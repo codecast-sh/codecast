@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "Multi-session work: a plan or tasks, not the in-session todo list.",
+  "label": {
+    "want": [
+      "cast\\s+(task|plan)\\s+create\\b"
+    ],
+    "avoid": [
+      "^TodoWrite:",
+      "^Task(Create|Update):",
+      "^Write: .*\\.(md|txt)"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "This auth migration will take several days across several sessions: add the new token table, backfill it, switch the readers, then drop the old table. Set up tracking so the work survives this session."
+  }
+}

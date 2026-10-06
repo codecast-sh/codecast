@@ -14,7 +14,7 @@
 // here") in plain text. Nothing on the chart is dashed.
 import { memo } from "react";
 import { BaseEdge, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
-import { AlertTriangle, Building2, Flag, FolderClosed } from "lucide-react";
+import { AlertTriangle, Building2, Compass, Flag, FolderClosed, FolderOpen } from "lucide-react";
 import { metricTrends, milestoneCounts, nextMilestone } from "@codecast/shared/contracts/initiative";
 import { cn } from "../../lib/utils";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -22,7 +22,7 @@ import { useInitiativeUpdates } from "../../hooks/useInitiatives";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { HealthChip, MetricReadingLine, MetricTile, NextMilestoneChip, UpdateLine } from "../initiatives/InitiativeAtoms";
 import { useZoomLevel } from "./orgZoom";
-import { Frame, GhostActions, GhostChips, Ports, type GhostActionHandlers } from "./OrgNodeCards";
+import { Frame, GhostActions, GhostChips, Ports, StateBar, StateTally, type GhostActionHandlers } from "./OrgNodeCards";
 import { GhostTag } from "./ghostChrome";
 import { RoleFace } from "./RoleFace";
 import { CHANGE_KIND_WORD, CHIP_STATUS, GHOST, ORG_STATE_META, changeFrameStyle } from "./orgMeta";
@@ -38,7 +38,7 @@ const ghostTagStatus = (g: GoalGhost) => (g.unresolved ? "failed" : g.status);
 const proposed = (g: GoalGhost | undefined) => !!g && !g.solid;
 const DIM = "var(--sol-text-dim)";
 
-export type CompanyNodeData = Lit & { name: string; goals: number; projects: number };
+export type CompanyNodeData = Lit & { name: string; goals: number; projects: number; mission: boolean };
 export const CompanyCard = memo(function CompanyCard({ data }: NodeProps<Node<CompanyNodeData>>) {
   const far = useZoomLevel() === "far";
   return (
@@ -48,9 +48,24 @@ export const CompanyCard = memo(function CompanyCard({ data }: NodeProps<Node<Co
       <div className="min-w-0">
         <div className={cn("truncate font-semibold leading-tight tracking-tight", far ? "text-[20px]" : "text-[14px]")} style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{data.name}</div>
         <div className={cn("mt-[2px] tabular-nums", far ? "text-[12px]" : "text-[10.5px]")} style={{ color: DIM }} data-company-tally>
-          {data.goals === 0 ? "No goals yet" : `${data.goals} ${data.goals === 1 ? "goal" : "goals"}${far ? " ·" : ", carried by"} ${data.projects} ${data.projects === 1 ? "project" : "projects"}`}
+          {data.goals === 0 ? "No goals yet" : `${data.mission ? (far ? "mission · " : "the mission · ") : ""}${data.goals} ${data.goals === 1 ? "goal" : "goals"} · ${data.projects} ${data.projects === 1 ? "project" : "projects"}`}
         </div>
       </div>
+    </Frame>
+  );
+});
+
+/** The quiet header over the projects no goal carries. */
+export type LooseNodeData = Lit & { projects: number };
+export const LooseCard = memo(function LooseCard({ data }: NodeProps<Node<LooseNodeData>>) {
+  const far = useZoomLevel() === "far";
+  return (
+    <Frame selected={data.selected} className="px-3 flex items-center gap-2" kind="loose" accent="var(--sol-text-dim)" style={{ background: "transparent", borderStyle: "dashed", borderColor: "color-mix(in srgb, var(--sol-border) 55%, transparent)", boxShadow: "none" }}>
+      <Ports />
+      <FolderOpen className={cn("shrink-0", far ? "h-4 w-4" : "h-3.5 w-3.5")} style={{ color: DIM }} />
+      <span className={cn("min-w-0 truncate font-medium", far ? "text-[15px] tracking-tight" : "text-[12px]")} style={{ color: "var(--sol-text-muted)" }} data-loose-count={data.projects}>
+        {far ? "No goal yet" : `${data.projects} ${data.projects === 1 ? "project" : "projects"} under no goal`}
+      </span>
     </Frame>
   );
 });
@@ -106,9 +121,18 @@ function ProjectRefs({ refs }: { refs: Extract<GoalsNode, { kind: "goal" }>["ref
   );
 }
 
-export type GoalNodeData = Lit & GhostFocus & Pick<Extract<GoalsNode, { kind: "goal" }>, "goal" | "metrics" | "rows" | "refs" | "running">;
+/** The word over a mission's title, in the goal's own colour. */
+function MissionKicker({ ghost }: { ghost: boolean }) {
+  return (
+    <div className="flex items-center gap-1 text-[9.5px] font-semibold uppercase tracking-[0.08em]" style={{ height: GOALS_SIZES.missionRow, color: ghost ? GHOST.color : "var(--sol-cyan)" }} data-goal-mission>
+      <Compass className="h-[10px] w-[10px]" /> mission
+    </div>
+  );
+}
+
+export type GoalNodeData = Lit & GhostFocus & Pick<Extract<GoalsNode, { kind: "goal" }>, "goal" | "metrics" | "rows" | "refs" | "running" | "mission">;
 export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNodeData>>) {
-  const { goal: g, metrics, rows, refs, running } = data;
+  const { goal: g, metrics, rows, refs, running, mission } = data;
   const now = useCoarseNow(60_000);
   const level = useZoomLevel();
   const ghost = proposed(g.ghost);
@@ -121,8 +145,11 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
     return (
       <Frame {...frame} className={cn("px-3 flex items-start gap-2.5 overflow-hidden transition-opacity", data.dim && "opacity-45")} style={{ ...ghostFrame(g.ghost), paddingTop: GOALS_SIZES.farPad / 2 }}>
         <Ports />
-        <span className="mt-[6px] shrink-0">{g.row ? <HealthChip health={g.row.health} now={now} bare className="[&>span]:!h-[13px] [&>span]:!w-[13px]" /> : <span className="block h-[13px] w-[13px] rounded-full" style={{ background: GHOST.color, opacity: 0.8 }} title="Proposed" aria-hidden />}</span>
-        <div className="line-clamp-3 min-w-0 text-[21px] font-semibold tracking-tight" style={{ lineHeight: `${GOALS_SIZES.farRow}px`, color: "var(--sol-text)", opacity: ghost ? 0.9 : 1 }} title={g.title} data-goal-title>{g.title}</div>
+        <span className="shrink-0" style={{ marginTop: 6 + (mission ? GOALS_SIZES.missionRow : 0) }}>{g.row ? <HealthChip health={g.row.health} now={now} bare className="[&>span]:!h-[13px] [&>span]:!w-[13px]" /> : <span className="block h-[13px] w-[13px] rounded-full" style={{ background: GHOST.color, opacity: 0.8 }} title="Proposed" aria-hidden />}</span>
+        <div className="min-w-0">
+          {mission && <MissionKicker ghost={ghost} />}
+          <div className="line-clamp-3 min-w-0 text-[21px] font-semibold tracking-tight" style={{ lineHeight: `${GOALS_SIZES.farRow}px`, color: "var(--sol-text)", opacity: ghost ? 0.9 : 1 }} title={g.title} data-goal-title>{g.title}</div>
+        </div>
       </Frame>
     );
   }
@@ -139,7 +166,8 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
   return (
     <Frame {...frame} className={cn("px-2.5 py-2 transition-opacity", data.dim && "opacity-45")} style={ghostFrame(g.ghost)}>
       <Ports />
-      {action && <GhostActions meta={action} word={CHANGE_KIND_WORD[action.kind]} data={{ chips: g.chips, answers: data.answers, onAnswerChange: data.onAnswerChange, onEditChange: data.onEditChange }} below />}
+      {action && data.onAnswerChange && <GhostActions meta={action} word={CHANGE_KIND_WORD[action.kind]} data={{ chips: g.chips, answers: data.answers, onAnswerChange: data.onAnswerChange, onEditChange: data.onEditChange }} below />}
+      {mission && <MissionKicker ghost={ghost} />}
       <div className="flex min-w-0 items-start gap-2" title={g.ghost?.line}>
         <span className="mt-[1px] inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md" style={{ background: ghost ? "color-mix(in srgb, var(--sol-violet) 16%, transparent)" : "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: ghost ? GHOST.color : "var(--sol-cyan)" }}><Flag className="h-3 w-3" /></span>
         <div className="min-w-0 flex-1">
@@ -174,9 +202,10 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
   );
 });
 
-export type ProjectNodeData = Lit & GhostFocus & { project: Extract<GoalsNode, { kind: "project" }>["project"] };
+export type ProjectNodeData = Lit & GhostFocus & Pick<Extract<GoalsNode, { kind: "project" }>, "project" | "counts">;
 export const GoalProjectCard = memo(function GoalProjectCard({ data }: NodeProps<Node<ProjectNodeData>>) {
   const p = data.project;
+  const counts = data.counts;
   const level = useZoomLevel();
   const ghost = proposed(p.ghost);
   // A row an `initiative_projects` change added decides on its own row; a new
@@ -186,11 +215,13 @@ export const GoalProjectCard = memo(function GoalProjectCard({ data }: NodeProps
   return (
     <Frame selected={data.selected} className={cn("px-2.5 flex flex-col justify-center !rounded-lg transition-opacity", data.dim && "opacity-45")} style={ghostFrame(p.ghost)} kind={p.ghost ? "project-ghost" : "project"} accent={p.ghost ? GHOST.color : "var(--sol-cyan)"}>
       <Ports />
-      {action && <GhostActions meta={action} word={CHANGE_KIND_WORD[action.kind]} data={{ answers: data.answers, onAnswerChange: data.onAnswerChange, onEditChange: data.onEditChange }} below />}
+      {action && data.onAnswerChange && <GhostActions meta={action} word={CHANGE_KIND_WORD[action.kind]} data={{ answers: data.answers, onAnswerChange: data.onAnswerChange, onEditChange: data.onEditChange }} below />}
       <div className="flex min-w-0 items-center gap-2">
         <FolderClosed className={cn("shrink-0", far ? "h-4 w-4" : "h-3.5 w-3.5")} style={{ color: ghost ? GHOST.color : "var(--sol-text-muted)" }} />
         <span className={cn("min-w-0 flex-1 truncate font-medium", far ? "text-[15px] tracking-tight" : "text-[12px]")} style={{ color: "var(--sol-text)", opacity: ghost ? 0.9 : 1 }} title={p.ghost?.line ?? p.title} data-project-title>{p.title}</span>
         {!far && p.ghost?.tag && <GhostTag quiet label={p.ghost.tag} status={ghostTagStatus(p.ghost)} className="shrink-0" />}
+        {/* The sessions under the roles whose area holds the project: dots by state, never a stack of cards. */}
+        {!far && counts && <span className="inline-flex shrink-0" data-project-counts><StateTally counts={counts} /></span>}
         {!far && p.lead && <span className="inline-flex shrink-0" title={`Led by ${p.lead.name}`} data-project-lead-face={p.lead.id}><OwnerFace owner={p.lead} size={16} /></span>}
       </div>
       {/* Close: its number, where it stands and who leads it. */}
@@ -205,7 +236,7 @@ export const GoalProjectCard = memo(function GoalProjectCard({ data }: NodeProps
   );
 });
 
-export type OwnerNodeData = Lit & { owner: GoalOwner; owns: number; line?: string };
+export type OwnerNodeData = Lit & Pick<Extract<GoalsNode, { kind: "owner" }>, "owner" | "owns" | "line" | "counts" | "reportsTo">;
 export const GoalOwnerCard = memo(function GoalOwnerCard({ data }: NodeProps<Node<OwnerNodeData>>) {
   const o = data.owner;
   const level = useZoomLevel();
@@ -221,8 +252,15 @@ export const GoalOwnerCard = memo(function GoalOwnerCard({ data }: NodeProps<Nod
           {!far && o.kind === "person" && o.me && <span className="shrink-0 rounded-sm px-1 text-[9.5px] font-medium" style={{ background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: "var(--sol-cyan)" }}>you</span>}
         </div>
         {!far && (
-          <div className="mt-[2px] truncate text-[10.5px]" style={{ color: DIM }}>
-            {o.kind === "role" ? `@${o.handle} · ` : o.kind === "unknown" ? "not on this chart · " : ""}{data.owns === 0 ? "owns nothing after this" : `owns ${data.owns}`}
+          <div className="mt-[2px] truncate text-[10.5px]" style={{ color: DIM }} title={data.reportsTo ? `Reports to ${data.reportsTo}` : undefined} data-owner-meta>
+            {o.kind === "role" ? `@${o.handle} · ` : o.kind === "unknown" ? "not on this chart · " : ""}{data.owns === 0 ? (data.counts ? "owns nothing" : "owns nothing after this") : `owns ${data.owns}`}{data.reportsTo ? ` · under ${data.reportsTo}` : ""}
+          </div>
+        )}
+        {/* The map's Everything: the card's sessions by state, the way a role card on the chart wears them. */}
+        {data.counts && (
+          <div className={cn("flex min-w-0 items-center gap-2", far ? "mt-[5px]" : "mt-[4px]")} style={{ height: GOALS_SIZES.ownerStateRow - 4 }} data-owner-counts>
+            <StateBar counts={data.counts} className="min-w-0 flex-1" />
+            {!far && <StateTally counts={data.counts} />}
           </div>
         )}
         {level === "close" && data.line && <div className="mt-[2px] truncate text-[10.5px]" style={{ color: "var(--sol-text-muted)" }} title={data.line} data-owner-line>{data.line}</div>}
@@ -231,7 +269,7 @@ export const GoalOwnerCard = memo(function GoalOwnerCard({ data }: NodeProps<Nod
   );
 });
 
-export const GOALS_NODE_TYPES = { company: CompanyCard, goal: GoalCard, project: GoalProjectCard, owner: GoalOwnerCard };
+export const GOALS_NODE_TYPES = { company: CompanyCard, goal: GoalCard, project: GoalProjectCard, owner: GoalOwnerCard, loose: LooseCard };
 
 // ---------------------------------------------------------------- edges
 // Both edges are drawn from the cards' own rects (the layout knows them), not
@@ -245,13 +283,15 @@ type Rect = { x: number; y: number; w: number; h: number; a: number };
 export type GoalsEdgeData = { s: Rect; t: Rect; ghost?: boolean; faded?: boolean; lit?: boolean; dim?: boolean; /** An owner edge's lane (GoalsLayout.ownerLane). */ lane?: number };
 
 function GoalSpineEdge({ id, data }: EdgeProps<Edge<GoalsEdgeData>>) {
-  const { s, t, ghost } = data!;
+  const { s, t, ghost, faded } = data!;
   // The trunk runs down the gutter between the parent's left edge and its
   // children's (GOALS_SIZES.spineInset of indent), never through a card.
   const x = s.x + GOALS_SIZES.spineInset;
   const midY = t.y + t.a;
   const r = Math.min(9, Math.max(0, t.x - x));
   const path = `M ${x},${s.y + s.a} L ${x},${midY - r} Q ${x},${midY} ${x + r},${midY} L ${t.x},${midY}`;
+  // A moved goal's old place: a faint line, so the move reads as a move.
+  if (faded) return <g data-spine-was={id}><BaseEdge id={id} path={path} style={{ stroke: "var(--sol-text-dim)", strokeWidth: 1, strokeOpacity: 0.35 }} /></g>;
   return <BaseEdge id={id} path={path} style={ghost ? { stroke: GHOST.color, strokeWidth: 1.5, strokeOpacity: 0.55 } : { stroke: "color-mix(in srgb, var(--sol-border) 70%, transparent)", strokeWidth: 1.5 }} />;
 }
 

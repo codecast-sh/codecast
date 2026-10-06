@@ -1,5 +1,6 @@
 import type { DragEventHandler, HTMLAttributes, ReactNode } from "react";
 import { Check } from "lucide-react";
+import { useHostedMode } from "../lib/surfaces";
 
 export interface ItemRowState {
   isFocused: boolean;
@@ -31,6 +32,9 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
   children: ReactNode;
 }) {
   const { isFocused, isSelected } = state;
+  // Hosted mode keeps a row's checkbox out of sight until the pointer is on
+  // the row or something is selected (x still selects from the keyboard).
+  const hosted = useHostedMode();
   return (
     <div
       data-list-focused={isFocused || undefined}
@@ -71,7 +75,7 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
         className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors cq-hide-compact ${
           isSelected
             ? "bg-sol-cyan border-sol-cyan"
-            : isFocused
+            : isFocused && !hosted
               ? "border-gray-500/50"
               : "border-sol-border/60 opacity-0 group-hover:opacity-100"
         }`}
@@ -118,10 +122,12 @@ export function ListGroupHeader({ label, count, icon, badge, extra, collapsed, o
           <path d="M6 4l8 6-8 6V4z" />
         </svg>
         {icon}
-        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
+        <span data-cc-group-label className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
           {label}
         </span>
-        <span className="text-xs text-sol-text-dim">({count})</span>
+        {/* Hosted mode (globals.css) drops the brackets and sets the bare
+            count in the family's mono, as Whisk counts a list. */}
+        <span data-cc-group-count className="text-xs text-sol-text-dim tabular-nums"><span data-cc-bracket>(</span>{count}<span data-cc-bracket>)</span></span>
         {badge}
       </button>
       {extra}

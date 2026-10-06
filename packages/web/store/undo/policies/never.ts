@@ -87,12 +87,14 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   cancelPendingMessage: never("send: withdrawing a queued message is itself the way back from sending it"),
   clearDraftFinal: DRAFT,
   answerDecision: never("send: an answered decision has already been read by the agent that asked"),
+  startShip: never("send: Ship starts a session that commits, pushes and opens a pull request; stopping it is the way back"),
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
 
   // Local echoes of sends (sync creators a component calls)
   addOptimisticMessage: LOCAL_ECHO,
   markOptimisticAsFailed: LOCAL_ECHO,
+  markOptimisticAsRetrying: LOCAL_ECHO,
   removeOptimisticMessage: LOCAL_ECHO,
   resolvePendingUploads: LOCAL_ECHO,
   stampPendingDispatchContent: LOCAL_ECHO,

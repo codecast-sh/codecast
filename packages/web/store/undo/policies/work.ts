@@ -383,19 +383,19 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // The target date picker writes once per input event (a typed year is four
   // writes), so rapid edits of one field merge as they do for plans.
   updateInitiative: viaInitiativeWriter(
-    (ctx) => editLabel(ctx.before?.initiatives?.[ctx.args[0] as string], (ctx.args[1] ?? {}) as Record<string, unknown>, "initiative"),
+    (ctx) => editLabel(ctx.before?.initiatives?.[ctx.args[0] as string], (ctx.args[1] ?? {}) as Record<string, unknown>, "goal"),
     { coalesce: true },
   ),
   addInitiativeProject: viaInitiativeWriter(
-    (ctx) => `Added ${quoted(projectOf(ctx.before, ctx.args[1] as string)?.title, "project")} to ${quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "initiative")}`,
+    (ctx) => `Added ${quoted(projectOf(ctx.before, ctx.args[1] as string)?.title, "project")} to ${quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "goal")}`,
   ),
   removeInitiativeProject: viaWriter(
-    (ctx) => `Removed ${quoted(projectOf(ctx.before, ctx.args[1] as string)?.title, "project")} from ${quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "initiative")}`,
+    (ctx) => `Removed ${quoted(projectOf(ctx.before, ctx.args[1] as string)?.title, "project")} from ${quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "goal")}`,
   ),
   // One entry of the intent record: the writer sends the entry's prior state
   // back by key (recordOpsBetween), so an undo never replaces the list.
-  recordInitiativeEntry: viaWriter((ctx) => recordLabel(ctx.args[1] as RecordOpLike, quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "initiative"))),
-  setInitiativeProjects: viaInitiativeWriter((ctx) => `Reordered the projects of ${quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "initiative")}`),
+  recordInitiativeEntry: viaWriter((ctx) => recordLabel(ctx.args[1] as RecordOpLike, quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "goal"))),
+  setInitiativeProjects: viaInitiativeWriter((ctx) => `Reordered the projects of ${quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "goal")}`),
   // Naming a lead also widens the role's scope in the org record, in one
   // server transaction (orgRoles.setProjectLead); the org record owns its undo.
   setProjectLead: org((ctx) =>

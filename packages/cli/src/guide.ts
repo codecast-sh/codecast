@@ -15,23 +15,14 @@
 import type { Command } from "commander";
 import {
   type SnippetDescriptor,
+  guideText,
   guideTopics,
   snippetBySlug,
-  stripSnippetStamp,
 } from "@codecast/shared/contracts";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { getVersion } from "./update.js";
 import { c, fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
-
-/** The guide text for one topic: the installed body without the installer's own
- *  bookkeeping (the end marker, and the version stamp the header already
- *  carries). */
-export function guideBody(descriptor: SnippetDescriptor): string {
-  const section = descriptor.section;
-  if (!section) throw new Error(`snippet "${descriptor.slug}" has no markdown section`);
-  return stripSnippetStamp(section.body).split(section.spec.endMarker).join("").trim();
-}
 
 /** The line that ties a guide to the binary that printed it. */
 export function guideHeader(slug: string): string {
@@ -52,7 +43,7 @@ export function guidePayload(descriptor: SnippetDescriptor): GuidePayload {
     name: descriptor.name,
     version: getVersion(),
     build_id: DAEMON_BUILD_ID,
-    body: guideBody(descriptor),
+    body: guideText(descriptor),
   };
 }
 
@@ -114,6 +105,6 @@ export function registerGuideCommand(program: Command): void {
       }
       console.log(guideHeader(descriptor.slug));
       console.log("");
-      console.log(guideBody(descriptor));
+      console.log(guideText(descriptor));
     });
 }

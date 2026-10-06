@@ -130,6 +130,21 @@ export const assistantTables = {
     .index("by_user", ["user_id"])
     .index("by_stripe_customer", ["stripe_customer_id"]),
 
+  // A provider that could not serve the assistant (an empty account, a bad
+  // key, an outage), one open row per provider while it lasts. The first
+  // failure opens it and alerts the operator once (assistant/incidents.ts);
+  // the next turn the provider serves closes it.
+  assistant_incidents: defineTable({
+    provider: v.string(),
+    fault: v.string(),
+    model: v.string(),
+    error: v.string(),
+    first_at: v.number(),
+    last_at: v.number(),
+    count: v.number(),
+    closed_at: v.optional(v.number()),
+  }).index("by_provider_closed", ["provider", "closed_at"]),
+
   // Every movement of a wallet, append only.
   wallet_ledger: defineTable({
     user_id: v.id("users"),

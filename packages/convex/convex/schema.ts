@@ -6,8 +6,11 @@ import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
 import { cloudHostReportValidator, hostReadinessValidator, localMirrorValidator } from "./lib/cloudHostValidators";
 import { openTaskValidator } from "./lib/openTasksValidator";
+import { changeGuideValidator } from "./lib/changeGuideValidator";
+import { followViewValidator } from "./lib/followView";
 import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
+import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
@@ -130,7 +133,13 @@ export default defineSchema({
     isAnonymous: v.optional(v.boolean()),
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
+    // Legacy mirror of the user's role in their first team (team creation
+    // writes "admin"). It grants nothing outside that team; platform-wide
+    // operator access is `staff`.
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
+    // Codecast operator: reads every user's daemon logs, sends daemon
+    // commands, sets system config. Granted only by migrations:setStaff.
+    staff: v.optional(v.boolean()),
     // Agent (non-human) account. Two flavors: a synthetic anchor identity (no
     // login; gives a standing agent member its own name/avatar in author chips
     // while a human host runs and bills the session — see anchors), or a full
@@ -424,6 +433,9 @@ export default defineSchema({
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
+    // People with a proven address at this domain can find the team and ask
+    // to join (teamDiscovery.ts). Set by an admin, from their own domain.
+    discoverable_domain: v.optional(v.string()),
     // Idempotency key from the client's optimistic stub. A retried create
     // (replayed dispatch, timeout after commit) finds the team it already
     // made instead of minting a duplicate.
@@ -444,7 +456,31 @@ export default defineSchema({
     }))),
   })
     .index("by_invite_code", ["invite_code"])
-    .index("by_client_key", ["client_key"]),
+    .index("by_client_key", ["client_key"])
+    .index("by_discoverable_domain", ["discoverable_domain"]),
+
+  // A person asking to join a team they found by their work email domain
+  // (teamDiscovery.ts). An admin approves or declines.
+  team_join_requests: defineTable({
+    team_id: v.id("teams"),
+    user_id: v.id("users"),
+    status: v.union(v.literal("pending"), v.literal("approved"), v.literal("declined")),
+    created_at: v.number(),
+    decided_at: v.optional(v.number()),
+    decided_by: v.optional(v.id("users")),
+  })
+    .index("by_user_team", ["user_id", "team_id"])
+    .index("by_team_status", ["team_id", "status"]),
+
+  // The one outstanding code proving a user holds their account email, for
+  // finding their team by domain (teamDiscovery.ts). Only a hash is stored.
+  work_email_codes: defineTable({
+    user_id: v.id("users"),
+    email: v.string(),
+    code_hash: v.string(),
+    expires_at: v.number(),
+    attempts: v.number(),
+  }).index("by_user", ["user_id"]),
 
   team_memberships: defineTable({
     user_id: v.id("users"),
@@ -994,6 +1030,28 @@ export default defineSchema({
       v.literal("merged"),
       v.literal("archived")
     )),
+    // The subagent fleet (subagentFleet.ts, shared/contracts/subagentFleet):
+    // a `cast spawn --subagent` row holds a slot ("running") or waits for one
+    // ("queued"); absent once the worker ends or for rows the fleet never
+    // counted. `subagent_slot_at` orders the queue, `subagent_slot_device` is
+    // the machine it counts against, `subagent_caps` the limits it was
+    // spawned under, and `subagent_queued_start` the start a queued row runs
+    // when a slot frees.
+    subagent_slot: v.optional(v.union(v.literal("running"), v.literal("queued"))),
+    subagent_slot_at: v.optional(v.number()),
+    subagent_slot_device: v.optional(v.string()),
+    subagent_caps: v.optional(v.object({ per_session: v.number(), per_machine: v.number() })),
+    subagent_queued_start: v.optional(v.any()),
+    // Bring this isolated worker's changes into its parent's checkout when it
+    // finishes done (agent definition merge_back, or cast spawn --merge-back).
+    merge_back_on_done: v.optional(v.boolean()),
+    // What became of them (MergeBackStatus): the worker row's chip.
+    merge_back: v.optional(v.object({
+      state: v.union(v.literal("pending"), v.literal("merged"), v.literal("empty"), v.literal("conflict"), v.literal("kept"), v.literal("failed")),
+      at: v.number(),
+      files: v.optional(v.array(v.string())),
+      reason: v.optional(v.string()),
+    })),
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
     is_workflow_primary: v.optional(v.boolean()),
@@ -1012,6 +1070,8 @@ export default defineSchema({
     // The pull request this session shepherds, folded for the inbox card and
     // the thread state panel. Single writer: prShepherd.refreshConversationPrStatus.
     // state mirrors pull_requests.shepherd_state.
+    // A ship session (ship.ts): the target it lands, as ship_runs.target_key.
+    ship_target_key: v.optional(v.string()),
     pr_status: v.optional(v.object({
       pr_id: v.id("pull_requests"),
       repository: v.string(),
@@ -1209,6 +1269,9 @@ export default defineSchema({
     // server channel.
     .index("by_user_killed", ["user_id", "inbox_killed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
+    // Sparse and written only at a worker's start, queue and end: the fleet's
+    // running and queued rows for one user (subagentFleet.ts).
+    .index("by_user_subagent_slot", ["user_id", "subagent_slot", "subagent_slot_at"])
     .index("by_restored_from", ["restored_from_conversation_id"])
     // `persistent` and `anchor_id` are plain fields with no index: anchors
     // resolve their conversation via anchors.conversation_id, and no query
@@ -2495,6 +2558,9 @@ export default defineSchema({
     pr_id: v.optional(v.id("pull_requests")),
     file_path: v.optional(v.string()),
     line_number: v.optional(v.number()),
+    // The commented line's text with two lines of context, to find it again
+    // after the code moves (shared/comments/codeAnchor.ts).
+    anchor_lines: v.optional(codeAnchorValidator),
     // Agent-reply comments: an opt-in "ask the agent to reply" spawns a hidden
     // fork whose answer is mirrored back into this comment. author_kind="agent"
     // renders it as the agent; agent_status tracks the reply lifecycle; the fork
@@ -2638,6 +2704,13 @@ export default defineSchema({
       v.literal("held")
     ),
     created_at: v.number(),
+    // Place in the conversation's queue when someone moved it (reorderQueued).
+    // Absent = created_at. Every reader that takes "the oldest row" orders by
+    // queueOrder(row), so a reorder changes what the session takes next.
+    queue_at: v.optional(v.number()),
+    // Set on a row folded into another by mergeQueued (status "cancelled"):
+    // its words go out as a part of that row's joint turn.
+    merged_into: v.optional(v.id("pending_messages")),
     delivered_at: v.optional(v.number()),
     // The transcript message this row's echo produced. Stamped when the echo
     // adopts the row (content rewrite, client_id, images, from_user_id). Lets a
@@ -3300,6 +3373,9 @@ export default defineSchema({
     new_content: v.optional(v.string()),
     commit_message: v.optional(v.string()),
     commit_hash: v.optional(v.string()),
+    // The branch `git commit` reported. The diff pane's branch base is the
+    // last commit that landed on the default branch.
+    commit_branch: v.optional(v.string()),
     timestamp: v.number(),
   })
     .index("by_conversation_id", ["conversation_id"])
@@ -3529,6 +3605,47 @@ export default defineSchema({
   // A comment is a codecast object: it records the session, task, plan or doc
   // it was made from, and is mirrored to GitHub (github_comment_id) when the
   // file sits in an open PR.
+  // The working tree of a checkout at the end of a turn, as a git commit the
+  // daemon took on the machine that ran the session (cli/src/treeSnapshot.ts).
+  // The transcript records only the edits an agent made through its tools; the
+  // snapshot records the tree itself, so an edit made by a shell command, a
+  // formatter or a person is in the history too. One snapshot describes one
+  // checkout, and every session that shares that checkout gets a row naming
+  // the same sha (checkout_key says which). Objects live in the session's own
+  // git repository and travel on the hidden wip ref; this table is the index
+  // that joins a sha to a conversation and a turn.
+  tree_snapshots: defineTable({
+    conversation_id: v.id("conversations"),
+    sha: v.string(),
+    tree_sha: v.string(),
+    /** HEAD when the snapshot was taken (the commit's first parent). */
+    base_sha: v.string(),
+    /** The previous snapshot in the chain (the second parent), when chained. */
+    prev_sha: v.optional(v.string()),
+    branch: v.optional(v.string()),
+    depth: v.number(),
+    /** Paths that differ from prev (or from HEAD for a chain's first), capped at 200 by the daemon; the count is exact. */
+    changed_paths: v.array(v.string()),
+    changed_count: v.number(),
+    /** The tree differs from HEAD's. */
+    dirty: v.boolean(),
+    /** Hash of the checkout's root path, the same hash project paths use, so sessions sharing a checkout are visible as such. */
+    checkout_key: v.string(),
+    device_id: v.optional(v.string()),
+    /** Why the snapshot was taken: a lead turn ended, or the periodic sweep ran. */
+    source: v.union(v.literal("turn"), v.literal("sweep")),
+    taken_at: v.number(),
+    /** The Stop hook's turn_completed_at for a turn snapshot, in ms. */
+    turn_completed_at: v.optional(v.number()),
+    /** How long the snapshot took on the daemon, ms: the cost the design promises to keep small. */
+    took_ms: v.optional(v.number()),
+    /** Other sessions the daemon recorded this same snapshot for: the checkout was shared, so the changes are theirs too. */
+    shared_sessions: v.optional(v.number()),
+  })
+    .index("by_conversation_taken", ["conversation_id", "taken_at"])
+    .index("by_conversation_sha", ["conversation_id", "sha"])
+    .index("by_checkout_taken", ["checkout_key", "taken_at"]),
+
   review_comments: defineTable({
     review_id: v.optional(v.id("reviews")),
     pull_request_id: v.optional(v.id("pull_requests")),
@@ -3538,6 +3655,9 @@ export default defineSchema({
     file_path: v.optional(v.string()),
     line_number: v.optional(v.number()),
     line_end: v.optional(v.number()),
+    // The commented lines' text with two lines of context, so a reader finds
+    // the passage again after the code moves (shared/comments/codeAnchor.ts).
+    anchor_lines: v.optional(codeAnchorValidator),
     // "LEFT" (old side of a diff) | "RIGHT". Absent = the file as it is at ref.
     side: v.optional(v.string()),
     parent_id: v.optional(v.id("review_comments")),
@@ -3591,6 +3711,15 @@ export default defineSchema({
     // When the note was handed to a session. Editing it clears this: a changed
     // note has not been sent.
     sent_at: v.optional(v.number()),
+    // Where it was handed and in which message (the pending message's
+    // client_id, which the delivered user message keeps), so the agent's
+    // reply can be matched to it.
+    sent_to_conversation_id: v.optional(v.id("conversations")),
+    sent_client_id: v.optional(v.string()),
+    // The agent reply that answers this note (lib/reviewAnswered): it quoted
+    // the note, named its file and line, or answered a batch of this one note.
+    answered_message_id: v.optional(v.id("messages")),
+    answered_at: v.optional(v.number()),
     // ── Findings as promises (fix loop) ──
     // A line reviewer's finding, or a person's note, that was fixed, deferred
     // or rejected. A deferred finding is a promise: it needs an owner (a user
@@ -3614,6 +3743,7 @@ export default defineSchema({
     .index("by_pull_request", ["pull_request_id"])
     .index("by_github_comment_id", ["github_comment_id"])
     .index("by_repository_file", ["repository", "file_path"])
+    .index("by_sent_conversation_answered", ["sent_to_conversation_id", "answered_at"])
     .index("by_conversation", ["conversation_id"])
     .index("by_task", ["task_id"])
     .index("by_parent", ["parent_id"]),
@@ -3848,6 +3978,30 @@ export default defineSchema({
   })
     .index("by_user_day", ["user_id", "day_start"])
     .index("by_user_team_day", ["user_id", "team_id", "day_start"]),
+
+  // Per-day token and spend counters (the "Tokens" and "Spend" chart
+  // metrics). One row per (user, team, UTC day), 24 UTC-hour buckets each;
+  // spend is dollars at API list price. Never written by a transcript insert:
+  // the insert adds to its own session's usage_pending rows and a scheduled
+  // fold moves them here (lib/usageDaily.ts).
+  user_usage_daily: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    day_start: v.number(),
+    token_hours: v.array(v.number()),
+    spend_hours: v.array(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user_day", ["user_id", "day_start"])
+    .index("by_user_team_day", ["user_id", "team_id", "day_start"]),
+
+  // A session's usage not yet folded into user_usage_daily, per UTC day.
+  usage_pending: defineTable({
+    conversation_id: v.id("conversations"),
+    day_start: v.number(),
+    token_hours: v.array(v.number()),
+    spend_hours: v.array(v.number()),
+  }).index("by_conversation_day", ["conversation_id", "day_start"]),
 
   session_insights: defineTable({
     conversation_id: v.id("conversations"),
@@ -4185,7 +4339,11 @@ export default defineSchema({
       // recipient, a cause's change shipped, a watched cause reopened.
       v.literal("card_waiting"),
       v.literal("change_shipped"),
-      v.literal("cause_reopened")
+      v.literal("cause_reopened"),
+      // Finding a team by work email (teamDiscovery.ts): someone asked to
+      // join (to its admins), and an admin let them in (to them).
+      v.literal("team_join_request"),
+      v.literal("team_join_approved")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -4207,7 +4365,9 @@ export default defineSchema({
       v.literal("code"),
       // A role (its short id): the goal stall notice opens the role's page,
       // where the person reads their goals with what moved and what stalled.
-      v.literal("org_role")
+      v.literal("org_role"),
+      // A team: a join request or approval opens its settings.
+      v.literal("team")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -5644,6 +5804,10 @@ export default defineSchema({
     conversation_ids: v.optional(v.array(v.id("conversations"))),
     created_from_conversation: v.optional(v.id("conversations")),
     created_from_insight: v.optional(v.id("session_insights")),
+    // The call this task was pulled from (a transcripts row). Set by `cast
+    // task create --from-call`, `cast task update --call`, or the call page;
+    // the call page lists its tasks through by_from_call.
+    from_call: v.optional(v.id("transcripts")),
     last_session_summary: v.optional(v.string()),
     attempt_count: v.optional(v.number()),
     last_attempted_at: v.optional(v.number()),
@@ -5710,6 +5874,8 @@ export default defineSchema({
     execution_concerns: v.optional(v.string()),
     verification_evidence: v.optional(v.string()),
     files_changed: v.optional(v.array(v.string())),
+    // The author's walkthrough of the change, written at handoff (ct-57527).
+    change_guide: v.optional(changeGuideValidator),
     // The review station's verdict (docs/architecture/the-line.md L3).
     // Written by tasks.update alongside the status move; the independence
     // rule reads it when a role's session tries to close the task.
@@ -5809,6 +5975,7 @@ export default defineSchema({
     // lineGround.sweep grounds before admission can rank them.
     .index("by_source_status_readiness", ["source", "status", "readiness"])
     .index("by_created_from_conversation", ["created_from_conversation"])
+    .index("by_from_call", ["from_call"])
     .index("by_user_insight", ["user_id", "created_from_insight"])
     .index("by_workflow_run", ["workflow_run_id"])
     .index("by_assignee_status", ["assignee", "status"])
@@ -6349,6 +6516,17 @@ export default defineSchema({
     // Lets each side watch the words the other is forming without a full OT buffer.
     // Unused by the document editor, which only sends cursor/anchor positions.
     draft_text: v.optional(v.string()),
+    // Composer co-presence in a session (doc_id "compose:<id>"), written only
+    // while someone else is present. user_image: the face others draw.
+    // can_send: whether this person may send into the session (server
+    // computed); a draft from someone who may not reads as a suggestion.
+    // anchor: where they are reading in the transcript (the same anchor follow
+    // mode reports). claims: drafts of others this person sent as part of a
+    // joint turn, so each named author's composer clears.
+    user_image: v.optional(v.string()),
+    can_send: v.optional(v.boolean()),
+    anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
+    claims: v.optional(v.array(v.object({ user_id: v.id("users"), text: v.string(), at: v.number() }))),
     updated_at: v.number(),
   })
     .index("by_doc", ["doc_id"])
@@ -6727,6 +6905,9 @@ export default defineSchema({
         // Session routes: chunks delivered since the last one that carried
         // the full huddle framing (needsFullBrief). Absent → none yet.
         briefed_chunks: v.optional(v.number()),
+        // Session routes: when the last context lane chunk went out; the next
+        // waits CONTEXT_MIN_GAP_MS unless a line names the agent.
+        context_at: v.optional(v.number()),
       }),
     ),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
@@ -7135,6 +7316,25 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_user_slug", ["user_id", "slug"]),
 
+  // One Ship control (docs/architecture/ship.md): every press of Ship, from
+  // a task, a session, a pull request, a change card or `cast ship run`. The
+  // plan is what the popover said at the press; the ship session (or the line
+  // run whose card it answered) carries the progress.
+  ship_runs: defineTable({
+    target_key: v.string(),
+    target_kind: v.union(v.literal("task"), v.literal("conversation"), v.literal("pull_request")),
+    user_id: v.id("users"),
+    plan: v.any(),
+    conversation_id: v.optional(v.id("conversations")),
+    decision_id: v.optional(v.id("session_decisions")),
+    workflow_run_id: v.optional(v.id("workflow_runs")),
+    // The web's optimistic press: the row the server writes supersedes it.
+    client_key: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_target", ["target_key", "created_at"])
+    .index("by_conversation", ["conversation_id"]),
+
   workflow_runs: defineTable({
     user_id: v.id("users"),
     workflow_id: v.optional(v.id("workflows")),
@@ -7364,7 +7564,9 @@ export default defineSchema({
       // A role, by short id: a goal stall notice to a person who reports to
       // it. Direct recipients only, like a device — nothing subscribes to a
       // role. Present for the same reason: one shape.
-      v.literal("org_role")
+      v.literal("org_role"),
+      // A team, for join requests. Direct recipients only. Same reason.
+      v.literal("team")
     ),
     entity_id: v.string(),
     reason: v.union(
@@ -7913,6 +8115,9 @@ export default defineSchema({
     follower_id: v.id("users"),
     leader_id: v.id("users"),
     updated_at: v.number(),
+    // The leader stopped sharing with this follower: renewals are refused
+    // until the follower starts a follow again on purpose.
+    dropped_at: v.optional(v.number()),
   })
     .index("by_leader", ["leader_id", "updated_at"])
     .index("by_follower", ["follower_id"]),
@@ -7924,6 +8129,8 @@ export default defineSchema({
     path: v.string(),
     conversation_id: v.optional(v.id("conversations")),
     anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
+    // Inside the page: open panel, diff file and line, a scroll region's offset.
+    view: v.optional(followViewValidator),
     updated_at: v.number(),
   }).index("by_user", ["user_id"]),
   chat_typing: defineTable({

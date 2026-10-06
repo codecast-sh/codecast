@@ -1,0 +1,30 @@
+{
+  "name": "@codecast/playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "convex": "convex dev",
+    "test": "bun test",
+    "build:sdk": "bun scripts/build-sdk.ts"
+  },
+  "dependencies": {
+    "@codecast/shared": "workspace:*",
+    "@platform/agent": "file:../../platform/packages/agent",
+    "convex": "^1.31.6",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "sucrase": "^3.35.1"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "0.73.1",
+    "@types/bun": "^1.3.13",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.1",
+    "@vitejs/plugin-react": "^4.5.2",
+    "convex-test": "0.0.54",
+    "typescript": "^5.7.2",
+    "vite": "^6.3.5"
+  }
+}
