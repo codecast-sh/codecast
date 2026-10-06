@@ -26,6 +26,7 @@ import { AlternativesPanel, DraftingControls, OverflowPanel, TrimBar, useDraftin
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
+import { useFollowScroll } from "../hooks/useFollowSurface";
 // Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
 // it). Renders the doc's markdown as a flat run of blocks — each a direct child
 // of MessageReview's measurement container, so every block is hover-quotable.
@@ -118,6 +119,9 @@ export function DocumentDetailLayout({
   const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   const getMarkdownRef = useRef<(() => string) | null>(null);
+  // The body is the doc's one scroller: a follower reads where the leader reads.
+  const bodyScrollRef = useRef<HTMLDivElement | null>(null);
+  useFollowScroll("doc", bodyScrollRef);
   const draft = useDrafting(docId);
   const draftingOn = !!drafting && isEditing;
   const overflowEnabled = !!drafting?.overflow;
@@ -228,7 +232,7 @@ export function DocumentDetailLayout({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={bodyScrollRef} className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
         <div className="flex-1 flex items-start w-full">
         {draftingOn && <AlternativesPanel d={draft} />}

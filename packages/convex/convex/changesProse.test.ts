@@ -140,6 +140,16 @@ describe("storyRequest", () => {
     expect(rich.prompt).toContain(`"session", "commit", "pr", "none"`);
     expect(rich.prompt).toContain("#412 Line pages");
     expect(rich.prompt).toContain("Asked: ask 0");
+    expect(rich.prompt).not.toContain("The author's guide");
+  });
+
+  test("a session's change guide reaches the prompt as the author's ordered outline", () => {
+    const guide = "1. Store it (convex/schema.ts:12): the page reads it.\n2. Render it (web/Guide.tsx:4-30): one walkthrough.";
+    const input = storyPromptInput(facts(), [], [session({ guide })], []);
+    expect(input.sessions[0].guide).toBe(guide);
+    const prompt = storyRequest(input).prompt;
+    expect(prompt).toContain("The author's guide to the change, in their order:");
+    expect(prompt).toContain("      2. Render it (web/Guide.tsx:4-30): one walkthrough.");
   });
 });
 
