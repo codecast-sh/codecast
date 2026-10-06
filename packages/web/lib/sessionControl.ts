@@ -1,4 +1,4 @@
-import { canSessionBecomeAgent, fromConvexAgentType, pinnedLaunchOptions, cloudAgentProviderOfConversation, type ConvexAgentType } from "@codecast/shared/contracts";
+import { canSessionBecomeAgent, fromConvexAgentType, pinnedLaunchOptions, cloudAgentProviderOfConversation, isHostedAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
 
 // ── Moving a session ──────────────────────────────────────────────────────────
 //
@@ -32,9 +32,18 @@ export function canSwitchSessionAgent(agentType: string | undefined, sessionId: 
   return !cloudAgentProviderOfConversation(agentType, sessionId, model);
 }
 
-/** The move verbs a session offers. */
+/** The move verbs a session offers. A hosted assistant conversation offers
+ *  none: every verb lands its history on a local agent, which
+ *  agentTypeChangeRefusal forbids, and it runs on no machine to move. */
 export function sessionMoveVerbs(agentType: string | undefined, sessionId: string | null | undefined, model: string | null | undefined): MoveVerb[] {
+  if (isHostedAgentType(agentType)) return [];
   return (Object.keys(MOVE_VERBS) as MoveVerb[]).filter((verb) => verb !== "switch" || canSwitchSessionAgent(agentType, sessionId, model));
+}
+
+/** Whether a session runs on a machine of the viewer's, so "Move to machine"
+ *  means something: false for a hosted assistant conversation. */
+export function canMoveSessionToMachine(agentType: string | undefined): boolean {
+  return !isHostedAgentType(agentType);
 }
 
 /** The agent list for each verb from one session state: the viewer's pinned

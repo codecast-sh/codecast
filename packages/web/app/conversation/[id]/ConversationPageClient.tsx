@@ -20,6 +20,7 @@ import { isForeignSession } from "../../../lib/liveEntities";
 import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
 import { setShareTokenScope } from "../../../lib/shareTokenScope";
 import { useLocalAuth } from "../../../lib/localAuth";
+import { parseMessageHash } from "../../../lib/messageHash";
 
 /**
  * Every accessible conversation renders through the inbox — single codepath —
@@ -237,11 +238,7 @@ export default function ConversationPage() {
   const shareToken = searchParams.get("share") || undefined;
   const [targetMessageId] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
-    const hash = window.location.hash;
-    if (hash && hash.startsWith("#msg-")) {
-      return hash.slice(5);
-    }
-    return undefined;
+    return parseMessageHash(window.location.hash)?.messageId;
   });
 
   // A failed resolve (a backend without the function, a server error) must

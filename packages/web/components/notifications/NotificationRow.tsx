@@ -11,17 +11,29 @@ import { AgentTypeIcon } from "../AgentTypeIcon";
 import { SessionGlyph } from "../identity";
 import { ChevronRight } from "lucide-react";
 import {
-  agentNames,
   notificationActor,
+  notificationAgentName,
+  notificationTypeLabel,
   sessionLabel,
   showsAgentIcon,
   timeAgo,
   typeColors,
   typeLabels,
 } from "../../lib/notificationTypes";
-import { summarizeIdleDigest, type IdleGrouped } from "@codecast/shared/contracts";
+import { isHostedAgentType, summarizeIdleDigest, type IdleGrouped } from "@codecast/shared/contracts";
+import { AssistantMark } from "../simple/AssistantMark";
+import { DEVELOPER_MODE, type SurfaceMode } from "../../lib/surfaceRules";
 
 export function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: string; className?: string }) {
+  // The hosted assistant is one disc everywhere it appears, never another
+  // company's mark.
+  if (isHostedAgentType(agentType)) {
+    return (
+      <span className={`${className} flex items-center justify-center shrink-0`}>
+        <AssistantMark size={28} className="h-full w-full" />
+      </span>
+    );
+  }
   if (agentType === "codex" || agentType === "codex_cli") {
     return (
       <span className={`${className} rounded-full bg-[#0f0f0f] flex items-center justify-center shrink-0`}>
@@ -71,15 +83,20 @@ type RowProps = {
   size?: "bell" | "page";
   /** A row inside an open group: indented, quieter, no repeated border. */
   nested?: boolean;
+  /** The viewer's mode (a prop, so the marketing hero draws rows without the store). */
+  mode?: SurfaceMode;
 };
 
-export function NotificationRow({ notification, onOpen, onContextMenu, size = "bell", nested }: RowProps) {
+export function NotificationRow({ notification, onOpen, onContextMenu, size = "bell", nested, mode = DEVELOPER_MODE }: RowProps) {
   const label = sessionLabel(notification.conversation);
   const { name: actorName, avatar: actorAvatar } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
   const agentIcon = showsAgentIcon(notification);
-  const typeLabel = typeLabels[notification.type] || notification.type;
-  const typeColor = typeColors[notification.type] || "text-sol-text-muted";
+  const typeLabel = notificationTypeLabel(notification.type, notification.conversation?.agent_type);
+  // Hosted mode sets the event word in the muted ink; only the unread dot
+  // carries the accent.
+  const hosted = mode.hosted;
+  const typeColor = hosted ? "text-sol-text-muted" : typeColors[notification.type] || "text-sol-text-muted";
   const av = size === "page" ? "w-10 h-10" : "w-9 h-9";
 
   return (
@@ -124,19 +141,21 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
             {actorName ? (
               <span className="text-sm font-medium text-sol-text">{actorName}</span>
             ) : agentIcon ? (
-              <span className="text-sm font-medium text-sol-text">{agentNames[agentType] || agentType}</span>
+              <span className="text-sm font-medium text-sol-text">{notificationAgentName(agentType)}</span>
             ) : null}
             <span className={`text-xs ${typeColor}`}>{typeLabel}</span>
             <span className="text-xs text-sol-text-muted ml-auto flex-shrink-0">{timeAgo(notification.created_at)}</span>
-            {!notification.read && <div className="w-2 h-2 bg-sol-yellow rounded-full flex-shrink-0" />}
+            {!notification.read && <div className={`w-2 h-2 rounded-full flex-shrink-0 ${hosted ? "bg-sol-orange" : "bg-sol-yellow"}`} />}
           </div>
           <p className="text-sm text-sol-text leading-relaxed line-clamp-2">{notification.message}</p>
           {label && (
             <div className="flex items-center gap-2 mt-1.5">
               <span className={`inline-flex items-center gap-1.5 text-xs text-sol-text-muted bg-sol-bg-alt px-2 py-0.5 rounded truncate ${size === "page" ? "max-w-[360px]" : "max-w-[280px]"}`}>
                 {/* Which session this is about, by its face
-                    (session-characters.md S3). */}
-                <SessionGlyph row={notification.conversation} size={14} className="flex-shrink-0" />
+                    (session-characters.md S3); the assistant's by its disc. */}
+                {isHostedAgentType(notification.conversation?.agent_type)
+                  ? <AssistantMark size={14} />
+                  : <SessionGlyph row={notification.conversation} size={14} className="flex-shrink-0" />}
                 {label}
               </span>
             </div>
@@ -163,6 +182,7 @@ export function NotificationGroupRow({
   onOpen,
   onContextMenu,
   size = "bell",
+  mode = DEVELOPER_MODE,
 }: {
   group: Extract<IdleGrouped<any>, { kind: "group" }>;
   open: boolean;
@@ -170,8 +190,11 @@ export function NotificationGroupRow({
   onOpen: (n: any) => void;
   onContextMenu?: (e: MouseEvent, n: any) => void;
   size?: "bell" | "page";
+  mode?: SurfaceMode;
 }) {
-  const titles = group.rows.map((r) => sessionLabel(r.conversation) || "Session");
+  const words = mode.words;
+  const hosted = mode.hosted;
+  const titles = group.rows.map((r) => sessionLabel(r.conversation) || words.conversation);
   const { message } = summarizeIdleDigest(titles);
   const faces = group.rows.slice(0, 4);
 
@@ -191,20 +214,24 @@ export function NotificationGroupRow({
                 className="w-7 h-7 rounded-full bg-sol-bg border border-sol-border flex items-center justify-center"
                 style={{ zIndex: faces.length - i }}
               >
-                <SessionGlyph
-                  row={r.conversation}
-                  size={14}
-                  fallback={<AgentIcon agentType={r.conversation?.agent_type || "claude_code"} className="w-full h-full" />}
-                />
+                {isHostedAgentType(r.conversation?.agent_type) ? (
+                  <AssistantMark size={26} />
+                ) : (
+                  <SessionGlyph
+                    row={r.conversation}
+                    size={14}
+                    fallback={<AgentIcon agentType={r.conversation?.agent_type || "claude_code"} className="w-full h-full" />}
+                  />
+                )}
               </span>
             ))}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-sm font-medium text-sol-text">{group.rows.length} sessions</span>
-              <span className="text-xs text-sol-green">{typeLabels.sessions_need_input}</span>
+              <span className="text-sm font-medium text-sol-text">{group.rows.length} {words.conversations.toLowerCase()}</span>
+              <span className={`text-xs ${hosted ? "text-sol-text-muted" : "text-sol-green"}`}>{typeLabels.sessions_need_input}</span>
               <span className="text-xs text-sol-text-muted ml-auto flex-shrink-0">{timeAgo(group.newestAt)}</span>
-              {group.unread > 0 && <div className="w-2 h-2 bg-sol-yellow rounded-full flex-shrink-0" />}
+              {group.unread > 0 && <div className={`w-2 h-2 rounded-full flex-shrink-0 ${hosted ? "bg-sol-orange" : "bg-sol-yellow"}`} />}
             </div>
             <p className="text-sm text-sol-text leading-relaxed line-clamp-2">{message}</p>
           </div>
@@ -222,6 +249,7 @@ export function NotificationGroupRow({
             onContextMenu={onContextMenu}
             size={size}
             nested
+            mode={mode}
           />
         ))}
     </div>
