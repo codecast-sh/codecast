@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { takeReviewBatch, attachReviewToMessage, createReviewComment, addImagePin, quotedImages, answerProposalCard, pendingAnswerOf, proposalAnswersOf, replyItemsOf, takeProposalAnswers, submitReview, cancelReview } from "./reviewActions";
+import { takeReviewBatch, attachReviewToMessage, createReviewComment, addImagePin, quotedImages, answerProposalCard, pendingAnswerOf, proposalAnswersOf, replyItemsOf, takeProposalAnswers, submitReview, cancelReview, batchSendWords } from "./reviewActions";
 import { formatPlanFeedback, formatDocFeedback, formatPendingComments, sortPendingComments, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
@@ -352,6 +352,68 @@ describe("proposal answers in the batch", () => {
     cancelReview(CONV);
     expect(useInboxStore.getState().reviewComments[CONV]).toBeUndefined();
     expect(useInboxStore.getState().orgProposalChanges["ch-1"].status).toBe("proposed");
+  });
+
+  test("the subject rides on the item, so the tray can name the card or the group", () => {
+    answerProposalCard(CONV, { ...card("role:ops", [1], "Retire ops.", 1), subject: "Ops" }, { verdict: "approve" });
+    answerProposalCard(CONV, card("role:qa", [2], "Retire qa.", 2), { verdict: "reject", text: "no" });
+    expect(answers().map((c) => c.proposal.subject)).toEqual(["Ops", undefined]);
+    // A group's answer is one item over every member.
+    answerProposalCard(CONV, { proposal: P, key: "group:pr-1", change_ids: ["ch-1", "ch-2", "ch-3"], seqs: [1, 2, 3], sentence: "Settle 3 records in Funnel", subject: "Funnel" }, { verdict: "approve" });
+    expect(answers().map((c) => [c.proposal.card, c.proposal.change_ids.length, c.proposal.seqs, c.proposal.subject])).toEqual([["group:pr-1", 3, [1, 2, 3], "Funnel"]]);
+  });
+
+  test("batchSendWords counts the changes an approval applies, the answers with words, and the quotes, and words the head, the button and the placeholder", () => {
+    const words = () => batchSendWords(useInboxStore.getState().reviewComments[CONV] ?? []);
+    expect(words()).toEqual({ applies: 0, answers: 0, quotes: 0, head: null, button: null, placeholder: null });
+    // Applies only: the ids are summed, not the items.
+    answerProposalCard(CONV, { proposal: P, key: "group:pr-1", change_ids: ["ch-1", "ch-2"], seqs: [1, 2], sentence: "Settle 2 records" }, { verdict: "approve" });
+    answerProposalCard(CONV, card("role:x", [3], "Retire x.", 3), { verdict: "approve" });
+    expect(words()).toMatchObject({ applies: 3, answers: 0, quotes: 0, head: "3 changes will apply when you send", button: "Send and apply 3", placeholder: null });
+    // Both: the answers follow; a blank note is no answer.
+    answerProposalCard(CONV, card("role:qa", [2], "Retire qa.", 2), { verdict: "reject", text: "no" });
+    answerProposalCard(CONV, { ...card("role:y", [4], "Retire y.", 4), change_ids: ["ch-4"] }, { verdict: "note", text: "  " });
+    expect(words()).toMatchObject({ applies: 1, answers: 1, head: "1 change will apply when you send, and 1 answer goes with them", button: "Send and apply 1", placeholder: "Add a word if you like, or just send." });
+    answerProposalCard(CONV, { ...card("role:y", [4], "Retire y.", 4), change_ids: ["ch-4"] }, { verdict: "note", text: "why?" });
+    expect(words()).toMatchObject({ applies: 1, answers: 2, head: "1 change will apply when you send, and 2 answers go with them" });
+    // With quotes the count trails the sentence.
+    seed([...useInboxStore.getState().reviewComments[CONV]!, mk("q1", 0, "quoted", ""), mk("q2", 1, "quoted", "")]);
+    expect(words()).toMatchObject({ quotes: 2, head: "1 change will apply when you send, and 2 answers go with them · 2 quotes", button: "Send and apply 1" });
+    // Answers only.
+    seed([]);
+    answerProposalCard(CONV, card("role:qa", [2], "Retire qa.", 2), { verdict: "reject", text: "no" });
+    expect(words()).toMatchObject({ applies: 0, answers: 1, head: "1 answer goes when you send", button: "Send 1 answer", placeholder: "Add a word if you like, or just send." });
+    answerProposalCard(CONV, card("role:x", [3], "Retire x.", 3), { verdict: "note", text: "later" });
+    seed([...useInboxStore.getState().reviewComments[CONV]!, mk("q1", 0, "quoted", "")]);
+    expect(words()).toMatchObject({ answers: 2, quotes: 1, head: "2 answers go when you send · 1 quote", button: "Send 2 answers" });
+    // Quotes only: today's words, and the icon stands.
+    seed([mk("q1", 0, "quoted", ""), mk("q2", 1, "quoted", "note")]);
+    expect(words()).toEqual({ applies: 0, answers: 0, quotes: 2, head: "2 quotes on your next message", button: null, placeholder: null });
+    seed([mk("q1", 0, "quoted", "")]);
+    expect(words().head).toBe("1 quote on your next message");
+  });
+
+  test("a send from a conversation adds say for a proposal whose thread is another conversation, and not for the thread's own", () => {
+    const SENT_IN = "k57c6zk1n3m0p2q4r6s8t0v2w4x6y8z1";
+    const other = { id: "p-2", short_id: "op-2", title: "Elsewhere" };
+    useInboxStore.setState({
+      orgProposalChanges: { ...JSON.parse(JSON.stringify(ROWS)), "ch-9": { _id: "ch-9", proposal_id: "p-2", seq: 1, change: { kind: "retire", handle: "z" }, rationale: "r", evidence: [], status: "proposed" } },
+      orgProposals: {
+        "p-1": { _id: "p-1", short_id: "op-1", title: "Tidy ops", status: "open", thread: { conversation_id: SENT_IN } },
+        "p-2": { _id: "p-2", short_id: "op-2", title: "Elsewhere", status: "open", thread: { conversation_id: "t-other" } },
+      },
+    } as any);
+    answerProposalCard(SENT_IN, card("role:ops", [1], "Retire ops.", 1), { verdict: "approve" });
+    answerProposalCard(SENT_IN, { proposal: other, key: "role:z", change_ids: ["ch-9"], seqs: [1], sentence: "Retire z." }, { verdict: "approve" });
+    const text = attachReviewToMessage(SENT_IN, "");
+    expect(text).toBe(["On op-1:", "- Approved, and applied: op-1#1.", "", "On op-2:", "- Approved, and applied: op-2#1."].join("\n"));
+    const replies = dispatched.filter(([a]) => a === "replyOnOrgProposal");
+    expect(replies.map(([, args]) => args[0])).toEqual(["p-1", "p-2"]);
+    expect(replies[0][1][3]).toEqual({});
+    expect(replies[1][1][3]).toEqual({ say: { thread: "t-other", client_id: expect.stringMatching(/^optimistic_/) } });
+    // No body: the typed words stay in this conversation; the server writes the reply into the author's thread.
+    expect((replies[1][1][3] as { say: { body?: string } }).say.body).toBeUndefined();
+    useInboxStore.setState({ pendingMessages: {} } as any);
   });
 
   test("a surface with no composer takes one proposal's answers with say, and the words are the same", () => {

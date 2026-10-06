@@ -2,12 +2,28 @@ import { toast } from "sonner";
 import { copyToClipboard } from "./utils";
 import { useInboxStore, defaultNewSessionPath, findProjectPathByName } from "../store/inboxStore";
 import { spawnSessionWithPrompt } from "./spawnSession";
+import { surfaceShownNow } from "./surfaces";
 
 // The one error toast. Every surface that reports a caught error to the user
 // (ErrorBoundary crashes, window "error", unhandledrejection) renders through
 // this so the two recovery affordances — copy the trace, or hand it straight
 // to an agent — never drift apart per call site.
+//
+// Hosted mode has no trace to read and no agent to hand it to: it says the
+// page hit a problem, once however many follow, offers a reload, and logs the
+// detail (surface "errors.developer").
+export const HOSTED_ERROR_WORDS = "This page hit a problem.";
+
 export function showErrorToast(title: string, fullTrace: string) {
+  if (!surfaceShownNow("errors.developer")) {
+    console.error(title, fullTrace);
+    toast.error(HOSTED_ERROR_WORDS, {
+      id: "hosted-error",
+      duration: 10_000,
+      action: { label: "Reload", onClick: () => window.location.reload() },
+    });
+    return;
+  }
   toast.error(title, {
     duration: 15_000,
     action: {

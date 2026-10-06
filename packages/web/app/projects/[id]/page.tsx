@@ -68,7 +68,7 @@ import { ProgressBar, TargetDate } from "../../../components/initiatives/Initiat
 import { IntentHeader, IntentIdChip, IntentPickChip, IntentTabs, IntentTargetChip, useIntentTab, type IntentTab } from "../../../components/initiatives/IntentHeader";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
-import { InlineEdit } from "../../../components/org/OrgScopePanel";
+import { InlineEdit } from "../../../components/org/scope/ScopeEditors";
 
 const api = _api as any;
 
