@@ -58,12 +58,12 @@ describe("durable sync delivery through wrapped application saves", () => {
     const a = await save(ctx, { fields: { title: "Old", subtitle: "Remove" } });
     const b = await save(ctx, { id: a.id, fields: { title: "New", subtitle: undefined } });
     expect(b.receipts[0].revision).toBe(2);
-    expect(await readDeliveryReceipts(db, [a.receipts[0].id], new Set(["user:owner"])))
+    expect(await readDeliveryReceipts(db, [a.receipts[0]], new Set(["user:owner"])))
       .toMatchObject([{ revision: 0, position: 0 }]);
     await deliverAll(ctx);
     expect(db._tables.sync_actions[0]).toMatchObject({ patch: { title: "New" }, unset: ["subtitle"] });
     expect(db._tables.sync_actions[0].patch.subtitle).toBeUndefined();
-    expect(await readDeliveryReceipts(db, [a.receipts[0].id], new Set(["user:owner"])))
+    expect(await readDeliveryReceipts(db, [a.receipts[0]], new Set(["user:owner"])))
       .toMatchObject([{ revision: 2, position: 1 }]);
     await drainSyncOutbox(ctx, a.receipts[0].id);
     expect(db._tables.sync_heads[0].position).toBe(1);
@@ -165,8 +165,8 @@ describe("durable sync delivery through wrapped application saves", () => {
     const { ctx, db } = fixture();
     const a = await save(ctx, { fields: {} });
     await deliverAll(ctx);
-    expect(await readDeliveryReceipts(db, [a.receipts[0].id], new Set(["user:intruder"])))
-      .toEqual([{ id: a.receipts[0].id, revoked: true }]);
+    expect(await readDeliveryReceipts(db, [a.receipts[0]], new Set(["user:intruder"])))
+      .toEqual([{ id: a.receipts[0].id, revision: 1, revoked: true }]);
   });
 });
 

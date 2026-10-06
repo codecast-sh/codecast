@@ -75,19 +75,19 @@ export const status = internalQuery({
   },
 });
 
-export async function readDeliveryReceipts(db: any, ids: string[], heldKeys: ReadonlySet<string>) {
-  return Promise.all([...new Set(ids)].slice(0, 100).map(async (id) => {
+export async function readDeliveryReceipts(db: any, receipts: Array<{ id: string; revision: number }>, heldKeys: ReadonlySet<string>) {
+  return Promise.all(receipts.slice(0, 100).map(async ({ id, revision }) => {
     const row = await db.get(id);
-    if (!row || !heldKeys.has(row.scope_key)) return { id, revoked: true as const };
+    if (!row || !heldKeys.has(row.scope_key)) return { id, revision, revoked: true as const };
     return { id, revision: row.delivered_revision, scope_key: row.scope_key, position: row.position };
   }));
 }
 
 export const getReceipts = query({
-  args: { ids: v.array(v.id("sync_outbox")) },
-  handler: async (ctx, { ids }) => {
+  args: { receipts: v.array(v.object({ id: v.id("sync_outbox"), revision: v.number() })) },
+  handler: async (ctx, { receipts }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    return readDeliveryReceipts(ctx.db, ids, new Set(await heldKeysFor(ctx, userId)));
+    return readDeliveryReceipts(ctx.db, receipts, new Set(await heldKeysFor(ctx, userId)));
   },
 });

@@ -73,3 +73,12 @@ test("fanout scopes share one receipt list and any applied copy settles the enti
   settle();
   expect(useInboxStore.getState().pending[field]).toBeUndefined();
 });
+
+
+test("a stale revocation response cannot retire a newer write after rejoining", () => {
+  stamp();
+  settleDeliveryReceipts(useInboxStore.getState(), [{ id: "receipt", revision: 1, revoked: true }], syncLogScopeMetaKey);
+  expect(useInboxStore.getState().pending[field]).toBeDefined();
+  settleDeliveryReceipts(useInboxStore.getState(), [{ id: "receipt", revision: 2, revoked: true }], syncLogScopeMetaKey);
+  expect(useInboxStore.getState().pending[field]).toBeUndefined();
+});
