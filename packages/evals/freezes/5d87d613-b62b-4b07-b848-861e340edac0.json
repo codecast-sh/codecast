@@ -18,7 +18,7 @@
     "visibility": "public",
     "snapshot": "fixtures/changes-story/one-fix-with-risk.json"
   },
-  "judge": "The body tells the one change (a paused reminder series stays paused; a new reminder starts its own series) and why (230 patients got reminders for cancelled appointments), as plain paragraphs: no template section headings such as 'What changed', 'Why' or 'Also in this change', since a single change needs none. It does not repeat the risk warning (that the change adds a database column a teammate should watch on deploy), which the page shows on its own line under the body; saying what the change does for users, such as a pause surviving a restart, is fine.",
+  "judge": "The article tells the change (a paused reminder series stays paused; a new reminder starts its own series) and why (230 patients got reminders for cancelled appointments). Any headings name the part they introduce; none is a generic label such as 'What changed', 'Why' or 'Also in this change'. It does not repeat the risk warning (that the change adds a database column a teammate should watch on deploy), which the page shows on its own line under the body; saying what the change does for users, such as a pause surviving a restart, is fine.",
   "notes": null,
   "tags": [],
   "id": "5d87d613-b62b-4b07-b848-861e340edac0",

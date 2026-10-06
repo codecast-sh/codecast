@@ -46,7 +46,7 @@ test("loadShift spreads session CPU over the machine's cores and moves memory by
 
 describe("assignDestinations", () => {
   const ok = { readiness: "preflight_required" as const, blockers: [], pending: [] };
-  const cand = (id: string, rss: number, to = ["a", "b"]): OffloadCandidate => ({ sessionId: id, reason: "", confidence: "low", relief: { cpu: 0, rssHigh: rss }, staysLocal: [], disruption: "idle", perDestination: Object.fromEntries(to.map((d) => [d, ok])) });
+  const cand = (id: string, rss: number, to = ["a", "b"]): OffloadCandidate => ({ sessionId: id, reason: "", confidence: "low", relief: { cpu: 0, rssHigh: rss }, stops: [], staysLocal: [], disruption: "idle", perDestination: Object.fromEntries(to.map((d) => [d, ok])) });
   const host = (deviceId: string, available: number, extra: Partial<OffloadPlan["destinations"][number]> = {}) => ({ deviceId, name: deviceId, role: "cloud_linux" as const, online: true, sample: { ...point(0), cpuPercent: 10, memoryTotal: 1000, memoryAvailable: available }, ...extra });
   const plan = (destinations: OffloadPlan["destinations"], candidates: OffloadCandidate[]) => ({ deviceId: "mac", sourceSample: point(0), incident: { level: "elevated", reason: "", since: 0 }, generatedAt: 0, destinations, candidates, notOffered: [] }) as unknown as OffloadPlan;
 

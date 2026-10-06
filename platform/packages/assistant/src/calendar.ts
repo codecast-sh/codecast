@@ -1,8 +1,8 @@
-// The hosted assistant's calendar tools (plan pl-840): list events, find free
+// A hosted assistant's calendar tools: list events, find free
 // time, create and update events on the person's primary calendar. The tools
 // are written against a Calendar, the few verbs any calendar engine offers,
 // with events in Google Calendar's event shape (the shape the family's
-// calendars already sync in). whisk.ts is the Calendar: codecast reaches
+// calendars already sync in). whiskEngine.ts is the Calendar: the apps reach
 // calendars only through Whisk, which emails guests about every change, so a
 // call that would reach guests must say notify.
 //
@@ -10,8 +10,9 @@
 // pass the gate. Event titles and descriptions are written by whoever sent
 // the invitation, so every tool that returns them declares source "calendar".
 import { defineTool, Type, type Tool } from "@platform/agent";
-import { dayBounds, wallClockAt } from "../../lib/teamDay";
-import { callKey } from "./mail";
+import { dayBounds, wallClockAt } from "./zone";
+import { callKey, ruleAddresses } from "./mail";
+import { NEVER, NO_ONE, type AllowScopes } from "./rules";
 
 /** The longest window find_free_time searches. */
 export const FREE_TIME_MAX_DAYS = 14;
@@ -374,3 +375,26 @@ export function updateEventTool(calendar: Calendar): Tool {
 export function calendarTools(calendar: Calendar): Tool[] {
   return [listEventsTool(calendar), findFreeTimeTool(calendar), createEventTool(calendar), updateEventTool(calendar)];
 }
+
+/** How an Always allow narrows for each calendar tool (rules.ts): a rule
+ *  covers exactly the guests a call adds, and never a call that emails them
+ *  or drops one, since that changes what other people see and no match
+ *  names it. */
+export const CALENDAR_SCOPES: AllowScopes = {
+  create_event: (input) => {
+    if (input.notify) return NEVER;
+    const guests = ruleAddresses("bare", input.attendees);
+    if (guests === null) return NEVER;
+    return guests
+      ? { kind: "match", match: guests, covers: `Add events with ${guests} as the guests, without emailing them` }
+      : { kind: "match", match: NO_ONE, covers: "Add events with no guests" };
+  },
+  update_event: (input) => {
+    if (input.notify || (Array.isArray(input.remove_attendees) && input.remove_attendees.length > 0)) return NEVER;
+    const added = ruleAddresses("bare", input.add_attendees);
+    if (added === null) return NEVER;
+    return added
+      ? { kind: "match", match: added, covers: `Add ${added} to events, without emailing anyone` }
+      : { kind: "match", match: NO_ONE, covers: "Change events without adding or removing anyone or emailing the guests" };
+  },
+};

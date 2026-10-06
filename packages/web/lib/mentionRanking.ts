@@ -32,13 +32,18 @@ export function score(label: string, q: string): number {
 // exact/prefix/substring hit), order-independent — so "plain road" finds
 // "...The Roadmap, in Plain Language". Returns Infinity when any required word
 // is absent, so callers drop the candidate exactly as they do for score().
+/** The words of a text as every ranker splits them. */
+export function textWords(lower: string): string[] {
+  return lower.split(/[\s\-—,.;:/\\]+/).filter(Boolean);
+}
+
 export function matchScore(text: string, query: string): number {
   const q = query.trim().toLowerCase();
   if (!q) return 0;
   const tokens = q.split(/\s+/).filter(Boolean);
   if (tokens.length <= 1) return score(text, q);
   const lower = text.toLowerCase();
-  const words = lower.split(/[\s\-—,.;:/\\]+/).filter(Boolean);
+  const words = textWords(lower);
   let total = 0;
   for (const tok of tokens) {
     let best = Infinity;

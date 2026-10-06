@@ -1,7 +1,7 @@
 import { c, fmt, UNVERIFIABLE_MARK } from "./colors.js";
 import { computeCumulativeFiles, type CumulativeChange } from "@codecast/shared/diff";
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw, toolSummary } from "@codecast/shared/render";
-import { threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
+import { agentDisplayName, threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
 import type { AskResult, LivenessVerdict } from "@codecast/shared/contracts";
 
 // One glyph per liveness verdict. Green is positive contact. The gray ring is a
@@ -2386,13 +2386,6 @@ export function formatResumeResults(result: ResumeResult): string {
   const ownConvs = conversations.filter(cv => !cv.user);
   const teamConvs = conversations.filter(cv => cv.user);
 
-  const getAgentLabel = (agentType?: string): string | null => {
-    if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
-    if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-    if (agentType === "cursor") return "Cursor";
-    return agentType;
-  };
-
   lines.push(`${c.dim}Found ${conversations.length} session${conversations.length === 1 ? "" : "s"} matching "${query}"${c.reset}`);
   lines.push("");
 
@@ -2411,7 +2404,7 @@ export function formatResumeResults(result: ResumeResult): string {
       const name = conv.user.name || conv.user.email || "team member";
       meta.push(`${c.magenta}${name}${c.reset}`);
     }
-    const label = getAgentLabel(conv.agent_type);
+    const label = agentDisplayName(conv.agent_type);
     if (label) {
       meta.push(`${c.yellow}${label}${c.reset}`);
     }

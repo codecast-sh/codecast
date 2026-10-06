@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { AlertTriangle, Loader2, MonitorUp, RotateCw, Trash2, Users, Volume2, VolumeX } from "lucide-react";
+import { useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { AlertTriangle, Loader2, MonitorUp, RotateCw, Trash2, Users } from "lucide-react";
 import { recordingFailureWords, recordingSubject, type CallView } from "@codecast/shared/contracts";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { usePressOutside } from "../../hooks/usePressOutside";
@@ -20,6 +20,7 @@ import { isMediaDenial } from "../../lib/calls/mediaDenial";
 import { RecordingMark } from "./RecordingMark";
 import { ParticipantTag } from "./GuestTag";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { CallVideoControls } from "./CallVideoControls";
 import { formatCallTime } from "@codecast/shared/entities";
 import "./callVideoPlayer.css";
 
@@ -38,14 +39,13 @@ import "./callVideoPlayer.css";
 // controls). When the share ends the view falls back to the room at the same
 // moment, still playing.
 //
-// THE CLOCK. The native controls count from the file's own start, which is
-// not the call's (Record was pressed some minutes in). So the toolbar says
-// where in the CALL the picture is, in the clock the transcript and every
-// `cl-42@12:34` reference use, and the browser's own time readouts are hidden
-// (callVideoPlayer.css): one picture, one clock. The browser's download,
-// speed and picture-in-picture menus are left out too: they are not this
-// page's controls, and a downloaded file leaves the call's access rules
-// behind.
+// THE CLOCK. A file counts from its own start, which is not the call's
+// (Record was pressed some minutes in). So the player draws its own controls
+// (CallVideoControls) and they read where in the CALL the picture is, in the
+// clock the transcript and every `cl-42@12:34` reference use: one picture,
+// one clock. The browser's own controls stay off, and with them its download
+// and picture-in-picture menus, since a downloaded file leaves the call's
+// access rules behind.
 //
 // LOADING. Until a file's metadata arrives the box pulses the way the page's
 // placeholder does (CallVideoPlaceholder) and the browser draws nothing: no
@@ -58,16 +58,15 @@ import "./callVideoPlayer.css";
 // moves only when the element refuses it (useStableMediaSrcs), resuming at the
 // same moment.
 //
-// SOUND. A screen file has no audio track, and a browser draws no volume
-// control on a video without one, while the room's file that carries the
-// voices is playing unseen with its controls off. So the toolbar has its own
-// mute and volume while a screen is shown, and they act on the room's file.
-// A phone browser (iOS Safari above all) plays sound only from a play() made
-// inside a tap on that element, and the room's file is started by the
-// screen's play, not by a tap: the browser refuses, and the screen would run
-// silent with nothing saying why. So a refused play of the room's file turns
+// SOUND. A screen file has no audio track; the room's file carries every
+// voice, playing unseen under a screen. So the controls' mute and volume act
+// on the room's file whichever picture is up. A phone browser (iOS Safari
+// above all) plays sound only from a play() made inside a tap on that
+// element, and the room's file is started by the screen's play, not by a
+// tap: the browser refuses, and the screen would run silent with nothing
+// saying why. So a refused play of the room's file turns
 // the mute button into "Tap for sound", whose tap is the gesture the browser
-// wants. A phone also ignores a page's volume, so there the toolbar offers
+// wants. A phone also ignores a page's volume, so there the controls offer
 // mute alone.
 //
 // ONE SHAPE. The picture's box is 16:9 whatever the file's own shape, capped
@@ -85,8 +84,6 @@ import "./callVideoPlayer.css";
 // The cap leaves room for the page's header, the toolbar and the thread's
 // floor of about nine lines (callMedia.css) without the page scrolling.
 const CALL_VIDEO_BOX = "call-video-box relative aspect-video max-h-[min(46vh,calc(100dvh-520px))] min-h-[180px] w-full overflow-hidden bg-black";
-/** The browser menus that are not this page's (THE CLOCK above). */
-const NATIVE_MENUS_OFF = "nodownload noplaybackrate noremoteplayback";
 const CALL_VIDEO_FRAME = "dark overflow-hidden rounded-lg bg-black ring-1 ring-sol-border/30";
 const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 font-mono text-[11px] text-sol-text-muted";
 
@@ -169,8 +166,20 @@ export function CallVideoPlayer({
   const screen = screenId ? (playable.find((f) => f.id === screenId) ?? null) : null;
   const [callMs, setCallMs] = useState(() => (main ? callMsOf(main, callStartedAt, 0) : 0));
 
-  const mainEl = useRef<HTMLVideoElement>(null);
-  const screenEl = useRef<HTMLVideoElement>(null);
+  const mainEl = useRef<HTMLVideoElement | null>(null);
+  const screenEl = useRef<HTMLVideoElement | null>(null);
+  // The same elements as state, for the controls to follow as they change.
+  const [mainNode, setMainNode] = useState<HTMLVideoElement | null>(null);
+  const [screenNode, setScreenNode] = useState<HTMLVideoElement | null>(null);
+  const mainRef = useCallback((n: HTMLVideoElement | null) => {
+    mainEl.current = n;
+    setMainNode(n);
+  }, []);
+  const screenRef = useCallback((n: HTMLVideoElement | null) => {
+    screenEl.current = n;
+    setScreenNode(n);
+  }, []);
+  const boxRef = useRef<HTMLDivElement>(null);
   // Where a file should open once its element has loaded: keyed by file,
   // since a switch can move the room and the screen at once.
   const pending = useRef(new Map<string, { seconds: number; play: boolean }>());
@@ -224,8 +233,8 @@ export function CallVideoPlayer({
     }
   };
 
-  // The room's sound refused for want of a tap (SOUND above): the toolbar
-  // asks for one. Cleared the moment the room's file does play.
+  // The room's sound refused for want of a tap (SOUND above): the controls
+  // ask for one. Cleared the moment the room's file does play.
   const [soundBlocked, setSoundBlocked] = useState(false);
   /** Play the room's file, noting a refusal that a tap would lift. */
   const playRoom = (el: HTMLVideoElement) =>
@@ -351,17 +360,6 @@ export function CallVideoPlayer({
     media.retry(file.id);
   };
 
-  // The room's sound, as the toolbar's own controls show and set it while a
-  // screen is the view (see SOUND above).
-  const [sound, setSound] = useState({ volume: 1, muted: false });
-  const onMainVolume = (e: React.SyntheticEvent<HTMLVideoElement>) => setSound({ volume: e.currentTarget.volume, muted: e.currentTarget.muted });
-  const setMainSound = (next: { volume?: number; muted?: boolean }) => {
-    const el = mainEl.current;
-    if (!el) return;
-    if (next.volume !== undefined) el.volume = next.volume;
-    if (next.muted !== undefined) el.muted = next.muted;
-  };
-
   const isDriver = (el: HTMLVideoElement) => driver()?.el === el;
   const driverHandlers = {
     onTimeUpdate: (e: React.SyntheticEvent<HTMLVideoElement>) => {
@@ -423,25 +421,21 @@ export function CallVideoPlayer({
     // class makes every sol token inside (the toolbar's words) read on it
     // whatever theme the page is in.
     <div className={`${CALL_VIDEO_FRAME} ${className}`}>
-      <div className={CALL_VIDEO_BOX} aria-busy={!shownLoaded && !dead ? true : undefined}>
+      <div ref={boxRef} className={CALL_VIDEO_BOX} aria-busy={!shownLoaded && !dead ? true : undefined}>
         <video
           key={media.keyOf(main)}
-          ref={mainEl}
+          ref={mainRef}
           src={srcOf(main)}
-          controls={!screen && loadedKeys.has(media.keyOf(main))}
-          controlsList={NATIVE_MENUS_OFF}
           disablePictureInPicture
           playsInline
           preload="metadata"
           aria-hidden={screen ? true : undefined}
           tabIndex={screen ? -1 : undefined}
-          className={`call-video absolute inset-0 h-full w-full object-contain ${screen || !loadedKeys.has(media.keyOf(main)) ? "pointer-events-none opacity-0" : ""}`}
+          className={`absolute inset-0 h-full w-full object-contain ${screen || !loadedKeys.has(media.keyOf(main)) ? "pointer-events-none opacity-0" : ""}`}
           onLoadedMetadata={(e) => {
             noteLoaded(main);
-            onMainVolume(e);
             onLoadedFile(main)(e);
           }}
-          onVolumeChange={onMainVolume}
           onError={onError(main)}
           onEnded={onMainEnded}
           {...driverHandlers}
@@ -450,15 +444,13 @@ export function CallVideoPlayer({
         {screen && (
           <video
             key={media.keyOf(screen)}
-            ref={screenEl}
+            ref={screenRef}
             src={srcOf(screen)}
-            controls={loadedKeys.has(media.keyOf(screen))}
-            controlsList={NATIVE_MENUS_OFF}
             disablePictureInPicture
             muted
             playsInline
             preload="metadata"
-            className={`call-video absolute inset-0 h-full w-full object-contain ${loadedKeys.has(media.keyOf(screen)) ? "" : "opacity-0"}`}
+            className={`absolute inset-0 h-full w-full object-contain ${loadedKeys.has(media.keyOf(screen)) ? "" : "opacity-0"}`}
             onLoadedMetadata={(e) => {
               noteLoaded(screen);
               onLoadedFile(screen)(e);
@@ -466,6 +458,17 @@ export function CallVideoPlayer({
             onError={onError(screen)}
             onEnded={onScreenEnded}
             {...driverHandlers}
+          />
+        )}
+        {!dead && (
+          <CallVideoControls
+            boxRef={boxRef}
+            el={screen ? screenNode : mainNode}
+            room={main.kind === "composite" ? mainNode : null}
+            toCallMs={(seconds) => callMsOf(shown, callStartedAt, seconds)}
+            ready={shownLoaded}
+            soundBlocked={soundBlocked}
+            onUnblockSound={unblockSound}
           />
         )}
         {!shownLoaded && !dead && <div className={CALL_VIDEO_LOADING} aria-hidden="true" />}
@@ -515,9 +518,6 @@ export function CallVideoPlayer({
         </div>
       )}
       <div className={CALL_VIDEO_BAR}>
-        <span className="tabular-nums text-sol-text-secondary" title="Where in the call this is, in the transcript's clock">
-          {formatCallTime(callMs)}
-        </span>
         {chips.length > 0 && (
           <span className="flex items-center gap-0.5 rounded-md bg-white/[0.05] p-0.5" role="radiogroup" aria-label="What to watch">
             <ViewChip active={!screen} onClick={() => pickView(null)} title="The room as everyone saw it, with every voice">
@@ -568,51 +568,6 @@ export function CallVideoPlayer({
                 </button>
               );
             })}
-          </span>
-        )}
-        {screen && (
-          // The slider rises above the button on hover or focus rather than
-          // sitting in the bar: the bar holds one line at the page's usual
-          // width, and a control that only the screen view has must not
-          // wrap it there and move the transcript down when the view
-          // switches.
-          <span className="group/vol relative flex items-center" role="group" aria-label="The room's sound">
-            {soundBlocked ? (
-              <button
-                type="button"
-                onClick={unblockSound}
-                className="flex items-center gap-1 rounded bg-sol-violet/15 px-1.5 py-0.5 text-sol-violet transition-colors hover:bg-sol-violet/25"
-              >
-                <VolumeX className="h-3.5 w-3.5" />
-                Tap for sound
-              </button>
-            ) : (
-            <button
-              type="button"
-              onClick={() => setMainSound({ muted: !sound.muted })}
-              aria-pressed={sound.muted}
-              aria-label={sound.muted ? "Unmute the room" : "Mute the room"}
-              title={sound.muted ? "Unmute: the room's voices, under this screen" : "Mute the room's voices"}
-              className="rounded p-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
-            >
-              {sound.muted || sound.volume === 0 ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-            </button>
-            )}
-            {/* No slider on a touch screen: a phone ignores a page's volume. */}
-            <span className="absolute bottom-full left-1/2 z-10 hidden -translate-x-1/2 pb-1.5 group-focus-within/vol:block group-hover/vol:block [@media(pointer:coarse)]:!hidden">
-              <span className="flex rounded-md bg-sol-base03 px-2.5 py-2 shadow-lg ring-1 ring-white/[0.08]">
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={sound.muted ? 0 : sound.volume}
-                  onChange={(e) => setMainSound({ volume: Number(e.currentTarget.value), muted: Number(e.currentTarget.value) === 0 })}
-                  aria-label="The room's volume"
-                  className="h-1 w-20 cursor-pointer accent-sol-violet"
-                />
-              </span>
-            </span>
           </span>
         )}
         <span className="flex-1" />

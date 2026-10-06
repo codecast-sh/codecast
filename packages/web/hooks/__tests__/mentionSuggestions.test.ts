@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildMentionItems, mentionItemMatches } from "../useMentionQuery";
+import { buildMentionItems, chatMentionOffers, mentionItemMatches } from "../useMentionQuery";
 import { mergeMentionSuggestions, mentionViewTimes } from "../../lib/mentionRanking";
 import type { MentionItem } from "../../components/editor/MentionList";
 import { useInboxStore } from "../../store/inboxStore";
@@ -133,5 +133,22 @@ describe("match strength leads once the reader has typed", () => {
     const ranked = mergeMentionSuggestions(workers.filter((m) => mentionItemMatches(m, "desk v3")), [], new Map(), Infinity, "desk v3");
     expect(ranked.map((m) => m.id)).toEqual(["w1", "w3"]);
     expect(workers.filter((m) => mentionItemMatches(m, ""))).toEqual([]);
+  });
+
+  test("chat offers sessions by title once typed, and only the room on a bare @", () => {
+    const pool: MentionItem[] = [
+      { id: "s1", type: "session", label: "CPU accounting for agent processes", updatedAt: 50 },
+      { id: "s2", type: "session", label: "Feedback processing pipeline design", updatedAt: 40 },
+      { id: "t1", type: "task", label: "Processed a four-hour fallback stall", shortId: "ct-1", status: "in_progress", updatedAt: 90 },
+      { id: "d1", type: "doc", label: "Process-Level Assessment", updatedAt: 10 },
+      { id: "p1", type: "person", label: "Ashot Petrosian", handle: "ashot" },
+      { id: "l1", type: "label", label: "processing" },
+    ];
+    const offered = (q: string) => mergeMentionSuggestions(
+      pool.filter((m) => chatMentionOffers(m, q) && mentionItemMatches(m, q)), [], new Map(), 10, q,
+    ).map((m) => m.id);
+    expect(offered("process")).toEqual(["s1", "s2", "t1", "d1"]);
+    expect(offered("").filter((id) => id.startsWith("s"))).toEqual([]);
+    expect(chatMentionOffers({ ...pool[0], contextAt: 1 }, "")).toBe(true);
   });
 });
