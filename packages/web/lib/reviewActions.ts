@@ -112,6 +112,8 @@ export type ProposalCardRef = {
   seqs: number[];
   sentence: string;
   ordinal?: number;
+  /** The card's or the group's title, which names the row in the tray. */
+  subject?: string;
 };
 
 /** A note with nothing said: no answer. Blank words are kept while the
@@ -137,7 +139,7 @@ export function answerProposalCard(batchKey: string, card: ProposalCardRef, answ
   const leave = answer.verdict === "approve" && !!answer.leave_sessions;
   const proposal: PendingProposalAnswer = {
     id: card.proposal.id, short_id: card.proposal.short_id, title: card.proposal.title, card: card.key,
-    change_ids: card.change_ids, seqs: card.seqs, verdict: answer.verdict, ...(card.ordinal !== undefined ? { ordinal: card.ordinal } : {}), ...(leave ? { leave_sessions: true } : {}),
+    change_ids: card.change_ids, seqs: card.seqs, verdict: answer.verdict, ...(card.ordinal !== undefined ? { ordinal: card.ordinal } : {}), ...(leave ? { leave_sessions: true } : {}), ...(card.subject ? { subject: card.subject } : {}),
   };
   // Same verdict: only the words moved, so the item keeps its place and id.
   if (have && have.proposal.verdict === answer.verdict && sameSeqs(have.proposal.seqs, card.seqs) && !!have.proposal.leave_sessions === leave) {
@@ -177,6 +179,50 @@ export function replyItemsOf(comments: readonly PendingComment[] | undefined, pr
   }));
 }
 
+export type BatchSendWords = {
+  /** Changes the send applies: the change ids over the approve items. */
+  applies: number;
+  /** Rejections and notes with words: the answers the send carries. */
+  answers: number;
+  /** Items that quote a message. */
+  quotes: number;
+  /** The tray's head sentence; null with nothing to say. */
+  head: string | null;
+  /** The composer button's words; null when the icon stands. */
+  button: string | null;
+  /** The composer's placeholder while answers wait; null otherwise. */
+  placeholder: string | null;
+};
+
+const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+
+/** The one home for counting a batch: what the tray's head, the composer's
+ *  button and its placeholder say about the next send. Pure. */
+export function batchSendWords(comments: readonly PendingComment[]): BatchSendWords {
+  let applies = 0;
+  let answers = 0;
+  let quotes = 0;
+  for (const c of comments) {
+    if (!isProposalAnswer(c)) quotes += 1;
+    else if (c.proposal.verdict === "approve") applies += c.proposal.change_ids.length;
+    else if (!blankNote({ verdict: c.proposal.verdict, text: c.body })) answers += 1;
+  }
+  const applyWords = `${plural(applies, "change")} will apply when you send`;
+  const answerWords = (lead: string) => `${plural(answers, "answer")} ${answers === 1 ? "goes" : "go"} ${lead}`;
+  const quoteWords = plural(quotes, "quote");
+  const head = applies && answers ? `${applyWords}, and ${answerWords("with them")}`
+    : applies ? applyWords
+    : answers ? answerWords("when you send")
+    : quotes ? `${quoteWords} on your next message`
+    : null;
+  return {
+    applies, answers, quotes,
+    head: head && quotes && (applies || answers) ? `${head} · ${quoteWords}` : head,
+    button: applies ? `Send and apply ${applies}` : answers ? `Send ${plural(answers, "answer")}` : null,
+    placeholder: answers ? "Add a word if you like, or just send." : null,
+  };
+}
+
 /** The words a proposal's answers read as (proposalReplyText), from the batch. */
 function replyOf(answers: readonly (PendingComment & { proposal: PendingProposalAnswer })[]): OrgProposalReply {
   const first = answers[0].proposal;
@@ -190,10 +236,13 @@ function replyOf(answers: readonly (PendingComment & { proposal: PendingProposal
  * proposal) and return the words for the message, one block per proposal.
  * With `proposalId` only that proposal's answers are taken; `say` rides to
  * the server for a surface with no composer, which then sends the words
- * into the proposal's thread itself. A proposal's approvals leave the
- * sessions where they are when any of them asks to (`leave_sessions`, per
- * proposal on the server), or when the caller does. A note left blank is
- * dropped, not sent. Returns "" when nothing was pending.
+ * into the proposal's thread itself. A send from a conversation (`sentIn`)
+ * adds `say` on its own for a proposal whose thread is another
+ * conversation, with no body: the typed words stay here and the server
+ * writes the reply into the author's thread. A proposal's approvals leave
+ * the sessions where they are when any of them asks to (`leave_sessions`,
+ * per proposal on the server), or when the caller does. A note left blank
+ * is dropped, not sent. Returns "" when nothing was pending.
  */
 export function takeProposalAnswers(batchKey: string, opts?: { proposalId?: string; say?: OrgReplyOpts["say"]; leave_sessions?: boolean; sentIn?: string }): string {
   const s = useInboxStore.getState();
@@ -207,7 +256,9 @@ export function takeProposalAnswers(batchKey: string, opts?: { proposalId?: stri
     const items = replyItemsOf(answers, proposalId);
     const leave = !!opts?.leave_sessions || answers.some((c) => c.proposal.leave_sessions);
     if (opts?.sentIn) noteReplySent(proposalId, answers[0].proposal.short_id, opts.sentIn);
-    s.replyOnOrgProposal(proposalId, items, proposalSeen(rows), { ...(leave ? { leave_sessions: true } : {}), ...(opts?.say ? { say: opts.say } : {}) });
+    const thread = s.orgProposals[proposalId]?.thread?.conversation_id;
+    const say = opts?.say ?? (opts?.sentIn && thread && thread !== opts.sentIn ? { thread, client_id: `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}` } : undefined);
+    s.replyOnOrgProposal(proposalId, items, proposalSeen(rows), { ...(leave ? { leave_sessions: true } : {}), ...(say ? { say } : {}) });
     replies.push(replyOf(answers));
   }
   for (const c of taken) s.removeReviewComment(batchKey, c.id);

@@ -58,11 +58,11 @@ import {
   type OrgScopeChange,
   type OrgTaskStatusChange,
   type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
-  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords, ORG_GOAL_KINDS } from "@codecast/shared/contracts/orgProposal";
+  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords, ORG_GOAL_KINDS, type OrgCharterEditChange, applyCharterEdits } from "@codecast/shared/contracts/orgProposal";
 import { INITIATIVE_RECORD_MAX, INITIATIVE_RECORD_NOUN, mergeIntentSources, parseIntentSource, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
 import { findInitiative } from "./lib/initiativeRef";
-import { applyRoutineTune, performSetTrust, roleCheckOf, standingConversationOf } from "./orgRoles";
+import { applyRoutineTune, performSetTrust, performUpdateRole, roleCheckOf, standingConversationOf } from "./orgRoles";
 import { roleWakeOf } from "@codecast/shared/contracts/rolePlaybook";
 import { roleRoutineFor } from "./lib/orgRoutine";
 import { insertTask } from "./agentTasks";
@@ -644,7 +644,7 @@ export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, tea
     now,
     commits,
     sessions: activitySessionsFromScan(scan),
-    projects: projects.map((p: any) => ({ id: String(p._id), title: p.title, status: p.status, project_path: p.project_path ?? null, updated_at: p.updated_at ?? p._creationTime })),
+    projects: projects.map((p: any) => ({ id: String(p._id), short_id: p.short_id, title: p.title, status: p.status, project_path: p.project_path ?? null, updated_at: p.updated_at ?? p._creationTime })),
     plans: plans.map(activityPlanOf),
     tasks: tasks.map((t: any) => ({ id: String(t._id), short_id: t.short_id, title: t.title, status: t.status, plan_id: t.plan_id ? String(t.plan_id) : null, project_id: t.project_id ? String(t.project_id) : null, updated_at: t.updated_at ?? t._creationTime, conversation_ids: (t.conversation_ids ?? []).map((id: any) => String(id)) })),
     members,
@@ -1378,6 +1378,22 @@ export async function applyScope(ctx: Ctx, userId: Id<"users">, boundary: Bounda
   return applyMove(ctx, userId, boundary, { handle: p.handle, scope_add: p.add, scope_remove: p.remove, leave_sessions: p.leave_sessions }, opts.human_decision);
 }
 
+// A role's charter edited in place (S7): the passages the change names are
+// substituted in the charter as it stands (applyCharterEdits, which refuses
+// a passage that is missing or ambiguous and a result over the cap) and the
+// text lands through the role's own update, a human only write the
+// person's accept authorises.
+export async function applyCharterEdit(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgCharterEditChange, opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const edited = applyCharterEdits(role.charter ?? "", p.edits);
+  if (edited.error !== undefined) return { status: "error", error: `@${role.handle}'s charter: ${edited.error}` };
+  const charter = edited.charter;
+  if (charter === (role.charter ?? "").trim()) return { status: "applied", note: `@${role.handle}: charter unchanged`, role: roleRef(role) };
+  await performUpdateRole(ctx, userId, { role_id: String(role._id), charter, human_decision: opts.human_decision });
+  const did = p.edits.map((e) => (e.op === "replace" ? "a passage rewritten" : e.op === "add" ? "a line added" : "a passage cut"));
+  return { status: "applied", note: `@${role.handle}: charter ${did.join(", ")} (${charter.length} characters)`, role: roleRef(role) };
+}
+
 export async function applyBudget(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgBudgetChange, opts: ApplyOpts): Promise<ApplyResult> {
   const role = await liveRole(ctx, boundary, p.handle);
   const before = capsFor(role);
@@ -1466,10 +1482,20 @@ export async function applyProjectMeta(ctx: Ctx, userId: Id<"users">, boundary: 
   const project = ref.kind === "project" ? await ctx.db.get(ref.id) : null;
   if (!project) throw new Error(`No project "${p.project}" in this workspace`);
   const { project: _ref, kind: _kind, ...fields } = p;
+  // A proposal adds to a charter's lists, never replaces them: a reviewer
+  // that read one new risk writes that risk, and what the person wrote
+  // stays. The words, the priority and the owner are single values and move.
+  const held = (k: "success_metrics" | "non_goals" | "risks"): string[] => (project[k] ?? []).map((x: string) => x.trim()).filter(Boolean);
+  for (const k of ["success_metrics", "non_goals", "risks"] as const) {
+    if (fields[k] === undefined) continue;
+    const have = held(k);
+    const seen = new Set(have.map((x) => x.toLowerCase()));
+    fields[k] = [...have, ...fields[k]!.map((x) => x.trim()).filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()))];
+  }
   const patch = await charterPatch(ctx, project, fields, "projects");
   await ctx.db.patch(project._id, { ...patch, updated_at: Date.now() });
   await noteOrgChange(ctx, userId, whereOfRecord(project), { kind: "project_meta", subject: recordSubject("project", project), ...movedFields(Object.fromEntries(Object.keys(patch).map((k) => [k, project[k] ?? null])), patch), labels: await labelsOf(ctx, [project.owner_role_id, patch.owner_role_id]) });
-  const did = Object.keys(patch).map((k) => (k === "owner_role_id" ? `owner ${p.owner}` : k === "priority" ? String(patch.priority ?? "no priority") : k.replace(/_/g, " ")));
+  const did = Object.keys(patch).map((k) => (k === "owner_role_id" ? `owner ${p.owner}` : k === "priority" ? String(patch.priority ?? "no priority") : k === "success_metrics" || k === "non_goals" || k === "risks" ? `${k.replace(/_/g, " ")} +${(patch[k] ?? []).length - held(k).length}` : k.replace(/_/g, " ")));
   return { status: "applied", note: `project "${project.title}": ${did.join(", ") || "nothing to change"}` };
 }
 
@@ -1831,6 +1857,7 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "upgrade": return applyUpgrade(ctx, userId, boundary, change);
     case "routine": return applyRoutine(ctx, userId, boundary, change, opts);
     case "project_meta": return applyProjectMeta(ctx, userId, boundary, change, opts);
+    case "charter_edit": return applyCharterEdit(ctx, userId, boundary, change, opts);
     case "adopt": return applyAdopt(ctx, userId, boundary, change, opts);
     case "file": return applyFile(ctx, userId, boundary, change, opts);
     case "plan_status": return applyPlanStatus(ctx, userId, boundary, change, opts);

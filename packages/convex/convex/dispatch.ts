@@ -2,6 +2,7 @@ import { mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
@@ -34,7 +35,7 @@ import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { startHostedConversationFor } from "./assistant/entry";
-import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser, reorderQueuedForUser, mergeQueuedForUser, releaseQueuedForUser } from "./pendingMessages";
 import { enqueueCloudSpawn, performCloudHostAction, performSetLocalMirror } from "./cloud";
 import type { CloudHostAction, LocalMirrorMode, MirrorResolve } from "@codecast/shared/contracts";
 import { effectiveStartFrom, parkOnCloudHost, resolveCloudDevice } from "./cloudPlacement";
@@ -57,6 +58,8 @@ import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, canAccessProject, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
+import { startShipCore } from "./ship";
+import { personEditCore, resolveProposalCore } from "./expectations";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -1260,6 +1263,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   cancelPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
     cancelPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
+  // A shared session's queue, steered by anyone who may send into it.
+  reorderQueued: async (ctx, userId, [convId, messageId, beforeId]: [string, string, string | null]) =>
+    reorderQueuedForUser(ctx, userId, convId as Id<"conversations">, { messageId, beforeId }),
+  mergeQueued: async (ctx, userId, [convId, messageId, intoId]: [string, string, string]) =>
+    mergeQueuedForUser(ctx, userId, convId as Id<"conversations">, { messageId, intoId }),
+  // The composer's "Queue for later": a row held for the end of the turn.
+  queueMessage: async (ctx, userId, [convId, content, clientId]: [string, string, string]) => {
+    const conversation = await ctx.db.get(convId as Id<"conversations">);
+    if (!conversation) throw new Error("conversation_deleted");
+    if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
+    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, queue: true });
+  },
+  releaseQueued: async (ctx, userId, [convId]: [string]) =>
+    releaseQueuedForUser(ctx, userId, convId as Id<"conversations">),
 
   sendMessage: async (
     ctx,
@@ -1465,6 +1482,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       parent: fields.parent,
       sort_order: fields.sort_order,
       duplicate_of: fields.duplicate_of,
+      from_call: fields.from_call,
       subtask_resolution:
         fields.subtask_resolution === "cascade" || fields.subtask_resolution === "only_parent"
           ? fields.subtask_resolution
@@ -1497,6 +1515,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       parent: opts.parent,
       // Idempotency key: a retried/replayed create returns the same row.
       client_key: opts.client_key,
+      from_call: opts.from_call,
     });
   },
 
@@ -1591,6 +1610,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (lp.publisher_user_id && lp.publisher_user_id !== String(userId)) throw new ConvexError("The checkout is on a teammate's machine: its owner can edit this file");
     const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: lp.root, edits }), lp.device_id, requestId);
     return { command_id: commandId };
+  },
+
+  // A project's expectations, changed where they are read (line-map.md LX3,
+  // LX5; the-line-model.md LM5). A person's own line or retirement becomes a
+  // proposal that applies by the shared rule (personEditApplies); Apply / Drop
+  // on an open proposal answers its card when the person holds it, so the
+  // queue and the panel settle one decision. A throw is a permanent refusal:
+  // the store takes its paint back.
+  editExpectations: async (ctx, userId, [projectId, edit]: [string, any]) => {
+    if (!isServerId(projectId)) throw new ConvexError("This project is not saved yet");
+    return await personEditCore(ctx as any, userId, projectId, edit);
+  },
+  resolveExpectationProposal: async (ctx, userId, [_projectId, proposal, verdict]: [string, string, "apply" | "drop"]) => {
+    if (verdict !== "apply" && verdict !== "drop") throw new ConvexError("Apply or drop");
+    return await resolveProposalCore(ctx as any, userId, proposal, verdict, { settled: true });
   },
 
   // Naming a project's lead (org-roles-run-work.md R4): the owner and, when
@@ -1726,6 +1760,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.ingest.updateSource, { source: id, status });
     return null;
   },
+  // The bulk import of a vendor source's recordings (sources/replayBackfill.ts):
+  // the same start and stop `cast replay import` calls.
+  startOpsReplayImport: async (ctx, _userId, [id, window]: [string, string | undefined]) => {
+    if (!opsRowId(ctx, "event_sources", id)) return null;
+    await (ctx as any).runMutation(api.sources.replayBackfill.start, { source: id, ...(window ? { window } : {}) });
+    return null;
+  },
+  stopOpsReplayImport: async (ctx, _userId, [id]: [string]) => {
+    if (!opsRowId(ctx, "event_sources", id)) return null;
+    await (ctx as any).runMutation(api.sources.replayBackfill.stop, { source: id });
+    return null;
+  },
   removeOpsSource: async (ctx, _userId, [id]: [string]) => {
     if (!opsRowId(ctx, "event_sources", id)) return null;
     await (ctx as any).runMutation(api.ingest.removeSource, { source: id });
@@ -1769,12 +1815,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // client's stub id, so rewrite it with the real id in the same transaction.
   // The stub id doubles as the idempotency key: a replayed dispatch returns
   // the team the first run made instead of minting a duplicate.
-  dispatchCreateTeam: async (ctx, userId, [stubId, opts]: [string, { name: string; icon?: string; icon_color?: string }]) => {
+  dispatchCreateTeam: async (ctx, userId, [stubId, opts]: [string, { name: string; icon?: string; icon_color?: string; discoverable?: boolean }]) => {
     const teamId = await (ctx as any).runMutation(api.teams.createTeam, {
       name: opts.name,
       icon: opts.icon,
       icon_color: opts.icon_color,
       client_key: stubId,
+      ...(opts.discoverable ? { discoverable: true } : {}),
     });
     await applyPatches(ctx, userId, {
       client_state: { _: { ui: { active_team_id: teamId } } },
@@ -2043,6 +2090,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       parentCommentId?: string;
       filePath?: string;
       lineNumber?: number;
+      anchorLines?: CodeAnchorText;
       clientId: string;
       commandId?: string;
     }>(result);
@@ -2058,6 +2106,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       parent_comment_id: r.parentCommentId ? (r.parentCommentId as Id<"comments">) : undefined,
       file_path: r.filePath || undefined,
       line_number: typeof r.lineNumber === "number" ? r.lineNumber : undefined,
+      anchor_lines: r.anchorLines,
       client_id: r.clientId,
     });
   },
@@ -2153,6 +2202,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Code review threads (review_comments). The server settles a whole thread
   // from any one comment in it, so one call per gesture is enough; a stub
   // (no server row yet) has nothing to resolve.
+  // One Ship control (ship.ts): the store paints the press on shipTargets,
+  // this starts it. A press on a target that is not a server row yet waits.
+  startShip: async (ctx, userId, [target, clientKey, decisionId]: [{ kind: "task" | "conversation" | "pull_request"; id: string }, string, string | undefined]) => {
+    if (!isServerId(target?.id)) throw new Error("Nothing to ship yet");
+    return await startShipCore(ctx as any, userId, target, { clientKey, decisionId });
+  },
   setPrShepherd: async (ctx, _userId, [prId, conversationId, enabled]: [string, string | undefined, boolean]) => {
     return await ctx.runMutation!((api as any).prShepherd.setShepherd, { pr_id: prId, ...(conversationId ? { conversation_id: conversationId } : {}), enabled });
   },

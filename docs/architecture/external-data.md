@@ -340,6 +340,36 @@ Three things read the stream (`packages/shared/replay/`):
 - `toRepro(events, baseUrl)`: a Playwright test that replays navigation, clicks, typed placeholders and submits up to the error, then asserts the error does not happen.
 - `fromRrweb(rrwebEvents)`: converts PostHog and Sentry rrweb recordings (meta, incremental mouse interactions, inputs, the console and network plugins) into the same events, so mirrored replays read the same way.
 
+A PostHog or Sentry recording is imported the first time it is read (X7), or
+all at once by a source's bulk import (`sources/replayBackfill.ts`), shaped
+like the Slack history import (slack-chat-mirror.md, "Bringing channels
+over"). `cast replay import --source <name> [--since 7d|30d|90d|all]`, the
+source card on Settings, Integrations and the Ops Replays tab all start the
+same `replayBackfill.start`. Its one state object is the source row's
+`replay_backfill` (status running, done, paused or error; window, since and
+an `until` pinned at the start so pages walk a set new recordings do not
+shift; cursor; listed, imported, skipped, failed; last error), written once
+per page, and every surface reads it (`cast sources show`, `cast replay
+import --status`, the web line). One scheduled action runs one page: list 10
+recordings (PostHog's `session_recordings` by offset inside `date_from` and
+`date_to`; Sentry's org `replays` list by cursor inside `start` and `end`),
+skip those already imported (`replays.importedReplays`), and import the rest
+two at a time, each in its own action, through the same
+`importVendorRecording` a read takes, with its byte caps. A page that imported
+anything pauses 15 s before the next, which keeps PostHog near 150 calls a
+minute. A 429 waits the vendor's Retry-After (60 s without one, 15 min at
+most) and redoes the page from where it stopped: the ids it already handled
+ride `page_seen`, so each recording counts once and the cursor moves only past
+a finished page. A refused token pauses the import and stops the source
+through `lib/sourceHealth.markConnectionLost`; ten failures in a row stop it on
+the error. A stop, a pause or a stalled run (no page for 15 minutes) continues
+from the cursor on the next start; `--restart` or another window starts over.
+`started_at` names the run, so a page left scheduled by an earlier run does
+nothing. Imported recordings link to no groups: a Sentry replay is linked
+through its issue as before, and matching a PostHog recording's errors to
+groups is left out. Chunks still expire with the bucket's 30-day lifecycle
+rule, so "all" brings older recordings over only for a month.
+
 The SDK recorder (`@platform/analytics/replay`) keeps a ring buffer of the last
 60 seconds and uploads it when an error happens (always), or for a sampled
 share of sessions (`replaySampleRate`, default 0). It never records an input
@@ -411,7 +441,11 @@ direction, an interval) are polled, their last 60 values kept on the row, and
 crossings become `metric` group transitions. `cast metrics query "<hogql>"`
 passes a query through and stores nothing. Recordings: `cast replay ls
 --source posthog` lists them from the API; `show` imports one (snapshots to
-`fromRrweb` to chunks and `timeline_md`) the first time it is read. A PostHog
+`fromRrweb` to chunks and `timeline_md`) the first time it is read, and
+`cast replay import` brings every retained one over (X5). Each PostHog and
+Sentry call keeps its status and Retry-After (`VendorCallError`,
+`lib/tokenHttp` `retry_after_ms`) so the bulk import can wait out a 429 and
+stop on a refused token. A PostHog
 destination webhook can post actions to the generic door.
 
 **Generic HTTP** (`provider: http`). Any system that can POST JSON uses the

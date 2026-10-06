@@ -220,7 +220,7 @@ describe("with the open proposals", () => {
 
   test("every name on a change leads somewhere: a live thing to its page, a proposed one to its place on this page", () => {
     const network = flatGoals(doc.goals).find((g) => g.short_id === "in-2")!;
-    expect(network.changes[0].hrefs).toEqual({ node: "/initiatives/in-2", parent: `#${goalAnchor("union-purpose")}`, proposal: "/org?proposal=op-54" });
+    expect(network.changes[0].hrefs).toEqual({ node: "/goals/in-2", parent: `#${goalAnchor("union-purpose")}`, proposal: "/org?proposal=op-54" });
     const revenue = purpose.goals[0];
     expect(revenue.ownerHref).toBe("/team/samvit");
     expect(revenue.proposed!.hrefs).toMatchObject({ owner: "/team/samvit", parent: `#${goalAnchor("union-purpose")}`, proposal: "/org?proposal=op-54" });

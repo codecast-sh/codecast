@@ -1,21 +1,14 @@
 
 ## Typechecking
 
-Typecheck TypeScript with `cast check`, never `tsc --noEmit`. One `tsc --watch` per tree and project keeps the program in memory and rechecks only changed files, so answers take seconds and ten sessions asking cost the same as one. A fresh `tsc` rebuilds everything, and many at once push the machine into swap.
+Typecheck TypeScript with `cast check`, never `tsc --noEmit`. One `tsc --watch` per tree and project rechecks only changed files, so answers take seconds and ten sessions asking cost the same as one; fresh `tsc` runs rebuild everything and push the machine into swap.
 
 ```bash
-cast check                 # every project the tree lists, or else the tsconfig nearest this directory
-cast check web             # one project, by its name in .codecast/check.toml
-cast check packages/api    # any directory or tsconfig path in the tree
-cast check --fresh         # restart a watcher that lost track, then ask
-cast check --json          # { project, errors, diagnostics } for each project
-cast check-status          # the watchers on this machine (--stop stops them all)
+cast check            # every project in .codecast/check.toml, else the tsconfig nearest this directory
+cast check web        # one project by name, or any directory or tsconfig path
+cast check --fresh    # restart a watcher that lost track, then ask
 ```
 
-A tree lists its programs in `.codecast/check.toml` as a `[projects]` table of `name = "path/to/tsconfig.json"`. Commit it so every worktree inherits it (if the repo ignores `.codecast/`, add `!.codecast/check.toml`). A repo with more than one program needs it; without it only the tsconfig nearest your directory is checked, which may not be the program your change reaches.
-
-Point each entry at the tsconfig the package's own `typecheck` script runs, not necessarily the plain `tsconfig.json`: a build that narrows `rootDir` often keeps a widened `tsconfig.typecheck.json`, and checking the build config reports hundreds of files-outside-root errors. When a check is red with errors nobody wrote, suspect the entry before the code.
-
-The first ask builds the program (as slow as `tsc`); later asks take seconds. If a pass is still running, ask again rather than starting your own `tsc`. Sessions in one checkout share a watcher. A worktree is a tree of its own and holds a program of its own, gigabytes of memory for each project, though its first pass starts from the main checkout's last one and rechecks only what differs. Work in the shared checkout unless parallel edits would collide, and give worktrees to the agents whose edits need them, never to every agent of a fan-out by default. A machine keeps at most six watchers. When all six are busy an ask waits in a queue and starts when a slot frees, so wait on it rather than polling; a pass nobody waits on gives its slot up, and a watcher stops after 45 idle minutes.
+The first ask builds the program; later ones take seconds. If a pass is running or queued, wait on it rather than starting your own `tsc`. A worktree holds a program of its own (gigabytes per project), so give worktrees only to the agents whose edits would collide. When a check is red with errors nobody wrote, suspect the `.codecast/check.toml` entry before the code. `cast guide check` covers that file.
 <!-- cast @VERSION@ -->
 <!-- /codecast-check -->

@@ -4,6 +4,7 @@
 // a quote to the agent. A comment is that blockquote followed by the user's reply.
 
 import type { OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 
 // A person's answer to one card of an org proposal (org-staffing.md S39),
 // held in the same batch as the quotes until the next send applies it. The
@@ -24,6 +25,8 @@ export type PendingProposalAnswer = {
   ordinal?: number;
   /** On an approval that would take sessions over (R1): leave them where they are. */
   leave_sessions?: boolean;
+  /** The card's or the group's title, which names the row in the tray. */
+  subject?: string;
 };
 
 export type PendingComment = {
@@ -37,6 +40,8 @@ export type PendingComment = {
   // editor can offer posting it as a durable team comment at that anchor.
   filePath?: string;
   fileLine?: number;
+  /** The line's text and context, stored with the comment when it is posted. */
+  anchorLines?: CodeAnchorText;
   // Set on a note pinned to a point of a gallery image. `quote` then holds a
   // plain description of where the image came from, and the image itself is
   // pointed at by its attachment number when it rides along on the send, else

@@ -87,12 +87,14 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   cancelPendingMessage: never("send: withdrawing a queued message is itself the way back from sending it"),
   clearDraftFinal: DRAFT,
   answerDecision: never("send: an answered decision has already been read by the agent that asked"),
+  startShip: never("send: Ship starts a session that commits, pushes and opens a pull request; stopping it is the way back"),
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
 
   // Local echoes of sends (sync creators a component calls)
   addOptimisticMessage: LOCAL_ECHO,
   markOptimisticAsFailed: LOCAL_ECHO,
+  markOptimisticAsRetrying: LOCAL_ECHO,
   removeOptimisticMessage: LOCAL_ECHO,
   resolvePendingUploads: LOCAL_ECHO,
   stampPendingDispatchContent: LOCAL_ECHO,
@@ -207,6 +209,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   updateNotificationSettings: SETTINGS,
   updateIssueSyncSource: SETTINGS,
   setOpsSourceStatus: SETTINGS,
+  startOpsReplayImport: MACHINE,
+  stopOpsReplayImport: MACHINE,
   setOpsGroupStatus: never("triage: resolve, ignore and reopen sit on the same status control"),
   grantOpsAction: never("permission: a grant changes what agents may do; revoke it explicitly"),
   revokeOpsAction: never("permission: a revoke changes what agents may do; grant it again explicitly"),
@@ -235,6 +239,10 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
 
   // The project's line.toml, written on the checkout's machine by the daemon
   editLineProfile: never("machine control: the daemon rewrites the project's line.toml on its host, and the field is set back in the same settings control"),
+
+  // A project's expectations (LM5): every change is a version judges grade against
+  editExpectations: never("send: a line or a retirement becomes a proposal a person reads, and an applied one is a version judges grade against; a later retirement takes a line back"),
+  resolveExpectationProposal: never("send: it answers the proposal's card, and an applied version is what judges grade against from then on"),
 
   // Internal
   applyUndoPatches: never("internal: the undo replay itself"),
