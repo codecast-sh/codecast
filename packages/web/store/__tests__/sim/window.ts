@@ -41,7 +41,8 @@ import { getFunctionName } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Principal, SimBackend, SimClient } from "@codecast/convex/convex/simBackend.testing";
 import type { OutboxEntry } from "@platform/engine";
-import { placeInboxRows, useInboxStore } from "../../inboxStore";
+import { placeInboxRows, useInboxStore, syncLogScopeMetaKey } from "../../inboxStore";
+import { deliveryReceiptRequests, settleDeliveryReceipts } from "../../../lib/syncDeliveryReceipts";
 import { subscribeGestures } from "../../gestureBridge";
 import { applyBridgedGesture } from "../../syncReplication";
 import type { InboxCompareOutcome, InboxDigestComparer } from "../../inboxDigestCompare";
@@ -193,6 +194,10 @@ export class SimWindow implements RealmWindow {
       this.unbridge = subscribeGestures(this.user.userId, currentUserId, applyBridgedGesture);
       this.comparer = startInboxDigestCompare(this.client, () => () => {}).comparer;
       this.device.attach(this);
+      this.mount("deliveryReceipts", api.syncOutbox.getReceipts, () => {
+        const receipts = deliveryReceiptRequests(this.store.getState().pending);
+        return receipts.length ? { receipts } : "skip";
+      }, (data) => settleDeliveryReceipts(useInboxStore.getState(), data, syncLogScopeMetaKey));
       if (this.role === "host") this.startHost();
     });
     await (this.world.settleBoot ? this.world.settleBoot(this) : this.world.net.drain());
@@ -239,8 +244,11 @@ export class SimWindow implements RealmWindow {
 
   /** Stop being a host: unmount every feeder (the window closed, or handed the role on). */
   stopHost(): void {
-    for (const channel of this.live.keys()) this.world.net.unmountLive(channel);
-    this.live.clear();
+    for (const channel of this.live.keys()) {
+      if (!this.closed && channel === `live:${this.name}:deliveryReceipts`) continue;
+      this.world.net.unmountLive(channel);
+      this.live.delete(channel);
+    }
     this.catchUpNow = null;
     this.lastHeads = null;
   }
@@ -472,6 +480,8 @@ export class SimWindow implements RealmWindow {
   }
 
   private teeWrite(patches: any[], state: any): void {
+    const receipts = `live:${this.name}:deliveryReceipts`;
+    if (this.live.has(receipts)) this.world.net.markDirty(receipts);
     for (const fn of this.writeListeners) fn(patches, state);
     if (this.role === "host") this.device.hostTee(this, patches, state);
   }
@@ -493,11 +503,11 @@ export class SimWindow implements RealmWindow {
   /** Close the window: no more feeds, deliveries to it land nowhere. */
   close(): void {
     if (this.closed) return;
+    this.closed = true;
     this.stopHost();
     this.unbridge?.();
     this.unbridge = null;
     this.comparer?.dispose();
-    this.closed = true;
   }
 
   report(what: string, e: unknown): void {

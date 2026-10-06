@@ -90,6 +90,7 @@ export interface SimBackend {
 // known function, so adding a module is one line.
 const MODULES: Record<string, () => Promise<any>> = {
   syncLog: () => import("./syncLog"),
+  syncOutbox: () => import("./syncOutbox"),
   conversations: () => import("./conversations"),
   dispatch: () => import("./dispatch"),
   tasks: () => import("./tasks"),

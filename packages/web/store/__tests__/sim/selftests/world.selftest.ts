@@ -42,12 +42,11 @@ describe("world", () => {
     expect(sweep).toEqual({ findings: [], missing: 0, writes: 0 });
 
     const db = w.backend.db._tables;
-    // Memberships went through the change log: one scope_added per membership
-    // (the role's bot joins acme too, through the hire).
     const people = new Set(["ada", "bo", "cy"].map((u) => w.idOf(u)));
     const memberships = db.team_memberships.filter((m: any) => people.has(m.user_id));
     expect(memberships).toHaveLength(4);
-    const scopeAdded = (db.sync_actions ?? []).filter((a: any) => a.op === "scope_added");
+    const scopeAdded = (db.sync_outbox ?? []).flatMap((r: any) => r.events ?? [])
+      .filter((a: any) => a.op === "scope_added");
     expect(scopeAdded.length).toBe(db.team_memberships.length);
     // Every conversation was stamped through patchConversationVisibility.
     for (const conv of db.conversations) expect(typeof conv.is_private).toBe("boolean");

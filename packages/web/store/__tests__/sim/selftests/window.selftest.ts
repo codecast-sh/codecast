@@ -160,15 +160,15 @@ describe("sim window and device", () => {
 
     await follower.run(() => useInboxStore.getState().killSession(id));
     expect(lockKeys(follower, id).length).toBeGreaterThan(0);
-    // The response carries the log position the write landed at; the follower
-    // stamps it on the lock that write created.
     for (;;) {
       const d = await f.net.step();
       if (!d) throw new Error("the kill never got a response");
       if (d.channel === follower.conn && d.label.startsWith("res dispatch:dispatch")) break;
     }
     const lock = (follower.store.getState().pending as Record<string, any>)[`conversations:${id}:inbox_dismissed_at`];
-    expect(lock?.ack).toEqual([{ s: `user:${f.userId}`, p: expect.any(Number) }]);
+    const receipt = f.backend.db._tables.sync_outbox.find((r: any) =>
+      r.scope_key === `user:${f.userId}` && r.entity_id === id);
+    expect(lock?.ack).toEqual([{ s: `outbox:${receipt._id}`, p: receipt.revision }]);
     await f.net.drain();
 
     expect(sentOn(f, "repl:A-w1>A-host", /^mut from A-w1/).length).toBeGreaterThan(0);
