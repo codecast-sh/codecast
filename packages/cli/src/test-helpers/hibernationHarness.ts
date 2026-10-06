@@ -3,6 +3,7 @@ import path from "node:path";
 import { ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
 import * as policy from "../hibernation.js";
 import { functionBlock } from "./sourceRegion.js";
+import { withTmuxSession } from "../tmuxRoute.js";
 
 const names = [
   "collectHibernationCandidates", "hibernationRefusalReason", "hibernateSessionNow", "runHibernationPass",
@@ -40,6 +41,7 @@ export function createHibernationHarness() {
     keystrokeInference: { cancel: () => {} },
     serializeSessionStatus: (_id: string, fn: () => Promise<unknown>) => fn(),
     hasTmux: () => true,
+    withTmuxSession,
     log: record("log"), reaperLog: record("log"),
     stopCodexPermissionPoller: record("poller-stop"),
     ensureHeartbeatFlushLoop: forbidden("heartbeat-start"),

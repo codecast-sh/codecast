@@ -1,0 +1,74 @@
+.card {
+  background: var(--paper); border: var(--line-thick); border-radius: var(--r-lg); box-shadow: var(--pop-sm);
+  overflow: hidden; animation: arrive var(--t-arrive) var(--squish); flex: none;
+}
+.head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: var(--line); min-height: 50px; }
+.state { font: 400 17px/1 var(--display); white-space: nowrap; }
+.asker { margin-left: auto; display: flex; align-items: center; gap: 6px; font: 700 12px var(--ui); color: var(--ink-soft); min-width: 0; }
+.askerName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+.timer { font: 700 11px var(--mono); color: var(--ink); }
+.body { padding: 10px 14px 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+
+.stripes { background: var(--stripes); background-size: 28px 28px; animation: march 1s linear infinite; }
+.request {
+  font: 700 15px/1.35 var(--ui); overflow-wrap: anywhere; cursor: pointer;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.request.open { -webkit-line-clamp: unset; }
+.narration { list-style: none; display: flex; flex-direction: column; gap: 6px; font: 500 14px/1.35 var(--ui); width: 100%; }
+.narration li { display: flex; gap: var(--s2); align-items: baseline; animation: fade-up var(--t-quick) var(--glide); }
+.narration li:not(.fold)::before {
+  content: ""; width: 9px; height: 9px; flex: none; border-radius: 3px; background: var(--mint); border: var(--line-thin); transform: translateY(1px);
+}
+.narration li.now { font-weight: 800; }
+.narration li.now::before { background: var(--butter); animation: wobble .8s infinite; }
+.narration li.now::after { content: ""; width: 7px; height: 15px; flex: none; background: var(--ink); animation: blink 1s steps(1) infinite; transform: translateY(2px); }
+.fold button { font: 700 12px var(--ui); color: var(--ink-soft); text-decoration: underline; text-underline-offset: 2px; }
+.files { display: flex; flex-wrap: wrap; gap: 6px; max-height: 50px; overflow: hidden; }
+.moreFiles { font: 700 11px/1.9 var(--mono); color: var(--ink-soft); }
+.meter { width: 100%; height: 12px; border: var(--line); border-radius: var(--r-pill); background: var(--cream); overflow: hidden; }
+.meter i {
+  display: block; height: 100%; border-right: var(--line); min-width: 8px;
+  background: repeating-linear-gradient(-45deg, var(--tomato) 0 8px, var(--tomato-soft) 8px 16px);
+  background-size: 28px 28px; animation: march .6s linear infinite; transition: width 250ms linear;
+}
+
+.liveHead { background: var(--mint); }
+.liveTitle { font: 400 17px/1 var(--display); display: flex; align-items: baseline; gap: 6px; }
+.liveTitle b { font: 400 30px/1 var(--display); }
+.summary { font: 600 15px/1.35 var(--ui); overflow-wrap: anywhere; }
+.actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.celebrate { animation: pop var(--t-arrive) var(--squish); }
+.celebrate .liveHead { animation: ring-mint 700ms var(--glide); }
+
+.collapsed {
+  display: flex; align-items: center; gap: 10px; height: 36px; padding-right: 10px; flex: none;
+  background: var(--paper); border: var(--line); border-radius: var(--r-md); overflow: hidden;
+  animation: fade-up var(--t-move) var(--glide);
+}
+.bar { width: 6px; align-self: stretch; background: var(--mint); border-right: var(--line); }
+.collapsedV { font: 400 17px/1 var(--display); flex: none; }
+.collapsedSummary { flex: 1; min-width: 0; font: 600 13px var(--ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.textBtn { font: 800 13px var(--ui); text-decoration: underline; text-underline-offset: 2px; flex: none; }
+
+.failHead { background: var(--tomato-soft); }
+.bang {
+  width: 24px; height: 24px; flex: none; display: grid; place-items: center; border-radius: 50%;
+  background: var(--tomato); border: var(--line-thin); font: 900 14px var(--ui);
+}
+.why { font: 600 14px/1.35 var(--ui); }
+.details {
+  width: 100%; max-height: calc(8 * 1.5 * 11px + 16px); overflow: auto; background: var(--cream); border: var(--line-thin);
+  border-radius: var(--r-xs); padding: 8px; font: 700 11px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.queued {
+  display: flex; align-items: center; gap: 10px; flex: none; border: 2.5px dashed var(--ink); border-radius: var(--r-md);
+  padding: 8px 12px; background: color-mix(in srgb, var(--cream) 50%, transparent); font: 600 14px var(--ui);
+  animation: arrive var(--t-arrive) var(--squish);
+}
+.ordinal {
+  flex: none; min-width: 40px; height: 26px; display: grid; place-items: center; padding: 0 9px;
+  background: var(--ink); color: var(--butter); border-radius: 10px; font: 400 15px var(--display);
+}
+.queuedText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

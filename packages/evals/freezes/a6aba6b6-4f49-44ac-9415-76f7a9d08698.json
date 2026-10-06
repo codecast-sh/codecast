@@ -1,0 +1,26 @@
+{
+  "name": "guidance recurring-digest",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:recurring-digest"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:recurring-digest",
+    "title": "guidance recurring-digest"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/recurring-digest.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "a6aba6b6-4f49-44ac-9415-76f7a9d08698",
+  "createdAt": "2026-10-06T21:49:16.450Z"
+}

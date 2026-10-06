@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation } from "convex/react";
-import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link as LinkIcon, Link2, ArrowUpRight, Check, Columns2, Maximize2, MessageSquarePlus, Minimize2 } from "lucide-react";
+import { Link as LinkIcon, Link2, ArrowUpRight, Check, ChevronDown, ChevronRight, Columns2, Maximize2, MessageSquarePlus, Minimize2, MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { linkPreviewStale } from "@codecast/convex/convex/lib/linkPreviewMeta";
@@ -15,10 +14,8 @@ import { isDesktop } from "../lib/desktop";
 import { openBrowserPane } from "../lib/stage";
 import { pageFrameSrc, pageShareUrl } from "../lib/publishedPageUrls";
 import { claudeArtifactUrl } from "../lib/entityLinks";
-import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
-import { snippetEnabledOn } from "../lib/newSnippets";
+import { FeatureUpsell } from "./agentFeatures/FeatureUpsell";
 import { ClaudeIcon } from "./BrandIcons";
-import { useDevices } from "./DeviceBadge";
 import { HeightGrip, savedGripHeight } from "./HeightGrip";
 import { KeyCap } from "./KeyCap";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -178,11 +175,13 @@ function usePageMeta(slug: string) {
 //
 // A page an agent made is part of its reply, so it sits straight on the
 // thread: no border, no header strip, no bar inside it. Its edge shows only
-// as a hairline while the pointer is over it, and its verbs float in as one
-// glass toolbar in the top corner. Pinning notes keeps the toolbar up and
-// turns the hairline yellow, so the mode is never invisible. The bottom edge
-// is a resize grip that appears with the toolbar; a double click on it hands
-// the height back to the page.
+// as a soft shadow, a hairline while the pointer is over it, and its verbs
+// float in as one glass toolbar in the top corner. A small button holds that
+// corner when the toolbar is away: it opens the toolbar on a touch screen,
+// where there is no hover. Pinning notes keeps the toolbar up and turns the
+// hairline yellow, so the mode is never invisible. The toolbar can fold the
+// page down to its title row. The bottom edge is a resize grip that appears
+// with the toolbar; a double click on it hands the height back to the page.
 // ---------------------------------------------------------------------------
 
 const TOOL =
@@ -273,8 +272,9 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
 
 /** The frameless page: the body on the thread's own surface, the toolbar
  *  floating over its top corner, the resize edge under it, the caption
- *  below. All spans, so it stays valid wherever markdown puts it. */
-export function FramelessPage({ title, href, actions, caption, height, stageRef, loaded, pinning, grip, children }: {
+ *  below. Folded (`collapsed`), it is the title row alone. All spans, so it
+ *  stays valid wherever markdown puts it. */
+export function FramelessPage({ title, href, actions, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, children }: {
   title: string;
   href: string;
   actions: ReactNode;
@@ -285,30 +285,87 @@ export function FramelessPage({ title, href, actions, caption, height, stageRef,
   loaded: boolean;
   pinning?: boolean;
   grip?: ReactNode;
+  /** Given with `onToggleCollapsed`, the toolbar carries a fold verb. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   children: ReactNode;
 }) {
+  // The corner button opens the toolbar where there is no hover; a press
+  // anywhere outside the page puts it away again.
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!controlsOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setControlsOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [controlsOpen]);
+
+  const titleLink = (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-full py-0.5 pl-1 pr-2 text-[11px] font-medium text-sol-text-secondary no-underline transition-colors hover:text-sol-text"
+      title={href}
+    >
+      <PageFavicon className="h-4 w-4" />
+      <span className="truncate">{title}</span>
+    </a>
+  );
+
+  if (collapsed && onToggleCollapsed) {
+    return (
+      <span className="page-embed page-embed--collapsed not-prose mb-5 block">
+        <span className="page-embed__fold">
+          <button type="button" onClick={onToggleCollapsed} className={TOOL} aria-label={`Show ${title}`} title="Show the page">
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+          {titleLink}
+        </span>
+        {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
+      </span>
+    );
+  }
+
   return (
-    <span className="page-embed not-prose mb-5 block" data-loaded={loaded ? "" : undefined} data-pinning={pinning ? "" : undefined}>
+    <span
+      ref={rootRef}
+      className="page-embed not-prose mb-5 block"
+      data-loaded={loaded ? "" : undefined}
+      data-pinning={pinning ? "" : undefined}
+      data-controls={controlsOpen ? "" : undefined}
+    >
       <span className="relative block">
         <span className="page-embed__edge" aria-hidden />
         <span ref={stageRef} className="page-embed__stage relative block overflow-hidden rounded-[10px]" style={{ height }}>
           {children}
           {!loaded && <span className="page-embed__shimmer" aria-hidden />}
         </span>
+        <button
+          type="button"
+          className="page-embed__reveal"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setControlsOpen(true);
+          }}
+          aria-label={`Show ${title} actions`}
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </button>
         <TooltipProvider delayDuration={350} skipDelayDuration={150}>
           <span className="page-embed__bar" role="toolbar" aria-label={`${title} actions`}>
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-full py-0.5 pl-1 pr-2 text-[11px] font-medium text-sol-text-secondary no-underline transition-colors hover:text-sol-text"
-              title={href}
-            >
-              <PageFavicon className="h-4 w-4" />
-              <span className="truncate">{title}</span>
-            </a>
+            {titleLink}
             <span className="mx-0.5 h-3.5 w-px flex-shrink-0 bg-sol-border/50" aria-hidden />
             {actions}
+            {onToggleCollapsed && (
+              <Tool label="Collapse" onClick={onToggleCollapsed}>
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Tool>
+            )}
           </span>
         </TooltipProvider>
         {grip}
@@ -361,6 +418,8 @@ export function PublishedPageEmbed({ slug, caption, height }: {
 }) {
   const meta = usePageMeta(slug);
   const [expanded, setExpanded] = useState(false);
+  // Folded, the frame unmounts: a page out of sight should not keep running.
+  const [collapsed, setCollapsed] = useState(false);
   // The height this frame was dragged to wins over everything until expanded.
   const [dragged, setDragged] = useState<number | null>(null);
   const onResized = useCallback((h: number) => {
@@ -420,6 +479,11 @@ export function PublishedPageEmbed({ slug, caption, height }: {
       stageRef={stageRef}
       loaded={loaded}
       pinning={notes?.pinMode}
+      collapsed={collapsed}
+      onToggleCollapsed={() => {
+        setLoaded(false);
+        setCollapsed((v) => !v);
+      }}
       actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={() => setExpanded((v) => !v)} notes={notes} />}
       grip={
         <span className="page-embed__grip" onDoubleClick={() => { setDragged(null); setExpanded(false); }} title="Drag to resize, double-click to fit">
@@ -504,30 +568,11 @@ function useCanPaneClaude(): boolean {
   return isDesktop() && nativeReady;
 }
 
-const PUBLISH_SNIPPET = SNIPPET_CATALOG.find((s) => s.slug === "publish");
-
 /** A Claude artifact in the thread is a page the reader cannot see in place.
  *  The fix is on their side: with the Publish feature on, their agents put
  *  deliverables on codecast pages, which the thread frames live. So the card
- *  suggests it — only to a reader whose machines all have it off (a reader
- *  with it on already knows; a roster not loaded yet says nothing). */
-function usePublishSuggestion(): boolean {
-  const { devices, loaded } = useDevices();
-  if (!loaded || !PUBLISH_SNIPPET) return false;
-  return !devices.some((d) => snippetEnabledOn(d.settings, PUBLISH_SNIPPET));
-}
-
-function PublishSuggestion() {
-  return (
-    <span className="block border-t border-sol-border bg-sol-bg-alt px-3 py-1.5 text-[11px] leading-snug text-sol-text-muted">
-      Turn on{" "}
-      <Link href="/agent-features" className="text-sol-blue hover:underline">
-        Publish
-      </Link>{" "}
-      in agent features and your agents put pages like this on codecast, where the thread shows them live.
-    </span>
-  );
-}
+ *  offers it (useFeatureOffer decides who sees the offer). */
+const PUBLISH_REASON = "Turn on Publish and your agents put pages like this on codecast, where the thread shows them live.";
 
 /** Block-level card for a Claude artifact URL standing alone on its line.
  *  claude.ai publishes no per-artifact title (its page metadata is the same
@@ -536,7 +581,6 @@ function PublishSuggestion() {
 export function ClaudeArtifactEmbed({ id, caption }: { id: string; caption?: string }) {
   const url = claudeArtifactUrl(id);
   const canPane = useCanPaneClaude();
-  const suggestPublish = usePublishSuggestion();
   return (
     <PageCard
       icon={<ClaudeFavicon className="h-4 w-4" />}
@@ -568,7 +612,7 @@ export function ClaudeArtifactEmbed({ id, caption }: { id: string; caption?: str
         </span>
         <ArrowUpRight className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-sol-text-dim transition-transform group-hover:-translate-y-px group-hover:translate-x-px group-hover:text-sol-orange" />
       </a>
-      {suggestPublish && <PublishSuggestion />}
+      <FeatureUpsell slug="publish" variant="inline" reason={PUBLISH_REASON} />
     </PageCard>
   );
 }

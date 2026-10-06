@@ -96,3 +96,83 @@ export function cleanUrl(raw: string, base?: string): string {
     return clip(raw.split("?")[0]);
   }
 }
+
+// ── Bulk import of a vendor's recordings (external-data.md X5) ──
+
+/** How far back `cast replay import` and the web's import reach. "all" is everything the vendor still keeps. */
+export const REPLAY_BACKFILL_WINDOWS = ["7d", "30d", "90d", "all"] as const;
+export type ReplayBackfillWindow = (typeof REPLAY_BACKFILL_WINDOWS)[number];
+export const DEFAULT_REPLAY_BACKFILL_WINDOW: ReplayBackfillWindow = "30d";
+
+export const REPLAY_BACKFILL_STATUSES = ["running", "done", "paused", "error"] as const;
+export type ReplayBackfillStatus = (typeof REPLAY_BACKFILL_STATUSES)[number];
+
+/**
+ * A source's one bulk import, as stored on its event_sources row. `started_at`
+ * names the run: a page scheduled by an earlier run finds another value and
+ * stops. `until` pins the list's end at the start, so pages walk a set that
+ * new recordings do not shift; those are read on open, as always.
+ */
+export interface ReplayBackfill {
+  status: ReplayBackfillStatus;
+  window: ReplayBackfillWindow;
+  /** Absent for "all". */
+  since?: number;
+  until: number;
+  /** The vendor's position: PostHog's list offset, Sentry's cursor. Absent before the first page. */
+  cursor?: string;
+  /** Recordings of the page at `cursor` already imported or failed, so a page resumed after a rate limit counts each once. */
+  page_seen?: string[];
+  listed: number;
+  imported: number;
+  /** Already ours when the import reached them. */
+  skipped: number;
+  failed: number;
+  /** Failures since the last success; past REPLAY_BACKFILL_LIMITS.failures_in_row the import stops on the error. */
+  failures_in_row?: number;
+  last_error?: string;
+  started_at: number;
+  updated_at: number;
+  finished_at?: number;
+}
+
+export const REPLAY_BACKFILL_LIMITS = {
+  /** A running import whose last page wrote nothing for this long died (an action killed mid page): it may be started again. */
+  stalled_ms: 15 * 60_000,
+  failures_in_row: 10,
+} as const;
+
+/** The start of a window, or undefined for "all". */
+export function replayBackfillSince(window: ReplayBackfillWindow, now: number = Date.now()): number | undefined {
+  const days = { "7d": 7, "30d": 30, "90d": 90 } as const;
+  return window === "all" ? undefined : now - days[window] * 86_400_000;
+}
+
+export function isReplayBackfillWindow(value: unknown): value is ReplayBackfillWindow {
+  return typeof value === "string" && (REPLAY_BACKFILL_WINDOWS as readonly string[]).includes(value);
+}
+
+/** Running in name only: no page has written for REPLAY_BACKFILL_LIMITS.stalled_ms. */
+export function replayBackfillStalled(b: Pick<ReplayBackfill, "status" | "updated_at">, now: number = Date.now()): boolean {
+  return b.status === "running" && now - b.updated_at > REPLAY_BACKFILL_LIMITS.stalled_ms;
+}
+
+/** The state a surface leads with: "stalled" is a running import nobody is running. */
+export function replayBackfillState(b: Pick<ReplayBackfill, "status" | "updated_at">, now: number = Date.now()): ReplayBackfillStatus | "stalled" {
+  return replayBackfillStalled(b, now) ? "stalled" : b.status;
+}
+
+/** Whether a start continues from the cursor rather than starting over: a stopped import that never finished. */
+export function replayBackfillResumes(b: Pick<ReplayBackfill, "status" | "updated_at"> | null | undefined, now: number = Date.now()): boolean {
+  return !!b && (b.status === "paused" || b.status === "error" || replayBackfillStalled(b, now));
+}
+
+/** One line for the CLI and the web: what the import did and where it stands. */
+export function replayBackfillLine(b: ReplayBackfill, now: number = Date.now()): string {
+  const state = replayBackfillState(b, now);
+  const head = { running: "importing", done: "imported", paused: "paused", error: "stopped", stalled: "stalled" }[state];
+  const window = b.window === "all" ? "all retained recordings" : `the last ${b.window}`;
+  const counts = [`${b.imported} imported`, b.skipped ? `${b.skipped} already here` : "", b.failed ? `${b.failed} failed` : ""].filter(Boolean).join(", ");
+  const tail = state === "paused" || state === "error" ? (b.last_error ? `: ${b.last_error}` : "") : "";
+  return `${head} ${window}: ${b.listed} listed, ${counts}${tail}`;
+}

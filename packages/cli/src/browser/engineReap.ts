@@ -26,6 +26,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
+import { tmuxRun } from "../tmux.js";
+import { paneOwnerId } from "../tmuxRoute.js";
 import {
   baseSessionKey, engineHome, engineSession, engineSessionKey, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
   type EngineOptions,
@@ -140,10 +142,14 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
   const now = opts.now ?? Date.now();
   let panes: Set<string> | null = null;
   try {
-    const t = spawnSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], { encoding: "utf-8", timeout: 5_000 });
+    // Every server's panes, each named the way ownerKey names it (paneOwnerId).
+    const t = tmuxRun(["list-panes", "-a", "-F", "#{pane_id}|#{socket_path}"]);
     if (t.status === 0) {
       panes = new Set();
-      for (const line of ((t.stdout as string) ?? "").split("\n")) if (line.trim()) panes.add(line.trim());
+      for (const line of t.stdout.split("\n")) {
+        const [pane, socket] = line.trim().split("|");
+        if (pane) panes.add(paneOwnerId(pane, path.basename(socket ?? "") || "default"));
+      }
     }
   } catch {
     /* no tmux: panes stay unknowable */
