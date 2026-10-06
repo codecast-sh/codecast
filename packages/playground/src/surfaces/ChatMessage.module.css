@@ -1,0 +1,27 @@
+.row { display: flex; gap: 10px; align-items: flex-start; animation: arrive var(--t-arrive) var(--squish); }
+.grouped { margin-top: -8px; }
+.faceSlot { width: 30px; flex: none; display: flex; }
+.col { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.who { display: flex; align-items: baseline; gap: var(--s2); font: 800 13px var(--ui); }
+.who time, .animal { font: 600 12px var(--ui); color: var(--ink-soft); }
+.bubble {
+  max-width: 100%; background: var(--paper); border: var(--line); border-radius: 4px 16px 16px 16px;
+  padding: 8px 12px; font: 500 15px/1.4 var(--ui); overflow-wrap: anywhere; white-space: pre-wrap;
+}
+.bubble a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
+.clayBubble { background: var(--cream); }
+.mine { justify-content: flex-end; }
+.mine .col { align-items: flex-end; flex: 0 1 auto; max-width: 85%; }
+.mineBubble { background: var(--butter); border-radius: 16px 4px 16px 16px; }
+.pending { opacity: .6; }
+.code { display: block; margin: 6px 0 8px; font: 700 11px/1.5 var(--mono); white-space: pre-wrap; }
+.fix { display: flex; }
+
+.system {
+  align-self: center; max-width: 85%; display: flex; align-items: center; gap: var(--s2);
+  font: 700 12px/1.4 var(--ui); color: var(--ink-soft); text-align: center;
+}
+.system a { color: var(--pool); }
+.mintDot, .poolDot { flex: none; width: 12px; height: 12px; border-radius: 50%; border: var(--line-thin); }
+.mintDot { background: var(--mint); }
+.poolDot { background: var(--pool); }

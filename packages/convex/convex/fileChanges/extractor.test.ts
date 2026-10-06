@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractFileChanges, hasFileChangeToolCall } from "./extractor";
+import { extractCommitBranchFromContent, extractCommitHashFromContent, extractFileChanges, hasFileChangeToolCall } from "./extractor";
 
 const patch = "*** Begin Patch\n*** Update File: example.ts\n@@\n-before\n+after\n*** End Patch";
 const changes = (name: string, input: unknown, isError = false) => extractFileChanges([{
@@ -60,5 +60,28 @@ describe("shared file change formats", () => {
       { _id: "call", timestamp: 1, tool_calls: [{ id: "t", name: "apply_patch", input: patch }] },
       { _id: "result", timestamp: 2, tool_results: [{ tool_use_id: "t", content: "failed", is_error: true }] },
     ])).toEqual([]);
+  });
+});
+
+describe("git commit output", () => {
+  test("names the branch and the hash", () => {
+    const out = "[feature/x 1a2b3c4] Fix the thing\n 1 file changed";
+    expect(extractCommitHashFromContent(out)).toBe("1a2b3c4");
+    expect(extractCommitBranchFromContent(out)).toBe("feature/x");
+    expect(extractCommitBranchFromContent("[main (root-commit) 1a2b3c4] init")).toBe("main");
+  });
+
+  test("a detached HEAD names no branch", () => {
+    expect(extractCommitBranchFromContent("[detached HEAD 1a2b3c4] wip")).toBeUndefined();
+  });
+
+  test("the commit change carries the branch", () => {
+    const [change] = extractFileChanges([{
+      _id: "m1",
+      timestamp: 1,
+      tool_calls: [{ id: "t1", name: "Bash", input: JSON.stringify({ command: 'git commit -m "Ship it"' }) }],
+      tool_results: [{ tool_use_id: "t1", content: "[main abc1234] Ship it" }],
+    }]);
+    expect(change).toMatchObject({ changeType: "commit", commitHash: "abc1234", commitBranch: "main" });
   });
 });

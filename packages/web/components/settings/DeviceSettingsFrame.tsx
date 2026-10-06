@@ -18,6 +18,7 @@ export function DeviceSettingsFrame({
   title,
   icon,
   reports = (d) => !!d.settings,
+  className,
   children,
 }: {
   panel: ReturnType<typeof useDeviceSettingsPanel>;
@@ -25,12 +26,14 @@ export function DeviceSettingsFrame({
   icon: LucideIcon;
   /** Has this machine's daemon reported what the panel needs? */
   reports?: (d: Device) => boolean;
+  /** Overrides the settings column (a full page passes its own width). */
+  className?: string;
   children: (d: Device) => ReactNode;
 }) {
   const { devices, selected, select, localDeviceId } = panel;
   if (!selected) {
     return (
-      <SettingsPanel>
+      <SettingsPanel className={className}>
         <SettingsSection title={title} icon={icon} padded>
           <p className="text-center text-sm text-sol-text-muted">
             No devices yet. Start the daemon with{" "}
@@ -41,7 +44,7 @@ export function DeviceSettingsFrame({
     );
   }
   return (
-    <SettingsPanel>
+    <SettingsPanel className={className}>
       <DevicePanelHeader devices={devices} selected={selected} onSelect={select} localDeviceId={localDeviceId} />
       {reports(selected) ? (
         children(selected)
