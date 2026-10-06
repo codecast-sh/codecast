@@ -16,22 +16,39 @@ Nothing activates on its own. Saying "orchestrate this plan" to an agent with th
 
 **Waves.** The conductor resolves the task dependency graph topologically. Every task whose dependencies are satisfied forms the current wave; the wave runs in parallel, one agent per task; completions unlock the next wave.
 
-**Worktree isolation.** Each implementer works in its own git worktree on its own branch. Parallel agents never trample each other's files; completed branches merge back to main as their tasks pass review.
+```figure
+WavesFigure
+Eight tasks in three waves. Each wave starts the moment the work it depends on is done.
+```
+
+**Worktree isolation.** Under the `/orchestrate` skill, each implementer works in its own git worktree on its own branch. Parallel agents never trample each other's files; completed branches merge back to main as their tasks pass review.
 
 **Review before merge.** A reviewer agent checks each completed task against its acceptance criteria and returns a verdict — pass, needs changes, or reject. Failures route back to implementation with the review attached.
 
+```figure
+ReviewVerdictFigure
+The reviewer's verdict decides each task's path. The conductor escalates instead of looping forever.
+```
+
 **Drive rounds.** After the graph completes, a critic reviews the integrated codebase. Issues it finds become fix tasks, which run as a new wave. Repeat until quality converges.
+
+```figure
+CriticRoundFigure
+Critics look at the whole result, not single tasks. Serious findings go back in as a new wave.
+```
+
+![Two worker sessions running side by side](/documentation/shots/fanout.webp "Two workers, Cursor and Codex, each on its own half of the same feature, both visible in the inbox while they run.")
 
 ## Driving from the CLI
 
 ```bash
 cast plan create "Build user dashboard" --goal "Activity feed, metrics, settings"
-cast plan decompose pl-xxxx --depth deep    # Claude breaks the goal into 20–50 tasks
+cast plan decompose pl-xxxx                 # Claude breaks the goal into 20–50 tasks (--depth shallow|medium|deep)
 cast plan show pl-xxxx                      # review the task list before running
 cast plan autopilot pl-xxxx                 # the main loop: waves until done
 ```
 
-Autopilot options bound the blast radius: `--dry-run` shows what would spawn, `--max-agents 4` caps concurrency, `--max-waves 3` stops early, `--verify` typechecks before merging. While it runs:
+Autopilot options bound the blast radius: `--dry-run` shows what would spawn, `--max 4` caps concurrency (3 by default), `--max-waves 3` stops early, `--verify` typechecks before merging. Autopilot checks on its agents every two minutes and runs them in the current checkout; the per-task worktrees and reviewer agents belong to the `/orchestrate` skill. While it runs:
 
 ```bash
 cast plan agents pl-xxxx      # active agent sessions
@@ -39,7 +56,7 @@ cast plan wave pl-xxxx        # current and next wave
 cast plan progress pl-xxxx    # ETA and breakdown by status
 ```
 
-Failed tasks retry with escalation logging; a task that keeps failing is marked blocked and the run continues around it.
+A task whose agent dies or runs past 30 minutes is retried, up to 3 times, with a comment on each attempt. After that it is flagged for human attention and the run continues around it. An agent that prints `BLOCKED:` or `NEEDS_CONTEXT:` is stopped and its task flagged the same way.
 
 ## Watching it
 

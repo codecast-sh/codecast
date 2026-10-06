@@ -98,7 +98,7 @@ declaration; the finder itself lives where its data lives.
   carries `error` and counts as no verdict.
 - `cast line eval-result --reps $run_dir/reps.json --out eval-result.json`
   turns reps into the `EvalResult` the card reads: separation by the one
-  Mann-Whitney implementation (`packages/evals/src/stats.ts`), flips, proven
+  Mann-Whitney implementation (`platform/packages/evals/src/analysis/stats.ts`), flips, proven
   freezes, the verdict. Its exit code is the eval station's. A failed suite
   gate (`gates_failed`) reaches the card as its own red check, "Suite gates",
   naming each failing scenario, so the card cannot recommend Ship over it.

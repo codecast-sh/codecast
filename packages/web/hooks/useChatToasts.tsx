@@ -36,8 +36,8 @@ import { useWatchEffect } from "./useWatchEffect";
 
 /** How long a channel's toasts count toward its burst cap. */
 const BURST_WINDOW_MS = 45_000;
-const LOUD_DURATION_MS = 30_000;
-const QUIET_DURATION_MS = 15_000;
+const LOUD_DURATION_MS = 5 * 60_000;
+const QUIET_DURATION_MS = 90_000;
 
 type Seen = { messageId: string; unread: number; mentions: number };
 

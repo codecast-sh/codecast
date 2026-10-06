@@ -2,14 +2,15 @@
 // see whether any prompt surface is getting worse, and where. One full-width
 // row per surface on a shared time axis of up to 30 days, rows that separated worse
 // sorted first with a magenta edge, "What moved" beside it, and the spend,
-// open bisects and the latest Multiplayer sim session at the foot.
+// open bisects and the host's own blocks (codecast: the latest Multiplayer sim
+// session, through the host's wall slot) at the foot.
 //
 // Props only: HomePage reads GET /overview and hands the answer in. The keys
 // (j, k, Enter, b) live here so the mount test can drive them; they answer
 // only while `active` (the page is the active pane).
 
 import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { flipCounts, type BatchStats, type BisectSummary, type OverviewResponse, type SimSessionSummary, type StalenessWord, type SurfaceOverview } from "@codecast/shared/contracts/evalsApi";
+import { flipCounts, type BatchStats, type BisectSummary, type OverviewResponse, type StalenessWord, type SurfaceOverview } from "@codecast/shared/contracts/evalsApi";
 import { DAY_MS, dayStart, linear } from "./charts/scale";
 import { ScoreStrip } from "./charts/ScoreStrip";
 import { evalsHref } from "./evalsPaths";
@@ -21,7 +22,6 @@ import { EvalsLink, KeyHint, SeparationMark, StallChip, VerdictGlyph } from "./p
 import { pLabel, plural, shortModel, shortSha, usd } from "./format";
 import { baselineWords, noiseFlipWords, noiseFlipsShort, separationTitle } from "./verdictModel";
 import { WALL_CADENCES, isWorse, wallOrder, rowHref, attributeHref, wallWindowFrom, wallAxisTicks, wallSpend, wallWindowDays } from "./wallModel";
-import { simOutcome } from "./simModel";
 
 const SEPARATION_SHORT = { better: "better", worse: "worse", "not-separated": "not separated", "too-few": "too few reps" } as const;
 
@@ -201,7 +201,7 @@ function WallRow({ s, index, selected, from, to, stripWidth, cursor, onCursor, o
   );
 }
 
-// ── The foot: spend per day, open bisects, the latest Multiplayer sim ───────
+// ── The foot: spend per day, open bisects, then the host's own blocks ───────
 
 function SpendStrip({ days, from, to, width }: { days: OverviewResponse["spendByDay"]; from: number; to: number; width: number }) {
   const { HoverTip } = useEvalsHost().ui;
@@ -279,25 +279,6 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
   );
 }
 
-function SimLine({ sim, now }: { sim: SimSessionSummary | null; now: number }) {
-  const { format } = useEvalsHost();
-  if (!sim) return <div className="ev-wall-foot-empty">No Multiplayer sim session on this machine yet.</div>;
-  const outcome = simOutcome(sim);
-  return (
-    <EvalsLink href={evalsHref.sim()} className="ev-wall-simline" data-ev-sim-line={sim.id}>
-      <VerdictGlyph state={outcome.state} title={outcome.words} />
-      <span className="ev-wall-simline-text" title={`${plural(sim.runs, "run")} across ${plural(sim.scenarios, "scenario")}`}>
-        {sim.unsessioned ? "An unsessioned run" : plural(sim.scenarios, "scenario")}
-        {", "}
-        <span className={outcome.bad ? "ev-fail" : undefined}>{outcome.words}</span>
-      </span>
-      <span className="ev-grow" />
-      <span className="ev-quiet ev-tabular">{format.relativeTime(Date.parse(sim.startedAt), now).replace(" ago", "")}</span>
-      {sim.gitHead && <span className="ev-chip">{shortSha(sim.gitHead)}{sim.dirty ? ", dirty" : ""}</span>}
-    </EvalsLink>
-  );
-}
-
 
 export interface SurfaceWallViewProps {
   data: OverviewResponse;
@@ -314,6 +295,7 @@ export interface SurfaceWallViewProps {
 export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active }: SurfaceWallViewProps) {
   const host = useEvalsHost();
   const { EmptyState, SegmentedToggle } = host.ui;
+  const Foot = host.wall?.Foot;
   const rows = useMemo(() => wallOrder(data.surfaces), [data.surfaces]);
   const [selected, setSelected] = useState<string | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
@@ -458,20 +440,7 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
                 <div className="ev-wall-foot-empty">No bisect is running.</div>
               )}
             </div>
-            <div className="ev-wall-foot-block">
-              <h2 className="ev-title">
-                <svg width={12} height={12} viewBox="-7 -7 14 14" aria-hidden className="ev-quiet">
-                  <path d="M-6,-3 H6 M-6,3 H6" stroke="currentColor" strokeWidth={1.3} />
-                  <circle cx={-2} cy={-3} r={1.6} fill="currentColor" />
-                  <circle cx={3} cy={3} r={1.6} fill="currentColor" />
-                </svg>
-                Latest Multiplayer sim session
-                <EvalsLink href={evalsHref.sim()} className="ev-wall-more">
-                  catalog
-                </EvalsLink>
-              </h2>
-              <SimLine sim={data.sim} now={now} />
-            </div>
+            {Foot && <Foot overview={data} now={now} />}
           </footer>
         </section>
 

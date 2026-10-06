@@ -4,7 +4,7 @@ import { cleanTitle } from "./conversationProcessor";
 import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
-import { canSwitchSessionAgent } from "./sessionControl";
+import { canMoveSessionToMachine, sessionMoveVerbs } from "./sessionControl";
 import { isForeignSession } from "./liveEntities";
 import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
 import { isTriggerEditable } from "./triggerEditable";
@@ -84,11 +84,14 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     // files) only show for one row; the rest act on every target.
     const n = targets.length;
     const many = (one: string, several: string) => (single ? one : several.replace("#", String(n)));
+    // The same move verbs the session control menu offers (none for a hosted
+    // assistant conversation), and Move to machine only where one runs it.
+    const verbs = sessionMoveVerbs(target.agent_type, target.session_id, target.model);
     return [
       ...(single ? [
-        ...(canSwitchSessionAgent(target.agent_type, target.session_id, target.model) ? [row("agent_switch", "Switch agent…", Bot, "a")] : []),
-        row("agent_fork", "Fork session as…", GitBranch, "f"),
-        row("agent_handoff", "Hand off to…", ArrowRightLeft, "t"),
+        ...(verbs.includes("switch") ? [row("agent_switch", "Switch agent…", Bot, "a")] : []),
+        ...(verbs.includes("fork") ? [row("agent_fork", "Fork session as…", GitBranch, "f")] : []),
+        ...(verbs.includes("handoff") ? [row("agent_handoff", "Hand off to…", ArrowRightLeft, "t")] : []),
         ...(canControlModel(target.agent_type, target.session_id, target.model) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
         row("rename", "Rename session…", Pencil, "r", "session.rename"),
       ] : []),
@@ -98,7 +101,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("session_pin", target.is_pinned ? many("Unpin session", "Unpin # sessions") : many("Pin session", "Pin # sessions"), target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? many("Remove from favorites", "Remove # from favorites") : many("Add to favorites", "Add # to favorites"), Star, "v", "conv.favorite"),
       row("bucket", many("Label session…", "Label # sessions…"), Tag, "l", "session.moveToBucket"),
-      row("device", many("Move to machine…", "Move # sessions to machine…"), ArrowRightLeft, "w"),
+      ...(targets.every((t) => canMoveSessionToMachine(t.agent_type)) ? [row("device", many("Move to machine…", "Move # sessions to machine…"), ArrowRightLeft, "w")] : []),
       ...(!isSessionKilled(target) ? [row("snooze", many("Snooze session…", "Snooze # sessions…"), Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
       ...(isSessionSetAside(target) ? [row("session_restore", many("Restore session to inbox", "Restore # sessions to inbox"), RefreshCw, "u")] : [

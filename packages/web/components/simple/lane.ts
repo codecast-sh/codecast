@@ -824,6 +824,17 @@ export const LANE_COPY = {
   home: {
     lede: (can: MailAbilities | null | undefined) => `Hand me anything on your list. ${askFirstFor(can)}`,
     placeholder: "What can I take off your plate?",
+    /** First things to ask: each fills the composer with a request that works sent as is, and the person can edit it first. The mail ones need Whisk connected. */
+    starters: (mailConnected: boolean): Array<{ label: string; text: string }> => [
+      ...(mailConnected
+        ? [
+            { label: "Catch me up on mail", text: "Catch me up on what's new in my inbox and what needs a reply." },
+            { label: "Plan my week", text: "Look at my calendar and help me plan this week." },
+          ]
+        : [{ label: "Plan a trip", text: "Help me plan a trip. Start by asking me where and when." }]),
+      { label: "Research a question", text: "Research a question for me. Start by asking what I want to know." },
+      { label: "Help me write", text: "Help me write something. Start by asking what it is and who it's for." },
+    ],
     loading: "Getting your conversations",
     waiting: "Waiting on you",
     happening: "Happening now",

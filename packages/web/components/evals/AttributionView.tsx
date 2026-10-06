@@ -475,7 +475,7 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
                     <span className={ex.direction === "broke" ? "ev-fail" : "ev-pass"}>{ex.direction}</span>
                     {f && <FlipRunLinks flip={f} />}
                   </div>
-                  <ExamplePair ex={ex} />
+                  <ExamplePair ex={ex} stack={false} />
                 </div>
               );
             })}

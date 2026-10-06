@@ -14,6 +14,11 @@ codex login --device-auth     # no browser here: open the printed link elsewhere
 
 **Codecast only reads that sign-in.** It reads `~/.codex/auth.json` and never refreshes or rewrites it. Refreshing would rotate the token out from under any `codex` you have running. When the access token expires, the computer stops reading Codex Cloud, Settings says "The Codex sign-in on <computer> expired", and a message you send waits for you to sign in again.
 
+```figure
+CodexPathFigure
+The browser never calls Codex. Your computer does, with the sign-in codex login saved there, and mirrors each task back as a session.
+```
+
 **Create an environment for each repository.** Codex Cloud runs a task in an environment set up for its repository, at [Codex, Settings, Environments](https://chatgpt.com/codex/cloud/settings/environments) on chatgpt.com. Codecast uses the environment made for the repository, else any environment that lists it, and a pinned one first: to pick among several, pin the one you want. The transcript names the environment under the first prompt. With none, the message is held and its card links to the environments page; the message goes out on its own once one exists.
 
 ## What syncs
@@ -23,6 +28,8 @@ Settings, Sync & Privacy, "Sync Codex Cloud tasks" is off by default. Off, codec
 Each task becomes a Codex session with its title, its repository, and the branch and pull request it made. A session is placed in this computer's checkout of the task's repository when there is one. The daemon polls every 5 minutes, and every 30 seconds while a task runs or right after you send it a message.
 
 A task's transcript shows the prompt, the reasoning, each command with its output, the answer and the diff. New tasks record their work as Codex app-server events, and codecast renders them with the same parser it uses for Codex on your own machine. Older tasks keep a work log in another format, and that renders as the same rows. Codex Cloud does not stream: while a turn runs, the session shows Codex's latest progress line, and the whole turn appears when it ends.
+
+![Two sessions side by side, a Cursor worker and a Codex worker, each with its prompt, tool calls and replies](/documentation/shots/fanout.webp "A Codex session (right) beside a Cursor one. A synced Codex Cloud task renders the same way, through the same parser, with its commands as tool rows.")
 
 The mirror lives under `~/.codecast/codex-cloud/<task id>/`, readable only by your user, since a task's command output can include whatever its commands printed. When two of your computers are signed in to the same account, one of them hosts each task's session and syncs it, so nothing is written twice.
 
@@ -40,6 +47,11 @@ Every later message is a follow-up on the task. A message sent while a turn is s
 ## Attempts
 
 Each attempt beyond the first becomes a branch of the session, forking at the prompt they share. Switch between them under that prompt. A message sent on a branch continues that attempt, and the task's own line stays on attempt 1.
+
+```figure
+AttemptsFigure
+Three attempts at one prompt become three branches of one session. A follow-up continues the branch it was sent on.
+```
 
 ## Pull requests and applying changes
 
@@ -67,6 +79,11 @@ The API is private, and OpenAI can change it without notice. Codecast checks eve
 - Every 5 minutes it asks again, reading what broke. The first check that reads cleanly resumes syncing and sends what was held. A single task that keeps failing while other tasks read cleanly does not hold the rest: it waits on its own schedule, with a warning naming it, while the others sync.
 
 An outage is not a change: server errors, a lost network and a proxy's challenge page are retried as usual. A new task is the one exception to holding: if Codex answers a request to create a task in a shape codecast cannot read, the task may already exist, so the message is not sent again. Its card links your [Codex tasks](https://chatgpt.com/codex) to look for it there.
+
+```figure
+CodexStatesFigure
+Four ways a computer stops syncing Codex Cloud, each with its own way back. An ordinary outage is none of them: it is retried.
+```
 
 ## The OpenAI Agents API instead
 

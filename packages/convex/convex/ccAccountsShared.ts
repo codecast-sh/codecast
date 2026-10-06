@@ -8,6 +8,7 @@ import {
   fallbackProfiles,
   isUsageExhausted,
   isWindowRolled,
+  peggedWindow,
   livePercent,
   worstUsagePercent,
   switchUsagePercent,
@@ -377,6 +378,22 @@ export const ccAutoSwitchStateValidator = v.object({
   // A booked throttleContinueCheck (see accountSwitch.ts): a fresh throttle
   // park books one only when none is already booked for the future.
   throttle_check_at: v.optional(v.number()),
+  // A staged limit release in flight (see limitProbeStep). The loop's
+  // "continue" after a reset sends ONE session first, the probe; the paced
+  // throttle tick then reads the account from that session's fate: a fresh
+  // park of the same kind after `at` means the account is still spent and
+  // nothing else is sent; otherwise the rest go out in batches while this
+  // stays set, and it clears when the last batch has gone.
+  limit_probe: v.optional(
+    v.object({
+      conversation_id: v.string(),
+      at: v.number(),
+      kind: v.string(),
+      // The client-id bucket the probe's continue was minted with; the
+      // batches reuse it so a repeated tick cannot queue a second continue.
+      bucket: v.number(),
+    }),
+  ),
   // The recovery decision most recently taken or proposed, so the park card
   // and the notification can EXPLAIN what happened instead of the account
   // silently changing. Written by autoSwitchCheck on every switch, continue,
@@ -459,17 +476,76 @@ export function pickThrottleContinueBatch<
   blocked: T[],
   now: number,
   attempts: Array<{ profile: string; at: number }> = [],
+  // Which park kinds this pass releases and when each is due. The throttle
+  // pass (default) waits out the delay and backoff per row; a staged limit
+  // release (pickLimitReleaseBatch) has already waited for the reset and the
+  // probe, so every row is due at once and only the batch size paces it.
+  opts: { kinds?: ReadonlySet<string>; dueAt?: (c: T) => number } = {},
 ): { batch: T[]; remaining: number; waiting: number; nextDueAt: number | null } {
   const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
-  const dueAt = (c: T): number => throttleContinueDueAt(parkedAt(c), c._id, attempts, now);
+  const dueAt = opts.dueAt ?? ((c: T): number => throttleContinueDueAt(parkedAt(c), c._id, attempts, now));
+  const kinds = opts.kinds ?? PACED_CONTINUE_KINDS;
   const throttled = blocked
-    .filter((c) => PACED_CONTINUE_KINDS.has(c.pending_api_error_kind ?? ""))
+    .filter((c) => kinds.has(c.pending_api_error_kind ?? ""))
     .sort((a, b) => parkedAt(a) - parkedAt(b));
   const due = throttled.filter((c) => now >= dueAt(c));
   const waitingRows = throttled.filter((c) => now < dueAt(c));
   const batch = due.slice(0, THROTTLE_CONTINUE_BATCH);
   const nextDueAt = waitingRows.length > 0 ? Math.min(...waitingRows.map(dueAt)) : null;
   return { batch, remaining: due.length - batch.length, waiting: waitingRows.length, nextDueAt };
+}
+
+// Staged release after a usage-limit reset. The meter says the window rolled,
+// but the meter is a snapshot of one window on one account and a fleet of 30
+// continues into a still-spent week is 30 refused turns and 30 fresh parks.
+// So the loop's "continue" sends one session first and reads the account from
+// what happens to it, then releases the rest at the throttle pace.
+//
+// The probe is the MOST RECENTLY PARKED session: its park is the freshest
+// fact about the account, so its continue is the cleanest test of whether
+// that fact has changed, and a session that stopped last has the warmest
+// context to resume. Heartbeat freshness says who is alive, not who was
+// refused, and liveness is already a precondition of being in `blocked`.
+export type LimitProbe = { conversation_id: string; at: number; kind: string; bucket: number };
+
+export function pickLimitProbe<
+  T extends { _id: string; pending_api_error_kind?: string | null; pending_api_error_at?: number | null; updated_at?: number },
+>(blocked: T[], now: number): LimitProbe | null {
+  if (blocked.length === 0) return null;
+  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const probe = blocked.reduce((best, c) => (parkedAt(c) > parkedAt(best) ? c : best));
+  return { conversation_id: probe._id, at: now, kind: probe.pending_api_error_kind ?? "limit", bucket: Math.floor(now / 60_000) };
+}
+
+// How long the probe's continue may take to be delivered and answered before
+// the tick stops waiting on it. An undelivered continue (daemon busy, laptop
+// asleep) leaves the probe row parked on its ORIGINAL stamp; that is neither
+// a refusal nor a success, so the tick looks again, up to this long.
+export const LIMIT_PROBE_SETTLE_MAX_MS = 5 * 60 * 1000;
+
+/** What the paced tick should do about a limit probe in flight.
+ *  - reparked: a park of the probe's kind stamped after the probe went out
+ *    (on the probe row or any other row on the account): the account is still
+ *    spent, send nothing, hand back to the account loop.
+ *  - settling: the probe row still carries its pre-probe park (the continue
+ *    has not been answered yet) and the settle window is open: look again.
+ *  - release: the probe cleared (or settling timed out): the rows to send now
+ *    and how many are left for the next tick. */
+export function limitProbeStep<
+  T extends { _id?: string; pending_api_error_kind?: string | null; pending_api_error_at?: number | null; updated_at?: number },
+>(
+  blocked: T[],
+  probe: LimitProbe,
+  now: number,
+): { step: "reparked" } | { step: "settling" } | { step: "release"; batch: T[]; remaining: number } {
+  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const sameKind = blocked.filter((c) => (c.pending_api_error_kind ?? "") === probe.kind);
+  if (sameKind.some((c) => parkedAt(c) > probe.at)) return { step: "reparked" };
+  const probeRow = sameKind.find((c) => c._id === probe.conversation_id);
+  if (probeRow && now - probe.at < LIMIT_PROBE_SETTLE_MAX_MS) return { step: "settling" };
+  const rest = sameKind.filter((c) => c._id !== probe.conversation_id);
+  const { batch, remaining } = pickThrottleContinueBatch(rest, now, [], { kinds: new Set([probe.kind]), dueAt: () => 0 });
+  return { step: "release", batch, remaining };
 }
 
 // The browser sign-in round trip, stored on the device row that runs it. The
@@ -920,6 +996,31 @@ export function earliestUsageResetAt(
     }
   }
   return resets.length ? Math.min(...resets) : undefined;
+}
+
+/** When a session parked at a limit can expect room on the account it ran:
+ *  the pin on its row, else the device's fleet account. That account's
+ *  longest pegged window names the wait (a rolled 5h session inside a spent
+ *  week reopens nothing); with no meter pegged, its earliest future reset.
+ *  Only when the account is unknown to the device does this fall back to the
+ *  earliest reset across every account, which can wake on the wrong window.
+ *  A booked recovery check (`next_check_at`, the account loop's own next
+ *  look) is a floor: the loop knows at least as much as this does. */
+export function parkedAccountResetAt(
+  device: { cc_accounts?: FleetAccounts | null; cc_auto_switch_state?: { next_check_at?: number } | null } | undefined,
+  conv: { cc_account?: string | null },
+  now: number,
+): number | undefined {
+  const profiles = device?.cc_accounts?.profiles ?? [];
+  const fleet = fleetAccount(device?.cc_accounts, now);
+  const own = profiles.find((p) =>
+    conv.cc_account ? p.name === conv.cc_account : fleet.profile ? p.name === fleet.profile : !!p.email && p.email === fleet.email,
+  );
+  const pegged = own ? peggedWindow(own.usage, now)?.resets_at : undefined;
+  const resetAt = pegged && pegged > now ? pegged : earliestUsageResetAt(own ? [own] : profiles, now);
+  const booked = device?.cc_auto_switch_state?.next_check_at;
+  if (booked && booked > now && (resetAt === undefined || booked > resetAt)) return booked;
+  return resetAt;
 }
 
 // Selection predicate for the revive actions: a conversation parked on a

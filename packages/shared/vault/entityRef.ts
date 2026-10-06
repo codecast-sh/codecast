@@ -103,6 +103,8 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   decision: /^sd-\d+$/i,
   // A call, or a stretch of its transcript lines (cl-42, cl-42:15-25).
   call: /^cl-\d+(?::\d+(?:-\d+)?)?$/i,
+  // `src` is a path segment (src-tauri), so a product source takes digits only.
+  source: /^src-\d+$/i,
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -310,4 +312,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   proposal: "--sol-violet",
   decision: "--sol-yellow",
   call: "--sol-red",
+  source: "--sol-orange",
 };

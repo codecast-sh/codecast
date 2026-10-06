@@ -66,6 +66,22 @@ test("refresh discovers new workflow origins and removes deleted ones", async ()
   expect(await workflowAgentTranscriptPathFor(id)).toBeNull();
 });
 
+test("an ordinary session older than the walk is answered without another walk", async () => {
+  const ordinary = "0f6c2f0e-ordinary";
+  fs.writeFileSync(path.join(project, `${ordinary}.jsonl`), "{}\n");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await refreshSessionFileIndex();
+  expect(await workflowAgentTranscriptPathFor(ordinary)).toBeNull();
+  const reads = spyOn(fs.promises, "readdir");
+  spies.push(reads);
+  expect(await workflowAgentTranscriptPathFor(ordinary)).toBeNull();
+  expect(reads).not.toHaveBeenCalled();
+  // An id with no ordinary transcript still earns a fresh walk.
+  const file = writeWorkflow();
+  expect(await workflowAgentTranscriptPathFor(id)).toBe(file);
+  expect(reads).toHaveBeenCalled();
+});
+
 test("an incomplete scan defers recovery instead of granting absence", async () => {
   const original = fs.promises.readdir;
   const reads = spyOn(fs.promises, "readdir").mockImplementation(((dir: unknown, ...args: unknown[]) => {

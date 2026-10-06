@@ -111,8 +111,15 @@ const OUTCOME_WORDS: Record<string, string> = {
   unreplayable: "found uncommitted edits it cannot replay",
 };
 
-/** Where an event's line goes, and what it says. */
-export function movedLine(e: MovedEvent): { href: string; text: string } {
+/** Where a What moved line goes, and what it says. */
+export type MovedLine = { href: string; text: string };
+
+/**
+ * Where an event's line goes, and what it says. A host's own kinds (the
+ * second parameter of OverviewResponse) are drawn by `own` (codecast: a sim
+ * failure opens its sim run, through the host's wall slot).
+ */
+export function movedLine<L extends MovedLine = MovedLine>(e: MovedEvent, own?: (e: MovedEvent) => L): MovedLine | L {
   const s = e.surface ?? "";
   switch (e.kind) {
     case "epoch":
@@ -127,7 +134,7 @@ export function movedLine(e: MovedEvent): { href: string; text: string } {
     }
     case "bisect":
       return { href: evalsHref.bisect(e.id), text: `Bisect on ${s} ${e.outcome ? OUTCOME_WORDS[e.outcome] ?? "finished" : "stopped without an answer"}` };
-    case "sim-failure":
-      return { href: e.run ? evalsHref.simRun(e.session, e.run) : evalsHref.sim(), text: `Multiplayer sim: ${e.scenario} broke ${e.invariant || "an invariant"}` };
+    default:
+      return own ? own(e) : { href: evalsHref.home(), text: `${s || "The evals"} moved` };
   }
 }

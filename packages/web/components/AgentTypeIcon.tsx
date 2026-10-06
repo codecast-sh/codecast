@@ -1,5 +1,7 @@
 import { MUSE_MARK_PATH } from "@codecast/shared/render/mobileSessionStyle";
 import { CodexIcon, GrokIcon } from "./BrandIcons";
+import { LogoMark } from "./Logo";
+import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
 
 export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType: string; className?: string }) {
   if (agentType === "claude_code") {
@@ -43,20 +45,18 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType:
         <path d={MUSE_MARK_PATH} />
       </svg>
     );
+  } else if (isHostedAgentType(agentType)) {
+    // The hosted Codecast assistant wears the codecast mark, tight-cropped and
+    // in one colour so it fills the box the other agent glyphs fill.
+    return <LogoMark monochrome className={`${className} shrink-0 text-sol-cyan`} />;
   }
   return null;
 }
 
+/** The name a surface shows for an agent_type: "Claude Code" for Claude,
+ *  the registry's name (agentDisplayName) for every other client. */
 export function formatAgentType(agentType?: string): string {
   if (!agentType) return "Unknown";
   if (agentType === "claude_code") return "Claude Code";
-  if (agentType === "codex") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  if (agentType === "opencode") return "OpenCode";
-  if (agentType === "pi") return "pi";
-  if (agentType === "grok") return "Grok";
-  if (agentType === "muse") return "Muse Spark";
-
-  return agentType;
+  return agentDisplayName(agentType);
 }

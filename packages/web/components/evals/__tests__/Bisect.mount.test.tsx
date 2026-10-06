@@ -202,6 +202,21 @@ describe("the free answer", () => {
     });
   }
 
+  it("keeps each flip's before and after side by side, with no size container of its own to stack them in", async () => {
+    const a = (Object.keys(pairs) as Array<keyof typeof pairs>).map(attribution).find((x) => x.examples.length > 0)!;
+    expect(a).toBeTruthy();
+    const { container, unmount } = await mount(<AttributionView attribution={a} />);
+    const examples = [...container.querySelectorAll("[data-evb-examples] .cc-example")];
+    expect(examples.length).toBe(a.examples.length);
+    // Before the host seam these pairs sat bare in their row; the host's stacking container is for comparison lists.
+    for (const ex of examples) expect(ex.parentElement!.hasAttribute("data-ev-flip")).toBe(true);
+    await unmount();
+    const { ExamplePair } = codecastEvalsHost.ui;
+    const list = await mount(<ExamplePair ex={a.examples[0]!} />);
+    expect(list.container.querySelector(".cc-example")!.parentElement).not.toBe(list.container);
+    await list.unmount();
+  });
+
   it("shows a pinned answer's commit and no Start", async () => {
     const p = pairs.pinned!;
     const { container, unmount } = await mount(<BisectNewPage view={{ view: "bisect-new", surface: p.surface, good: p.good, bad: p.bad, freeze: null }} />);

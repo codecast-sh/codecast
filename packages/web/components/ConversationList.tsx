@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { AgentTypeIcon } from "./AgentTypeIcon";
+import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { AvatarImg } from "../lib/avatarCache";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -368,10 +369,10 @@ export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: str
         <GrokIcon className="w-2.5 h-2.5 text-white" />
       </span>
     );
-  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse") {
-    // opencode/pi/muse have no dedicated badge glyph here — reuse the canonical
-    // AgentTypeIcon (its own accent color) inside the badge chrome so they never
-    // fall through to the Claude icon.
+  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse" || isHostedAgentType(agentType)) {
+    // opencode/pi/muse and the hosted assistant have no dedicated badge glyph
+    // here — reuse the canonical AgentTypeIcon (its own accent color) inside
+    // the badge chrome so they never fall through to the Claude icon.
     return (
       <span className={`${className} rounded bg-sol-bg-alt flex items-center justify-center shrink-0`}>
         <AgentTypeIcon agentType={agentType} className="w-2.5 h-2.5" />
@@ -742,21 +743,9 @@ function groupByTime(conversations: Conversation[]): TimeGroup[] {
   return groups.filter((g) => g.conversations.length > 0);
 }
 
-function getAgentTypeLabel(agentType: string): string {
-  if (agentType === "claude_code") return "Claude Code";
-  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  if (agentType === "opencode") return "OpenCode";
-  if (agentType === "pi") return "pi";
-  if (agentType === "grok") return "Grok";
-  if (agentType === "muse") return "Muse Spark";
-  return agentType;
-}
-
 function createConversationAriaLabel(conv: Conversation): string {
   const title = cleanTitle(conv.title || "Untitled");
-  const agentType = getAgentTypeLabel(conv.agent_type || "claude_code");
+  const agentType = formatAgentType(conv.agent_type || "claude_code");
   const time = getRelativeTime(conv.updated_at);
   const status = conv.is_active ? ", active" : "";
   return `${title}, ${agentType}, ${time}${status}`;

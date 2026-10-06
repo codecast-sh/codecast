@@ -11,7 +11,7 @@
 
 import { createContext, useCallback, useContext, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { RunResponse } from "@codecast/shared/contracts/evalsApi";
+import type { MovedEvent, OverviewResponse, RunResponse } from "@codecast/shared/contracts/evalsApi";
 import { toast } from "sonner";
 import { SESSION_TRAILER_KEY, splitSessionTrailer } from "@codecast/shared/blame";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -36,6 +36,7 @@ import { useRepoLocation } from "../repo/useRepoFamily";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "../ui/sheet";
 import { useCodecastRunPanels } from "./runPanels";
+import { SimFoot, simMoved } from "./wallSim";
 
 // ── The contract ────────────────────────────────────────────────────────────
 
@@ -71,7 +72,12 @@ export interface EvalsHost {
     HoverTip: typeof HoverTip;
     Sheet: { Root: typeof Sheet; Content: typeof SheetContent; Title: typeof SheetTitle; Description: typeof SheetDescription; Close: typeof SheetClose };
     SegmentedToggle: typeof SegmentedToggle;
-    ExamplePair: typeof ExamplePair;
+    /**
+     * A before and after pair. By default it stacks when its own width is
+     * narrow (a comparison list); `stack={false}` keeps the two side by side
+     * at any width (a bisect's evidence card).
+     */
+    ExamplePair: ComponentType<Parameters<typeof ExamplePair>[0] & { stack?: boolean }>;
     EmptyState: ComponentType<{ title: string; description: string; action?: { label: string; href: string } }>;
     DiffView: typeof DiffView;
     /** The session that wrote a commit, as the host names a session. */
@@ -120,6 +126,19 @@ export interface EvalsHost {
    * tabs; it is called once per render of the run, whichever tab is open.
    */
   useRunPanels?(run: RunResponse, ctx: RunPanelContext): RunPanel[];
+  /**
+   * A host's own parts of the surface wall (codecast: the Multiplayer sim).
+   * Without it the wall draws only the surfaces, spend, bisects and moves
+   * every product shares.
+   */
+  wall?: {
+    /** The line and mark of a What moved event of the host's own kind (the second parameter of OverviewResponse). */
+    moved(e: MovedEvent): { href: string; text: string; mark: ReactNode };
+    /** What the host's own kinds are called, for the line that says nothing moved. */
+    movedKinds: string[];
+    /** The host's blocks in the wall's foot, after Open bisects, drawn from its own overview fields. */
+    Foot?: ComponentType<{ overview: OverviewResponse; now: number }>;
+  };
 }
 
 /** One tab a host adds under a run. */
@@ -205,9 +224,11 @@ function useCodecastConnection(): { state: string; screen: ReactNode | null } {
 /**
  * A change card's before and after pair. It sizes its columns by the nearest
  * `cc` container (changeCard.css: the two stack below 640px), which the change
- * card it was made for draws around it; here the host draws that container.
+ * card it was made for draws around it; here the host draws that container,
+ * unless the view keeps the pair side by side.
  */
-function ContainedExamplePair(props: Parameters<typeof ExamplePair>[0]) {
+function ContainedExamplePair({ stack = true, ...props }: Parameters<typeof ExamplePair>[0] & { stack?: boolean }) {
+  if (!stack) return <ExamplePair {...props} />;
   return (
     <div style={{ containerType: "inline-size", containerName: "cc" }}>
       <ExamplePair {...props} />
@@ -283,4 +304,5 @@ export const codecastEvalsHost: EvalsHost = {
     strip: (message) => splitSessionTrailer(message).message,
   },
   useRunPanels: useCodecastRunPanels,
+  wall: { moved: simMoved, movedKinds: ["Multiplayer sim failure"], Foot: SimFoot },
 };

@@ -28,12 +28,25 @@ digraph my_flow {
 
 This graph loops: implementation runs, a typecheck verifies it, failure routes back to implementation, success routes to a human review gate, and the reviewer's choice either exits or sends the work back with feedback. Node shapes carry meaning — a parallelogram is a shell command, a hexagon is a human gate — and edge conditions route on each node's outcome.
 
+```figure
+WorkflowRunFigure
+One run of the graph above: the first typecheck fails and loops back, the second passes, and the run waits at the gate until someone approves.
+```
+
 Node types:
 
 - **Agent** (`backend=claude`, `backend=codex`, …): spin up an agent session with a prompt; the plan or task context rides along.
 - **Command** (`script="…"`): run a shell command; its exit status and output drive downstream conditions.
 - **Human gate**: pause the run and wait. The gate shows up in the dashboard with its choices as buttons, and a push notification reaches you on mobile and desktop.
 - **Conditional edges**: `condition="outcome = success"` routes on the previous node's result.
+- **Parallel branches**: a `component` node fans out to branches that run at once, and a `tripleoctagon` node waits for them to join. A `tab` node is a single model call with no tools.
+
+A loop needs a bound: `max_visits` on a node aborts the run when the loop passes through it more times than that.
+
+```figure
+NodeShapesFigure
+Every node shape the parser knows, and the node type each one declares.
+```
 
 ## Running
 
@@ -47,6 +60,13 @@ cast workflow push             # publish the definition to the web UI
 ```
 
 A run creates a primary conversation in the inbox; each agent node gets its own session, streamed live to the dashboard with the graph's progress alongside. Human gates hold the run until you answer — reply through the normal message composer or click the gate button, and the workflow resumes with your input passed to the next node.
+
+```figure
+GateReplyFigure
+A reply that starts with an option's key picks that edge, and the rest of the reply becomes the next node's instructions.
+```
+
+![A workflow graph, two triggers, and a run paused at its review gate](/documentation/shots/automations.webp "The ship workflow's graph with its failure loop, and the run paused at Review after implement and verify passed.")
 
 ## When to use which
 

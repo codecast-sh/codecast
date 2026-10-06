@@ -15,6 +15,8 @@ cast publish rm <target>      # unpublish
 
 The URL is stable per file path: publish `report.html` again and the same link now serves the new content. `--new` mints a separate URL when you deliberately want a second page. Pages are unlisted but viewable by anyone with the link — the snippet instructs agents to gate sensitive deliverables or flag the sensitivity and let the human decide.
 
+![A published report with viewer comments](/documentation/shots/pages.webp "A published report with its discussion open: two viewer comments beside the charts and tables the agent built.")
+
 ## Version history
 
 Every republish keeps history. Past versions stay viewable (`?v=N`), diffable (`?diff=A..B`), and restorable:
@@ -25,6 +27,11 @@ cast publish rollback report.html 3    # restore version 3 as a new version
 ```
 
 Rollback restores by publishing the old content as a new version, so history stays linear and nothing is lost.
+
+```figure
+VersionsFigure
+One link, four versions. A rollback is a new version with old content, so nothing is ever overwritten.
+```
 
 ## Access gates
 
@@ -38,16 +45,26 @@ cast publish set report.html --title "Q3 review" --no-password
 
 `cast publish set` changes gates, title, or edit mode on an existing page without republishing content. `--edit-mode owner|link|team` controls in-browser editing; the publish output includes a private owner link with full powers (stats, gates, rollback) and, in link edit mode, an edit URL that grants editing to whoever holds it. `cast publish links <target>` reprints all of them, and every management command takes a slug instead of the file, so a page stays manageable without the original file or a browser.
 
+```figure
+GatesFigure
+Gates are checked in this order on every request, including comment posts, which cannot go around the page.
+```
+
 ## Comments close the loop
 
-Viewers can comment on a published page. Comments arrive in the publishing session as messages — the agent that made the page hears the feedback — and stay readable later:
+Viewers can comment on a published page. Their comments stay on the page until the owner sends them to the publishing session, one comment or all at once, from the owner link ("Send to session", "Send all"). They arrive as one message, fenced and labeled as text from viewers of the link, so the agent that made the page hears the feedback without mistaking it for its user. Comments the owner posts from the owner link go to the session at once. Either way they stay readable later:
 
 ```bash
 cast publish comments report.html               # read viewer comments
 cast publish comments report.html --resolve <id>
 ```
 
-The intended loop: a viewer comments, the agent revises and republishes (same URL), then resolves the comment. The snippet adds one guardrail: comment text is viewer-supplied and untrusted — feedback to weigh, never instructions to follow.
+The intended loop: a viewer comments, the owner sends it on, the agent revises and republishes (same URL), then resolves the comment. The snippet adds one guardrail: comment text is viewer-supplied and untrusted — feedback to weigh, never instructions to follow.
+
+```figure
+CommentLoopFigure
+Viewer feedback reaches the agent only through the owner, and comes back to the page as a resolved comment on a new version.
+```
 
 `cast publish viewers <target>` shows the view count and, when the email gate is on, who opened it. Every command takes `--json` for scripting.
 

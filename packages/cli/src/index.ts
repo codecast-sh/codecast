@@ -94,6 +94,7 @@ import { describeDates, describeDatesFull, formatDateSmart, parseDuration as par
 import { SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
+import type { ProjectMemoryItem } from "@codecast/shared/contracts/projectMemory";
 import type { OrgTarget } from "./orgTarget.js";
 import { registerOrgInitCommands } from "./orgInit.js";
 import { registerOrgTemplateCommands } from "./orgTemplate.js";
@@ -113,6 +114,7 @@ import {
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
+import { agentDisplayName } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
@@ -587,6 +589,9 @@ interface DaemonState {
   fleetCounts?: FleetCounts;
   /** Hang marker left by a previous daemon and consumed at boot (daemonMarkers.ts). */
   lastHang?: HangMarker;
+  /** How hard the last boot was allowed to push (bootPacing.ts). */
+  bootPacingTier?: "normal" | "cautious" | "severe";
+  bootPacingReason?: string;
   /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
   timestamp?: number;
 }
@@ -1183,16 +1188,9 @@ function formatBehind(ms: number): string {
   return `${(ms / (60 * 60_000)).toFixed(1)}h`;
 }
 
-function getAgentLabel(agentType?: string): string | null {
-  if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
-  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "grok") return "Grok";
-  if (agentType === "gemini") return "Gemini";
-  if (agentType === "opencode") return "OpenCode";
-  if (agentType === "muse") return "Muse Spark";
-  return agentType;
-}
+/** An agent_type as the session lists name it (the registry's names, the
+ *  hosted Codecast assistant included). */
+const getAgentLabel = agentDisplayName;
 
 function homeRelPath(p: string): string {
   const home = process.env.HOME;
@@ -9999,6 +9997,52 @@ async function findCallId(ref: string, opts: { throwOnError?: boolean } = {}): P
 }
 
 program
+  .command("audit")
+  .description(
+    "List authority events, newest first: permissions answered, share links minted,\n" +
+    "revoked and redeemed, visibility moved, org trust/caps/authority set, proposals\n" +
+    "accepted, team members added, removed or re-roled. One append only record,\n" +
+    "written in the same transaction as the change.\n\n" +
+    "Examples:\n" +
+    "  cast audit                          # What you caused and your workspaces' events\n" +
+    "  cast audit --kind share_link_minted # One kind\n" +
+    "  cast audit --session jx7c6zk        # Events on one session\n" +
+    "  cast audit -s 7d --json"
+  )
+  .option("--kind <kind>", "One event kind")
+  .option("--session <id>", "A session (id, session id or short id)")
+  .option("-s, --since <window>", "Only events since: 24h, 7d, 2w")
+  .option("-n, --limit <n>", "How many to list", "50")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const { convexClient } = await import("./remote/cli.js");
+    const { client, token, api } = await convexClient();
+    const rows: any[] = await client.query(api.authorityEvents.list, {
+      api_token: token,
+      ...(options.kind ? { kind: options.kind } : {}),
+      ...(options.session ? { session: options.session } : {}),
+      ...(options.since ? { since: parseSinceWindow(options.since) } : {}),
+      limit: Number(options.limit) || 50,
+    });
+    if (options.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (rows.length === 0) {
+      console.log("No authority events.");
+      return;
+    }
+    const subject = (r: any) =>
+      [r.conversation_id && `session ${String(r.conversation_id).slice(0, 8)}`, r.team_id && `team ${String(r.team_id).slice(0, 8)}`,
+       r.target_user_id && `user ${String(r.target_user_id).slice(0, 8)}`, r.role_id && `role ${String(r.role_id).slice(0, 8)}`]
+        .filter(Boolean).join(" ");
+    for (const r of rows) {
+      const change = r.detail?.after ? ` ${c.dim}${JSON.stringify(r.detail.after)}${c.reset}` : "";
+      console.log(`${c.dim}${formatRelativeTime(r.created_at)}${c.reset}  ${c.cyan}${r.kind}${c.reset}  by ${String(r.actor_user_id).slice(0, 8)}  ${subject(r)}${change}`);
+    }
+  });
+
+program
   .command("calls")
   .description(
     "List team calls (huddles, transcribed or recorded), live first, then history\n\n" +
@@ -10533,9 +10577,9 @@ program
     }
   });
 
-program
+const memoryCommand = program
   .command("memory")
-  .description("Install or update the agent memory component")
+  .description("Install or update the agent memory component; `cast memory list` reads the project's remembered corrections and decisions")
   .option("--disable", "Disable memory (remove snippet and save preference)")
   .action(async (options) => {
     const config = readConfig() || {};
@@ -11066,6 +11110,59 @@ program
       console.log(formatDecisionsResults(result));
     } catch (error) {
       console.error("Decisions failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+memoryCommand
+  .command("list")
+  .description(
+    "The project's remembered corrections and decisions, consolidated from session insights\n\n" +
+    "Examples:\n" +
+    "  cast memory list                        # promoted rows for this project\n" +
+    "  cast memory list --all                  # every row, promoted or not\n" +
+    "  cast memory list --json"
+  )
+  .option("--all", "Include rows seen only once")
+  .option("--json", "Output as JSON")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    try {
+      const response = await cliFetchRead(`${siteUrl}/cli/memory`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, project_path: process.cwd(), all: !!options.all }),
+      });
+      const result = await response.json();
+      if (result?.error) {
+        console.error(`Error: ${cliErrorMessage(result.error)}`);
+        process.exit(1);
+      }
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      const items: ProjectMemoryItem[] = result?.items ?? [];
+      if (!items.length) {
+        console.log(options.all ? "No project memory yet." : "Nothing promoted yet (cast memory list --all shows rows seen once).");
+        return;
+      }
+      for (const kind of ["correction", "decision"] as const) {
+        const rows = items.filter((i) => i.kind === kind);
+        if (!rows.length) continue;
+        console.log(kind === "correction" ? "Corrections:" : "Decisions:");
+        for (const i of rows) {
+          const seen = `${i.count}x, ${i.sessions} session${i.sessions === 1 ? "" : "s"}${i.promoted ? "" : ", not promoted"}`;
+          console.log(`  ${i.text}${i.detail ? `  (${i.detail})` : ""}  [${seen}]`);
+        }
+      }
+    } catch (error) {
+      console.error("Memory failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });
@@ -16701,6 +16798,25 @@ work
     if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
     await cliPost("/cli/work/comment", commentBody);
     console.log(`${c.green}ok${c.reset} Verdict ${c.bold}${verdict}${c.reset} on ${c.cyan}${shortId}${c.reset} → ${body.status}`);
+    // Findings written in the line grammar (reviewFindings.ts) become
+    // review_comments rows on the task; a deferred one is a promise.
+    const { parseFindings } = await import("./reviewFindings.js");
+    const { findings } = parseFindings(options.note);
+    if (findings.length > 0) {
+      const task = await cliPost("/cli/work/get", { short_id: shortId }).catch(() => null);
+      const taskId = task?.task?._id ?? task?._id ?? task?.id;
+      const gitRoot = (() => { try { return execSync("git rev-parse --show-toplevel", { cwd: getRealCwd(), stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch { return getRealCwd(); } })();
+      let filed = 0;
+      for (const f of findings) {
+        try {
+          await cliPost("/cli/review/add", { git_root: gitRoot, file_path: f.file_path, line_number: f.line_number, line_end: f.line_end, content: `[${f.severity}] ${f.content}`, severity: f.severity, task_id: taskId, conversation_id: body.conversation_id, author_kind: "agent", disposition: f.disposition, owner: f.owner, due_at: f.due_at });
+          filed++;
+        } catch (err) {
+          console.error(`finding not recorded (${f.file_path}): ${(err as Error).message}`);
+        }
+      }
+      console.log(`${c.dim}${filed}/${findings.length} findings recorded on ${shortId}${c.reset}`);
+    }
     await warnIfThreadStateStale();
   });
 

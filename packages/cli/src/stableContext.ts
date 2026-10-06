@@ -21,6 +21,7 @@ import {
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
 import { orgContextBlock } from "@codecast/shared/contracts/orgWhere";
+import { projectMemoryBlock, type ProjectMemoryResponse } from "@codecast/shared/contracts/projectMemory";
 import { STABLE_FEED_HOOK_FILE } from "./codecastOwned.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
@@ -66,6 +67,7 @@ export async function buildStableContext(
   const exclude = opts.exclude ?? [];
   const siteUrl = config.convex_url.replace(".cloud", ".site");
   const orgBlock = fetchOrgContext(siteUrl, config.auth_token, opts.session);
+  const memoryBlock = fetchProjectMemory(siteUrl, config.auth_token, opts.cwd, opts.session);
 
   try {
     const response = await fetch(`${siteUrl}/cli/feed`, {
@@ -119,7 +121,7 @@ export async function buildStableContext(
 ${instruction}
 
 ${feed}
-</stable-context>${await orgBlock}`,
+</stable-context>${await orgBlock}${await memoryBlock}`,
       data: { mode: opts.mode, global: opts.global, injected_at: Date.now(), items },
     };
   } catch {
@@ -139,6 +141,26 @@ async function fetchOrgContext(siteUrl: string, apiToken: string, session?: stri
     });
     const where = response.ok ? ((await response.json()) as any) : null;
     return where?.roles?.length ? `\n\n${orgContextBlock(where)}` : "";
+  } catch {
+    return "";
+  }
+}
+
+/** The project's promoted corrections and decisions (shared/contracts/projectMemory)
+ *  as a block to follow the org block, or "" when the project has none or the
+ *  read fails. Read for the working directory, never globally. */
+export async function fetchProjectMemory(siteUrl: string, apiToken: string, cwd?: string, session?: string): Promise<string> {
+  if (!cwd) return "";
+  try {
+    const response = await fetch(`${siteUrl}/cli/memory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, project_path: cwd, session }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const memory = response.ok ? ((await response.json()) as ProjectMemoryResponse | null) : null;
+    const block = projectMemoryBlock(memory?.items ?? []);
+    return block ? `\n\n${block}` : "";
   } catch {
     return "";
   }
