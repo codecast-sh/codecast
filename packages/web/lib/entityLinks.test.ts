@@ -575,6 +575,13 @@ describe("initiatives (in-N)", () => {
     expect(isEntityId("in-7")).toBe(true);
   });
 
+  test("an id inside a hyphenated word is prose", () => {
+    for (const prose of ["a 2-in-1 vacuum", "an all-in-1 kit", "the op-1-style card", "x-ct-4102 and ct-4102-ish"]) {
+      expect(prose.match(bareEntityIdRegex())).toBeNull();
+    }
+    expect("see in-1, op-1 and sd-2.".match(bareEntityIdRegex())).toEqual(["in-1", "op-1", "sd-2"]);
+  });
+
   test("prose that starts with in- is never an initiative", () => {
     for (const word of ["in-app", "in-house", "in-flight", "in-7th", "in-"]) {
       expect(inferEntityTypeFromShortId(word)).toBeNull();

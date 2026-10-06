@@ -4,12 +4,14 @@
 // /welcome and home all read it, so they never disagree about whether mail is
 // connected or what it allows. Codecast holds no Google token for mail: the
 // connect goes to Whisk and comes back through /connect/whisk.
+import { useState } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { WhiskConnectionView, WhiskReturnPath } from "@codecast/convex/convex/whisk";
 import { useSettingsData } from "../../hooks/useSyncSettings";
 import { useConnectGesture } from "../../lib/integrations";
-import { useConnectAvailable } from "./assistantPromise";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { GATE_DEADLINE_MS, useConnectAvailable } from "./assistantPromise";
 import type { MailAbilities } from "./lane";
 
 /** Whisk's web home, where "Open Whisk" goes before the server has said. */
@@ -20,15 +22,29 @@ export const WHISK_HOME = "https://whisk.email";
 export function useLaneMailAbilities() {
   const { data, error } = useSettingsData("whiskConnection");
   const reach = useConnectAvailable();
-  // A backend that cannot answer is treated as able, so Connect shows and any
-  // refusal is said where it happens rather than the screen waiting for good.
-  const available = reach.failed ? true : reach.available;
+  // A connection read with no answer by the gate's deadline counts as "not
+  // connected" for now, so no screen waits on it forever; a late answer
+  // still lands.
+  const [readLate, setReadLate] = useState(false);
+  const reading = data === undefined && !error;
+  useWatchEffect(() => {
+    if (!reading) return;
+    const timer = setTimeout(() => setReadLate(true), GATE_DEADLINE_MS);
+    return () => clearTimeout(timer);
+  }, [reading]);
+  // Connect is offered only on a yes. Until one arrives, a deployment that is
+  // late to answer offers nothing, so no screen leads a newcomer to a connect
+  // that can only fail; a late yes still offers it.
+  const available = reach.available ?? (reach.failed ? false : undefined);
   const view = (data ?? null) as WhiskConnectionView | null;
   const linked = view?.connected ? view : null;
   const connected = !!linked;
   const can: MailAbilities | null = linked?.can ?? null;
   return {
     connected,
+    /** Whisk refused the connection (revoked there) or it can no longer be
+     *  opened: it stays listed, and every surface offers Reconnect. */
+    needsReconnect: !!linked?.needs_reconnect,
     can,
     email: linked?.email,
     /** Every mailbox the connection reaches, the main one first. */
@@ -36,14 +52,15 @@ export function useLaneMailAbilities() {
     /** Where Whisk itself opens. */
     whiskUrl: view?.whisk_url ?? WHISK_HOME,
     /** Whether this deployment can connect mail through Whisk at all;
-     *  undefined until it answers, true when the question failed. */
+     *  undefined until it answers, false when the question failed. Offer
+     *  Connect only on `available === true`. */
     available,
     canDisconnect: connected,
     /** False until the connection has answered and, for someone not
      *  connected, until the deployment has said whether Connect can work, so
      *  a screen can wait rather than show "not connected" or offer a button
      *  it may withdraw. A read that failed counts as answered. */
-    known: (data !== undefined || !!error) && (connected || available !== undefined),
+    known: (!reading || readLate) && (connected || available !== undefined),
   };
 }
 
@@ -59,7 +76,7 @@ function useWhiskActions(returnTo: WhiskReturnPath) {
     busy,
     error,
     connect: () =>
-      attempt(() => openMinted(() => getConnectUrl({ return_to: returnTo }), "Couldn't start connecting your mail", { sameTab: true }), "Couldn't reach Whisk"),
+      attempt(() => openMinted(() => getConnectUrl({ return_to: returnTo, origin: window.location.origin }), "Couldn't start connecting your mail", { sameTab: true }), "Couldn't reach Whisk"),
     disconnect: () =>
       attempt(async () => {
         settle(await disconnectWhisk({}), "Couldn't disconnect your mail");

@@ -193,7 +193,7 @@ describe("UndoTimelineView", () => {
     assert.deepEqual(calls.at(-1), ["org"]);
   });
 
-  // A frame outside the dashboard (the simple lane) has no page for most
+  // A frame outside the dashboard can have no page for most
   // objects and no org record: those rows show no link, and O and the org
   // button do nothing rather than navigate into a frame the person is not in.
   it("a frame with no place for an object or the org record leaves those rows inert", async () => {
