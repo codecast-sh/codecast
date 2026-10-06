@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { ArrowLeft, Check, Layers, ShieldCheck, Undo2, User } from "lucide-react";
 import { useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
+import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatTimeAgo } from "../../lib/messageNavigator";
@@ -67,6 +68,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const reopenDecision = useInboxStore((st) => st.reopenDecision);
   const grant = useMutation(api.sessionDecisions.grant);
   const now = useCoarseNow(30_000);
+  // A card's cause task may carry the author's change guide; its evidence row holds it.
+  const cardTask = decision.card?.cause.task ?? null;
+  useSyncTaskEvidence(cardTask);
+  const guide = useTaskEvidenceByShortId(cardTask)?.change_guide ?? null;
   const pending = decision.status === "pending";
   const rec = ladderRecommendation(decision);
   // Single, multi and rank answer on the option rows themselves; a form
@@ -224,7 +229,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* The agent's own context reads right under the card, before the facts. */}
         {decision.card && (
           <section className="mt-6">
-            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} summarized={verdictBar} />
+            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} summarized={verdictBar} guide={guide} />
             {body && <div className="mt-6">{body}</div>}
             {meta}
           </section>

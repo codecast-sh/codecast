@@ -1,5 +1,7 @@
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
+import { codeAnchorValidator } from "./lib/codeAnchorValidator";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { type Doc, Id } from "./_generated/dataModel";
@@ -230,6 +232,7 @@ type CreateCommentArgs = {
   pr_id?: Id<"pull_requests">;
   file_path?: string;
   line_number?: number;
+  anchor_lines?: CodeAnchorText;
   client_id?: string;
 };
 
@@ -462,6 +465,9 @@ async function executeCreateComment(
       pr_id: args.pr_id,
       file_path: args.file_path,
       line_number: args.line_number,
+      // A reply hangs in its parent's thread; only the comment that opens a
+      // thread on a line says what that line was.
+      anchor_lines: args.file_path && !args.parent_comment_id ? args.anchor_lines : undefined,
       client_id: args.client_id,
     }),
   );
@@ -605,6 +611,7 @@ const createCommentValidators = {
   pr_id: v.optional(v.id("pull_requests")),
   file_path: v.optional(v.string()),
   line_number: v.optional(v.number()),
+  anchor_lines: v.optional(codeAnchorValidator),
   client_id: v.optional(v.string()),
 };
 

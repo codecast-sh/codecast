@@ -1,0 +1,11 @@
+.pop {
+  position: fixed; z-index: var(--z-popover); background: var(--paper); border: var(--line);
+  border-radius: var(--r-xl); box-shadow: var(--pop); padding: var(--s3);
+  animation: arrive var(--t-arrive) var(--squish);
+}
+.pop::after {
+  content: ""; position: absolute; left: calc(var(--arrow) - 8px); width: 16px; height: 16px; background: var(--paper);
+  border-right: var(--line); border-bottom: var(--line);
+}
+.above::after { bottom: -9.5px; transform: rotate(45deg); }
+.below::after { top: -9.5px; transform: rotate(-135deg); }

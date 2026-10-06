@@ -1,0 +1,6 @@
+.shaping {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--s4); padding: var(--s6); text-align: center; background: var(--dot-grid), var(--butter);
+}
+.title { font: 400 17px/1 var(--display); margin-top: var(--s2); }
+.line { font: 600 14px/1.4 var(--ui); color: var(--ink-soft); max-width: 360px; animation: fade-up var(--t-quick) var(--glide); }

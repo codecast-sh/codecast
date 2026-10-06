@@ -27,6 +27,13 @@ import { altChordDirection } from "../shortcuts";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useReviewComposer } from "./reviewContext";
+import { Copy, Ellipsis, Forward, Link2 } from "lucide-react";
+import { toast } from "sonner";
+import { copyToClipboard } from "../lib/utils";
+import { messageLink } from "../lib/conversationFormat";
+import { openForwardToChat } from "../lib/forwardToChat";
+import { parseMessageHash } from "../lib/messageHash";
+import { useTeamFeature } from "../lib/teamFeatures";
 
 const RightCommentRail = lazy(() => import("./comments/RightCommentRail").then((m) => ({ default: m.RightCommentRail })));
 
@@ -60,9 +67,16 @@ type Props = {
   messageId: string;
   content: string;
   renderBlock: (content: string) => React.ReactNode;
+  /** A real conversation message: its blocks get a deep link (#msg-<id>.p<n>)
+   *  in the gutter menu and land lit when a link to one is opened. */
+  linkable?: boolean;
 };
 
-function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: Props) {
+// The paragraph link this page load has already landed on, so a virtualized
+// remount of the message doesn't scroll back to it.
+let landedHash: string | null = null;
+
+function MessageReviewImpl({ conversationId, messageId, content, renderBlock, linkable }: Props) {
   const scrollToBlock = useReviewComposer()?.scrollToBlock;
   const { user: author } = useCurrentUser();
 
@@ -107,6 +121,11 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [hoverTop, setHoverTop] = useState(0);
   const [peekBlock, setPeekBlock] = useState<number | null>(null);
+  // The block whose gutter menu is open, and the block a paragraph link just
+  // landed on (lit briefly).
+  const [menuBlock, setMenuBlock] = useState<number | null>(null);
+  const [flashBlock, setFlashBlock] = useState<number | null>(null);
+  const chatOn = useTeamFeature("chat");
   const [rects, setRects] = useState<Rect[]>([]);
   const [stackTops, setStackTops] = useState<Record<string, number>>({});
   // Bottom of the last stacked card, reserved as the inline rail's height.
@@ -134,7 +153,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // the hover handle must track its block live, because content above can reflow
   // after the mouse stops (web font load, syntax highlighting, image settle) and a
   // frozen offset would leave the handle stranded on the block's lower lines.
-  const measureActive = engaged || isReviewTarget || hoverIndex !== null || rightActive;
+  const measureActive = engaged || isReviewTarget || hoverIndex !== null || rightActive || menuBlock !== null || flashBlock !== null;
 
   // Drop a stuck peek highlight: removing a chip via its Remove button unmounts it
   // before onMouseLeave fires, so clear the peek when its block no longer has any
@@ -286,6 +305,67 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     [conversationId, messageId, blockText],
   );
 
+  // The open gutter menu closes on a press anywhere outside it, or on Escape.
+  useWatchEffect(() => {
+    if (menuBlock === null) return;
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as Element).closest?.("[data-cc-block-actions]")) setMenuBlock(null);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuBlock(null); };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuBlock]);
+
+  const runBlockAction = useCallback((i: number, act: "comment" | "link" | "copy" | "chat") => {
+    setMenuBlock(null);
+    if (act === "comment") return useInboxStore.getState().openCommentThread(messageId);
+    if (act === "copy") {
+      copyToClipboard(blockText(i)).then(() => toast.success("Copied")).catch(() => toast.error("Failed to copy"));
+      return;
+    }
+    const url = messageLink(conversationId, messageId, i);
+    if (act === "chat") return openForwardToChat({ url, label: "paragraph" });
+    copyToClipboard(url).then(() => toast.success("Link to paragraph copied")).catch(() => toast.error("Failed to copy link"));
+  }, [conversationId, messageId, blockText]);
+
+  // Land a paragraph link: once the message has scrolled into view, bring its
+  // block to the middle of the screen and light it. Runs on mount (a page load
+  // or a remount after the virtualizer scrolled here) and on in-page hash moves.
+  useWatchEffect(() => {
+    if (!linkable) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const land = () => {
+      const hash = window.location.hash;
+      const target = parseMessageHash(hash);
+      if (!target || target.messageId !== messageId || target.block == null || landedHash === hash) return;
+      landedHash = hash;
+      const block = target.block;
+      let tries = 0;
+      const attempt = () => {
+        const unit = getQuoteUnits(contentRef.current)[block];
+        if (unit) {
+          unit.scrollIntoView({ block: "center" });
+          setFlashBlock(block);
+          timer = setTimeout(() => setFlashBlock(null), 2400);
+        } else if (tries++ < 10) {
+          timer = setTimeout(attempt, 150);
+        }
+      };
+      // Let the conversation's own jump to the message settle first.
+      timer = setTimeout(attempt, 350);
+    };
+    land();
+    window.addEventListener("hashchange", land);
+    return () => {
+      window.removeEventListener("hashchange", land);
+      if (timer) clearTimeout(timer);
+    };
+  }, [linkable, messageId]);
+
   // ----- hover: track the block under the cursor; keep it alive over the rail -----
   const cancelClear = useCallback(() => {
     if (hoverClear.current) {
@@ -402,7 +482,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // the keyboard-active block. Replaces the in-card quote as the "what does this
   // comment point at" cue. An unquoted keyboard-lit block also shows its quote
   // key on the gutter handle (a quoted one already shows N / ⌫ on its chip).
-  const hiBlock = peekBlock != null ? peekBlock : isReviewTarget ? activeBlock : -1;
+  const hiBlock = peekBlock != null ? peekBlock : flashBlock != null ? flashBlock : isReviewTarget ? activeBlock : -1;
   const keyLitBlock =
     peekBlock == null && isReviewTarget && hiBlock >= 0 && !myComments.some((c) => c.blockIndex === hiBlock) ? hiBlock : null;
 
@@ -427,7 +507,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       onMouseLeave={handleMouseLeave}
     >
       {hiBlock >= 0 && rects[hiBlock] && (
-        <div className="cc-active-overlay" style={{ top: rects[hiBlock].top, height: rects[hiBlock].height }} />
+        <div className={hiBlock === flashBlock && peekBlock == null ? "cc-active-overlay cc-flash" : "cc-active-overlay"} style={{ top: rects[hiBlock].top, height: rects[hiBlock].height }} />
       )}
 
       <div ref={contentRef} className="cc-content">
@@ -464,25 +544,57 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           </button>
         ))}
 
-      {/* Mirror of the quote handle on the RIGHT gutter: open a teammate comment
-          thread anchored to this whole message in the comment rail. */}
-      {commentsEnabled && hoverIndex !== null && editingId === null && (
-        <button
-          type="button"
-          data-cc-gutter
-          className="cc-block-comment"
-          style={{ top: hoverTop }}
-          title="Comment for your team"
-          aria-label="Comment on this message for your team"
-          onMouseEnter={cancelClear}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => useInboxStore.getState().openCommentThread(messageId)}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-          </svg>
-        </button>
-      )}
+      {/* Mirror of the quote handle on the RIGHT gutter: the block's actions.
+          The handle opens a column under it, in the gutter: comment for your
+          team (when comment tools are on), link to this paragraph, copy it,
+          send it to chat. The open menu stays on its block while the pointer
+          moves on. */}
+      {editingId === null && (menuBlock ?? hoverIndex) !== null && (() => {
+        const i = (menuBlock ?? hoverIndex)!;
+        const top = rects[i]?.top ?? hoverTop;
+        const open = menuBlock === i;
+        return (
+          <div data-cc-block-actions onMouseEnter={cancelClear}>
+            <button
+              type="button"
+              data-cc-gutter
+              className="cc-block-comment"
+              style={{ top }}
+              title="Paragraph actions"
+              aria-label="Actions for this paragraph"
+              aria-expanded={open}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setMenuBlock(open ? null : i)}
+            >
+              <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+            {open && (
+              <div className="cc-block-menu" role="menu" style={{ top: `calc(${top}px + 1.6rem)` }}>
+                {commentsEnabled && (
+                  <button type="button" role="menuitem" title="Comment for your team" aria-label="Comment for your team" onClick={() => runBlockAction(i, "comment")}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+                    </svg>
+                  </button>
+                )}
+                {linkable && (
+                  <button type="button" role="menuitem" title="Copy link to paragraph" aria-label="Copy link to paragraph" onClick={() => runBlockAction(i, "link")}>
+                    <Link2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                )}
+                <button type="button" role="menuitem" title="Copy paragraph" aria-label="Copy paragraph" onClick={() => runBlockAction(i, "copy")}>
+                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+                {linkable && chatOn && (
+                  <button type="button" role="menuitem" title="Send to chat" aria-label="Send paragraph to chat" onClick={() => runBlockAction(i, "chat")}>
+                    <Forward className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {engaged && (
         <div

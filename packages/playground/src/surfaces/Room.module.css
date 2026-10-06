@@ -1,0 +1,28 @@
+.panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-room);
+  display: flex; flex-direction: column; background: var(--cream); border-left: var(--line-heavy);
+  animation: slide-in 320ms var(--squish);
+}
+@keyframes slide-in { from { opacity: 0; transform: translateX(24px); } }
+.leaving { animation: slide-out var(--t-quick) var(--glide) forwards; }
+@keyframes slide-out { to { opacity: 0; transform: translateX(24px); } }
+.resize {
+  position: absolute; left: -9px; top: 50%; z-index: 2; width: 14px; height: 58px; margin-top: -29px;
+  background: var(--paper); border: var(--line); border-radius: var(--r-xs); cursor: col-resize; touch-action: none;
+}
+.resize:hover { background: var(--butter); }
+
+.sheet {
+  position: fixed; left: 0; right: 0; z-index: var(--z-room); display: flex; flex-direction: column;
+  background: var(--cream); border-top: var(--line-heavy); border-radius: 28px 28px 0 0; overflow: hidden;
+  box-shadow: 0 -4px 0 var(--ink-faint);
+  transition: height 320ms var(--squish), bottom var(--t-quick) var(--glide);
+  animation: sheet-in 320ms var(--squish);
+}
+@keyframes sheet-in { from { transform: translateY(100%); } }
+.dragging { transition: none; }
+.sheetLeaving { animation: sheet-out var(--t-quick) var(--glide) forwards; }
+@keyframes sheet-out { to { transform: translateY(100%); } }
+.grab { flex: none; touch-action: none; background: var(--butter); }
+.handle { display: block; width: 44px; height: 5px; border-radius: var(--r-pill); background: var(--ink); margin: 10px auto 6px; }
+.grab:has(> :only-child) { background: var(--cream); }

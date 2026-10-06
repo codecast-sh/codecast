@@ -6,9 +6,9 @@ import { LANE_BOOT_TITLE, isLanePath } from "../components/simple/laneBoot";
 import { laneBootPlugin } from "./laneBoot";
 
 describe("lane paths", () => {
-  test("the lane's pages and nothing that merely starts with their names", () => {
-    for (const p of ["/simple", "/simple/", "/simple/c/abc", "/simple/plan", "/welcome", "/welcome/x"]) expect(isLanePath(p)).toBe(true);
-    for (const p of ["/", "/inbox", "/simpler", "/welcomes", "/settings/simple"]) expect(isLanePath(p)).toBe(false);
+  test("/welcome and nothing that merely starts with its name; the retired lane boots as the main app it redirects into", () => {
+    for (const p of ["/welcome", "/welcome/", "/welcome/x"]) expect(isLanePath(p)).toBe(true);
+    for (const p of ["/", "/inbox", "/simple", "/simple/c/abc", "/welcomes", "/settings/simple"]) expect(isLanePath(p)).toBe(false);
   });
 });
 
@@ -35,7 +35,7 @@ describe("lane boot head", () => {
       new Function("location", "document", script)({ pathname }, document);
       return { lane: "data-lane" in attrs, title: document.title };
     };
-    expect(run("/simple/approvals")).toEqual({ lane: true, title: LANE_BOOT_TITLE });
+    expect(run("/simple/approvals")).toEqual({ lane: false, title: marketing });
     expect(run("/welcome")).toEqual({ lane: true, title: LANE_BOOT_TITLE });
     expect(run("/inbox")).toEqual({ lane: false, title: marketing });
   });
