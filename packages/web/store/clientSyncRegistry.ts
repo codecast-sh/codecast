@@ -888,7 +888,7 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     // changesQueries.storyEvidence: a Changes story's commits, so its evidence
     // drawer paints from the same rows the /commit page reads.
-    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet", "changesQueries.storyEvidence"],
+    feeds: ["commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet", "changesQueries.storyEvidence"],
   },
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.

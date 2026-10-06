@@ -14,7 +14,8 @@ export const resourceSnapshot = v.object({
   version: v.literal(1), deviceId: v.string(), platform: v.string(), sample: resourcePoint,
   processes: v.array(v.object({
     pid: v.number(), ppid: v.number(), startedAt: v.optional(v.number()), name: v.string(), kind,
-    cpu: v.number(), rss: v.number(), sessionId: v.optional(v.string()), sharedSessionIds: v.optional(v.array(v.string())), detached: v.optional(v.boolean()),
+    cpu: v.number(), rss: v.number(), sessionId: v.optional(v.string()), sharedSessionIds: v.optional(v.array(v.string())), // `true` came from the first daemons to report it, before the route was recorded.
+    detached: v.optional(v.union(v.literal("tmux"), v.literal("background"), v.literal(true))),
   })),
   groups: v.array(v.object({ kind, cpu: v.number(), rss: v.number(), processCount: v.number() })),
   omittedProcessCount: v.number(), collectionDurationMs: v.number(), limitations: v.array(v.string()),

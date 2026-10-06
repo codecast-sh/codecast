@@ -26,6 +26,7 @@
     "@livekit/react-native": "^2.12.0",
     "@livekit/react-native-webrtc": "^144.1.2",
     "@platform/analytics": "file:../../platform/packages/analytics",
+    "@platform/assistant": "file:../../platform/packages/assistant",
     "@platform/design": "file:../../platform/packages/design",
     "@platform/flags": "file:../../platform/packages/flags",
     "@react-navigation/native": "^7.1.8",

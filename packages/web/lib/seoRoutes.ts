@@ -1,5 +1,6 @@
 import { GUIDES, guideHref } from "../app/(marketing)/documentation/guides/guides";
 import { POSTS } from "../app/(marketing)/blog/posts";
+import { CHAPTERS, chapterHref } from "../app/(marketing)/blog/field-manual/chapters";
 import { COMPARISONS, compareHref } from "../app/(marketing)/compare/comparisons";
 import { FEATURE_DEEP_DIVES, featureHref } from "../app/(marketing)/features/catalog";
 
@@ -137,6 +138,12 @@ export const SEO_ROUTES: SeoEntry[] = [
     title: `${p.title} — Codecast`,
     heading: p.title,
     description: p.dek,
+  })),
+  ...CHAPTERS.map((c) => ({
+    path: chapterHref(c.slug),
+    title: `${c.title} — Codecast field manual`,
+    heading: c.title,
+    description: c.dek,
   })),
 ];
 

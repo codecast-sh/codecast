@@ -46,8 +46,12 @@ export const AGENT_BRIDGE_REMOTE =
   `mkdir -p ~/.codecast; ln -sfn "$SSH_AUTH_SOCK" ~/${HOST_AGENT_SOCK_REL}; ` +
   `(exec -a ${AGENT_BRIDGE_ARGV0} cat >/dev/null); rm -f ~/${HOST_AGENT_SOCK_REL}`;
 
-/** The ssh argv for one bridge connection (the laptop keeps its stdin open). */
-export function agentBridgeArgs(host: RemoteHost): string[] {
+/**
+ * The ssh argv for one held connection (cloud/heldConnection.ts): its own TCP
+ * session, never the shared control socket, so it neither dies with that
+ * socket nor counts as more than one connection to the idle watchdog.
+ */
+export function heldSshArgs(host: RemoteHost, remoteCommand: string, opts: { forwardAgent?: boolean } = {}): string[] {
   return [
     "-i", host.keyPath,
     "-o", "IdentitiesOnly=yes",
@@ -58,11 +62,16 @@ export function agentBridgeArgs(host: RemoteHost): string[] {
     "-o", "ServerAliveCountMax=3",
     "-o", "ControlMaster=no",
     "-o", "ControlPath=none",
-    "-o", "ForwardAgent=yes",
+    ...(opts.forwardAgent ? ["-o", "ForwardAgent=yes"] : []),
     "-T",
     `${host.user}@${host.address}`,
-    AGENT_BRIDGE_REMOTE,
+    remoteCommand,
   ];
+}
+
+/** The ssh argv for one bridge connection (the laptop keeps its stdin open). */
+export function agentBridgeArgs(host: RemoteHost): string[] {
+  return heldSshArgs(host, AGENT_BRIDGE_REMOTE, { forwardAgent: true });
 }
 
 /**

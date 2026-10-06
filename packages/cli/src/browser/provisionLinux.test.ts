@@ -3,6 +3,7 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { REACH_MIN_WATCHDOG } from "../cloud/reach.js";
 import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, DAEMON_KEEP_SESSIONS_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
 import { encryptToken } from "../tokenEncryption.js";
 import { DEVICE_BOUND_TOKEN_PREFIX } from "@platform/auth/cli";
@@ -368,14 +369,16 @@ describe("idle watchdog and the daemon's activity stamp", () => {
     expect(script).toContain("conns=$(ss -Htn state established '( sport = :22 )' | wc -l)");
     expect(script).toContain("bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)");
     expect(script).toContain('[ -n "$bridges" ] || bridges=0');
-    expect(script).toContain("[ $(( conns - bridges )) -gt 0 ] && active=1");
+    expect(script).toContain("reaches=$(pgrep -c -f '^cast-reach :' 2>/dev/null)");
+    expect(script).toContain("[ $(( conns - bridges - reaches )) -gt 0 ] && active=1");
     expect(script).not.toContain('[ "$(ss -Htn state established');
     expect(script).not.toContain("${");
   });
 
-  test("the watchdog version the bridge needs is the one provisioning installs", () => {
-    expect(IDLE_WATCHDOG_VERSION).toBe(2);
-    expect(AGENT_BRIDGE_MIN_WATCHDOG).toBe(IDLE_WATCHDOG_VERSION);
+  test("the watchdog versions the bridge and reach need are ones provisioning installs", () => {
+    expect(IDLE_WATCHDOG_VERSION).toBe(3);
+    expect(AGENT_BRIDGE_MIN_WATCHDOG).toBeLessThanOrEqual(IDLE_WATCHDOG_VERSION);
+    expect(REACH_MIN_WATCHDOG).toBe(IDLE_WATCHDOG_VERSION);
   });
 });
 

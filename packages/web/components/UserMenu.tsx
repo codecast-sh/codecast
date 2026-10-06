@@ -11,7 +11,7 @@ import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { useTheme } from "./ThemeProvider";
 import {
-  Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
+  Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
   Blocks, Sun, Moon, SquareTerminal,
@@ -243,7 +243,6 @@ export function UserMenu() {
 
           <div className="border-t border-sol-border py-1">
             <MenuItem icon={CircleUser} label="Profile" onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)} />
-            <MenuItem icon={History} label="Timeline" onClick={() => go("/timeline")} />
             <MenuItem icon={Rss} label="Feed" onClick={() => go("/feed")} />
             <MenuItem icon={Radio} label="Crosstalk" onClick={() => go("/crosstalk")} />
             <MenuItem icon={ListChecks} label="Tasks" onClick={() => go("/tasks")} />

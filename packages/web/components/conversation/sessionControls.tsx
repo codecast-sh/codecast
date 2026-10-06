@@ -3,11 +3,12 @@ import { useRef, useState, useMemo, useCallback, Fragment } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../../shortcuts";
-import { usePinnedLaunchOptions } from "../../hooks/usePinnedAgents";
+import { usePinnedPickerOptions } from "../../hooks/usePinnedAgents";
+import { agentAccent } from "../../lib/agentColors";
 import { useScopedRecentProjects } from "../../hooks/useScopedRecentProjects";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
-import { fromConvexAgentType, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProviderForLaunch, cloudAgentProvidersFor, compareMachineChips, modelOptionKey, type CloudAgentLaunch, type CloudAgentProviderSpec, type ConvexAgentType } from "@codecast/shared/contracts";
+import { agentTypeChangeRefusal, fromConvexAgentType, isHostedAgentType, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProviderForLaunch, cloudAgentProvidersFor, compareMachineChips, modelOptionKey, type CloudAgentLaunch, type CloudAgentProviderSpec, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { commitModelChange } from "../../lib/modelSwitchWeb";
 import { useCloudAgentStatus } from "../cloudAgents/machine";
@@ -823,6 +824,21 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
 }
 
 
+/** The agent a new-session surface has chosen, read off the live row.
+ *  Narrowed: only _id/agent_type are read here, and neither churns on a
+ *  heartbeat. resolveLiveSessionId follows the row across the compose popup's
+ *  stub to real rekey (see ProjectSwitcher) so an agent click after the create
+ *  lands isn't lost. */
+function useNewSessionAgent(conversation: ConversationData) {
+  const storeSession = useInboxStore(useShallow((s) => {
+    const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
+    if (!sess) return undefined;
+    return { _id: sess._id, agent_type: sess.agent_type };
+  }));
+  const currentAgent: string = storeSession?.agent_type || conversation.agent_type || "claude_code";
+  return { storeSession, currentAgent };
+}
+
 function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef }: {
   conversation: ConversationData;
   showWorkflow: boolean;
@@ -833,19 +849,21 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   handleRef?: React.MutableRefObject<PickerHandle | null>;
 }) {
   const convCommand = useInboxStore((s) => s.convCommand);
-  // Narrowed: only _id/agent_type are read here — neither churns on a heartbeat.
-  // resolveLiveSessionId follows the row across the compose popup's stub→real rekey
-  // (see ProjectSwitcher) so an agent click after the create lands isn't lost.
-  const storeSession = useInboxStore(useShallow((s) => {
-    const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
-    if (!sess) return undefined;
-    return { _id: sess._id, agent_type: sess.agent_type };
-  }));
-  const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
-  // The viewer's pinned agents (shared with the mobile sheet), plus the one
-  // this session already runs. This surface keys by the convex spelling.
-  const pinned = usePinnedLaunchOptions(fromConvexAgentType(currentAgent));
-  const AGENT_OPTIONS = useMemo(() => pinned.map((a) => ({ type: a.convexType, label: a.label })), [pinned]);
+  const { storeSession, currentAgent } = useNewSessionAgent(conversation);
+  const hosted = isHostedAgentType(currentAgent);
+  // The viewer's pinned agents (shared with the mobile sheet) and the hosted
+  // assistant when pinned, plus the one this session already runs. This
+  // surface keys by the convex spelling. A row the server already holds
+  // cannot cross between local and hosted (agentTypeChangeRefusal), so a
+  // created blank offers only its own side; a stub may still pick either.
+  const pinned = usePinnedPickerOptions(fromConvexAgentType(currentAgent));
+  const created = isConvexId(storeSession?._id || conversation._id);
+  const AGENT_OPTIONS = useMemo(
+    () => pinned
+      .filter((a) => !created || agentTypeChangeRefusal(currentAgent, a.convexType) === null)
+      .map((a) => ({ type: a.convexType, label: a.label })),
+    [pinned, created, currentAgent],
+  );
 
   const handleAgentSwitch = useCallback(async (agentType: ConvexAgentType) => {
     if (agentType === currentAgent) return;
@@ -959,13 +977,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
                 isHi
                   ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
                   : isActive
-                    ? a.type === "claude_code"
-                      ? "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40"
-                      : a.type === "codex"
-                        ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40"
-                        : a.type === "cursor"
-                          ? "bg-purple-500/15 text-purple-400 border-purple-500/40"
-                          : "bg-blue-500/15 text-blue-400 border-blue-500/40"
+                    ? agentAccent(a.type).chip
                     : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
               }`}
             >
@@ -974,9 +986,15 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             </button>
           );
         })}
-        <span className="text-sol-border/50 text-xs">|</span>
-        <LaunchModelPill conversationId={storeSession?._id || conversation._id} />
-        <AgentDefinitionPill conversationId={storeSession?._id || conversation._id} />
+        {/* The hosted assistant's plan picks its model, and it takes no
+            agent definition: nothing to choose past the agent itself. */}
+        {!hosted && (
+          <>
+            <span className="text-sol-border/50 text-xs">|</span>
+            <LaunchModelPill conversationId={storeSession?._id || conversation._id} />
+            <AgentDefinitionPill conversationId={storeSession?._id || conversation._id} />
+          </>
+        )}
       </div>
 
       {picking && (
@@ -1143,23 +1161,39 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
     return () => window.removeEventListener("keydown", onChord, true);
   });
 
+  // The hosted assistant runs in codecast's backend: no folder, machine,
+  // cloud placement or stable context to pick, so only the agent row shows.
+  const hosted = isHostedAgentType(useNewSessionAgent(conversation).currentAgent);
+
   // Project picker sits up top; a flex spacer pushes the agent picker down so it
   // pins to the bottom, directly above the message input (the host renders the
   // input right after this view). Needs a full-height parent.
   return (
     <div ref={rootRef} className="flex flex-col items-center w-full flex-1 min-h-0">
-      <ErrorBoundary name="ProjectSwitcher" level="inline">
-        <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
-      </ErrorBoundary>
-      <div className="flex-1" />
-      <ErrorBoundary name="StableContextPicker" level="inline">
-        <div className="w-full px-4 mb-4">
-          <StableContextPicker
-            conversationId={conversation._id}
-            trailing={<div ref={setMachineSlot} className="flex-shrink-0 min-w-0" />}
-          />
+      {hosted ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center">
+          <LogoIcon size={28} />
+          <p className="text-sm text-sol-text">Ask the Codecast assistant</p>
+          <p className="max-w-sm text-xs text-sol-text-dim">
+            It runs on Codecast, with no machine or folder to pick: research, writing, and your mail and calendar through Whisk.
+          </p>
         </div>
-      </ErrorBoundary>
+      ) : (
+        <>
+          <ErrorBoundary name="ProjectSwitcher" level="inline">
+            <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
+          </ErrorBoundary>
+          <div className="flex-1" />
+          <ErrorBoundary name="StableContextPicker" level="inline">
+            <div className="w-full px-4 mb-4">
+              <StableContextPicker
+                conversationId={conversation._id}
+                trailing={<div ref={setMachineSlot} className="flex-shrink-0 min-w-0" />}
+              />
+            </div>
+          </ErrorBoundary>
+        </>
+      )}
       <AgentSwitcher
         conversation={conversation}
         showWorkflow={ac.showWorkflow}

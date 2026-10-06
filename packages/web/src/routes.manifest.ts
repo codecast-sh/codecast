@@ -110,6 +110,8 @@ const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-requ
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
+const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
+const BlogFieldManualChapter = lazy(() => import("@/app/(marketing)/blog/field-manual/ChapterPage"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -200,7 +202,6 @@ const Ops = lazy(() => import("@/app/ops/page"));
 
 // Standalone shell pages (outside the shared shell — page-specific props / not tab-routable)
 const Explore = lazy(() => import("@/app/explore/page"));
-const Timeline = lazy(() => import("@/app/timeline/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 const Orchestration = lazy(() => import("@/app/orchestration/page"));
 const Roadmap = lazy(() => import("@/app/roadmap/page"));
@@ -303,6 +304,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/one-repository-twenty-checkouts", component: cast(BlogWorktrees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/fewer-bigger-jumps", component: cast(BlogJumps), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/field-manual", component: cast(BlogFieldManual), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/field-manual/:chapter", component: cast(BlogFieldManualChapter), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare", component: cast(CompareIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare/:slug", component: cast(Compare), layout: "marketing", guestOk: true, guestKind: "public" },
 
@@ -408,7 +411,6 @@ export const ROUTES: RouteEntry[] = [
   // `windows` is NOT in DashboardShell in App.tsx, yet TabContent CAN render it in
   // place — so it carries a `tab` here even though its layout is "standalone".
   { path: "explore", component: cast(Explore), layout: "standalone" },
-  { path: "timeline", component: cast(Timeline), layout: "standalone", tab: "/timeline" },
   { path: "windows", component: cast(Windows), layout: "standalone", tab: "/windows", fullWidth: true },
   { path: "orchestration", component: cast(Orchestration), layout: "standalone" },
   { path: "roadmap", component: cast(Roadmap), layout: "standalone" },

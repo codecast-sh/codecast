@@ -48,6 +48,7 @@
     "./contracts/orgTemplateBind": "./contracts/orgTemplateBind.ts",
     "./contracts/orgTemplateReadiness": "./contracts/orgTemplateReadiness.ts",
     "./contracts/orgTemplateManifest": "./contracts/orgTemplateManifest.ts",
+    "./contracts/orgTemplateRelease": "./contracts/orgTemplateRelease.ts",
     "./contracts/orgTemplateState": "./contracts/orgTemplateState.ts",
     "./contracts/orgTemplateLearning": "./contracts/orgTemplateLearning.ts",
     "./contracts/orgLead": "./contracts/orgLead.ts",
@@ -101,6 +102,7 @@
   "dependencies": {
     "css-tree": "3.2.1",
     "@platform/analytics": "file:../../platform/packages/analytics",
+    "@platform/assistant": "file:../../platform/packages/assistant",
     "@platform/evals": "file:../../platform/packages/evals",
     "@platform/fence": "file:../../platform/packages/fence"
   },
