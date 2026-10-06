@@ -431,11 +431,20 @@ async function executeSessionNode(
   const pollInterval = options.pollIntervalMs ?? 10_000;
   let wasLive = false;
   let lastState = "";
+  let askedOnce = false;
   while (Date.now() - startMs < timeout) {
     await new Promise(r => setTimeout(r, pollInterval));
     const inbox = await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 });
     const row = (inbox?.sessions || []).find((r: any) => r.id === conversationId);
-    if (!row) continue;
+    if (!row) {
+      // A hand the read never returns would otherwise wait in silence until
+      // the node's timeout kills it: say so once, with the reason at hand.
+      if (lastState !== "unseen" && Date.now() - startMs > 60_000) {
+        console.log(`${c.yellow}  ${shortId}: the session read ${inbox ? "does not list this hand" : "is failing"}, so the run cannot see it settle${c.reset}`);
+        lastState = "unseen";
+      }
+      continue;
+    }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
     if (state !== lastState) {
@@ -451,6 +460,16 @@ async function executeSessionNode(
       lastState = `parked:${row.blocked_on}`;
       continue;
     }
+    // A live hand can read needs_input for a moment between a reply and its
+    // next tool call; one such reading ended a prove station three minutes in,
+    // with the hand still working. A live hand settles on needs_input only
+    // when two reads in a row say so. One that stopped needs no second read.
+    const asking = state === "needs_input" && row.is_live && !row.is_killed;
+    if (asking && !askedOnce) {
+      askedOnce = true;
+      continue;
+    }
+    askedOnce = asking;
     const settled = state === "done" || state === "needs_input" || row.is_killed || (wasLive && !row.is_live);
     if (!settled) continue;
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
