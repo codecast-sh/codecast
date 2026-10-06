@@ -1822,6 +1822,10 @@ export type ClientUI = {
   // left unstamped, so it stays a per-device reading preference like the other
   // layout toggles.
   thread_state_collapsed?: boolean;
+  // The calls history list beside an open call (/calls/<id>). Folded away by
+  // default, so a call reads as its own page; per-device like the other
+  // layout toggles.
+  calls_list_open?: boolean;
   // Inbox session panel view mode. When true, the panel drops the
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
@@ -6591,7 +6595,7 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "visual_style",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
-  "trigger_prompt_height", "thread_state_collapsed", "people_view", "float_face_size",
+  "trigger_prompt_height", "thread_state_collapsed", "calls_list_open", "people_view", "float_face_size",
   "last_picked_device_id", "call_mic_device_id", "call_camera_device_id",
   "call_speaker_device_id",
 ]);

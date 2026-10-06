@@ -10,7 +10,7 @@ import { conversationIdFromPath, directConversationId, shareTokenInPath } from "
 import { changesDayLabel } from "./changesDay";
 import { modTabLabel, objectTabLabel } from "./mods/label";
 import { weekMonday } from "@codecast/shared/changes";
-import { evalsTabLabel } from "../components/evals/evalsPaths";
+import { codecastEvalsPaths } from "../components/evals/evalsPaths";
 import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
 
 const REPO_SECTION_LABEL: Record<string, string> = {
@@ -110,7 +110,7 @@ export function pathLabel(path: string): string {
     const section = clean.split("/")[4];
     return inPath || REPO_SECTION_LABEL[section] || clean.split("/")[3] || "Repository";
   }
-  if (clean === "/evals" || clean.startsWith("/evals/")) return evalsTabLabel(path);
+  if (codecastEvalsPaths.isPath(clean)) return codecastEvalsPaths.tabLabel(path);
   if (isOpsPath(clean)) return opsTabLabel(path);
   if (clean.startsWith("/commit/")) {
     const sha = clean.split("/")[4] ?? "";
