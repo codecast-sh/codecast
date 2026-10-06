@@ -19,6 +19,7 @@ const ENV = {
   WHISK_APP_SECRET_CODECAST: SECRET,
   WHISK_CONVEX_URL: "https://fox.convex.cloud",
   SITE_URL: "https://codecast.sh",
+  WHISK_CONNECT_OPEN: "1",
 };
 
 type Seen = { url: string; body: any };
@@ -88,6 +89,23 @@ describe("connect", () => {
     );
   });
 
+  test("a connect started on a dev server or a subdomain comes back to it; any other origin comes back to the site", async () => {
+    const { me, as } = await setup();
+    const returnOf = async (origin: string) =>
+      new URL((await as(me).action(whisk.getConnectUrl, { origin })).url).searchParams.get("return");
+    expect(await returnOf("http://localhost:3200")).toBe("http://localhost:3200/connect/whisk");
+    expect(await returnOf("https://staging.codecast.sh")).toBe("https://staging.codecast.sh/connect/whisk");
+    expect(await returnOf("https://evil.example")).toBe("https://codecast.sh/connect/whisk");
+    expect(await returnOf("http://codecast.sh.evil.example")).toBe("https://codecast.sh/connect/whisk");
+  });
+
+  test("Connect stays hidden until Whisk serves its side of the connect", async () => {
+    const { t } = await setup();
+    expect(await t.query(whisk.connectAvailable, {})).toBe(true);
+    delete process.env.WHISK_CONNECT_OPEN;
+    expect(await t.query(whisk.connectAvailable, {})).toBe(false);
+  });
+
   test("signed out, an unknown landing page, or no Whisk settings: no URL", async () => {
     const { t, me, as } = await setup();
     expect(await t.action(whisk.getConnectUrl, {})).toEqual({ ok: false, error: "signed_out" });
@@ -128,7 +146,7 @@ describe("connect", () => {
   test("a forged, expired or missing state, a decline, or a refused code each say why and store nothing", async () => {
     const { t, me, as } = await setup();
     const forged = await signStateWith("not-the-secret", { user_id: me, ts: Date.now(), return_to: "/welcome" });
-    expect(await as(me).action(whisk.finishConnect, { state: forged, code: "c" })).toMatchObject({ ok: false, reason: "bad_state", return_to: "/simple/connections" });
+    expect(await as(me).action(whisk.finishConnect, { state: forged, code: "c" })).toMatchObject({ ok: false, reason: "bad_state", return_to: "/settings/integrations" });
     const stale = await stateFor(me, "/welcome", Date.now() - 31 * 60_000);
     expect(await as(me).action(whisk.finishConnect, { state: stale, code: "c" })).toMatchObject({ ok: false, reason: "bad_state" });
     expect(await as(me).action(whisk.finishConnect, { code: "c" })).toMatchObject({ ok: false, reason: "bad_state" });

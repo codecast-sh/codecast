@@ -22,8 +22,6 @@ import { Linking } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { router } from 'expo-router';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
-import { routeFromOutside, type LaneOpenStore } from '@/lib/laneOpen';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme } from '@/constants/Theme';
 
 export {
@@ -50,8 +48,7 @@ export async function openLink(url: string): Promise<void> {
 
   const route = mobileRouteForUrl(absolute);
   if (route) {
-    // A conversation or decision opens in the lane for a lane person.
-    router.push((await routeFromOutside(route, useInboxStore as unknown as LaneOpenStore)) as never);
+    router.push(route as never);
     return;
   }
 

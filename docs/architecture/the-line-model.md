@@ -129,3 +129,44 @@ its own:
 - the project page's Line tab shows the project's flow, sources, expectations,
   stations and versions;
 - `/line` rolls every line up across the team.
+
+## LM8. The working view, "done", and the measure
+
+A judge's output is a stream of findings: one per subject per judgment, so
+their count tracks traffic, not quality, and never shrinks to a working list.
+The working view of quality is therefore the project's causes, not its
+findings or the clusters that group them.
+
+- **Findings are signals.** Each one cites the expectation it breaks and the
+  evidence. Clusters group findings that look alike; they are the finder's
+  fingerprint, not a list anyone works.
+- **Causes are the working view.** A cause is one root mechanism, with every
+  signal it explains attached, the expectation it breaks, the goal it
+  threatens, and its place on the line. This is the list people read and the
+  line drains.
+- **A cause is done** when its fix has shipped and its watch has passed with
+  no signal of its own coming back. A cause the line could not reproduce, or
+  whose findings were the judge's own mistake, closes as dissolved; a judge's
+  mistake also becomes a freeze for that judge's evals, so it is fixed at the
+  judge rather than closed by hand.
+- **A judge needs the facts it is judging.** It cannot compare behavior with
+  an expectation without the state of things at the moment it judges: what
+  was delivered and what is still in flight, and the time. A finding that
+  only looked wrong because a reply had not landed yet is the judge's input
+  failing, not the system misbehaving.
+
+Three numbers say how quality is going, and none of them is the count of
+findings:
+
+1. **Expectation breaks that reach people, per day**: the findings that break
+   an expectation and were not refuted (for Union, the trust-breaking issues
+   per day already on the scoreboard). This is the outcome.
+2. **Explained share**: of the new signals in a week, the share that attach to
+   a known cause rather than opening a new one. High means the cause list
+   explains what the judges see; low means quality is moving faster than the
+   line understands it.
+3. **Fixes that hold**: of causes shipped, the share whose watch ended quiet.
+   Low means the line ships changes that do not fix the cause.
+
+The board is healthy when the first falls, the second is high and the third
+holds; the number of open findings or clusters is not a goal.

@@ -1,0 +1,26 @@
+{
+  "name": "guidance verify-ui",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:verify-ui"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:verify-ui",
+    "title": "guidance verify-ui"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/verify-ui.json"
+  },
+  "judge": "the agent reaches for the codecast tool the guidance names for this request",
+  "notes": null,
+  "tags": [],
+  "id": "be0cc4d5-5cf9-40f9-beb7-f0a0efdcab2a",
+  "createdAt": "2026-10-06T21:49:23.662Z"
+}

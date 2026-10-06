@@ -1,0 +1,22 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "A page check: the person's Chrome through cast browser.",
+  "label": {
+    "want": [
+      "cast\\s+browser\\b"
+    ],
+    "avoid": [
+      "^WebFetch:",
+      "\\bcurl\\b",
+      "playwright",
+      "agent-browser",
+      "puppeteer",
+      "^mcp__",
+      "open -a|\\bopen http"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Open http://localhost:3200/settings and tell me whether the page shows a 'Danger zone' heading."
+  }
+}
