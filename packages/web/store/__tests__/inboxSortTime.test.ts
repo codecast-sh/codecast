@@ -101,18 +101,18 @@ describe("in-bucket order — one stamp per class", () => {
     expect(titles(p.working)).toEqual(["Session just back", "Session grinding"]);
   });
 
-  it("dormant orders by the named wake, soonest first, and an unnamed wake files last", () => {
-    const parked = (key: string, title: string, wakeupAt?: number) =>
+  it("dormant orders oldest park first, whatever wake it names", () => {
+    const parked = (key: string, title: string, parkedAt: number, wakeupAt?: number) =>
       row(key, {
-        is_idle: true, agent_status: "dormant", agent_status_updated_at: NOW - 5 * MIN, updated_at: NOW - 5 * MIN, title,
-        ...(wakeupAt ? { loop_state: { status: "armed", wakeup_at: wakeupAt, event_at: NOW - 5 * MIN } } : {}),
+        is_idle: true, agent_status: "dormant", agent_status_updated_at: parkedAt, updated_at: parkedAt, title,
+        ...(wakeupAt ? { loop_state: { status: "armed", wakeup_at: wakeupAt, event_at: parkedAt } } : {}),
       } as Partial<InboxSession>);
     const p = place([
-      parked("a", "Session unnamed"),
-      parked("b", "Session later", NOW + 3 * HOUR),
-      parked("z", "Session soon", NOW + 10 * MIN),
+      parked("a", "Session fresh", NOW - 5 * MIN, NOW + 10 * MIN),
+      parked("b", "Session oldest", NOW - 3 * HOUR, NOW + HOUR),
+      parked("z", "Session older", NOW - HOUR, NOW + 3 * HOUR),
     ]);
-    expect(titles(p.dormant)).toEqual(["Session soon", "Session later", "Session unnamed"]);
+    expect(titles(p.dormant)).toEqual(["Session oldest", "Session older", "Session fresh"]);
   });
 
   // A session the user just started has none of those events yet, so ambient

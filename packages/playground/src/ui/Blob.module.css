@@ -1,0 +1,16 @@
+.blob {
+  position: relative; flex: none; display: inline-block; background: var(--tomato);
+  border: calc(2.5px * max(1, var(--u) * .8)) solid var(--ink);
+  border-radius: 58% 42% 55% 45% / 48% 60% 40% 52%;
+  box-shadow: calc(3px * var(--u)) calc(3px * var(--u)) 0 var(--ink);
+}
+.blob::before, .blob::after {
+  content: ""; position: absolute; top: 30%; width: 15%; height: 20%; background: var(--ink); border-radius: 50%;
+  transition: transform var(--t-move) var(--glide);
+}
+.blob::before { left: 26%; }
+.blob::after { left: 50%; }
+.down::before, .down::after { transform: translateY(calc(3px * var(--u))); }
+.wobble { animation: wobble 4s ease-in-out infinite; }
+.squash { animation: squash 1.2s ease-in-out infinite; transform-origin: 50% 100%; }
+@keyframes squash { 50% { transform: scale(1.04, .92); } }

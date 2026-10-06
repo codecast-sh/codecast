@@ -27,6 +27,7 @@ export function SearchField({
   inputRef,
   onChange,
   inputProps,
+  placeholder = "Search sessions",
   children,
 }: {
   value: string;
@@ -38,6 +39,8 @@ export function SearchField({
   onChange?: (e: ChangeEvent<HTMLInputElement>) => void;
   /** Focus, blur, selection and key handlers for the input. */
   inputProps?: Pick<InputHTMLAttributes<HTMLInputElement>, "onSelect" | "onFocus" | "onBlur" | "onKeyDown">;
+  /** The mode's word for it (lib/surfaces.ts useModeWords). */
+  placeholder?: string;
   /** Drawn inside the field's box, e.g. the autocomplete list. */
   children?: ReactNode;
 }) {
@@ -62,7 +65,7 @@ export function SearchField({
         value={value}
         onChange={onChange}
         {...inputProps}
-        placeholder="Search sessions"
+        placeholder={placeholder}
         className={`h-7 w-full pl-8 py-0 bg-sol-bg-alt border rounded-full text-[13px] text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 ${
           expanded
             ? "pr-3 border-sol-cyan/50 ring-1 ring-sol-cyan/30 shadow-lg shadow-black/10"

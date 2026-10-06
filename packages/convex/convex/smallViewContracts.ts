@@ -35,6 +35,7 @@ const CURRENT_USER_METADATA_FIELDS = [
   "created_at",
   "team_id",
   "role",
+  "staff",
   "is_bot",
   "bot_kind",
   "active_team_id",

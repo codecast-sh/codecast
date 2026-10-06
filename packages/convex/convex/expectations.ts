@@ -10,8 +10,12 @@
 //   on its own; anything else waits
 //   for the project's person, as a card in their queue when an agent session
 //   proposed it.
-// - `resolve`: a person applies or drops a proposal (the CLI, the web). The
-//   card's answer takes the same path (lib/expectationsApply).
+// - `resolve`: a person applies or drops a proposal (the CLI, the web). When
+//   the proposal has a card the person holds, that card is answered, so the
+//   queue and the Line tab settle one decision (lib/expectationsApply).
+// - `personEditCore` / `resolveProposalCore`: the web's two writes (line-map.md
+//   LX3, LX5), reached through dispatch: a person's own line or retirement,
+//   and Apply / Drop on an open proposal.
 //
 // Access is the project's: a caller resolves the project inside the
 // workspace its data context names, and a proposal is read through its
@@ -25,7 +29,7 @@ import { canAccessProject, computeWorkspaceKey } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { nextShortId } from "./counters";
-import { askCore, withdrawCore } from "./sessionDecisions";
+import { askCore, finalizeAnswer, personMayResolve, withdrawCore } from "./sessionDecisions";
 import { allRolesInBoundary } from "./lib/orgAccess";
 import { answererOf } from "./orgLine";
 import { personName } from "./sessionOwnership";
@@ -41,11 +45,14 @@ import {
   LIMITS,
   normalizeOp,
   opErrors,
+  personEditApplies,
+  personOp,
   renderExpectations,
   renderProposal,
   type ExpectationCitation,
   type ExpectationOp,
   type ExpectationsVersion,
+  type PersonEdit,
 } from "@codecast/shared/contracts/expectations";
 
 type Ctx = { db: any; auth?: any };
@@ -88,6 +95,7 @@ async function versionView(ctx: Ctx, project: Doc<"projects">, row: any): Promis
     project: { id: String(project._id), title: project.title },
     version: row.version,
     prefix: row.prefix,
+    next_n: row.next_n,
     items: row.items,
     applied_at: row.created_at,
     applied_by: personName(await ctx.db.get(row.user_id)),
@@ -97,7 +105,10 @@ async function versionView(ctx: Ctx, project: Doc<"projects">, row: any): Promis
   };
 }
 
-function proposalView(p: any, decision: any) {
+/** A proposal as the lists show it. `web` adds what the Line tab answers it
+ *  from: its changes in full and its card's id, so Apply there answers the
+ *  same card the queue holds. */
+function proposalView(p: any, decision: any, web = false) {
   return {
     short_id: p.short_id,
     status: p.status,
@@ -111,11 +122,12 @@ function proposalView(p: any, decision: any) {
     ...(p.since ? { since: p.since } : {}),
     ...(p.until ? { until: p.until } : {}),
     created_at: p.created_at,
+    ...(web ? { ops: p.ops, ...(decision ? { card_id: String(decision._id), card_status: decision.status } : {}) } : {}),
   };
 }
 
 /** The read every surface shares: one version (the current one by default), the history, recent proposals, the cursor. */
-async function readExpectations(ctx: Ctx, project: Doc<"projects">, version?: number) {
+async function readExpectations(ctx: Ctx, project: Doc<"projects">, version?: number, web = false) {
   const byVersion = () => ctx.db.query("project_expectations").withIndex("by_project_version", (q: any) => (version === undefined ? q.eq("project_id", project._id) : q.eq("project_id", project._id).eq("version", version)));
   const versions: any[] = await ctx.db.query("project_expectations").withIndex("by_project_version", (q: any) => q.eq("project_id", project._id)).order("desc").take(VERSIONS_LISTED);
   const row = version === undefined ? versions[0] ?? null : versions.find((r) => r.version === version) ?? (await byVersion().first());
@@ -129,7 +141,7 @@ async function readExpectations(ctx: Ctx, project: Doc<"projects">, version?: nu
     current_version: versions[0]?.version ?? 0,
     doc: row ? await versionView(ctx, project, row) : null,
     versions: await Promise.all(versions.map(async (r) => ({ version: r.version, summary: r.summary, how: r.how, applied_at: r.created_at, applied_by: personName(await ctx.db.get(r.user_id)), active: r.items.filter((e: any) => e.status === "active").length }))),
-    proposals: shown.map((p, i) => proposalView(p, decisions[i])),
+    proposals: shown.map((p, i) => proposalView(p, decisions[i], web && p.status === "open")),
     cursor,
   };
 }
@@ -152,7 +164,9 @@ export const forProject = query({
     if (!userId) return null;
     const project = await ctx.db.get(args.project_id);
     if (!project || !(await canAccessProject(ctx, userId, project))) return null;
-    return readExpectations(ctx, project, args.version);
+    // `you_answer`: the viewer is the project's person (LM4), whose own edits
+    // apply as they make them (personEditApplies).
+    return { ...(await readExpectations(ctx, project, args.version, true)), you_answer: String(await projectPerson(ctx, project)) === String(userId) };
   },
 });
 
@@ -311,76 +325,138 @@ export const propose = mutation({
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx, args.api_token);
     const { project, conversation } = await projectInScope(ctx, userId, args);
-    if (args.ops.length > LIMITS.ops) throw new Error(`At most ${LIMITS.ops} changes in one proposal`);
-    const ops: ExpectationOp[] = args.ops.map(normalizeOp);
-    const shapeErrors = ops.flatMap((op, i) => opErrors(op).map((e) => `op ${i + 1}: ${e}`));
-    if (shapeErrors.length) throw new Error(`The proposal cannot apply:\n${shapeErrors.join("\n")}`);
-    const latest = await latestExpectations(ctx, project._id);
-    const base = latest?.version ?? 0;
-    const trial = applyOps({ items: latest?.items ?? [], prefix: latest?.prefix ?? "x", next_n: latest?.next_n ?? 1 }, ops, base + 1, base);
-    if (!trial.ok) throw new Error(`The proposal cannot apply to version ${base}:\n${trial.errors.join("\n")}`);
-
-    const now = Date.now();
-    const short_id = await nextShortId(ctx.db as any, "xp");
-    const id = await ctx.db.insert("expectation_proposals", {
-      short_id,
-      project_id: project._id,
-      user_id: userId,
-      team_id: project.team_id,
-      workspace: project.workspace ?? computeWorkspaceKey(project, null),
-      ...(conversation ? { conversation_id: conversation._id } : {}),
-      summary: args.summary.trim().slice(0, LIMITS.summary) || `${ops.length} changes`,
-      ...(args.since !== undefined ? { since: args.since } : {}),
-      ...(args.until !== undefined ? { until: args.until } : {}),
-      base_version: base,
-      ops,
-      status: ops.length ? "open" : "empty",
-      created_at: now,
-      updated_at: now,
-    });
-    const proposal = await ctx.db.get(id);
-    if (!ops.length) return { short_id, status: "empty", version: base };
-    const said = args.hold ? new Set<ExpectationCitation>() : await citationsPersonSaid(ctx, project, ops);
-    if (!args.hold && autoApplies(ops, (c) => said.has(c))) {
-      const applied = await performApply(ctx, proposal, userId, "auto", now);
-      if (applied.ok) return { short_id, status: "applied", version: applied.version, auto: true };
-    }
-    const card = conversation ? await postCard(ctx, userId, conversation, project, proposal, latest?.items ?? []) : {};
-    return { short_id, status: "open", version: base, ...card };
+    return proposeCore(ctx, userId, project, conversation, args);
   },
 });
 
 /**
+ * Store a proposal and apply it when it may apply now. `applyAs` is the web's
+ * verdict on a person's own edit (personEditApplies), decided before the call;
+ * without it the record is checked for the words of a person (personSaid).
+ */
+async function proposeCore(
+  ctx: Ctx,
+  userId: Id<"users">,
+  project: Doc<"projects">,
+  conversation: any,
+  args: { summary: string; since?: number; until?: number; ops: any[]; hold?: boolean },
+  applyAs?: "person" | "auto" | null,
+) {
+  if (args.ops.length > LIMITS.ops) throw new Error(`At most ${LIMITS.ops} changes in one proposal`);
+  const ops: ExpectationOp[] = args.ops.map(normalizeOp);
+  const shapeErrors = ops.flatMap((op, i) => opErrors(op).map((e) => `op ${i + 1}: ${e}`));
+  if (shapeErrors.length) throw new Error(`The proposal cannot apply:\n${shapeErrors.join("\n")}`);
+  const latest = await latestExpectations(ctx, project._id);
+  const base = latest?.version ?? 0;
+  const trial = applyOps({ items: latest?.items ?? [], prefix: latest?.prefix ?? "x", next_n: latest?.next_n ?? 1 }, ops, base + 1, base);
+  if (!trial.ok) throw new Error(`The proposal cannot apply to version ${base}:\n${trial.errors.join("\n")}`);
+
+  const now = Date.now();
+  const short_id = await nextShortId(ctx.db as any, "xp");
+  const id = await ctx.db.insert("expectation_proposals", {
+    short_id,
+    project_id: project._id,
+    user_id: userId,
+    team_id: project.team_id,
+    workspace: project.workspace ?? computeWorkspaceKey(project, null),
+    ...(conversation ? { conversation_id: conversation._id } : {}),
+    summary: args.summary.trim().slice(0, LIMITS.summary) || `${ops.length} changes`,
+    ...(args.since !== undefined ? { since: args.since } : {}),
+    ...(args.until !== undefined ? { until: args.until } : {}),
+    base_version: base,
+    ops,
+    status: ops.length ? "open" : "empty",
+    created_at: now,
+    updated_at: now,
+  });
+  const proposal = await ctx.db.get(id);
+  if (!ops.length) return { short_id, status: "empty", version: base };
+  const said = args.hold || applyAs !== undefined ? new Set<ExpectationCitation>() : await citationsPersonSaid(ctx, project, ops);
+  const how = applyAs !== undefined ? applyAs : !args.hold && autoApplies(ops, (c) => said.has(c)) ? "auto" : null;
+  if (how) {
+    const applied = await performApply(ctx, proposal, userId, how, now);
+    if (applied.ok) return { short_id, status: "applied", version: applied.version, auto: how === "auto" };
+  }
+  const card = conversation ? await postCard(ctx, userId, conversation, project, proposal, latest?.items ?? []) : {};
+  return { short_id, status: "open", version: base, ...card };
+}
+
+/** The project a web write names, when the signed-in person can open it. */
+async function webProject(ctx: Ctx, userId: Id<"users">, projectId: string): Promise<Doc<"projects">> {
+  const id = ctx.db.normalizeId("projects", projectId);
+  const project = id ? await ctx.db.get(id) : null;
+  if (!project || !(await canAccessProject(ctx, userId, project))) notFound("Project not found");
+  return project as Doc<"projects">;
+}
+
+/**
+ * A person's own edit from the web (line-map.md LX3, LX5): a line in their
+ * words or a retirement with the reason, cited as them (personOp). It is a
+ * proposal like any other and applies by personEditApplies: at once for the
+ * project's person, on the rule for anyone else's line, and otherwise it
+ * waits open on the Line tab.
+ */
+export async function personEditCore(ctx: Ctx, userId: Id<"users">, projectId: string, edit: PersonEdit) {
+  const project = await webProject(ctx, userId, projectId);
+  const op = personOp(edit, String(userId), Date.now());
+  const youAnswer = String(await projectPerson(ctx, project)) === String(userId);
+  const who = personName(await ctx.db.get(userId));
+  const summary = edit.op === "add" ? `${who} added: ${edit.text}` : `${who} retired ${edit.id}: ${edit.reason}`;
+  const applyAs = personEditApplies(op, youAnswer) ? (youAnswer ? "person" : "auto") : null;
+  return proposeCore(ctx, userId, project, null, { summary, ops: [op] }, applyAs);
+}
+
+/**
  * A person applies or drops a proposal (LM5): from a terminal or the web,
  * never from an agent session, which proposes and leaves the answer to the
- * person. The proposal's open card, if any, is withdrawn: it was answered here.
+ * person (resolveProposalCore).
  */
 export const resolve = mutation({
   args: { api_token: v.optional(v.string()), proposal: v.string(), action: v.union(v.literal("apply"), v.literal("drop")), conversation_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
     if (args.conversation_id) throw new Error("Applying or dropping expectations is a person's act: an agent session proposes (cast expectations propose) and the project's person answers the card");
     const userId = await requireUser(ctx, args.api_token);
-    const ref = args.proposal.trim();
-    const proposal = (await ctx.db.query("expectation_proposals").withIndex("by_short_id", (q) => q.eq("short_id", ref)).first())
-      ?? (ctx.db.normalizeId("expectation_proposals", ref) ? await ctx.db.get(ctx.db.normalizeId("expectation_proposals", ref)!) : null);
-    const project = proposal ? await ctx.db.get(proposal.project_id) : null;
-    if (!proposal || !project || !(await canAccessProject(ctx, userId, project))) notFound(`Proposal ${ref} not found`);
-    if (proposal!.status !== "open") throw new Error(`${proposal!.short_id} is already ${proposal!.status}`);
-    const now = Date.now();
-    let result: { status: string; version?: number };
-    if (args.action === "apply") {
-      const applied = await performApply(ctx, proposal, userId, "person", now);
-      if (!applied.ok) throw new Error(`${proposal!.short_id} cannot apply:\n${applied.error}`);
-      result = { status: "applied", version: applied.version };
-    } else {
-      await ctx.db.patch(proposal!._id, { status: "dropped", resolved_by: userId, resolved_at: now, updated_at: now });
-      result = { status: "dropped" };
-    }
-    const decision = proposal!.decision_id ? await ctx.db.get(proposal!.decision_id) : null;
-    if (decision?.status === "pending") await withdrawCore(ctx as any, decision, now);
-    return { short_id: proposal!.short_id, ...result };
+    return resolveProposalCore(ctx, userId, args.proposal, args.action);
   },
 });
+
+/**
+ * Apply or drop an open proposal as a person. A card the person holds is
+ * answered rather than withdrawn: the card is the same decision, and its
+ * settle path applies or drops the proposal (settleExpectationCard). An apply
+ * the document refuses throws, which takes the answer back with it. `settled`
+ * accepts a proposal already where the person asked it to go: the web's
+ * dispatch may follow the queue's own answer to the card.
+ */
+export async function resolveProposalCore(ctx: Ctx, userId: Id<"users">, proposalRef: string, action: "apply" | "drop", opts: { settled?: boolean } = {}) {
+  const ref = proposalRef.trim();
+  const proposal = (await ctx.db.query("expectation_proposals").withIndex("by_short_id", (q) => q.eq("short_id", ref)).first())
+    ?? (ctx.db.normalizeId("expectation_proposals", ref) ? await ctx.db.get(ctx.db.normalizeId("expectation_proposals", ref)!) : null);
+  const project = proposal ? await ctx.db.get(proposal.project_id) : null;
+  if (!proposal || !project || !(await canAccessProject(ctx, userId, project))) notFound(`Proposal ${ref} not found`);
+  const want = action === "apply" ? "applied" : "dropped";
+  if (opts.settled && proposal!.status === want) return { short_id: proposal!.short_id, status: want, ...(proposal!.applied_version ? { version: proposal!.applied_version } : {}) };
+  if (proposal!.status !== "open") throw new Error(`${proposal!.short_id} is already ${proposal!.status}`);
+  const now = Date.now();
+  const card = proposal!.decision_id ? await ctx.db.get(proposal!.decision_id) : null;
+  if (card?.status === "pending" && personMayResolve(card, userId)) {
+    await finalizeAnswer(ctx as any, card, { status: "answered", answer_index: EXPECTATION_CARD_OPTIONS.indexOf(action === "apply" ? "Apply" : "Drop") }, { kind: "user", id: String(userId), user_id: userId }, { deliver: false, now });
+    const after = await ctx.db.get(proposal!._id);
+    if (after?.status !== want) throw new Error(`${proposal!.short_id} cannot apply:\n${after?.refused ?? "the document changed under it"}`);
+    return { short_id: proposal!.short_id, status: want, ...(after.applied_version ? { version: after.applied_version } : {}) };
+  }
+  let result: { status: string; version?: number };
+  if (action === "apply") {
+    const applied = await performApply(ctx, proposal, userId, "person", now);
+    if (!applied.ok) throw new Error(`${proposal!.short_id} cannot apply:\n${applied.error}`);
+    result = { status: "applied", version: applied.version };
+  } else {
+    await ctx.db.patch(proposal!._id, { status: "dropped", resolved_by: userId, resolved_at: now, updated_at: now });
+    result = { status: "dropped" };
+  }
+  if (card?.status === "pending") await withdrawCore(ctx as any, card, now);
+  return { short_id: proposal!.short_id, ...result };
+}
 
 /**
  * An operator withdraws a proposal that should never have been made (a test

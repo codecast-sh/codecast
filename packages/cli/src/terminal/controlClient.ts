@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "../proc.js";
 import { ControlModeParser, toSendKeysHex, type ControlEvent } from "./controlProtocol.js";
 import { tmuxRun, tmuxRunAsync } from "../tmux.js";
+import { routeTmuxArgs } from "../tmuxRoute.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const COMMAND_TIMEOUT_MS = 5000;
@@ -212,7 +213,8 @@ export class TmuxControlClient {
     // (vim: E1511, broken line-drawing). Force UTF-8 unless the user set one.
     if (!env.LANG && !env.LC_ALL && !env.LC_CTYPE) env.LANG = "en_US.UTF-8";
 
-    this.child = spawn("tmux", args, { stdio: ["pipe", "pipe", "pipe"], env: env as NodeJS.ProcessEnv });
+    // An agent session may live on a tmux server of its own (tmuxRoute.ts).
+    this.child = spawn("tmux", routeTmuxArgs(args, env)[0], { stdio: ["pipe", "pipe", "pipe"], env: env as NodeJS.ProcessEnv });
 
     this.child.stdout.on("data", (chunk: Buffer) => {
       this.parser.feed(chunk, (ev) => this.handleEvent(ev));

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { placeComments } from "./codeAnchorLocal";
 import {
+  prHeadLines,
   buildPrLocator,
   diffPrRows,
   formatPrTable,
@@ -323,6 +329,33 @@ describe("review threads", () => {
     expect(out).toContain("This leaks a handle");
   });
 
+  test("a thread follows its code at the pull request's head", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pr-threads-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("config", "user.email", "t@t");
+    git("config", "user.name", "t");
+    fs.writeFileSync(path.join(dir, "a.ts"), "// one\n// two\nconst handle = open(path);\nreturn handle;\n");
+    git("add", ".");
+    git("commit", "-qm", "head");
+    const head = git("rev-parse", "HEAD");
+    // The working tree moved on; the head commit is what the threads are read against.
+    fs.writeFileSync(path.join(dir, "a.ts"), "nothing here\n");
+    const thread = {
+      short_id: "aaaa0003",
+      file_path: "a.ts",
+      line_number: 1,
+      anchor_lines: { before: [], lines: ["const handle = open(path);"], after: ["return handle;"] },
+    };
+    const gone = { ...thread, short_id: "aaaa0004", anchor_lines: { before: [], lines: ["deleted code();"], after: [] } };
+    const placements = placeComments([thread, gone], prHeadLines(dir, { head_sha: head }, null));
+    expect(threadLocation(thread, placements.get(thread))).toBe("a.ts:3 (moved from line 1)");
+    expect(threadLocation(gone, placements.get(gone))).toBe("a.ts:1 (outdated)");
+    // A checkout without the head and on another branch says nothing.
+    expect(prHeadLines(dir, { head_sha: "f".repeat(40), head_ref: "feature" }, "main")("a.ts")).toBeNull();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   test("an author we do not know still reads as somebody", () => {
     expect(formatPrThreads([{ short_id: "a", first_line: "hi" }])).toContain("someone");
   });
@@ -342,5 +375,17 @@ describe("repository case", () => {
 
   test("a checkout whose remote carries capitals still names the canonical repository", () => {
     expect(extractRepoFromRemoteUrl("git@github.com:Codecast-SH/Codecast.git")).toBe("codecast-sh/codecast");
+  });
+});
+
+describe("cast pr create description", () => {
+  test("the task's change guide follows the written body as a walkthrough; no guide leaves the body as written", async () => {
+    const { prBodyWithGuide } = await import("./prCommand.js");
+    const guide = { steps: [{ title: "Store it", why: "The page reads it.", file: "a.ts", start: 3, hunk: "@@ -1,1 +1,1 @@\n-a\n+b" }] };
+    const body = prBodyWithGuide("Goal: one guide.\n", guide);
+    expect(body).toStartWith("Goal: one guide.\n\n## Walkthrough\n\n### 1. Store it\n`a.ts:3`");
+    expect(body).toContain("```diff\n@@ -1,1 +1,1 @@");
+    expect(prBodyWithGuide("Goal.", null)).toBe("Goal.");
+    expect(prBodyWithGuide("", guide)).toStartWith("## Walkthrough");
   });
 });

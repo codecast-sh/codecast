@@ -11,8 +11,10 @@ import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { LaneSettingRow } from "../../../components/simple/LaneSwitch";
+import { useHostedMode } from "../../../lib/surfaces";
+import { isHostedUi, showsAgentIcon } from "../../../components/simple/lanePaths";
 import { SelectBox } from "../../../components/ui/select-box";
-import { useInboxStore, resolveSimpleView, resolveInboxCompact, type ClientUI } from "../../../store/inboxStore";
+import { useInboxStore, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, type ClientUI } from "../../../store/inboxStore";
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
 import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
 import {
@@ -114,6 +116,9 @@ function ProfileSection({ user }: { user: any }) {
 
 function AppearanceSection() {
   const { theme, toggleTheme, visualStyle, setVisualStyle } = useTheme();
+  // Assistant mode keeps its own pick and starts Minimal (resolveVisualStyle);
+  // the developer pick comes back when it is turned off.
+  const hosted = useHostedMode();
   const options = ([
     { value: "classic", label: "Classic", description: <StyleOptionPreview variant="classic" caption="Solarized, compact, information-dense" /> },
     { value: "minimal", label: "Minimal", description: <StyleOptionPreview variant="minimal" caption="Neutral, spacious, reading-first" /> },
@@ -125,7 +130,7 @@ function AppearanceSection() {
       </SettingsRow>
       <SettingsField
         label="Interface style"
-        hint="Minimal is quieter and more spacious, with neutral surfaces and a focused reading column."
+        hint={hosted ? "Minimal is the assistant's own look. Your pick here applies in assistant mode only." : "Minimal is quieter and more spacious, with neutral surfaces and a focused reading column."}
       >
         <SettingsOptionGroup
           value={visualStyle}
@@ -135,7 +140,8 @@ function AppearanceSection() {
           className="visual-style-options w-full"
         />
       </SettingsField>
-      {visualStyle === "minimal" && <BubbleColorField />}
+      {/* Hosted mode sets your words as a quiet note in ink, not a hue. */}
+      {visualStyle === "minimal" && !hosted && <BubbleColorField />}
     </SettingsSection>
   );
 }
@@ -223,11 +229,13 @@ const INTERFACE_TOGGLES: Array<{
   /** The value when it is not a plain stored boolean (a default that depends
    *  on the style). Overrides `defaultOn`. */
   resolve?: (ui: ClientUI | undefined) => boolean;
+  /** Where the switch writes in assistant mode, which keeps its own pick. */
+  hostedKey?: keyof ClientUI;
 }> = [
-  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, lockedOn: (ui) => (ui?.visual_style === "minimal" && resolveSimpleView(ui) ? "Always on in the Minimal style" : undefined) },
-  { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact },
+  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, lockedOn: (ui) => (resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? "Always on in the Minimal style" : undefined) },
+  { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact, hostedKey: "hosted_inbox_compact" },
   { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images" },
-  { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", defaultOn: true },
+  { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", resolve: showsAgentIcon },
   { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false },
   { prefKey: "show_model_badge", label: "Model badge", desc: "Show each session's model in the inbox session list" },
   { prefKey: "show_branch_pill", label: "Branch pill", desc: "Show a pill on inbox cards when a session sits off the default branch: its branch, or the short commit when its checkout is detached", defaultOn: true },
@@ -256,9 +264,10 @@ function PrefToggleRow(t: (typeof INTERFACE_TOGGLES)[number]) {
   });
   const locked = useInboxStore((s) => t.lockedOn?.(s.clientState?.ui));
   const updateUI = useInboxStore((s) => s.updateClientUI);
+  const key = useInboxStore((s) => (t.hostedKey && isHostedUi(s.clientState?.ui) ? t.hostedKey : t.prefKey));
   return (
     <SettingsRow label={t.label} description={locked ? `${t.desc}. ${locked}.` : t.desc} disabled={!!locked}>
-      <Switch checked={enabled || !!locked} disabled={!!locked} onCheckedChange={(v) => updateUI({ [t.prefKey]: v } as Partial<ClientUI>)} aria-label={t.label} />
+      <Switch checked={enabled || !!locked} disabled={!!locked} onCheckedChange={(v) => updateUI({ [key]: v } as Partial<ClientUI>)} aria-label={t.label} />
     </SettingsRow>
   );
 }
