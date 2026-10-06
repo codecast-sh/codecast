@@ -1,0 +1,6 @@
+.boot { position: fixed; inset: 0; display: grid; place-items: center; background: var(--dot-grid), var(--butter); }
+.reconnecting {
+  position: fixed; z-index: var(--z-toast); top: var(--s4); left: 50%; translate: -50% 0;
+  display: flex; align-items: center; gap: var(--s2); background: var(--ink); color: var(--paper);
+  border-radius: var(--r-pill); padding: 6px 16px; font: 800 13px var(--ui); animation: arrive var(--t-arrive) var(--squish);
+}

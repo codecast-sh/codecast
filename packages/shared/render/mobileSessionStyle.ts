@@ -95,17 +95,6 @@ export const MOBILE_COMPOSER_STATUS: Record<string, { color: string; label: stri
   connected: { color: "#2aa198", label: "Connected" },
 };
 
-/** How the app names each agent in a transcript and the header strip. */
-export const MOBILE_AGENT_LABEL: Record<string, string> = {
-  claude_code: "Claude",
-  codex: "Codex",
-  cursor: "Cursor",
-  gemini: "Gemini",
-  opencode: "OpenCode",
-  pi: "pi",
-  grok: "Grok",
-};
-
 /** Each agent's tint in the header strip; others take the theme's (grok its text colour, the rest its accent). */
 export const MOBILE_AGENT_TINT: Record<string, string> = {
   codex: "#10b981",

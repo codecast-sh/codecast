@@ -15,7 +15,7 @@ import { InTheWorks } from "./InTheWorks";
 import { AreaDot, Tip } from "./StoryParts";
 import { useAreaColors } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
-import { hasFilters, toggleArea, type ChangesUrl, type SetChangesUrl } from "./useChangesUrlState";
+import { hasFilters, toggleArea, type ChangesUrl, type SetChangesUrl, type Zoom } from "./useChangesUrlState";
 
 export type FilterOptions = {
   areas: string[];
@@ -146,6 +146,33 @@ function Toggle({ open, onClick, children, buttonRef }: { open: boolean; onClick
   );
 }
 
+/** How far out the timeline reads: by age (the default), or one level everywhere. */
+function ZoomControl({ zoom, onZoom }: { zoom: Zoom | undefined; onZoom: (z: Zoom | undefined) => void }) {
+  const levels: Array<[Zoom | undefined, string, string]> = [
+    [undefined, "auto", "Recent days in full, older ones further out"],
+    ["changes", "changes", "Every change, day by day"],
+    ["days", "days", "Each day told whole"],
+    ["weeks", "weeks", "Each week told whole"],
+  ];
+  return (
+    <div role="radiogroup" aria-label="Zoom" className="inline-flex h-[24px] items-center rounded-md border border-sol-border/30 p-px">
+      {levels.map(([z, label, tip]) => (
+        <Tip key={label} text={tip}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={zoom === z}
+            onClick={() => onZoom(z)}
+            className={`h-full rounded-[5px] px-2 font-mono text-[11px] transition-colors ${zoom === z ? "bg-sol-bg-alt text-sol-text" : "text-sol-text/50 hover:text-sol-text"}`}
+          >
+            {label}
+          </button>
+        </Tip>
+      ))}
+    </div>
+  );
+}
+
 export function TimelineHeader(props: {
   repos: { repo: string; commits: number }[];
   repo: string | undefined;
@@ -170,6 +197,7 @@ export function TimelineHeader(props: {
         <h1 className="chg-ui text-[20px] font-semibold text-sol-text">Changes</h1>
         <RepoPicker repos={props.repos} repo={props.repo} onPick={(repo) => setUrl({ repo, story: undefined }, "push")} />
         <div className="ml-auto flex items-center gap-2">
+          <ZoomControl zoom={url.zoom} onZoom={(zoom) => setUrl({ zoom })} />
           {moving > 0 && (
             <Toggle open={worksOpen} onClick={() => setWorksOpen((o) => !o)}>
               in progress <span className="tabular-nums text-sol-text/45">{moving}</span>

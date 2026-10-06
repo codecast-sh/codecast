@@ -7,7 +7,8 @@
  */
 
 import { entityRoute, parseEntityUrl, parseRepoObjectId, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
-import { LANE_PATHS } from '@codecast/web/components/simple/lanePaths';
+import { laneRedirectTarget } from '@codecast/web/lib/laneRedirect';
+import { settingsPathFor } from '@codecast/web/lib/settingsSections';
 
 /**
  * One URL vocabulary for every surface. `www.` hosts count: people paste them
@@ -83,6 +84,16 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
   return `${base}/${id}`;
 }
 
+/** The web's pages the phone has a screen of its own for. Routines are a
+ *  segment of the Tasks tab, which reads `segment` from its address. */
+const PAGE_ROUTES: Record<string, string> = {
+  '/inbox': '/(tabs)/inbox',
+  '/questions': '/decisions',
+  '/triggers': '/(tabs)/tasks?segment=routines',
+  [settingsPathFor('plan')]: '/settings/plan',
+  [settingsPathFor('integrations')]: '/settings/mail',
+};
+
 /**
  * The in-app route a URL should open, or null when it belongs to the outside
  * world. Accepts app URLs and path-only hrefs; `parseEntityUrl` does the object
@@ -123,9 +134,12 @@ export function mobileRouteForUrl(url: string): string | null {
     if (!org[1]) return '/org';
     return /[?&]tab=/.test(url) ? `/org/${org[1]}/board` : `/org/${org[1]}`;
   }
-  // The assistant lane lives at the same addresses on the phone
-  // (app/(simple)), so its links open there unchanged.
-  if (path === LANE_PATHS.home || path.startsWith(`${LANE_PATHS.home}/`)) return path.replace(/\/+$/, '') || LANE_PATHS.home;
+  // The retired assistant lane's addresses (/simple/...) lead where the web
+  // sends them (lib/laneRedirect), and from there to the phone's screen.
+  const moved = laneRedirectTarget(path);
+  if (moved) return mobileRouteForUrl(moved);
+  const page = PAGE_ROUTES[path.length > 1 ? path.replace(/\/+$/, '') : path];
+  if (page) return page;
   // Team invites are completed on the web; the Chat tab (where the team
   // lives on the phone) is the nearest screen. The web's chat and calls
   // pages land there too.

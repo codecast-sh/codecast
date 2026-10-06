@@ -77,8 +77,8 @@ const SECURITY_FEATURES = [
   {
     icon: EyeOffIcon,
     title: "Automatic secret redaction",
-    description: "API keys, tokens, passwords, and credentials are automatically stripped before sync.",
-    detail: "Pattern-based detection",
+    description: "API keys, tokens, passwords, and credentials are stripped on your machine before sync. Known token formats are caught by shape, and the daemon also redacts the exact values of the secrets it can see locally: credential-named environment variables, your .env files, and credential files like ~/.netrc, ~/.aws/credentials and ~/.npmrc. A password with no recognizable format is still removed.",
+    detail: "Pattern and known-value detection",
     color: "red",
   },
   {

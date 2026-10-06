@@ -622,9 +622,11 @@ export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURN
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
 export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
-/** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
+/** Scans prose for bare object ids. Bounded by anything but a letter, digit
+ *  or hyphen on either side, so it can't split a longer token: a hyphen is a
+ *  word boundary to `\b`, which read "2-in-1" as "2-" and an initiative. */
 export function bareEntityIdRegex(): RegExp {
-  return new RegExp(`\\b(?:${BARE_ID_SOURCE})\\b`, "gi");
+  return new RegExp(`(?<![\\w-])(?:${BARE_ID_SOURCE})(?![\\w-])`, "gi");
 }
 
 /**
