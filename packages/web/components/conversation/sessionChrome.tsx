@@ -2,7 +2,7 @@ import { AppLoader } from "../AppLoader";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
+import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isHostedAgentType, isSessionActivityFresh } from "@codecast/shared/contracts";
 import { LimitParkCard } from "../LimitParkCard";
 import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -11,6 +11,7 @@ import { activitySig } from "../../lib/sessionActivity";
 import { LivePulseDot } from "../SessionActivityLine";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { HeaderModelControl } from "../SessionControlMenu";
+import { ShipControl } from "../ShipControl";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { OwnerAvatar, type HandoffInfo } from "../OwnersBadge";
@@ -642,16 +643,20 @@ export function ConversationMetadata({
           <AgentTypeIcon agentType={resolvedAgent} />
         </div>
       )}
-      <HeaderModelControl
-        conversationId={conversationId}
-        agentType={resolvedAgent}
-        model={resolvedModel}
-        effort={live ? (live.effort ?? undefined) : effort}
-        messageCount={messageCount}
-        canEdit={!!canEditModel}
-        open={controlOpen}
-        onOpenChange={onControlOpenChange}
-      />
+      {/* The hosted assistant's plan picks its model, and it has no machine
+          to move or local agent to switch to: nothing for this control. */}
+      {!isHostedAgentType(resolvedAgent) && (
+        <HeaderModelControl
+          conversationId={conversationId}
+          agentType={resolvedAgent}
+          model={resolvedModel}
+          effort={live ? (live.effort ?? undefined) : effort}
+          messageCount={messageCount}
+          canEdit={!!canEditModel}
+          open={controlOpen}
+          onOpenChange={onControlOpenChange}
+        />
+      )}
     </div>
   );
 }
@@ -881,7 +886,7 @@ export function WorkingStatusLine({ startedAt, phrase, conversationId, stopHint 
  * the empty composer stops the turn (a cloud agent's included), said here
  * because nothing else on screen does.
  */
-export function WorkingStatusLineView({ startedAt, now, label, stopHint }: { startedAt?: number; now: number; label?: string; stopHint?: boolean }) {
+export function WorkingStatusLineView({ startedAt, now, label, stopHint, labelNow }: { startedAt?: number; now: number; label?: string; stopHint?: boolean; /** Show the label from the first second, not only once the clock shows. */ labelNow?: boolean }) {
   const elapsedMs = startedAt ? now - startedAt : 0;
   const showElapsed = shouldShowElapsed(startedAt, now);
   return (
@@ -890,7 +895,18 @@ export function WorkingStatusLineView({ startedAt, now, label, stopHint }: { sta
       Working
       {showElapsed && <span className="text-sol-text-dim/60 tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
       {stopHint && <span data-stop-hint className="inline-flex shrink-0 items-center gap-1 text-sol-text-dim/60">· <KeyCap size="xs">Esc</KeyCap> stop</span>}
-      {showElapsed && label && <span className="text-sol-text-dim/60 truncate" title={label}>· {label}</span>}
+      {(showElapsed || labelNow) && label && <span className="text-sol-text-dim/60 truncate" title={label}>· {label}</span>}
     </span>
   );
+}
+
+/**
+ * Ship in the session header (docs/architecture/ship.md): only for a session
+ * with a branch and something on it (uncommitted changes or commits ahead of
+ * upstream), and never on a ship session itself.
+ */
+export function SessionShipButton({ session }: { session: { _id: string; git_branch?: string; worktree_branch?: string; git_dirty?: boolean; git_ahead?: number; ship_target_key?: string } }) {
+  const branch = session.worktree_branch || session.git_branch;
+  if (!branch || session.ship_target_key || !(session.git_dirty || (session.git_ahead ?? 0) > 0)) return null;
+  return <ShipControl target={{ kind: "conversation", id: String(session._id) }} size="compact" />;
 }

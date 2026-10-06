@@ -9,6 +9,7 @@ import {
   LINE_PROFILE_DEFAULTS,
   LINE_PROFILE_REL_PATH,
   LINE_VALUE_KINDS,
+  isLineStationEdit,
   parseLineValue,
   type LineValueKind,
   lineProfileNotes,
@@ -18,7 +19,8 @@ import {
   type PublishedLineProfile,
 } from "@codecast/shared/contracts/lineProfile";
 import { DAEMON_COMMAND_TTL_MS, deviceDisplayName, humanizeConvexError } from "@codecast/shared/contracts";
-import { lineProjectParam } from "./line/lineStations";
+import { lineProjectParam, paintStationEdits } from "./line/lineStations";
+import { SHIPPED_LINE } from "./line/shippedLine.generated";
 import { DISPATCH_REFUSED } from "./sessionCommands";
 
 export type LineFieldKind = LineValueKind;
@@ -134,7 +136,10 @@ export function editForField(field: LineField, text: string, lp: Facts): { edit:
 }
 
 /** The dotted keys an edit touches, for its pending state and a refusal's restore. */
-export const editKey = (e: LineProfileEdit) => (e.op === "set" || e.op === "remove" ? e.key : `finders.${e.op === "set_finder" ? e.finder.id : e.id}`);
+export const editKey = (e: LineProfileEdit) =>
+  e.op === "set" || e.op === "remove" ? e.key
+  : isLineStationEdit(e) ? `stations.${e.station}`
+  : `finders.${e.op === "set_finder" ? e.finder.id : e.id}`;
 
 /**
  * Paint edits onto a profile row the way the loader will resolve them, so the
@@ -143,7 +148,11 @@ export const editKey = (e: LineProfileEdit) => (e.op === "set" || e.op === "remo
  */
 export function applyLineEdits(lp: PublishedLineProfile, edits: LineProfileEdit[]): void {
   lp.sources ??= {};
+  // Station edits paint the repo's line (LX5); the rest paint the profile.
+  const stationEdits = edits.filter(isLineStationEdit);
+  if (stationEdits.length) lp.line = paintStationEdits(lp.line, stationEdits, SHIPPED_LINE) ?? undefined;
   for (const e of edits) {
+    if (isLineStationEdit(e)) continue;
     if (e.op === "set") {
       setPath(lp, e.key, e.value);
       lp.sources[e.key] = "file";

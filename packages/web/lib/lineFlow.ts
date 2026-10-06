@@ -38,6 +38,11 @@ export type LineSignal = {
   kind: string;
   title: string;
   subject?: string;
+  /** The key the finder files on; signals sharing it share a cause. */
+  fingerprint?: string;
+  /** The head of the finder's own words: what it saw, the quote (line-map.md LX7). */
+  detail_md?: string;
+  /** Where the source saw it, as specific as the finder had (LX7). */
   evidence_url?: string;
   observed_at: number;
   created_at: number;

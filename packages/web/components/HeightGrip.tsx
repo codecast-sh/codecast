@@ -11,8 +11,8 @@ import { scrollParentOf } from "../lib/scrollWithin";
 
 export { scrollParentOf };
 
-/** A frame never outgrows its scrolling surface, so its top and bottom fit
- *  in one view. */
+/** A height that fits a frame's top and bottom in one view of its scrolling
+ *  surface: the default a frame opens at. A drag is not held to it. */
 export const maxGripHeight = (scroller: HTMLElement, min: number) => Math.max(min, scroller.clientHeight - 24);
 
 export function savedGripHeight(key: string, min: number): number | null {
@@ -44,13 +44,12 @@ export function HeightGrip({ target, storageKey, min, onResized, className = "" 
       const startY = e.clientY;
       const startH = el.getBoundingClientRect().height / zoom;
       const scroller = scrollParentOf(el);
-      const max = scroller ? maxGripHeight(scroller, min) : Infinity;
       let h = startH;
       el.dataset.resizing = "";
       grip.dataset.resizing = "";
       const move = (ev: PointerEvent) => {
         const top = el.getBoundingClientRect().top;
-        h = Math.max(min, Math.min(max, startH + (ev.clientY - startY) / zoom));
+        h = Math.max(min, startH + (ev.clientY - startY) / zoom);
         el.style.height = `${Math.round(h)}px`;
         // The grip is the bottom edge: keep the top of the frame where it was
         // so a drag moves the bottom, not the text the frame sits under.

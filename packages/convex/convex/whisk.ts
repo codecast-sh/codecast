@@ -39,9 +39,11 @@ import {
   WHISK_PROVIDER,
   WHISK_RETURN_PATH,
   whiskAbilities,
-  whiskConfigured,
+  whiskConnectOpen,
   whiskEnv,
   whiskHttpCall,
+  whiskRefusal,
+  whiskReturnBase,
   whiskWebUrl,
   type MailAbilities,
   type WhiskCall,
@@ -53,9 +55,12 @@ const internalApi = internal as any;
 
 const TOKEN_HKDF_INFO = "codecast-whisk-app-token-v1";
 
-/** The lane pages a connect may come back to. A fixed list: the return path
- *  rides the signed state, and finishConnect sends the browser only here. */
-export const WHISK_RETURN_PATHS = ["/simple/connections", "/welcome"] as const;
+/** The pages a connect may come back to: Settings > Integrations (the
+ *  default), /welcome, the main shell's inbox, and the phone lane's
+ *  Connections, whose web address now redirects to Integrations. A fixed
+ *  list: the return path rides the signed state, and finishConnect sends the
+ *  browser only here. */
+export const WHISK_RETURN_PATHS = ["/settings/integrations", "/welcome", "/inbox", "/simple/connections"] as const;
 export type WhiskReturnPath = (typeof WHISK_RETURN_PATHS)[number];
 
 export function whiskReturnPath(raw: unknown): WhiskReturnPath | undefined {
@@ -144,10 +149,12 @@ async function endAtWhisk(call: WhiskCall): Promise<void> {
 
 // ── What the screens read ───────────────────────────────────────────────────
 
-/** Whether this deployment can connect mail and calendar through Whisk. */
+/** Whether a Connect button can lead anywhere: this deployment holds
+ *  Whisk's settings and Whisk serves its side of the connect
+ *  (whiskConnectOpen). Every Connect in the product reads this. */
 export const connectAvailable = query({
   args: {},
-  handler: async (): Promise<boolean> => whiskConfigured(),
+  handler: async (): Promise<boolean> => whiskConnectOpen(),
 });
 
 export type WhiskConnectionView =
@@ -161,7 +168,17 @@ export type WhiskConnectionView =
       mailboxes: string[];
       can: MailAbilities;
       connected_at: number;
+      /** Whisk refused the stored token (revoked there), or it can no longer
+       *  be opened: still listed, but every surface offers Reconnect. */
+      needs_reconnect?: true;
     };
+
+/** A stored connection that cannot reach Whisk until the person connects
+ *  again (lib/tokenRefresh's failure kinds, the same stamps every app
+ *  connection carries). */
+function needsReconnect(row: { last_error_kind?: string } | null | undefined): boolean {
+  return row?.last_error_kind === "revoked" || row?.last_error_kind === "undecryptable";
+}
 
 /** The person's Whisk connection as the lane shows it. Null when signed out. */
 export const connection = query({
@@ -180,15 +197,18 @@ export const connection = query({
       mailboxes,
       can: whiskAbilities(row.granted_scopes ?? []),
       connected_at: row.created_at,
+      ...(needsReconnect(row) ? { needs_reconnect: true as const } : {}),
     };
   },
 });
 
 // ── Connect ─────────────────────────────────────────────────────────────────
 
-/** Send the browser here to connect. `return_to` is the lane page to come back to. */
+/** Send the browser here to connect. `return_to` is the lane page to come
+ *  back to, and `origin` the site the person is on (whiskReturnBase), so a
+ *  connect started on a dev server comes back to it. */
 export const getConnectUrl = action({
-  args: { api_token: v.optional(v.string()), return_to: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), return_to: v.optional(v.string()), origin: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ ok: boolean; url?: string; error?: string }> => {
     const env = whiskEnv();
     if (!env) return { ok: false, error: "whisk_not_configured" };
@@ -197,7 +217,7 @@ export const getConnectUrl = action({
     const who = await ctx.runQuery(internalApi.googleOAuth.resolveConnectUser, { api_token: args.api_token });
     if (!who) return { ok: false, error: "signed_out" };
     const state = await signStateWith(env.secret, { user_id: who.user_id, ts: Date.now(), return_to: returnTo });
-    return { ok: true, url: whiskConnectUrl(env.webUrl, `${webBaseUrl()}${WHISK_RETURN_PATH}`, state) };
+    return { ok: true, url: whiskConnectUrl(env.webUrl, `${whiskReturnBase(args.origin, webBaseUrl())}${WHISK_RETURN_PATH}`, state) };
   },
 });
 
@@ -331,16 +351,36 @@ export const disconnect = action({
 /** The sealed token and grant of a person's connection, for server code only. */
 export const sealedConnectionFor = internalQuery({
   args: { user_id: v.id("users") },
-  handler: async (ctx, args): Promise<{ token_enc: string; scopes: string[]; email?: string } | null> => {
+  handler: async (ctx, args): Promise<{ token_enc: string; scopes: string[]; email?: string; needs_reconnect?: boolean } | null> => {
     const row = await connectionRowFor(ctx, WHISK_PROVIDER, { user_id: args.user_id });
     if (!row) return null;
     return {
       token_enc: row.access_token_enc,
       scopes: row.granted_scopes ?? [],
       ...(row.account_label ? { email: row.account_label as string } : {}),
+      ...(needsReconnect(row) ? { needs_reconnect: true } : {}),
     };
   },
 });
+
+/** Records that a connection stopped working, so every surface offers
+ *  Reconnect from the one connection view. Only the token that failed is
+ *  marked: a reconnect that landed meanwhile stays clean. */
+export const markConnectionRefused = internalMutation({
+  args: { user_id: v.id("users"), token_enc: v.string(), kind: v.union(v.literal("revoked"), v.literal("undecryptable")) },
+  handler: async (ctx, args) => {
+    const row = await connectionRowFor(ctx, WHISK_PROVIDER, { user_id: args.user_id });
+    if (!row || row.access_token_enc !== args.token_enc || row.last_error_kind === args.kind) return;
+    await ctx.db.patch(row._id, {
+      last_error_kind: args.kind,
+      last_error: args.kind === "revoked" ? "Whisk no longer accepts this connection." : "The stored connection can no longer be opened.",
+      updated_at: Date.now(),
+    });
+  },
+});
+
+/** The sentence whiskHttpCall throws when Whisk refuses the token. */
+const WHISK_REVOKED = whiskRefusal("Unauthorized: unknown token");
 
 export type WhiskAccess =
   | { state: "not_configured" }
@@ -352,7 +392,7 @@ export type WhiskAccess =
 /** How a person's turn reaches Whisk: a caller bound to their token, and
  *  what its grant allows. The token never leaves this closure. */
 export async function whiskAccessFor(
-  ctx: { runQuery: (ref: any, args: any) => Promise<any> },
+  ctx: { runQuery: (ref: any, args: any) => Promise<any>; runMutation?: (ref: any, args: any) => Promise<any> },
   userId: Id<"users">,
   fetchImpl?: typeof fetch,
 ): Promise<WhiskAccess> {
@@ -360,11 +400,30 @@ export async function whiskAccessFor(
   if (!env) return { state: "not_configured" };
   const row = await ctx.runQuery(internalApi.whisk.sealedConnectionFor, { user_id: userId });
   if (!row) return { state: "not_connected" };
+  const reconnect: WhiskAccess = { state: "reconnect", ...(row.email ? { email: row.email } : {}) };
+  if (row.needs_reconnect) return reconnect;
+  const mark = async (kind: "revoked" | "undecryptable") => {
+    await ctx.runMutation?.(internalApi.whisk.markConnectionRefused, { user_id: userId, token_enc: row.token_enc, kind }).catch(() => {});
+  };
   const token = await openWhiskToken(row.token_enc, env.secret);
-  if (!token) return { state: "reconnect", ...(row.email ? { email: row.email } : {}) };
+  if (!token) {
+    await mark("undecryptable");
+    return reconnect;
+  }
+  const raw = whiskHttpCall(env.convexUrl, token, fetchImpl);
+  // A refusal of the token itself is remembered, so the person is offered
+  // Reconnect rather than told to find it.
+  const call: WhiskCall = async (...args) => {
+    try {
+      return await raw(...args);
+    } catch (error) {
+      if (error instanceof Error && error.message === WHISK_REVOKED) await mark("revoked");
+      throw error;
+    }
+  };
   return {
     state: "connected",
-    call: whiskHttpCall(env.convexUrl, token, fetchImpl),
+    call,
     can: whiskAbilities(row.scopes),
     ...(row.email ? { email: row.email } : {}),
   };

@@ -28,5 +28,28 @@ export function typingRows(present: readonly PresenceRow[]): PresenceRow[] {
  * share link guest, who is not on the roster).
  */
 export function presenceMember(row: PresenceRow, roster: readonly ChatMember[]): ChatMember {
-  return roster.find((m) => String(m._id) === row.user_id) ?? { _id: row.user_id, name: row.user_name };
+  return roster.find((m) => String(m._id) === row.user_id) ?? { _id: row.user_id, name: row.user_name, image: row.user_image };
+}
+
+/** The presence id of a session's shared composer. */
+export function composeDocId(conversationId: string): string {
+  return `compose:${conversationId}`;
+}
+
+/** A draft from someone who may not send into the session: a suggestion for those who may. */
+export function isSuggestion(row: PresenceRow): boolean {
+  return row.can_send === false;
+}
+
+// Whether anyone else is in a session's composer right now, kept by the one
+// component that broadcasts there (useComposerPresence). The transcript reads
+// it while scrolling, without a subscription, to decide whether its reading
+// place is worth reporting: alone, nothing is written.
+const coPresent = new Map<string, number>();
+export function setCoPresent(conversationId: string, others: number): void {
+  if (others > 0) coPresent.set(conversationId, others);
+  else coPresent.delete(conversationId);
+}
+export function hasCoPresent(conversationId: string): boolean {
+  return (coPresent.get(conversationId) ?? 0) > 0;
 }

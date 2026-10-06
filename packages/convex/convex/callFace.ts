@@ -53,11 +53,12 @@ import { authorizeRoom } from "./callRooms";
 export const FACE_HOST_AGENT = "codecast-face";
 export const FACE_TOPIC = "codecast.face";
 // Tavus stock faces on Phoenix-4.5, its real-time model, each with the live
-// model's voice that suits it.
+// model's voice that suits it. Photoreal only: Tavus's stylized 3D faces
+// (STYLIZED_FACES) read as cartoons in a work call.
 const FACES: readonly { face: string; voice: string }[] = [
   { face: "rc8992fe8e8e", voice: "marin" }, // Brooke
   { face: "rcf10ec292c1", voice: "cedar" }, // Dominic
-  { face: "refaf3628ea7", voice: "cedar" }, // Evan
+  { face: "rc39f215e8cb", voice: "cedar" }, // Daniel
   { face: "rc9cff32ceba", voice: "marin" }, // Anna
   { face: "rbb3ca3630f7", voice: "cedar" }, // Charlie
   { face: "r3f4182ef554", voice: "cedar" }, // Lucas
@@ -68,6 +69,9 @@ const FACES: readonly { face: string; voice: string }[] = [
   { face: "rbb3d627a705", voice: "cedar" }, // Mateo
   { face: "r4dc9377a68e", voice: "marin" }, // Priya
 ];
+// Dr. Paws, Evan, Mr. Edward, Mrs. Hart.
+export const STYLIZED_FACES = ["r21a52c53fa4", "refaf3628ea7", "rc36bdce7740", "rc4492899eda"];
+export const FACE_IDS = FACES.map((f) => f.face);
 // The session replies the voice is briefed with, and how long a told reply may be.
 const BRIEF_REPLIES = 3;
 const TELL_MAX = 2000;

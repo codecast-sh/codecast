@@ -54,6 +54,7 @@ import {
 } from "./roomThreadModel";
 import "../chat/chat.css";
 import "./roomThread.css";
+import { CallTasks, itemKey, makeCallTask, useCallTasks } from "./CallTasks";
 
 // THE HUDDLE HAS ONE THREAD. Everything that happens in a room lands here in
 // time order: what people SAID (the transcript, folded into passages so it
@@ -152,6 +153,9 @@ export function RoomThread({
 }) {
   const recording = isRecRoomKey(roomKey);
   const ended = !!call && call.status !== "live";
+  // The tasks pulled from this call, and the one each action item became.
+  const callTasks = useCallTasks(call);
+  const tasksByItem = useMemo(() => new Map(callTasks.map((t) => [itemKey(t.title), t])), [callTasks]);
   const post = useMutation(api.callChat.post);
   const [pending, setPending] = useState<Array<{ key: string; text: string; attachments: ChatAttachment[]; at: number }>>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -644,6 +648,8 @@ export function RoomThread({
             live={!ended}
             callId={callPathRef(call)}
             focus={focus && focus.kind !== "turns" ? focusKey : null}
+            taskFor={surface === "page" ? (item) => tasksByItem.get(itemKey(item)) : undefined}
+            onMakeTask={surface === "page" ? (item) => makeCallTask(call, item) : undefined}
           />
         ) : ended && !recording && passages.length > 0 ? (
           // A call with no spoken words has nothing a summary would cover:
@@ -657,6 +663,9 @@ export function RoomThread({
                 : "Summary pending…"}
           </p>
         ) : null}
+
+        {/* The tasks pulled from the call, under its recap on the page. */}
+        {surface === "page" && call && (call.summary || callTasks.length > 0) && <CallTasks call={call} tasks={callTasks} />}
 
         {/* How selecting works: one quiet line after the recap, before the
             first turn it explains, and only while a turn is open to click. */}
