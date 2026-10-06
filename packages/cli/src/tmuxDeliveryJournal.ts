@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { defaultConfigDir } from "./config/configDir.js";
+import { isTmuxSessionMissingError } from "./tmux.js";
 
 export type TmuxDeliveryIdentity = { messageId: string; conversationId: string };
 export type TmuxPasteReceipt = TmuxDeliveryIdentity & {
@@ -168,8 +169,8 @@ export async function pendingMessageFinished(
   }
 }
 
-async function generationFor(target: string, exec: TmuxQuery): Promise<string> {
-  const { stdout } = await exec(["display-message", "-p", "-t", target, "#{pid}|#{socket_path}|#{pane_id}|#{pane_pid}|#{session_created}"]);
+async function generationFor(target: string, exec: TmuxQuery, server: string[] = []): Promise<string> {
+  const { stdout } = await exec([...server, "display-message", "-p", "-t", target, "#{pid}|#{socket_path}|#{pane_id}|#{pane_pid}|#{session_created}"]);
   const parts = stdout.trim().split("|");
   if (parts.length !== 5 || !parts.every(Boolean) || !/^%\d+$/.test(parts[2])) {
     throw new TmuxDeliveryUncertainError("terminal identity could not be verified");
@@ -228,12 +229,20 @@ async function prepareDelivery(
   if (prior && prior.generation !== generation && (prior.phase === "paste" || prior.terminalExited || settled)) {
     const oldParts: string[] = JSON.parse(prior.generation);
     const newParts: string[] = JSON.parse(generation);
-    let oldPaneGone = !!prior.terminalExited || (oldParts[1] === newParts[1] && oldParts[0] !== newParts[0]);
-    if (!oldPaneGone && oldParts[1] === newParts[1]) {
-      const { stdout } = await exec(["list-panes", "-a", "-F", "#{pane_id}"]);
+    const sameServer = oldParts[1] === newParts[1];
+    let oldPaneGone = !!prior.terminalExited || (sameServer && oldParts[0] !== newParts[0]);
+    if (!oldPaneGone) {
+      // Pane ids are numbered per server, so the old pane is looked up on the
+      // socket it lived on: a session that moved to its own server left it on
+      // the shared one, which may since have gone.
+      const oldServer = ["-S", oldParts[1]];
+      const { stdout } = await exec([...oldServer, "list-panes", "-a", "-F", "#{pane_id}"]).catch((error) => {
+        if (!sameServer && isTmuxSessionMissingError(error)) return { stdout: "" };
+        throw error;
+      });
       const panes = stdout.trim().split("\n");
-      if (!panes.includes(newParts[2])) throw new TmuxDeliveryUncertainError("terminal inventory could not be verified");
-      oldPaneGone = !panes.includes(oldParts[2]) || await generationFor(oldParts[2], exec) !== prior.generation;
+      if (sameServer && !panes.includes(newParts[2])) throw new TmuxDeliveryUncertainError("terminal inventory could not be verified");
+      oldPaneGone = !panes.includes(oldParts[2]) || await generationFor(oldParts[2], exec, oldServer) !== prior.generation;
     }
     if (oldPaneGone) {
       if (settled) journal.release(identity.messageId);

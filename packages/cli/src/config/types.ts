@@ -206,6 +206,13 @@ export interface Config extends CloudSessionSyncSettings {
   // disables it — re-warming is speculative, so it's opt-in.
   warm_pool_size?: number;
 
+  // --- One tmux server per agent session (tmuxRoute.ts) ---
+  // Each new agent session gets its own tmux server, started as its own launchd
+  // job, so macOS schedules it as its own group and a busy session cannot starve
+  // the rest. Sessions already running stay where they are and move on their
+  // next restart. macOS only; absent = every session shares the default server.
+  tmux_server_per_session?: boolean;
+
   // --- Fleet cap (daemon.ts, hibernation.ts) ---
   // How many sessions may hold a live pane on this machine. Past the cap the
   // heartbeat maintenance pass parks the longest-idle ones: the reaper's
@@ -282,6 +289,13 @@ export interface Config extends CloudSessionSyncSettings {
   // off on this machine; `git config codecast.sessionTrailer false` in one
   // repository, CODECAST_SESSION_TRAILER=0 in one environment.
   session_trailer?: boolean;
+
+  // --- Subagent fleet (shared/contracts/subagentFleet.ts) ---
+  // How many `cast spawn --subagent` workers one session (default 4) and this
+  // machine (default 8) run at once; a spawn past either waits in a queue.
+  // `cast config subagents.per_session 6`. Also the default `--max` of
+  // `cast plan orchestrate` and `autopilot`.
+  subagents?: { per_session?: number; per_machine?: number };
 
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;
