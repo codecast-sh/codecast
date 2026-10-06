@@ -1,4 +1,5 @@
-// The one integrations surface (docs/architecture/issue-sync.md S9): Slack,
+// The one integrations surface (docs/architecture/issue-sync.md S9): the
+// assistant's mail and calendar through Whisk (WhiskCard), then Slack,
 // GitHub, Linear, Google and Notion, each with connect, disconnect, who
 // connected it, health, and what it enables — plus the imported issue sources
 // inside the GitHub and Linear cards.
@@ -16,7 +17,8 @@
 // connectors redirect back here with a confirm token in the URL fragment, which
 // is read once, spent in this signed-in session, and cleared.
 
-import { User, Users } from "lucide-react";
+import { Surface, useModeWords, useSurface } from "../../../lib/surfaces";
+import { Sparkles, User, Users } from "lucide-react";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
@@ -29,6 +31,7 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useConnectorReturn } from "../../../hooks/useConnectorReturn";
 import { SettingsCallout, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { IntegrationCard } from "../../../components/integrations/IntegrationCard";
+import { WhiskCard } from "../../../components/integrations/WhiskCard";
 import { SourcesSection } from "../../../components/ops/SourcesSection";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
 import { TeamSwitcher } from "../../../components/TeamSwitcher";
@@ -49,6 +52,10 @@ export default function IntegrationsPage() {
   const { user } = useCurrentUser();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const notice = useConnectorReturn();
+  const words = useModeWords();
+  // Hosted mode leaves off the services only code work uses.
+  const devApps = useSurface("settings.devIntegrations");
+  const shownApp = (id: (typeof APP_IDS)[number]) => devApps || !APP_DESCRIPTORS[id].developerOnly;
 
   const result = connections.data as AppConnectionsResult | undefined;
   const loading = result === undefined && !connections.error;
@@ -77,7 +84,15 @@ export default function IntegrationsPage() {
         </SettingsCallout>
       )}
 
-      <BrowserExtensionSetup />
+      {/* The assistant's own connection: mail and calendar through Whisk,
+          personal, and first because it is what hosted mode runs on. */}
+      <SettingsSection title="Assistant" icon={Sparkles}>
+        <WhiskCard />
+      </SettingsSection>
+
+      <Surface name="settings.browserExtension">
+        <BrowserExtensionSetup />
+      </Surface>
 
       <SettingsSection
         title="Team connections"
@@ -87,7 +102,7 @@ export default function IntegrationsPage() {
         // is in flight; the server's answer stands in when the client is on
         // Personal, since the ledger then falls back to the home team.
         actions={<TeamSwitcher teamsOnly value={activeTeamId ?? team?.id ?? null} />}
-        description="Shared by everyone on the team picked here, for work inside it. Tokens stay server-side — an agent asks the backend to act, it never holds the credential."
+        description={words.teamConnectionsLede}
       >
         {errorCallout}
         {teamKnown && !team ? (
@@ -98,7 +113,7 @@ export default function IntegrationsPage() {
             </SettingsCallout>
           </div>
         ) : (
-          APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("team")).map((id) => (
+          APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("team") && shownApp(id)).map((id) => (
             <IntegrationCard
               key={id}
               descriptor={APP_DESCRIPTORS[id]}
@@ -115,9 +130,9 @@ export default function IntegrationsPage() {
       <SettingsSection
         title="Personal connections"
         icon={User}
-        description="Yours alone, and they follow you: in any workspace you work in that has no connection of its own, an agent acting for you acts through these."
+        description={words.personalConnectionsLede}
       >
-        {APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("personal")).map((id) => (
+        {APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("personal") && shownApp(id)).map((id) => (
           <IntegrationCard
             key={id}
             descriptor={APP_DESCRIPTORS[id]}
@@ -130,7 +145,9 @@ export default function IntegrationsPage() {
         ))}
       </SettingsSection>
 
-      <SourcesSection />
+      <Surface name="settings.devIntegrations">
+        <SourcesSection />
+      </Surface>
     </SettingsPanel>
   );
 }

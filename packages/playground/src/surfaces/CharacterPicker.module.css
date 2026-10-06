@@ -1,0 +1,68 @@
+.modal { width: 1020px; max-width: 100%; display: grid; grid-template-columns: 360px 1fr; overflow: hidden !important; }
+.me {
+  background: var(--tomato); border-right: var(--line-heavy); padding: 30px 28px;
+  display: flex; flex-direction: column; align-items: center; text-align: center; color: var(--paper);
+}
+.title { font: 400 40px/.95 var(--display); }
+.bigFace {
+  width: 188px; height: 188px; border-radius: 56px; border: 5px solid var(--ink); box-shadow: var(--pop-lg);
+  overflow: hidden; margin: 26px 0 22px; background: var(--cream);
+  animation: pop var(--t-arrive) var(--squish), wobble 2.6s ease-in-out var(--t-arrive) infinite;
+}
+.bigFace img { width: 100%; height: 100%; object-fit: cover; }
+.nameRow { width: 100%; display: flex; gap: var(--s2); }
+.nameField {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--s2);
+  background: var(--paper); border: var(--line); border-radius: var(--r-md); padding: 0 12px 0 14px;
+}
+.nameField:focus-within { box-shadow: var(--focus); }
+.nameField input { flex: 1; min-width: 0; border: 0; background: none; font: 400 26px/1 var(--display); color: var(--ink); padding: 10px 0; }
+.count { font: 700 11px var(--mono); color: var(--ink-soft); flex: none; }
+.dice {
+  width: 54px; flex: none; display: grid; place-items: center; color: var(--ink);
+  background: var(--butter); border: var(--line); border-radius: var(--r-md); box-shadow: var(--pop-sm);
+  transition: transform var(--t-press), box-shadow var(--t-press);
+}
+.dice svg { width: 30px; height: 30px; }
+.dice:hover { transform: translate(-1px, -1px) rotate(-8deg); box-shadow: 4px 4px 0 var(--ink); }
+.dice:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); transition-duration: 0s; }
+.suggest { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-top: 14px; }
+.suggestion { font-size: 13px !important; padding: 4px 11px !important; color: var(--ink); }
+.current { background: var(--butter) !important; }
+.footnote { margin-top: auto; padding-top: 18px; font: 600 13px/1.4 var(--ui); }
+
+.zooSide { padding: var(--s8); display: flex; flex-direction: column; min-width: 0; }
+.zooHead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); margin-bottom: 18px; }
+.zooTitle { font: 400 30px/1 var(--display); }
+.legend { display: flex; align-items: center; gap: 6px; font: 700 13px var(--ui); color: var(--ink-soft); }
+.zoo { display: grid; grid-template-columns: repeat(6, 80px); gap: 14px; justify-content: space-between; }
+.animal {
+  position: relative; width: 80px; height: 80px; border-radius: 28px; border: var(--line-thick); background: var(--cream);
+  box-shadow: var(--pop-sm); transition: transform var(--t-quick) var(--squish), box-shadow var(--t-quick);
+}
+.animal img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.animal:hover { transform: translateY(-2px); }
+.selected { transform: translateY(-2px) rotate(-3deg); box-shadow: var(--focus), var(--pop-sm); }
+.badge {
+  display: inline-block; background: var(--mint); border: var(--line-thin); border-radius: var(--r-pill);
+  padding: 0 6px; font: 700 10px/1.6 var(--mono); color: var(--ink); white-space: nowrap;
+}
+.animal .badge { position: absolute; top: -8px; right: -10px; }
+.keys { display: flex; gap: var(--s4); flex-wrap: wrap; margin-top: 18px; font: 600 12px var(--ui); color: var(--ink-soft); }
+.foot { display: flex; align-items: center; gap: var(--s3); margin-top: auto; padding-top: 24px; }
+.repeat { flex: 1; font: 600 13px var(--ui); color: var(--ink-soft); }
+.be { font: 400 20px var(--display) !important; color: var(--paper) !important; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 1023px) {
+  .modal { display: flex; flex-direction: column; overflow: auto !important; }
+  .me { border-right: 0; border-bottom: var(--line-heavy); padding: 24px 20px 20px; }
+  .title { font-size: 32px; }
+  .bigFace { width: 120px; height: 120px; border-radius: 40px; border-width: 4px; margin: 16px 0; }
+  .footnote { display: none; }
+  .zooSide { padding: 20px 20px 0; }
+  .zoo { grid-template-columns: repeat(4, 64px); }
+  .animal { width: 64px; height: 64px; border-radius: 22px; }
+  .foot { position: sticky; bottom: 0; background: var(--cream); padding: 14px 0 18px; margin-top: 16px; flex-wrap: wrap; }
+  .repeat { flex-basis: 100%; }
+  .be { flex: 1; }
+}

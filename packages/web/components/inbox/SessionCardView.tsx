@@ -3,6 +3,8 @@ import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { withSafetyBlock, isStashHidden, type UserRest } from "@codecast/shared/contracts";
+import type { NoticeKind } from "@codecast/shared/contracts/assistant";
+import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
 import { AvatarImg } from "../../lib/avatarCache";
@@ -18,6 +20,7 @@ import { useLabelColor } from "../../lib/labelColors";
 import { ViewerFaces } from "../presence/ViewerFaces";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { SessionWorktreeChip } from "../SessionWorktreeChip";
+import { SubagentFleetChip } from "../SubagentFleetChip";
 import { cleanUserMessage } from "../sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
@@ -56,6 +59,9 @@ export type SessionCardChrome = {
   showBranchPill: boolean;
   /** The workspace asks for every session to have a face. */
   personifyAll: boolean;
+  /** Branch, worktree and pull request chips at all (lib/surfaces.ts
+   *  "gitChips"; off in hosted mode). Absent means shown. */
+  showGitChips?: boolean;
 };
 
 /** The per-card live facts that are not fields of the session row. */
@@ -70,6 +76,12 @@ export type SessionCardLiveness = {
   restarting: boolean;
   /** The kept compose draft's unsent text; "" when there is none. */
   draft: string;
+  /** A hosted conversation whose transcript ends on a stop notice: the
+   *  notice's kind, so the row says it stopped rather than looking like one
+   *  that was answered. */
+  stopped?: NoticeKind | null;
+  /** A hosted conversation waits on the person's OK (an approval card). */
+  asksOk?: boolean;
 };
 
 export type SessionCardViewProps = {
@@ -218,7 +230,9 @@ export function SessionCardView({
     liveness.blockedReviveAt,
     now,
   );
-  const { showModelBadge, showAgentIcon, showBranchPill } = chrome;
+  const { showModelBadge, showAgentIcon } = chrome;
+  const showGitChips = chrome.showGitChips !== false;
+  const showBranchPill = chrome.showBranchPill && showGitChips;
   // Personification is opt in (session-characters.md S2): a session shows a
   // face once somebody gives it one, or when the workspace asks for every
   // session to have one. A role's standing session always has one — the role
@@ -289,7 +303,9 @@ export function SessionCardView({
     onDropFiles,
   });
 
-  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
+  // A subagent's place in the fleet queue, or what became of its worktree.
+  const fleetChip = session.subagent_slot === "queued" || session.merge_back ? <SubagentFleetChip session={session} /> : null;
+  const worktreeChip = showGitChips && (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
     <SessionWorktreeChip
       name={session.worktree_name}
       branch={session.worktree_branch}
@@ -375,7 +391,7 @@ export function SessionCardView({
                 </span>
               )}
               {!isLive && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Idle" />
               )}
               {session.message_count > 0 && (
                 <span className="text-[9px] tabular-nums text-sol-text-dim/50">{session.message_count}</span>
@@ -385,7 +401,7 @@ export function SessionCardView({
               </span>
             </div>
           </div>
-          {worktreeChip && <div className="flex min-w-0 pl-[18px] mt-0.5">{worktreeChip}</div>}
+          {(worktreeChip || fleetChip) && <div className="flex min-w-0 gap-1.5 pl-[18px] mt-0.5">{worktreeChip}{fleetChip}</div>}
           {stateView && (
             <div data-sv-state className="mt-0.5 flex items-start gap-1" title={stateView.text}>
               <Pin
@@ -541,6 +557,17 @@ export function SessionCardView({
             </span>
           )}
           {isUnread && !isActive && <UnreadDot />}
+          {/* A stop is a small dot in the dot slot; its word follows the
+              title in faint ink. The danger colour is said once, by the
+              Couldn't finish section, not by every row in it. */}
+          {liveness.asksOk && !liveness.stopped && (
+            <span data-sv-asks-ok className="flex-shrink-0 text-[12px] text-sol-orange" title="Your assistant is waiting for your OK. Open it to answer.">
+              Needs your OK
+            </span>
+          )}
+          {liveness.stopped && (
+            <span data-sv-stopped-dot aria-hidden className={`flex-shrink-0 h-1.5 w-1.5 rounded-full ${NOTICE_DOT[liveness.stopped]}`} />
+          )}
           {/* Name, then the title: "Ember: Fixing the auth race". The name is
               the row's identity and never truncates; the title does. */}
           <SessionIdentityLine
@@ -566,6 +593,16 @@ export function SessionCardView({
               </ShortcutTooltip>
             }
           />
+          {liveness.asksOk && !liveness.stopped && (
+            <span data-sv-asks-ok className="flex-shrink-0 text-[12px] text-sol-orange" title="Your assistant is waiting for your OK. Open it to answer.">
+              Needs your OK
+            </span>
+          )}
+          {liveness.stopped && (
+            <span data-sv-stopped className="flex-shrink-0 text-[12px] text-sol-text-dim" title="The assistant stopped before answering. Open it to try again.">
+              {NOTICE_ROW_WORD[liveness.stopped]}
+            </span>
+          )}
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
           {/* A role's sessions are the role's (S23.3): never rows under its
               card, one count that opens the role's page. Silent at zero. */}
@@ -680,6 +717,7 @@ export function SessionCardView({
             </span>
           )}
           {worktreeChip}
+          {fleetChip}
           {/* The task this session owns: the fact that ties the card to its
               work, so it stays in simple view too. */}
           {session.active_task && <SessionTaskChip task={session.active_task} className="flex-shrink" />}
@@ -695,7 +733,7 @@ export function SessionCardView({
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
-            <PrStatusChip status={session.pr_status} />
+            {showGitChips && <PrStatusChip status={session.pr_status} />}
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
@@ -732,7 +770,7 @@ export function SessionCardView({
               isPendingWorking={isPendingWorking}
               isRowRestarting={isRowRestarting}
             />
-            <span className="text-[10px] text-sol-text-dim tabular-nums">
+            <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
               {formatIdleDuration(session.updated_at)}
             </span>
           </div>
