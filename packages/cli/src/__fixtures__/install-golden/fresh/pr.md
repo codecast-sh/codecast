@@ -10,6 +10,7 @@ cast pr threads [ref]                       # open review threads, each with a s
 cast pr events [ref]                        # timeline: pushes, reviews, checks, merges
 cast pr watch [ref]                         # one line per change; the first frame is silent
 cast pr open [ref]                          # the page in codecast (--print for the URL only)
+cast pr create -t "<title>" -b -            # open one with gh; the bound task's change guide becomes its walkthrough (--dry-run)
 ```
 
 ### Reviewing a pull request

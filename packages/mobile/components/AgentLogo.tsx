@@ -3,11 +3,15 @@ import { Text as RNText } from '@/components/Themed';
 import Svg, { Path } from 'react-native-svg';
 import { Theme } from '@/constants/Theme';
 import { MOBILE_AGENT_LOGO_BG, MUSE_MARK_PATH } from '@codecast/shared/render/mobileSessionStyle';
+import { CODECAST_MARK_ARROW_PATH, CODECAST_MARK_C_PATH, CODECAST_MARK_VIEWBOX } from '@codecast/shared/render/codecastMark';
+import { isHostedAgentType } from '@codecast/shared/contracts';
 
 export function agentLogoBg(agentType?: string): string {
   const bg = agentType ? MOBILE_AGENT_LOGO_BG[agentType] : undefined;
   if (bg) return bg;
   if (agentType === 'grok') return Theme.text;
+  // The hosted Codecast assistant wears codecast's cyan, as on the web.
+  if (isHostedAgentType(agentType)) return Theme.cyan;
   return '#cb4b16';
 }
 
@@ -56,6 +60,17 @@ export function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; siz
       <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
         <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
           <Path d="M4 4l16 6-8 2-2 8z" stroke="white" strokeWidth={2} />
+        </Svg>
+      </RNView>
+    );
+  }
+  if (isHostedAgentType(agentType)) {
+    // The codecast mark, tight-cropped, in white on the assistant's cyan.
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={size * 0.72} height={size * 0.72} viewBox={CODECAST_MARK_VIEWBOX}>
+          <Path d={CODECAST_MARK_C_PATH} fill="white" />
+          <Path d={CODECAST_MARK_ARROW_PATH} fill="white" />
         </Svg>
       </RNView>
     );

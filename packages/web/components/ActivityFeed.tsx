@@ -22,6 +22,10 @@ import { ExternalEventGroupRow } from "./feed/ExternalEventGroupRow";
 import { externalEventGroupActor, groupExternalEvents, isQuietExternalEvent, mergeExternalEventGroups, type ExternalEventGroup, type ExternalEventRecord } from "../lib/externalEvents";
 import { useExternalEvents, externalEventsNewestFirst } from "../hooks/useSyncExternalEvents";
 import { FolderGit2 } from "lucide-react";
+import { pickShareSuggestion, useTeamWorkspaceSuggestions } from "../hooks/useTeamWorkspaceSuggestions";
+import { useSaveTeamSetup } from "../lib/team/saveTeamSetup";
+import { TeamFindableNudge } from "./team/TeamFindableNudge";
+import { toast } from "sonner";
 import type { CSSProperties } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 // The team-tinted card and accent text used by the share nudge below.
@@ -809,16 +813,39 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
 // instead of re-walking pages already cached. ---
 // Shown in the team feed while the viewer shares no workspace with the team:
 // their sessions are invisible to teammates, and this is the surface where that
-// absence is felt. One click lands in the guided setup (visibility + repos).
-function TeamShareNudge({ teamId }: { teamId: string }) {
+// absence is felt. When teammates already work in a repo the viewer does too,
+// the card names it and shares it from now on in one click (earlier sessions
+// stay private); otherwise one click lands in the guided setup.
+export function TeamShareNudge({ teamId }: { teamId: string }) {
   const router = useRouter();
+  const data = useTeamWorkspaceSuggestions(teamId as Id<"teams">);
+  const save = useSaveTeamSetup();
+  const [sharing, setSharing] = useState(false);
+  const pick = pickShareSuggestion(data.suggestions?.suggestions, teamId);
+  const repoName = pick ? pick.path.split("/").filter(Boolean).pop() ?? pick.path : null;
+  const shareNow = () => {
+    if (!pick || !data.suggestions) return;
+    setSharing(true);
+    save({
+      teamId: teamId as Id<"teams">,
+      visibility: data.suggestions.current_visibility,
+      selectedPaths: { [pick.path]: true },
+      shareSince: Date.now(),
+      allProjects: data.allProjects,
+    })
+      .then(() => toast.success(`Sharing ${repoName} with ${data.teamName}`, { description: "New sessions there show in this feed. Earlier ones stay private." }))
+      .catch(() => {
+        setSharing(false);
+        toast.error("Could not share that repo", { description: "Try again from the sharing setup." });
+      });
+  };
   // The card belongs to one team, so it wears that team's color instead of a
   // fixed cyan. A user who just picked a color in the create flow lands here
   // and finds the same color waiting. Cyan stays the fallback.
   const color = useInboxStore(
     (s) => (s.teams || []).find((t: any) => String(t._id) === String(teamId))?.icon_color,
   ) as string | undefined;
-  return (
+  const generic = (
     <button
       type="button"
       onClick={() => router.push(`/settings/team/join?teamId=${teamId}&setup=1`)}
@@ -835,11 +862,45 @@ function TeamShareNudge({ teamId }: { teamId: string }) {
       <span className="tf-accent-text shrink-0 text-sm font-medium">Set up sharing &rarr;</span>
     </button>
   );
+  if (!pick || !repoName) return generic;
+  const people = pick.matched_member_count === 1 ? "a teammate works" : `${pick.matched_member_count} teammates work`;
+  return (
+    <div
+      style={color ? ({ "--tf-acc": `var(--sol-${color})` } as CSSProperties) : undefined}
+      className="tf-accent-card w-full flex items-center gap-3 rounded-lg border px-4 py-3"
+    >
+      <FolderGit2 className="tf-accent-text h-4 w-4 shrink-0" />
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-medium text-sol-text">
+          {people} in <span className="font-mono">{repoName}</span> too
+        </span>
+        <span className="block text-xs text-sol-text-muted">
+          You have {pick.session_count} session{pick.session_count === 1 ? "" : "s"} there that the team can't see. Share it from now on; earlier sessions stay private.
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={() => router.push(`/settings/team/join?teamId=${teamId}&setup=1`)}
+        className="shrink-0 text-xs text-sol-text-muted hover:text-sol-text"
+      >
+        Other repos
+      </button>
+      <button
+        type="button"
+        onClick={shareNow}
+        disabled={sharing}
+        className="tf-accent-text shrink-0 text-sm font-medium disabled:opacity-60"
+      >
+        {sharing ? "Sharing…" : "Share from now on"}
+      </button>
+    </div>
+  );
 }
 
 function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePeopleRow }: ActivityFeedProps) {
   const convex = useConvex();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
+  const activeTeamName = useInboxStore((s) => (s.teams || []).find((t: any) => String(t._id) === String(activeTeamId))?.name) as string | undefined;
   // Keyed by team+dir so a team/filter switch never mixes the wrong rows.
   const key = `${activeTeamId ?? ""}|${directoryFilter ?? ""}`;
   const cached = useInboxStore((s) => s.feedConversations[key]) as Conversation[] | undefined;
@@ -1094,7 +1155,12 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
       compact={compact}
       hidePeopleRow={hidePeopleRow}
       initialActorId={initialActorId}
-      shareNudge={sharesNone ? <TeamShareNudge teamId={String(activeTeamId)} /> : undefined}
+      shareNudge={activeTeamId ? (
+        <div className="space-y-2 empty:hidden">
+          {sharesNone && <TeamShareNudge teamId={String(activeTeamId)} />}
+          <TeamFindableNudge key={String(activeTeamId)} teamId={activeTeamId} teamName={activeTeamName || "your team"} />
+        </div>
+      ) : undefined}
       shareTeamId={activeTeamId ? String(activeTeamId) : undefined}
     />
   );

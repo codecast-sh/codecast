@@ -41,6 +41,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/plans(\/|$)/,
   /^\/docs(\/|$)/,
   /^\/capabilities$/,
+  // Agent features: a category rail beside a card grid, its own scroll.
+  /^\/agent-features$/,
   // The resource monitor: strip, table and review drawer, each its own scroll.
   /^\/resources$/,
   /^\/crosstalk$/,
