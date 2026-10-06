@@ -6,6 +6,7 @@ import { useInboxStore } from './inboxStore';
 // client viewer can't drift. Re-exported here to preserve the many
 // `import type { FileChange } from '../store/diffViewerStore'` sites.
 import type { FileChange, FileChangeBody, FileChangeRef } from '../lib/fileChangeExtractor';
+import type { DiffBase } from '@codecast/shared/diff';
 export type { FileChange, FileChangeBody, FileChangeRef };
 
 /** What the timeline holds: the server's references (sizes, no text) merged
@@ -51,6 +52,10 @@ interface DiffViewerState {
   prevChange: () => void;
   toggleDiffPanel: () => void;
   setDiffPanelOpen: (open: boolean) => void;
+  /** Where a conversation's diff starts. Remembered per conversation in
+   *  clientState.ui, so it follows the person; a timeline selection is let go,
+   *  since the switch is the reader asking for that base. */
+  setDiffBase: (conversationId: string, base: DiffBase) => void;
 
   getSelectedChanges: () => FileChangeEntry[];
   getFilesList: () => string[];
@@ -112,6 +117,14 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   setDiffPanelOpen: (open) => {
     useInboxStore.getState().updateClientUI({ diff_panel_open: open });
     set({ diffPanelOpen: open });
+  },
+
+  setDiffBase: (conversationId, base) => {
+    const inbox = useInboxStore.getState();
+    const all = inbox.clientState.ui?.diff_base ?? {};
+    const { [conversationId]: _old, ...rest } = all;
+    inbox.updateClientUI({ diff_base: base === 'session' ? rest : { ...rest, [conversationId]: base } });
+    set({ selectedChangeIndex: null, rangeStart: null, rangeEnd: null });
   },
 
   setChanges: (conversationId, changes) =>

@@ -6,8 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { getSystemConfig } from "./systemConfig";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-
-const isAdmin = (user: { role?: string } | null) => user?.role === "admin";
+import { isStaff } from "./lib/staff";
 
 const MAX_LOGS_PER_BATCH = 100;
 const MAX_MESSAGE_LENGTH = 2000;
@@ -171,7 +170,7 @@ export const adminList = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || !isAdmin(currentUser)) {
+    if (!currentUser || !isStaff(currentUser)) {
       return { logs: [], users: [], isAdmin: false };
     }
 
@@ -221,7 +220,7 @@ export const adminGetUsers = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || !isAdmin(currentUser)) {
+    if (!currentUser || !isStaff(currentUser)) {
       return [];
     }
 
@@ -275,6 +274,19 @@ export const adminGetUsers = query({
   },
 });
 
+// Counts are capped by this take either way; 10000 blew the syscall time
+// budget under load (~1ms/doc when saturated). Keep it inside the budget.
+const STATS_SAMPLE = 4000;
+
+// One error with a different path, id or count per user is still one error.
+export function errorShape(message: string): string {
+  return message
+    .replace(/(?:\/Users|\/home|\/private|\/var|\/tmp|~)\/[^\s)'"]*/g, "<path>")
+    .replace(/\b[0-9a-f]{8,}\b/gi, "<id>")
+    .replace(/\d+/g, "N")
+    .slice(0, 100);
+}
+
 export const adminGetStats = query({
   args: {},
   handler: async (ctx) => {
@@ -284,7 +296,7 @@ export const adminGetStats = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || !isAdmin(currentUser)) {
+    if (!currentUser || !isStaff(currentUser)) {
       return null;
     }
 
@@ -293,9 +305,7 @@ export const adminGetStats = query({
     const oneDayAgo = now - 24 * 60 * 60 * 1000;
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-    // Counts are capped by this take either way; 10000 blew the syscall time
-    // budget under load (~1ms/doc when saturated). Keep it inside the budget.
-    const logs = await ctx.db.query("daemon_logs").order("desc").take(4000);
+    const logs = await ctx.db.query("daemon_logs").order("desc").take(STATS_SAMPLE);
 
     const logsLastHour = logs.filter((l) => l.timestamp >= oneHourAgo);
     const logsLastDay = logs.filter((l) => l.timestamp >= oneDayAgo);
@@ -314,7 +324,7 @@ export const adminGetStats = query({
     const topErrors = logs
       .filter((l) => l.level === "error")
       .reduce((acc, log) => {
-        const key = log.message.slice(0, 100);
+        const key = errorShape(log.message);
         acc[key] = (acc[key] || 0) + 1;
         return acc;
       }, {} as Record<string, number>);
@@ -341,6 +351,8 @@ export const adminGetStats = query({
         uniqueUsers: uniqueUsers(logsLastWeek),
       },
       topErrors: topErrorsList,
+      // A window that reaches past the oldest sampled row is a floor, not a count.
+      sampledSince: logs.length === STATS_SAMPLE ? logs[logs.length - 1].timestamp : null,
     };
   },
 });

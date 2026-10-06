@@ -12,10 +12,10 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { guideTopics, snippetBySlug } from "@codecast/shared/contracts";
+import { guideText, guideTopics, snippetBySlug } from "@codecast/shared/contracts";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { getVersion } from "./update.js";
-import { guideBody, guideHeader, guidePayload, unknownTopicMessage } from "./guide.js";
+import { guideHeader, guidePayload, unknownTopicMessage } from "./guide.js";
 
 const cliEntry = path.join(import.meta.dir, "index.ts");
 
@@ -46,15 +46,16 @@ function runGuide(args: string[]): { status: number | null; stdout: string; stde
 }
 
 describe("cast guide", () => {
-  test("every topic's body is the catalog section, without the installer's markers", () => {
+  test("every topic is the catalog section without the installer's markers, then its reference", () => {
     for (const topic of guideTopics()) {
       const section = topic.section!;
-      // Derived from the catalog here rather than through guideBody, so the
+      // Derived from the catalog here rather than through guideText, so the
       // assertion is a real comparison and not the function agreeing with
       // itself.
-      const expected = section.body.split(section.spec.endMarker).join("").trim();
-      expect(`${topic.slug}: ${guideBody(topic)}`).toBe(`${topic.slug}: ${expected}`);
-      expect(guideBody(topic)).toContain(section.spec.headings[0]);
+      const body = section.body.split(section.spec.endMarker).join("").trim();
+      const expected = section.reference ? `${body}\n\n${section.reference.trim()}` : body;
+      expect(`${topic.slug}: ${guideText(topic)}`).toBe(`${topic.slug}: ${expected}`);
+      expect(guideText(topic)).toContain(section.spec.headings[0]);
     }
   });
 
@@ -84,7 +85,7 @@ describe("cast guide", () => {
     expect(run.status).toBe(0);
     const [header] = run.stdout.split("\n");
     expect(header).toBe(guideHeader("browser"));
-    expect(run.stdout).toContain(guideBody(snippetBySlug("browser")!));
+    expect(run.stdout).toContain(guideText(snippetBySlug("browser")!));
   }, 60_000);
 
   test("`cast guide --list` names every topic and the binary serving them", () => {
