@@ -283,6 +283,13 @@ export interface Config extends CloudSessionSyncSettings {
   // repository, CODECAST_SESSION_TRAILER=0 in one environment.
   session_trailer?: boolean;
 
+  // --- Subagent fleet (shared/contracts/subagentFleet.ts) ---
+  // How many `cast spawn --subagent` workers one session (default 4) and this
+  // machine (default 8) run at once; a spawn past either waits in a queue.
+  // `cast config subagents.per_session 6`. Also the default `--max` of
+  // `cast plan orchestrate` and `autopilot`.
+  subagents?: { per_session?: number; per_machine?: number };
+
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;
   updated_at?: string;

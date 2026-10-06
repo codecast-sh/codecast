@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { LogoMark } from "./Logo";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { cn } from "../lib/utils";
 import { onLanePage } from "./simple/laneBoot";
 
@@ -55,6 +57,32 @@ export function AppLoader({
         )}
       </div>
       {label && <div className="text-sm text-sol-text-dim">{label}</div>}
+    </div>
+  );
+}
+
+/** How long a boot may sit on the mark before it says so. */
+const SLOW_BOOT_MS = 8_000;
+
+/**
+ * Said under the boot loader once a cold load has run long (a slow device,
+ * a busy machine, a large cache): one calm line and a way out, so a loader
+ * that will not finish never reads as a dead site. Fixed below the mark, so
+ * the loader itself does not move.
+ */
+export function SlowBootNote() {
+  const [slow, setSlow] = useState(false);
+  useMountEffect(() => {
+    const t = window.setTimeout(() => setSlow(true), SLOW_BOOT_MS);
+    return () => window.clearTimeout(t);
+  });
+  if (!slow) return null;
+  return (
+    <div className="fixed inset-x-0 top-[calc(50%+56px)] flex flex-col items-center gap-2 text-center" data-slow-boot>
+      <p className="text-sm text-sol-text-dim">Still loading your conversations…</p>
+      <button type="button" onClick={() => window.location.reload()} className="text-sm text-sol-text-muted underline decoration-sol-border underline-offset-4 hover:text-sol-text">
+        Reload
+      </button>
     </div>
   );
 }

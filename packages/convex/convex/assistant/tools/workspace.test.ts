@@ -13,11 +13,11 @@ import type { Id } from "../../_generated/dataModel";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { codecastTools } from "./codecast";
 import { MEMORY_DOC_TITLE } from "./workspace";
-import { connectionNote, toolsFor } from "./index";
+import { connectionNote, MAIL_COMING_NOTE, toolsFor } from "./index";
 import { SEARCH_MAX_PER_TURN } from "./web";
 import { sealWhiskToken, type WhiskAccess } from "../../whisk";
 import { WHISK_PROVIDER } from "../../lib/whisk";
-import { fakeWhisk } from "./whisk.testkit";
+import { fakeWhisk } from "@platform/assistant/testkit";
 
 setDefaultTimeout(120_000);
 
@@ -390,7 +390,7 @@ async function withEnv<T>(vars: Record<string, string | undefined>, fn: () => Pr
   }
 }
 const SECRET = "whisk-app-secret";
-const WHISK_ENV = { WHISK_APP_SECRET_CODECAST: SECRET, WHISK_CONVEX_URL: "https://fox.convex.cloud" };
+const WHISK_ENV = { WHISK_APP_SECRET_CODECAST: SECRET, WHISK_CONVEX_URL: "https://fox.convex.cloud", WHISK_CONNECT_OPEN: "1" };
 const EVERY_SCOPE = ["mail.read", "mail.draft", "mail.send", "mail.organize", "calendar.read", "calendar.write"];
 const ALL = { read_mail: true, modify_mail: true, send_mail: true, calendar: true };
 const NOT_CONNECTED: WhiskAccess = { state: "not_connected" };
@@ -415,7 +415,17 @@ describe("toolsFor", () => {
       expect(names).toContain("fetch_page");
       expect(names.some((n) => ["search_mail", "list_events", "send_mail"].includes(n))).toBe(false);
       expect(set.note).toContain("has not connected their mail and calendar");
-      expect(set.note).toContain("Connections");
+      expect(set.note).toContain("Settings, under Integrations");
+    }));
+
+  test("while Connect is closed, the note says mail is coming soon and offers no button, the same answer the Connect gate gives", () =>
+    withEnv({ ...WHISK_ENV, WHISK_CONNECT_OPEN: undefined }, async () => {
+      const { t, user, conversationId, deps } = await setup();
+      const set = await toolsFor(deps, user, conversationId);
+      expect(await t.query(api.whisk.connectAvailable, {})).toBe(false);
+      expect(set.note).toBe(MAIL_COMING_NOTE);
+      expect(connectionNote({ state: "reconnect" } as WhiskAccess)).toBe(MAIL_COMING_NOTE);
+      for (const offer of ["Integrations", "A Connect button shows"]) expect(set.note).not.toContain(offer);
     }));
 
   test("on a server with no Whisk settings: no mail tools, and a note that offers nothing to connect", async () => {
@@ -424,7 +434,7 @@ describe("toolsFor", () => {
     const set = await withEnv({ WHISK_APP_SECRET_CODECAST: undefined, WHISK_CONVEX_URL: undefined }, () => toolsFor(deps, user, conversationId));
     expect(set.tools.some((x) => ["search_mail", "list_events", "send_mail"].includes(x.name))).toBe(false);
     expect(set.note).toContain("not available on this server");
-    expect(set.note).not.toContain("Connections");
+    expect(set.note).not.toContain("Integrations");
   });
 
   test("connected: every tool, nothing to offer, and every call carries the stored token to Whisk and nowhere else", () =>
@@ -453,7 +463,7 @@ describe("toolsFor", () => {
       expect(names.filter((n) => ["search_mail", "read_thread", "summarize_thread", "suggest_reply", "draft_reply", "send_mail", "archive", "list_events"].includes(n)))
         .toEqual(["search_mail", "read_thread", "summarize_thread"]);
       expect(set.note).toBe(
-        "Mail and calendar are connected through Whisk, but you cannot draft, archive or label mail, or send mail, or see or change their calendar. If they ask for that, offer to connect mail and calendar again from Connections.",
+        "Mail and calendar are connected through Whisk, but you cannot draft, archive or label mail, or send mail, or see or change their calendar. If they ask for that, offer to connect them again in Settings, under Integrations.",
       );
     }));
 
