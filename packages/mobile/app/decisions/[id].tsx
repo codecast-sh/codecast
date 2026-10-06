@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { Text, TextInput } from '@/components/Themed';
 import { Spacing, BorderRadius, themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
+import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
 import { openLink } from '@/lib/links';
 import { useInboxStore, type DecisionAnswerInput, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
@@ -92,6 +93,8 @@ export default function DecisionScreen() {
   const reportSlug = item ? item.reportSlug : row?.report_slug;
   const docBody = detail?.doc?.content?.trim();
   const otherText = draft.otherText ?? '';
+  // A typed answer is the rare path: its box opens on request, or holds a saved draft.
+  const writing = !!draft.otherOpen || !!otherText;
 
   const title = queued ? `${position + 1} of ${decideQueue.length}` : 'Decision';
 
@@ -125,19 +128,30 @@ export default function DecisionScreen() {
             </TouchableOpacity>
           ) : null}
 
-          {contextMd ? <MarkdownContent text={contextMd} baseStyle={styles.context} /> : null}
-          {docBody && docBody !== contextMd?.trim() ? <MarkdownContent text={docBody} baseStyle={styles.context} /> : null}
+          {/* The reasoning folds, so the answers stay in reach without scrolling. */}
+          {contextMd || (docBody && docBody !== contextMd?.trim()) ? (
+            <CollapsibleBody fadeColor={Theme.bg} height={150}>
+              {contextMd ? <MarkdownContent text={contextMd} baseStyle={styles.context} /> : null}
+              {docBody && docBody !== contextMd?.trim() ? <MarkdownContent text={docBody} baseStyle={styles.context} /> : null}
+            </CollapsibleBody>
+          ) : null}
           {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(pageUrl(reportSlug))} /> : null}
 
           <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} />
 
-          {kind === 'single' ? (
+          {kind === 'single' && !writing ? (
+            <TouchableOpacity onPress={() => patchDraft({ otherOpen: true })} hitSlop={8}>
+              <Text style={styles.footerText}>Answer in your own words</Text>
+            </TouchableOpacity>
+          ) : null}
+          {kind === 'single' && writing ? (
             <View style={styles.other}>
               <TextInput
                 style={[styles.input, styles.otherInput]}
                 value={otherText}
                 onChangeText={(t) => patchDraft({ otherText: t })}
-                placeholder="Or answer in your own words"
+                placeholder="Your answer"
+                autoFocus
                 placeholderTextColor={Theme.inputPlaceholder}
                 multiline
               />

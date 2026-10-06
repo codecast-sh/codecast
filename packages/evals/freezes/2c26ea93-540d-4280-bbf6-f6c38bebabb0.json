@@ -1,0 +1,26 @@
+{
+  "name": "guidance native-app",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:native-app"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:native-app",
+    "title": "guidance native-app"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/native-app.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "2c26ea93-540d-4280-bbf6-f6c38bebabb0",
+  "createdAt": "2026-10-06T21:49:07.289Z"
+}

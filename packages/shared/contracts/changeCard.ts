@@ -339,7 +339,8 @@ export const CARD_GATE_NODE_ID = "decide";
  *  run of another workflow with a station of the same name is told apart. */
 export type LineRunEnd = "shipped" | "dropped" | "dissolved" | "parked";
 const LINE_FIRST_NODE_ID = "ground";
-const LINE_END_NODES: Record<string, LineRunEnd> = { watch: "shipped", drop: "dropped", dissolve: "dissolved", park: "parked" };
+/** The stations that end a line run, and the end each means. */
+export const LINE_END_NODES: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped", dissolve: "dissolved", park: "parked" };
 
 /** Whether a run's stations are the line's (it started at ground). */
 export function isLineRun(nodes: ReadonlyArray<{ node_id: string }> | undefined): boolean {

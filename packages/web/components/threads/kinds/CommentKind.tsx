@@ -17,17 +17,12 @@ import { useReaderFold } from "../../../hooks/useReaderFold";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useConversationAgentType } from "../../../hooks/useConversationAgentType";
 // The comment kind: one comment thread on a session — anchored to a message,
 // to a code line, or to the conversation itself. The row names the session
 // and previews the newest reply (or the root comment while it has none);
 // open, the anchor line, then the whole thread through the same renderers
 // the conversation's rail uses, composer and agent ping included.
-
-function useAgentType(conversationId: string): string {
-  return useInboxStore(
-    (s) => ((s.conversations[conversationId] ?? s.sessions[conversationId]) as { agent_type?: string } | undefined)?.agent_type ?? "claude_code",
-  );
-}
 
 /** The label leads with the session's agent mark, the way an Inbox row does.
  *  The kind tile keeps the kind's own icon, so a scan down the page reads
@@ -35,7 +30,7 @@ function useAgentType(conversationId: string): string {
 export function CommentLabel({ card }: { card: ThreadCardModel }) {
   const row = rowOf(card);
   const { conversationId, filePath, lineNumber } = anchorOf(row);
-  const agentType = useAgentType(conversationId);
+  const agentType = useConversationAgentType(conversationId);
   const label = useInboxStore((s) => sessionLabel(s.conversations[conversationId] ?? s.sessions[conversationId]));
   // Never the literal word "Session": when the conversation is not cached,
   // the anchor still says what this thread is about.
@@ -108,7 +103,7 @@ export function CommentExpanded({ card, seen, frozenReadAt, focusComposer }: { c
   const comments = useCommentThreadRows(card);
   const { user, isAuthenticated } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
-  const agentType = useAgentType(conversationId);
+  const agentType = useConversationAgentType(conversationId);
   const actions = useCommentActions(conversationId);
 
   // The read law: the row is open and the reader is here (`seen`), and the

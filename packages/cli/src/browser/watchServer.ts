@@ -39,6 +39,8 @@ import {
 import { tmuxRunAsync } from "../tmux.js";
 import { cdpWatchEngine, type FrameSource, type WatchEngine } from "./watchSource.js";
 import { RecentActions, WATCH_PROTOCOL_VERSION } from "./watchActions.js";
+import { paneOwnerId } from "../tmuxRoute.js";
+import * as path from "node:path";
 
 export { resolveOwnedTab as resolveWatchTarget } from "./watchSource.js";
 
@@ -103,10 +105,10 @@ export async function ownerCandidates(
 // The hello runs on the daemon's loop, so the pane lookup is the async tmux
 // twin: a sync display-message held the loop for the whole spawn.
 export async function tmuxPaneId(tmuxSession: string): Promise<string | null> {
-  const r = await tmuxRunAsync(["display-message", "-p", "-t", tmuxSession, "-F", "#{pane_id}"]);
+  const r = await tmuxRunAsync(["display-message", "-p", "-t", tmuxSession, "-F", "#{pane_id}|#{socket_path}"]);
   if (r.status !== 0) return null;
-  const pane = r.stdout.trim();
-  return /^%\d+$/.test(pane) ? pane : null;
+  const [pane, socket] = r.stdout.trim().split("|");
+  return /^%\d+$/.test(pane ?? "") ? paneOwnerId(pane, path.basename(socket ?? "") || "default") : null;
 }
 
 export interface WatchServerDeps {

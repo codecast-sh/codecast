@@ -19,8 +19,16 @@
  */
 export const REMOTE_TMUX_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 
+/**
+ * An agent session may run on a tmux server of its own, listening on a socket
+ * named this prefix plus the session name (cli/src/tmuxRoute.ts). Whoever
+ * prints an attach command cannot tell which server holds the pane, so the
+ * command asks the session's own server first and the shared one after.
+ */
+export const TMUX_SESSION_SOCKET_PREFIX = "cast-";
+
 export function localTmuxAttachCommand(tmuxSession: string): string {
-  return `tmux attach -t '${tmuxSession}'`;
+  return `tmux -L '${TMUX_SESSION_SOCKET_PREFIX}${tmuxSession}' attach -t '${tmuxSession}' 2>/dev/null || tmux attach -t '${tmuxSession}'`;
 }
 
 /**

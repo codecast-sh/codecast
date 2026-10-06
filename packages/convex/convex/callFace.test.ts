@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { mirrorAgentTurn } from "./callChat";
 import { syncAgentFeeds } from "./transcripts";
-import { ask, brief, dispatchFace, FACE_HOST_AGENT, FACE_TOPIC, faceForAvatar, handleFaceRequest, join, leave, said, tell } from "./callFace";
+import { ask, brief, dispatchFace, FACE_HOST_AGENT, FACE_IDS, STYLIZED_FACES, FACE_TOPIC, faceForAvatar, handleFaceRequest, join, leave, said, tell } from "./callFace";
 import { makeFakeDb } from "./testDb";
 
 // An agent fed live into a huddle gets a face in the room when its team has
@@ -255,4 +255,8 @@ describe("the wire", () => {
     expect(sent[0].url).toBe("https://lk.example/twirp/livekit.RoomService/RemoveParticipant");
     expect(sent[0].body).toEqual({ room: "session:conv1", identity: "agent:conv1" });
   });
+});
+
+test("every face an agent can wear is photoreal", () => {
+  expect(FACE_IDS.filter((f) => STYLIZED_FACES.includes(f))).toEqual([]);
 });
