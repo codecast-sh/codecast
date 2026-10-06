@@ -12,7 +12,7 @@ export const HELP_SECTIONS: { when: string | undefined; label: string; accent: s
   { when: "changes", label: "Changes", accent: "bg-sol-green" },
   { when: "evals", label: "Evals", accent: "bg-sol-violet" },
   { when: "tasks", label: "Tasks", accent: "bg-sol-red" },
-  { when: "docs", label: "Documents", accent: "bg-sol-yellow" },
+  { when: "docs", label: "Docs", accent: "bg-sol-yellow" },
   { when: "evalsRun", label: "Eval run", accent: "bg-sol-violet" },
   { when: "evalsSim", label: "Multiplayer sim run", accent: "bg-sol-magenta" },
   { when: "line", label: "Line", accent: "bg-sol-blue" },

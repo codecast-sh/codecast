@@ -11,8 +11,9 @@ import { AgentTypeIcon } from "../AgentTypeIcon";
 import { SessionGlyph } from "../identity";
 import { ChevronRight } from "lucide-react";
 import {
-  agentNames,
   notificationActor,
+  notificationAgentName,
+  notificationTypeLabel,
   sessionLabel,
   showsAgentIcon,
   timeAgo,
@@ -78,7 +79,7 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
   const { name: actorName, avatar: actorAvatar } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
   const agentIcon = showsAgentIcon(notification);
-  const typeLabel = typeLabels[notification.type] || notification.type;
+  const typeLabel = notificationTypeLabel(notification.type, notification.conversation?.agent_type);
   const typeColor = typeColors[notification.type] || "text-sol-text-muted";
   const av = size === "page" ? "w-10 h-10" : "w-9 h-9";
 
@@ -124,7 +125,7 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
             {actorName ? (
               <span className="text-sm font-medium text-sol-text">{actorName}</span>
             ) : agentIcon ? (
-              <span className="text-sm font-medium text-sol-text">{agentNames[agentType] || agentType}</span>
+              <span className="text-sm font-medium text-sol-text">{notificationAgentName(agentType)}</span>
             ) : null}
             <span className={`text-xs ${typeColor}`}>{typeLabel}</span>
             <span className="text-xs text-sol-text-muted ml-auto flex-shrink-0">{timeAgo(notification.created_at)}</span>

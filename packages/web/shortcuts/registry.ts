@@ -49,6 +49,7 @@ export type ShortcutAction =
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
   | 'ui.openTours'
+  | 'ui.toggleLane'
   | 'ui.openSettings'
   | 'ui.undo'
   | 'ui.redo'
@@ -482,7 +483,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 't', action: 'doc.type', when: 'docs', description: 'Set doc type' },
   { key: 'l', action: 'doc.labels', when: 'docs', description: 'Edit labels' },
   { key: 'ctrl+e', mac: 'meta+e', action: 'doc.toggleEdit', when: 'docs', description: 'Toggle edit mode (doc page)' },
-  // One eval run in full (components/evals/RunView, evals-ui.md 4.4). The page
+  // One eval run in full (@platform/evals/react RunView, evals-ui.md 4.4). The page
   // activates the context while it is the active pane.
   { key: 'j', action: 'evalsRun.nextSeed', when: 'evalsRun', description: 'Next seed of this freeze in the batch' },
   { key: 'k', action: 'evalsRun.prevSeed', when: 'evalsRun', description: 'Previous seed of this freeze in the batch' },

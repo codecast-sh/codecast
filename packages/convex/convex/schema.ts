@@ -130,7 +130,13 @@ export default defineSchema({
     isAnonymous: v.optional(v.boolean()),
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
+    // Legacy mirror of the user's role in their first team (team creation
+    // writes "admin"). It grants nothing outside that team; platform-wide
+    // operator access is `staff`.
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
+    // Codecast operator: reads every user's daemon logs, sends daemon
+    // commands, sets system config. Granted only by migrations:setStaff.
+    staff: v.optional(v.boolean()),
     // Agent (non-human) account. Two flavors: a synthetic anchor identity (no
     // login; gives a standing agent member its own name/avatar in author chips
     // while a human host runs and bills the session — see anchors), or a full

@@ -250,6 +250,7 @@ import type * as lib_slackOutbound from "../lib/slackOutbound.js";
 import type * as lib_slackText from "../lib/slackText.js";
 import type * as lib_slug from "../lib/slug.js";
 import type * as lib_sourceHealth from "../lib/sourceHealth.js";
+import type * as lib_staff from "../lib/staff.js";
 import type * as lib_standingSeat from "../lib/standingSeat.js";
 import type * as lib_taskOwner from "../lib/taskOwner.js";
 import type * as lib_taskWrite from "../lib/taskWrite.js";
@@ -663,6 +664,7 @@ declare const fullApi: ApiFromModules<{
   "lib/slackText": typeof lib_slackText;
   "lib/slug": typeof lib_slug;
   "lib/sourceHealth": typeof lib_sourceHealth;
+  "lib/staff": typeof lib_staff;
   "lib/standingSeat": typeof lib_standingSeat;
   "lib/taskOwner": typeof lib_taskOwner;
   "lib/taskWrite": typeof lib_taskWrite;

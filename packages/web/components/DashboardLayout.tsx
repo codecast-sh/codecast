@@ -65,7 +65,10 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, filterInboxScope, isSub } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
+import { newConversationAgentType } from "../lib/defaultAgent";
+import { ConnectToast } from "./simple/ConnectNotice";
+import { Surface, useHostedMode, useModeWords, useSurface } from "../lib/surfaces";
 import { agentFleetCounts } from "../lib/liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
@@ -334,9 +337,9 @@ function HostFeeders() {
 }
 
 /** The store's feeders and write wiring for one window. Every shell that
- *  renders store data mounts this: the dashboard, and the simple lane
- *  (layouts/SimpleShell), which passes `windowEffects={false}` because call
- *  rings, chat toasts and mods belong to the full app's window. */
+ *  renders store data mounts this: the dashboard, and /welcome
+ *  (components/simple/LaneSync), which passes `windowEffects={false}` because
+ *  call rings, chat toasts and mods belong to the full app's window. */
 export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEffects?: boolean } = {}) {
   // Cross-window replication: elect a sync host, follow one, or run solo.
   // Everything below the feeder gate still runs in every window — toasts,
@@ -376,7 +379,7 @@ function SessionCommandResultsFeeder() {
  *  badge, the call surfaces. */
 function WindowOnlyEffects() {
   useChatToasts();
-  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /><ProfileSignInDialogHost /><ModRuntimes /></>;
+  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /><ProfileSignInDialogHost /><ModRuntimes /><ConnectToast /></>;
 }
 
 // The window's OS title: the surface, then the specific thing it shows,
@@ -392,7 +395,7 @@ function WindowOnlyEffects() {
 function useWindowTitle(path: string) {
   const { mentions } = useChatUnread();
   const title = useInboxStore((s) => {
-    const label = pathLabel(path);
+    const label = pathLabel(path, s.clientState.ui);
     // An inbox window titles by the session it is SHOWING (the store pointer);
     // the URL's ?s= deep link is the fallback inside tabTitle.
     const inboxish = path.startsWith("/inbox") || path.startsWith("/conversation");
@@ -438,7 +441,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.clientState.ui?.comments_enabled ?? false,
     s => resolveSimpleView(s.clientState.ui),
     s => resolveInboxCompact(s.clientState.ui),
-    s => s.clientState.ui?.visual_style,
+    s => resolveVisualStyle(s.clientState.ui),
     // Re-render the header toggle when comments change, so a teammate's comment on
     // the viewed conversation surfaces the toggle even with the tools off. Subscribe
     // to the comments map REF (O(1) Object.is compare), not a full scan: comments is
@@ -471,13 +474,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // its page. A hook: a window made from the warm spare becomes one after
   // it has mounted.
   const appWindow = useAppWindowRegistry();
+  // Hosted mode's surfaces and words (lib/surfaces.ts).
+  const terminalShown = useSurface("terminal");
+  const hostedMode = useHostedMode();
+  const words = useModeWords();
   // Shell display modes, as classes on the shell root and on anything that
   // portals out of it (the phone drawers), so the mode's scoped rules apply.
-  const shellModeClass = `${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`;
+  const shellModeClass = `${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}${hostedMode ? " hosted-mode" : ""}`;
   // The nav slot owns the sidebar's width (so a workbench restores it with the
   // rest of the chrome); the legacy layouts.dashboard value seeds it once for
   // users whose width predates the slot taking ownership.
-  const rawLayout = s.clientState.layouts?.dashboard ?? (s.clientState.ui?.visual_style === "minimal" ? { sidebar: 18, main: 82 } : DEFAULT_LAYOUT);
+  const rawLayout = s.clientState.layouts?.dashboard ?? (resolveVisualStyle(s.clientState.ui) === "minimal" ? { sidebar: 18, main: 82 } : DEFAULT_LAYOUT);
   const navSize = s.workspace.nav.size ?? rawLayout.sidebar ?? 25;
   const layout = {
     sidebar: Math.max(10, Math.min(50, navSize)),
@@ -486,6 +493,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Phone width (below 768px) as a live media query: the side rails become
   // slide-over drawers and the resizable panels stand down.
   const isMobile = useIsPhone();
+  const phoneHosted = hostedMode && isMobile;
+  const tabStripShown = useSurface("tabStrip");
   const pathname = usePathname();
   // The real browser URL from react-router. `pathname` (usePathname compat) can
   // report the active in-app tab's route instead — e.g. on Settings it returns a
@@ -772,8 +781,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // (the null-state ProjectSwitcher lets the user pick before sending).
   const handleNewFullSession = useCallback(() => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
-    const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const store = useInboxStore.getState();
+    // The selected conversation's agent carries over; the default
+    // (lib/defaultAgent) fills in, the hosted assistant in hosted mode.
+    const agentType = newConversationAgentType(store, rawAgent);
     const { stubId } = store.beginOptimisticSession({
       agentType,
       projectPath: path,
@@ -1001,7 +1012,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // pane holds the edge — a percent for the session list, pixels for the
   // comment rail — so only a plausibly-percent value is read here.
   const ctxSize = s.workspace.context.size;
-  const railSize = ctxSize !== undefined && ctxSize >= 5 && ctxSize <= 50 ? ctxSize : s.clientState.ui?.visual_style === "minimal" ? 22 : 30;
+  const HOSTED_RAIL_MAX_PX = 420;
+  const railSize = ctxSize !== undefined && ctxSize >= 5 && ctxSize <= 50 ? ctxSize : resolveVisualStyle(s.clientState.ui) === "minimal" ? 22 : 30;
   const railDragEchoRef = useRef<number | null>(railSize);
   const handleRightLayoutChange = useDragGatedLayoutPersist((newLayout) => {
     const size = newLayout["session-list"];
@@ -1085,7 +1097,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           corner button with no layout height. Own boundary: a bar crash must
           cost the bar, never the stage. */}
       <ErrorBoundary name="TriageBar" level="inline">
-        <TriageBar />
+        <Surface name="triageBar"><TriageBar /></Surface>
       </ErrorBoundary>
     </div>
   );
@@ -1104,7 +1116,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             id="session-list"
             panelRef={sessionListPanelRef}
             minSize={200}
-            maxSize="50%"
+            // Hosted mode's list sits beside the conversation, not over it: a
+            // width nobody chose stops at 420px (Whisk keeps a side list under
+            // about 380), so title and time stay close. A width the person
+            // dragged to is theirs.
+            maxSize={hostedMode && ctxSize === undefined ? HOSTED_RAIL_MAX_PX : "50%"}
             defaultSize={showSessionList ? railSize : 0}
             collapsible
             collapsedSize={0}
@@ -1186,9 +1202,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </ShortcutTooltip>
               </div>
             )}
-            <ErrorBoundary name="RecentlyViewedMenu" level="inline">
-              <RecentlyViewedMenu onSelectSession={sessionListOnSelect} />
-            </ErrorBoundary>
+            {/* Hosted mode's bar keeps room for New conversation: the
+                conversations panel and the palette already list what is
+                recent, so the history clock is the developer's. */}
+            {!hostedMode && (
+              <ErrorBoundary name="RecentlyViewedMenu" level="inline">
+                <RecentlyViewedMenu onSelectSession={sessionListOnSelect} />
+              </ErrorBoundary>
+            )}
           </>}
           workspace={<>
             <ErrorBoundary name="TeamSwitcher" level="inline">
@@ -1216,19 +1237,27 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <AccountUsageChip />
             </ErrorBoundary>
             <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
-            <ErrorBoundary name="DaemonStatusChip" level="inline">
-              <DaemonStatusChip />
-            </ErrorBoundary>
+            <Surface name="machineChips">
+              <ErrorBoundary name="DaemonStatusChip" level="inline">
+                <DaemonStatusChip />
+              </ErrorBoundary>
+            </Surface>
           </TopbarTray>}
           actions={<>
-            <ShortcutTooltip label="New session" action="session.create">
+            <ShortcutTooltip label={words.newConversation} action="session.create">
               <TopbarButton
                 onClick={(e) => {
                   openCompose();
                   tipActions.whisper('session.create', e);
                 }}
-                aria-label="New session"
-                desktopOnly
+                aria-label={words.newConversation}
+                // In hosted mode starting a conversation is the main thing,
+                // so the phone keeps it as the bar's one filled control. The
+                // fill is painted by globals.css ([data-cc-compose]), because
+                // the minimal style clears every top bar button's background
+                // with !important and no utility class can win against it.
+                desktopOnly={!hostedMode}
+                data-cc-compose=""
               >
                 <Plus />
               </TopbarButton>
@@ -1244,7 +1273,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ErrorBoundary>
           </>}
           panels={<>
-            {showCommentsToggle && (
+            {showCommentsToggle && !hostedMode && (
               <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
                 <TopbarButton
                   onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
@@ -1255,7 +1284,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </TopbarButton>
               </ShortcutTooltip>
             )}
-            {!isMobile && (
+            {!isMobile && terminalShown && (
               <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
                 <TopbarButton
                   onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
@@ -1270,18 +1299,20 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             {/* Detached tab window only: merge this surface back into the
                 main window as a tab (renders null everywhere else). */}
             <AttachTabButton />
-            <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
+            {/* On a hosted phone the conversations panel is its own screen,
+                reached from the inbox, so the bar drops its toggle. */}
+            {!phoneHosted && <ShortcutTooltip label={words.conversationsPanel} action="sidebar.toggleRight">
               <TopbarButton
                 onClick={(e) => {
                   if (isMobile) setIsMobileSessionListOpen((open) => !open);
                   else s.toggleSidePanel();
                   tipActions.whisper('sidebar.toggleRight', e);
                 }}
-                aria-label="Toggle sessions panel"
+                aria-label={words.conversationsPanel}
               >
                 <PanelRight />
               </TopbarButton>
-            </ShortcutTooltip>
+            </ShortcutTooltip>}
           </>}
         />
       </header>
@@ -1297,22 +1328,24 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <StatusNoticeStack />
         <ConnectionBanner />
         <StorageHealthBanner />
-        <NativeAppBanner />
-        <SetupPromptBanner />
+        <Surface name="banner.nativeApp"><NativeAppBanner /></Surface>
+        <Surface name="banner.setup"><SetupPromptBanner /></Surface>
         <NewSnippetsBanner />
         <OrgIntroAnywhere />
-        <CliOfflineBanner />
-        <ResourcePressureNotice />
-        <TmuxMissingBanner />
+        <Surface name="banner.cliOffline"><CliOfflineBanner /></Surface>
+        <Surface name="banner.resourcePressure"><ResourcePressureNotice /></Surface>
+        <Surface name="banner.tmuxMissing"><TmuxMissingBanner /></Surface>
         <NotificationNudgeBanner />
         <SharingSetupBanner />
         <TeamSharingNudgeBanner />
         <DeviceSetupDialog />
       </ErrorBoundary>
 
-      <ErrorBoundary name="TabBar" level="inline">
-        <TabBar />
-      </ErrorBoundary>
+      {tabStripShown && (
+        <ErrorBoundary name="TabBar" level="inline">
+          <TabBar />
+        </ErrorBoundary>
+      )}
 
       {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
           collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
@@ -1393,7 +1426,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {/* Integrated terminal, docked across the bottom (ctrl+`). Mounts lazily
           on first open, then stays mounted (hidden) so terminals survive
           close/reopen. Desktop-only surface. */}
-      {!isMobile && (
+      {!isMobile && terminalShown && (
         <ErrorBoundary name="TerminalPanel" level="panel">
           <TerminalDock />
         </ErrorBoundary>
@@ -1434,7 +1467,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </ErrorBoundary>
         </MobileDrawer>
       )}
-      <MobileDrawer open={showMobileSessionList} onOpenChange={setIsMobileSessionListOpen} side="right" title="Sessions" className={shellModeClass}>
+      <MobileDrawer open={showMobileSessionList} onOpenChange={setIsMobileSessionListOpen} side="right" title={words.conversations} className={shellModeClass}>
         <ErrorBoundary name="SessionList" level="panel">
           <SessionListPanel
             onSessionSelect={selectFromMobileSessionList}
