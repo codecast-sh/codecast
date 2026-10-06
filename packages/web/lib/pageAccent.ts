@@ -8,7 +8,7 @@ export function pageAccent(path: string): string {
   if (path.startsWith("/plans")) return "var(--sol-cyan)";
   if (path.startsWith("/docs")) return "var(--sol-green)";
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return "var(--sol-orange)";
-  if (path.startsWith("/initiatives")) return "var(--sol-magenta)";
+  if (currentPagePath(path).startsWith("/goals")) return "var(--sol-magenta)";
   if (path.startsWith("/projects")) return "var(--sol-text-muted)";
   if (isOpsPath(path)) return "var(--sol-red)";
   return "var(--sol-cyan)";

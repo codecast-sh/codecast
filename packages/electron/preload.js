@@ -77,6 +77,11 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // vocabulary. Kept out of getOsPermissions because one read runs the CLI and
   // takes seconds; `openOsPermissionSettings` covers both kinds too.
   getComputerPermissions: () => ipcRenderer.invoke("get-computer-permissions"),
+  // The CLI and daemon on this machine (daemonSetup.js). getDaemonSetup:
+  // { supported, installed, linked, running }. runDaemonSetup(token) runs the
+  // installer with a setup token the page minted: { ok } or { ok: false, error }.
+  getDaemonSetup: () => ipcRenderer.invoke("get-daemon-setup"),
+  runDaemonSetup: (token) => ipcRenderer.invoke("run-daemon-setup", token),
   // The people window: the floating buddy list (route /people). One per app —
   // openPeopleWindow focuses the existing one. `isPeopleWindow` tells this
   // renderer it IS that window, so it draws the panel and mounts the call and

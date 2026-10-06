@@ -19,7 +19,7 @@ import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
-import { useDecisionQueue } from "../hooks/useDecisionQueue";
+import { useScopedDecisionQueue } from "../hooks/useDecisionQueue";
 import { waitingOnPerson } from "../lib/decisionQueue";
 import { chatUnreadTotals, useChatRail, useChatMembers, supersededChannelId } from "../hooks/useChatSync";
 import { useOpenDm } from "../hooks/useOpenDm";
@@ -47,7 +47,9 @@ import { AppPopOutButton } from "./desktop/AppPopOutButton";
 import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
+import { ShellUsageMeter } from "./plan/UsageMeter";
 import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "./sidebar/SidebarNav";
+import { Surface, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
 import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -125,9 +127,13 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   // prompt. Counting only decisions hid this row at zero while the queue still
   // had work — removing the only way in. One hook defines "pending" for both.
   // Minus the rows a lead holds under a grant: those are the lead's to clear.
-  const pending = waitingOnPerson(useDecisionQueue()).length;
-  if (pending === 0) return null;
-  return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
+  // In hosted mode's Assistant scope, only the assistant's asks count, as the
+  // page lists them (useScopedDecisionQueue).
+  const pending = waitingOnPerson(useScopedDecisionQueue()).length;
+  const words = useModeWords();
+  const onlyWhenWaiting = useSurface("rail.questionsOnlyWhenWaiting");
+  if (pending === 0 && onlyWhenWaiting) return null;
+  return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} label={words.questionsPage} tip={words.questionsTip} />;
 });
 
 // The Threads inbox's row: every conversation you are in, across chat, session
@@ -600,6 +606,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // The workspace's agent is its root role (org-staffing.md S22): the rail
   // shows it by its name and face, and the entry opens its page.
   const rootAgent = useRootAgent();
+  // Hosted mode's rows and words (lib/surfaces.ts).
+  const surfaceMode = useSurfaceMode();
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -613,7 +621,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
-  const isInitiatives = pathname === "/initiatives" || pathname?.startsWith("/initiatives/");
+  const isInitiatives = pathname === "/goals" || pathname?.startsWith("/goals/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
@@ -966,6 +974,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           />
         )}
         <SidebarNavView
+          mode={surfaceMode}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
@@ -1052,7 +1061,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           }}
         />
 
-        <ModSidebarSections isNarrow={isNarrow} />
+        <Surface name="mods.sidebar">
+          <ModSidebarSections isNarrow={isNarrow} />
+        </Surface>
 
         {scope === "work" ? null : (<>
 
@@ -1220,6 +1231,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       <div data-sidebar-scroll className="flex-1 overflow-y-auto scrollbar-auto pt-3 sm:pt-4">
         {sidebarContent}
       </div>
+      {/* Hosted mode's quiet usage meter: the month so far, opening Plan. */}
+      {!isNarrow && <ShellUsageMeter />}
       {offerNativeApp && nativeApp && !isNarrow && (
         <a
           href={NATIVE_APP_LINKS[nativeApp]}

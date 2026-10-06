@@ -76,7 +76,7 @@ export function RoleScopeView({ model, density, renderLead, renderInitiative, on
   return (
     <div className={cn(card ? "grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2.5 gap-y-2 text-[11px] leading-snug" : "space-y-5", className)} data-role-scope={density}>
       {model.initiatives.length > 0 && (
-        <Section density={density} label="Initiatives" name="initiatives">
+        <Section density={density} label="Goals" name="initiatives">
           <ul className={card ? "space-y-0.5" : "space-y-0.5"}>
             {model.initiatives.map((i) => <li key={i.id}><InitiativeRowView i={i} density={density} now={now} /></li>)}
           </ul>

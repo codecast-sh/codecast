@@ -109,7 +109,7 @@ export function InitiativePageInner({ id }: { id: string }) {
       tab={tab}
       onTab={setTab}
       onClose={conversationId ? () => setPanelOpen(false) : undefined}
-      closeLabel={layout === "sheet" ? "Back to the conversation" : "Close the initiative"}
+      closeLabel={layout === "sheet" ? "Back to the conversation" : "Close the goal"}
     />
   );
 
@@ -119,14 +119,14 @@ export function InitiativePageInner({ id }: { id: string }) {
         key={initiative._id}
         // the stripe says how it is going, in the colour of the owner's last word
         stripeColor={initiative.health === "none" ? INITIATIVE_ACCENT : HEALTH_COLOR[initiative.health]}
-        back={{ href: "/initiatives", label: "Back to initiatives" }}
+        back={{ href: "/initiatives", label: "Back to goals" }}
         glyph={<Flag className="w-4 h-4 shrink-0" style={{ color: INITIATIVE_ACCENT }} />}
         title={initiative.title}
         onRename={(title) => useInboxStore.getState().updateInitiative(initiative._id, { title })}
-        renameLabel="Initiative title"
+        renameLabel="Goal title"
         titleData={{ "data-initiative-title": "" }}
         idChip={initiative.short_id ? <IntentIdChip id={initiative.short_id} /> : null}
-        share={<ShareControl label="initiative" path={`/initiatives/${initiative.short_id || initiative._id}`} publicShare={{ kind: "initiative", id: initiative._id, token: (initiative as any).share_token }} />}
+        share={<ShareControl label="goal" path={`/initiatives/${initiative.short_id || initiative._id}`} publicShare={{ kind: "initiative", id: initiative._id, token: (initiative as any).share_token }} />}
         phone={phone}
         // Line two: status, who drives it, how it is going, when it is due, how
         // far along, the number against its target, and the next milestone.
@@ -146,18 +146,18 @@ export function InitiativePageInner({ id }: { id: string }) {
           <OriginLine initiativeId={initiative._id} />
         </>}
         actions={conversationId && (
-          <ShortcutTooltip label={panelOpen ? "Close the initiative" : `Open the initiative: ${progressPercent(progress)}% done`} side="bottom">
+          <ShortcutTooltip label={panelOpen ? "Close the goal" : `Open the goal: ${progressPercent(progress)}% done`} side="bottom">
             <button
               type="button"
               onClick={() => setPanelOpen((v) => !v)}
               className={cn("shrink-0 h-[32px] inline-flex items-center justify-center gap-1.5 rounded-lg text-[12.5px] font-medium transition-colors hover:bg-sol-bg-highlight/70", phone ? "w-[32px]" : "px-3", panelOpen && "bg-sol-bg-highlight/60")}
               style={{ border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", color: panelOpen ? "var(--sol-text)" : "var(--sol-text-muted)" }}
               aria-pressed={panelOpen}
-              aria-label={phone ? "Initiative" : undefined}
+              aria-label={phone ? "Goal" : undefined}
               data-initiative-panel-toggle={panelOpen ? "open" : "closed"}
             >
               {panelOpen ? <PanelRightClose className="w-3.5 h-3.5" /> : <PanelRightOpen className="w-3.5 h-3.5" />}
-              {!phone && "Initiative"}
+              {!phone && "Goal"}
             </button>
           </ShortcutTooltip>
         )}
@@ -203,11 +203,11 @@ function NotFound({ id, loading }: { id: string; loading: boolean }) {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: "var(--sol-bg)" }} data-initiative-missing>
       {loading ? (
-        <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Loading the initiative…</p>
+        <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Loading the goal…</p>
       ) : (
         <>
           <Flag className="w-8 h-8" style={{ color: "var(--sol-text-dim)" }} />
-          <p className="text-[14px]" style={{ color: "var(--sol-text)" }}>No initiative <span style={{ fontFamily: "var(--font-mono)" }}>{id}</span> in this workspace.</p>
+          <p className="text-[14px]" style={{ color: "var(--sol-text)" }}>No goal <span style={{ fontFamily: "var(--font-mono)" }}>{id}</span> in this workspace.</p>
           <p className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>It may belong to another team. Switch the workspace or go back to the list.</p>
           <Link href="/initiatives" className="mt-1 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12.5px] font-medium" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)" }}><ArrowLeft className="w-3.5 h-3.5" /> Initiatives</Link>
         </>

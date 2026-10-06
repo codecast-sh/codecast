@@ -12,6 +12,16 @@ import { modTabLabel, objectTabLabel } from "./mods/label";
 import { weekMonday } from "@codecast/shared/changes";
 import { codecastEvalsPaths } from "../components/evals/evalsPaths";
 import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
+import { modePageLabel } from "./surfaceRules";
+import { isHostedUi } from "../components/simple/lanePaths";
+
+/** The mode's name for the page at `path` under this client_state.ui, or
+ *  null when the page is named the same in both modes. A label that a stored
+ *  title or record would otherwise win reads this first, since the stored
+ *  name was stamped in whichever mode opened the page. */
+export function modePathLabel(path: string, ui?: { lane?: string } | null): string | null {
+  return modePageLabel(path, isHostedUi(ui));
+}
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -23,7 +33,9 @@ const REPO_SECTION_LABEL: Record<string, string> = {
   search: "Search",
 };
 
-export function pathLabel(path: string): string {
+/** `ui` is client_state.ui, for the pages named by mode (modePathLabel);
+ *  absent reads as developer mode. */
+export function pathLabel(path: string, ui?: { lane?: string } | null): string {
   // A browser pane is named by what it shows — the page's title once a
   // backend could read one, else the host ("localhost:3000"). "Browser" would
   // make three open pages three identical tabs.
@@ -32,7 +44,7 @@ export function pathLabel(path: string): string {
   // (/inbox?s=<id>) must label as "Inbox" — before this, the raw
   // "inbox?s=jx7…" leaked into tab titles. The /files branch below still reads
   // the original path because its label lives IN the query (?f=<file>).
-  const clean = path.split("?")[0].split("#")[0];
+  const clean = currentPagePath(path.split("?")[0].split("#")[0]);
   if (clean.startsWith("/conversation/")) return "Conversation";
   if (clean.startsWith("/calls/")) return "Call";
   // /chat/threads is the pre-move alias of /threads — old saved tabs keep it.
@@ -48,8 +60,8 @@ export function pathLabel(path: string): string {
   if (clean.startsWith("/projects/") && clean.split("/")[2] && !/^pj-\d+$/i.test(clean.split("/")[2])) return "Project";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
-  // An initiative titles by its `in-N`, the handle people quote (initiatives-projects-role-page.md I1).
-  if (clean.startsWith("/initiatives/")) return /^in-\d+$/i.test(clean.split("/")[2] ?? "") ? `Initiative ${clean.split("/")[2].toLowerCase()}` : "Initiative";
+  // A goal titles by its `in-N`, the handle people quote (initiatives-projects-role-page.md I1).
+  if (clean.startsWith("/goals/")) return /^in-\d+$/i.test(clean.split("/")[2] ?? "") ? `Goal ${clean.split("/")[2].toLowerCase()}` : "Goal";
   // A decision's document page and a stack (docs/architecture/decisions-as-
   // documents.md D4, D5) title by their short id, the handle people quote.
   if (clean.startsWith("/decisions/stacks/")) return clean.split("/")[3] ? `Stack ${clean.split("/")[3]}` : "Stack";
@@ -67,6 +79,7 @@ export function pathLabel(path: string): string {
   // return to day mode, else a day ("Changes, Fri 2 Oct"). With neither in
   // the query it is today's, and the bare name says so.
   if (clean === "/mods") return "Mods";
+  if (clean === "/agent-features") return "Agent features";
   if (clean.startsWith("/m/")) return modTabLabel(clean);
   if (clean.startsWith("/objects/") || clean.startsWith("/o/")) return objectTabLabel(clean);
   if (clean === "/changes") {
@@ -139,14 +152,14 @@ export function pathLabel(path: string): string {
     "/line": "The line",
     "/line/settings": "Line settings",
     "/org": "Org",
-    "/initiatives": "Initiatives",
+    "/goals": "Goals",
     "/chat": "Chat",
     "/community": "Community",
     "/threads": "Threads",
     "/settings": "Settings",
     "/team/activity": "Activity",
   };
-  return segments[clean] || clean.split("/").pop() || "Tab";
+  return modePathLabel(clean, ui) || segments[clean] || clean.split("/").pop() || "Tab";
 }
 
 /** The session an /inbox?s=<id> tab is pinned to, if any. */

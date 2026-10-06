@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { FileClock, MessageSquareText, Unplug } from "lucide-react";
 import { MACHINE_SETTINGS, type HarnessHook, type MachineSetting } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useRouter } from "next/navigation";
 import { AGENT_HOOKS, FUNCTIONAL_HOOKS, deviceHookInstalled, hookFeatureName } from "../../../lib/harnessHooksView";
 import { Switch } from "../../../components/ui/switch";
 import { Button } from "../../../components/ui/button";
@@ -141,13 +142,21 @@ function HooksSection({ d, panel }: { d: Device; panel: ReturnType<typeof useDev
  * entry's CLAUDE.md section, so this section explains and points there.
  */
 function AgentHooksSection({ d }: { d: Device }) {
+  const router = useRouter();
   return (
     <SettingsSection
       title="Hooks that shape the agent"
       icon={MessageSquareText}
       description="These add text the agent reads, or hold a turn open for one more step. Each one belongs to a feature in Agent Features: turn the feature off there and its hook goes with it."
       actions={
-        <Button size="sm" variant="ghost" onClick={() => useInboxStore.getState().openSettingsModal("agent-features")}>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            useInboxStore.getState().closeSettingsModal();
+            router.push("/agent-features");
+          }}
+        >
           Agent Features
         </Button>
       }

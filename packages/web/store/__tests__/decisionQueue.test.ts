@@ -265,6 +265,40 @@ describe("answering a decision", () => {
     expect(useInboxStore.getState().sessionDecisions.d3.status).toBe("dismissed");
     expect(useInboxStore.getState().pendingMessages[convId] ?? []).toHaveLength(0);
   });
+
+  // A role on the ladder heard it first (S28), so no inbox row put it in the
+  // viewer's queue; they are still one of its people and answer from its page.
+  it("answers from the document page when the viewer holds it but their queue lacks it", async () => {
+    const convId = convexId("conv4");
+    const me = convexId("me");
+    const row = decision("d4", { conversation_id: convId, holder: { kind: "user", id: me } } as any);
+    useInboxStore.setState({
+      currentUser: { _id: me },
+      decisionDetails: { d4: { _id: "d4", decision: row, asked_users: [{ _id: me, name: "Ashot" }] } },
+    } as any);
+
+    useInboxStore.getState().adoptDecision("d4");
+    useInboxStore.getState().answerDecision("d4", { index: 1 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const after = useInboxStore.getState().sessionDecisions.d4;
+    expect(after.status).toBe("answered");
+    expect(after.answer_index).toBe(1);
+    const sent = (useInboxStore.getState().pendingMessages[convId] ?? []).find((m: any) => m.content.startsWith("Decision: No"));
+    expect(sent).toBeDefined();
+  });
+
+  it("does not adopt a decision the viewer was not asked", () => {
+    const row = decision("d5", { holder: { kind: "user", id: "someone" } } as any);
+    useInboxStore.setState({
+      currentUser: { _id: convexId("me") },
+      decisionDetails: { d5: { _id: "d5", decision: row, asked_users: [{ _id: "someone", name: "Jason" }] } },
+    } as any);
+
+    useInboxStore.getState().adoptDecision("d5");
+    useInboxStore.getState().answerDecision("d5", { index: 0 });
+    expect(useInboxStore.getState().sessionDecisions.d5).toBeUndefined();
+  });
 });
 
 // The local-first question resolution overlay: answering or dismissing an

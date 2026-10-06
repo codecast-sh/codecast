@@ -43,14 +43,32 @@ test("clicking the Cloud Linux chip hands that machine to onPick", () => {
 });
 
 test("a sleeping cloud host says it boots on start, not that it falls back", () => {
-  expect(machineChipTitle(cloud)).toContain("asleep");
-  expect(machineChipTitle(cloud)).not.toContain("fall back");
-  expect(machineChipTitle({ ...laptop, online: false })).toContain("fall back");
+  expect(machineChipTitle(cloud, [laptop, cloud])).toContain("asleep");
+  expect(machineChipTitle(cloud, [laptop, cloud])).not.toContain("fall back");
+  expect(machineChipTitle({ ...laptop, online: false }, [laptop, cloud])).toContain("fall back");
   const { host, unmount } = mount(
     <MachineChips machines={[laptop, cloud]} selectedDeviceId="cloud" open onOpen={() => {}} onPick={() => {}} />,
   );
   const chip = Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.includes("Cloud Linux"));
   expect(chip?.getAttribute("title")).toContain("asleep");
+  unmount();
+});
+
+test("same-named cloud hosts read apart: the dead one says gone, the sleeping one how long", () => {
+  const report = (at: number) => ({ managed_by: "laptop", instance_id: "i-1", provider: "aws" as const, state: "stopped" as const, images: [], logins_held: [], at });
+  const now = Date.now();
+  const live = { ...cloud, device_id: "live", online: true, last_seen: now, cloud_host: { ...report(now), state: "running" as const, region: "us-west-2" } };
+  const asleep = { ...cloud, device_id: "asleep", last_seen: now - 3 * 86_400_000, cloud_host: report(now) };
+  const dead = { ...cloud, device_id: "dead", last_seen: now - 14 * 86_400_000, cloud_host: report(now - 14 * 86_400_000) };
+  const { host, unmount } = mount(
+    <MachineChips machines={[laptop, live, asleep, dead]} selectedDeviceId="laptop" open onOpen={() => {}} onPick={() => {}} />,
+  );
+  const labels = Array.from(host.querySelectorAll("button")).map((b) => b.textContent);
+  expect(labels).toContain("Cloud Linux · us-west-2");
+  expect(labels).toContain("Cloud Linux · asleep 3d");
+  expect(labels).toContain("Cloud Linux · gone");
+  const deadChip = Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.includes("gone"));
+  expect(deadChip?.getAttribute("title")).toContain("no longer exists");
   unmount();
 });
 
