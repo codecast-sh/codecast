@@ -8,8 +8,9 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { ArrowLeft, Check, Layers, ShieldCheck, Undo2, User } from "lucide-react";
-import { useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
+import { mayAnswerFromDocument, useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
+import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatTimeAgo } from "../../lib/messageNavigator";
@@ -39,14 +40,17 @@ export function DecisionDocument({ id }: { id: string }) {
   const { ready, missing } = useSyncDecisionDetail(id);
   const detail = useDecisionDetail(id);
   const liveRow = useInboxStore((s) => (detail ? s.sessionDecisions[detail._id] : undefined));
+  const meId = useInboxStore((s) => String(s.currentUser?._id ?? ""));
   if (!detail) {
     if (missing && ready) return <Empty text="This decision does not exist, or it is not yours to read." />;
     return <AppLoader />;
   }
-  // The store row is the one the viewer may answer; the detail's copy is the
-  // server's read for viewers who only have read access.
+  // The store row is the queue's; the detail's copy is the server's read. A
+  // person the decision was asked of answers either way: a role on the
+  // ladder that heard it first keeps it out of their queue, not out of
+  // their hands (onAnswer adopts the detail's copy first).
   const decision: SessionDecisionItem = liveRow ?? detail.decision;
-  return <DocumentBody decision={decision} detail={detail} answerable={!!liveRow} />;
+  return <DocumentBody decision={decision} detail={detail} answerable={!!liveRow || mayAnswerFromDocument(detail, meId)} />;
 }
 
 function Empty({ text }: { text: string }) {
@@ -67,6 +71,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const reopenDecision = useInboxStore((st) => st.reopenDecision);
   const grant = useMutation(api.sessionDecisions.grant);
   const now = useCoarseNow(30_000);
+  // A card's cause task may carry the author's change guide; its evidence row holds it.
+  const cardTask = decision.card?.cause.task ?? null;
+  useSyncTaskEvidence(cardTask);
+  const guide = useTaskEvidenceByShortId(cardTask)?.change_guide ?? null;
   const pending = decision.status === "pending";
   const rec = ladderRecommendation(decision);
   // Single, multi and rank answer on the option rows themselves; a form
@@ -81,8 +89,12 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const verdictBar = (answerInOptions || changeCourse) && !!cardAnswerIndexes(decision);
   const chosen = new Set<number>(chosenOptions(decision));
 
-  const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
-  const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
+  const adoptDecision = useInboxStore((st) => st.adoptDecision);
+  const onAnswer = useCallback((input: DecisionAnswerInput) => {
+    adoptDecision(decision._id);
+    answerDecision(decision._id, input);
+  }, [adoptDecision, answerDecision, decision._id]);
+  const onDismiss = useCallback(() => onAnswer({ dismiss: true }), [onAnswer]);
   // The store action flips the row on the draft (the page re-renders as
   // pending at once); the reopenDecision side effect does the server write.
   const onReopen = useCallback(() => {
@@ -224,7 +236,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* The agent's own context reads right under the card, before the facts. */}
         {decision.card && (
           <section className="mt-6">
-            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} summarized={verdictBar} />
+            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} summarized={verdictBar} guide={guide} />
             {body && <div className="mt-6">{body}</div>}
             {meta}
           </section>

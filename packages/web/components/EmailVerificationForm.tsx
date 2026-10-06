@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { useAuthActions } from "@convex-dev/auth/react";
+import { useEmailCode } from "../hooks/useEmailAuth";
 import { Logo } from "./Logo";
 
 /**
@@ -8,7 +7,8 @@ import { Logo } from "./Logo";
  * Shown when the backend requires email verification (Password provider's
  * `verify` option): `signIn(..., { flow: "signUp" | "signIn" })` resolves with
  * `signingIn: false` after emailing an OTP, and this form completes the flow
- * with `flow: "email-verification"`. Styled to match the auth cards.
+ * with `flow: "email-verification"` (useEmailCode). Styled to match the auth
+ * cards; /welcome draws the same step in its own look.
  */
 export function EmailVerificationForm({
   email,
@@ -19,23 +19,7 @@ export function EmailVerificationForm({
   onVerified: () => void;
   onBack: () => void;
 }) {
-  const [code, setCode] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const { signIn } = useAuthActions();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      await signIn("password", { email, code: code.trim(), flow: "email-verification" });
-      onVerified();
-    } catch {
-      setError("Invalid or expired code. Check the email and try again.");
-      setLoading(false);
-    }
-  };
+  const { code, setCode, error, loading, ready, submit: handleSubmit } = useEmailCode(email, onVerified);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
@@ -71,7 +55,7 @@ export function EmailVerificationForm({
             required
             maxLength={6}
             value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onChange={(e) => setCode(e.target.value)}
             className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim font-mono tracking-[0.5em] text-center text-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
             placeholder="XXXXXX"
           />
@@ -80,7 +64,7 @@ export function EmailVerificationForm({
 
           <button
             type="submit"
-            disabled={loading || code.trim().length < 6}
+            disabled={loading || !ready}
             className="w-full mt-6 py-3 px-4 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
           >
             {loading ? "Verifying..." : "Verify Email"}

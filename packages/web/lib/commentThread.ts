@@ -5,6 +5,9 @@
 // A thread is the set of comments sharing the same anchor — that's the unit a
 // teammate (or the agent) chats in.
 
+import { agentDisplayName } from "@codecast/shared/contracts";
+import type { CodeAnchorText } from "@codecast/shared/comments";
+
 // The server's thread identity (thread_reads root keys) and the one normalizer
 // from its anchor key to this file's thread key, shared with the Threads page.
 export {
@@ -33,6 +36,9 @@ export type Comment = {
   // Durable code anchor: a comment left on one line of a file in a diff.
   file_path?: string | null;
   line_number?: number | null;
+  // The line's text and context when it was written, to find it again after
+  // the code moves (shared/comments/codeAnchor.ts).
+  anchor_lines?: CodeAnchorText | null;
   // Thread resolution: stamped on every comment of a resolved thread. A thread
   // is open while any of its comments is unstamped, so a reply posted after
   // resolution reopens it.
@@ -131,14 +137,6 @@ export function groupComments(comments: Comment[]): { global: CommentThread; anc
 
 export function isAgentComment(c: Comment): boolean {
   return c.author_kind === "agent";
-}
-
-// The agent's product name (short), so a reply reads "Claude"/"Codex" — not "Agent".
-export function agentDisplayName(agentType?: string): string {
-  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  return "Claude";
 }
 
 export function commentAuthorName(c: Comment, currentUserId?: string, agentType?: string): string {

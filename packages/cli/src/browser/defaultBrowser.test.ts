@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
-import { BROWSER_EXTENSION_STORE_URL, BROWSER_SNIPPET, renderSectionBody, snippetBySlug } from "@codecast/shared/contracts";
+import { BROWSER_EXTENSION_STORE_URL, BROWSER_SNIPPET, guideText, renderSectionBody, snippetBySlug } from "@codecast/shared/contracts";
 
 const dirs: string[] = [];
 const test = (name: string, fn: () => void | Promise<unknown>) => bunTest(name, fn, 30_000);
@@ -226,7 +226,6 @@ test("full and short agent instructions make separate Chrome a last resort", () 
     expect(text).toContain("last resort");
     expect(text).toContain("explicit permission");
     expect(text).toContain("extension");
-    expect(text).toContain(BROWSER_EXTENSION_STORE_URL);
     expect(text).not.toContain("your own Chrome is never touched");
     expect(text).not.toContain("start --fresh");
     expect(text).not.toContain("start --remote");
@@ -235,11 +234,14 @@ test("full and short agent instructions make separate Chrome a last resort", () 
   expect(BROWSER_SNIPPET).not.toContain("target clone");
   expect(BROWSER_SNIPPET).not.toContain("help start");
   expect(BROWSER_SNIPPET).toContain("another agent");
-  expect(BROWSER_SNIPPET).toContain("Connection checks and tab lists create nothing");
   expect(BROWSER_SNIPPET).toContain("unless the human still needs them");
   expect(BROWSER_SNIPPET).toContain("Close tabs you opened");
-  expect(BROWSER_SNIPPET).toContain("abandoned Cast tab already on that URL");
-  expect(BROWSER_SNIPPET).toContain("cast read");
+  // Detail an install leaves to `cast guide browser`.
+  const guide = guideText(snippetBySlug("browser")!);
+  expect(guide).toContain(BROWSER_EXTENSION_STORE_URL);
+  expect(guide).toContain("Connection checks and tab lists create nothing");
+  expect(guide).toContain("abandoned Cast tab already on that URL");
+  expect(guide).toContain("cast read");
   const stub = renderSectionBody(snippetBySlug("browser")!, "stub", "1.0.0");
   expect(stub).toContain("unless the human still needs them");
 });

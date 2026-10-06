@@ -256,7 +256,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
   // list's order. A drop cannot move a task between initiatives: membership is
   // the project's, so the groups refuse drops.
   initiative: {
-    label: "Initiative",
+    label: "Goal",
     keyOf: (t, ctx) => initiativeOfTask(t, ctx)?._id ?? "",
     compare: (a, b, ctx) => {
       const ra = initiativeOfTask(a.sample, ctx);
@@ -273,13 +273,13 @@ export const TASK_AXES: Record<string, TaskAxis> = {
           <span className="flex items-center gap-2 flex-shrink-0">
             <OwnerChip owner={row.owner} size={14} />
             <Link href={initiativeHref(row)} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
-              View initiative
+              View goal
             </Link>
           </span>
         ) : undefined,
       };
     },
-    noneLabel: "No initiative",
+    noneLabel: "No goal",
   },
 
   label: {

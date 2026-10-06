@@ -1,4 +1,6 @@
 import type { ShortcutAction } from '../shortcuts/registry';
+import { useInboxStore } from '../store/inboxStore';
+import { isHostedMode } from '../lib/surfaces';
 
 export type TipType = 'whisper' | 'milestone' | 'nudge' | 'inline';
 
@@ -6,24 +8,27 @@ export interface TipDef {
   id: string;
   type: TipType;
   content: string;
+  /** The tip in hosted mode's words. A tip without it teaches running a fleet
+   *  of sessions and never shows in hosted mode (tipForMode). */
+  hosted?: string;
   shortcutAction?: ShortcutAction;
   phase: 1 | 2 | 3 | 4;
 }
 
 export const TIPS: TipDef[] = [
   // ═══════════════════════════════════════════════
-  // PHASE 1 — Basics (shown immediately)
+  // PHASE 1: Basics (shown immediately)
   // ═══════════════════════════════════════════════
 
   // Whispers: show when user clicks instead of using shortcut
   { id: 'w-palette', type: 'whisper', shortcutAction: 'palette.toggle', phase: 1,
-    content: 'Open command palette' },
+    content: 'Open command palette', hosted: 'Find anything, or ask the assistant' },
   { id: 'w-search', type: 'whisper', shortcutAction: 'search.open', phase: 1,
-    content: 'Open search' },
+    content: 'Open search', hosted: 'Search your conversations' },
   { id: 'w-new-session', type: 'whisper', shortcutAction: 'session.create', phase: 1,
-    content: 'Create a new session' },
+    content: 'Create a new session', hosted: 'Start a new conversation' },
   { id: 'w-focus-input', type: 'whisper', shortcutAction: 'compose.focus', phase: 1,
-    content: 'Jump to message input' },
+    content: 'Jump to message input', hosted: 'Jump to your reply' },
 
   // Inline: proactive tips shown in the session list on first use
   { id: 'i-keyboard-nav', type: 'inline', shortcutAction: 'session.next', phase: 1,
@@ -40,11 +45,11 @@ export const TIPS: TipDef[] = [
     content: 'View all keyboard shortcuts' },
 
   // Milestones: celebrate first-time discoveries
-  { id: 'm-first-shortcut', type: 'milestone', phase: 1,
-    content: 'Keyboard shortcut unlocked — press ? to see all shortcuts' },
+  { id: 'm-first-shortcut', type: 'milestone', phase: 1, shortcutAction: 'ui.toggleShortcutsHelp',
+    content: 'Keyboard shortcut unlocked. See them all with', hosted: 'Every shortcut, one key away' },
 
   // ═══════════════════════════════════════════════
-  // PHASE 2 — Session management (after 5+ sessions)
+  // PHASE 2: Session management (after 5+ sessions)
   // ═══════════════════════════════════════════════
 
   { id: 'w-session-next', type: 'whisper', shortcutAction: 'session.next', phase: 2,
@@ -59,9 +64,9 @@ export const TIPS: TipDef[] = [
     content: 'Rename session' },
 
   { id: 'm-first-pin', type: 'milestone', phase: 2,
-    content: 'Pinned — this session stays at the top of your list' },
+    content: 'Pinned: this session stays at the top of your list' },
   { id: 'm-first-stash', type: 'milestone', phase: 2,
-    content: 'Stashed — find it later via the dismissed toggle' },
+    content: 'Stashed: find it later via the dismissed toggle' },
   { id: 'm-undo-history', type: 'milestone', phase: 2, shortcutAction: 'ui.undoHistory',
     content: 'Every change in this window has a way back. See them all in the undo history' },
 
@@ -72,7 +77,7 @@ export const TIPS: TipDef[] = [
     content: 'Navigate sessions without the mouse' },
 
   // ═══════════════════════════════════════════════
-  // PHASE 3 — Power user (after 1+ week)
+  // PHASE 3: Power user (after 1+ week)
   // ═══════════════════════════════════════════════
 
   { id: 'w-zen', type: 'whisper', shortcutAction: 'ui.zenToggle', phase: 3,
@@ -96,16 +101,16 @@ export const TIPS: TipDef[] = [
     content: 'Drag a session or a sidebar section onto the page to split the stage' },
 
   { id: 'm-first-zen', type: 'milestone', phase: 3,
-    content: 'Zen mode — distraction-free focus' },
+    content: 'Zen mode: distraction-free focus' },
   { id: 'm-first-split', type: 'milestone', phase: 3,
-    content: 'Stage split — drag the seam to resize; drag a pane’s strip to rearrange' },
+    content: 'Stage split: drag the seam to resize, and a pane’s strip to rearrange' },
   { id: 'm-first-diff', type: 'milestone', phase: 3,
-    content: 'Diff panel — see code changes inline' },
+    content: 'Diff panel: see code changes inline' },
   { id: 'm-first-fork', type: 'milestone', phase: 3,
-    content: 'Forked — branch the conversation from this point' },
+    content: 'Forked: the conversation branches from this point' },
 
   // ═══════════════════════════════════════════════
-  // PHASE 4 — Advanced (after using 10+ features)
+  // PHASE 4: Advanced (after using 10+ features)
   // ═══════════════════════════════════════════════
 
   { id: 'w-mru', type: 'whisper', shortcutAction: 'session.mruSwitch', phase: 4,
@@ -124,9 +129,9 @@ export const TIPS: TipDef[] = [
     content: 'Send and advance to next' },
 
   { id: 'm-first-task', type: 'milestone', phase: 4,
-    content: 'Task created — track your work from the tasks page' },
+    content: 'Task created: track your work from the tasks page' },
   { id: 'm-first-doc', type: 'milestone', phase: 4,
-    content: 'Doc created — find it on the docs page' },
+    content: 'Doc created: find it on the docs page' },
 ];
 
 const tipMap = new Map(TIPS.map(t => [t.id, t]));
@@ -135,12 +140,19 @@ const whisperByAction = new Map(
     .map(t => [t.shortcutAction!, t])
 );
 
+/** A tip as the viewer's mode says it: hosted mode shows only the tips that
+ *  have hosted words, in those words. */
+function tipForMode(tip: TipDef | undefined): TipDef | undefined {
+  if (!tip || !isHostedMode(useInboxStore.getState())) return tip;
+  return tip.hosted ? { ...tip, content: tip.hosted } : undefined;
+}
+
 export function getTip(id: string): TipDef | undefined {
-  return tipMap.get(id);
+  return tipForMode(tipMap.get(id));
 }
 
 export function getWhisperForAction(action: ShortcutAction): TipDef | undefined {
-  return whisperByAction.get(action);
+  return tipForMode(whisperByAction.get(action));
 }
 
 export function getTipsByPhase(phase: number): TipDef[] {
@@ -152,5 +164,5 @@ export function getTipsByType(type: TipType): TipDef[] {
 }
 
 export function getInlineTips(): TipDef[] {
-  return TIPS.filter(t => t.type === 'inline');
+  return TIPS.filter(t => t.type === 'inline').flatMap((t) => tipForMode(t) ?? []);
 }

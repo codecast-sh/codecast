@@ -1,7 +1,7 @@
 import { memo, useCallback, type RefObject } from "react";
 import { useWindowManager, TASKBAR_HEIGHT_PX, type ArrangeMode } from "../store/windowManagerStore";
 import { useTrackedStore, useInboxStore, isSessionEffectivelyIdle } from "../store/inboxStore";
-import { cleanTitle } from "../lib/conversationProcessor";
+import { sessionCardTitle } from "../lib/sessionCard";
 import { LayoutGrid, Layers, Columns, Rows, X, Plus } from "lucide-react";
 
 const arrangeOptions: { mode: ArrangeMode; icon: typeof LayoutGrid; label: string }[] = [
@@ -114,7 +114,7 @@ const MinimizedPill = memo(function MinimizedPill({ windowId, sessionId }: { win
   ]);
   const session = s.sessions[sessionId];
   const isIdle = session ? isSessionEffectivelyIdle(session) : true;
-  const title = cleanTitle(session?.title || "New Session");
+  const title = session ? sessionCardTitle(session) : "New Session";
 
   const handleClick = useCallback(() => {
     restoreWindow(windowId);

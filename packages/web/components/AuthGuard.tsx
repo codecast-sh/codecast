@@ -4,14 +4,29 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useLocalAuth } from "../lib/localAuth";
 import { oauthJustFailed } from "../lib/oauthReturn";
 import { AppLoader } from "./AppLoader";
+import { WELCOME_PATH, readLaneHint } from "./simple/laneBoot";
+
+/** How long a signed-out verdict must hold before the page leaves. A token
+ *  refresh can read as signed out for a moment (no stored token yet, the
+ *  socket not yet authenticated); a reload under load landed signed-in
+ *  people on the marketing page that way. The gate unmounts this the moment
+ *  auth comes back, which cancels the leave. */
+const SIGNED_OUT_SETTLE_MS = 1500;
 
 function RedirectUnsignedIn({ to }: { to: string }) {
   const router = useRouter();
   useMountEffect(() => {
-    if (oauthJustFailed()) router.replace("/login?reason=oauth");
-    else router.push(to);
+    if (oauthJustFailed()) {
+      router.replace("/login?reason=oauth");
+      return;
+    }
+    // A device last seen in hosted mode signs in again on /welcome, in the
+    // family's look, never on the developer marketing page.
+    const target = to === "/" && readLaneHint() === "simple" ? WELCOME_PATH : to;
+    const timer = window.setTimeout(() => router.push(target), SIGNED_OUT_SETTLE_MS);
+    return () => window.clearTimeout(timer);
   });
-  return null;
+  return <AppLoader />;
 }
 
 /**
@@ -33,27 +48,22 @@ function RedirectUnsignedIn({ to }: { to: string }) {
  * marketing home page in an always-on-top square. Invisible glass is the
  * honest signed-out state there, and children resume the moment a sign-in
  * flips the gate.
- *
- * signedOutPath: where a signed-out visitor is sent (the home page by
- * default; the simple lane sends them to its own welcome).
  */
 export function AuthGuard({
   children,
   guestOk,
   blankSignedOut,
-  signedOutPath = "/",
 }: {
   children: React.ReactNode;
   guestOk?: boolean;
   blankSignedOut?: boolean;
-  signedOutPath?: string;
 }) {
   return (
     <LocalFirstAuthGuard
       guestOk={guestOk}
       useLocalAuth={useLocalAuth}
       loading={blankSignedOut ? null : <AppLoader />}
-      unauthenticated={blankSignedOut ? null : <RedirectUnsignedIn to={signedOutPath} />}
+      unauthenticated={blankSignedOut ? null : <RedirectUnsignedIn to="/" />}
     >
       {children}
     </LocalFirstAuthGuard>

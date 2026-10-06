@@ -47,7 +47,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   session: "Session",
   doc: "Doc",
   project: "Project",
-  initiative: "Initiative",
+  initiative: "Goal",
   proposal: "Proposal",
   trigger: "Trigger",
   decision: "Decision",

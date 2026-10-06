@@ -1,4 +1,5 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
+import { useFollowScroll, useFollowSurface } from "../hooks/useFollowSurface";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useShortcutContext, useShortcutAction } from "../shortcuts";
@@ -34,6 +35,8 @@ export function ReviewView({ prId }: { prId: string }) {
   const [success, setSuccess] = useState<string | null>(null);
 
   const submitReview = useAction(api.reviews.submitReview);
+  const diffScrollRef = useRef<HTMLDivElement | null>(null);
+  useFollowScroll("review", diffScrollRef);
 
   const mockPR = {
     title: "Add Header component improvements",
@@ -88,6 +91,20 @@ export function ReviewView({ prId }: { prId: string }) {
   ];
 
   const currentFile = mockDiffs[currentFileIndex];
+  // The file in hand is the reader's place in the review (lib/follow.ts).
+  useFollowSurface(
+    {
+      read: () => (currentFile ? { diff: { file: currentFile.path } } : null),
+      apply: (view) => {
+        const index = view.diff ? mockDiffs.findIndex((f) => f.path === view.diff!.file) : -1;
+        if (index < 0) return [];
+        setCurrentFileIndex(index);
+        return ["diff"];
+      },
+    },
+    true,
+    [currentFile?.path],
+  );
 
   useShortcutContext('review');
 
@@ -250,7 +267,7 @@ export function ReviewView({ prId }: { prId: string }) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div ref={diffScrollRef} className="flex-1 overflow-y-auto p-4">
           <div className="sol-card p-4">
             <div className="mb-4 pb-3 border-b border-sol-border">
               <h3 className="font-mono text-sm text-sol-text">

@@ -230,7 +230,7 @@ function Projects({ initiative, now }: { initiative: InitiativeRow; now: number 
     const after = new Set(next ? next.split(",") : []);
     const store = useInboxStore.getState();
     // One pick is one undo, however many projects it adds and removes.
-    undoAsOne(`Changed the projects of ${quoted(initiative.title, "initiative")}`, () => {
+    undoAsOne(`Changed the projects of ${quoted(initiative.title, "goal")}`, () => {
       for (const id of after) if (!before.has(id)) store.addInitiativeProject(initiative._id, id);
       for (const id of before) if (!after.has(id)) store.removeInitiativeProject(initiative._id, id);
     });
@@ -251,7 +251,7 @@ function Projects({ initiative, now }: { initiative: InitiativeRow; now: number 
       }
     >
       {cards.length === 0 ? (
-        <p className="text-[12.5px] italic" style={{ color: "var(--sol-text-dim)" }}>No project carries this yet. An initiative is reached through its projects: add the ones that contribute to it.</p>
+        <p className="text-[12.5px] italic" style={{ color: "var(--sol-text-dim)" }}>No project carries this yet. A goal is reached through its projects: add the ones that contribute to it.</p>
       ) : (
         <div className="space-y-2.5">
           {cards.map((p) => {
@@ -358,7 +358,7 @@ function UpdateForm({ initiative, onDone }: { initiative: InitiativeRow; onDone:
 function SubInitiatives({ rows, now }: { rows: InitiativeRow[]; now: number }) {
   if (rows.length === 0) return null;
   return (
-    <Section name="sub" label="Initiatives under this one" count={rows.length}>
+    <Section name="sub" label="Goals under this one" count={rows.length}>
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: HAIRLINE }}>
         {rows.map((r) => (
           <Link key={r._id} href={initiativeHref(r)} className="flex items-center gap-2.5 px-3 py-2.5 border-t first:border-t-0 no-underline transition-colors hover:bg-sol-bg-highlight/50" style={{ borderColor: HAIRLINE }} data-initiative-sub={r.short_id || r._id}>
