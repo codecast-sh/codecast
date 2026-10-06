@@ -9,12 +9,13 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { isDesktopShell } from "../lib/desktop";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
+import { useSurfaceMode } from "../lib/surfaces";
 import { useTheme } from "./ThemeProvider";
 import {
-  Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
+  Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
-  Blocks, Sun, Moon, SquareTerminal,
+  Blocks, Library, Sun, Moon, SquareTerminal, Gauge,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -148,11 +149,30 @@ export function UserMenu() {
   };
 
   const displayName = user?.name || user?.email?.split("@")[0] || "User";
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.staff === true;
   const { theme, toggleTheme } = useTheme();
   const isLocal = typeof window !== "undefined" && window.location.hostname.includes("local.");
 
   const go = (path: string) => { setOpen(false); router.push(path); };
+  // One rule with the palette and the rail: a page whose surface hosted mode
+  // hides is not offered here either, and the developer-only verbs (tours of
+  // the agent inbox, the changelog, admin tools) go with them.
+  const mode = useSurfaceMode();
+  const hosted = mode.hosted;
+  const page = (icon: LucideIcon, label: string, path: string) =>
+    mode.showsPage(path) ? <MenuItem key={path} icon={icon} label={label} onClick={() => go(path)} /> : null;
+  // In hosted mode the rail already holds every page this group would repeat.
+  const pages = hosted ? [] : [
+    <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)} />,
+    page(Rss, "Feed", "/feed"),
+    page(Radio, "Crosstalk", "/crosstalk"),
+    page(ListChecks, "Tasks", "/tasks"),
+    page(FileText, "Documents", "/docs"),
+    page(FolderGit2, "Projects", "/projects"),
+    page(SquareTerminal, "Sessions", "/sessions"),
+    page(CalendarClock, "Workflows", "/routines"),
+    page(Waypoints, "Line", "/line"),
+  ].filter(Boolean);
 
   const handleEnvSwitch = () => {
     const { pathname, search, hash } = window.location;
@@ -175,14 +195,14 @@ export function UserMenu() {
       </ShortcutTooltip>
       {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
       {open && (
-        <div className="cc-topbar-menu absolute right-0 mt-2 w-60 bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
+        <div className="cc-topbar-menu absolute right-0 mt-2 w-60 max-h-[calc(100vh-4rem)] overflow-y-auto overscroll-contain bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
           <button
             onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)}
             className="w-full px-3 py-2.5 border-b border-sol-border text-left hover:bg-sol-bg-alt transition-colors"
           >
             <div className="flex items-center gap-2">
               <p className="text-sm font-medium text-sol-text">{displayName}</p>
-              {isAdmin && (
+              {isAdmin && !hosted && (
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow">admin</span>
               )}
             </div>
@@ -210,27 +230,31 @@ export function UserMenu() {
               label={theme === "dark" ? "Light mode" : "Dark mode"}
               onClick={() => { setOpen(false); toggleTheme(); }}
             />
-            <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />
-            <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />
-            <MenuItem icon={Blocks} label="Capabilities" onClick={() => go("/capabilities")} />
+            {hosted && (
+              <MenuItem icon={Gauge} label="Plan and usage" onClick={() => { setOpen(false); useInboxStore.getState().openSettingsModal("plan"); }} />
+            )}
+            {!hosted && <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />}
+            {page(Blocks, "Agent features", "/agent-features")}
+            {page(SlidersHorizontal, "Agent Config", "/config")}
+            {page(Library, "Capabilities", "/capabilities")}
             <MenuItem
               icon={BookOpen}
-              label="Documentation"
+              label={hosted ? "Help" : "Documentation"}
               onClick={() => { setOpen(false); window.open("/documentation", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
             />
-            <MenuItem
+            {!hosted && <MenuItem
               icon={Newspaper}
               label="Changelog"
               onClick={() => { setOpen(false); window.open("/changelog", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
-            />
-            <MenuItem
+            />}
+            {!hosted && <MenuItem
               icon={Home}
               label="Home page"
               onClick={() => { setOpen(false); window.open("/", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
-            />
+            />}
             {/* Settings > Apps: the desktop and iOS apps, with the one that
                 fits this device first. Shown inside the desktop app too, where
                 the iOS app is still worth offering. */}
@@ -241,20 +265,9 @@ export function UserMenu() {
             />
           </div>
 
-          <div className="border-t border-sol-border py-1">
-            <MenuItem icon={CircleUser} label="Profile" onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)} />
-            <MenuItem icon={History} label="Timeline" onClick={() => go("/timeline")} />
-            <MenuItem icon={Rss} label="Feed" onClick={() => go("/feed")} />
-            <MenuItem icon={Radio} label="Crosstalk" onClick={() => go("/crosstalk")} />
-            <MenuItem icon={ListChecks} label="Tasks" onClick={() => go("/tasks")} />
-            <MenuItem icon={FileText} label="Documents" onClick={() => go("/docs")} />
-            <MenuItem icon={FolderGit2} label="Projects" onClick={() => go("/projects")} />
-            <MenuItem icon={SquareTerminal} label="Sessions" onClick={() => go("/sessions")} />
-            <MenuItem icon={CalendarClock} label="Workflows" onClick={() => go("/routines")} />
-            <MenuItem icon={Waypoints} label="Line" onClick={() => go("/line")} />
-          </div>
+          {pages.length > 0 && <div className="border-t border-sol-border py-1">{pages}</div>}
 
-          {isAdmin && (
+          {isAdmin && !hosted && (
             <div className="border-t border-sol-border py-1">
               <MenuItem
                 icon={ArrowLeftRight}

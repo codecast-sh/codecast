@@ -39,9 +39,10 @@ import {
   WHISK_PROVIDER,
   WHISK_RETURN_PATH,
   whiskAbilities,
-  whiskConfigured,
+  whiskConnectOpen,
   whiskEnv,
   whiskHttpCall,
+  whiskReturnBase,
   whiskWebUrl,
   type MailAbilities,
   type WhiskCall,
@@ -53,9 +54,12 @@ const internalApi = internal as any;
 
 const TOKEN_HKDF_INFO = "codecast-whisk-app-token-v1";
 
-/** The lane pages a connect may come back to. A fixed list: the return path
- *  rides the signed state, and finishConnect sends the browser only here. */
-export const WHISK_RETURN_PATHS = ["/simple/connections", "/welcome"] as const;
+/** The pages a connect may come back to: Settings > Integrations (the
+ *  default), /welcome, the main shell's inbox, and the phone lane's
+ *  Connections, whose web address now redirects to Integrations. A fixed
+ *  list: the return path rides the signed state, and finishConnect sends the
+ *  browser only here. */
+export const WHISK_RETURN_PATHS = ["/settings/integrations", "/welcome", "/inbox", "/simple/connections"] as const;
 export type WhiskReturnPath = (typeof WHISK_RETURN_PATHS)[number];
 
 export function whiskReturnPath(raw: unknown): WhiskReturnPath | undefined {
@@ -144,10 +148,12 @@ async function endAtWhisk(call: WhiskCall): Promise<void> {
 
 // ── What the screens read ───────────────────────────────────────────────────
 
-/** Whether this deployment can connect mail and calendar through Whisk. */
+/** Whether a Connect button can lead anywhere: this deployment holds
+ *  Whisk's settings and Whisk serves its side of the connect
+ *  (whiskConnectOpen). Every Connect in the product reads this. */
 export const connectAvailable = query({
   args: {},
-  handler: async (): Promise<boolean> => whiskConfigured(),
+  handler: async (): Promise<boolean> => whiskConnectOpen(),
 });
 
 export type WhiskConnectionView =
@@ -186,9 +192,11 @@ export const connection = query({
 
 // ── Connect ─────────────────────────────────────────────────────────────────
 
-/** Send the browser here to connect. `return_to` is the lane page to come back to. */
+/** Send the browser here to connect. `return_to` is the lane page to come
+ *  back to, and `origin` the site the person is on (whiskReturnBase), so a
+ *  connect started on a dev server comes back to it. */
 export const getConnectUrl = action({
-  args: { api_token: v.optional(v.string()), return_to: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), return_to: v.optional(v.string()), origin: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ ok: boolean; url?: string; error?: string }> => {
     const env = whiskEnv();
     if (!env) return { ok: false, error: "whisk_not_configured" };
@@ -197,7 +205,7 @@ export const getConnectUrl = action({
     const who = await ctx.runQuery(internalApi.googleOAuth.resolveConnectUser, { api_token: args.api_token });
     if (!who) return { ok: false, error: "signed_out" };
     const state = await signStateWith(env.secret, { user_id: who.user_id, ts: Date.now(), return_to: returnTo });
-    return { ok: true, url: whiskConnectUrl(env.webUrl, `${webBaseUrl()}${WHISK_RETURN_PATH}`, state) };
+    return { ok: true, url: whiskConnectUrl(env.webUrl, `${whiskReturnBase(args.origin, webBaseUrl())}${WHISK_RETURN_PATH}`, state) };
   },
 });
 

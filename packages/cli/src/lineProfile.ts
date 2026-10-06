@@ -16,6 +16,8 @@ import {
   COMMAND_KEYS,
   LINE_PROFILE_DEFAULTS,
   LINE_PROFILE_REL_PATH,
+  MERGE_KEYS,
+  MERGE_METHODS,
   isLineCount,
   lineProfileNotes,
   splitFinderKind,
@@ -58,12 +60,13 @@ export class LineProfileError extends Error {
 }
 
 /** The values a profile file sets; anything absent takes the default. */
-export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K] }, "commands" | "caps"> & {
+export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K] }, "commands" | "caps" | "merge"> & {
   commands?: { [K in keyof LineProfile["commands"]]?: string };
   caps?: { cards?: number };
+  merge?: Partial<NonNullable<LineProfile["merge"]>>;
 };
 
-export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "finders"] as const;
+export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "finders"] as const;
 export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "project"] as const;
 
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
@@ -147,6 +150,20 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
       values.caps = {};
       if (line.caps.cards !== undefined) values.caps.cards = count(line.caps.cards, "[line.caps] cards");
     }
+    if (line.merge !== undefined) {
+      if (!isTable(line.merge)) throw new LineProfileError("[line.merge] must be a table");
+      refuseUnknown(line.merge, MERGE_KEYS, "[line.merge]");
+      values.merge = {};
+      if (line.merge.auto !== undefined) {
+        if (typeof line.merge.auto !== "boolean") throw new LineProfileError("[line.merge] auto must be true or false");
+        values.merge.auto = line.merge.auto;
+      }
+      if (line.merge.method !== undefined) {
+        const method = text(line.merge.method, "[line.merge] method");
+        if (!(MERGE_METHODS as readonly string[]).includes(method)) throw new LineProfileError(`[line.merge] method must be one of ${MERGE_METHODS.join(", ")}`);
+        values.merge.method = method as (typeof MERGE_METHODS)[number];
+      }
+    }
     if (line.finders !== undefined) {
       if (!Array.isArray(line.finders)) throw new LineProfileError("[[line.finders]] must be an array of tables");
       const seen = new Set<string>();
@@ -198,6 +215,10 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
       ship: pick("commands.ship", values.commands?.ship, d.commands.ship),
     },
     caps: { cards: pick("caps.cards", values.caps?.cards, d.caps.cards) },
+    merge: {
+      auto: pick("merge.auto", values.merge?.auto, d.merge!.auto),
+      method: pick("merge.method", values.merge?.method, d.merge!.method),
+    },
     finders: pick("finders", values.finders, d.finders),
   };
   const notes = lineProfileNotes(profile);
@@ -268,6 +289,8 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
     ["watch_days", String(p.watch_days)],
     ...COMMAND_KEYS.map((k): [string, string] => [`commands.${k}`, p.commands[k] ?? "(none)"]),
     ["caps.cards", String(p.caps.cards)],
+    ["merge.auto", String(p.merge?.auto ?? false)],
+    ["merge.method", p.merge?.method ?? "squash"],
   ];
   const width = Math.max(...rows.map(([k]) => k.length));
   const out = [r.file ? `profile ${r.file}` : `no ${LINE_PROFILE_REL_PATH}${r.root ? ` in ${r.root}` : ""}: every value is a default`, ""];
@@ -311,6 +334,10 @@ export function starterLineProfile(opts: { project: string; team?: string | null
     ``,
     `[line.caps]`,
     `cards = ${d.caps.cards}                          # open cards per person, across their lines`,
+    ``,
+    `[line.merge]                       # what Ship does once a pull request is green`,
+    `auto = ${d.merge!.auto}                       # true: Ship on a task or session merges too; false: only Ship on the PR page merges`,
+    `method = ${q(d.merge!.method)}`,
     ``,
     `# [[line.finders]]                 # what this project listens to; one table per finder`,
     `# id = "lessons"`,

@@ -175,6 +175,8 @@ struct Snapshot {
     /// The pixels were read for this tree, so the next one must read them too
     /// or the indexes that name visible text stop resolving.
     let readPixels: Bool
+    /// "sheet" or "dialog" while one covers the window, so the tree lists only it.
+    let blockedBy: String?
 
     /// A cached snapshot exists to prove element identity. Holding megabytes of
     /// base64 in a process that lives for minutes is how a helper grows.
@@ -194,7 +196,8 @@ struct Snapshot {
             truncated: truncated,
             maxDepthReached: maxDepthReached,
             eventMark: eventMark,
-            readPixels: readPixels
+            readPixels: readPixels,
+            blockedBy: blockedBy
         )
     }
 }
@@ -416,6 +419,9 @@ final class Provider {
                 .elementNotFound,
                 "element indexes require a fresh get-app-state snapshot for this app and window"
             )
+        }
+        if let noun = current.blockedBy, cached.blockedBy == nil {
+            throw ProviderError(.elementNotFound, BlockingSurface.openedSince(noun: noun, index: index, tree: current.treeText))
         }
         guard let expected = cached.elements[index], let actual = current.elements[index] else {
             throw ProviderError(
@@ -658,7 +664,8 @@ final class Provider {
             truncated: renderer.truncated,
             maxDepthReached: renderer.maxDepthReached,
             eventMark: eventMark,
-            readPixels: readPixels
+            readPixels: readPixels,
+            blockedBy: renderer.blockedBy
         )
     }
 
@@ -755,9 +762,9 @@ final class Provider {
                 return try clickPoint(point, button: button, count: count, modifiers: modifiers, accessible: accessible, snapshot: snapshot, params: params)
             }
             if !forceMouse, accessible {
-                pointAt(point, params: params)
+                let shown = pointAt(point, snapshot: snapshot, params: params)
                 if let actionName = performClickAction(element: record.element, mouseButton: button) {
-                    pressAt(point, params: params)
+                    pressAt(shown)
                     return actionMetadata(path: "accessibility", actionName: actionName)
                 }
             }
@@ -795,9 +802,9 @@ final class Provider {
         // A background window drops a real press, but the control under the
         // point can often be pressed through accessibility instead.
         if accessible, !isTargetWindowFocused(snapshot), let hit = pressableElement(at: point, snapshot: snapshot, button: button) {
-            pointAt(point, params: params)
+            let shown = pointAt(point, snapshot: snapshot, params: params)
             if let actionName = performClickAction(element: hit, mouseButton: button) {
-                pressAt(point, params: params)
+                pressAt(shown)
                 return actionMetadata(path: "accessibility", actionName: actionName, fallbackReason: "backgroundPointHit")
             }
         }
@@ -807,14 +814,24 @@ final class Provider {
     }
 
     /// The agent cursor glides to where the action is about to land, unless the
-    /// request or the session turned it off.
-    private func pointAt(_ point: CGPoint?, params: [String: JSONValue]) {
-        guard let point, params["cursor"]?.bool != false, AgentCursor.enabledByEnvironment else { return }
+    /// request or the session turned it off. It is drawn over everything, so it
+    /// appears only where the target window is what the human sees at that
+    /// point: a window in the back still takes an accessibility press, but a
+    /// pointer gliding over whatever covers it would point at the wrong app.
+    /// Returns the point when it was shown.
+    @discardableResult
+    private func pointAt(_ point: CGPoint?, snapshot: Snapshot, params: [String: JSONValue]) -> CGPoint? {
+        guard let point, params["cursor"]?.bool != false, AgentCursor.enabledByEnvironment,
+              visibleWindowOwner(at: point, target: snapshot.app.pid) == snapshot.app.pid
+        else {
+            return nil
+        }
         AgentCursor.move(to: point)
+        return point
     }
 
-    private func pressAt(_ point: CGPoint?, params: [String: JSONValue]) {
-        guard point != nil, params["cursor"]?.bool != false, AgentCursor.enabledByEnvironment else { return }
+    private func pressAt(_ shown: CGPoint?) {
+        guard shown != nil else { return }
         AgentCursor.press()
     }
 
@@ -851,9 +868,9 @@ final class Provider {
         why: String
     ) throws -> InputRoute {
         try requireMouseFocus(snapshot, verb: "click", why: why)
-        pointAt(point, params: params)
+        let shown = pointAt(point, snapshot: snapshot, params: params)
         try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
-        pressAt(point, params: params)
+        pressAt(shown)
         return .hid
     }
 
@@ -882,11 +899,11 @@ final class Provider {
             )
         }
         let point = center(record.localFrame, in: snapshot.windowBounds)
-        pointAt(point, params: params)
+        let shown = pointAt(point, snapshot: snapshot, params: params)
         guard performAction(record.element, action) else {
             throw ProviderError(.accessibilityError, "AXUIElementPerformAction(\(SnapshotRenderHeuristics.prettyAction(action))) failed")
         }
-        pressAt(point, params: params)
+        pressAt(shown)
         return actionMetadata(path: "accessibility", actionName: SnapshotRenderHeuristics.prettyAction(action))
     }
 
@@ -899,7 +916,7 @@ final class Provider {
         guard isSettable(record.element, kAXValueAttribute as String) else {
             throw ProviderError(.valueNotSettable, "element \(record.index) does not accept a value write")
         }
-        pointAt(center(record.localFrame, in: snapshot.windowBounds), params: params)
+        pointAt(center(record.localFrame, in: snapshot.windowBounds), snapshot: snapshot, params: params)
         let coercion = AttributeValueCoercion(
             existingValue: rawAttributeValue(record.element, kAXValueAttribute as String),
             requested: expected
@@ -999,7 +1016,7 @@ final class Provider {
         let pages = try positiveNumber(params["pages"]?.number, defaultValue: 1, name: "pages")
         if let elementIndex = try optionalInteger(params, "elementIndex") {
             let record = try element(snapshot, elementIndex)
-            pointAt(center(record.localFrame, in: snapshot.windowBounds), params: params)
+            pointAt(center(record.localFrame, in: snapshot.windowBounds), snapshot: snapshot, params: params)
             let action = "AXScroll\(direction.capitalized)ByPage"
             if pages.rounded() == pages,
                let pageCount = boundedInteger(pages, as: Int.self),
@@ -1044,8 +1061,7 @@ final class Provider {
             to = try coordinatePoint(params: params, xKey: "toX", yKey: "toY", snapshot: snapshot)
         }
         try requireMouseFocus(snapshot, verb: "drag", why: "a drag is a real press and move")
-        pointAt(from, params: params)
-        if params["cursor"]?.bool != false, AgentCursor.enabledByEnvironment {
+        if pointAt(from, snapshot: snapshot, params: params) != nil {
             AgentCursor.follow(to: to, over: Input.dragSeconds)
         }
         try Input.drag(from: from, to: to, targetWindow: snapshot)
@@ -1250,6 +1266,27 @@ private func focusedSystemWindow(systemWide: AXUIElement, app: AppDescriptor) ->
     }
     if let windows = copyArray(focusedApp, kAXWindowsAttribute as String) {
         return windows.first(where: usableWindow)
+    }
+    return nil
+}
+
+/// The app whose window the human sees at a point: the frontmost ordinary
+/// window there, or a menu or popover of the target itself. Floating windows of
+/// other apps at higher levels (the menu bar, overlays) are looked through.
+private func visibleWindowOwner(at point: CGPoint, target: pid_t) -> pid_t? {
+    guard let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        return nil
+    }
+    let me = getpid()
+    for info in infos {
+        guard let owner = info[kCGWindowOwnerPID as String] as? pid_t, owner != me,
+              let boundsDictionary = info[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: boundsDictionary), bounds.contains(point),
+              (info[kCGWindowAlpha as String] as? CGFloat ?? 1) > 0.05
+        else {
+            continue
+        }
+        if (info[kCGWindowLayer as String] as? Int ?? 0) == 0 || owner == target { return owner }
     }
     return nil
 }
@@ -1729,11 +1766,16 @@ extension KeyModifierName {
     var keyCode: CGKeyCode { CGKeyCode(KeyChord.modifierKeyCode(self)) }
 }
 
-/// The sheet or modal dialog among a window's children, if one is up.
-private func blockingSurface(among children: [AXUIElement]) -> (element: AXUIElement, role: String)? {
+/// The sheet or modal dialog among a window's children, if one is up. The
+/// walk passes its own cached reads, so the check costs it nothing.
+private func blockingSurface(
+    among children: [AXUIElement],
+    string: (AXUIElement, String) -> String? = stringAttribute,
+    bool: (AXUIElement, String) -> Bool? = boolAttribute
+) -> (element: AXUIElement, role: String)? {
     for child in children {
-        let role = stringAttribute(child, kAXRoleAttribute as String) ?? ""
-        if BlockingSurface.blocks(role: role, modal: boolAttribute(child, "AXModal") == true) {
+        let role = string(child, kAXRoleAttribute as String) ?? ""
+        if BlockingSurface.blocks(role: role, modal: bool(child, "AXModal") == true) {
             return (child, role)
         }
     }
@@ -1973,6 +2015,7 @@ private final class TreeRenderer {
     var maxDepthReached = false
     /// Something an agent can act on by name; without one the pixels are read.
     var hasApplicationControl = false
+    var blockedBy: String?
     let reader: AXSnapshotReader
     let pruneOffscreen: Bool
     private(set) var nextIndex = 0
@@ -2009,8 +2052,9 @@ private final class TreeRenderer {
         if depth > 0, VisibleRegion.isOutside(localFrame, region: region) { return }
         var children = reader.primaryChildren(element, role: role, windowBounds: windowBounds)
         var blockingNote: String?
-        if depth == 0, let surface = blockingSurface(among: children) {
+        if depth == 0, let surface = blockingSurface(among: children, string: reader.stringAttribute, bool: reader.boolAttribute) {
             children = [surface.element]
+            blockedBy = BlockingSurface.noun(role: surface.role)
             blockingNote = BlockingSurface.note(
                 noun: BlockingSurface.noun(role: surface.role),
                 windowTitle: reader.stringAttribute(element, kAXTitleAttribute as String) ?? ""
