@@ -17,6 +17,7 @@ import { STRONG_MODEL, modelCost } from "./lib/anthropic";
 import { isInstructionEdit } from "./lib/sessionMedia";
 import { dayBounds, localDate } from "./lib/teamDay";
 import {
+  BODY_CHARS,
   DAILY_CAP_USD,
   PROSE_WALL_MS,
   EDITION_INTERVAL_MS,
@@ -693,8 +694,8 @@ describe("story articles", () => {
 
   test("a long article is cut at the last paragraph that fits", () => {
     const para = "word ".repeat(150).trim();
-    const body = articleBody([para, para, para, para, para].join("\n\n"), {});
-    expect(body.length).toBeLessThanOrEqual(3200);
+    const body = articleBody(Array.from({ length: Math.ceil(BODY_CHARS / para.length) + 2 }, () => para).join("\n\n"), {});
+    expect(body.length).toBeLessThanOrEqual(BODY_CHARS);
     expect(body.endsWith("word")).toBe(true);
     expect(body.split("\n\n").every((p) => p === para)).toBe(true);
   });
