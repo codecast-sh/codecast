@@ -18,6 +18,8 @@ import { ShareControl } from "../../../components/ShareControl";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
+import { useSurface } from "../../../lib/surfaces";
+import { sessionCardTitle } from "../../../lib/sessionCard";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
 import {
@@ -108,6 +110,9 @@ function DocDetailContent() {
   const router = useRouter();
   const openLinkedSession = useOpenLinkedSession();
   const id = params.id as string;
+  // Hosted mode reads a note: no type picker or Watch, and a line naming the
+  // conversation it came from in place of the Sessions list.
+  const internals = useSurface("docs.internals");
 
   const detailResult = useSyncDocDetail(id);
 
@@ -221,9 +226,9 @@ function DocDetailContent() {
           drafting={{ overflow: true }}
           topBarLeft={
             <>
-              <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
+              {internals && <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />}
               {doc.pinned && <Star className="w-3 h-3 text-sol-yellow fill-current" />}
-              <WatchButton entityType="doc" entityId={doc._id} />
+              {internals && <WatchButton entityType="doc" entityId={doc._id} />}
               <DocDates doc={doc} variant="full" className="text-xs text-sol-text-dim" />
             </>
           }
@@ -246,6 +251,14 @@ function DocDetailContent() {
               </button>
             </>
           }
+          leadContent={!internals && conversation ? (
+            <p data-cc-note-source className="text-[13px] text-sol-text-dim">
+              From{" "}
+              <button type="button" onClick={() => openLinkedSession(conversation)} className="text-sol-text-muted underline decoration-sol-border underline-offset-4 hover:text-sol-text">
+                {sessionCardTitle(conversation as any)}
+              </button>
+            </p>
+          ) : undefined}
           metaContent={
             <div className="flex items-center gap-4 text-xs text-sol-text-dim flex-wrap">
               {(doc as any).author_image && (() => {
@@ -281,7 +294,7 @@ function DocDetailContent() {
             </div>
           }
           footerContent={
-            ((doc as any).related_conversations?.length > 0 || conversation) ? (
+            internals && ((doc as any).related_conversations?.length > 0 || conversation) ? (
               <div>
                 <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-3">
                   Sessions

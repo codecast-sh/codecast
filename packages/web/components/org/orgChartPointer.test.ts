@@ -63,18 +63,27 @@ describe("what a pointer shows", () => {
     initiatives: [{ _id: "g1", short_id: "in-4" }],
     roles: [{ _id: "r1", handle: "growth", status: "active" }],
   };
-  test("a change number focuses that change in the lens that draws it", () => {
-    expect(chartView({ proposal: "op-1", focus: "2" }, ctx)).toEqual({ lens: "goals", focus: { kind: "change", id: "c2" } });
-    expect(chartView({ proposal: "op-1", focus: "1" }, ctx)).toEqual({ lens: "people", focus: { kind: "change", id: "c1" } });
+  test("a change number focuses that change; the map shows everything unless a lens is named", () => {
+    expect(chartView({ proposal: "op-1", focus: "2" }, ctx)).toEqual({ lens: "everything", focus: { kind: "change", id: "c2" } });
+    expect(chartView({ proposal: "op-1", focus: "1" }, ctx)).toEqual({ lens: "everything", focus: { kind: "change", id: "c1" } });
     expect(chartView({ proposal: "op-1", focus: "3" }, ctx).focus).toBeNull();
   });
-  test("in-N is a goal on the goals lens, @handle a role on the people lens", () => {
-    expect(chartView({ focus: "IN-4" }, ctx)).toEqual({ lens: "goals", focus: { kind: "node", id: "goal:g1" } });
-    expect(chartView({ focus: "@Growth" }, ctx)).toEqual({ lens: "people", focus: { kind: "node", id: "role:r1" } });
+  test("in-N is a goal, @handle a role; each keeps a named lens that draws it", () => {
+    expect(chartView({ focus: "IN-4", lens: "goals" }, ctx)).toEqual({ lens: "goals", focus: { kind: "node", id: "goal:g1" } });
+    expect(chartView({ focus: "@Growth", lens: "people" }, ctx)).toEqual({ lens: "people", focus: { kind: "node", id: "role:r1" } });
   });
-  test("with no focus the proposal picks the lens, and a named lens always wins", () => {
-    expect(chartView({}, ctx).lens).toBe("people");
-    expect(chartView({}, { ...ctx, changes: ctx.changes.slice(1) }).lens).toBe("goals");
-    expect(chartView({ focus: "2", lens: "people" }, ctx).lens).toBe("people");
+  test("a named lens holds, except when the focus has no place on it: then the map shows everything", () => {
+    expect(chartView({}, ctx).lens).toBe("everything");
+    expect(chartView({ lens: "people" }, ctx).lens).toBe("people");
+    expect(chartView({ focus: "1", lens: "people" }, ctx).lens).toBe("people");
+    expect(chartView({ focus: "2", lens: "people" }, ctx).lens).toBe("everything");
+    expect(chartView({ focus: "1", lens: "goals" }, ctx).lens).toBe("everything");
+    expect(chartView({ focus: "IN-4", lens: "people" }, ctx).lens).toBe("everything");
+    expect(chartView({ focus: "@growth", lens: "goals" }, ctx).lens).toBe("everything");
+  });
+  test("proposed=0 turns the overlay off in the address, and the path carries it", () => {
+    expect(chartPointerOfParams(new URLSearchParams("proposal=op-1&proposed=0"))).toEqual({ proposal: "op-1", proposed: false });
+    expect(chartPointerOfParams(new URLSearchParams("proposal=op-1&proposed=1"))).toEqual({ proposal: "op-1" });
+    expect(orgChartPath({ proposal: "op-1", lens: "everything", proposed: false })).toBe("/org?view=chart&proposal=op-1&lens=everything&proposed=0");
   });
 });

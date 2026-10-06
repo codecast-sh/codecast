@@ -23,7 +23,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { invalidScope } from "../lib/auth";
 import { scopeArgs, scopeOf, sourceByRef } from "../ingest";
 import { gunzipCapped, REPLAY_CHUNK_MAX_INFLATED_BYTES } from "../replays";
-import { importVendorRecording, type ImportOutcome, type VendorRecording } from "./vendorReplay";
+import { importVendorRecording, VendorCallError, type ImportOutcome, type VendorRecording } from "./vendorReplay";
 import { connectionIdForSource, tokenFor, type FetchLike } from "../tokenConnectors";
 import { isTokenRefusal } from "../lib/sourceHealth";
 import { tokenHttp } from "../lib/tokenHttp";
@@ -72,7 +72,8 @@ export function posthogConn(cred: { token: string; config: Record<string, string
   return { token: cred.token, host, project_id: project };
 }
 
-export type PostHogAnswer = { ok: true; text: string } | { ok: false; error: string; status?: number };
+export type PostHogAnswer = { ok: true; text: string } | PostHogFailure;
+export type PostHogFailure = { ok: false; error: string; status?: number; retry_after_ms?: number };
 
 function detailOf(text: string): string | null {
   try {
@@ -109,11 +110,11 @@ export async function posthogRequest(
   const text = res.text ?? "";
   const detail = detailOf(text);
   if (isTokenRefusal(res.status)) return { ok: false, status: res.status, error: `PostHog refused the token (${res.status})${detail ? `: ${detail}` : ""}` };
-  if (!res.ok) return { ok: false, status: res.status, error: `PostHog answered ${res.status}${detail ? `: ${detail}` : ""}` };
+  if (!res.ok) return { ok: false, status: res.status, error: `PostHog answered ${res.status}${detail ? `: ${detail}` : ""}`, ...(res.retry_after_ms !== undefined ? { retry_after_ms: res.retry_after_ms } : {}) };
   return { ok: true, text };
 }
 
-function parseJson(answer: PostHogAnswer): { ok: true; body: any } | { ok: false; status?: number; error: string } {
+function parseJson(answer: PostHogAnswer): { ok: true; body: any } | PostHogFailure {
   if (!answer.ok) return answer;
   try {
     return { ok: true, body: JSON.parse(answer.text) };
@@ -263,6 +264,8 @@ export function recordingRow(raw: any): RecordingRow | null {
 
 export interface RecordingFilters {
   limit?: number;
+  /** Rows to skip: the bulk import's position in a list pinned by date_to. */
+  offset?: number;
   date_from?: string;
   date_to?: string;
   person_uuid?: string;
@@ -272,6 +275,7 @@ export interface RecordingFilters {
 export function recordingsPath(filters: RecordingFilters): string {
   const params = new URLSearchParams();
   params.set("limit", String(Math.min(Math.max(Math.floor(filters.limit ?? 20), 1), RECORDINGS_LIST_MAX)));
+  if (filters.offset && filters.offset > 0) params.set("offset", String(Math.floor(filters.offset)));
   for (const key of ["date_from", "date_to"] as const) {
     const value = filters[key]?.trim();
     if (!value) continue;
@@ -387,7 +391,7 @@ export async function fetchRecordingEvents(
   conn: PostHogConn,
   recordingId: string,
   fetchImpl: FetchLike = fetch,
-): Promise<{ ok: true; events: RrwebEvent[]; truncated: boolean } | { ok: false; error: string }> {
+): Promise<{ ok: true; events: RrwebEvent[]; truncated: boolean } | PostHogFailure> {
   const listed = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/snapshots`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
   if (!listed.ok) return listed;
   const sources = snapshotSources(listed.body);
@@ -488,10 +492,10 @@ export const listRecordings = action({
 /** One recording read whole from PostHog: its metadata (start, person) and its rrweb events. */
 export async function readPostHogRecording(conn: PostHogConn, recordingId: string, fetchImpl: FetchLike = fetch): Promise<VendorRecording> {
   const meta = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
-  if (!meta.ok) throw new Error(meta.error);
+  if (!meta.ok) throw new VendorCallError(meta);
   const row = recordingRow(meta.body);
   const read = await fetchRecordingEvents(conn, recordingId, fetchImpl);
-  if (!read.ok) throw new Error(read.error);
+  if (!read.ok) throw new VendorCallError(read);
   return {
     events: read.events,
     truncated: read.truncated,
@@ -500,11 +504,11 @@ export async function readPostHogRecording(conn: PostHogConn, recordingId: strin
   };
 }
 
-/** Import (or find) one recording of a source, as the source: access was checked by the caller (vendorReplay.importLinked). */
-async function importFor(ctx: Pick<ActionCtx, "runQuery" | "runAction">, input: { source_id: Id<"event_sources">; config: { project_id?: string } | null; connection_id: string | null }, recordingId: string): Promise<ImportOutcome> {
+/** Import (or find) one recording of a source, as the source: access was checked by the caller (vendorReplay.importLinked, the bulk import). */
+export async function importFor(ctx: Pick<ActionCtx, "runQuery" | "runAction">, input: { source_id: Id<"event_sources">; config: { project_id?: string } | null; connection_id: string | null }, recordingId: string): Promise<ImportOutcome> {
   return importVendorRecording(ctx, { source_id: input.source_id, provider: "posthog", external_id: recordingId }, async () => {
     const conn = await connFor(ctx, input);
-    if ("error" in conn) throw new Error(conn.error);
+    if ("error" in conn) throw new VendorCallError({ error: conn.error, lost: true });
     return readPostHogRecording(conn, recordingId);
   });
 }

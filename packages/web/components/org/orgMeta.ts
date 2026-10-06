@@ -7,7 +7,7 @@ import { parseThreadStateStatus, type WorkState } from "@codecast/shared/contrac
 import { changeLine, describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
-import type { OrgParentRef, OrgStandingState, OrgTree } from "./orgTypes";
+import type { OrgParentRef, OrgStandingState, OrgTree, StateCounts } from "./orgTypes";
 import type { OrgHealth } from "./orgStaffingTypes";
 
 export const ORG_STATE_META: Record<WorkState, { label: string; color: string; chip: string }> = {
@@ -17,6 +17,18 @@ export const ORG_STATE_META: Record<WorkState, { label: string; color: string; c
   done: { label: "done", color: "var(--sol-cyan)", chip: THREAD_STATE_STATUS_META.done.chip },
   idle: { label: "idle", color: "var(--sol-text-dim)", chip: "bg-sol-bg-highlight text-sol-text-dim border-sol-border/30" },
 };
+
+/** A card's sessions in words, the states a person acts on first ("4 need
+ *  input · 2 working"), at most `max` parts; the rest is for a title. Empty
+ *  when there is nothing to say. */
+export function stateWords(counts: Partial<StateCounts>, max = 2): string[] {
+  const out: string[] = [];
+  const n = (k: WorkState) => counts[k] ?? 0;
+  if (n("needs_input")) out.push(`${n("needs_input")} need${n("needs_input") === 1 ? "s" : ""} input`);
+  if (n("working")) out.push(`${n("working")} working`);
+  for (const k of ["dormant", "done", "idle"] as const) if (out.length < max && n(k)) out.push(`${n(k)} ${ORG_STATE_META[k].label}`);
+  return out.slice(0, max);
+}
 
 /** The word on the button and the tab that open the staffing pane, said as
  *  what they open: the proposal waiting on the person when one is open,
@@ -78,6 +90,7 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
   file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
   role: { label: "New roles", describe: "Adds a role with a name and an area to look after." },
+  charter_edit: { label: "Charter edits", describe: "Changes a passage of a role's charter, or adds or removes a line, leaving the rest as it is." },
   move: { label: "Reporting changes", describe: "Moves a role under a different person or role, and can change what it looks after." },
   scope: { label: "Area changes", describe: "Adds or removes the projects and plans a role looks after." },
   budget: { label: "Daily limit changes", describe: "Raises or lowers how much a role may do in one day." },
@@ -157,6 +170,7 @@ export function chipLine(change: OrgChange): string {
  *  it accepts on a card carrying several changes. */
 export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   projects: "projects",
+  charter_edit: "charter",
   file: "filing",
   role: "role",
   move: "move",

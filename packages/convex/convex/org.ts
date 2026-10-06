@@ -830,7 +830,7 @@ export async function computeScopeFeed(
   /** The window's range on a time keyed index: everything before the cursor. */
   const before = (q: any, field: string, kind: FeedKind) => (cursor[kind] ? q.lt(field, cursor[kind]!.ts) : q);
   const goals = resolved.initiatives ?? [];
-  const goalHref = (goal: any) => `/initiatives/${goal.short_id ?? goal._id}`;
+  const goalHref = (goal: any) => `/goals/${goal.short_id ?? goal._id}`;
   // A source that windows a member's or the workspace's rows runs only when
   // the scope holds something its filter can match: a goal with no projects
   // has no project, plan, task or session, and reads none of them.

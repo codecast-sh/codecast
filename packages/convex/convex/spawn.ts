@@ -5,9 +5,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
-import { enqueueStartSession } from "./devices";
-import { enqueuePendingMessage } from "./pendingMessages";
-import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode } from "@codecast/shared/contracts";
+import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
+import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
@@ -141,8 +140,14 @@ export async function spawnSessionCore(
     // tool policy and system prompt at launch; agent/model/effort were folded
     // into the fields above by resolveSpawnDefinition.
     definition?: AgentDefinitionSpec;
+    // A worker under a parent (`cast spawn --subagent`): the machine it counts
+    // against and the limits from the spawner's config (subagentFleet.ts).
+    fleet?: { device: string | null; caps: SubagentCaps };
+    // Merge this isolated worker's changes into its parent's checkout when it
+    // finishes done.
+    mergeBackOnDone?: boolean;
   },
-): Promise<{ conversationId: Id<"conversations">; shortId: string }> {
+): Promise<{ conversationId: Id<"conversations">; shortId: string; queued?: boolean }> {
   const now = Date.now();
   const sessionId = crypto.randomUUID();
   const agentType = opts.agentType || "claude_code";
@@ -176,6 +181,7 @@ export async function spawnSessionCore(
     ...(opts.spawnerConversationId ? { spawned_by_conversation_id: opts.spawnerConversationId } : {}),
     ...(opts.handoffFrom ? handoffChildFields(opts.handoffFrom) : {}),
     ...(opts.ccAccount ? { cc_account: opts.ccAccount } : {}),
+    ...(opts.mergeBackOnDone ? { merge_back_on_done: true } : {}),
     ...(opts.worktree
       ? {
           worktree_name: opts.worktree.name,
@@ -207,10 +213,8 @@ export async function spawnSessionCore(
   // with the prompt once the host has the checkout ready.
   if (opts.cloudPark) return { conversationId, shortId };
 
-  const daemonAgentType = fromConvexAgentType(agentType);
-  await enqueueStartSession(ctx, runnerUserId, {
-    conversationId,
-    agentType: daemonAgentType,
+  const start: QueuedStart = {
+    agentType: fromConvexAgentType(agentType),
     projectPath: opts.projectPath || opts.gitRoot,
     sessionId,
     isolated: opts.isolated,
@@ -223,18 +227,20 @@ export async function spawnSessionCore(
     definition: opts.definition,
     // The cloud upgrade fires only when the spawner runs its own session
     // (runnerUserId === userId); a team agent box target keeps a plain start.
-    callerUserId: userId,
-  });
-
-  // Seed the first turn as a plain user message (raw, not wrapped as a
-  // session-message) over the same pending-message rail the UI uses for a new
-  // session's first message — delivered once the daemon spawns and the agent
-  // is ready.
-  const prompt = (opts.prompt ?? "").trim();
-  if (prompt) {
-    const conversation = await ctx.db.get(conversationId);
-    await enqueuePendingMessage(ctx, conversation, userId, { content: prompt });
+    callerUserId: String(userId),
+    prompt: opts.prompt,
+  };
+  // A worker under a parent counts against the fleet's limits and may wait
+  // for a slot (subagentFleet.ts); every other spawn starts now.
+  if (opts.fleet && opts.subagentFields) {
+    const { queued } = await admitSubagent(ctx, conversationId, runnerUserId, {
+      device: opts.targetDeviceId ?? opts.fleet.device,
+      caps: opts.fleet.caps,
+      start,
+    });
+    return { conversationId, shortId, queued };
   }
+  await startSpawnedSession(ctx, runnerUserId, conversationId, start);
 
   return { conversationId, shortId };
 }
@@ -249,7 +255,7 @@ export async function resolveSpawnDefinition(
   userId: Id<"users">,
   name: string | undefined,
   explicit: { agentType?: string; model?: string; effort?: string; prompt?: string; isolated?: boolean },
-): Promise<{ agentType?: any; model?: string; effort?: string; prompt?: string; isolated?: boolean; definition?: AgentDefinitionSpec }> {
+): Promise<{ agentType?: any; model?: string; effort?: string; prompt?: string; isolated?: boolean; mergeBack?: boolean; definition?: AgentDefinitionSpec }> {
   if (!name) return explicit;
   const def = await resolveDefinitionFor(ctx, userId, name);
   if (!def) throw new Error(`No agent definition named "${name}"`);
@@ -266,6 +272,7 @@ export async function resolveSpawnDefinition(
     effort: launch.effort,
     prompt,
     isolated: explicit.isolated || launch.isolated || undefined,
+    mergeBack: launch.mergeBack,
     definition: def,
   };
 }
@@ -339,6 +346,12 @@ export const createSessionFromCli = mutation({
     // handed_off_from_conversation_id and the source's task/plan binding, and
     // the source is patched forward and pinned done in this same mutation.
     handoff_from_session: v.optional(v.string()),
+    // `cast spawn --subagent`: the spawner's fleet limits from its config and
+    // the machine it runs on (subagentFleet.ts). Absent = the defaults.
+    subagent_caps: v.optional(v.object({ per_session: v.optional(v.number()), per_machine: v.optional(v.number()) })),
+    spawn_device_id: v.optional(v.string()),
+    // `--merge-back` / `--no-merge-back`; absent = the definition decides.
+    merge_back: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -391,7 +404,7 @@ export const createSessionFromCli = mutation({
       cloudPark = { deviceId: args.cloud_device_id, workspace: "shared", checkoutPath: args.cloud_checkout_path };
     }
 
-    const { conversationId, shortId } = await spawnSessionCore(ctx, userId, {
+    const { conversationId, shortId, queued } = await spawnSessionCore(ctx, userId, {
       agentType: asDef.agentType ?? args.agent_type,
       projectPath: args.project_path,
       gitRoot: args.git_root,
@@ -412,6 +425,8 @@ export const createSessionFromCli = mutation({
       spawnerConversationId: spawner?._id,
       handoffFrom,
       prompt,
+      fleet: subagentFields ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
+      mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
     if (review) {
@@ -425,6 +440,7 @@ export const createSessionFromCli = mutation({
       parent_short_id: subagentFields
         ? subagentFields.parent_conversation_id.toString().slice(0, 7)
         : undefined,
+      queued: queued || undefined,
     };
   },
 });

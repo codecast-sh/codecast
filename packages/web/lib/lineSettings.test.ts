@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
-import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineValue, lineWriteGate } from "./lineSettings";
+import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, editKey, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineValue, lineWriteGate } from "./lineSettings";
 
 const field = (key: string) => LINE_FIELDS.find((f) => f.key === key)!;
 
@@ -67,6 +67,16 @@ describe("applyLineEdits", () => {
     expect(lp.finders[0]).toEqual({ id: "sentry-web", source: "sentry", kind: "any", fingerprint: "s:<x>", runs: "cast trigger tr-1" });
     applyLineEdits(lp, [{ op: "remove_finder", id: "evals" }]);
     expect(lp.finders.map((f) => f.id)).toEqual(["sentry-web"]);
+  });
+
+  test("a station edit paints the repo's line (LX5) and keys its state by station", () => {
+    const lp = profile();
+    const edit = { op: "set_station", station: "prove", timeout: 600 } as const;
+    applyLineEdits(lp, [edit]);
+    expect(lp.line!.nodes.find((n) => n.id === "prove")!.timeout).toBe(600);
+    expect(lp.finders.map((f) => f.id)).toEqual(["sentry-web"]);
+    expect(editKey(edit)).toBe("stations.prove");
+    expect(editKey({ op: "reset_station", station: "red" })).toBe("stations.red");
   });
 
   test("an older row without values reads the defaults", () => {

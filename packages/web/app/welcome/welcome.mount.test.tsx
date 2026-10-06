@@ -1,6 +1,7 @@
-// /welcome mounted on the real store: each screen shows for the facts that
-// call for it, "Not now" moves on and puts the person in the simple lane, and
-// tapping the first ask starts a hosted conversation with it and lands in it.
+// /welcome mounted on the real store: sign in, then straight to the first
+// asks; "Connect it" opens the connect screen only where connect works, and
+// "Not now" comes back. Tapping the first ask starts a hosted conversation
+// with it and lands in it.
 // The promise follows what the deployment can connect, the first ask waits
 // for what the grant allows, and a failed read never strands the page.
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -33,7 +34,9 @@ let signedIn = true;
 const localAuth = await import("../../lib/localAuth");
 mock.module("../../lib/localAuth", () => ({ ...localAuth, useLocalAuth: () => signedIn }));
 mock.module("../../components/simple/LaneSync", () => ({ LaneSync: () => null }));
-let connectAvailable = true;
+let connectAvailable: boolean | undefined = true;
+let thinking: boolean | undefined = true;
+let googleOffered = true;
 let connectionsError: Error | undefined;
 const syncSettings = await import("../../hooks/useSyncSettings");
 const realSettingsData = syncSettings.useSettingsData;
@@ -47,7 +50,10 @@ mock.module("../../hooks/useSyncSettings", () => ({
 mock.module("../../hooks/useQueryNoThrow", () => ({
   useQueryNoThrow: (ref: any) => {
     const name = getFunctionName(ref);
-    const data = name === "auth:signInProviders" ? { google: true } : name === "whisk:connectAvailable" ? connectAvailable : undefined;
+    const data = name === "auth:signInProviders" ? { google: googleOffered }
+      : name === "whisk:connectAvailable" ? connectAvailable
+      : name === "assistant/incidents:thinkingAvailable" ? thinking
+      : undefined;
     return { data, error: undefined, retry() {} };
   },
 }));
@@ -56,7 +62,7 @@ const { useInboxStore } = await import("../../store/inboxStore");
 const { settingsDataKey } = await import("../../lib/settingsData");
 const { ASKS, ASK_FIRST } = await import("../../components/simple/lane");
 const { disconnectNote } = await import("../../components/simple/connectionWords");
-const { MAIL_COMING, assistantPromise } = await import("../../components/simple/assistantPromise");
+const { MAIL_COMING, THINKING_DOWN, assistantPromise } = await import("../../components/simple/assistantPromise");
 const { default: Welcome } = await import("./page");
 
 let root: Root;
@@ -129,6 +135,7 @@ afterAll(() => {
 beforeEach(() => {
   signedIn = true;
   connectAvailable = true;
+  thinking = true;
   connectionsError = undefined;
 });
 
@@ -155,18 +162,111 @@ describe("/welcome", () => {
     connectAvailable = true;
   });
 
-  test("not connected: connect, and Not now moves on and joins the lane", async () => {
+  test("signed out without Google: Apple and email are the ways in, GitHub sits quietly", async () => {
+    signedIn = false;
+    googleOffered = false;
+    await open();
+    await settle(() => text().includes("Continue with Apple"));
+    const email = [...container().querySelectorAll("a")].find((a) => a.textContent?.trim() === "Continue with email");
+    expect(email?.getAttribute("href")).toBe("/welcome?email=signup");
+    expect(container().querySelector("button[data-provider=apple]")?.className).toBe("wl-auth");
+    expect(container().querySelector("button[data-provider=github]")?.className).toBe("wl-auth is-quiet");
+    signedIn = true;
+    googleOffered = true;
+  });
+
+  test("signed out, by email: the form shows here, in the page's own look", async () => {
+    signedIn = false;
+    await open("/welcome?email=signup");
+    await settle(() => text().includes("Create your account"));
+    expect(container().querySelector("[data-welcome] form.wl-form")).toBeTruthy();
+    expect(container().querySelectorAll("form.wl-form input")).toHaveLength(3);
+    expect(text()).not.toContain("Continue with Google");
+    await open("/welcome?email=signin");
+    await settle(() => text().includes("Welcome back"));
+    expect(container().querySelectorAll("form.wl-form input")).toHaveLength(2);
+    // A forgotten password stays in the page's look, with its ways back.
+    const forgot = Array.from(container().querySelectorAll("a")).find((a) => a.textContent === "Forgot your password?");
+    expect(forgot?.getAttribute("href")).toBe("/welcome?email=reset");
+    signedIn = true;
+  });
+
+  test("signed out, a forgotten password: the address, then the code and a new password", async () => {
+    signedIn = false;
+    await open("/welcome?email=reset");
+    await settle(() => text().includes("Forgot your password?"));
+    expect(container().querySelectorAll("[data-welcome] form.wl-form input")).toHaveLength(1);
+    expect(text()).toContain("Other ways to sign in");
+    await act(async () => {
+      container().querySelector("form.wl-form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await settle(() => text().includes("Set a new password"));
+    expect(container().querySelectorAll("form.wl-form input")).toHaveLength(3);
+    expect(text()).toContain("Back to sign in");
+    signedIn = true;
+  });
+
+  test("not connected: the asks come first; Connect it opens the connect screen and Not now comes back", async () => {
     setMail(false);
     await open();
+    await settle(() => text().includes("What can I take off your plate?"));
+    expect(text()).toContain(ASKS.sayNo);
+    expect(text()).not.toContain("Bring in your mail and calendar");
+    await act(async () => { button("Connect it")!.click(); });
     await settle(() => text().includes("Bring in your mail and calendar"));
     expect(text()).toContain(ASK_FIRST);
     expect(text()).toContain(disconnectNote(false));
-    expect(text()).toContain("One step with Whisk");
+    expect(text()).toContain("Connect with Whisk");
     await act(async () => { button("Not now")!.click(); });
     await settle(() => text().includes("What can I take off your plate?"));
-    expect(text()).toContain(ASKS.planWeek);
     expect(useInboxStore.getState().clientState?.ui?.lane).toBe("simple");
   });
+
+  test("a deployment that has not said connect works offers no connect at all", async () => {
+    setMail(false);
+    connectAvailable = undefined;
+    await open("/welcome?step=connect");
+    await settle(() => text().includes("What can I take off your plate?"));
+    expect(button("Connect it")).toBeFalsy();
+    expect(text()).not.toContain("Bring in your mail and calendar");
+    connectAvailable = true;
+  });
+
+  test("asks show unless the deployment says it cannot think; a slow answer is not an outage", async () => {
+    setMail(false);
+    thinking = undefined;
+    await open();
+    await settle(() => text().includes(ASKS.sayNo));
+    expect(text()).not.toContain(THINKING_DOWN);
+    thinking = false;
+    await open();
+    await settle(() => text().includes(THINKING_DOWN));
+    expect(text()).not.toContain(ASKS.sayNo);
+    thinking = true;
+  });
+
+  test("an errand carried in while thinking is down stays on screen, held and saved", async () => {
+    setMail(false);
+    thinking = false;
+    // As kept across sign-in from the marketing page's ?ask= link.
+    sessionStorage.setItem("codecast-welcome-ask", "Compare robot vacuums");
+    await open();
+    await settle(() => text().includes("Compare robot vacuums"));
+    expect(container().querySelector(".wl-lead.is-held")).toBeTruthy();
+    expect(container().querySelector("button.wl-lead")).toBeFalsy();
+    expect(text()).toContain("Saved for later");
+    expect(sessionStorage.getItem("codecast-welcome-ask")).toBe("Compare robot vacuums");
+    sessionStorage.removeItem("codecast-welcome-ask");
+    thinking = true;
+  });
+
+  test("a connection read that never answers still reaches Start after the deadline", async () => {
+    unanswered("whiskConnection");
+    await open();
+    await settle(() => text().includes("Getting things ready"));
+    await settle(() => text().includes("What can I take off your plate?"), 7000);
+    expect(text()).toContain(ASKS.sayNo);
+  }, 10000);
 
   test("connected: the first ask is about the week, and tapping it starts and lands", async () => {
     setMail(true);
@@ -174,7 +274,7 @@ describe("/welcome", () => {
     await settle(() => text().includes(ASKS.week));
     await act(async () => { (container().querySelector(".wl-lead") as HTMLButtonElement).click(); });
     await settle(() => !!container().querySelector("[data-landed]"));
-    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/simple/c/");
+    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/conversation/");
     await settle(() => starts.length > 0);
     expect(starts[0]).toMatchObject({ agent_type: "codecast", first_message: ASKS.week });
   });
@@ -198,21 +298,21 @@ describe("/welcome", () => {
     await open("/welcome?step=start");
     await settle(() => text().includes("Getting things ready"));
     await act(async () => { await new Promise((r) => setTimeout(r, 60)); });
-    expect(text()).not.toContain(ASKS.planWeek);
+    expect(text()).not.toContain(ASKS.sayNo);
     expect(text()).not.toContain(ASKS.replies);
     expect(text()).not.toContain(ASKS.week);
     await act(async () => { setMail(true); });
     await settle(() => text().includes(ASKS.week));
-    expect(text()).not.toContain(ASKS.planWeek);
+    expect(text()).not.toContain(ASKS.sayNo);
     expect(text()).not.toContain(ASKS.replies);
   });
 
-  test("a connection read that fails still lets the person on: the connect screen and its Not now", async () => {
+  test("a connection read that fails still lets the person on to the asks", async () => {
     unanswered("whiskConnection");
     connectionsError = new Error("whisk.connection failed");
     await open();
-    await settle(() => text().includes("Bring in your mail and calendar"));
-    expect(button("Not now")).toBeTruthy();
+    await settle(() => text().includes("What can I take off your plate?"));
+    expect(text()).toContain(ASKS.sayNo);
     connectionsError = undefined;
   });
 
