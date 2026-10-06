@@ -81,6 +81,7 @@ export interface CodexProcessCandidate {
 }
 
 export interface StartedSessionEntry {
+  sessionId?: string;
   tmuxSession: string;
   projectPath: string;
   startedAt: number;
@@ -224,18 +225,27 @@ export function shortId(sessionId: string): string {
 export function matchStartedConversation(
   entries: Iterable<[string, StartedSessionEntry]>,
   {
+    sessionId,
     tmuxSessionName,
     projectPath,
     now = Date.now(),
     ttlMs = 300_000,
   }: {
+    sessionId?: string;
     tmuxSessionName?: string | null;
     projectPath?: string | null;
     now?: number;
     ttlMs?: number;
   }
 ): string | null {
-  const startedEntries = Array.isArray(entries) ? entries : [...entries];
+  const candidates = Array.isArray(entries) ? entries : [...entries];
+  if (sessionId) {
+    const assigned = candidates.filter(([, entry]) => entry.sessionId === sessionId);
+    if (assigned.length) return assigned.length === 1 ? assigned[0][0] : null;
+  }
+  const startedEntries = sessionId
+    ? candidates.filter(([, entry]) => !entry.sessionId)
+    : candidates;
 
   if (tmuxSessionName) {
     for (const [conversationId, entry] of startedEntries) {

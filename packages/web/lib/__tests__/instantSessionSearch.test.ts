@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { instantSessionRows, mergeSearchRows, sessionMatchesQuery } from "../instantSessionSearch";
+import { instantSessionRows, mergeSearchRows, rankSessions, sessionMatchesQuery, sessionStanding, standingMark, type SessionStanding } from "../instantSessionSearch";
 
 const session = (over: any) => ({
   _id: over._id,
@@ -94,5 +94,94 @@ describe("mergeSearchRows", () => {
 
   test("an absent tier is skipped", () => {
     expect(mergeSearchRows(undefined, [instantRow]).map((r) => r.conversationId)).toEqual(["a"]);
+  });
+});
+
+describe("rankSessions", () => {
+  const H = 3_600_000;
+  const NOW = 1_000 * H;
+  const quiet: SessionStanding = { state: "done", shelf: null, sub: false, mine: true };
+  const rank = (rows: any[], q: string, standing: Record<string, Partial<SessionStanding>> = {}) =>
+    rankSessions(rows, q, (r: any) => ({ ...quiet, ...standing[r._id] }), 25, NOW).map((r: any) => r._id);
+
+  test("a title hit beats a fresher hit in a summary (the ⌘K 'cloud' case)", () => {
+    const rows = [
+      session({ _id: "aurora", title: "Aurora toy hardware design", idle_summary: "ran the cloud render", updated_at: NOW }),
+      session({ _id: "chip", title: "Cloud Linux chip cleanup", updated_at: NOW - 18 * H }),
+      session({ _id: "dev", title: "Dev server cloud standardization", updated_at: NOW - 9 * H }),
+    ];
+    expect(rank(rows, "cloud")).toEqual(["dev", "chip", "aurora"]);
+  });
+
+  test("a word starting the query names a session as strongly as the title's first word", () => {
+    const rows = [
+      session({ _id: "mid", title: "Dev server cloud standardization", updated_at: NOW - 2 * H }),
+      session({ _id: "inside", title: "Wordcloud renderer", updated_at: NOW }),
+      session({ _id: "lead", title: "Cloud host parity", updated_at: NOW - 3 * H }),
+    ];
+    expect(rank(rows, "cloud")).toEqual(["lead", "mid", "inside"]);
+  });
+
+  test("a worker's ask gets no lift: it reports to its parent, not to you", () => {
+    const rows = [
+      session({ _id: "worker", title: "Sim worker", updated_at: NOW - 1 * H }),
+      session({ _id: "own", title: "Sim own", updated_at: NOW - 1 * H }),
+    ];
+    expect(rank(rows, "sim", { worker: { sub: true, state: "needs_input" } })).toEqual(["own", "worker"]);
+    expect(standingMark({ state: "needs_input", shelf: null, sub: true, mine: true })).toBe(null);
+    expect(standingMark({ state: "working", shelf: null, sub: true, mine: true })).toBe("working");
+    expect(standingMark({ state: "needs_input", shelf: "stashed", sub: false, mine: true })).toBe(null);
+  });
+
+  test("every typed word must land somewhere, in any order", () => {
+    const rows = [
+      session({ _id: "a", title: "Cloud box unblock and cleanup", updated_at: NOW }),
+      session({ _id: "b", title: "Cloud host parity", updated_at: NOW }),
+    ];
+    expect(rank(rows, "cleanup cloud")).toEqual(["a"]);
+  });
+
+  test("inside a tier, a session that needs you or is working rises over a slightly fresher one", () => {
+    const rows = [
+      session({ _id: "fresh", title: "Sim pool", updated_at: NOW - 1 * H }),
+      session({ _id: "asks", title: "Sim verify", updated_at: NOW - 6 * H }),
+      session({ _id: "busy", title: "Sim offload", updated_at: NOW - 3 * H }),
+    ];
+    expect(rank(rows, "sim", { asks: { state: "needs_input" }, busy: { state: "working" } })).toEqual(["asks", "busy", "fresh"]);
+  });
+
+  test("workers, set-aside sessions and teammates' sink below an equal own session", () => {
+    const rows = ["sub", "stashed", "killed", "theirs", "own"].map((id) => session({ _id: id, title: `Deploy ${id}`, updated_at: NOW - 2 * H }));
+    expect(rank(rows, "deploy", {
+      sub: { sub: true }, stashed: { shelf: "stashed" }, killed: { shelf: "killed" }, theirs: { mine: false },
+    })).toEqual(["own", "theirs", "stashed", "sub", "killed"]);
+  });
+
+  test("an empty query orders by standing and recency, not by match", () => {
+    const rows = [
+      session({ _id: "old", title: "A", updated_at: NOW - 48 * H }),
+      session({ _id: "new", title: "B", updated_at: NOW - 1 * H }),
+      session({ _id: "asks", title: "C", updated_at: NOW - 3 * H }),
+    ];
+    expect(rank(rows, "", { asks: { state: "needs_input" } })).toEqual(["asks", "new", "old"]);
+  });
+});
+
+describe("sessionStanding", () => {
+  test("a server-only row reads its shelf from its triage stamps", () => {
+    const row = session({ _id: "a", user_id: "u2", inbox_stashed_at: 5, isOwn: false });
+    expect(sessionStanding(row, "u1", null)).toEqual({ state: null, shelf: "stashed", sub: false, mine: false });
+  });
+
+  test("a live row is placed the way the inbox places it", () => {
+    const row = session({ _id: "a", user_id: "u1", awaiting_input: true, is_idle: true, is_connected: true });
+    expect(sessionStanding(row, "u1", row).state).toBe("needs_input");
+  });
+
+  test("a worker is a sub; a killed row is killed whatever else it says", () => {
+    const row = session({ _id: "a", user_id: "u1", parent_conversation_id: "p", inbox_killed_at: 9, inbox_stashed_at: 5 });
+    const s = sessionStanding(row, "u1", null);
+    expect(s.sub).toBe(true);
+    expect(s.shelf).toBe("killed");
   });
 });

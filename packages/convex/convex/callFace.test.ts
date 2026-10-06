@@ -214,7 +214,7 @@ describe("the wire", () => {
   const cfg = { secret: "s", lkUrl: "wss://lk.example", lkKey: "lkkey", lkSecret: ENV.LIVEKIT_API_SECRET };
   const faceFeed = { room_key: "session:conv1", conversation_id: "conv1", name: "Ember", avatar: "fox" };
   const listing = (status: string | null, conversation = "conv1") => ({
-    agentDispatches: [{ id: "AD_1", agentName: FACE_HOST_AGENT, metadata: JSON.stringify({ conversation_id: conversation }), state: { jobs: status === null ? [] : [{ state: status ? { status } : {} }] } }],
+    agent_dispatches: [{ id: "AD_1", agent_name: FACE_HOST_AGENT, metadata: JSON.stringify({ conversation_id: conversation }), state: { jobs: status === null ? [] : [{ state: status ? { status } : {} }] } }],
   });
 
   test("a face already on its way or in the room is not sent twice", async () => {
@@ -243,9 +243,15 @@ describe("the wire", () => {
     expect(JSON.parse(atob(sent[0].body.data))).toEqual({ conversation_id: "conv1", kind: "reply", text: "Ship it." });
   });
 
+  test("a leave from the last call does not take the next call's face", async () => {
+    const sent = recordFetch();
+    await call(leave, { runQuery: async () => true }, { room_key: "session:conv1", conversation_id: "conv1" });
+    expect(sent).toEqual([]);
+  });
+
   test("leave removes the face from the room", async () => {
     const sent = recordFetch();
-    await call(leave, {}, { room_key: "session:conv1", conversation_id: "conv1" });
+    await call(leave, { runQuery: async () => false }, { room_key: "session:conv1", conversation_id: "conv1" });
     expect(sent[0].url).toBe("https://lk.example/twirp/livekit.RoomService/RemoveParticipant");
     expect(sent[0].body).toEqual({ room: "session:conv1", identity: "agent:conv1" });
   });

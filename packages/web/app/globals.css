@@ -1928,7 +1928,7 @@ pre[class*="language-"] {
    on the button): strong enough to catch a scanning eye, on negative space
    rather than a filled band. */
 .simple-view [data-sv-rail] [data-sv-sec] {
-  background: transparent;
+  background: var(--sol-bg-alt);
   border-bottom: 1px solid color-mix(in srgb, currentColor 40%, transparent);
   margin-top: 12px;
   padding: 8px 12px 6px;
@@ -2278,8 +2278,12 @@ pre[class*="language-"] {
 /* Hover flyouts that hang off the titlebar. A drag region eats pointer
    events (the window manager takes the mouse; the renderer never sees it
    enter), so a hover panel closes the moment you move onto it. Buttons
-   already opt out above; a panel is a div. */
-[data-flyout] {
+   already opt out above; a panel is a div.
+   Modal layers likewise: Electron draws drag regions from the DOM regardless
+   of stacking, so a modal's controls over a draggable stretch of the header
+   (the image gallery's top-right actions) never get the click. */
+[data-flyout],
+[aria-modal="true"] {
   -webkit-app-region: no-drag;
 }
 
@@ -4561,7 +4565,7 @@ pre[class*="language-"] {
   margin-top: 0;
   padding: 6px 16px 6px 22px;
   border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent) !important;
-  background: color-mix(in srgb, currentColor 6%, transparent) !important;
+  background: color-mix(in srgb, currentColor 6%, var(--sol-bg-alt)) !important;
   font-family: var(--font-ui);
   line-height: 16px;
 }
@@ -6339,6 +6343,101 @@ pre[class*="language-"] {
 .height-grip[data-resizing] .height-grip__bar {
   width: 64px;
   background: var(--grip-accent);
+}
+/* A published page shown frameless in the thread (PublishedPageEmbed's
+   FramelessPage). The page owns its own pixels; the thread adds only a
+   hairline edge and a glass toolbar while the pointer is over it. */
+.page-embed {
+  margin-top: 1.75rem;
+  --embed-edge: color-mix(in srgb, var(--sol-border) 55%, transparent);
+  --embed-ease: cubic-bezier(.2, .8, .2, 1);
+}
+.page-embed[data-loaded] .page-embed__stage { transition: height 260ms var(--embed-ease); }
+.page-embed__stage[data-resizing] { transition: none; }
+/* The page's edge: a hairline that stands a few pixels off the page, so the
+   page's content keeps its breathing room inside it. Shown only on hover. */
+.page-embed__edge {
+  position: absolute;
+  inset: -6px;
+  border-radius: 14px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px transparent;
+  transition: box-shadow 200ms ease;
+}
+.page-embed:hover .page-embed__edge,
+.page-embed:focus-within .page-embed__edge { box-shadow: 0 0 0 1px var(--embed-edge); }
+.page-embed[data-pinning] .page-embed__edge {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--sol-yellow) 70%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--sol-yellow) 12%, transparent);
+}
+.page-embed__frame {
+  border: 0;
+  opacity: 0;
+  transition: opacity 320ms ease;
+}
+.page-embed[data-loaded] .page-embed__frame { opacity: 1; }
+.page-embed__shimmer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--sol-text) 5%, transparent) 50%, transparent 70%) 0 0 / 220% 100%,
+    color-mix(in srgb, var(--sol-bg-alt) 60%, transparent);
+  animation: page-embed-shimmer 1.6s linear infinite;
+}
+@keyframes page-embed-shimmer { from { background-position: 120% 0, 0 0; } to { background-position: -120% 0, 0 0; } }
+/* The toolbar straddles the page's top edge, half in the gap above it, so it
+   reads as attached to the page and covers only the page's own top margin. */
+.page-embed__bar {
+  position: absolute;
+  top: -21px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  max-width: calc(100% - 16px);
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: 0 10px 28px -12px rgb(0 0 0 / .45), 0 1px 2px rgb(0 0 0 / .1);
+  opacity: 0;
+  transform: translateY(3px) scale(.985);
+  transform-origin: bottom right;
+  pointer-events: none;
+  transition: opacity 140ms ease 120ms, transform 180ms var(--embed-ease) 120ms;
+}
+.page-embed:hover .page-embed__bar,
+.page-embed:focus-within .page-embed__bar,
+.page-embed[data-pinning] .page-embed__bar {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition-delay: 0ms;
+}
+.page-embed__grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -13px;
+  z-index: 2;
+  display: block;
+  opacity: 0;
+  transition: opacity 160ms ease 120ms;
+}
+.page-embed__grip .height-grip { height: 14px; }
+.page-embed:hover .page-embed__grip,
+.page-embed__grip:has([data-resizing]) { opacity: 1; transition-delay: 0ms; }
+@media (hover: none) {
+  .page-embed__bar { opacity: 1; transform: none; pointer-events: auto; }
+  .page-embed__edge { box-shadow: 0 0 0 1px var(--embed-edge); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-embed__edge, .page-embed[data-loaded] .page-embed__stage, .page-embed__bar, .page-embed__frame { transition: none; }
+  .page-embed__shimmer { animation: none; }
 }
 .object-reveal__grip {
   --grip-accent: var(--reveal-accent);

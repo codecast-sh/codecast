@@ -209,7 +209,7 @@ export async function performFileLearned(ctx: Ctx, args: { instance_id: Id<"org_
 
 /** The newest canary release above the newest stable one: the release in trial. */
 function canaryOf(template: any): any | null {
-  const newest = (status: string) => template.releases.filter((r: any) => r.status === status).sort((a: any, b: any) => compareVersions(a.version, b.version)).at(-1) ?? null;
+  const newest = (status: string) => template.releases.filter((r: any) => r.status === status && !r.yanked).sort((a: any, b: any) => compareVersions(a.version, b.version)).at(-1) ?? null;
   const stable = newest("stable"), canary = newest("canary");
   return canary && (!stable || compareVersions(canary.version, stable.version) > 0) ? canary : null;
 }
@@ -238,7 +238,7 @@ async function learnStatus(ctx: Ctx, template: any, now: number) {
   const count = (status: string) => lessons.filter((l) => l.status === status).length;
   return {
     template_id: template.template_id as string, name: template.name as string, latest: template.latest.version as string,
-    stable: template.releases.filter((r: any) => r.status === "stable").map((r: any) => r.version).sort(compareVersions).at(-1) ?? null,
+    stable: template.releases.filter((r: any) => r.status === "stable" && !r.yanked).map((r: any) => r.version).sort(compareVersions).at(-1) ?? null,
     canary,
     lessons: { open: count("open"), accepted: count("accepted"), released: count("released"), declined: count("declined") },
     draft: { ...draft, next_version: nextPatch(template.releases.map((r: any) => r.version)) },

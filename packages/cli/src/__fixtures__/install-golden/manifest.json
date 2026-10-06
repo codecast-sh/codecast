@@ -58,7 +58,7 @@
   "workflows": {
     "config": {
       "workflow_enabled": true,
-      "workflow_version": "1"
+      "workflow_version": "2"
     },
     "stdout": "* Workflows — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

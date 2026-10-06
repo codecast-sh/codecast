@@ -2,30 +2,54 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { ReactNode, AnchorHTMLAttributes } from "react";
-import ReactMarkdown from "react-markdown";
+import { Suspense, type ReactNode, type AnchorHTMLAttributes } from "react";
+import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { usePageMeta } from "../../pageMeta";
-import { GUIDES, getGuide, guideHref, type Guide } from "./guides";
+import { SOL, Figure, Screenshot } from "../../blog/blogChrome";
+import { FigureStyles } from "../../blog/figureKit";
+import { GUIDES, formatGuideDate, getGuide, type Guide } from "./guides";
 import { getGuideContent } from "./guideContent";
+import { GuideCard } from "./GuideCard";
+import { guideFigure } from "./figures";
 
-// Solarized light palette — matches the documentation page.
-const SOL = {
-  base03: "#002b36",
-  base02: "#073642",
-  base01: "#586e75",
-  base00: "#657b83",
-  base0: "#839496",
-  base1: "#93a1a1",
-  base2: "#eee8d5",
-  base3: "#fdf6e3",
-  yellow: "#b58900",
-  blue: "#268bd2",
-  cyan: "#2aa198",
-  green: "#859900",
-};
+/** Words a reader gets through in a minute of technical prose. */
+const WORDS_PER_MINUTE = 220;
+
+function readingMinutes(markdown: string): number {
+  return Math.max(1, Math.round(markdown.split(/\s+/).filter(Boolean).length / WORDS_PER_MINUTE));
+}
+
+type MdNode = ExtraProps["node"];
+
+/** The text of a fenced block's language and body, when `node` is one. */
+function fenceOf(node: MdNode): { lang: string; body: string } | null {
+  const code = node?.children[0];
+  if (!code || code.type !== "element" || code.tagName !== "code") return null;
+  const cls = code.properties?.className;
+  const lang = (Array.isArray(cls) ? cls : []).map(String).find((c) => c.startsWith("language-"))?.slice(9) ?? "";
+  const text = code.children[0];
+  return { lang, body: text?.type === "text" ? text.value : "" };
+}
+
+/**
+ * A ```figure fence: the first line names a figure exported from
+ * figures/<slug>.tsx, the rest is its caption.
+ */
+function GuideFigure({ slug, body }: { slug: string; body: string }) {
+  const [name, ...rest] = body.trim().split("\n");
+  const Comp = guideFigure(slug, name.trim());
+  if (!Comp) return null;
+  return (
+    <Figure wide caption={rest.join(" ").trim()}>
+      <Suspense fallback={<div className="h-64" />}>
+        <Comp />
+      </Suspense>
+    </Figure>
+  );
+}
 
 function headingId(children: ReactNode): string {
   const text = Array.isArray(children) ? children.join("") : String(children ?? "");
@@ -52,7 +76,14 @@ function MdLink({ href, children }: AnchorHTMLAttributes<HTMLAnchorElement>) {
   );
 }
 
-const MD_COMPONENTS = {
+/** True when a paragraph holds only images (markdown wraps a lone image in <p>). */
+function onlyImages(node: MdNode): boolean {
+  const kids = node?.children ?? [];
+  return kids.some((k) => k.type === "element" && k.tagName === "img")
+    && kids.every((k) => (k.type === "element" && k.tagName === "img") || (k.type === "text" && !k.value.trim()));
+}
+
+const mdComponents = (slug: string) => ({
   h2: ({ children }: { children?: ReactNode }) => (
     <h2
       id={headingId(children)}
@@ -67,8 +98,13 @@ const MD_COMPONENTS = {
       {children}
     </h3>
   ),
-  p: ({ children }: { children?: ReactNode }) => (
-    <p className="text-[15px] leading-7 mb-4" style={{ color: SOL.base00 }}>{children}</p>
+  p: ({ node, children }: { children?: ReactNode } & ExtraProps) =>
+    onlyImages(node) ? <>{children}</> : (
+      <p className="text-[15px] leading-7 mb-4" style={{ color: SOL.base00 }}>{children}</p>
+    ),
+  // ![alt](/documentation/<slug>/shot.webp "caption") renders as a framed screenshot.
+  img: ({ src, alt, title }: { src?: string | Blob; alt?: string; title?: string }) => (
+    <Screenshot wide src={typeof src === "string" ? src : ""} alt={alt ?? ""} caption={title ?? alt ?? ""} />
   ),
   a: MdLink,
   strong: ({ children }: { children?: ReactNode }) => (
@@ -95,14 +131,18 @@ const MD_COMPONENTS = {
     }
     return <code className="font-mono">{children}</code>;
   },
-  pre: ({ children }: { children?: ReactNode }) => (
+  pre: ({ node, children }: { children?: ReactNode } & ExtraProps) => {
+    const fence = fenceOf(node);
+    if (fence?.lang === "figure") return <GuideFigure slug={slug} body={fence.body} />;
+    return (
     <pre
       className="rounded-lg p-4 my-5 text-[13px] leading-relaxed overflow-x-auto font-mono"
       style={{ backgroundColor: SOL.base03, color: SOL.base1, border: `1px solid ${SOL.base02}` }}
     >
       {children}
     </pre>
-  ),
+    );
+  },
   table: ({ children }: { children?: ReactNode }) => (
     <div className="overflow-x-auto my-5">
       <table className="w-full text-sm" style={{ borderCollapse: "collapse" }}>{children}</table>
@@ -126,7 +166,7 @@ const MD_COMPONENTS = {
       {children}
     </blockquote>
   ),
-};
+});
 
 function GuideNav() {
   return (
@@ -177,17 +217,7 @@ function MoreGuides({ current }: { current: Guide }) {
         More guides
       </div>
       <div className="grid sm:grid-cols-2 gap-3">
-        {others.map((g) => (
-          <Link
-            key={g.slug}
-            href={guideHref(g.slug)}
-            className="rounded-lg p-4 transition-colors"
-            style={{ backgroundColor: `${SOL.base2}55`, border: `1px solid ${SOL.base2}` }}
-          >
-            <div className="font-mono text-sm font-semibold mb-1" style={{ color: SOL.base03 }}>{g.title}</div>
-            <div className="text-[13px] leading-relaxed" style={{ color: SOL.base00 }}>{g.dek}</div>
-          </Link>
-        ))}
+        {others.map((g) => <GuideCard key={g.slug} guide={g} />)}
       </div>
     </div>
   );
@@ -219,8 +249,11 @@ export default function GuidePage() {
     );
   }
 
+  const content = getGuideContent(guide.slug) ?? "";
+
   return (
-    <main className="min-h-screen w-full" style={{ backgroundColor: SOL.base3 }}>
+    <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: SOL.base3 }}>
+      <FigureStyles />
       <GuideNav />
       <article className="max-w-3xl mx-auto px-6 pt-14 pb-24">
         <Link href="/documentation" className="inline-flex items-center gap-1 text-sm font-medium mb-8" style={{ color: SOL.yellow }}>
@@ -238,6 +271,11 @@ export default function GuidePage() {
             {guide.title}
           </h1>
           <p className="mt-4 text-lg leading-relaxed" style={{ color: SOL.base00 }}>{guide.dek}</p>
+          <div className="mt-5 flex items-center gap-3 font-mono text-sm" style={{ color: SOL.base1 }}>
+            <time dateTime={guide.published}>{formatGuideDate(guide.published)}</time>
+            <span aria-hidden>&middot;</span>
+            <span>{readingMinutes(content)} min read</span>
+          </div>
           {guide.installSlug && (
             <div
               className="mt-5 inline-flex items-center gap-2 rounded-lg px-3 py-2 font-mono text-[13px]"
@@ -249,8 +287,8 @@ export default function GuidePage() {
           )}
         </header>
 
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-          {getGuideContent(guide.slug) ?? ""}
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents(guide.slug)}>
+          {content}
         </ReactMarkdown>
 
         <MoreGuides current={guide} />

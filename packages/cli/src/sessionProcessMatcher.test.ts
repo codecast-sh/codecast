@@ -253,6 +253,28 @@ describe("shortId", () => {
 });
 
 describe("matchStartedConversation", () => {
+  test("matches an assigned id after discovery expires without process evidence", () => {
+    const entries = new Map([
+      ["call", { sessionId: "assigned", tmuxSession: "call-pane", projectPath: "/repo", startedAt: 0 }],
+      ["other", { sessionId: "different", tmuxSession: "other-pane", projectPath: "/repo", startedAt: 0 }],
+    ]);
+    expect(matchStartedConversation(entries.entries(), { sessionId: "assigned", now: 900_000 })).toBe("call");
+  });
+
+  test("does not give a different assigned session the transcript through a pane or cwd fallback", () => {
+    const entries: Array<[string, { sessionId: string; tmuxSession: string; projectPath: string; startedAt: number }]> = [
+      ["call", { sessionId: "assigned", tmuxSession: "call-pane", projectPath: "/repo", startedAt: 1000 }],
+    ];
+    expect(matchStartedConversation(entries, { sessionId: "different", tmuxSessionName: "call-pane", now: 1001 })).toBeNull();
+    expect(matchStartedConversation(entries, { sessionId: "different", projectPath: "/repo", now: 1001 })).toBeNull();
+  });
+
+  test("keeps terminal discovery for launches without an assigned id", () => {
+    expect(matchStartedConversation([
+      ["legacy", { tmuxSession: "legacy-pane", projectPath: "/repo", startedAt: 0 }],
+    ], { sessionId: "discovered", tmuxSessionName: "legacy-pane" })).toBe("legacy");
+  });
+
   test("matches by tmux session first", () => {
     const match = matchStartedConversation(
       [

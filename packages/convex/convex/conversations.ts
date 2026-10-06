@@ -114,6 +114,7 @@ import { isDaemonManagedRow, liveConversationIdSet } from "./lib/liveSessions";
 import { isDeletedSession } from "./lib/deletedSessions";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { claimShareToken } from "./publicShare";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
 import {
   FAVORITES_GRANT_KEY,
   FAVORITES_VIEW_CONTRACT_ID,
@@ -3257,7 +3258,7 @@ export async function writeShareLink(ctx: Pick<MutationCtx, "db">, userId: Id<"u
     throw new Error("Unauthorized: can only change sharing on your own conversations");
   if (token === null && conversation.profile_pinned_at)
     await ctx.db.patch(conversation._id, { profile_pinned_at: undefined });
-  await claimShareToken(ctx, "conversations", conversation, token);
+  await claimShareToken(ctx, "conversations", conversation, token, userId);
 }
 
 // Pin a session to the owner's PUBLIC profile. This is the consent act that
@@ -3335,6 +3336,14 @@ export const redeemShareToken = mutation({
         created_at: Date.now(),
       });
     }
+    await recordAuthorityEvent(ctx, {
+      kind: "share_link_redeemed",
+      actor_user_id: userId,
+      conversation,
+      share_table: "conversations",
+      share_token: args.share_token,
+      detail: { after: { redeemer: userId, renewed: !!existing } },
+    });
     return { conversation_id: conversation._id };
   },
 });
