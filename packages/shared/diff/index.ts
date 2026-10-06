@@ -183,18 +183,8 @@ export function computeCumulativeFiles(changes: CumulativeChange[], upToIndex: n
     const isNewFile = newFiles.has(filePath);
     if (oldStr === newStr && !isNewFile && !diff.deleted) continue;
 
-    const patch = generateUnifiedPatch(filePath, oldStr, newStr);
-    const patchLines = patch.split('\n');
-    const additions = patchLines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length;
-    const deletions = patchLines.filter(l => l.startsWith('-') && !l.startsWith('---')).length;
-
     files.push({
-      filename: filePath,
-      status: diff.deleted ? "deleted" : isNewFile ? "added" : "modified",
-      additions,
-      deletions,
-      changes: additions + deletions,
-      patch,
+      ...diffFileOf(filePath, oldStr, newStr, diff.deleted ? "deleted" : isNewFile ? "added" : "modified"),
       lastIndex: lastIndexes.get(filePath)!,
     });
   }
@@ -202,6 +192,15 @@ export function computeCumulativeFiles(changes: CumulativeChange[], upToIndex: n
   files.sort((a, b) => b.lastIndex - a.lastIndex);
 
   return files.map(({ lastIndex, ...file }) => file);
+}
+
+/** One file of the tree from its text before and after. */
+export function diffFileOf(filePath: string, oldStr: string, newStr: string, status: string): DiffFile {
+  const patch = generateUnifiedPatch(filePath, oldStr, newStr);
+  const patchLines = patch.split('\n');
+  const additions = patchLines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length;
+  const deletions = patchLines.filter(l => l.startsWith('-') && !l.startsWith('---')).length;
+  return { filename: filePath, status, additions, deletions, changes: additions + deletions, patch };
 }
 
 export function generateUnifiedPatch(filename: string, oldContent: string, newContent: string): string {
@@ -309,3 +308,4 @@ export function generateUnifiedPatch(filename: string, oldContent: string, newCo
 
 
 export { selectFoldInputs, type FoldInputRef } from "./foldInputs";
+export { selectRangeFoldInputs, computeRangeFiles, diffBaseStart, contentHash, DIFF_BASES, type DiffBase, type DiffBaseInputs, type RangeDiffFile } from "./rangeFold";

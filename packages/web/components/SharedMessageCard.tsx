@@ -6,7 +6,7 @@ import { formatToolName } from "@codecast/shared/render";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { parseMessageRefPayload, truncateEntityLabel, type MessageRef } from "../lib/entityLinks";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { agentDisplayName } from "../lib/commentThread";
+import { agentDisplayName } from "@codecast/shared/contracts";
 import { stripMarkdown } from "../lib/notificationText";
 import { MessageBlock, type SharedMessageData } from "../app/share/message/[token]/SharedMessageView";
 import { CardMarkdown, ObjectCardFrame } from "./EntityObjectCard";

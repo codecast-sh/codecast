@@ -1,5 +1,6 @@
 import { createContext, useMemo } from "react";
 import { useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inboxStore";
+import { useAssistantConversationIds, useAssistantScope } from "../lib/surfaces";
 import { makeCollectionSig } from "../store/wakeSig";
 import {
   decisionQueueItems,
@@ -142,6 +143,16 @@ export function useDecisionQueue(): QueueItem[] {
     }
     return sortQueue(items);
   }, [s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id]);
+}
+
+/** The queue in hosted mode's scope (lib/assistantScope): only the
+ *  assistant's asks unless the person widened it, so the Approvals page and
+ *  its rail count list the same asks. */
+export function useScopedDecisionQueue(): QueueItem[] {
+  const queue = useDecisionQueue();
+  const { only } = useAssistantScope();
+  const ids = useAssistantConversationIds();
+  return useMemo(() => (only ? queue.filter((i) => ids.has(i.conversationId)) : queue), [queue, only, ids]);
 }
 
 /** Options minus Claude Code's synthetic affordance rows, keeping true indices. */
