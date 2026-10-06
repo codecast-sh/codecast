@@ -23,6 +23,7 @@ import {
 import { DiffStat, MetaDot } from "../entityDisplay";
 import { EntityIdPill } from "../EntityIdPill";
 import { CommitLinks } from "../repo/CommitLinks";
+import { ImageGalleryProvider } from "../ImageGallery";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AreaTag, People, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";
@@ -156,7 +157,12 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
 
   return (
     <div className="mt-2 space-y-3 pb-1">
-      {story.body && <MarkdownRenderer content={story.body} className="chg-article prose-p:my-2 prose-headings:mb-1 prose-headings:mt-4 prose-h3:text-[14px] max-w-[46rem] text-[13.5px] leading-[1.65]" />}
+      {story.body && (
+        // The article's screenshots open full size in the lightbox, one gallery per story.
+        <ImageGalleryProvider key={story.story_key}>
+          <MarkdownRenderer content={story.body} className="chg-article prose-p:my-2 prose-headings:mb-1 prose-headings:mt-4 prose-h3:text-[14px] max-w-[46rem] text-[13.5px] leading-[1.65]" />
+        </ImageGalleryProvider>
+      )}
       <RiskLine story={story} full />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <People story={story} />
