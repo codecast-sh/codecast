@@ -7,6 +7,7 @@ import { MESSAGE_PAGE_SIZE } from "../store/cacheRetention";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
+import { isHostedAgentType, isTaggedDecisionAnswer } from "@codecast/shared/contracts";
 import { rowSigExcluding } from "../store/wakeSig";
 import { withClearedInboxStamps } from "../store/syncProtocol";
 import { shareTokenArg } from "../lib/shareTokenScope";
@@ -87,7 +88,11 @@ export type Message = {
   _clientId?: string;
   _isFailed?: true;
   _isLocalQueue?: true;
+  /** The server holds the send (the store's settleOptimisticMessage). */
+  _isSettled?: true;
   client_id?: string;
+  /** The row's server stamp when a bubble was sent (the store's addOptimisticMessage). */
+  _sentBaselineTs?: number;
 };
 
 // Convex patches the active streaming message in place, so its id and the list
@@ -101,17 +106,46 @@ export type Message = {
  * while a confirmed row carries the transcript time, and a paste the agent
  * picks up late is echoed after a newer send left this window. The session
  * has not read a pending row, so nothing it has read can come after it.
+ *
+ * One kind of row is placed instead (`hosted`): an approval's answer in a
+ * conversation with the hosted assistant. Its turn consumes the answer and
+ * never writes it to the transcript (isTaggedDecisionAnswer), so its bubble
+ * meets no echo and would trail the conversation for good, below everything
+ * said after it. It sits where the conversation stood when it was sent
+ * (`_sentBaselineTs`, the row's server stamp then): right after the rows that
+ * were there, where the approval card was, and after any answer already
+ * placed there, so two answers given together keep their order.
  */
-export function mergeUnconfirmedMessages(storeMessages: Message[], storePending: Message[]): Message[] {
+export function mergeUnconfirmedMessages(storeMessages: Message[], storePending: Message[], hosted = false): Message[] {
   if (storePending.length === 0) return storeMessages;
   // Dedup by both _id (optimistic messages now live in messages[]) and client_id (server-confirmed)
   const storeIds = new Set(storeMessages.map((m) => m._id));
   const serverClientIds = new Set(storeMessages.filter((m) => m.client_id).map((m) => m.client_id));
   const unconfirmed = storePending.filter((m) =>
     !m._isLocalQueue && !storeIds.has(m._id) && (!m._clientId || !serverClientIds.has(m._clientId))
-  );
+  ).sort((a, b) => a.timestamp - b.timestamp);
   if (unconfirmed.length === 0) return storeMessages;
-  return [...storeMessages, ...unconfirmed.sort((a, b) => a.timestamp - b.timestamp)];
+  const answers = hosted ? unconfirmed.filter((m) => isTaggedDecisionAnswer(m.content)) : [];
+  if (answers.length === 0) return [...storeMessages, ...unconfirmed];
+  const isAnswer = new Set<Message>(answers);
+  // An answer the server already took is a note about a place in the
+  // transcript. Before any of the transcript is read back it has no place,
+  // so it waits rather than standing alone on a cold open.
+  if (storeMessages.length === 0) return unconfirmed.filter((m) => !(isAnswer.has(m) && m._isSettled));
+  const placed = [...storeMessages];
+  for (const answer of answers) {
+    const sentAt = answer._sentBaselineTs ?? answer.timestamp;
+    let at = 0;
+    for (let i = placed.length - 1; i >= 0; i--) {
+      if (!isAnswer.has(placed[i]) && placed[i].timestamp <= sentAt) {
+        at = i + 1;
+        break;
+      }
+    }
+    while (at < placed.length && isAnswer.has(placed[at])) at++;
+    placed.splice(at, 0, answer);
+  }
+  return [...placed, ...unconfirmed.filter((m) => !isAnswer.has(m))];
 }
 
 export function messagePageSyncKey(conversationId: string, messages: Message[]): string {
@@ -568,11 +602,12 @@ export function useConversationMessages(
     return merged;
   }, [_convMeta, _sessMeta, conversationId]);
   const storePagination = s.pagination[conversationId];
+  const hosted = isHostedAgentType(storeMeta?.agent_type);
 
   // Merge server messages with unconfirmed pending messages (local-first)
   const mergedMessages: Message[] = useMemo(
-    () => mergeUnconfirmedMessages(storeMessages, storePending),
-    [storeMessages, storePending],
+    () => mergeUnconfirmedMessages(storeMessages, storePending, hosted),
+    [storeMessages, storePending, hosted],
   );
 
   // Long-visit re-anchor: the tail range grows as messages land; past ~300

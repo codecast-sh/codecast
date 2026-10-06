@@ -18,7 +18,7 @@ import {
   type ChangeCard,
   type ChangeVerdict,
 } from "@codecast/shared/contracts/changeCard";
-import type { DecisionAnswerInput, DecisionDetailItem, SessionDecisionItem } from "../../store/inboxStore";
+import { useInboxStore, type DecisionAnswerInput, type DecisionDetailItem, type SessionDecisionItem } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useDecisionDraft } from "../../hooks/useDecisionDraft";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -27,6 +27,8 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useGoalChip } from "../../hooks/useGoalChip";
 import "./changeCard.css";
+import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
+import { ChangeGuideWalkthrough } from "../tasks/ChangeGuideWalkthrough";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 // The change card (docs/architecture/the-line-end-to-end.md LE10, LE11) drawn
@@ -57,10 +59,10 @@ const prLabel = (url: string) => {
  * draws the head: the surface holding it does. `dots` is off where a full
  * proof strip reads on the same page.
  */
-export function ChangeCardView({ card, density = "full", recommend = true, change = true, outcome, story = false, summarized = false, folded, dots = true, diffAnchor }: { card: ChangeCard; density?: ChangeCardDensity; recommend?: boolean; change?: boolean; outcome?: ReactNode; story?: boolean; summarized?: boolean; folded?: boolean; dots?: boolean; diffAnchor?: string }) {
+export function ChangeCardView({ card, density = "full", recommend = true, change = true, outcome, story = false, summarized = false, folded, dots = true, diffAnchor, guide }: { card: ChangeCard; density?: ChangeCardDensity; recommend?: boolean; change?: boolean; outcome?: ReactNode; story?: boolean; summarized?: boolean; folded?: boolean; dots?: boolean; diffAnchor?: string; guide?: ChangeGuide | null }) {
   const animate = useFirstSight(card.cause.task);
   if (density === "line") return <ChangeCardLine card={card} recommend={recommend && !outcome} story={story} folded={folded} dots={dots} />;
-  return <ChangeCardFull card={card} inline={density === "inline"} head={change} recommend={recommend} outcome={outcome} animate={animate} summarized={summarized} diffAnchor={diffAnchor} />;
+  return <ChangeCardFull card={card} inline={density === "inline"} head={change} recommend={recommend} outcome={outcome} animate={animate} summarized={summarized} diffAnchor={diffAnchor} guide={guide} />;
 }
 
 /** "evals, judges and users" */
@@ -507,7 +509,7 @@ export function ExamplePair({ ex, clamp = false }: { ex: ChangeCard["examples"][
   );
 }
 
-function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summarized, diffAnchor }: { card: ChangeCard; inline: boolean; head: boolean; recommend: boolean; outcome?: ReactNode; animate: boolean; summarized: boolean; diffAnchor?: string }) {
+function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summarized, diffAnchor, guide }: { card: ChangeCard; inline: boolean; head: boolean; recommend: boolean; outcome?: ReactNode; animate: boolean; summarized: boolean; diffAnchor?: string; guide?: ChangeGuide | null }) {
   const [allExamples, setAllExamples] = useState(false);
   const [checksOpen, setChecksOpen] = useState(false);
   // Two pairs show at every width; the rest wait behind a toggle that names
@@ -631,6 +633,9 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
         </dl>
         {!summarized && showChecks && checks.length > 0 && <ul className="cc-checks">{checks.map((c) => <CheckRow key={c.name} check={c} />)}</ul>}
       </div>
+
+      {/* The author's tour of the code (ct-57527), read just before the verdict. */}
+      {guide && guide.steps.length > 0 && <ChangeGuideWalkthrough guide={guide} compact={inline} className="cc-section" />}
 
       {outcome ?? (recommend && <RecommendCaption verdict={card.recommend.verdict} why={card.recommend.why} />)}
     </article>
@@ -838,10 +843,15 @@ export function ChangeCardAnswer({
   }, [note, onAnswer, indexes.revise]);
   const pick = useCallback((v: ChangeVerdict) => {
     if (v === "revise") return openNote();
-    onAnswer({ index: indexes[v] });
+    // Ship on a line run's card is the One Ship control's press (ship.ts):
+    // the same action the task, session and PR buttons run, which answers
+    // the card on its own rail and records the ship run against it.
+    if (v === "ship" && decision.task_id && decision.workflow_run_id) {
+      useInboxStore.getState().startShip({ kind: "task", id: decision.task_id }, `ship-${Date.now().toString(36)}`, decision._id);
+    } else onAnswer({ index: indexes[v] });
     // The row leaves the list as it answers, so a toast says what was sent.
     if (line) toast.success(`${verdictLabel(v)} sent`, { description: decision.card?.cause.title });
-  }, [onAnswer, indexes, openNote, line, decision.card]);
+  }, [onAnswer, indexes, openNote, line, decision.card, decision.task_id, decision.workflow_run_id, decision._id]);
   const commit = useCallback(() => {
     if (armed === "dismiss") { onDismiss?.(); toast(`Dismissed`, { description: decision.card?.cause.title }); }
     else if (armed) pick(armed);
