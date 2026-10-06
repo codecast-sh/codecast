@@ -367,6 +367,20 @@ html, body {
   --sol-blue: #268bd2;
   --sol-cyan: #2aa198;
   --sol-green: #859900;
+  /* What the sol accent utility classes paint (tailwind.config.ts). They are
+     their own variables, separate from --sol-yellow and friends above, which
+     Minimal and dark retune for the CSS that reads them: the classes have
+     always painted these Solarized values in every theme, and only hosted
+     mode remaps them (the hosted-mode block near the end of this file). */
+  --sol-class-yellow: #b58900;
+  --sol-class-orange: #cb4b16;
+  --sol-class-amber: #b66f20;
+  --sol-class-red: #dc322f;
+  --sol-class-magenta: #d33682;
+  --sol-class-violet: #6c71c4;
+  --sol-class-blue: #268bd2;
+  --sol-class-cyan: #2aa198;
+  --sol-class-green: #859900;
   /* Hyperlink accent — the amber that prose links and .sol-link already wear
      (tailwind amber-600). One token so every surface's links match. */
   --sol-link: #d97706;
@@ -1928,7 +1942,7 @@ pre[class*="language-"] {
    on the button): strong enough to catch a scanning eye, on negative space
    rather than a filled band. */
 .simple-view [data-sv-rail] [data-sv-sec] {
-  background: transparent;
+  background: var(--sol-bg-alt);
   border-bottom: 1px solid color-mix(in srgb, currentColor 40%, transparent);
   margin-top: 12px;
   padding: 8px 12px 6px;
@@ -2278,8 +2292,12 @@ pre[class*="language-"] {
 /* Hover flyouts that hang off the titlebar. A drag region eats pointer
    events (the window manager takes the mouse; the renderer never sees it
    enter), so a hover panel closes the moment you move onto it. Buttons
-   already opt out above; a panel is a div. */
-[data-flyout] {
+   already opt out above; a panel is a div.
+   Modal layers likewise: Electron draws drag regions from the DOM regardless
+   of stacking, so a modal's controls over a draggable stretch of the header
+   (the image gallery's top-right actions) never get the click. */
+[data-flyout],
+[aria-modal="true"] {
   -webkit-app-region: no-drag;
 }
 
@@ -4048,6 +4066,20 @@ pre[class*="language-"] {
   box-shadow: none !important;
 }
 
+/* Hosted mode's New conversation on a phone: the bar's one filled control,
+   a disc in the family accent. It needs the same weight as the rule above,
+   which clears every top bar button's fill. */
+@media (max-width: 767px) {
+  html.hosted-mode [data-cc-topbar-group] > button[data-cc-compose],
+  html.hosted-mode [data-cc-topbar-group] > div > button[data-cc-compose] {
+    width: 32px;
+    height: 32px;
+    border-radius: 9999px;
+    background: var(--pd-accent) !important;
+    color: var(--pd-accent-ink) !important;
+  }
+}
+
 .minimal-style [data-cc-topbar-group] > div > button:hover,
 .minimal-style [data-cc-topbar-group] > button:hover {
   background: var(--sol-bg-highlight) !important;
@@ -4561,7 +4593,7 @@ pre[class*="language-"] {
   margin-top: 0;
   padding: 6px 16px 6px 22px;
   border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent) !important;
-  background: color-mix(in srgb, currentColor 6%, transparent) !important;
+  background: color-mix(in srgb, currentColor 6%, var(--sol-bg-alt)) !important;
   font-family: var(--font-ui);
   line-height: 16px;
 }
@@ -4954,6 +4986,11 @@ pre[class*="language-"] {
 .minimal-style [data-sv-nav] [data-rail-heading="Agents"],
 .minimal-style [data-sv-nav] [data-rail-group] {
   display: none;
+}
+/* Assistant mode (lib/surfaces.ts) keeps that group, renamed Assistant: its
+   routines are the standing work the assistant does for the person. */
+.minimal-style .hosted-mode [data-sv-nav] [data-rail-group="agents"] {
+  display: block;
 }
 
 /* Session list head */
@@ -5604,7 +5641,11 @@ pre[class*="language-"] {
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.minimal-style :is(.decision-card, .decision-doc) :is([class*="text-sol-blue"], [class*="text-sol-cyan"], [class*="text-sol-green"], [class*="text-sol-yellow"], [class*="text-sol-orange"], [class*="text-sol-violet"]) {
+/* The accent text colours, as resting classes only: a word match (and the
+   opacity form, text-sol-blue/70), so a hover variant such as the question
+   link's hover:text-sol-blue never mutes an element whose resting colour is
+   the ink. */
+.minimal-style :is(.decision-card, .decision-doc) :is([class~="text-sol-blue"], [class^="text-sol-blue/"], [class*=" text-sol-blue/"], [class~="text-sol-cyan"], [class^="text-sol-cyan/"], [class*=" text-sol-cyan/"], [class~="text-sol-green"], [class^="text-sol-green/"], [class*=" text-sol-green/"], [class~="text-sol-yellow"], [class^="text-sol-yellow/"], [class*=" text-sol-yellow/"], [class~="text-sol-orange"], [class^="text-sol-orange/"], [class*=" text-sol-orange/"], [class~="text-sol-violet"], [class^="text-sol-violet/"], [class*=" text-sol-violet/"]) {
   color: var(--sol-text-muted);
 }
 .minimal-style :is(.decision-card, .decision-doc) span[class*="rounded"][class*="border-"] {
@@ -6340,6 +6381,101 @@ pre[class*="language-"] {
   width: 64px;
   background: var(--grip-accent);
 }
+/* A published page shown frameless in the thread (PublishedPageEmbed's
+   FramelessPage). The page owns its own pixels; the thread adds only a
+   hairline edge and a glass toolbar while the pointer is over it. */
+.page-embed {
+  margin-top: 1.75rem;
+  --embed-edge: color-mix(in srgb, var(--sol-border) 55%, transparent);
+  --embed-ease: cubic-bezier(.2, .8, .2, 1);
+}
+.page-embed[data-loaded] .page-embed__stage { transition: height 260ms var(--embed-ease); }
+.page-embed__stage[data-resizing] { transition: none; }
+/* The page's edge: a hairline that stands a few pixels off the page, so the
+   page's content keeps its breathing room inside it. Shown only on hover. */
+.page-embed__edge {
+  position: absolute;
+  inset: -6px;
+  border-radius: 14px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px transparent;
+  transition: box-shadow 200ms ease;
+}
+.page-embed:hover .page-embed__edge,
+.page-embed:focus-within .page-embed__edge { box-shadow: 0 0 0 1px var(--embed-edge); }
+.page-embed[data-pinning] .page-embed__edge {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--sol-yellow) 70%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--sol-yellow) 12%, transparent);
+}
+.page-embed__frame {
+  border: 0;
+  opacity: 0;
+  transition: opacity 320ms ease;
+}
+.page-embed[data-loaded] .page-embed__frame { opacity: 1; }
+.page-embed__shimmer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--sol-text) 5%, transparent) 50%, transparent 70%) 0 0 / 220% 100%,
+    color-mix(in srgb, var(--sol-bg-alt) 60%, transparent);
+  animation: page-embed-shimmer 1.6s linear infinite;
+}
+@keyframes page-embed-shimmer { from { background-position: 120% 0, 0 0; } to { background-position: -120% 0, 0 0; } }
+/* The toolbar straddles the page's top edge, half in the gap above it, so it
+   reads as attached to the page and covers only the page's own top margin. */
+.page-embed__bar {
+  position: absolute;
+  top: -21px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  max-width: calc(100% - 16px);
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: 0 10px 28px -12px rgb(0 0 0 / .45), 0 1px 2px rgb(0 0 0 / .1);
+  opacity: 0;
+  transform: translateY(3px) scale(.985);
+  transform-origin: bottom right;
+  pointer-events: none;
+  transition: opacity 140ms ease 120ms, transform 180ms var(--embed-ease) 120ms;
+}
+.page-embed:hover .page-embed__bar,
+.page-embed:focus-within .page-embed__bar,
+.page-embed[data-pinning] .page-embed__bar {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition-delay: 0ms;
+}
+.page-embed__grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -13px;
+  z-index: 2;
+  display: block;
+  opacity: 0;
+  transition: opacity 160ms ease 120ms;
+}
+.page-embed__grip .height-grip { height: 14px; }
+.page-embed:hover .page-embed__grip,
+.page-embed__grip:has([data-resizing]) { opacity: 1; transition-delay: 0ms; }
+@media (hover: none) {
+  .page-embed__bar { opacity: 1; transform: none; pointer-events: auto; }
+  .page-embed__edge { box-shadow: 0 0 0 1px var(--embed-edge); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-embed__edge, .page-embed[data-loaded] .page-embed__stage, .page-embed__bar, .page-embed__frame { transition: none; }
+  .page-embed__shimmer { animation: none; }
+}
 .object-reveal__grip {
   --grip-accent: var(--reveal-accent);
   position: absolute;
@@ -6746,3 +6882,508 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .cc-quote-compact { padding: 0 0.6rem; margin: 0 0 0.15rem; }
 .cc-quote-compact .cc-quote-body,
 .cc-quote-compact .cc-quote-body * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Hosted mode: the family's paper, ink and type ─────────────────────────
+   Hosted mode (client_state.ui.lane "simple", docs/architecture/
+   hosted-assistant.md "The mode") keeps codecast's layout and structure and
+   takes the family's look from @platform/design, the tokens Whisk and
+   /welcome are built on: warm paper, warm ink, Instrument Sans for the
+   interface, Newsreader for what the assistant writes, Fragment Mono for code
+   and receipts. ThemeProvider sets html.hosted-mode beside .minimal-style, so
+   portaled surfaces take it too. A person who picks Classic in hosted mode
+   keeps Classic: every rule here needs .minimal-style. */
+html.hosted-mode.minimal-style {
+  --font-ui: var(--pd-font-ui);
+  --font-mono: var(--pd-font-mono);
+  --sol-bg: var(--pd-bg);
+  --sol-bg-alt: color-mix(in srgb, var(--pd-bg-sunken) 55%, var(--pd-bg));
+  --sol-bg-highlight: var(--pd-bg-hover);
+  --sol-bg-inset: var(--pd-bg-sunken);
+  --sol-card: var(--pd-bg-raised);
+  --sol-card-hover: var(--pd-bg-hover);
+  --sol-border: var(--pd-rule);
+  --cc-panel-rule: var(--pd-rule);
+  --sol-text: var(--pd-ink);
+  --sol-text-secondary: color-mix(in srgb, var(--pd-ink) 78%, var(--pd-ink-muted));
+  --sol-text-muted: var(--pd-ink-muted);
+  --sol-text-dim: var(--pd-ink-faint);
+  --sol-text-muted0: color-mix(in srgb, var(--pd-ink-faint) 70%, var(--pd-bg));
+  --sol-link: var(--pd-accent);
+  --sol-orange: var(--pd-accent);
+  /* The accent classes collapse to Whisk's palette: one rust accent for
+     what wants attention, ok and danger for outcomes, stars in their gold,
+     and the cool hues (violet, blue) to muted ink, since they only ever
+     told one kind of thing from another. Light and dark both resolve
+     through the family tokens, which carry their own dark values. */
+  --sol-class-yellow: var(--pd-star);
+  --sol-class-orange: var(--pd-accent);
+  --sol-class-amber: var(--pd-accent);
+  --sol-class-red: var(--pd-danger);
+  --sol-class-magenta: var(--pd-danger);
+  --sol-class-violet: var(--pd-ink-muted);
+  --sol-class-blue: var(--pd-ink-muted);
+  --sol-class-cyan: var(--pd-ok);
+  --sol-class-green: var(--pd-ok);
+  --logo-c: var(--pd-ink);
+  --radius: var(--pd-radius-lg);
+  /* shadcn's surfaces, as HSL triplets of the same palette. */
+  --background: 43 37% 94%;
+  --foreground: 33 16% 11%;
+  --card: 43 64% 98%;
+  --card-foreground: 33 16% 11%;
+  --popover: 43 64% 98%;
+  --popover-foreground: 33 16% 11%;
+  --primary: 33 16% 11%;
+  --primary-foreground: 43 64% 98%;
+  --secondary: 43 27% 91%;
+  --secondary-foreground: 33 16% 20%;
+  --muted: 43 27% 91%;
+  --muted-foreground: 38 11% 38%;
+  --accent: 45 33% 91%;
+  --accent-foreground: 33 16% 11%;
+  --border: 41 28% 85%;
+  --input: 41 28% 85%;
+  --ring: 33 16% 30%;
+  /* Your own words read as a quiet note, the way Whisk sets quoted text,
+     not as a coloured block. */
+  --cc-user-bubble: color-mix(in srgb, var(--pd-ink) 7%, var(--pd-bg));
+}
+
+html.hosted-mode.dark.minimal-style {
+  --sol-bg: var(--pd-bg);
+  --sol-bg-alt: var(--pd-bg-sunken);
+  --sol-bg-highlight: var(--pd-bg-hover);
+  --sol-bg-inset: var(--pd-bg-sunken);
+  --sol-card: var(--pd-bg-raised);
+  --sol-card-hover: var(--pd-bg-hover);
+  --sol-border: var(--pd-rule-strong);
+  --cc-panel-rule: var(--pd-rule);
+  --sol-text: var(--pd-ink);
+  --sol-text-secondary: color-mix(in srgb, var(--pd-ink) 82%, var(--pd-ink-muted));
+  --sol-text-muted: var(--pd-ink-muted);
+  --sol-text-dim: var(--pd-ink-faint);
+  --sol-text-muted0: color-mix(in srgb, var(--pd-ink-faint) 70%, var(--pd-bg));
+  --background: 30 16% 7%;
+  --foreground: 39 32% 89%;
+  --card: 33 18% 10%;
+  --card-foreground: 39 32% 89%;
+  --popover: 33 18% 10%;
+  --popover-foreground: 39 32% 89%;
+  --primary: 39 32% 89%;
+  --primary-foreground: 30 16% 7%;
+  --secondary: 33 18% 12%;
+  --secondary-foreground: 39 20% 82%;
+  --muted: 33 18% 12%;
+  --muted-foreground: 37 12% 59%;
+  --accent: 33 18% 14%;
+  --accent-foreground: 39 32% 89%;
+  --border: 38 15% 21%;
+  --input: 38 15% 21%;
+  --ring: 37 12% 59%;
+  --cc-user-bubble: color-mix(in srgb, var(--pd-ink) 9%, var(--pd-bg));
+}
+
+html.hosted-mode.minimal-style ::selection { background: var(--pd-selection); }
+
+/* What the assistant writes reads like a letter: Newsreader at a reading
+   size, on the conversation's measure. The person's words, receipts and step
+   lines stay in the interface face, so the two voices separate. Code keeps
+   the mono face (the .prose pre and code rule above). */
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose {
+  font-family: var(--pd-font-read);
+  font-size: 17px;
+  line-height: 1.55;
+  letter-spacing: 0;
+}
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] {
+  font-size: 14px;
+}
+
+/* The conversation's title in the header, in the reading face. */
+html.hosted-mode.minimal-style [data-sv-convhead] [data-cc-conv-title] {
+  font-family: var(--pd-font-read);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+/* The composer, as /welcome draws it: a raised sheet on a hairline with the
+   family's soft shadow, and a round send in ink that takes the accent once
+   there is something to send. */
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
+  border-color: var(--pd-rule);
+  background: var(--pd-bg-raised);
+  box-shadow: var(--pd-shadow);
+}
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div:focus-within {
+  border-color: var(--pd-rule-strong);
+}
+html.hosted-mode.minimal-style [data-cc-send] {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  background: var(--pd-ink);
+  color: var(--pd-bg-raised);
+  transition: background-color var(--pd-t-fast), opacity var(--pd-t-fast);
+}
+html.hosted-mode.minimal-style [data-cc-send]:not(:disabled) {
+  background: var(--pd-accent);
+  color: var(--pd-accent-ink);
+}
+html.hosted-mode.minimal-style [data-cc-send]:disabled {
+  opacity: 0.28;
+}
+/* On dark paper a faded ink disc all but vanishes: an empty send reads as a
+   quiet raised disc with a faint arrow instead. */
+html.hosted-mode.dark.minimal-style [data-cc-send]:disabled {
+  opacity: 1;
+  background: var(--pd-bg-hover);
+  color: var(--pd-ink-faint);
+}
+
+/* The conversations panel's section captions read as quiet headings, not a
+   band of colours: sentence case, the muted ink, a hairline above. The one
+   colour left is a small accent dot on the sections that wait on the person. */
+html.hosted-mode.minimal-style [data-sv-sec],
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-sec] {
+  color: var(--pd-ink-muted);
+  border-bottom: 0 !important;
+  border-top: 1px solid var(--pd-rule);
+  /* The panel's own paper: a heading, not a filled band. Minimal's tinted
+     band sets its fill with !important, so this answers in kind. */
+  background: var(--sol-bg-alt) !important;
+}
+html.hosted-mode.minimal-style [data-sv-sec] > span,
+html.hosted-mode.minimal-style [data-sv-sec] > svg {
+  color: var(--pd-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+html.hosted-mode.minimal-style :is([data-inbox-section="questions"], [data-inbox-section="needs_input"]) > span::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 999px;
+  background: var(--pd-accent);
+  vertical-align: 1px;
+}
+
+/* The plan, in the family's ink: the meter fills with ink on a sunken track
+   and takes the accent only once most of the month is used; the plan's name
+   and the month's headline read in the reading face. */
+html.hosted-mode.minimal-style [data-cc-meter] { background: var(--pd-bg-sunken); }
+html.hosted-mode.minimal-style [data-cc-meter-used] { background: var(--pd-ink); }
+html.hosted-mode.minimal-style [data-cc-meter-held] { background: color-mix(in srgb, var(--pd-ink) 28%, transparent); }
+html.hosted-mode.minimal-style [data-cc-meter][data-cc-meter-high] [data-cc-meter-used] { background: var(--pd-accent); }
+html.hosted-mode.minimal-style [data-cc-plan-card][data-current] { box-shadow: inset 0 0 0 1px var(--pd-accent); background: var(--pd-bg-raised); }
+html.hosted-mode.minimal-style [data-cc-plan-yours] { background: var(--pd-accent-soft); color: var(--pd-accent); }
+html.hosted-mode.minimal-style :is([data-cc-plan-name], [data-cc-plan-headline]) {
+  font-family: var(--pd-font-read);
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+/* The sidebar's meter speaks in the interface face like the rail around it,
+   on a hairline track. */
+html.hosted-mode.minimal-style [data-cc-usage-meter] > span {
+  font-family: var(--pd-font-ui);
+  font-size: 12px;
+  color: var(--pd-ink-muted);
+}
+/* The sidebar's meter fills as Plan's does: ink, rust past 80%, danger only
+   for a month used up, so 2% never reads as a warning. */
+html.hosted-mode.minimal-style [data-cc-usage-meter] [data-cc-meter] { background: var(--pd-rule); }
+
+/* The palette's group headings, as the family labels a list: small sentence
+   case in muted ink, not a letterspaced capital kicker. */
+html.hosted-mode.minimal-style [cmdk-group-heading] {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pd-ink-muted);
+}
+
+/* A page's own title (PageHeading) in the reading face, as Whisk titles its
+   pages, with the count beside it in the interface face. */
+html.hosted-mode.minimal-style [data-cc-page-title] {
+  font-family: var(--pd-font-read);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--pd-ink);
+}
+html.hosted-mode.minimal-style [data-cc-page-count] {
+  font-family: var(--pd-font-mono);
+  font-size: 13px;
+  color: var(--pd-ink-faint);
+}
+
+/* A list's group headings (the tasks list's people and statuses) in sentence
+   case, with a bare mono count instead of a bracketed one. */
+html.hosted-mode.minimal-style [data-cc-group-label] {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pd-ink-muted);
+}
+html.hosted-mode.minimal-style [data-cc-group-count] {
+  font-family: var(--pd-font-mono);
+  font-size: 11px;
+  color: var(--pd-ink-faint);
+}
+html.hosted-mode.minimal-style [data-cc-bracket] { display: none; }
+/* An approval's options are buttons; their numbers only ever served the keys. */
+html.hosted-mode.minimal-style [data-cc-option-number] { display: none; }
+/* A live call's cluster (the face row's seats, its card and the phone's
+   strip) in the family's palette: the call reads in the live green rather
+   than the developer theme's violet, which the family does not have, and
+   names and counts are set in the interface face, not mono. */
+html.hosted-mode.minimal-style :is(.face-row, .walkie-strip, .people-bar, .phone-call-strip) {
+  --sol-violet: var(--pd-ok);
+  --font-mono: var(--pd-font-ui);
+}
+
+/* The rail, as Whisk draws its own: words without glyphs (Inbox and
+   Approvals keep theirs, quieter), counts as small mono numerals in the
+   accent where they wait on the person and in faint ink elsewhere, and the
+   open page in Whisk's warm hover tint, ink at weight 500, rather than a grey
+   band with an edge or a raised chip that reads as a button. The narrow rail
+   (centred rows) keeps its icons, which are all it has. */
+html.hosted-mode.minimal-style [data-sv-nav] :is([data-nav-row], [data-nav-subrow], a.w-full, button.w-full):not(.justify-center) > :first-child:not(:last-child):not([data-sv-count]) {
+  display: none;
+}
+html.hosted-mode.minimal-style [data-sv-nav] :is(a, button)[href="/inbox"]:not(.justify-center) > :first-child:not(:last-child),
+html.hosted-mode.minimal-style [data-sv-nav] :is(a, button)[href="/questions"]:not(.justify-center) > :first-child:not(:last-child) {
+  display: inline-block;
+  opacity: 0.6;
+}
+html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count],
+html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count] > * {
+  font-family: var(--pd-font-mono);
+  font-size: 11px;
+  color: var(--pd-ink-faint) !important;
+}
+html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [href="/questions"]) [data-sv-count] {
+  color: var(--pd-accent) !important;
+}
+html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count="mention"] {
+  color: var(--pd-danger) !important;
+}
+html.hosted-mode.minimal-style [data-sv-nav] .border-l-2.bg-sol-bg-highlight {
+  margin-inline: 8px;
+  border-radius: 6px;
+  border-left-color: transparent;
+  background: var(--pd-bg-hover);
+  box-shadow: none;
+  color: var(--pd-ink);
+  font-weight: 500;
+}
+/* The chip's inset is taken back from its padding, so the words stay in line
+   with the rows above and below it. */
+html.hosted-mode.minimal-style [data-sv-nav] :is(a, button).border-l-2.bg-sol-bg-highlight:not(.justify-center),
+html.hosted-mode.minimal-style [data-sv-nav] div.border-l-2.bg-sol-bg-highlight > [data-nav-row]:not(.justify-center) {
+  padding-left: 8px;
+}
+
+/* Settings' section titles in the reading face, like the pages' own titles,
+   rather than a letterspaced capital kicker. */
+html.hosted-mode.minimal-style [data-cc-settings-title] {
+  font-family: var(--pd-font-read);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--pd-ink);
+}
+
+/* The conversations panel's title, in the reading face as Whisk titles its
+   inbox. */
+html.hosted-mode.minimal-style [data-cc-panel-title] {
+  font-family: var(--pd-font-read);
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+html.hosted-mode.minimal-style [data-cc-sec-count] {
+  margin-left: 2px;
+  font-family: var(--pd-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--pd-ink-faint);
+}
+
+/* The shortcuts sheet's section headings in sentence case, as the palette's. */
+html.hosted-mode.minimal-style [data-cc-help-heading] {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pd-ink-muted);
+}
+
+/* A list's section headings (the routines page's Active, Paused, History) as
+   the family labels them: sentence case in the interface face, no capitals
+   spaced into a kicker. */
+html.hosted-mode.minimal-style [data-cc-list-section] {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pd-ink-muted);
+}
+html.hosted-mode.minimal-style [data-cc-list-section] > span {
+  font-family: var(--pd-font-ui);
+}
+
+/* Inbox rows, as Whisk draws its list: the open row is a raised sheet with a
+   rust rule on its left edge, and a settled row carries no idle dot, since
+   "nothing is happening" needs no mark. */
+html.hosted-mode.minimal-style [data-sv-rail] [data-session-id][data-active="true"] {
+  background: var(--pd-bg-raised) !important;
+  box-shadow: inset 2px 0 0 var(--pd-accent), 0 1px 3px color-mix(in srgb, var(--pd-ink) 10%, transparent) !important;
+  border-left-color: transparent;
+}
+html.hosted-mode.minimal-style [data-sv-idle-dot] { display: none; }
+
+/* A message on its way reads as the ordinary bubble, a little faded, with a
+   quiet "Sending" under it, rather than the developer hatch that looked
+   disabled or failed. */
+html.hosted-mode.minimal-style [data-cc-message="user"].pending-stripes {
+  background-image: none !important;
+  opacity: 0.6;
+}
+html.hosted-mode.minimal-style [data-cc-message="user"].pending-stripes::after {
+  content: "Sending";
+  display: block;
+  margin-top: 6px;
+  text-align: right;
+  font-family: var(--pd-font-ui);
+  font-size: 11px;
+  color: var(--pd-ink-faint);
+}
+
+/* The assistant's intro (AssistantIntro) titles itself as /welcome does. */
+html.hosted-mode.minimal-style [data-cc-intro-title] {
+  font-family: var(--pd-font-read);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+/* A connection's facts line (LedgerLine) in the interface face: hosted mode
+   keeps mono for code. */
+html.hosted-mode.minimal-style [data-cc-ledger] {
+  font-family: var(--pd-font-ui);
+  font-size: 11.5px;
+}
+
+/* Hosted mode's reading face sizes above the interface scale: a card's
+   question (an approval, as Whisk's subject line) and a sheet's title. */
+html.hosted-mode {
+  --t-read-title: 17px;
+  --t-read-head: 20px;
+}
+
+/* Approvals: the question carries the card, in the reading face, as Whisk's
+   subject line carries a message. */
+html.hosted-mode.minimal-style .decision-card .decision-question {
+  font-family: var(--pd-font-read);
+  font-size: var(--t-read-title);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--pd-ink);
+}
+
+/* Couldn't finish (hosted conversations that ended on a stop): one heading
+   with its Try again beside the caption, and the danger colour said once,
+   as the heading's dot, rather than on every row under it. */
+html.hosted-mode.minimal-style [data-sv-sec-row] {
+  background: var(--sol-bg-alt);
+  border-top: 1px solid var(--pd-rule);
+}
+html.hosted-mode.minimal-style [data-sv-sec-row] > [data-sv-sec] { border-top: 0; }
+html.hosted-mode.minimal-style [data-sv-sec-row] > [data-sv-sec-action] { border-bottom: 0; }
+html.hosted-mode.minimal-style [data-inbox-section="hosted_stopped"] > span::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 999px;
+  background: var(--pd-danger);
+  vertical-align: 1px;
+}
+
+/* A row's time, as Whisk's time column: mono numerals in faint ink, the
+   accent where the row waits on the person. */
+html.hosted-mode.minimal-style [data-sv-time] {
+  font-family: var(--pd-font-mono);
+  font-size: var(--t-mark);
+  font-variant-numeric: tabular-nums;
+  color: var(--pd-ink-faint);
+}
+html.hosted-mode.minimal-style div:has(> :is([data-inbox-section="needs_input"], [data-inbox-section="questions"])) [data-sv-time] {
+  color: var(--pd-accent);
+}
+
+/* The set-aside lists (Closed, Stashed, Snoozed) head like Done: the same
+   sentence-case caption, bare mono count, no extra indent. */
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] {
+  padding-inline: 0;
+  border-top: 1px solid var(--pd-rule);
+  border-bottom: 0;
+  background: var(--sol-bg-alt);
+}
+html.hosted-mode.minimal-style [data-sv-hidden-head] [data-sv-hidden-label] {
+  color: var(--pd-ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Approval options: every option on the same raised paper, nothing filled
+   as if already chosen. The asker's suggestion is a rust hairline and a
+   small "Suggested" at the row's end. On a wide screen the options sit in
+   one row, so more asks fit above the fold. */
+html.hosted-mode.minimal-style :is(.decision-card, .decision-doc) .decision-option {
+  background: var(--pd-bg-raised);
+}
+html.hosted-mode.minimal-style :is(.decision-card, .decision-doc) .decision-option[data-suggested] {
+  border-color: var(--pd-accent);
+}
+html.hosted-mode.minimal-style [data-cc-suggested] {
+  color: var(--pd-accent);
+}
+@media (min-width: 900px) {
+  html.hosted-mode.minimal-style .decision-card [data-option-list] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  html.hosted-mode.minimal-style .decision-card [data-option-list] > .decision-option {
+    width: auto;
+    flex: 1 1 180px;
+    margin: 0;
+  }
+}
+
+/* A month used up is the one time the meter takes the danger colour. */
+html.hosted-mode.minimal-style [data-cc-meter][data-cc-meter-full] [data-cc-meter-used] { background: var(--pd-danger); }
+
+/* Settings: the sheet's title in the reading face, over sections that drop
+   their leading icons, so the hierarchy reads title, then section. */
+html.hosted-mode.minimal-style [data-cc-sheet-title] {
+  font-family: var(--pd-font-read);
+  font-size: var(--t-read-head);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+html.hosted-mode.minimal-style [data-cc-settings-icon] { display: none; }
+

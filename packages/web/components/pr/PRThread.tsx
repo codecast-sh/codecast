@@ -9,6 +9,8 @@ import { relTimeShort } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { isOptimisticComment, threadResolved, type CodeCommentRow } from "../../lib/prView";
+import { AnchorPlacementNote, placementBorderClass } from "../comments/AnchorPlacementNote";
+import type { AnchorPlacement } from "@codecast/shared/comments";
 import "../chat/chat.css";
 
 /** Where a new line note goes: into the reader's review, or straight out. */
@@ -211,7 +213,10 @@ export function PRLineThread({
   onFinishReview,
   linkHref,
   onSelectLines,
+  placement,
 }: {
+  /** Where the thread's passage is now, when it moved or is gone. */
+  placement?: AnchorPlacement | null;
   /** The address of the lines this thread is on, and selecting them. */
   linkHref?: string;
   onSelectLines?: () => void;
@@ -239,17 +244,20 @@ export function PRLineThread({
   const [replying, setReplying] = useState(comments.length === 0);
   const resolved = threadResolved(comments);
   const pending = comments.length > 0 && comments.every((c) => c.pending_review);
+  // A moved thread names the lines it sits on now; the note says where from.
+  const shownStart = placement?.state === "moved" ? placement.line : lineNumber;
+  const shownEnd = placement?.state === "moved" ? placement.lineEnd : lineEnd;
   const span =
-    lineNumber !== undefined && lineEnd !== undefined && lineEnd !== lineNumber
-      ? `lines ${lineNumber} to ${lineEnd}`
-      : lineNumber !== undefined
-        ? `line ${lineNumber}`
+    shownStart !== undefined && shownEnd !== undefined && shownEnd !== shownStart
+      ? `lines ${shownStart} to ${shownEnd}`
+      : shownStart !== undefined
+        ? `line ${shownStart}`
         : null;
 
   return (
     <div
       className={`group/thread my-1 ml-2 space-y-2 border-l-2 pl-2.5 py-1.5 font-sans whitespace-normal ${
-        pending ? "pr-pending" : resolved ? "border-sol-green/40 opacity-70" : "border-sol-cyan/40"
+        pending ? "pr-pending" : resolved ? "border-sol-green/40 opacity-70" : placementBorderClass(placement) ?? "border-sol-cyan/40"
       } ${landed ? "pr-thread-landed" : ""}`}
     >
       <div className="flex items-center gap-2">
@@ -273,6 +281,7 @@ export function PRLineThread({
           <span className="ml-auto"><NoteModePill mode={noteMode} onChange={onNoteMode} pendingCount={pendingCount} /></span>
         )}
       </div>
+      <AnchorPlacementNote placement={placement} anchorLines={comments.find((c) => c.anchor_lines)?.anchor_lines} />
       {comments.map((comment) => (
         <PRCommentCard key={comment._id} comment={comment} />
       ))}

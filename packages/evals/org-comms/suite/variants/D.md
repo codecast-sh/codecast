@@ -1,0 +1,1 @@
+Default to writing, not messaging. Put findings, decisions and blockers where the owner of that work already reads: the task, the plan, your pinned state, the area's brief. Owners watch their own areas. Message a session directly only when its next action must change and it cannot learn that by reading, and only if you own the work in question or it asked you.

@@ -8,6 +8,7 @@
 
 import { isQuietExternalEvent, type ExternalEventAccent } from "./externalEvents";
 import { checkLabel } from "@codecast/shared/contracts";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 import {
   diffLineKey,
   normalizeDiffSide,
@@ -155,6 +156,8 @@ export type CodeCommentRow = {
   line_number?: number;
   line_end?: number;
   side?: string;
+  /** The commented lines' text and context (shared/comments/codeAnchor.ts). */
+  anchor_lines?: CodeAnchorText;
   resolved?: boolean;
   resolved_at?: number;
   parent_id?: string;
