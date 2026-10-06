@@ -8,7 +8,7 @@ export function BatchCompletionModal() {
   if (!isComplete) return null;
 
   const handleExit = () => {
-    router.push("/timeline");
+    router.push("/changes");
   };
 
   return (

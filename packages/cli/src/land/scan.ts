@@ -151,13 +151,13 @@ export async function worktreeBase(entry: WorktreeEntry, mainRef: string): Promi
  * as an embedded repo), and a `node_modules` symlink into another checkout,
  * which `.gitignore`'s `node_modules/` does not match.
  */
-export function parseRawDiff(out: string): Array<{ path: string; src: string; dst: string; status: string }> {
-  const rows: Array<{ path: string; src: string; dst: string; status: string }> = [];
+export function parseRawDiff(out: string): Array<{ path: string; src: string; dst: string; status: string; mode: string }> {
+  const rows: Array<{ path: string; src: string; dst: string; status: string; mode: string }> = [];
   for (const line of out.split("\n")) {
     const m = /^:(\d+) (\d+) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])\d*\t(.+)$/.exec(line);
     if (!m || (m[2] === "160000" && m[1] === "000000")) continue;
     if (m[2] === "120000" && path.basename(m[6]) === "node_modules") continue;
-    rows.push({ src: m[3], dst: m[4], status: m[5], path: m[6] });
+    rows.push({ src: m[3], dst: m[4], status: m[5], path: m[6], mode: m[2] });
   }
   return rows;
 }
@@ -196,7 +196,14 @@ export async function withWorkingIndex<T>(tree: string, fn: (env: NodeJS.Process
   try {
     const index = path.join(tmp, "index");
     const own = (await tryGit(tree, ["rev-parse", "--path-format=absolute", "--git-path", "index"]));
-    try { fs.copyFileSync(own, index); } catch { /* a fresh index is built from scratch */ }
+    try {
+      fs.copyFileSync(own, index);
+      // Why: git trusts a cached stat only for entries older than the index
+      // file itself. A copy stamped "now" made a same-size edit from the same
+      // second as the checkout read as unchanged.
+      const { atime, mtime } = fs.statSync(own);
+      fs.utimesSync(index, atime, mtime);
+    } catch { /* a fresh index is built from scratch */ }
     const env = { GIT_INDEX_FILE: index };
     await git(tree, ["add", "-A", "."], { env });
     return await fn(env);

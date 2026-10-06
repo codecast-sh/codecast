@@ -26,7 +26,7 @@ describe("org proposal block", () => {
 
 // Staffing changes (org-staffing.md S4): one validator per kind, the spec
 // envelope, the accept order and the one-line describer.
-import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_VERDICT_REVISED, deriveAsks, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeDependencies, orgChangeError, orgTenureError, orgVerdictSeenFault, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
+import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_CHARTER_MAX, ORG_PROPOSAL_MAX, ORG_PROPOSAL_WORKS, ORG_VERDICT_REVISED, applyCharterEdits, deriveAsks, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeDependencies, orgChangeError, orgProposalWork, orgProposalWorkErrors, orgRecordGroups, orgRecordRedundancyErrors, orgTenureError, orgVerdictSeenFault, orgWorkOfChange, parseOrgProposalSpec, recordGroupTotalsLine, type OrgChange } from "./orgProposal";
 
 const GOOD: Record<OrgChange["kind"], OrgChange> = {
   role: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, reports_to: "me" },
@@ -40,6 +40,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   project_meta: { kind: "project_meta", project: "pr-1", goal: "Ship the onboarding", success_metrics: ["activation 40%"], priority: "p1", owner: "@growth", non_goals: ["paid ads"], risks: ["one engineer"] },
   adopt: { kind: "adopt", handle: "head-of-people", conversation: "jx7abcd" },
   file: { kind: "file", plan: "pl-1", project: "Platform" },
+  charter_edit: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] },
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
   task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open" },
   project_status: { kind: "project_status", project: "Legacy", status: "paused", reason: "no activity 30d" },
@@ -92,12 +93,49 @@ describe("org change validation", () => {
 
 describe("parseOrgProposalSpec", () => {
   const spec = { title: "Staffing for Acme", summary_md: "Two paragraphs.", mode: "init", changes: Object.values(GOOD).map((change) => ({ change, rationale: `why ${change.kind}`, evidence: [{ label: "3 sessions", href: "https://x" }], expected_effect: "less chatter", risk: "none" })) };
-  test("a spec with every kind parses and keeps only the known fields", () => {
-    const r = parseOrgProposalSpec({ ...spec, extra: 1 });
-    expect(r.errors).toEqual([]);
-    expect(r.spec!.changes.length).toBe(ORG_CHANGE_KINDS.length);
-    expect(Object.keys(r.spec!)).toEqual(["title", "summary_md", "mode", "changes"]);
-    expect(r.spec!.changes[0]).toEqual({ change: GOOD.role, rationale: "why role", evidence: [{ label: "3 sessions", href: "https://x" }], expected_effect: "less chatter", risk: "none" });
+  test("a spec with every kind of one work parses and keeps only the known fields; every kind is one work", () => {
+    let parsed = 0;
+    for (const work of ORG_PROPOSAL_WORKS) {
+      const mine = spec.changes.filter((c) => orgWorkOfChange(c.change) === work);
+      // The structure kinds alone outnumber a structure proposal's cap, so they parse in two.
+      for (let at = 0; at < mine.length; at += ORG_PROPOSAL_MAX[work] ?? mine.length) {
+        const r = parseOrgProposalSpec({ ...spec, changes: mine.slice(at, at + (ORG_PROPOSAL_MAX[work] ?? mine.length)), extra: 1 });
+        expect(r.errors, work).toEqual([]);
+        expect(Object.keys(r.spec!)).toEqual(["title", "summary_md", "mode", "changes"]);
+        parsed += r.spec!.changes.length;
+        if (work === "structure" && at === 0) expect(r.spec!.changes[0]).toEqual({ change: GOOD.role, rationale: "why role", evidence: [{ label: "3 sessions", href: "https://x" }], expected_effect: "less chatter", risk: "none" });
+      }
+    }
+    expect(parsed).toBe(ORG_CHANGE_KINDS.length);
+  });
+  test("a proposal holds one kind of work: a mixed spec is refused with how to split it; structure and goals are capped, records are not", () => {
+    const r = parseOrgProposalSpec(spec);
+    expect(r.spec).toBeNull();
+    expect(r.errors).toEqual(["a proposal holds one kind of work, and this one mixes 3 record changes (plan_status, task_status, project_status), 15 structure changes (role, projects, move, retire, scope, budget, trust, routine, project_meta, adopt, file, charter_edit, authority, hire, upgrade) and 4 goal changes (initiative, initiative_projects, initiative_owner, initiative_shape): post the records as one proposal, the structure as another and the goals as a third, each with its own title and summary"]);
+    expect(orgProposalWork(spec.changes)).toBeNull();
+    expect(orgProposalWork([{ change: GOOD.role }, { change: GOOD.move }])).toBe("structure");
+    expect(orgProposalWork([])).toBeNull();
+    expect(orgProposalWorkErrors([])).toEqual([]);
+    const tasks = (n: number) => Array.from({ length: n }, (_, i) => ({ change: { kind: "task_status", task: `ct-${i}`, status: "done", reason: "landed" }, rationale: "r" }));
+    const metas = (n: number) => Array.from({ length: n }, (_, i) => ({ change: { kind: "project_meta", project: `pr-${i}`, priority: "p2" }, rationale: "r" }));
+    const goals = (n: number) => Array.from({ length: n }, (_, i) => ({ change: { kind: "initiative", title: `Goal ${i}`, description: "d", projects: ["pr-1"] }, rationale: "r" }));
+    expect(ORG_PROPOSAL_MAX).toEqual({ records: null, structure: 12, goals: 12 });
+    expect(parseOrgProposalSpec({ ...spec, changes: tasks(64) }).errors).toEqual([]);
+    expect(parseOrgProposalSpec({ ...spec, changes: metas(12) }).errors).toEqual([]);
+    expect(parseOrgProposalSpec({ ...spec, changes: metas(13) }).errors).toEqual(["a structure proposal holds at most 12 changes, and this one has 13: split it by area (one proposal per lead, project or goal) or leave the smaller changes for the next review"]);
+    expect(parseOrgProposalSpec({ ...spec, changes: goals(13) }).errors).toEqual(["a goal proposal holds at most 12 changes, and this one has 13: split it by area (one proposal per lead, project or goal) or leave the smaller changes for the next review"]);
+  });
+  test("a task dropped under a plan the same spec closes is refused: the plan's close drops it; a task done on its own evidence keeps its row", () => {
+    const plan = (status: string) => ({ change: { kind: "plan_status", plan: "pl-7", status, reason: "every task closed" }, rationale: "r" });
+    const task = (status: string, plan?: string) => ({ change: { kind: "task_status", task: "ct-42", status, reason: "landed", ...(plan ? { plan } : {}) }, rationale: "r" });
+    const covered = (i: number, j: number, status: string) => `changes[${i}] (mark task ct-42 dropped) is covered by changes[${j}], which marks its plan pl-7 ${status}: closing the plan drops its open tasks, so drop this change (a task finished on its own evidence keeps its own done change)`;
+    expect(parseOrgProposalSpec({ ...spec, changes: [plan("done"), task("dropped", "pl-7")] }).errors).toEqual([covered(1, 0, "done")]);
+    expect(parseOrgProposalSpec({ ...spec, changes: [task("dropped", "pl-7"), plan("abandoned")] }).errors).toEqual([covered(0, 1, "abandoned")]);
+    expect(parseOrgProposalSpec({ ...spec, changes: [plan("done"), task("done", "pl-7")] }).errors).toEqual([]);
+    expect(parseOrgProposalSpec({ ...spec, changes: [plan("abandoned"), task("dropped", "pl-8")] }).errors).toEqual([]);
+    expect(parseOrgProposalSpec({ ...spec, changes: [plan("done"), task("dropped")] }).errors).toEqual([]);
+    expect(parseOrgProposalSpec({ ...spec, changes: [plan("active"), task("dropped", "pl-7")] }).errors).toEqual([]);
+    expect(orgRecordRedundancyErrors([plan("done"), task("open", "pl-7")] as any)).toEqual([]);
   });
   test("every fault is reported, named by index and kind", () => {
     const r = parseOrgProposalSpec({ title: "", mode: "later", changes: [
@@ -141,9 +179,10 @@ describe("orderOrgChanges and describeOrgChange", () => {
     expect(describeOrgChange(GOOD.plan_status)).toBe("mark plan pl-7 done");
     expect(describeOrgChange(GOOD.task_status)).toBe("mark task ct-42 done");
     expect(describeOrgChange(GOOD.project_status)).toBe("mark project Legacy paused");
-    expect(describeOrgChange(GOOD.initiative)).toBe("create initiative Win the private network over Callers, Broker network owned by @calling");
-    expect(describeOrgChange(GOOD.initiative_projects)).toBe("initiative in-2 +Callers");
-    expect(describeOrgChange(GOOD.initiative_owner)).toBe("initiative in-2 owner @calling");
+    expect(describeOrgChange(GOOD.initiative)).toBe("set goal Win the private network over Callers, Broker network owned by @calling");
+    expect(describeOrgChange(GOOD.initiative_projects)).toBe("goal in-2 +Callers");
+    expect(describeOrgChange(GOOD.initiative_owner)).toBe("goal in-2 owner @calling");
+    expect(describeOrgChange(GOOD.charter_edit)).toBe('charter @growth: replace "on budget" with "under budget"; add "Reports spend every Monday."');
   });
 
   test("a record change carries its record's title: the row reads the title with the id beside it, the CLI walk keeps the id", () => {
@@ -274,13 +313,13 @@ describe("goal changes", () => {
     const set = { ...GOOD.initiative, ...record } as const;
     expect(orgChangeError(set)).toBeNull();
     expect(changeLine(set)).toBe("Set a goal: Win the private network, carried by Callers and Broker network, owned by @calling, with 2 milestones");
-    expect(describeOrgChange(set)).toBe("create initiative Win the private network over Callers, Broker network owned by @calling why done_when +2 milestones +2 sources");
-    expect(deriveAsks([{ seq: 1, change: set }] as any)[0].effect).toBe("A new goal, Win the private network, appears on the initiatives page with the Callers and Broker network projects under it and calling as its owner. Quiet is onboarded and three brokers trade through us. Why it matters: Brokers bring the sellers. Done when: Three brokers trade through us. Milestones: Quiet onboarded (Nov 1); Second broker live. Its record says where it was stated (2 sources).");
+    expect(describeOrgChange(set)).toBe("set goal Win the private network over Callers, Broker network owned by @calling why done_when +2 milestones +2 sources");
+    expect(deriveAsks([{ seq: 1, change: set }] as any)[0].effect).toBe("A new goal, Win the private network, appears on the goals page with the Callers and Broker network projects under it and calling as its owner. Quiet is onboarded and three brokers trade through us. Why it matters: Brokers bring the sellers. Done when: Three brokers trade through us. Milestones: Quiet onboarded (Nov 1); Second broker live. Its record says where it was stated (2 sources).");
     const shape = { kind: "initiative_shape", initiative: "in-2", title: "Win the private network", ...record, questions: ["Do we price per seat?"], decisions: ["Ship to brokers first", "Quiet goes first."] } as const;
     expect(orgChangeError(shape)).toBeNull();
     expect(changeLine(shape)).toBe("Record on the goal Win the private network: why it matters, what done looks like, 2 milestones, an open question, 2 decisions and 2 places it was stated");
     expect(changeLine({ kind: "initiative_shape", initiative: "in-2", parent: "Reach 1k teams", milestones: [{ title: "Quiet onboarded" }], sources: ["ct-12"] })).toBe("Put the goal in-2 under Reach 1k teams, and record the milestone Quiet onboarded and where it was stated");
-    expect(describeOrgChange(shape)).toBe("initiative in-2 why done_when +2 milestones +1 questions +2 decisions +2 sources");
+    expect(describeOrgChange(shape)).toBe("goal in-2 why done_when +2 milestones +1 questions +2 decisions +2 sources");
     expect(deriveAsks([{ seq: 1, change: { kind: "initiative_shape", initiative: "in-2", metrics: [{ name: "Brokers live", target: "40" }], questions: shape.questions, decisions: shape.decisions } }] as any)[0].effect).toBe("On track means against Brokers live (target 40); its owner reports the numbers. Still open: Do we price per seat? Decided: Ship to brokers first. Quiet goes first.");
     // Each list adds, so an empty one changes nothing, and each is held to the row's own cap.
     expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", questions: [] })).toContain("what it changes about the goal");
@@ -333,7 +372,7 @@ describe("goal changes", () => {
       { seq: 5, change: { kind: "role", name: "Calling lead", handle: "calling" } },
     ] as any, names);
     expect(many.map((a) => [a.title, a.seqs])).toEqual([
-      ["Bring 1 record up to date", [1]],
+      ["Mark the task ct-1 as done", [1]],
       ["1 goal to set, and 2 changes to the goals that exist", [2, 3, 4]],
       ["Add an agent: Calling lead", [5]],
     ]);
@@ -388,21 +427,22 @@ describe("a proposal carries one change per subject", () => {
 describe("asks partition a proposal's changes", () => {
   const task = (t: string) => ({ change: { kind: "task_status", task: t, status: "done", reason: "landed" }, rationale: "r" });
   const role = { change: { kind: "role", name: "Head of Quality", handle: "quality", tenure: { kind: "standing" } }, rationale: "Nobody watches the quality line.", expected_effect: "One daily list of fixes waiting on you." };
+  const plan = { change: { kind: "plan_status", plan: "pl-9", status: "done", reason: "every task closed" }, rationale: "r" };
   const ask = (title: string, seqs: number[]) => ({ title, why: "why", effect: "effect", seqs });
   const spec = (changes: any[], asks?: any) => parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes, ...(asks !== undefined ? { asks } : {}) });
 
   test("a partition parses and is kept; a spec without asks carries none", () => {
-    const r = spec([task("ct-1"), task("ct-2"), role], [ask("Close two tasks", [1, 2]), ask("Add an agent for quality", [3])]);
+    const r = spec([task("ct-1"), task("ct-2"), plan], [ask("Close two tasks", [1, 2]), ask("Close the plan", [3])]);
     expect(r.errors).toEqual([]);
-    expect(r.spec!.asks).toEqual([{ title: "Close two tasks", why: "why", effect: "effect", seqs: [1, 2] }, { title: "Add an agent for quality", why: "why", effect: "effect", seqs: [3] }]);
+    expect(r.spec!.asks).toEqual([{ title: "Close two tasks", why: "why", effect: "effect", seqs: [1, 2] }, { title: "Close the plan", why: "why", effect: "effect", seqs: [3] }]);
     expect(spec([task("ct-1")]).spec!.asks).toBeUndefined();
   });
   test("a change in no ask, in two asks, or an ask naming a change that is not there is refused, naming the change", () => {
-    const left = spec([task("ct-1"), task("ct-2"), role], [ask("a", [1]), ask("b", [3])]);
+    const left = spec([task("ct-1"), task("ct-2"), plan], [ask("a", [1]), ask("b", [3])]);
     expect(left.spec).toBeNull();
     expect(left.errors).toEqual(["changes[1] (mark task ct-2 done) is in no ask: every change belongs to exactly one ask"]);
-    const twice = spec([task("ct-1"), role], [ask("a", [1, 2]), ask("b", [2])]);
-    expect(twice.errors).toEqual(["changes[1] (create role Head of Quality @quality (standing)) is in asks[0] and asks[1]: every change belongs to exactly one ask"]);
+    const twice = spec([task("ct-1"), plan], [ask("a", [1, 2]), ask("b", [2])]);
+    expect(twice.errors).toEqual(["changes[1] (mark plan pl-9 done) is in asks[0] and asks[1]: every change belongs to exactly one ask"]);
     expect(spec([task("ct-1")], [ask("a", [1, 9])]).errors).toEqual(["asks[0] names change 9, and the spec has 1"]);
     expect(spec([task("ct-1")], []).errors).toEqual(["asks is a non-empty list of { title, why, effect, seqs }"]);
     expect(spec([task("ct-1")], [{ title: "a", seqs: [1] }]).errors).toEqual(["asks[0]: title, why and effect are required"]);
@@ -415,23 +455,24 @@ describe("asks partition a proposal's changes", () => {
   test("asks name changes as written, and survive the fold: a folded row answers to the ask of the row it folded into", () => {
     const goal = { change: { kind: "project_meta", project: "pr-7", goal: "Inbox zero" }, rationale: "r" };
     const owner = { change: { kind: "project_meta", project: "pr-7", owner: "@quality" }, rationale: "r" };
-    const r = spec([task("ct-1"), goal, role, owner], [ask("Records", [1]), ask("Goals", [2]), ask("The agent", [3, 4])]);
+    const file = { change: { kind: "file", plan: "pl-3", project: "pr-7" }, rationale: "r" };
+    const r = spec([file, goal, role, owner], [ask("Filing", [1]), ask("Goals", [2]), ask("The agent", [3, 4])]);
     expect(r.errors).toEqual([]);
     expect(r.spec!.changes.length).toBe(3);
     // The goal sat in the goals ask and the owner in the agent's ask. The
     // merged row names @quality as owner, so it follows the ask that creates
     // @quality: accepting the goals alone never sets an owner nobody accepted.
-    expect(r.spec!.asks!.map((a) => [a.title, a.seqs])).toEqual([["Records", [1]], ["The agent", [2, 3]]]);
+    expect(r.spec!.asks!.map((a) => [a.title, a.seqs])).toEqual([["Filing", [1]], ["The agent", [2, 3]]]);
     expect(r.spec!.asks!.flatMap((a) => a.seqs).sort()).toEqual([1, 2, 3]);
     // With no ask creating the agent it names, the first ask that named the row keeps it.
-    const plain = spec([task("ct-1"), goal, owner], [ask("Goals", [2]), ask("Rest", [1, 3])]);
+    const plain = spec([file, goal, owner], [ask("Goals", [2]), ask("Rest", [1, 3])]);
     expect(plain.spec!.asks!.map((a) => a.seqs)).toEqual([[2], [1]]);
   });
-  test("deriveAsks: the records are one ask, each role, retire, move and scope its own with its riders, the rest one ask; removed rows are in none", async () => {
+  test("deriveAsks: each record group is one ask, each role, retire, move, scope and charter edit its own with its riders, the rest one ask; removed rows are in none", async () => {
     const { deriveAsks, resolveOrgAsks } = await import("./orgProposal");
     const rows = [
       { seq: 1, change: { kind: "plan_status", plan: "pl-1", status: "done", reason: "x" } },
-      { seq: 2, change: { kind: "task_status", task: "ct-1", status: "dropped", reason: "x" } },
+      { seq: 2, change: { kind: "task_status", task: "ct-1", status: "dropped", reason: "x", plan: "pl-1" } },
       { seq: 3, change: { kind: "file", plan: "pl-2", project: "pr-1" } },
       { seq: 4, change: role.change, rationale: role.rationale, expected_effect: role.expected_effect },
       { seq: 5, change: { kind: "routine", handle: "@quality", title: "Daily list", prompt: "p", every: "1d" } },
@@ -442,12 +483,13 @@ describe("asks partition a proposal's changes", () => {
     ] as any[];
     const asks = deriveAsks(rows);
     expect(asks.map((a) => [a.title, a.seqs])).toEqual([
-      ["Bring 2 records up to date", [1, 2]],
+      ["Settle 2 records under the plan pl-1", [1, 2]],
       ["Add an agent: Head of Quality", [4, 5]],
       ["Retire test-lead", [6]],
       // Three rows ride in the ask; the words count two, because the limit (seq 8) is never a row a person reads (S23.2).
       ["2 smaller changes: filing, goals and settings", [3, 7, 8]],
     ]);
+    expect(asks[0].effect).toBe("1 plan done and 1 task dropped. No work starts or stops.");
     expect(asks[1].why).toBe("Nobody watches the quality line.");
     expect(asks[1].effect).toBe("One daily list of fixes waiting on you.");
     // A derived ask with no words of its own reads as sentences: no handle,
@@ -463,7 +505,7 @@ describe("asks partition a proposal's changes", () => {
       { seq: 6, change: { kind: "scope", handle: "product", add: ["Calls"] } },
     ] as any[]);
     expect(bare.map((a) => [a.title, a.why, a.effect])).toEqual([
-      ["Add an agent: Head of Platform", "Owns the sync layer.", "A new agent, Head of Platform, reporting to you and looking after the Platform project. It stays until you retire it. It runs Release check every day." /* the limit rider says nothing (S23.2) */],
+      ["Add an agent: Head of Platform", "The author did not say why. Ask about this.", "A new agent, Head of Platform, reporting to you and looking after the Platform project. It stays until you retire it. It runs Release check every day." /* the limit rider says nothing (S23.2) */],
       ["Add an agent: Content Lead", "The author did not say why. Ask about this.", "A new agent, Content Lead, reporting to growth and looking after the pl-88 plan. It ends with the pl-88 plan, then comes up for review."],
       ["Move ops", "The author did not say why. Ask about this.", "ops reports to growth from now on, takes on pr-1 and hands off pr-2."],
       ["Change what product looks after", "The author did not say why. Ask about this.", "product takes on Calls."],
@@ -671,6 +713,7 @@ describe("the words of a change", () => {
       retire: "Retire @ops; its sessions go back to their owners",
       scope: "@growth also looks after pr-5 and stops looking after pl-2",
       budget: "@growth may use up to 800,000 tokens a day",
+      charter_edit: "Rewrite a passage of @growth's charter and add a line to its charter",
       trust: "@growth starts work on its own",
       routine: '@growth runs "Weekly funnel" every week',
       project_meta: "Make pr-1 a high priority, make @growth its lead and write down what it is for, how it is measured, what it leaves out and its risks",
@@ -1060,5 +1103,82 @@ describe("a person's answers as the message the agent reads (proposalReplyText)"
     expect(aboutChangeHeader("op-55", 3, 'Rename "Growth"')).toBe(`About op-55 change 3 ("Rename 'Growth'"):`);
     expect(aboutProposalHeader("op-55", TITLE)).toBe(`About op-55 ("${TITLE}"):`);
     expect(parseAboutChange(`${aboutChangeHeader("op-55", 3, "Retire @growth")}\n\nwhy?`)).toEqual({ proposal: "op-55", seq: 3, line: "Retire @growth", body: "why?" });
+  });
+});
+
+describe("record groups (S9, revised)", () => {
+  const row = (seq: number, change: any, status?: string) => ({ seq, change, ...(status ? { status } : {}) });
+  test("every record change is in exactly one group: its project, else its plan, else loose; biggest first, loose last", () => {
+    const rows = [
+      row(1, { kind: "task_status", task: "ct-1", status: "done", reason: "r", project: "pr-1" }),
+      row(2, { kind: "task_status", task: "ct-2", status: "open", reason: "r", plan: "pl-5" }),
+      row(3, { kind: "plan_status", plan: "pl-5", status: "done", reason: "r", title: "Member app", project: "pr-1" }),
+      row(4, { kind: "task_status", task: "ct-4", status: "dropped", reason: "r" }),
+      row(5, { kind: "task_status", task: "ct-5", status: "backlog", reason: "r", plan: "pl-9" }),
+      row(6, { kind: "plan_status", plan: "pl-9", status: "abandoned", reason: "r", title: "Old funnel" }),
+      row(7, { kind: "project_status", project: "pr-2", status: "paused", reason: "r", title: "Legacy" }),
+      row(8, { kind: "task_status", task: "ct-8", status: "done", reason: "r", project: "pr-1" }, "removed"),
+      row(9, { kind: "role", name: "X", handle: "x" }),
+    ];
+    const names = { project: (r: string) => ({ "pr-1": "Desire DB" } as Record<string, string>)[r] };
+    const groups = orgRecordGroups(rows, names);
+    expect(groups.map((g) => [g.key, g.kind, g.ref, g.title, g.seqs])).toEqual([
+      ["project:pr-1", "project", "pr-1", "Desire DB", [1, 2, 3]],
+      ["plan:pl-9", "plan", "pl-9", "Old funnel", [5, 6]],
+      ["project:pr-2", "project", "pr-2", "Legacy", [7]],
+      ["loose", "loose", undefined, undefined, [4]],
+    ]);
+    expect(groups[0].totals).toEqual([{ noun: "plan", act: "done", count: 1 }, { noun: "task", act: "done", count: 1 }, { noun: "task", act: "reopened", count: 1 }]);
+    expect(recordGroupTotalsLine(groups[0])).toBe("1 plan done, 1 task done and 1 task reopened");
+    expect(recordGroupTotalsLine(groups[1])).toBe("1 plan abandoned and 1 task backlog");
+    expect(recordGroupTotalsLine(groups[2])).toBe("1 project paused");
+    // A title that only repeats the ref is dropped; a ref nobody can name stands alone.
+    expect(orgRecordGroups([row(1, { kind: "plan_status", plan: "pl-3", status: "done", reason: "r", title: "pl-3" })])[0]).toEqual({ key: "plan:pl-3", kind: "plan", ref: "pl-3", seqs: [1], totals: [{ noun: "plan", act: "done", count: 1 }] });
+    expect(orgRecordGroups([])).toEqual([]);
+  });
+  test("the asks of a record proposal are its groups, with the totals as the effect", () => {
+    const asks = deriveAsks([
+      { seq: 1, change: { kind: "task_status", task: "ct-1", status: "done", reason: "r", project: "pr-1" } },
+      { seq: 2, change: { kind: "plan_status", plan: "pl-5", status: "done", reason: "r", title: "Member app", project: "pr-1" } },
+      { seq: 3, change: { kind: "task_status", task: "ct-3", status: "dropped", reason: "nobody picked it up" } },
+    ] as any, { project: (r: string) => ({ "pr-1": "Desire DB" } as Record<string, string>)[r] });
+    expect(asks.map((a) => [a.title, a.effect, a.seqs])).toEqual([
+      ["Settle 2 records in Desire DB", "1 plan done and 1 task done. No work starts or stops.", [1, 2]],
+      ["Mark the task ct-3 as dropped", "1 task dropped. No work starts or stops.", [3]],
+    ]);
+    expect(asks[1].why).toBe("nobody picked it up");
+  });
+});
+
+describe("a role's charter edited in place", () => {
+  const charter = "Keeps paid acquisition on budget and pointed at the funnel.\n\nReads the ads account every morning.";
+  test("each edit names a passage; a passage must be short, and a replace must change something", () => {
+    expect(orgChangeError({ kind: "charter_edit", handle: "growth", edits: [] })).toBe('charter_edit edits is a list of one to 5 edits: { op: "replace", before, after }, { op: "add", line } or { op: "remove", before }');
+    expect(orgChangeError({ kind: "charter_edit", handle: "growth", edits: [{ op: "swap", before: "a" }] })).toBe('charter_edit op is replace, add or remove, not "swap"');
+    expect(orgChangeError({ kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "a", after: " a " }] })).toBe("charter_edit replace: after is the same as before");
+    expect(orgChangeError({ kind: "charter_edit", handle: "growth", edits: [{ op: "add", line: "x".repeat(301) }] })).toBe("charter_edit add: line is 301 characters; a passage is at most 300, so quote the sentence that changes, not the whole charter");
+    expect(orgChangeError({ kind: "charter_edit", handle: "growth", edits: [{ op: "remove", before: "" }] })).toBe("charter_edit remove: before is the passage, a non-empty string");
+    expect(orgChangeError({ kind: "role", name: "G", handle: "growth", charter: "x".repeat(ORG_CHARTER_MAX + 1) })).toBe(`charter is ${ORG_CHARTER_MAX + 1} characters; a charter is the job in a few sentences, at most ${ORG_CHARTER_MAX} characters: what the role watches, what it does on its own, and what it brings to a person; cut examples, procedures, and anything its routine or its scope already says`);
+    expect(orgChangeError({ kind: "role", name: "G", handle: "growth", charter: "x".repeat(ORG_CHARTER_MAX) })).toBeNull();
+    expect(ORG_CHANGE_APPLY_RANK.charter_edit).toBeGreaterThan(ORG_CHANGE_APPLY_RANK.role);
+    expect(ORG_CHANGE_APPLY_RANK.charter_edit).toBeLessThan(ORG_CHANGE_APPLY_RANK.retire);
+  });
+  test("the words say what the edit does, never the text", () => {
+    const names = { role: (h: string) => (h === "growth" ? "Growth lead" : undefined) };
+    expect(changeLine(GOOD.charter_edit, { names, brief: true })).toBe("Rewrite a passage of Growth lead's charter and add a line to its charter");
+    expect(changeLine({ kind: "charter_edit", handle: "growth", edits: [{ op: "remove", before: "x" }, { op: "remove", before: "y" }] })).toBe("Cut 2 passages from @growth's charter");
+    const [ask] = deriveAsks([{ seq: 1, change: GOOD.charter_edit, rationale: "The role now reports spend." }] as any, names);
+    expect([ask.title, ask.why, ask.effect, ask.seqs]).toEqual(["Change what Growth lead's charter says", "The role now reports spend.", "Growth lead's charter changes in 2 places; each passage is shown before and after. Its area and its reporting line stay as they are.", [1]]);
+  });
+  test("applyCharterEdits substitutes exact, unique passages and keeps the result under the cap", () => {
+    expect(applyCharterEdits(charter, GOOD.charter_edit.edits as any)).toEqual({ charter: "Keeps paid acquisition under budget and pointed at the funnel.\n\nReads the ads account every morning.\n\nReports spend every Monday." });
+    expect(applyCharterEdits(charter, [{ op: "remove", before: "Reads the ads account every morning." }])).toEqual({ charter: "Keeps paid acquisition on budget and pointed at the funnel." });
+    // Spacing in the quote does not matter; the words do.
+    expect(applyCharterEdits(charter, [{ op: "replace", before: "on  budget and\npointed", after: "steady" }])).toEqual({ charter: "Keeps paid acquisition steady at the funnel.\n\nReads the ads account every morning." });
+    expect(applyCharterEdits(charter, [{ op: "replace", before: "spend", after: "x" }])).toEqual({ error: 'the passage "spend" is not in the charter as it stands; quote it exactly' });
+    expect(applyCharterEdits(charter, [{ op: "remove", before: "the" }])).toEqual({ error: 'the passage "the" appears 2 times in the charter; quote more of it so it names one place' });
+    expect(applyCharterEdits("", [{ op: "add", line: "First line." }])).toEqual({ charter: "First line." });
+    const long = applyCharterEdits("y".repeat(600), [{ op: "add", line: "x".repeat(250) }]);
+    expect(long.error).toBe("the charter would be 852 characters after this edit; a charter is the job in a few sentences, at most 800 characters: what the role watches, what it does on its own, and what it brings to a person; cut examples, procedures, and anything its routine or its scope already says");
   });
 });

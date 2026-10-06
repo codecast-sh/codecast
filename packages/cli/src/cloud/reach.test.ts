@@ -40,10 +40,11 @@ describe("normalizeReachFolder", () => {
 
 describe("reachHostRefusal", () => {
   const base: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k", watchdogVersion: 3 };
-  test("a provisioned Linux host is fine; an old watchdog or a macOS host is not", () => {
+  test("a provisioned Linux host and any macOS host are fine; a Linux host with an old watchdog is not", () => {
     expect(reachHostRefusal(base)).toBeNull();
     expect(reachHostRefusal({ ...base, watchdogVersion: 2 })).toMatch(/cast hosts provision i-1/);
-    expect(reachHostRefusal({ ...base, platform: "darwin" })).toMatch(/macOS hosts/);
+    // A Mac never stops itself, so it has no watchdog to outgrow; sshfs is the host's answer.
+    expect(reachHostRefusal({ ...base, platform: "darwin", watchdogVersion: undefined })).toBeNull();
   });
 });
 

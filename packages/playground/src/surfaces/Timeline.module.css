@@ -1,0 +1,52 @@
+.dock {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 76px; z-index: var(--z-dock);
+  display: flex; align-items: center; gap: var(--s4); padding: 0 var(--s4);
+  background: var(--paper); border-top: var(--line); animation: dock-in var(--t-move) var(--glide);
+}
+@keyframes dock-in { from { transform: translateY(100%); } }
+.dockHead { flex: none; display: flex; flex-direction: column; gap: 2px; font: 800 13px var(--ui); min-width: 92px; }
+.dockHead span { font: 600 12px var(--ui); color: var(--ink-soft); }
+.stepKeys { flex: none; font: 600 12px var(--ui); color: var(--ink-soft); }
+@media (max-width: 1200px) { .stepKeys { display: none; } }
+
+.strip { flex: none; padding: 4px 16px 6px; border-top: var(--line); background: var(--paper); }
+
+.beadsWrap { flex: 1; min-width: 0; }
+.beads {
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 22px 24px 10px;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+}
+.beads::-webkit-scrollbar { display: none; }
+.string { position: relative; display: flex; align-items: center; min-width: 100%; width: max-content; height: 34px; }
+.string::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; background: var(--ink); border-radius: 2px; }
+.slot { position: relative; flex: 0 1 72px; min-width: 34px; display: grid; place-items: center; }
+
+.bead {
+  position: relative; width: 18px; height: 18px; border-radius: 50%; border: var(--line); background: var(--fill);
+  display: grid; place-items: center; padding: 0;
+  transition: width var(--t-quick) var(--squish), height var(--t-quick) var(--squish), transform var(--t-quick) var(--squish);
+}
+.bead:hover, .bead:focus-visible, .peeked { width: 28px; height: 28px; transform: translateY(-2px); box-shadow: var(--focus); }
+.live { width: 30px; height: 30px; background: var(--mint); }
+.live.peeked, .live:hover { width: 32px; height: 32px; }
+.num { font: 700 9px/1 var(--mono); }
+.restore { background: repeating-linear-gradient(-45deg, var(--ink) 0 2px, var(--cream) 2px 6px); }
+.viewing { background: var(--bubble); box-shadow: 0 0 0 3px var(--paper), 0 0 0 6px var(--bubble); }
+.askerFace { position: absolute; bottom: calc(100% + 6px); left: 50%; translate: -50% 4px; opacity: 0; pointer-events: none; transition: opacity var(--t-quick), translate var(--t-quick) var(--squish); }
+.bead:hover .askerFace, .bead:focus-visible .askerFace, .peeked .askerFace { opacity: 1; translate: -50% 0; }
+.buildingBead { width: 22px; height: 22px; border-radius: 50%; border: 2.5px dashed var(--ink); background: var(--paper); display: grid; place-items: center; }
+
+.peek { display: flex; flex-direction: column; gap: var(--s2); }
+.peekHead { display: flex; align-items: center; gap: var(--s2); }
+.peekHead b { font: 400 26px/1 var(--display); }
+.peekHead small { font: 600 12px var(--ui); color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary { font: 700 14px/1.35 var(--ui); overflow-wrap: anywhere; }
+.request {
+  font: 500 13px/1.35 var(--ui); color: var(--ink-soft);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.peekActions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+.isLive { font: 800 13px var(--ui); display: inline-flex; align-items: center; gap: 6px; }
+.isLive::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--mint); border: var(--line-thin); }
+.strip .beads { padding-top: 14px; padding-bottom: 4px; }

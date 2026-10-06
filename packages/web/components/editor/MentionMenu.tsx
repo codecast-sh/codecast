@@ -50,7 +50,7 @@ export function MentionMenu({
       className={`bg-sol-bg border border-sol-border/60 rounded-xl shadow-2xl overflow-hidden flex flex-col ${className ?? ""}`}
       style={style}
     >
-      <div ref={listRef} role="listbox" aria-label="Suggestions" className="overflow-y-auto overflow-x-hidden overscroll-contain max-h-[min(440px,52vh)] pb-1">
+      <div ref={listRef} role="listbox" aria-label="Suggestions" className="min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain max-h-[min(440px,52vh)] pb-1">
         {groups.map((group) => (
           <div key={group.key} role="group" aria-label={group.title}>
             <div className="sticky top-0 z-[1] px-3 pt-2 pb-1 bg-sol-bg/95 backdrop-blur-sm flex items-center gap-2 text-[11px] font-medium text-sol-text-dim">

@@ -140,7 +140,7 @@ async function verifyCompany() {
   assert.deepEqual(goalIds("[data-company-section='goals'] > [data-company-goal]"), ["in-2", "in-4", "in-1"]);
   const network = q("[data-company-goal='in-2']")!;
   assert.equal(network.getAttribute("data-company-depth"), "1");
-  assert.equal(network.querySelector("h3[data-company-goal-title] a")!.getAttribute("href"), "/initiatives/in-2");
+  assert.equal(network.querySelector("h3[data-company-goal-title] a")!.getAttribute("href"), "/goals/in-2");
   assert.equal(network.querySelector("h3")!.textContent, "Win the private network");
   assert.ok(network.querySelector(":scope > header [data-company-byline] [data-face='person:Ashot Petrosian']"), "the owner's face by the heading");
   assert.equal(network.querySelector("[data-company-byline] a[data-company-owner='user']")!.getAttribute("href"), "/team/ashot", "the owner is a link to the person");
@@ -296,7 +296,7 @@ async function verifyCompany() {
   const moved = q("[data-company-goal='in-2']")!;
   assert.equal(moved.getAttribute("data-company-depth"), "2");
   assert.equal(moved.getAttribute("data-company-goal-kind"), "live");
-  assert.ok(moved.querySelector(":scope > header h4[data-company-goal-title] a[href='/initiatives/in-2']"), "the live heading stays");
+  assert.ok(moved.querySelector(":scope > header h4[data-company-goal-title] a[href='/goals/in-2']"), "the live heading stays");
   const place = moved.querySelector(":scope > [data-company-goal-changes='1'] [data-subject='goal:union-in-2']") as HTMLElement;
   assert.equal(place.getAttribute("data-change-ids"), "union-network");
   assert.equal(place.querySelector("[data-subject-sentence]")!.textContent, "Move this goal under the purpose.");
@@ -444,7 +444,7 @@ async function verifyCompany() {
   assert.equal(q("[data-company-purpose]")!.getAttribute("data-company-purpose"), "none");
   assert.match(q("[data-company-purpose]")!.textContent!, /^No purpose written yet$/);
   assert.match(q("[data-company-section='goals']")!.textContent!, /No goals yet/);
-  assert.equal(q("[data-company-section='goals'] a")!.getAttribute("href"), "/initiatives");
+  assert.equal(q("[data-company-section='goals'] a")!.getAttribute("href"), "/goals");
   assert.match(q("[data-company-section='projects']")!.textContent!, /No projects yet/);
 
   await act(async () => root.unmount());

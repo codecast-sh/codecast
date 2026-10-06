@@ -575,6 +575,13 @@ describe("initiatives (in-N)", () => {
     expect(isEntityId("in-7")).toBe(true);
   });
 
+  test("an id inside a hyphenated word is prose", () => {
+    for (const prose of ["a 2-in-1 vacuum", "an all-in-1 kit", "the op-1-style card", "x-ct-4102 and ct-4102-ish"]) {
+      expect(prose.match(bareEntityIdRegex())).toBeNull();
+    }
+    expect("see in-1, op-1 and sd-2.".match(bareEntityIdRegex())).toEqual(["in-1", "op-1", "sd-2"]);
+  });
+
   test("prose that starts with in- is never an initiative", () => {
     for (const word of ["in-app", "in-house", "in-flight", "in-7th", "in-"]) {
       expect(inferEntityTypeFromShortId(word)).toBeNull();
@@ -590,9 +597,10 @@ describe("initiatives (in-N)", () => {
     expect(entityMentionRegex().exec("the @[checkout in-app] flow")?.slice(1, 3)).toEqual(["checkout in-app", undefined]);
   });
 
-  test("an initiative routes to its page and its url parses back", () => {
-    expect(entityRoute("initiative", "in-7")).toBe("/initiatives/in-7");
-    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/initiatives/in-7");
+  test("an initiative routes to its goal page and its url parses back, old address included", () => {
+    expect(entityRoute("initiative", "in-7")).toBe("/goals/in-7");
+    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/goals/in-7");
+    expect(parseEntityUrl("https://codecast.sh/goals/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(parseEntityUrl("https://codecast.sh/initiatives/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(normalizeEntityType("initiatives")).toBe("initiative");
   });

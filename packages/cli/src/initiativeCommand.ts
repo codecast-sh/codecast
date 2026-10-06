@@ -203,9 +203,9 @@ export function recordEntries(row: any, list: InitiativeRecordList): RecordEntry
 
 // The command that adds the first entry of each list, said when a goal has none.
 const RECORD_ADD: Record<InitiativeRecordList, (on: string) => string> = {
-  milestones: (on) => `cast initiative milestone ${on} "<title>" --date <YYYY-MM-DD>`,
-  questions: (on) => `cast initiative ask ${on} "<question>"`,
-  decisions: (on) => `cast initiative decide ${on} "<decision>"`,
+  milestones: (on) => `cast goal milestone ${on} "<title>" --date <YYYY-MM-DD>`,
+  questions: (on) => `cast goal ask ${on} "<question>"`,
+  decisions: (on) => `cast goal decide ${on} "<decision>"`,
   sources: (on) => `cast initiative source ${on} <address or the words said>`,
 };
 
@@ -505,7 +505,7 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
   section("sources", "Sources", recordEntries(row, "sources"));
 
   const gaps = [!row.why && "why", !row.done_when && "done when", !milestones.length && "milestones", !row.sources?.length && "sources"].filter(Boolean);
-  if (gaps.length) out.push("", hint(`Not on the record yet: ${gaps.join(", ")}. cast initiative --help lists the commands that write them.`));
+  if (gaps.length) out.push("", hint(`Not on the record yet: ${gaps.join(", ")}. cast goal --help lists the commands that write them.`));
 
   const projects: any[] = row.projects ?? [];
   out.push(head(`Projects (${projects.length})`, progressText(row.task_counts)));
@@ -516,11 +516,11 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
 
   const updates: any[] = row.updates ?? [];
   out.push(head(`Updates (${updates.length})`));
-  if (!updates.length) out.push(hint(`None yet: cast initiative update ${row.short_id} --health on_track "How it is going"`));
+  if (!updates.length) out.push(hint(`None yet: cast goal update ${row.short_id} --health on_track "How it is going"`));
   for (const u of updates) out.push(`  ${healthText(c, u.health)} ${c.dim}· ${u.by_label ?? "unknown"} · ${opts.ago(u.at)}${c.reset}`, ...indented(u.body, "    "));
 
   if (row.sub_initiatives?.length) {
-    out.push(head("Sub initiatives"));
+    out.push(head("Goals under it"));
     for (const s of row.sub_initiatives) out.push(`  ${icon(s.status)} ${c.cyan}${s.short_id}${c.reset} ${s.title} ${healthText(c, s.health)}`);
   }
   out.push("");

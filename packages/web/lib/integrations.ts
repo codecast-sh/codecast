@@ -95,7 +95,7 @@ export function openConnectUrl(url: string, sameTab = false): void {
  * The machinery every connect gesture shares: a busy flag, the last refusal
  * in plain words (describeConnectorError), `attempt` to run a step holding
  * both, and `openMinted` to open the authorize URL a server minted or report
- * why it minted none. useAppConnection and the simple lane's mail connect
+ * why it minted none. useAppConnection and the mail connect through Whisk
  * (components/simple/useLaneMail.ts) both build on it.
  */
 export function useConnectGesture() {

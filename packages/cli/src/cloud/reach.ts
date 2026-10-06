@@ -56,6 +56,18 @@ export const REACH_NOTE = ".cast-reach";
 /** How often the daemon checks reaches. A tick that finds every reach live costs nothing; only a down one probes its host (never waking it). */
 export const REACH_TICK_MS = 15_000;
 
+/**
+ * Provisioning on both platforms: sshd drops a client that stopped answering
+ * within a minute. Without it a laptop that went to sleep mid-connection
+ * leaves its session, and a reached folder's sshfs with it, alive for TCP's
+ * two hours, and every read of the folder hangs that long instead of failing.
+ * Linux reloads sshd; macOS starts one per connection, so the next one reads it.
+ */
+export const SSHD_KEEPALIVE_SCRIPT = `if [ ! -f /etc/ssh/sshd_config.d/cast-alive.conf ]; then
+  printf 'ClientAliveInterval 15\\nClientAliveCountMax 4\\n' | sudo -n tee /etc/ssh/sshd_config.d/cast-alive.conf >/dev/null
+  sudo -n systemctl reload ssh 2>/dev/null || sudo -n systemctl reload sshd 2>/dev/null || true
+fi`;
+
 export const REACH_NO_SSHFS_EXIT = 4;
 export const REACH_NO_MOUNTPOINT_EXIT = 5;
 export const REACH_OCCUPIED_EXIT = 6;
@@ -81,7 +93,9 @@ export function reachKey(hostId: string, folder: string): string {
  * the box awake and billing forever.
  */
 export function reachHostRefusal(host: CloudHost): string | null {
-  if (host.platform === "darwin" || host.provider === "scaleway-mac") return "reached folders need FUSE, which macOS hosts do not have yet; use a Linux host";
+  // A Mac host never stops itself (no idle watchdog to keep awake); whether it
+  // has FUSE-T and sshfs is answered by the host itself (REACH_NO_SSHFS_EXIT).
+  if (host.platform === "darwin" || host.provider === "scaleway-mac") return null;
   if ((host.watchdogVersion ?? 0) < REACH_MIN_WATCHDOG) return `run \`cast hosts provision ${host.id}\` first: it installs sshfs and an idle watchdog that ignores the reach's own connection (its watchdog is version ${host.watchdogVersion ?? 1}, reach needs ${REACH_MIN_WATCHDOG})`;
   return null;
 }
@@ -134,7 +148,11 @@ export function reachSandboxProfile(realFolder: string, readOnly: boolean): stri
 
 /**
  * The host side, run by `bash -c` with the mountpoint, the laptop's path and
- * the laptop's name. It clears a mount a dead connection left behind, makes
+ * the laptop's name, on Linux (kernel FUSE, sshfs 3) and macOS (FUSE-T, which
+ * serves the mount over a local NFS server, and its sshfs 2.9) alike: only
+ * options both sshfs versions read are passed. A non-interactive ssh shell on a
+ * Mac has no /usr/local/bin or Homebrew on PATH, so the script adds them. It
+ * clears a mount a dead connection left behind, makes
  * the mountpoint (sudo for a path like /Users/<name> that the host lacks),
  * refuses one that holds anything but its own note, opens it for fusermount
  * and runs sshfs on this connection's stdio. When sshfs ends the mountpoint
@@ -142,6 +160,7 @@ export function reachSandboxProfile(realFolder: string, readOnly: boolean): stri
  * returns.
  */
 export const REACH_REMOTE_SCRIPT = `mp="$1"; src="$2"; laptop="$3"
+PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 command -v sshfs >/dev/null 2>&1 || exit ${REACH_NO_SSHFS_EXIT}
 mounted() { if command -v findmnt >/dev/null 2>&1; then findmnt -n -M "$mp" >/dev/null 2>&1; else mount | grep -qF " on $mp "; fi; }
 if mounted; then
@@ -158,7 +177,7 @@ chmod u+w "$mp" || exit ${REACH_NO_MOUNTPOINT_EXIT}
 [ -z "$(ls -A "$mp" | grep -vxF '${REACH_NOTE}')" ] || exit ${REACH_OCCUPIED_EXIT}
 printf '%s\\n' "This folder is $src on $laptop, reached over ssh: its files live on that laptop and are read and written there in place." "It is not connected right now, so it is empty here. It comes back while that laptop is awake and its codecast daemon is running." "Nothing written here while it is disconnected is kept, so writes are refused." > "$mp/${REACH_NOTE}"
 ( i=0; while [ $i -lt 100 ]; do if mounted; then echo "${REACH_MOUNTED_LINE}" >&2; exit 0; fi; i=$((i+1)); sleep 0.2; done ) </dev/null >/dev/null &
-(exec -a ${REACH_ARGV0} sshfs ":$src" "$mp" -f -o slave -o idmap=user -o dcache_timeout=2 -o dcache_stat_timeout=2 -o dcache_link_timeout=2 -o dcache_dir_timeout=2)
+(exec -a ${REACH_ARGV0} sshfs ":$src" "$mp" -f -o slave -o idmap=user -o cache_timeout=2)
 code=$?
 chmod a-w "$mp" 2>/dev/null
 exit $code`;
