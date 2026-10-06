@@ -37,3 +37,14 @@ final class BlockingSurfaceTests: XCTestCase {
         XCTAssertNil(VisibleRegion.narrowed(window, role: "AXSheet", frame: scroll))
     }
 }
+
+final class BlockingSurfaceRefusalTests: XCTestCase {
+    func testTheRefusalNamesTheSheetAndCarriesTheTreeToActOn() {
+        let tree = "App=fixture (pid 1)\nWindow: \"Bench Form\", App: fixture.\n\n0 standard window Bench Form\n\t1 sheet alert\n\t\t2 button Cancel\n\nThe focused UI element is 2 button Cancel."
+        let message = BlockingSurface.openedSince(noun: "sheet", index: 8, tree: tree)
+        XCTAssertTrue(message.hasPrefix("a sheet opened after your last read"))
+        XCTAssertTrue(message.contains("element 8 does not respond"))
+        XCTAssertTrue(message.hasSuffix("0 standard window Bench Form\n\t1 sheet alert\n\t\t2 button Cancel\nThe focused UI element is 2 button Cancel."))
+        XCTAssertFalse(message.contains("App=fixture"))
+    }
+}

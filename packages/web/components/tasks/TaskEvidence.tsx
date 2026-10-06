@@ -12,6 +12,7 @@ import { ImageGalleryProvider, useImageGallery } from "../ImageGallery";
 import { useSyncTaskEvidence, useTaskEvidence, type TaskEvidencePage, type TaskEvidenceRow } from "../../hooks/useSyncTaskEvidence";
 import { stationLabel, stationOf, type LineTask } from "../../lib/taskLine";
 import { ReviewVerdictChip } from "./StationStrip";
+import { ChangeGuideWalkthrough } from "./ChangeGuideWalkthrough";
 
 // Evidence attaches at the station (docs/architecture/the-line.md L6, L10):
 // the pages a station produced, grouped by station with thumbnails; the
@@ -106,12 +107,13 @@ function TaskEvidenceContent({ task }: { task: EvidenceTask }) {
   const docs = row?.docs ?? [];
   const images = row?.images ?? [];
   const pr = row?.pr_url ?? null;
+  const guide = row?.change_guide ?? null;
   const groups = useMemo(() => {
     const current = stationOf(task);
     // The current station first, then the rest in the order the server gave.
     return [...stations].sort((a, b) => Number(b.station === current) - Number(a.station === current));
   }, [stations, task.status, task.status_id]);
-  const empty = stations.length === 0 && docs.length === 0 && images.length === 0 && files.length === 0 && !verification && !pr && !verdict && !execution;
+  const empty = !guide && stations.length === 0 && docs.length === 0 && images.length === 0 && files.length === 0 && !verification && !pr && !verdict && !execution;
 
   return (
     <div className="mb-6" data-task-evidence={empty ? "empty" : "filled"}>
@@ -125,6 +127,8 @@ function TaskEvidenceContent({ task }: { task: EvidenceTask }) {
         <p className="text-xs text-sol-text-dim" data-evidence-empty>Nothing attached yet. A handoff, a published page or a review adds to this.</p>
       ) : (
         <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 p-4 space-y-4 border-l-2 border-l-sol-cyan/30">
+          {/* The author's tour reads first: it is how the change wants to be reviewed. */}
+          {guide && <ChangeGuideWalkthrough guide={guide} />}
           {groups.map((g) => (
             <div key={g.station || "unfiled"} data-evidence-station={g.station}>
               <div className="text-xs font-medium text-sol-text-dim mb-2">
