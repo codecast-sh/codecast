@@ -4,17 +4,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
-import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
+import { AGENT_CLIENTS, localAgentClient } from "../../shared/contracts/agentClients";
 import { authorizesTeardown } from "../../shared/contracts/liveness";
 import { isClaudeAutoContinueLine, isRecoveryContinueClientId, isUsageLimitDialog } from "../../shared/contracts/apiErrorBanner";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { LaunchPromptCarriedError, transcriptHasUserPrompt } from "./launchPrompt";
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
-import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
+import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
-import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
+import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { typedPollAnswer } from "./typedPollAnswer";
-import { CloudAgentHoldError } from "./cloudAgents/types";
+import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { CLAUDE_TURN_STATUS_LINE } from "./daemon";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
@@ -38,7 +38,7 @@ function fixture(transport = "tmux", cached = true) {
   const bodies: string[] = [];
   const commands: string[] = [];
   const captureSizes: number[] = [];
-  const hooks = { capture: () => {}, input: (_event: string) => {}, loaded: () => {} };
+  const hooks = { capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null };
   const timers: Array<{ fn: () => unknown; ms: number; cancelled: boolean }> = [];
   const clock = { now: 1_000_000, steps: 0 };
   const step = (ms = 0) => {
@@ -77,6 +77,7 @@ function fixture(transport = "tmux", cached = true) {
   };
   const buffers = new Map<string, string>();
   const tmuxExec = async (args: string[]) => {
+    await hooks.exec(args);
     if (args[0] === "capture-pane") {
       const size = Math.abs(Number(args[args.indexOf("-S") + 1]));
       captureSizes.push(size);
@@ -125,6 +126,7 @@ function fixture(transport = "tmux", cached = true) {
   const pendingInteractivePrompts = new Map<string, typeof prompt>([["sid", prompt]]);
   const lastEmittedSyntheticPrompt = new Map([["sid", "card-1"]]);
   const closed: unknown[][] = [];
+  let journal: TmuxDeliveryJournal | undefined;
   const messages = new Map<string, any>();
   const statuses: Array<{ messageId: string; status: string }> = [];
   const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
@@ -137,17 +139,18 @@ function fixture(transport = "tmux", cached = true) {
     retryMessage: async (id: string, opts?: { holdReason?: string }) => { events.push(opts?.holdReason ? `hold:${id}` : `retry:${id}`); },
     setSessionError: async () => {},
     cancelPendingMessage: fail("cancel pending"),
+    addMessage: fail("system row"),
   };
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
-    isMachineDeliveredMessage, AGENT_CLIENTS, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
+    isMachineDeliveredMessage, AGENT_CLIENTS, localAgentClient, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
     LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
     holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
-    clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
+    clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
-    CloudAgentHoldError, pollPendingNow: () => {},
+    CloudAgentHoldError, CloudAgentUnsentError, pollPendingNow: () => {},
     cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
     // A recovery continue restarts a pane that holds its own credential first;
     // this fixture's machine has no fleet store, so no pane is restarted.
@@ -206,7 +209,10 @@ function fixture(transport = "tmux", cached = true) {
     },
     clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
     autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
-    prepareTmuxDelivery: async () => null, TmuxDeliveryUncertainError,
+    prepareTmuxDelivery: async () => hooks.prepare(), TmuxDeliveryUncertainError, TmuxDeliveryExhaustedError,
+    // The receipt journal the inject path opens when a delivery identity rides
+    // along: a private one per fixture, so no test reads the machine's.
+    tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
     selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
     IN_FLIGHT_HARD_TTL_MS: 10000, compactionRedeliveryBypass: new Set(), injectionDedupWindowMs: () => 10000,
@@ -219,8 +225,8 @@ function fixture(transport = "tmux", cached = true) {
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog", "isClaudeBypassWarning",
       "spendLimitDialogBanner", "usageLimitMenuBanner", "limitDialogOnPane",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
-      "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
-      "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
+      "isDeliveryVerdict", "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+      "tmuxWatchablePrefix", "promptIsOwnText", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
@@ -232,7 +238,7 @@ function fixture(transport = "tmux", cached = true) {
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
       "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS",
     ].map(name => {
@@ -891,6 +897,65 @@ describe("machine prompt delivery safety", () => {
       carry(f, { age: 11 * 60_000 });
       await expect(f.deliver("the brief")).resolves.toBe(true);
       expect(f.bodies).toEqual(["the brief"]);
+    });
+  });
+
+  describe("delivery budget and write cap", () => {
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    test("a timed-out attempt keeps its slot until it settles, so a retry never writes over it", async () => {
+      // A 157 KB prompt typed for 7 minutes was timed out at 3 and retried
+      // over itself; the pane got a second copy (jx7b88a, 2026-10-05).
+      const f = fixture();
+      f.state.menu = null;
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>(resolve => { releaseHang = resolve; });
+      let writes = 0;
+      f.hooks.exec = async (args: string[]) => {
+        if (args[0] === "send-keys" && args.includes("-l")) { writes++; await hang; }
+      };
+      const first = f.scan([{ _id: "update", content: "continue" }]);
+      for (let i = 0; i < 20 && writes === 0; i++) await tick();
+      expect(writes).toBe(1);
+      const budget = f.timers.find((t: any) => t.ms === deliveryTimeoutMsFor("continue", undefined, 180_000));
+      expect(budget).toBeDefined();
+      await budget!.fn();
+      await first;
+      // The retry is scheduled, not yet fired: the slot is still held.
+      const retry = f.timers.find((t: any) => t.ms === 1000 && !t.cancelled);
+      expect(retry).toBeDefined();
+      expect(f.deps.messagesInFlight.has("update")).toBe(true);
+      await retry!.fn();
+      expect(f.events).toEqual(["retry:update"]);
+      expect(f.bodies).toEqual([]);
+      // The retry re-pends the row; the scan finds the attempt still in flight.
+      await f.scan([{ _id: "update", content: "continue", retry_count: 1 }]);
+      expect(writes).toBe(1);
+      expect(f.deps.messagesInFlight.has("update")).toBe(true);
+      releaseHang();
+      for (let i = 0; i < 50 && f.deps.messagesInFlight.has("update"); i++) await tick();
+      expect(f.bodies).toEqual(["continue"]);
+      expect(f.deps.messagesInFlight.has("update")).toBe(false);
+      expect(f.deps.conversationDeliveryActive.has("conv")).toBe(false);
+    });
+
+    test("a message the pane took the capped number of times is cancelled and said in the session", async () => {
+      const f = fixture();
+      f.state.menu = null;
+      f.hooks.prepare = async () => { throw new TmuxDeliveryExhaustedError("update", 3); };
+      const cancelled: string[] = [];
+      const rows: any[] = [];
+      f.deps.syncService.cancelPendingMessage = async (id: string) => { cancelled.push(id); };
+      f.deps.syncService.addMessage = async (row: any) => { rows.push(row); return "row-1"; };
+      await f.scan([{ _id: "update", content: "continue" }]);
+      expect(f.bodies).toEqual([]);
+      expect(cancelled).toEqual(["update"]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ conversationId: "conv", role: "system", subtype: "delivery_failed" });
+      expect(rows[0].content).toContain("written into its terminal 3 times");
+      expect(rows[0].content).toContain("continue");
+      expect(f.events.filter((e: string) => /^(retry|hold):/.test(e))).toEqual([]);
+      expect(f.deps.messagesInFlight.size).toBe(0);
     });
   });
 });

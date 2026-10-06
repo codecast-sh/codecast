@@ -58,6 +58,7 @@
         "@convex-dev/prosemirror-sync": "^0.2.3",
         "@platform/agent": "file:../../platform/packages/agent",
         "@platform/analytics": "file:../../platform/packages/analytics",
+        "@platform/assistant": "file:../../platform/packages/assistant",
         "@platform/auth": "file:../../platform/packages/auth",
         "@platform/billing": "file:../../platform/packages/billing",
         "@platform/crypto": "file:../../platform/packages/crypto",
@@ -119,6 +120,7 @@
         "@livekit/react-native": "^2.12.0",
         "@livekit/react-native-webrtc": "^144.1.2",
         "@platform/analytics": "file:../../platform/packages/analytics",
+        "@platform/assistant": "file:../../platform/packages/assistant",
         "@platform/design": "file:../../platform/packages/design",
         "@platform/flags": "file:../../platform/packages/flags",
         "@react-navigation/native": "^7.1.8",
@@ -178,6 +180,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@platform/analytics": "file:../../platform/packages/analytics",
+        "@platform/assistant": "file:../../platform/packages/assistant",
         "@platform/evals": "file:../../platform/packages/evals",
         "@platform/fence": "file:../../platform/packages/fence",
         "css-tree": "3.2.1",
@@ -219,6 +222,7 @@
         "@novnc/novnc": "1.7.0",
         "@observablehq/plot": "^0.6.17",
         "@platform/analytics": "file:../../platform/packages/analytics",
+        "@platform/assistant": "file:../../platform/packages/assistant",
         "@platform/auth": "file:../../platform/packages/auth",
         "@platform/design": "file:../../platform/packages/design",
         "@platform/engine": "file:../../platform/packages/engine",
@@ -4415,6 +4419,8 @@
 
     "@codecast/convex/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "happy-dom": "20.11.1", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
 
+    "@codecast/convex/@platform/assistant": ["@platform/assistant@file:platform/packages/assistant", { "devDependencies": { "@platform/agent": "file:../agent", "typescript": "^5.7.2" } }],
+
     "@codecast/convex/@platform/auth": ["@platform/auth@file:platform/packages/auth", { "devDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "@types/bun": "latest", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "19.1.0", "typescript": "^5.7.2" }, "peerDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "^19.0.0" }, "optionalPeers": ["@auth/core", "jose", "oslo", "react"] }],
 
     "@codecast/convex/@platform/billing": ["@platform/billing@file:platform/packages/billing", { "dependencies": { "@platform/crypto": "file:../crypto" }, "devDependencies": { "typescript": "^5.7.2" } }],
@@ -4435,11 +4441,15 @@
 
     "@codecast/shared/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "happy-dom": "20.11.1", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
 
+    "@codecast/shared/@platform/assistant": ["@platform/assistant@file:platform/packages/assistant", { "devDependencies": { "@platform/agent": "file:../agent", "typescript": "^5.7.2" } }],
+
     "@codecast/shared/@platform/evals": ["@platform/evals@file:platform/packages/evals", { "dependencies": { "@platform/cli-kit": "file:../cli-kit", "commander": "^12.1.0" }, "devDependencies": { "@types/bun": "latest", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "@types/react-dom": "~19.2.0", "happy-dom": "20.11.1", "lucide-react": "^0.556.0", "react": "19.1.0", "react-dom": "19.1.0", "typescript": "^5.7.2" }, "peerDependencies": { "lucide-react": ">=0.500.0", "react": ">=18.0.0", "react-dom": ">=18.0.0" }, "optionalPeers": ["lucide-react", "react", "react-dom"] }],
 
     "@codecast/shared/@platform/fence": ["@platform/fence@file:platform/packages/fence", { "devDependencies": { "typescript": "^5.7.2" } }],
 
     "@codecast/web/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "happy-dom": "20.11.1", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
+
+    "@codecast/web/@platform/assistant": ["@platform/assistant@file:platform/packages/assistant", { "devDependencies": { "@platform/agent": "file:../agent", "typescript": "^5.7.2" } }],
 
     "@codecast/web/@platform/auth": ["@platform/auth@file:platform/packages/auth", { "devDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "@types/bun": "latest", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "19.1.0", "typescript": "^5.7.2" }, "peerDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "^19.0.0" }, "optionalPeers": ["@auth/core", "jose", "oslo", "react"] }],
 
@@ -4919,6 +4929,8 @@
 
     "mobile/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "happy-dom": "20.11.1", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
 
+    "mobile/@platform/assistant": ["@platform/assistant@file:platform/packages/assistant", { "devDependencies": { "@platform/agent": "file:../agent", "typescript": "^5.7.2" } }],
+
     "mobile/@platform/design": ["@platform/design@file:platform/packages/design", { "dependencies": { "@fontsource-variable/instrument-sans": "^5.3.0", "@fontsource-variable/newsreader": "^5.3.0", "@fontsource/fragment-mono": "^5.3.0" }, "devDependencies": { "@types/bun": "latest", "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
 
     "mobile/@platform/flags": ["@platform/flags@file:platform/packages/flags", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "posthog-js": ">=1.0.0", "posthog-react-native": ">=3.0.0", "react": ">=18.0.0" }, "optionalPeers": ["posthog-js", "posthog-react-native", "react"], "bin": { "platform-flags": "src/cli.ts" } }],
@@ -5305,7 +5317,7 @@
 
     "@codecast/cli/@platform/evals/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
 
-    "@codecast/cli/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
+    "@codecast/cli/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", { "devDependencies": { "@types/bun": "latest", "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
 
     "@codecast/cli/convex/esbuild": ["esbuild@0.25.4", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.25.4", "@esbuild/android-arm": "0.25.4", "@esbuild/android-arm64": "0.25.4", "@esbuild/android-x64": "0.25.4", "@esbuild/darwin-arm64": "0.25.4", "@esbuild/darwin-x64": "0.25.4", "@esbuild/freebsd-arm64": "0.25.4", "@esbuild/freebsd-x64": "0.25.4", "@esbuild/linux-arm": "0.25.4", "@esbuild/linux-arm64": "0.25.4", "@esbuild/linux-ia32": "0.25.4", "@esbuild/linux-loong64": "0.25.4", "@esbuild/linux-mips64el": "0.25.4", "@esbuild/linux-ppc64": "0.25.4", "@esbuild/linux-riscv64": "0.25.4", "@esbuild/linux-s390x": "0.25.4", "@esbuild/linux-x64": "0.25.4", "@esbuild/netbsd-arm64": "0.25.4", "@esbuild/netbsd-x64": "0.25.4", "@esbuild/openbsd-arm64": "0.25.4", "@esbuild/openbsd-x64": "0.25.4", "@esbuild/sunos-x64": "0.25.4", "@esbuild/win32-arm64": "0.25.4", "@esbuild/win32-ia32": "0.25.4", "@esbuild/win32-x64": "0.25.4" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-8pgjLUcUjcgDg+2Q4NYXnPbo/vncAY4UmyaCm0jZevERqCHZIaWwdJHkf8XQtu4AxSKCdvrUbT0XUr1IdZzI8Q=="],
 
@@ -5313,13 +5325,19 @@
 
     "@codecast/convex/@platform/agent/esbuild": ["esbuild@0.25.4", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.25.4", "@esbuild/android-arm": "0.25.4", "@esbuild/android-arm64": "0.25.4", "@esbuild/android-x64": "0.25.4", "@esbuild/darwin-arm64": "0.25.4", "@esbuild/darwin-x64": "0.25.4", "@esbuild/freebsd-arm64": "0.25.4", "@esbuild/freebsd-x64": "0.25.4", "@esbuild/linux-arm": "0.25.4", "@esbuild/linux-arm64": "0.25.4", "@esbuild/linux-ia32": "0.25.4", "@esbuild/linux-loong64": "0.25.4", "@esbuild/linux-mips64el": "0.25.4", "@esbuild/linux-ppc64": "0.25.4", "@esbuild/linux-riscv64": "0.25.4", "@esbuild/linux-s390x": "0.25.4", "@esbuild/linux-x64": "0.25.4", "@esbuild/netbsd-arm64": "0.25.4", "@esbuild/netbsd-x64": "0.25.4", "@esbuild/openbsd-arm64": "0.25.4", "@esbuild/openbsd-x64": "0.25.4", "@esbuild/sunos-x64": "0.25.4", "@esbuild/win32-arm64": "0.25.4", "@esbuild/win32-ia32": "0.25.4", "@esbuild/win32-x64": "0.25.4" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-8pgjLUcUjcgDg+2Q4NYXnPbo/vncAY4UmyaCm0jZevERqCHZIaWwdJHkf8XQtu4AxSKCdvrUbT0XUr1IdZzI8Q=="],
 
+    "@codecast/convex/@platform/assistant/@platform/agent": ["@platform/agent@file:platform/packages/agent", {}],
+
     "@codecast/convex/@platform/billing/@platform/crypto": ["@platform/crypto@file:platform/packages/crypto", {}],
 
     "@codecast/evals/@platform/evals/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
 
-    "@codecast/evals/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
+    "@codecast/evals/@platform/snippets/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", { "devDependencies": { "@types/bun": "latest", "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
+
+    "@codecast/shared/@platform/assistant/@platform/agent": ["@platform/agent@file:platform/packages/agent", {}],
 
     "@codecast/shared/@platform/evals/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
+
+    "@codecast/web/@platform/assistant/@platform/agent": ["@platform/agent@file:platform/packages/agent", {}],
 
     "@codecast/web/@platform/evals/@platform/cli-kit": ["@platform/cli-kit@file:platform/packages/cli-kit", {}],
 
@@ -5648,6 +5666,8 @@
     "minipass-pipeline/minipass/yallist": ["yallist@4.0.0", "", {}, "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A=="],
 
     "minipass-sized/minipass/yallist": ["yallist@4.0.0", "", {}, "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A=="],
+
+    "mobile/@platform/assistant/@platform/agent": ["@platform/agent@file:platform/packages/agent", {}],
 
     "node-fetch/whatwg-url/tr46": ["tr46@0.0.3", "", {}, "sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw=="],
 

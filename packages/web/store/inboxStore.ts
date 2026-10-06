@@ -215,7 +215,8 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
 import { projectRootOf } from "../lib/recentProjectPaths";
-import { cloudPlacementFor, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
+import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
+import { defaultAgentType, type DefaultAgentState } from "../lib/defaultAgent";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
@@ -1630,6 +1631,10 @@ export type ClientUI = {
   // lane (/simple, docs/architecture/hosted-assistant.md), "full" or absent is
   // the whole app. Stamped LWW, so a switch on one device follows the person.
   lane?: "simple" | "full";
+  // The agent a new conversation starts with (a Convex agent_type), read only
+  // through lib/defaultAgent, which also decides hosted mode's and a
+  // machine-less account's default. Absent means Claude.
+  default_agent?: string;
   /** Resource pressure suggestions dismissed per machine (device id → until, ms). */
   resource_plan_dismissed?: Record<string, number>;
   visual_style?: "classic" | "minimal";
@@ -2760,12 +2765,14 @@ export function isSessionHardBlocked(
 // stale key. `waiting` here is the no-in-flight verdict; the chokepoint
 // layers the tiny in-flight set on top (an in-flight send forces a session
 // OUT of needs-input).
-const _workStateCache = new WeakMap<object, WorkState>();
+const _placementCache = new WeakMap<object, { bucket: InboxBucket; work_state: WorkState }>();
 const _classifyCache = new WeakMap<object, SessionVerdict>();
-/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
-export function sessionWorkState(s: InboxSession): WorkState {
-  let ws = _workStateCache.get(s);
-  if (!ws) {
+/** One row's bucket and work state from its shipped live fields, outside the
+ *  working set: the per-row placement the inbox sections use, without the
+ *  membership fold. For a surface listing rows the inbox may not hold. */
+export function sessionPlacement(s: InboxSession): { bucket: InboxBucket; work_state: WorkState } {
+  let p = _placementCache.get(s);
+  if (!p) {
     // The shipped live fields as they stand — no clock, no re-derivation.
     const live: LiveFacts = {
       agent_status: s.agent_status ?? null,
@@ -2774,10 +2781,14 @@ export function sessionWorkState(s: InboxSession): WorkState {
       awaiting_input: !!s.awaiting_input,
       daemon_alive: !!s.is_connected,
     };
-    ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
-    _workStateCache.set(s, ws);
+    p = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0));
+    _placementCache.set(s, p);
   }
-  return ws;
+  return p;
+}
+/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
+export function sessionWorkState(s: InboxSession): WorkState {
+  return sessionPlacement(s).work_state;
 }
 export function classifySession(s: InboxSession): SessionVerdict {
   let c = _classifyCache.get(s);
@@ -5394,7 +5405,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
   // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
   // self-heal create (ensureSessionCreated routes through it too).
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => Promise<any>;
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string; firstMessage?: { content: string; clientId: string } }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -10277,12 +10288,27 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // compose popup intentionally allows a project-less stub → the daemon starts in
   // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
   // ensureSessionCreated), so this only creates.
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => {
+  //
+  // A hosted agent (the Codecast assistant) runs in codecast's backend, so its
+  // create carries no project, machine, model or cloud placement: only the
+  // stub id and, when the caller has it, the first message, which the server
+  // queues in the same transaction (`firstMessage.clientId` is the optimistic
+  // bubble's, so the two reconcile).
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string; firstMessage?: { content: string; clientId: string } }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
+    const agentType = cur?.agent_type || fallback?.agentType || defaultAgentType(s as unknown as DefaultAgentState);
+    if (isHostedAgentType(agentType)) {
+      return s.createSession({
+        agent_type: agentType,
+        session_id: stubId,
+        ...(fallback?.firstMessage
+          ? { first_message: fallback.firstMessage.content, first_message_client_id: fallback.firstMessage.clientId }
+          : {}),
+      });
+    }
     const projectPath = cur?.project_path ?? fallback?.projectPath;
     const gitRoot = cur?.git_root ?? fallback?.gitRoot ?? projectPath;
-    const agentType = cur?.agent_type || fallback?.agentType || "claude_code";
     // Fold in the blank session's chosen model/effort. The launch picker stamps
     // these on the stub row (setConversationModel) with no server round-trip;
     // this is where the choice reaches the daemon's launch flags. The row stores
@@ -11847,7 +11873,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // path is set (updateSessionProject) the retry re-creates normally. The
     // automatic heal-on-load already filters pathless stubs out, so this only
     // gates the user-triggered awaitConvexId retry.
-    if (!stub.project_path && !stub.git_root) {
+    // A hosted assistant conversation has no folder by design.
+    if (!stub.project_path && !stub.git_root && !isHostedAgentType(stub.agent_type)) {
       return Promise.reject(new Error("Pick a folder for this session before sending"));
     }
     // Route through createSessionFromStub (not a bare createSession) so the live

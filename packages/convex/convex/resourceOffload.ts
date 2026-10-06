@@ -3,7 +3,7 @@ import { resourceOffloadSelection } from "./resourceOffloadSchema";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation } from "./functions";
-import { RESOURCE_STALE_MS, evaluateOffloadRequirements, movesWithSession } from "@codecast/shared/contracts";
+import { RESOURCE_STALE_MS, evaluateOffloadRequirements } from "@codecast/shared/contracts";
 import { performCreateBatch, planMigration } from "./sessionMigrations";
 
 export const start = mutation({
@@ -68,7 +68,7 @@ export const start = mutation({
       // never marked completed) and moves with it.
       const running = new Set(source.snapshot.processes.map(p => p.sessionId).filter(Boolean));
       if ([...children, ...teammates.filter(c => c.agent_team_name)].some(c => c.status !== "completed" && !c.inbox_killed_at && running.has(c.session_id))) blockers.push("This session has unfinished subagents");
-      const processes = source.snapshot.processes.filter(p => movesWithSession(p, selection.session_id));
+      const processes = source.snapshot.processes.filter(p => p.sessionId === selection.session_id);
       if (!processes.length) blockers.push("Exclusive process ownership is no longer measured");
       if (source.snapshot.processes.some(p => p.sharedSessionIds?.includes(selection.session_id))) blockers.push("This session shares a process with other sessions");
       const target = devices.find(d => d.device_id === selection.destination_id);
@@ -89,7 +89,7 @@ export const start = mutation({
     for (const [destination, ids] of groups) {
       const targetReport = reports.find(r => r.device_id === destination);
       const selected = new Set(args.selections.filter(s => s.destination_id === destination).map(s => s.session_id));
-      const total = source.snapshot.processes.filter(p => p.sessionId && !p.detached && selected.has(p.sessionId)).reduce((n, p) => n + p.rss, 0);
+      const total = source.snapshot.processes.filter(p => p.sessionId && selected.has(p.sessionId)).reduce((n, p) => n + p.rss, 0);
       if (ids.length > 1 && fresh(targetReport) && targetReport && total > targetReport.snapshot.sample.memoryAvailable) {
         for (const check of checks.filter(c => c.destination_id === destination)) check.blockers.push("The selected group exceeds the destination's measured available memory; choose fewer sessions");
       }

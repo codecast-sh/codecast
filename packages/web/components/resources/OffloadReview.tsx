@@ -13,7 +13,7 @@ import { AlertTriangle, Check, ChevronDown, ChevronRight, Cloud, Laptop, RotateC
 import { cn } from "../../lib/utils";
 import { WAIT_PRESETS, isRowActive, isRowTerminal } from "../../lib/migrationPlan";
 import { MigrationStatusPill } from "../MigrationStatusPill";
-import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, projectName } from "./resourceModel";
+import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, namedStops, projectName } from "./resourceModel";
 import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession } from "./types";
 import { SPREAD_CEILING, assignDestinations, loadShift } from "../../lib/resourceOffload";
 
@@ -74,6 +74,7 @@ function LoadBar({ label, before, after }: { label: string; before?: number; aft
 type Choice = { checked: boolean; destinationId?: string };
 
 function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCandidate; title: string; checked: boolean; elsewhere?: OffloadDestination; onCheck: (checked: boolean) => void }) {
+  const outside = c.stops.filter((p) => p.detached);
   return (
     <label className={cn("flex cursor-pointer items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-sol-bg-highlight/40", !checked && "opacity-55")} data-candidate={c.sessionId}>
       <input
@@ -83,7 +84,14 @@ function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCan
         checked={checked}
         onChange={(e) => onCheck(e.target.checked)}
       />
-      <span className="min-w-[6rem] flex-1 truncate text-[13px] text-sol-text">{title}</span>
+      <span className="min-w-[6rem] flex-1">
+        <span className="block truncate text-[13px] text-sol-text">{title}</span>
+        {outside.length > 0 && (
+          <span className="block truncate text-[10px] text-sol-orange" title={`Also stops what it left running outside its process tree: ${namedStops(outside, 20)}`}>
+            also stops {outside.length} outside its tree
+          </span>
+        )}
+      </span>
       {c.disruption === "mid_turn" && <span className="shrink-0 text-[10px] text-sol-yellow">working</span>}
       {elsewhere && <span className="inline-flex min-w-0 max-w-[7rem] shrink items-center gap-1 text-[10px] text-sol-text-muted" title={elsewhere.name}>{destIcon(elsewhere)}<span className="truncate">{elsewhere.name}</span></span>}
       <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">
@@ -105,6 +113,7 @@ function CandidateDetail({ c, session, plan, destinationId, onDestination }: {
       {dest?.passed && dest.passed.length > 0 && (
         <div className="flex gap-1.5"><Check className="mt-px h-3 w-3 shrink-0 text-sol-green" />Checked: {dest.passed.join("; ")}</div>
       )}
+      {c.stops.length > 0 && <div>Stops here: {namedStops(c.stops, 8)}</div>}
       {c.staysLocal.length > 0 && <div>Stays here: {c.staysLocal.map((s) => s.label).join(", ")}</div>}
       {plan.destinations.length > 1 && (
         <div className="flex flex-wrap gap-1 pt-0.5" role="radiogroup" aria-label="Destination">
@@ -196,6 +205,10 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const titleOf = (id: string) => byId.get(id)?.title ?? id;
   const stayCount = blocked.length + plan.notOffered.length + unevaluated.length;
 
+  const stopping = going.flatMap((c) => c.stops);
+  const stoppingOutside = stopping.filter((p) => p.detached).length;
+  const stopsSummary = stopping.length === 0 ? (midTurn ? "Working sessions finish their turn first." : "Nothing is interrupted.")
+    : `${midTurn ? "Working sessions finish their turn first, then m" : "M"}oving stops ${stopping.length} ${stopping.length === 1 ? "process" : "processes"} on ${sourceName}${stoppingOutside ? `, ${stoppingOutside} of them left running outside the agents (tmux, background jobs)` : ""}.`;
   const off = actionsDisabledReason;
   const moveBlocked = !actions?.onStartOffload ? (off ?? "Moving is not available here") : going.length === 0 ? "Select at least one session" : undefined;
 
@@ -343,7 +356,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
 
       {plan.destinations.length > 0 && (
         <footer className="space-y-2.5 border-t border-sol-border/20 px-5 pb-5 pt-3.5">
-          <div className="text-center text-[11px] text-sol-text-muted">Nothing is interrupted.</div>
+          <div className="text-center text-[11px] text-sol-text-muted">{stopsSummary}</div>
           {toConfirm.length > 0 && going.length > 0 && (
             <details className="text-[11px] text-sol-text-muted">
               <summary className="cursor-pointer select-none text-center hover:text-sol-text">You confirm {plural(toConfirm.length, "item")} not checked automatically</summary>

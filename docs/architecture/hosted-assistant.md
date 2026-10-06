@@ -18,6 +18,61 @@ default Convex runtime, which is the only one our self-hosted deployment uses.
 Machines come back later for work that genuinely needs one (a browser, a
 shell): the personal computer, a separate phase.
 
+## Revised 2026-10-05: hosted mode inside codecast, and a platform core
+
+The founder's direction, which supersedes the separate lane described under
+"The simple lane" below:
+
+1. **A platform core.** Everything Averil and codecast can reasonably share
+   lives in `@platform`: the harness (`agent`), billing, design tokens
+   (`design`), and a new `assistant` package with the storage-free parts of
+   the assistant: plan types, wallet arithmetic, approval-rule matching, the
+   system prompt builder, and the Whisk mail and calendar tools and web tools
+   over an injected transport. Codecast's Convex code keeps only storage and
+   wiring. Averil adopts the core on its own schedule.
+2. **No separate shell.** Codecast itself gains a hosted, minimal mode: the
+   same power dashboard (inbox, conversations, tasks, docs, routines,
+   questions, pages, teams) for general-purpose work, with our inference as
+   the default and developer-only surfaces hidden. It is the existing Minimal
+   style and Simple view taken further, not a different product. The
+   `/simple` routes redirect into the main app and the lane's duplicated
+   components (its own transcript, conversation row, shell) are retired;
+   the parts worth keeping (step wording, plan page, connections copy,
+   onboarding) move into the main app.
+3. **Packaged end to end, and funnelled.** Codecast.sh routes a
+   non-developer from the marketing page through `/welcome` (sign in, connect
+   mail and calendar through Whisk, first useful result) into the main app
+   in hosted mode. A signed-in person with no machine is offered the hosted
+   assistant instead of only "install the CLI".
+
+### The mode
+
+- One preference, `client_state.ui.lane` (already exists; one home): `"simple"`
+  means hosted mode, anything else the developer default. `/welcome` sets
+  it; settings and the command palette switch it.
+- One central registry of developer-only surfaces (`lib/surfaces.ts` or
+  similar, one `useSurface(name)` hook) consulted by every gated place:
+  sidebar rows (changes, projects, repo, files, line, ops, windows), shell
+  banners (setup prompt, CLI offline, tmux missing, device setup, resource
+  pressure), the terminal dock and split, diff layouts, PR, worktree and git
+  chips, machine chips, model and effort pickers, the settings "Machines"
+  group, and the install-CLI empty state. No scattered `if (lane)` checks.
+- Hosted mode implies the Minimal style and Simple view, condensed
+  transcript density, and general-purpose words where the developer words
+  would confuse ("conversation", not "session"; "assistant", not "agent").
+- The hosted assistant is a pickable agent everywhere (a picker list that
+  includes it, separate from the daemon's local-only registry), allowed as a
+  pin, and the default agent in hosted mode through a default-agent
+  preference that replaces today's hard-coded `"claude_code"` defaults.
+  When the agent is hosted, compose skips device, cloud placement, project
+  and model pickers.
+- Plan and usage become a Settings section in the Account group, with a
+  quiet usage meter in the shell; mail and calendar through Whisk become a
+  row on the Integrations page; approvals are the existing questions page
+  and inline decision cards; routines are the existing triggers.
+- Mobile follows the same mode in its existing tabs rather than a separate
+  route group.
+
 ## Mail and calendar go through Whisk
 
 Decided 2026-10-05, built the same day. Codecast never holds Gmail or
@@ -476,6 +531,8 @@ customer.subscription.created, updated and deleted, invoice.paid,
 charge.refunded and charge.dispute.created.
 
 ## The simple lane
+
+Superseded on 2026-10-05 by "Revised 2026-10-05" above: the lane folds into codecast's own shell as hosted mode. Kept for the history of what was built.
 
 A person in the simple lane never sees a repo, a terminal, a device, a model
 picker or the word "session". Same store, same data, different shell.

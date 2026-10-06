@@ -46,7 +46,7 @@ import { MentionMenu } from "./editor/MentionMenu";
 import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
 import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, mentionItemMatches, channelMentionItems } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, mentionItemMatches, chatMentionOffers, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
 import { parseChatDraftKey } from "../lib/chatDraftKey";
 import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -438,9 +438,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (acTrigger.type === "@") {
       // Chat mode's own vocabulary (docs/architecture/agent-channels.md C2):
       // the org roles of the active workspace answer to @handle, and a
-      // session answers to its 7-char short id — offered once the query
-      // starts "jx", from the 20 most recent in the store, so a room's people
-      // and roles are never buried under every session the cache holds.
+      // session is inserted as its short id (chatMentionOffers decides which
+      // ones the room is offered).
       const chatState = chatMentionMode ? useInboxStore.getState() : null;
       const roleItems: MentionItem[] = (chatState?.orgTree?.roles ?? [])
         .filter((r: any) => r.status !== "retired")
@@ -448,23 +447,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           id: String(r._id), type: "role", label: r.name, sublabel: `@${r.handle}`,
           handle: r.handle, shortId: r.short_id, updatedAt: r.updated_at,
         }));
-      const recentSessionIds = chatState
-        ? new Set(
-            Object.values(chatState.sessions)
-              .filter((sess: any) => !sess.is_subagent)
-              .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
-              .slice(0, 20)
-              .map((sess: any) => String(sess._id)),
-          )
-        : null;
       const candidates = mergeMentionSuggestions(
         [...roleItems, ...(effectiveMentionItemsRef.current ?? [])], acServerItems,
         mentionViewTimes(useInboxStore.getState()), Infinity, "", false, acContext,
       ).filter((m) => {
-        if (chatMentionMode && (m.type === "label" || (m.type === "person" && !m.handle))) return false;
-        // A session the thread already cites is offered outright; any other
-        // waits for its short id.
-        if (chatMentionMode && m.type === "session" && !m.contextAt && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
+        if (chatMentionMode && !chatMentionOffers(m, acQuery)) return false;
         return mentionItemMatches(m, acQuery);
       });
       const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 10 : 6, acQuery, personifyAllNow());
