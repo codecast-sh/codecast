@@ -70,10 +70,10 @@ test("only files whose fold inputs all have text fold; the rest are pending or, 
     { id: "d1", sequenceIndex: 4, messageId: "m", filePath: "d.ts", changeType: "write" as const, oldContent: "x\n", newContent: "y\n", timestamp: 5 },
   ];
   const bodies = { a1: { newContent: "hi\n" }, b1: { newContent: "b\n" } };
-  const { files, pending } = foldReadyFiles(inputs, bodies, { c1: true });
+  const { files, pending } = foldReadyFiles({ base: [], head: inputs }, bodies, { c1: true });
   expect(files.map((f) => [f.filename, f.status])).toEqual([["d.ts", "modified"], ["a.ts", "added"]]);
   expect(pending).toBe(1);
-  const done = foldReadyFiles(inputs, { ...bodies, b2: { oldContent: "b", newContent: "B" } }, { c1: true });
+  const done = foldReadyFiles({ base: [], head: inputs }, { ...bodies, b2: { oldContent: "b", newContent: "B" } }, { c1: true });
   expect(done.pending).toBe(0);
   expect(done.files.find((f) => f.filename === "b.ts")?.patch).toContain("+B");
 });

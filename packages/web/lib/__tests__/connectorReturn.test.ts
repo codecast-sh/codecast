@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeConnectorError, parseConnectorReturn, strippedUrl, WHISK_RETURN_KEY } from "../connectorReturn";
+import { describeConnectorError, isReturnFrom, parseConnectorReturn, strippedUrl, WHISK_RETURN_KEY } from "../connectorReturn";
 
 describe("parseConnectorReturn", () => {
   test("reads the connector confirm, provider from the fragment", () => {
@@ -131,5 +131,15 @@ describe("the mail connect through Whisk", () => {
 
   test("its keys leave the address bar with the rest of a connector return", () => {
     expect(strippedUrl("/simple/connections", "?whisk=error&reason=bad_state&tab=x", "")).toBe("/simple/connections?tab=x");
+  });
+
+  test("isReturnFrom names only that provider's return, success or refusal", () => {
+    expect(isReturnFrom("", "?whisk=connected", WHISK_RETURN_KEY)).toBe(true);
+    expect(isReturnFrom("", "?whisk=error&reason=bad_state", WHISK_RETURN_KEY)).toBe(true);
+    // Another connector's return stays on the address for its own reader.
+    expect(isReturnFrom("", "?linear=connected", WHISK_RETURN_KEY)).toBe(false);
+    expect(isReturnFrom("#installation=i1&confirm=t1&provider=linear", "?linear=pending", WHISK_RETURN_KEY)).toBe(false);
+    expect(isReturnFrom("", "?success=true", WHISK_RETURN_KEY)).toBe(false);
+    expect(isReturnFrom("", "", WHISK_RETURN_KEY)).toBe(false);
   });
 });

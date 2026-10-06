@@ -1,4 +1,4 @@
-import { mutation, query, action, internalAction, internalQuery, internalMutation } from "./functions";
+import { mutation, query, internalAction, internalQuery, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
@@ -318,80 +318,6 @@ export const getCommitsByRepository = query({
   },
 });
 
-export const getCommitsForTimeline = query({
-  args: {
-    start_time: v.optional(v.number()),
-    end_time: v.optional(v.number()),
-    repository: v.optional(v.string()),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const limit = args.limit ?? 100;
-
-    const commits = await ctx.db
-      .query("commits")
-      .withIndex("by_timestamp")
-      .order("desc")
-      .take(limit * 2);
-
-    let filtered = commits;
-
-    if (args.start_time !== undefined) {
-      filtered = filtered.filter((c) => c.timestamp >= args.start_time!);
-    }
-
-    if (args.end_time !== undefined) {
-      filtered = filtered.filter((c) => c.timestamp <= args.end_time!);
-    }
-
-    if (args.repository) {
-      const repository = normalizeRepository(args.repository);
-      filtered = filtered.filter((c) => c.repository === repository);
-    }
-
-    return (await accessibleCommits(ctx, userId, filtered)).slice(0, limit);
-  },
-});
-
-export const getUserGitHubToken = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
-    const user = await ctx.db.get(userId);
-    return user?.github_access_token || null;
-  },
-});
-
-
-
-export const getUserActiveRepositories = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-
-    // Take limited conversations to avoid byte limit - most recent 200 should cover active repos
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .order("desc")
-      .take(200);
-
-    const repos = new Set<string>();
-    for (const conv of conversations) {
-      if (conv.git_remote_url) {
-        const repo = extractRepoFromRemoteUrl(conv.git_remote_url);
-        if (repo) repos.add(repo);
-      }
-    }
-
-    return Array.from(repos);
-  },
-});
-
 export const clearMyGitHubData = mutation({
   args: {},
   handler: async (ctx) => {
@@ -426,44 +352,6 @@ export const clearMyGitHubData = mutation({
 // it was callable by anyone with the deployment URL and had no caller in the
 // repo. `clearMyGitHubData` above covers the legitimate case, scoped to the
 // authenticated user's own conversations.
-
-export const syncAllMyRepositories = action({
-  args: {
-    per_page: v.optional(v.number()),
-  },
-  returns: v.object({ repos_synced: v.number(), total_commits: v.number() }),
-  handler: async (ctx, args): Promise<{ repos_synced: number; total_commits: number }> => {
-    const token = await ctx.runQuery(internal.commits.getUserGitHubToken, {});
-    if (!token) {
-      throw new Error("GitHub account not connected");
-    }
-
-    const activeRepos = await ctx.runQuery(internal.commits.getUserActiveRepositories, {});
-
-    if (activeRepos.length === 0) {
-      return { repos_synced: 0, total_commits: 0 };
-    }
-
-    let totalCommits = 0;
-    let reposSynced = 0;
-
-    for (const repo of activeRepos) {
-      try {
-        const result = await ctx.runAction(internal.githubApi.syncRepositoryCommits, {
-          repository: repo,
-          github_access_token: token,
-          per_page: args.per_page ?? 30,
-        });
-        totalCommits += result.synced;
-        reposSynced++;
-      } catch (e) {
-        console.error(`Failed to sync ${repo}:`, e);
-      }
-    }
-
-    return { repos_synced: reposSynced, total_commits: totalCommits };
-  },
-});
 
 export const getActiveRepositoriesForUser = internalQuery({
   args: {

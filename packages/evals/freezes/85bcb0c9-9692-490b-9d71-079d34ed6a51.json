@@ -1,0 +1,26 @@
+{
+  "name": "guidance pr-review",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:pr-review"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:pr-review",
+    "title": "guidance pr-review"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/pr-review.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "85bcb0c9-9692-490b-9d71-079d34ed6a51",
+  "createdAt": "2026-10-06T21:49:09.668Z"
+}

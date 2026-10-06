@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "Delegated parallel reviews that report back: workers under this session, not the harness's own subagent tool and not inbox threads.",
+  "label": {
+    "want": [
+      "cast\\s+spawn\\b[^|;&\\n]*--subagent"
+    ],
+    "avoid": [
+      "^Agent:",
+      "^Workflow:",
+      "cast\\s+(spawn|fork)\\b(?![^|;&\\n]*--subagent)"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Run three independent reviews of ~/src/codecast/packages/evals in parallel: one for correctness bugs, one for missing tests, one for dead code. Each reviewer reports back to you; then give me one combined summary."
+  }
+}
