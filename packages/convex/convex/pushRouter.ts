@@ -128,6 +128,8 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   card_waiting: ["change card waiting", "change cards waiting"],
   change_shipped: ["change shipped", "changes shipped"],
   cause_reopened: ["cause reopened", "causes reopened"],
+  team_join_request: ["request to join", "requests to join"],
+  team_join_approved: ["team you joined", "teams you joined"],
 };
 
 export function summarizePushBatch(

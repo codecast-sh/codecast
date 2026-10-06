@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { PLANS } from "@codecast/shared/contracts/assistant";
 import { disconnectNote, mailboxLine } from "./connectionWords";
 import { formatDecisionAnswer } from "@codecast/shared/contracts";
-import { mailTools } from "@codecast/convex/convex/assistant/tools/mail";
-import { calendarTools } from "@codecast/convex/convex/assistant/tools/calendar";
+import { calendarTools, mailTools } from "@platform/assistant";
 import { codecastTools } from "@codecast/convex/convex/assistant/tools/codecast";
 import { searchWebTool, webTools, WEB_SEARCH_TOOL } from "@codecast/convex/convex/assistant/tools/web";
 import {
@@ -11,45 +10,41 @@ import {
   HOME_DONE,
   LANE_COPY,
   connectionControls,
-  homeView,
   meterLegend,
   planCard,
   topupLabel,
   workedTimes,
+  ledgerLines,
+  meterShort,
+  monthPercent,
+  monthShare,
   LANE_PATHS,
   LANE_SECTIONS,
   laneSurfaceLabel,
   conversationPath,
-  STEPS_SHOWN,
+  conversationState,
   conversationSubline,
   draftIsLong,
-  visibleSteps,
   approvalAsk,
   accountLine,
-  mailSearch,
   answerTone,
-  buildTranscript,
+  answerNote,
   conversationTitle,
+  titleIsAsk,
   dollars,
   answerNotes,
   answersInline,
-  greeting,
-  homeBands,
   isLaneConversation,
-  isLaneRoutine,
   laneOf,
   meterFill,
-  personName,
   planPoints,
   planPrice,
   routineSchedule,
   routineLastRun,
-  runsToday,
   stepText,
   upgradesFrom,
   usageHeadline,
   whenSaid,
-  type LaneMessage,
 } from "./lane";
 
 const BANNED = /\b(agent|session|model|token|repo|repository|device)s?\b/i;
@@ -75,24 +70,26 @@ describe("conversations", () => {
     expect(conversationTitle({ title: "New session", last_user_message: "Find a time with Sam next week" })).toBe("Find a time with Sam next week");
     expect(conversationTitle({ title: "New session", last_user_message: "Tidy my inbox" })).toBe("Tidy my inbox");
     expect(conversationTitle({ title: "" })).toBe("A new conversation");
-    expect(conversationTitle({ last_user_message: "x".repeat(100) }).length).toBeLessThanOrEqual(64);
+    // The same placeholder the server stores at start (promptTitle): whole,
+    // capped only for safety, and never with an ellipsis of its own (each
+    // surface truncates with CSS).
+    expect(conversationTitle({ last_user_message: "x".repeat(300) }).length).toBeLessThanOrEqual(140);
+    expect(conversationTitle({ last_user_message: "word ".repeat(60) }).endsWith("…")).toBe(false);
+    // The first sentence, cut at a word with no word split.
+    expect(conversationTitle({ last_user_message: "Design check: what's on my calendar tomorrow? Also look at Friday." })).toBe("Design check: what's on my calendar tomorrow?");
+    expect(conversationTitle({ last_user_message: "Compare the three best rated robot vacuums for a small apartment" })).toBe("Compare the three best rated robot vacuums for a small apartment");
+    expect(conversationTitle({ last_user_message: "Plan a trip to Lisbon." })).toBe("Plan a trip to Lisbon");
   });
 
-  it("puts each conversation in one band of home", () => {
+  it("is done the moment a hosted turn says it ended, and working again on the next ask", () => {
     const NOW = 10_000_000;
-    const live = { agent_status: "working", agent_status_updated_at: NOW - 1_000, last_heartbeat: NOW - 1_000, message_count: 3, updated_at: NOW - 1_000 };
-    const stalled = { agent_status: "working", agent_status_updated_at: NOW - 3_600_000, last_heartbeat: NOW - 3_600_000, message_count: 3 };
-    const row = (id: string, updated_at: number, extra: Record<string, unknown> = {}) =>
-      ({ _id: id, updated_at, has_pending: false, ...extra }) as any;
-    const bands = homeBands(
-      [row("a", 1), row("b", 2, live), row("c", 3), row("d", 4, { has_pending: true }), row("e", 5), row("f", 6, stalled)],
-      new Map([["c", 1]]),
-      NOW,
-    );
-    expect(bands.waiting.map((r) => r._id)).toEqual(["c"]);
-    expect(bands.working.map((r) => r._id)).toEqual(["b", "d"]);
-    // A status frozen at "working" with no heartbeat settles, as in the inbox.
-    expect(bands.done.map((r) => r._id)).toEqual(["f", "e", "a"]);
+    const fresh = { agent_status_updated_at: NOW - 1_000, last_heartbeat: NOW - 1_000, updated_at: NOW - 1_000, message_count: 4, has_pending: false, awaiting_input: false };
+    // The answer just landed: inside the idle grace, and still done.
+    expect(conversationState({ ...fresh, agent_status: "done", last_role_is_user: false } as any, 0, NOW)).toBe("done");
+    // The person replied and the next turn has not begun: on it.
+    expect(conversationState({ ...fresh, agent_status: "done", last_role_is_user: true } as any, 0, NOW)).toBe("working");
+    expect(conversationState({ ...fresh, agent_status: "working", last_role_is_user: false } as any, 0, NOW)).toBe("working");
+    expect(conversationState({ ...fresh, agent_status: "done", last_role_is_user: false } as any, 1, NOW)).toBe("waiting");
   });
 });
 
@@ -104,6 +101,19 @@ describe("approvals", () => {
     expect(APPROVAL_LABEL[approvalAsk({ kind: "multi", options: opts("Milk", "No thanks") } as any)]).toBe("Needs your answer");
   });
 
+  it("drops the answer note for a decline, which the declined step already says", () => {
+    expect(answerNote("Approve")).toBe("You said: Approve");
+    expect(answerNote("Always allow")).toBe("You said: Always allow");
+    // A plain decline, and a decline the assistant follows with a new ask:
+    // the rule reads the answer alone, so neither waits on the step's result.
+    expect(answerNote("Decline")).toBeNull();
+    expect(answerNote(" Decline ")).toBeNull();
+    // The person's own words are more than a no, and always show.
+    expect(answerNote("No, make it 9am")).toBe("You said: No, make it 9am");
+    expect(answerNote("")).toBeNull();
+    expect(answerNote(undefined)).toBeNull();
+  });
+
   it("makes the first answer the yes and a refusal quiet", () => {
     expect(answerTone("Approve", 0)).toBe("yes");
     expect(answerTone("Always allow", 1)).toBe("plain");
@@ -112,25 +122,11 @@ describe("approvals", () => {
   });
 });
 
+// The step wording itself is tested in @platform/assistant (steps.test.ts);
+// this checks it covers every tool codecast's assistant offers.
 describe("tool steps", () => {
-  it("reads common tools as plain lines", () => {
-    expect(stepText({ name: "send_email", input: { to: "dana@example.com", body: "hi" } })).toBe("Sent an email to Dana");
-    expect(stepText({ name: "draft_reply", input: JSON.stringify({ to: "Dana Ruiz <dana@x.org>" }) })).toBe("Drafted a reply to Dana Ruiz");
-    expect(stepText({ name: "search_mail", input: { q: "newer_than:7d" } }, { content: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] })).toBe("Read 12 emails from the past week");
-    expect(stepText({ name: "read_calendar", input: {} })).toBe("Checked your calendar");
-    expect(stepText({ name: "create_event", input: { title: "Dinner with Sam" } })).toBe('Added "Dinner with Sam" to your calendar');
-    expect(stepText({ name: "web_search", input: { query: "flights to Lisbon" } })).toBe('Searched the web for "flights to Lisbon"');
-    expect(stepText({ name: "web_fetch", input: { url: "https://www.example.com/a" } })).toBe("Read a page on example.com");
-  });
-
-  it("prefers the sentence a tool wrote for itself", () => {
-    expect(stepText({ name: "search_mail" }, { summary: "Read 12 emails from this week" })).toBe("Read 12 emails from this week");
-  });
-
-  it("never says a tool's name, even for one nobody has phrased", () => {
-    expect(stepText({ name: "frobnicateWidgets" })).toBe("Did a step");
-    expect(stepText({})).toBe("Did a step");
-  });
+  /** A step that came back fine. */
+  const DONE = { content: "ok" };
 
   it("phrases every tool the hosted assistant has", () => {
     // Factories only build their definitions here; no call runs.
@@ -143,66 +139,22 @@ describe("tool steps", () => {
     ].map((t) => t.name).concat(WEB_SEARCH_TOOL.name);
     expect(names.length).toBeGreaterThan(20);
     for (const name of names) {
-      const line = stepText({ name });
+      const line = stepText({ name }, DONE);
       expect({ name, line }).toEqual({ name, line: expect.not.stringMatching(/^Used |^Did a step$|go-ahead/) });
     }
-    expect(stepText({ name: "list_tasks" })).toBe("Checked your to-dos");
-    expect(stepText({ name: "update_task" })).toBe("Updated a to-do");
-    expect(stepText({ name: "archive" })).toBe("Tidied your inbox");
-    expect(stepText({ name: "label" })).toBe("Tidied your inbox");
-    expect(stepText({ name: "cancel_routine" })).toBe("Stopped a routine");
-    expect(stepText({ name: "list_routines" })).toBe("Checked your routines");
-    expect(stepText({ name: "replace_doc" })).toBe("Updated a note");
-    expect(stepText({ name: "read_doc" })).toBe("Read a note");
-    expect(stepText({ name: "recall" })).toBe("Remembered what you told me");
-    expect(stepText({ name: "ask_user" })).toBe("Asked for your go-ahead");
-    expect(stepText({ name: "suggest_reply" })).toBe("Wrote a reply in your voice");
-    expect(stepText({ name: "summarize_thread" })).toBe("Summed up an email");
-    expect(stepText({ name: "draft_reply", input: { to: "Dana <dana@x.com>" } })).toBe("Drafted a reply to Dana");
-  });
-
-  it("names people from addresses", () => {
-    expect(personName("sam.lee@x.org")).toBe("Sam");
-    expect(personName(["a@x.org", "b@x.org", "c@x.org"])).toBe("A and 2 others");
-    expect(personName("")).toBeNull();
-  });
-});
-
-describe("transcript", () => {
-  const msgs: LaneMessage[] = [
-    { _id: "u1", role: "user", content: "What needs a reply from me this week?", timestamp: 1 },
-    { _id: "a1", role: "assistant", content: "", timestamp: 2, tool_calls: [{ id: "c1", name: "search_mail", input: { q: "is:unread" } }, { id: "c2", name: "draft_reply", input: { to: "dana@x.org" } }] },
-    { _id: "r1", role: "user", timestamp: 3, tool_results: [{ tool_use_id: "c1", content: [1, 2] }, { tool_use_id: "c2", content: "ok", is_error: true }] },
-    { _id: "a2", role: "assistant", content: "Two need you. I drafted one for Dana.", timestamp: 4 },
-    { _id: "u2", role: "user", content: formatDecisionAnswer({ id: "d1", question: "Send this reply to Dana?", answer: "Approve" }), timestamp: 5 },
-    { _id: "a3", role: "assistant", content: "", timestamp: 6, tool_calls: [{ id: "c3", name: "send_email", input: { to: "dana@x.org" } }] },
-  ];
-
-  it("folds tool calls into step lists and keeps the words", () => {
-    const items = buildTranscript(msgs, true);
-    expect(items.map((i) => i.kind)).toEqual(["you", "steps", "said", "answer", "steps"]);
-    const steps = items[1] as Extract<(typeof items)[number], { kind: "steps" }>;
-    expect(steps.steps.map((s) => [s.text, s.state])).toEqual([
-      ["Read 2 unread emails", "done"],
-      ["Drafted a reply to Dana", "failed"],
-    ]);
-    expect((items[3] as any).text).toBe("You said: Approve");
-    expect((items[4] as any).steps[0].state).toBe("running");
-  });
-
-  it("settles an unanswered step once the turn is over", () => {
-    const items = buildTranscript(msgs, false);
-    expect((items[4] as any).steps[0].state).toBe("done");
-  });
-
-  it("shows an unsent message as pending", () => {
-    const items = buildTranscript([{ _id: "p", role: "user", content: "hello", timestamp: 1, _isOptimistic: true }], false);
-    expect(items).toEqual([{ kind: "you", id: "p", text: "hello", pending: true, failed: false, at: 1 }]);
-  });
-
-  it("shows a failed send as failed, not pending", () => {
-    const items = buildTranscript([{ _id: "p", role: "user", content: "hello", timestamp: 1, _isOptimistic: true, _isFailed: true } as LaneMessage], false);
-    expect(items).toEqual([{ kind: "you", id: "p", text: "hello", pending: false, failed: true, at: 1 }]);
+    expect(stepText({ name: "list_tasks" }, DONE)).toBe("Checked your to-dos");
+    expect(stepText({ name: "update_task" }, DONE)).toBe("Updated a to-do");
+    expect(stepText({ name: "archive" }, DONE)).toBe("Tidied your inbox");
+    expect(stepText({ name: "label" }, DONE)).toBe("Tidied your inbox");
+    expect(stepText({ name: "cancel_routine" }, DONE)).toBe("Stopped a routine");
+    expect(stepText({ name: "list_routines" }, DONE)).toBe("Checked your routines");
+    expect(stepText({ name: "replace_doc" }, DONE)).toBe("Updated a note");
+    expect(stepText({ name: "read_doc" }, DONE)).toBe("Read a note");
+    expect(stepText({ name: "recall" }, DONE)).toBe("Remembered what you told me");
+    expect(stepText({ name: "ask_user" }, DONE)).toBe("Asked for your go-ahead");
+    expect(stepText({ name: "suggest_reply" }, DONE)).toBe("Wrote a reply in your voice");
+    expect(stepText({ name: "summarize_thread" }, DONE)).toBe("Summed up an email");
+    expect(stepText({ name: "draft_reply", input: { to: "Dana <dana@x.com>" } }, DONE)).toBe("Drafted a reply to Dana");
   });
 });
 
@@ -218,6 +170,17 @@ describe("answering a card", () => {
   it("shows what an answer means when it says", () => {
     expect(answerNotes(opts)).toEqual([{ label: "Always allow", note: "Add events to your calendar without asking first" }]);
     expect(answerNotes([{ label: "Yes", description: "  " }])).toEqual([]);
+  });
+  it("leaves the yes and the no of a permission card to say themselves", () => {
+    const card = [
+      { label: "Approve", description: "Do this once." },
+      { label: "Always allow", description: "Set up routines without asking first" },
+      { label: "Decline", description: "Don't do it." },
+    ];
+    expect(answerNotes(card)).toEqual([{ label: "Always allow", note: "Set up routines without asking first" }]);
+    // A choice has no refusal, so each described answer keeps its note.
+    const choice = [{ label: "Morning", description: "Before 9" }, { label: "Evening", description: "After 6" }];
+    expect(answerNotes(choice)).toHaveLength(2);
   });
 });
 
@@ -237,13 +200,6 @@ describe("routines", () => {
     expect(routineLastRun({ last_run_summary: "x" }, now)).toBeNull();
   });
 
-  it("lists live routines bound to the lane's conversations", () => {
-    expect(isLaneRoutine({ status: "scheduled", originating_conversation_id: "c1" }, lane)).toBe(true);
-    expect(isLaneRoutine({ status: "paused", originating_conversation_id: "c1" }, lane)).toBe(true);
-    expect(isLaneRoutine({ status: "completed", originating_conversation_id: "c1" }, lane)).toBe(false);
-    expect(isLaneRoutine({ status: "scheduled", originating_conversation_id: "other" }, lane)).toBe(false);
-  });
-
   it("says when", () => {
     expect(whenSaid(new Date(2026, 9, 5, 18, 0).getTime(), now)).toMatch(/^today at 6:00/);
     expect(whenSaid(new Date(2026, 9, 6, 8, 0).getTime(), now)).toMatch(/^tomorrow at 8:00/);
@@ -256,11 +212,6 @@ describe("routines", () => {
     expect(routineSchedule({ schedule_type: "once", run_at: tomorrow8, status: "scheduled" }, now)).toMatch(/^Runs once, tomorrow/);
   });
 
-  it("knows what runs today", () => {
-    expect(runsToday({ status: "scheduled", run_at: now + 3_600_000 }, now)).toBe(true);
-    expect(runsToday({ status: "scheduled", run_at: now + 86_400_000 }, now)).toBe(false);
-    expect(runsToday({ status: "paused", run_at: now + 60_000 }, now)).toBe(false);
-  });
 });
 
 describe("usage", () => {
@@ -275,12 +226,26 @@ describe("usage", () => {
     expect(usageHeadline({ used_usd: 2, reserved_usd: 0, cap_usd: 2, topup_usd: 0 })).toBe("You've used all of this month's allowance");
   });
 
+  it("rounds every percent of the month one way, so the sidebar and the Plan page agree", () => {
+    const tiny = { used_usd: 0.01, reserved_usd: 0, cap_usd: 3, topup_usd: 0 };
+    expect(usageHeadline(tiny)).toBe("Under 1% of this month's allowance used");
+    expect(meterShort(tiny)).toBe("Under 1% used this month");
+    expect(monthPercent(0)).toBe("0%");
+    expect(monthPercent(0.004)).toBe("under 1%");
+    expect(monthPercent(0.996)).toBe("99%");
+    expect(monthPercent(0.25)).toBe("25%");
+    expect(monthShare(0.6, 2)).toBe("30% of a month");
+  });
+
   it("describes each plan from the catalog, in plain words", () => {
     for (const plan of Object.values(PLANS)) {
       for (const line of [...planPoints(plan), planPrice(plan)]) expect(line).not.toMatch(BANNED);
     }
     expect(planPrice(PLANS.free)).toBe("$0 a month");
     expect(planPrice(PLANS.plus)).toBe("$20 a month");
+    // The Free month is sized in measured everyday requests ($2 at $0.0032 each, 625, said as 600).
+    expect(planPoints(PLANS.free)[0]).toBe("Room for about 600 everyday requests a month");
+    expect(planPoints(PLANS.plus)[0]).toBe("6 times the Free allowance each month");
     expect(planPoints(PLANS.free)[1]).toBe("3 routines, at most every day");
     // The global hourly floor shows on every plan, so the card promises what the server allows.
     expect(planPoints(PLANS.plus)[1]).toBe("25 routines, at most every hour");
@@ -291,19 +256,14 @@ describe("usage", () => {
   });
 });
 
-describe("greeting", () => {
-  it("greets by the time of day and first name", () => {
-    expect(greeting(new Date(2026, 9, 5, 9).getTime(), "Ashot Petrosian")).toBe("Good morning, Ashot");
-    expect(greeting(new Date(2026, 9, 5, 20).getTime(), null)).toBe("Good evening");
-  });
-});
-
 describe("connections", () => {
   it("says a missing mail setup plainly", async () => {
-    const { plainConnectError, missingAbilities } = await import("./lane");
+    const { plainConnectError, missingAbilities, MAIL_CONNECT_CLOSED } = await import("./lane");
     expect(plainConnectError("whisk_not_configured")).toBe("Connecting mail and calendar isn't switched on here yet.");
     expect(plainConnectError("Google OAuth not configured (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET)")).toBe("Connecting mail and calendar isn't switched on here yet.");
     expect(plainConnectError("Couldn't reach Gmail")).toBe("Couldn't reach Gmail");
+    // A thrown error's text never reaches the person.
+    expect(plainConnectError("[CONVEX A(whisk:getConnectUrl)] [Request ID: 1a2b] Server Error ArgumentValidationError: Object contains extra field `origin`")).toBe(MAIL_CONNECT_CLOSED);
     expect(plainConnectError("whisk_invalid_grant")).toContain("expired or was already used");
     // Codes from the connect return read through the connectors' one table.
     expect(plainConnectError("access_denied")).toBe("You declined the authorization.");
@@ -353,31 +313,19 @@ describe("billing return", () => {
 });
 
 describe("plan history", () => {
-  it("signs each line by which way it moved extra credit", () => {
-    expect(accountLine({ kind: "topup", amount_usd: 15 })).toEqual({ text: "Extra credit you bought", amount: "+$15.00" });
-    expect(accountLine({ kind: "grant", amount_usd: 5 })).toEqual({ text: "Extra credit from us", amount: "+$5.00" });
-    expect(accountLine({ kind: "refund", amount_usd: 6 })).toEqual({ text: "Refunded extra credit taken back", amount: "-$6.00" });
-    expect(accountLine({ kind: "repay", amount_usd: 2.5 })).toEqual({ text: "Paid back what was owed", amount: "$2.50" });
+  it("says each line as a sentence, its amount a share of a month on the named plan", () => {
+    // Work is a share of the plan's month (Plus: $12 of work), never dollars, and never a signed badge.
+    expect(accountLine({ kind: "topup", amount_usd: 15 }, PLANS.plus)).toEqual({ text: "Extra credit you bought: about a month on Plus" });
+    expect(accountLine({ kind: "grant", amount_usd: 6 }, PLANS.plus)).toEqual({ text: "Extra credit from us: about half a month on Plus" });
+    expect(accountLine({ kind: "refund", amount_usd: 3 }, PLANS.plus)).toEqual({ text: "Refunded extra credit taken back: about a quarter of a month on Plus" });
+    expect(accountLine({ kind: "repay", amount_usd: 1.2 }, PLANS.plus)).toEqual({ text: "Paid back what was owed: about 10% of a month on Plus" });
+    expect(accountLine({ kind: "grant", amount_usd: 0.05 }, PLANS.plus)).toEqual({ text: "Extra credit from us: under 1% of a month on Plus" });
   });
 
-  it("says what a new month forgave, and leaves out a refund that took nothing", () => {
-    expect(accountLine({ kind: "period_reset", amount_usd: 1.2 })).toEqual({ text: "A new month started", amount: null, detail: "$1.20 used the month before" });
-    expect(accountLine({ kind: "period_reset", amount_usd: 0 })).toEqual({ text: "A new month started", amount: null });
-    expect(accountLine({ kind: "refund", amount_usd: 0 })).toBeNull();
-  });
-});
-
-describe("mail searches", () => {
-  it("reads Gmail's search syntax as plain words", () => {
-    expect(mailSearch("from:dana is:unread newer_than:7d")).toEqual({ unread: true, scope: " from Dana from the past week" });
-    expect(mailSearch('from:"Dana Ruiz <dana@ruiz.studio>" subject:"kitchen plans"')).toEqual({ unread: false, scope: ' from Dana Ruiz about "kitchen plans"' });
-    expect(mailSearch("invoice newer_than:3d -label:spam")).toEqual({ unread: false, scope: ' matching "invoice" from the past 3 days' });
-    expect(mailSearch("has:attachment in:inbox")).toEqual({ unread: false, scope: "" });
-  });
-
-  it("says a search with no count by what it looked for", () => {
-    expect(stepText({ name: "search_mail", input: { query: "from:sam@x.org" } })).toBe("Looked for emails from Sam");
-    expect(stepText({ name: "search_mail", input: {} })).toBe("Looked through your email");
+  it("says what a new month used, and leaves out a refund that took nothing", () => {
+    expect(accountLine({ kind: "period_reset", amount_usd: 1.2 }, PLANS.free)).toEqual({ text: "A new month started", detail: "60% of the month before used" });
+    expect(accountLine({ kind: "period_reset", amount_usd: 0 }, PLANS.free)).toEqual({ text: "A new month started" });
+    expect(accountLine({ kind: "refund", amount_usd: 0 }, PLANS.free)).toBeNull();
   });
 });
 
@@ -387,7 +335,17 @@ describe("shared list and fold rules", () => {
     expect(conversationSubline(row, "waiting")).toBe("Waiting on you");
     expect(conversationSubline(row, "working")).toBe("Working on it");
     expect(conversationSubline(row, "done")).toBe("Sent the reply to Dana");
-    expect(conversationSubline({ last_user_message: "Answer Dana" }, "done")).toBe("Answer Dana");
+    expect(conversationSubline({ title: "Dana's email", last_user_message: "Answer Dana" }, "done")).toBe("Answer Dana");
+    // While the title is still the person's ask, the ask is not said twice.
+    const untitled = { title: "New session", last_user_message: "Set up a routine: every weekday at 8am, send me the weather for the day ahead" };
+    expect(titleIsAsk(untitled)).toBe(true);
+    expect(titleIsAsk({ title: "Weekday weather", last_user_message: "Set up a routine" })).toBe(false);
+    expect(titleIsAsk({ title: "" })).toBe(false);
+    expect(conversationSubline(untitled, "done")).toBe("");
+    expect(conversationSubline(untitled, "working")).toBe("Working on it");
+    // A row waiting on an answer says what it asks, not a state word.
+    expect(conversationSubline(row, "waiting", 'Set up a routine: "Weekday weather"?')).toBe('Set up a routine: "Weekday weather"?');
+    expect(conversationSubline(row, "working", "Send it?")).toBe("Working on it");
     expect(conversationSubline({}, "done")).toBe("");
   });
 
@@ -396,15 +354,6 @@ describe("shared list and fold rules", () => {
     expect(draftIsLong("x".repeat(421))).toBe(true);
     expect(draftIsLong(Array(10).fill("a").join("\n"))).toBe(true);
     expect(draftIsLong(Array(9).fill("a").join("\n"))).toBe(false);
-  });
-
-  it("never folds away a single step", () => {
-    const steps = (n: number) => Array.from({ length: n }, (_, i) => i);
-    expect(visibleSteps(steps(STEPS_SHOWN + 1), false)).toEqual({ shown: steps(STEPS_SHOWN + 1), more: 0 });
-    const folded = visibleSteps(steps(9), false);
-    expect(folded.shown).toEqual(steps(STEPS_SHOWN - 1));
-    expect(folded.more).toBe(9 - (STEPS_SHOWN - 1));
-    expect(visibleSteps(steps(9), true)).toEqual({ shown: steps(9), more: 0 });
   });
 
   it("lists every lane surface once, home first", () => {
@@ -421,22 +370,6 @@ describe("shared list and fold rules", () => {
 });
 
 describe("page rules shared by the web and the phone", () => {
-  const row = (id: string) => ({ _id: id });
-  it("home leaves out waiting rows an approval card already covers", () => {
-    const bands = { waiting: [row("a"), row("b")], working: [], done: Array.from({ length: HOME_DONE + 2 }, (_, i) => row(`d${i}`)) };
-    const view = homeView(bands as any, new Map([["a", 1]]), 10, true, false);
-    expect(view.waitingRows.map((r) => r._id)).toEqual(["b"]);
-    expect(view.done.length).toBe(HOME_DONE);
-    expect(view.moreDone).toBe(2);
-    expect(homeView(bands as any, new Map(), 10, true, true).moreDone).toBe(0);
-  });
-
-  it("home tells an empty list from one that has not loaded", () => {
-    const empty = { waiting: [], working: [], done: [] };
-    expect(homeView(empty, new Map(), 0, true, false)).toMatchObject({ nothingYet: true, loading: false });
-    expect(homeView(empty, new Map(), 0, false, false)).toMatchObject({ nothingYet: false, loading: true });
-  });
-
   it("a plan card offers nothing until the wallet and billing have answered", () => {
     const figures = { known: true, plan: { id: "free" as const }, upgrades: new Set<any>(["plus", "pro"]) };
     expect(planCard("free", figures, { known: true, plans: ["plus"] })).toEqual({ current: true, offer: null });
@@ -446,18 +379,37 @@ describe("page rules shared by the web and the phone", () => {
     expect(planCard("free", { ...figures, known: false }, { known: true, plans: ["plus"] })).toEqual({ current: false, offer: null });
   });
 
+  it("lists where the month went costliest first, with the rest under 1% folded", () => {
+    const lines = [{ id: "a", cost_usd: 0.03 }, { id: "b", cost_usd: 0.001 }, { id: "c", cost_usd: 0.2 }, { id: "d", cost_usd: 0 }, { id: "e", cost_usd: 0.005 }];
+    // On Free ($2 of work), 1% is two cents.
+    const { shown, small } = ledgerLines(lines, 2);
+    expect(shown.map((l) => l.id)).toEqual(["c", "a"]);
+    expect(small).toBe(3);
+    expect(LANE_COPY.plan.smallLines(1)).toBe("1 other conversation, each under 1% of a month");
+    expect(ledgerLines([], 2)).toEqual({ shown: [], small: 0 });
+  });
+
   it("says top-ups, turns and the meter in plain words", () => {
-    expect(topupLabel(10).label).toBe("Add $10");
-    expect(topupLabel(10).note).toMatch(/of extra work$/);
+    // A top-up's note is what it buys on the person's plan, never a second dollar figure.
+    expect(topupLabel(10, PLANS.plus)).toEqual({ label: "Add $10", note: "About half a month on Plus" });
+    expect(topupLabel(25, PLANS.plus).note).toBe("About a month on Plus");
+    expect(topupLabel(10, PLANS.free).note).toBe("About 3 months on Free");
     expect(workedTimes(1)).toBe("Worked on it once");
     expect(workedTimes(3)).toBe("Worked on it 3 times");
-    const legend = meterLegend({ used_usd: 1, cap_usd: 5, reserved_usd: 0.5, topup_usd: -2 }, "October 21");
+    const legend = meterLegend({ used_usd: 1, cap_usd: 5, reserved_usd: 0.5, topup_usd: -2 }, "October 21", 5);
     expect(legend.map((l) => `${l.strong ?? ""}${l.rest}`)).toEqual([
-      "$1.00 of $5.00 used",
-      "$0.50 set aside for work in progress",
-      "$2.00 owed for refunded extra credit, taken from next month's allowance first",
+      "About 10% of a month is set aside for work still running, and comes back when it ends",
+      "Refunded extra credit you'd already used (about 40% of a month) comes out of next month first",
       "Starts fresh October 21",
     ]);
+    expect(meterLegend({ used_usd: 0, cap_usd: 12, reserved_usd: 0, topup_usd: 6 }, null, 12).map((l) => l.rest)).toEqual(["Extra credit for about half a month more"]);
+    // The legend measures in the plan's full month even when a mid-month change prorated the cap.
+    expect(meterLegend({ used_usd: 0, cap_usd: 6, reserved_usd: 0, topup_usd: 6 }, null, 12).map((l) => l.rest)).toEqual(["Extra credit for about half a month more"]);
+    expect(meterLegend({ used_usd: 0, cap_usd: 12, reserved_usd: 0, topup_usd: 0.01 }, null, 12).map((l) => l.rest)).toEqual(["Extra credit for under 1% of a month more"]);
+    expect(meterShort({ used_usd: 3, cap_usd: 12, reserved_usd: 0, topup_usd: 0 })).toBe("25% used this month");
+    expect(meterShort({ used_usd: 0, cap_usd: 12, reserved_usd: 0, topup_usd: 0 })).toBe("Nothing used this month");
+    expect(monthShare(0.001, 12)).toBe("under 1% of a month");
+    expect(monthShare(18, 12)).toBe("1.5 months");
   });
 
   it("a disconnect question stands alone on the mail row", () => {
@@ -491,13 +443,6 @@ describe("the note under the mail card", () => {
     expect(mailboxLine("dana@x.com", ["Dana@x.com", "dana@work.com"])).toBe("dana@x.com and 1 more mailbox");
     expect(mailboxLine(undefined, ["a@x.com", "b@x.com", "c@x.com"])).toBe("a@x.com and 2 more mailboxes");
     expect(mailboxLine(undefined, [])).toBeUndefined();
-  });
-});
-
-describe("the lane's spoken tab names", () => {
-  it("adds what is waiting only when something is", () => {
-    expect(LANE_COPY.tabs.label("Approvals", 0)).toBe("Approvals");
-    expect(LANE_COPY.tabs.label("Approvals", 2)).toBe("Approvals, 2 waiting");
   });
 });
 
@@ -545,16 +490,15 @@ describe("the promise follows what the mail connection allows", () => {
   });
 });
 
-describe("home's ideas", () => {
-  it("are /welcome's first asks, so home suggests only what is connected", async () => {
-    const { ASKS, firstAsks, homeIdeas } = await import("./lane");
-    const all = { read_mail: true, modify_mail: true, send_mail: true, calendar: true };
-    for (const can of [all, { ...all, calendar: false }, { ...all, read_mail: false }, null]) {
-      const { lead, more } = firstAsks(can);
-      expect(homeIdeas(can)).toEqual((lead ? [lead, ...more] : more).slice(0, 3));
+describe("the inbox's names for whose move it is", () => {
+  it("never names a section with the words a row uses for its state", async () => {
+    const { MODE_WORDS } = await import("../../lib/surfaceRules");
+    const w = MODE_WORDS.hosted;
+    const names = [w.sectionQuestions, w.sectionNeedsInput, w.sectionDormant];
+    expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(3);
+    const row = { idle_summary: null, last_user_message: null };
+    for (const state of ["waiting", "working"] as const) {
+      expect(names.map((n) => n.toLowerCase())).not.toContain(conversationSubline(row, state).toLowerCase());
     }
-    expect(homeIdeas(all)[0]).toBe(ASKS.week);
-    expect(homeIdeas(null)).toHaveLength(3);
-    for (const idea of homeIdeas(null)) expect(idea).not.toMatch(/mail|calendar|reply/i);
   });
 });
