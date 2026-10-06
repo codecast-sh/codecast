@@ -1,30 +1,30 @@
-// The lane's one composer on the phone: home's "What can I take off your
-// plate?" and the reply box at the foot of a conversation (web
-// components/simple/Composer.tsx). Return breaks the line, as a phone
-// keyboard expects; the round accent button sends.
+// The first ask to the hosted assistant on the phone, in the new conversation
+// sheet. Return breaks the line, as a phone keyboard expects; the round
+// button sends. A reply in an open conversation is the session screen's own
+// composer (app/session/[id]).
 import { useRef, useState } from 'react';
 import { Pressable, View, type TextInput as RNTextInput } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { TextInput } from '@/components/Themed';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
-import { LANE_RADIUS, useLaneTheme } from './laneTheme';
+import { HOSTED_RADIUS, useHostedTheme } from './hostedTheme';
 
-const MAX_HEIGHT = 224;
+const MAX_HEIGHT = 200;
 
 export function Composer({
   placeholder,
   onSend,
-  hero = false,
   seed,
+  autoFocus = false,
 }: {
   placeholder: string;
   onSend: (text: string) => void;
-  hero?: boolean;
-  /** Text to place in the box (an idea chip), applied when it changes. */
+  /** Text to place in the box (a starter), applied when it changes. */
   seed?: { text: string; at: number } | null;
+  autoFocus?: boolean;
 }) {
-  const { c } = useLaneTheme();
+  const { c } = useHostedTheme();
   const [text, setText] = useState('');
   const [seededAt, setSeededAt] = useState<number | null>(null);
   const [focused, setFocused] = useState(false);
@@ -51,18 +51,13 @@ export function Composer({
         flexDirection: 'row',
         alignItems: 'flex-end',
         gap: 8,
-        paddingVertical: hero ? 10 : 8,
-        paddingLeft: hero ? 20 : 17,
-        paddingRight: hero ? 10 : 8,
-        borderRadius: LANE_RADIUS,
+        paddingVertical: 6,
+        paddingLeft: 14,
+        paddingRight: 6,
+        borderRadius: HOSTED_RADIUS,
         backgroundColor: c.sheet,
         borderWidth: 1,
         borderColor: focused ? c.lineStrong : c.line,
-        shadowColor: c.ink,
-        shadowOffset: { width: 0, height: focused ? 14 : 8 },
-        shadowOpacity: focused ? 0.14 : 0.08,
-        shadowRadius: focused ? 22 : 16,
-        elevation: 2,
       }}
     >
       <TextInput
@@ -73,16 +68,17 @@ export function Composer({
         placeholderTextColor={c.faint}
         accessibilityLabel={placeholder}
         multiline
+        autoFocus={autoFocus}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         style={{
           flex: 1,
-          minHeight: hero ? 56 : 28,
+          minHeight: 96,
           maxHeight: MAX_HEIGHT,
-          paddingTop: hero ? 8 : 9,
+          paddingTop: 8,
           paddingBottom: 8,
-          fontSize: hero ? 18 : 16.5,
-          lineHeight: hero ? 26 : 24,
+          fontSize: 14.5,
+          lineHeight: 21,
           color: c.ink,
           textAlignVertical: 'top',
         }}
@@ -95,17 +91,16 @@ export function Composer({
         onPress={send}
         hitSlop={6}
         style={({ pressed }) => ({
-          width: 42,
-          height: 42,
-          borderRadius: 21,
+          width: 36,
+          height: 36,
+          borderRadius: 18,
           alignItems: 'center',
           justifyContent: 'center',
-          // Disabled, it steps back to a quiet wash (web .sl-send:disabled).
           backgroundColor: !ready ? c.wash : pressed ? c.accentPressed : c.accent,
           transform: [{ scale: pressed ? 0.94 : 1 }],
         })}
       >
-        <Feather name="arrow-up" size={20} color={ready ? c.onSolid : c.faint} />
+        <Feather name="arrow-up" size={18} color={ready ? c.onSolid : c.faint} />
       </Pressable>
     </View>
   );
