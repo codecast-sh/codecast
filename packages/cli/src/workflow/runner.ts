@@ -435,7 +435,15 @@ async function executeSessionNode(
     await new Promise(r => setTimeout(r, pollInterval));
     const inbox = await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 });
     const row = (inbox?.sessions || []).find((r: any) => r.id === conversationId);
-    if (!row) continue;
+    if (!row) {
+      // A hand the read never returns would otherwise wait in silence until
+      // the node's timeout kills it: say so once, with the reason at hand.
+      if (lastState !== "unseen" && Date.now() - startMs > 60_000) {
+        console.log(`${c.yellow}  ${shortId}: the session read ${inbox ? "does not list this hand" : "is failing"}, so the run cannot see it settle${c.reset}`);
+        lastState = "unseen";
+      }
+      continue;
+    }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
     if (state !== lastState) {

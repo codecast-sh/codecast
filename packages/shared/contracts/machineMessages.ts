@@ -758,6 +758,15 @@ export function formatDecisionAnswer(a: { id: string; question: string; answer: 
   return `Decision: ${a.answer}\n<cast-decision id="${a.id}" question="${escapeTagAttr(a.question)}"/>`;
 }
 
+/** Whether a message is an answer that names its decision (the tagged
+ *  form). A hosted conversation's turn consumes such a message and never
+ *  writes it to the transcript (convex/assistant/input.ts decisionAnswerOf),
+ *  so a client that painted it has no echo to wait for. The legacy untagged
+ *  line does not count: a person may type exactly that. */
+export function isTaggedDecisionAnswer(rawContent: string | null | undefined): boolean {
+  return !!parseDecisionAnswer(rawContent)?.id;
+}
+
 export function parseDecisionAnswer(rawContent: string | null | undefined): DecisionAnswerMessage | null {
   if (!rawContent) return null;
   const text = stripInjectionNoise(rawContent);

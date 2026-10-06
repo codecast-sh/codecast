@@ -1,14 +1,15 @@
 // /welcome: where someone new to codecast starts (plan pl-840 onboarding,
-// docs/architecture/hosted-assistant.md). Three screens: sign in, connect
+// docs/architecture/hosted-assistant.md). Three screens: sign in (with its
+// email form inline, EmailStep), connect
 // mail and calendar, and the first useful thing, which starts a conversation and lands
-// in it in the simple lane. Which screen shows is onboarding.ts welcomeStep;
+// in it in the main app in hosted mode. Which screen shows is onboarding.ts welcomeStep;
 // a move between screens runs as one view transition (the orb glides, the old
 // screen leaves the way the person is heading, the new one rises in order).
 //
 // Mail and calendar connect through Whisk, the family's mail app, and the
 // connect comes back here (convex/whisk.ts WHISK_RETURN_PATHS), so it always
 // mounts ConnectNotice, which says how it went. Anyone who acts here
-// (connects, skips, or starts) is moved to the simple lane
+// (connects, skips, or starts) is moved to hosted mode
 // (`client_state.ui.lane`).
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
@@ -28,13 +29,15 @@ import { Composer } from "../../components/simple/Composer";
 import { ConnectNotice } from "../../components/simple/ConnectNotice";
 import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
 import { LaneSync } from "../../components/simple/LaneSync";
-import { ASK_FIRST, LANE_COPY, LANE_PATHS, conversationPath, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
-import { laneOf, writeLane } from "../../components/simple/lanePref";
+import { ASK_FIRST, LANE_COPY, LANE_PATHS, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
+import { HOSTED_HOME, hostedConversationPath } from "../../components/simple/lanePaths";
+import { isHostedUi, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
-import { startConversationWith } from "../../components/simple/startConversation";
+import { startHostedConversation } from "../../lib/startHostedConversation";
 import "../../components/simple/laneLook";
 import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
 import { useLaneMail } from "../../components/simple/useLaneMail";
+import { EMAIL_PARAM, EmailStep, emailMode, emailStepPath } from "./EmailStep";
 import { SKIP_PARAM, SKIP_VALUE, stepDirection, welcomeStep, welcomeTrail, type WelcomeStep } from "./onboarding";
 import "../../components/simple/simple.css";
 import "./welcome.css";
@@ -52,7 +55,7 @@ const rise = (i: number) => ({ ["--i" as any]: i }) as CSSProperties;
 /** Moving to the lane is what arriving through /welcome means, written the
  *  first time the person acts here. */
 function joinLane() {
-  if (laneOf(useInboxStore.getState().clientState?.ui) !== "simple") writeLane("simple");
+  if (!isHostedUi(useInboxStore.getState().clientState?.ui)) writeLane("simple");
 }
 
 /** Runs a screen change as a view transition where the browser has one and
@@ -151,21 +154,24 @@ function Orb({ step, connected = false }: { step: WelcomeStep | null; connected?
 
 function SignedOut() {
   const { available } = useConnectAvailable();
+  const [params] = useSearchParams();
+  const email = emailMode(params.get(EMAIL_PARAM));
   return (
     <Frame step="signin" trail={welcomeTrail(available)}>
       {/* Mail and calendar are promised only where they can be connected. */}
-      <SignIn mail={available === true} />
+      {email ? <EmailStep key={email} mode={email} /> : <SignIn mail={available === true} />}
     </Frame>
   );
 }
 
 function SignIn({ mail }: { mail: boolean }) {
   const google = useQueryNoThrow(api.auth.signInProviders, {}).data?.google === true;
-  const back = encodeURIComponent(LANE_PATHS.welcome);
-  // Google leads when the deployment has it; the other providers then sit
-  // quietly underneath. Without it, they are the way in.
+  // Ordered for someone who does not write code. Google leads when the
+  // deployment has it, with the other providers quiet underneath and email
+  // as a line. Without it Apple and email are the ways in, and GitHub, which
+  // means nothing to this reader, sits quietly last.
   const classFor = (id: OAuthProviderId) =>
-    id === "google" ? "wl-auth is-google" : google ? "wl-auth is-quiet" : "wl-auth";
+    id === "google" ? "wl-auth is-google" : google || id === "github" ? "wl-auth is-quiet" : "wl-auth";
   return (
     <section className="wl-screen" aria-labelledby="wl-signin-title">
       <h1 id="wl-signin-title" className="sl-hello sl-rise" style={rise(1)}>An assistant for the busywork.</h1>
@@ -177,13 +183,27 @@ function SignIn({ mail }: { mail: boolean }) {
           classFor={classFor}
           labelFor={(id, label) => (google && id !== "google" ? label : `Continue with ${label}`)}
           listClassName={google ? "wl-auth-list has-lead" : "wl-auth-list"}
-        />
+        >
+          {google ? null : (
+            <Link to={emailStepPath("signup")} className="wl-auth is-email">
+              <Mail size={19} aria-hidden />
+              Continue with email
+            </Link>
+          )}
+        </AuthProviderButtons>
       </div>
       <p className="wl-aside sl-rise" style={rise(4)}>
-        Or use your email:{" "}
-        <Link to={`/signup?return_to=${back}`}>create an account</Link>
-        {" or "}
-        <Link to={`/login?return_to=${back}`}>sign in</Link>.
+        {google ? (
+          <>
+            Or use your email: <Link to={emailStepPath("signup")}>create an account</Link>
+            {" or "}
+            <Link to={emailStepPath("signin")}>sign in</Link>.
+          </>
+        ) : (
+          <>
+            Already have an account? <Link to={emailStepPath("signin")}>Sign in with your email</Link>.
+          </>
+        )}
       </p>
     </section>
   );
@@ -299,16 +319,15 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
 
   // The conversation's code loads while the person reads, so the landing is instant.
   useMountEffect(() => {
-    void import("../../src/layouts/SimpleShell");
-    void import("../simple/c/[id]/page");
+    void import("../conversation/[id]/page");
   });
 
   const begin = (text: string) => {
     if (leaving) return;
     joinLane();
-    const id = startConversationWith(text);
+    const id = startHostedConversation(text);
     setLeaving(text);
-    window.setTimeout(() => navigate(conversationPath(id)), SEND_OFF_MS);
+    window.setTimeout(() => navigate(hostedConversationPath(id)), SEND_OFF_MS);
   };
 
   let i = 1;
@@ -363,7 +382,7 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
           </>
         ) : null}
         <Link
-          to={LANE_PATHS.home}
+          to={HOSTED_HOME}
           onClick={() => joinLane()}
         >
           Go to my assistant

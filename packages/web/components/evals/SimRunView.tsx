@@ -6,13 +6,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { GitBranch, Pause, Play, Scissors } from "lucide-react";
 import type { SimFailureResult, SimRunResponse } from "@codecast/shared/contracts/evalsApi";
-import { KeyCap } from "../KeyboardShortcutsHelp";
-import { formatShortcutParts, getShortcutsForAction, useShortcutAction, useShortcutContext, type ShortcutAction } from "../../shortcuts";
-import { useTabActive } from "../../hooks/usePagePresence";
 import { evalsHref } from "./evalsPaths";
-import { CopyCommand, EvalsLink, LogTail, StallChip, VerdictGlyph } from "./parts";
-import { isJobStalled } from "./bisectModel";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { CopyCommand, EvalsLink, KeyHint, LogTail, StallChip, useEvalsHost, VerdictGlyph } from "@platform/evals/react";
+import { plural, shortSha, whenLabel } from "@platform/evals/client";
 import { DeliveryTimeline } from "./DeliveryTimeline";
 import { OrderStrip } from "./OrderStrip";
 import { parseOrder } from "../../store/__tests__/sim/replay";
@@ -20,9 +16,8 @@ import { splitOrderLine } from "../../store/__tests__/sim/shrink";
 import { SimLabels } from "../../store/__tests__/sim/labels";
 import { buildTimeline, failIndex, feedTone, keptIndexes, rowDiffSides, splitRowDiff, traceLabels } from "./simLanes";
 import "./sim.css";
-import { plural, shortSha, whenLabel } from "./format";
 import { PLAY_STEP_MS } from "./simModel";
-import type { JobState } from "./simJobState";
+import { isJobStalled, type JobState } from "./simJobState";
 
 export type ShrinkState = JobState;
 
@@ -76,13 +71,18 @@ export function SimRunView({ data, shrink, onShrink, keysActive = true }: SimRun
     setPlaying(true);
   };
 
-  const active = useTabActive() && keysActive && timeline.count > 0;
-  useShortcutContext("evalsSim", active);
-  useShortcutAction("evalsSim.prev", () => (active ? move((playhead ?? 0) - 1) : false));
-  useShortcutAction("evalsSim.next", () => (active ? move(playhead === null ? 0 : playhead + 1) : false));
-  useShortcutAction("evalsSim.first", () => (active ? move(0) : false));
-  useShortcutAction("evalsSim.last", () => (active ? move(failAt ?? last) : false));
-  useShortcutAction("evalsSim.play", () => (active ? togglePlay() : false));
+  const host = useEvalsHost();
+  const active = host.useActive() && keysActive && timeline.count > 0;
+  host.useShortcuts(
+    {
+      "evalsSim.prev": { keys: "ArrowLeft", label: "Playhead back one delivery", run: () => move((playhead ?? 0) - 1) },
+      "evalsSim.next": { keys: "ArrowRight", label: "Playhead forward one delivery", run: () => move(playhead === null ? 0 : playhead + 1) },
+      "evalsSim.first": { keys: "Home", label: "Playhead to the first delivery", run: () => move(0) },
+      "evalsSim.last": { keys: "End", label: "Playhead to the failing delivery, else the last", run: () => move(failAt ?? last) },
+      "evalsSim.play": { keys: "p", label: "Play or pause the deliveries", run: togglePlay },
+    },
+    active,
+  );
 
   const at = playhead === null ? null : timeline.marks[playhead] ?? null;
   const stepAt = at ? [...timeline.steps].reverse().find((s) => s.at <= at.i) ?? null : null;
@@ -151,10 +151,10 @@ export function SimRunView({ data, shrink, onShrink, keysActive = true }: SimRun
             {playing ? "Pause" : "Play"}
           </button>
           <span className="evs-keys">
-            <ActionKeys action="evalsSim.prev" />
-            <ActionKeys action="evalsSim.next" />
+            <KeyHint action="evalsSim.prev" keys="ArrowLeft" />
+            <KeyHint action="evalsSim.next" keys="ArrowRight" />
             step
-            <ActionKeys action="evalsSim.play" />
+            <KeyHint action="evalsSim.play" keys="p" />
             play
           </span>
           {minimal && (
@@ -239,21 +239,6 @@ export function SimRunView({ data, shrink, onShrink, keysActive = true }: SimRun
   );
 }
 
-/** A registered shortcut's keys as keycaps, read from the registry so the hint never drifts from the binding. */
-function ActionKeys({ action }: { action: ShortcutAction }) {
-  const def = getShortcutsForAction(action)[0];
-  if (!def) return null;
-  return (
-    <>
-      {formatShortcutParts(def).map((k) => (
-        <KeyCap key={k} size="xs">
-          {k}
-        </KeyCap>
-      ))}
-    </>
-  );
-}
-
 function FailureCard({ failure, data, labels }: { failure: SimFailureResult; data: SimRunResponse; labels: SimLabels }) {
   const meaning = data.invariant?.meaning ?? failure.invariant.meaning;
   const sides = rowDiffSides(failure.invariant.id, failure.window?.name, data.world);
@@ -324,7 +309,7 @@ function FailureCard({ failure, data, labels }: { failure: SimFailureResult; dat
 function ShrinkBar({ minimal, shrinking, shrink, onShrink, recorded }: { minimal: boolean; shrinking: SimRunResponse["shrinking"]; shrink: ShrinkState; onShrink: () => void; recorded: number }) {
   const running = !!shrinking || shrink.state === "running" || shrink.state === "starting";
   const job = shrink.state === "running" ? shrink.job : null;
-  const now = useCoarseNow(30_000);
+  const now = useEvalsHost().useNow(30_000);
   const stalled = !!job && isJobStalled(job, now);
   return (
     <div className="evs-sweep" style={{ borderTop: "1px solid var(--ev-rule)" }} data-evs-shrink={minimal ? "done" : running ? "running" : shrink.state}>

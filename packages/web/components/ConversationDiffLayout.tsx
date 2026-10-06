@@ -24,6 +24,7 @@ import { devRenderCount } from "../lib/devRenderCount";
 import { requestFilePathMenu } from "../lib/filePathMenu";
 import { filePathHref } from "../lib/filePathLinks";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { useSurface } from "../lib/surfaces";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -124,9 +125,12 @@ export function ConversationDiffLayout({
   foldWorkingTurns,
   openAtTop,
   composerPlaceholder,
-  hideDiff,
+  hideDiff: hideDiffProp,
 }: ConversationDiffLayoutProps) {
   devRenderCount("ConversationDiffLayout");
+  // Hosted mode has no diff panel (lib/surfaces.ts).
+  const diffShown = useSurface("diff");
+  const hideDiff = hideDiffProp || !diffShown;
   const heightClass = "h-full";
   const [isMobile, setIsMobile] = useState(false);
   const layoutPref = useInboxStore(s => s.clientState.layouts?.conversation_diff ?? DEFAULT_DIFF_LAYOUT);
@@ -179,7 +183,7 @@ export function ConversationDiffLayout({
     const target = e.target as HTMLElement;
     const isInput = keyBelongsElsewhere(target);
 
-    if (isInput) return;
+    if (isInput || !diffShown) return;
 
     switch (e.key) {
       case "[":
@@ -215,14 +219,14 @@ export function ConversationDiffLayout({
   // Element props handed to the memoized ConversationView must keep identity
   // across this component's own re-renders, or the memo never holds.
   const combinedHeaderExtra = useMemo(() => {
-    const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;
+    const changesOverlay = changes.length > 0 && !diffPanelOpen && !hideDiff ? <ChangesBar changes={changes} /> : null;
     return changesOverlay ? (
       <>
         {headerExtra}
         {changesOverlay}
       </>
     ) : headerExtra;
-  }, [changes, diffPanelOpen, headerExtra]);
+  }, [changes, diffPanelOpen, hideDiff, headerExtra]);
 
   const conversationViewProps = {
     ref: conversationRef,

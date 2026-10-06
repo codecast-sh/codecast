@@ -67,7 +67,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, isTaggedDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -213,9 +213,12 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
+import { firstRun } from "./firstRunState";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
 import { projectRootOf } from "../lib/recentProjectPaths";
-import { cloudPlacementFor, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
+import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
+import { defaultAgentType } from "../lib/defaultAgent";
+import { isHostedUi } from "../components/simple/lanePaths";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
@@ -1630,6 +1633,10 @@ export type ClientUI = {
   // lane (/simple, docs/architecture/hosted-assistant.md), "full" or absent is
   // the whole app. Stamped LWW, so a switch on one device follows the person.
   lane?: "simple" | "full";
+  // The agent a new conversation starts with (a Convex agent_type), read only
+  // through lib/defaultAgent, which also decides hosted mode's and a
+  // machine-less account's default. Absent means Claude.
+  default_agent?: string;
   /** Resource pressure suggestions dismissed per machine (device id → until, ms). */
   resource_plan_dismissed?: Record<string, number>;
   visual_style?: "classic" | "minimal";
@@ -1822,6 +1829,10 @@ export type ClientUI = {
   // left unstamped, so it stays a per-device reading preference like the other
   // layout toggles.
   thread_state_collapsed?: boolean;
+  // The calls history list beside an open call (/calls/<id>). Folded away by
+  // default, so a call reads as its own page; per-device like the other
+  // layout toggles.
+  calls_list_open?: boolean;
   // Inbox session panel view mode. When true, the panel drops the
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
@@ -2664,10 +2675,21 @@ function pendingSendEchoed(msg: Message, localMessages: Message[]): boolean {
   });
 }
 
+/** A hosted conversation took an approval's answer. Its turn consumes the
+ *  answer without writing a transcript row, so the bubble the store painted
+ *  for it (answerDecision) never meets an echo: it is delivered once the row
+ *  has moved past the stamp it was sent at with nothing left queued. */
+function hostedAnswerTaken(
+  session: Pick<InboxSession, "has_pending" | "updated_at"> | undefined,
+  sentBaselineTs: number,
+): boolean {
+  return !!session && !session.has_pending && (session.updated_at ?? 0) > sentBaselineTs;
+}
+
 export function reconcilePendingSendForSession(
   pendingMessages: Record<string, Message[]>,
   convId: string,
-  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
+  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at" | "agent_type"> | undefined,
   _focusedConvId: string | null,
   localMessages?: Message[],
 ): boolean {
@@ -2675,11 +2697,17 @@ export function reconcilePendingSendForSession(
   if (!pending?.length) return false;
   let changed = false;
   const kept = pending.filter((m) => m._isLocalQueue || !pendingSendEchoed(m, localMessages ?? []));
+  const hosted = isHostedAgentType(session?.agent_type);
   for (const message of kept) {
     if (message._isFailed || message._isSettled || message._isLocalQueue) continue;
-    if (!isInterruptControlMessage(message.content) && !/^\/(?:model|effort)(?:\s|$)/.test(message.content ?? "")) continue;
-    if (Date.now() - message.timestamp < PENDING_SEND_PRUNE_GRACE_MS) continue;
-    if (!pendingSendConsumed(session, message._sentBaselineTs ?? message.timestamp)) continue;
+    const sentAt = message._sentBaselineTs ?? message.timestamp;
+    if (hosted && isTaggedDecisionAnswer(message.content)) {
+      if (!hostedAnswerTaken(session, sentAt)) continue;
+    } else {
+      if (!isInterruptControlMessage(message.content) && !/^\/(?:model|effort)(?:\s|$)/.test(message.content ?? "")) continue;
+      if (Date.now() - message.timestamp < PENDING_SEND_PRUNE_GRACE_MS) continue;
+      if (!pendingSendConsumed(session, sentAt)) continue;
+    }
     message._isSettled = true;
     delete message._isOptimistic;
     delete message._isQueued;
@@ -2760,12 +2788,14 @@ export function isSessionHardBlocked(
 // stale key. `waiting` here is the no-in-flight verdict; the chokepoint
 // layers the tiny in-flight set on top (an in-flight send forces a session
 // OUT of needs-input).
-const _workStateCache = new WeakMap<object, WorkState>();
+const _placementCache = new WeakMap<object, { bucket: InboxBucket; work_state: WorkState }>();
 const _classifyCache = new WeakMap<object, SessionVerdict>();
-/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
-export function sessionWorkState(s: InboxSession): WorkState {
-  let ws = _workStateCache.get(s);
-  if (!ws) {
+/** One row's bucket and work state from its shipped live fields, outside the
+ *  working set: the per-row placement the inbox sections use, without the
+ *  membership fold. For a surface listing rows the inbox may not hold. */
+export function sessionPlacement(s: InboxSession): { bucket: InboxBucket; work_state: WorkState } {
+  let p = _placementCache.get(s);
+  if (!p) {
     // The shipped live fields as they stand — no clock, no re-derivation.
     const live: LiveFacts = {
       agent_status: s.agent_status ?? null,
@@ -2774,10 +2804,14 @@ export function sessionWorkState(s: InboxSession): WorkState {
       awaiting_input: !!s.awaiting_input,
       daemon_alive: !!s.is_connected,
     };
-    ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
-    _workStateCache.set(s, ws);
+    p = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0));
+    _placementCache.set(s, p);
   }
-  return ws;
+  return p;
+}
+/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
+export function sessionWorkState(s: InboxSession): WorkState {
+  return sessionPlacement(s).work_state;
 }
 export function classifySession(s: InboxSession): SessionVerdict {
   let c = _classifyCache.get(s);
@@ -4357,17 +4391,27 @@ export type ScheduleNavSets = {
   triggerOrder?: Array<{ key: string; ids: string[] }>;
 };
 
+// The style on screen. Hosted mode (ui.lane "simple") is always Minimal; any
+// other viewer gets their own pick. Every reader of the style goes through
+// here, so hosted mode reaches the shell, the layout defaults and the feed.
+export function resolveVisualStyle(ui: { visual_style?: "classic" | "minimal"; lane?: string } | undefined): "classic" | "minimal" {
+  return isHostedUi(ui) || ui?.visual_style === "minimal" ? "minimal" : "classic";
+}
+
 // Simple view is a preference in Classic and a given in Minimal: the Minimal
 // style has no dense variant, so it never reads the toggle. Every reader goes
 // through here so the shell class, the feed density and the settings row agree.
-export function resolveSimpleView(ui: { simple_view?: boolean; visual_style?: "classic" | "minimal" } | undefined): boolean {
-  return ui?.visual_style === "minimal" || ui?.simple_view !== false;
+export function resolveSimpleView(ui: { simple_view?: boolean; visual_style?: "classic" | "minimal"; lane?: string } | undefined): boolean {
+  return resolveVisualStyle(ui) === "minimal" || ui?.simple_view !== false;
 }
 
-// One line per session. The person's own choice wins in either style; with no
-// choice made, Minimal lists compactly and Classic keeps its full cards.
-export function resolveInboxCompact(ui: { inbox_compact?: boolean; visual_style?: "classic" | "minimal" } | undefined): boolean {
-  return ui?.inbox_compact ?? ui?.visual_style === "minimal";
+// One line per session. Hosted mode always lists compactly; otherwise the
+// person's own choice wins in either style, and with no choice made, Minimal
+// lists compactly and Classic keeps its full cards. The stored pick is kept
+// for when hosted mode ends.
+export function resolveInboxCompact(ui: { inbox_compact?: boolean; visual_style?: "classic" | "minimal"; lane?: string } | undefined): boolean {
+  if (isHostedUi(ui)) return true;
+  return ui?.inbox_compact ?? resolveVisualStyle(ui) === "minimal";
 }
 
 // Resolve the active inbox view mode from client UI state. Shared by the
@@ -5394,7 +5438,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
   // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
   // self-heal create (ensureSessionCreated routes through it too).
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => Promise<any>;
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string; firstMessage?: { content: string; clientId: string } }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -6591,7 +6635,7 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "visual_style",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
-  "trigger_prompt_height", "thread_state_collapsed", "people_view", "float_face_size",
+  "trigger_prompt_height", "thread_state_collapsed", "calls_list_open", "people_view", "float_face_size",
   "last_picked_device_id", "call_mic_device_id", "call_camera_device_id",
   "call_speaker_device_id",
 ]);
@@ -10277,12 +10321,33 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // compose popup intentionally allows a project-less stub → the daemon starts in
   // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
   // ensureSessionCreated), so this only creates.
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => {
+  //
+  // A hosted agent (the Codecast assistant) runs in codecast's backend, so its
+  // create carries no project, machine, model or cloud placement: only the
+  // stub id and, when the caller has it, the first message, which the server
+  // queues in the same transaction (`firstMessage.clientId` is the optimistic
+  // bubble's, so the two reconcile).
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string; firstMessage?: { content: string; clientId: string } }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
+    const agentType = cur?.agent_type || fallback?.agentType || defaultAgentType(s);
+    if (isHostedAgentType(agentType)) {
+      // Someone whose first conversation, with no machine, goes to the hosted
+      // assistant is in hosted mode from then on, as /welcome leaves them.
+      // Read here, the one create every entry point reaches (the composer,
+      // Ctrl+N, the palette, the context composer, the self-heal), and before
+      // the caller tracks this create, which would end the first run.
+      if (firstRun(s) === "yes") s.updateClientUI({ lane: "simple" });
+      return s.createSession({
+        agent_type: agentType,
+        session_id: stubId,
+        ...(fallback?.firstMessage
+          ? { first_message: fallback.firstMessage.content, first_message_client_id: fallback.firstMessage.clientId }
+          : {}),
+      });
+    }
     const projectPath = cur?.project_path ?? fallback?.projectPath;
     const gitRoot = cur?.git_root ?? fallback?.gitRoot ?? projectPath;
-    const agentType = cur?.agent_type || fallback?.agentType || "claude_code";
     // Fold in the blank session's chosen model/effort. The launch picker stamps
     // these on the stub row (setConversationModel) with no server round-trip;
     // this is where the choice reaches the daemon's launch flags. The row stores
@@ -11025,6 +11090,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
       for (const key in fields) {
         if (stripSet?.has(key)) continue;
         if (!Object.is(row[key], fields[key])) row[key] = fields[key];
+      }
+      // The overlay carries the facts a send is settled by (updated_at, the
+      // status), and a finished conversation may get no base row after it:
+      // a send still on its way is read against them here too, or it waits
+      // for the minute coverage pass with its row reading as working.
+      if (field === "sessions" && pendingRowsUnsettled(this.pendingMessages[id])) {
+        reconcilePendingSendForSession(this.pendingMessages, id, row, this.currentSessionId, this.messages[id]);
       }
     }
   }),
@@ -11847,7 +11919,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // path is set (updateSessionProject) the retry re-creates normally. The
     // automatic heal-on-load already filters pathless stubs out, so this only
     // gates the user-triggered awaitConvexId retry.
-    if (!stub.project_path && !stub.git_root) {
+    // A hosted assistant conversation has no folder by design.
+    if (!stub.project_path && !stub.git_root && !isHostedAgentType(stub.agent_type)) {
       return Promise.reject(new Error("Pick a folder for this session before sending"));
     }
     // Route through createSessionFromStub (not a bare createSession) so the live
@@ -13895,10 +13968,15 @@ const serverSnapshot = () => useInboxStore.getInitialState();
 
 export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): InboxStoreState {
   const prevRef = useRef<{ deps: any[]; state: InboxStoreState } | null>(null);
+  let lastReadState: InboxStoreState | undefined;
+  let lastReadSnapshot: InboxStoreState | undefined;
   return useSyncExternalStore(useInboxStore.subscribe, () => {
     const state = useInboxStore.getState();
+    if (state === lastReadState && lastReadSnapshot) return lastReadSnapshot;
     const prev = prevRef.current;
     const snapshot = resolveTrackedStoreSnapshot(state, deps, prev);
+    lastReadState = state;
+    lastReadSnapshot = snapshot.state;
     if (snapshot === prev) return prev.state;
     const next = snapshot.deps;
     if (process.env.NODE_ENV !== "production" && prev) {

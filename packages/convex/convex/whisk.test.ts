@@ -128,7 +128,7 @@ describe("connect", () => {
   test("a forged, expired or missing state, a decline, or a refused code each say why and store nothing", async () => {
     const { t, me, as } = await setup();
     const forged = await signStateWith("not-the-secret", { user_id: me, ts: Date.now(), return_to: "/welcome" });
-    expect(await as(me).action(whisk.finishConnect, { state: forged, code: "c" })).toMatchObject({ ok: false, reason: "bad_state", return_to: "/simple/connections" });
+    expect(await as(me).action(whisk.finishConnect, { state: forged, code: "c" })).toMatchObject({ ok: false, reason: "bad_state", return_to: "/settings/integrations" });
     const stale = await stateFor(me, "/welcome", Date.now() - 31 * 60_000);
     expect(await as(me).action(whisk.finishConnect, { state: stale, code: "c" })).toMatchObject({ ok: false, reason: "bad_state" });
     expect(await as(me).action(whisk.finishConnect, { code: "c" })).toMatchObject({ ok: false, reason: "bad_state" });

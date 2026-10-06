@@ -1,4 +1,5 @@
 import { getUserOrToken } from "./lib/auth";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { mutation, query, action, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -269,6 +270,10 @@ export const createTeam = mutation({
       invite_code_expires_at: now + sevenDaysInMs,
       client_key: args.client_key,
     });
+    await recordAuthorityEvent(ctx, {
+      kind: "team_member_added", actor_user_id: authUserId, team_id: teamId, target_user_id: authUserId,
+      detail: { after: { role: "admin", how: "Created the team" } },
+    });
     await ctx.db.insert("team_memberships", {
       user_id: authUserId,
       team_id: teamId,
@@ -289,7 +294,7 @@ export const createTeam = mutation({
  * rides the change log), their first team pointer if they have none, and the
  * team activity line. Idempotent.
  */
-async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string): Promise<void> {
+async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string, actor: Id<"users"> = userId): Promise<void> {
   const existingMembership = await ctx.db
     .query("team_memberships")
     .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", team._id))
@@ -301,6 +306,10 @@ async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, 
     team_id: team._id,
     role: "member",
     joined_at: now,
+  });
+  await recordAuthorityEvent(ctx, {
+    kind: "team_member_added", actor_user_id: actor, team_id: team._id, target_user_id: userId,
+    detail: { after: { role: "member", how } },
   });
   const user = await ctx.db.get(userId);
   if (!user?.team_id) {
@@ -638,12 +647,19 @@ export async function endMembership(
   ctx: { db: any },
   userId: Id<"users">,
   teamId: Id<"teams">,
+  actor: Id<"users"> = userId,
 ): Promise<void> {
   const rows = await ctx.db
     .query("team_memberships")
     .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
     .collect();
   for (const row of rows) await ctx.db.delete(row._id);
+  if (rows.length) {
+    await recordAuthorityEvent(ctx, {
+      kind: "team_member_removed", actor_user_id: actor, team_id: teamId, target_user_id: userId,
+      detail: { before: { role: rows[0].role, visibility: rows[0].visibility } },
+    });
+  }
   await purgeChatMembership(ctx as any, userId, teamId);
   const mappings = await ctx.db
     .query("directory_team_mappings")
@@ -702,7 +718,7 @@ export async function retireTeam(
     deleted_members: roster,
     invite_code_expires_at: now,
   });
-  for (const m of memberships) await endMembership(ctx, m.user_id, team._id);
+  for (const m of memberships) await endMembership(ctx, m.user_id, team._id, actorId);
   // Mappings owned by non-members (a user removed earlier, a mapping created
   // before their membership ended) would otherwise outlive the team.
   const strays = await ctx.db
@@ -854,7 +870,7 @@ export const removeMember = mutation({
     }
     const memberUser = await ctx.db.get(args.member_user_id);
     const team = await ctx.db.get(teamId);
-    await endMembership(ctx, args.member_user_id, teamId);
+    await endMembership(ctx, args.member_user_id, teamId, authUserId);
     const memberName = memberUser?.name || memberUser?.email || "A member";
     await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
       team_id: teamId,
@@ -1039,6 +1055,10 @@ export const setMemberRole = mutation({
       }
     }
     await ctx.db.patch(memberMembership._id, { role: args.role });
+    await recordAuthorityEvent(ctx, {
+      kind: "team_member_role_changed", actor_user_id: authUserId, team_id: teamId, target_user_id: args.member_user_id,
+      detail: { before: { role: memberMembership.role }, after: { role: args.role } },
+    });
     const memberUser = await ctx.db.get(args.member_user_id);
     if (memberUser?.team_id?.toString() === teamId.toString()) {
       await ctx.db.patch(args.member_user_id, { role: args.role });
@@ -1084,7 +1104,7 @@ export const removeFromTeam = mutation({
     }
     const userToRemove = await ctx.db.get(args.user_id);
     const team = await ctx.db.get(args.team_id);
-    await endMembership(ctx, args.user_id, args.team_id);
+    await endMembership(ctx, args.user_id, args.team_id, authUserId);
     const memberName = userToRemove?.name || userToRemove?.email || "A member";
     await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
       team_id: args.team_id,
@@ -1448,6 +1468,10 @@ export async function applyMembershipVisibilityChange(
   }
   const next = nextMembershipVisibility(membership, visibility, mode, Date.now());
   await ctx.db.patch(membership._id, next);
+  await recordAuthorityEvent(ctx, {
+    kind: "team_member_visibility_changed", actor_user_id: userId, team_id: teamId, target_user_id: userId,
+    detail: { before: { visibility: membership.visibility }, after: { visibility, mode } },
+  });
   await invalidateForMember(ctx, userId, teamId);
   return next;
 }

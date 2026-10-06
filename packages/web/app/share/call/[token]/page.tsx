@@ -167,6 +167,7 @@ function SharedCallBody({
             onTime={media.onTime}
             missedMs={missed}
             onJump={seekTo}
+            segments={call.segments}
           />
         </div>
       )}

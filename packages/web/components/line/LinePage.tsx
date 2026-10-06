@@ -37,7 +37,7 @@ import { CustomizedLineChip } from "./CustomizedLineChip";
 import { DecisionCompactCard } from "../decisions/DecisionCompactCard";
 import { edgeAttrs, useScrollEdges } from "./useScrollEdges";
 import { cardAnswerIndexes, GoalChip } from "../decisions/ChangeCardView";
-import { evalsSenseHref } from "../evals/evalsPaths";
+import { codecastEvalsPaths } from "../evals/evalsPaths";
 import "./line.css";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
@@ -159,7 +159,7 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
   // Keyboard: one cursor over the whole flow, in render order.
   const hrefs: Record<StationKey, string[]> = useMemo(() => ({
     // The evals finder's row opens the Evals area, where the drop can be read and attributed.
-    sense: senseRows.map((s) => { if (s.source === "evals") return evalsSenseHref(s.newest?.subject); const t = s.newest ? taskById.get(s.newest.task_id) : undefined; return t ? taskHref(t) : line.href; }),
+    sense: senseRows.map((s) => { if (s.source === "evals") return codecastEvalsPaths.senseHref(s.newest?.subject); const t = s.newest ? taskById.get(s.newest.task_id) : undefined; return t ? taskHref(t) : line.href; }),
     causes: [...flow.causes.items, ...(parkedOpen ? flow.causes.parked : [])].map((r) => taskHref(r.task)),
     build: buildBlocks.flatMap((g) => g.rows).map((b) => runHref(b.run._id)),
     awaiting: flow.awaiting.items.map((d) => decisionHref(d)),

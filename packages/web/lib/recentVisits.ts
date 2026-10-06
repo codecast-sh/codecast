@@ -4,7 +4,7 @@
 // left the store — so renames never leave the rail stale (lib/liveEntities
 // philosophy). Shared by the header RecentlyViewedMenu, the Ctrl+Tab
 // RecentSwitcher and the command palette's "Recently Visited" group.
-import { pathLabel } from "./pathLabel";
+import { modePathLabel, pathLabel } from "./pathLabel";
 import { channelDisplayName } from "./chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { cleanTitle } from "./conversationProcessor";
@@ -140,7 +140,7 @@ export function resolveVisit(
   }
   const path = v.path ?? v.key.slice("page:".length);
   const obj = resolvePageObject(state, path);
-  const title = obj.title ?? v.label ?? pathLabel(path);
+  const title = obj.title ?? modePathLabel(path, state.clientState?.ui) ?? v.label ?? pathLabel(path);
   return { key: v.key, kind: v.kind, ts: v.ts, title, objectType: obj.objectType, entity: obj.entity, path };
 }
 

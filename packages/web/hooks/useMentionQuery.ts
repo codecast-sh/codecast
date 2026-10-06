@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../lib/mentionItem";
-import { memberHandle } from "@codecast/shared/chat";
+import { matchHandle, memberHandle } from "@codecast/shared/chat";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
@@ -200,7 +200,41 @@ export function mentionItemMatches(m: MentionItem, query: string): boolean {
   );
 }
 
+/** What a chat composer's @ may offer beyond the shared match: chat names
+ *  people by handle and has no labels. A bare @ belongs to the room (its
+ *  people, its roles, what the thread already cites); once anything is typed,
+ *  sessions compete by title like every other mention surface, so a session
+ *  is reachable by name and not only by its short id. */
+export function chatMentionOffers(m: MentionItem, query: string): boolean {
+  if (m.type === "label" || (m.type === "person" && !m.handle)) return false;
+  if (m.type === "session" && !m.contextAt && !query.trim()) return false;
+  return true;
+}
+
+const mentionFilterCache = new WeakMap<MentionItem[], { query: string; personify: boolean; chat: boolean; result: MentionItem[] }>();
+
+export function filterMentionItems(items: MentionItem[], query: string, chat = false): MentionItem[] {
+  const q = query.trim().toLowerCase();
+  const personify = personifyAllNow();
+  const previous = mentionFilterCache.get(items);
+  const source = previous && previous.personify === personify && previous.chat === chat && previous.query && q.startsWith(previous.query)
+    ? previous.result : items;
+  const result = source.filter(item => (!chat || chatMentionOffers(item, q)) && mentionItemMatches(item, q));
+  mentionFilterCache.set(items, { query: q, personify, chat, result });
+  return result;
+}
+
+let previousMentionInputs: unknown[] = [];
+let previousMentionItems: MentionItem[] = [];
+
 export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, scope: MentionScope): MentionItem[] {
+  const personify = personifyAllNow();
+  const inputs = [
+    scope.kind, scope.kind === "team" ? scope.teamId : scope.kind === "personal" ? scope.userId : "",
+    s.mentionIndex, s.tasks, s.docs, s.plans, s.sessions, s.teamMembers, s.chatSlackPeople,
+    s.buckets, s.bucketAssignments, s.recentVisits, s._lastViewedAt, personify,
+  ];
+  if (inputs.length === previousMentionInputs.length && inputs.every((value, i) => value === previousMentionInputs[i])) return previousMentionItems;
   const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
   const merged = (windowRows: Record<string, any>, storeRows: Record<string, any>) => {
     const rows = new Map<string, any>();
@@ -220,10 +254,12 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       };
     }),
     // People in the team's Slack workspace with no codecast account. One
-    // already matched to a teammate is that teammate's own entry above.
+    // already matched to a teammate is that teammate's own entry above, and so
+    // is one whose handle a teammate answers to: the send resolves the roster
+    // first and reaches Slack only when no teammate matches.
     ...(scope.kind === "team"
       ? Object.values(s.chatSlackPeople || {})
-        .filter((p) => p.team_id === scope.teamId && !p.codecast_user_id && !!p.handle)
+        .filter((p) => p.team_id === scope.teamId && !p.codecast_user_id && !!p.handle && !matchHandle(s.teamMembers || [], p.handle))
         .map((p) => ({
           id: `slack:${p.slack_user_id}`, type: "person", label: p.name,
           sublabel: `@${p.handle}`, image: p.avatar_url ?? undefined,
@@ -252,7 +288,10 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       identity: identityRowOf(sess as never), worker: !!sess.is_subagent || undefined,
     })),
   ];
-  return mergeMentionSuggestions(items, [], mentionViewTimes(s), Infinity, "", personifyAllNow());
+  const result = mergeMentionSuggestions(items, [], mentionViewTimes(s), Infinity, "", personify);
+  previousMentionInputs = inputs;
+  previousMentionItems = result;
+  return result;
 }
 
 export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
@@ -262,7 +301,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
   return useCallback(async (rawQ: string): Promise<MentionItem[]> => {
     const s = useInboxStore.getState();
     return mergeMentionSuggestions(
-      buildMentionItems(s, kind === "team" ? { kind, teamId } : kind === "personal" ? { kind, userId } : { kind }).filter((item) => mentionItemMatches(item, rawQ)),
+      filterMentionItems(buildMentionItems(s, kind === "team" ? { kind, teamId } : kind === "personal" ? { kind, userId } : { kind }), rawQ),
       [], mentionViewTimes(s), rawQ.trim() ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE, rawQ, personifyAllNow(),
     );
   }, [kind, teamId, userId]);

@@ -1,0 +1,30 @@
+# doc references: the paths a doc names that do not exist in the repo.
+#
+# THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
+# fix. Point the doc at the file that exists, or drop the path from the doc,
+# then delete its line here. A line whose reference is no longer dead fails
+# the test until it is deleted.
+#
+# Prune it (drops lines that are no longer dead, adds nothing):
+#   cd packages/shared && RATCHET_WRITE=prune bun test ratchet/docRefs.guard.test.ts
+AGENTS.md packages/mobile/lib/x
+docs/architecture/evals-converge.md packages/evals/src/analysis/stats.test.ts
+docs/architecture/evals-converge.md packages/evals/src/core/verdict.ts
+docs/architecture/evals-converge.md packages/evals/src/evalResult.ts
+docs/architecture/evals-converge.md packages/evals/src/stats.ts
+docs/architecture/evals-converge.md packages/shared/random/index.ts
+docs/architecture/evals-converge.md packages/web/components/evals/tokens.drift.test.ts
+docs/architecture/evals-converge.md scripts/ci/typecheck.sh
+docs/architecture/evals-home.md packages/convex/scripts/settle-eval.ts
+docs/architecture/evals-home.md packages/convex/scripts/suggest-eval.ts
+docs/architecture/evals-home.md packages/evals/src/x.ts
+docs/architecture/evals-ui.md scripts/sim.ts
+docs/architecture/hosted-assistant.md scripts/gated-push.ts
+docs/architecture/multiplayer-sim-harness.md packages/convex/.env.local
+docs/architecture/multiplayer-sim-harness.md scripts/sim.ts
+docs/architecture/org-hire.md .codecast/org-templates/releases
+docs/architecture/org-hire.md .codecast/packs/growth.toml
+docs/architecture/sync-sim.md packages/convex/.env.local
+docs/architecture/sync-sim.md scripts/rig/stack.mjs
+docs/architecture/union-ops-role.md .github/workflows/deploy.yml
+docs/architecture/union-ops-role.md scripts/codecast-signing-key.ts

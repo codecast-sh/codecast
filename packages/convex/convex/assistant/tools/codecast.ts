@@ -24,7 +24,7 @@ import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks"
 import { internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import { MEMORY_DOC_TITLE, TASK_LIST_FILTERS } from "./workspace";
-import { instant } from "./calendar";
+import { instant, NEVER, WHOLE_TOOL, type AllowScopes } from "@platform/assistant";
 
 /** The sourced codecast tools whose results hold only text the person
  *  approved: the memory doc, which grows through remember's gate or an
@@ -33,6 +33,17 @@ import { instant } from "./calendar";
  *  can hold text others wrote (a synced issue, a pasted email) or that the
  *  assistant wrote without asking while mail was in front of it. */
 export const PERSON_APPROVED_TOOLS: ReadonlySet<string> = new Set(["recall", "list_routines"]);
+
+/** How an Always allow narrows for each codecast tool (@platform/assistant
+ *  rules). A routine's prompt comes back later as the person's own words, and
+ *  docs keep no old versions, so both always ask; appending to a doc and
+ *  recall stay in the person's own workspace, so one rule covers the tool. */
+export const CODECAST_SCOPES: AllowScopes = {
+  schedule_routine: () => NEVER,
+  write_doc: () => WHOLE_TOOL,
+  replace_doc: () => NEVER,
+  recall: () => WHOLE_TOOL,
+};
 
 /** What the codecast tools need from the turn action. */
 export interface CodecastDeps {
@@ -100,7 +111,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
     }),
     defineTool({
       name: "read_doc",
-      label: "Read a doc",
+      label: "Read a note",
       description: "Read one of the person's own docs in codecast, by id or by words from its title. Returns the best match in full and names the other matches.",
       parameters: Type.Object({
         id: Type.Optional(Type.String()),
@@ -120,7 +131,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
     }),
     defineTool({
       name: "write_doc",
-      label: "Write a doc",
+      label: "Write a note",
       description:
         "Write in the person's own codecast docs. Without an id it creates a new doc (a title is needed). With an id it adds the text to the end of that doc. " +
         "To rewrite a doc's existing text, or to add to a doc shared by link, use replace_doc.",
@@ -137,7 +148,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
     }),
     defineTool({
       name: "replace_doc",
-      label: "Rewrite a doc",
+      label: "Rewrite a note",
       description: "Replace the whole text of one of the person's own codecast docs, by its id. The old text is not kept, so the person approves the new text first.",
       parameters: Type.Object({
         id: Type.String(),

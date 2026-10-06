@@ -8,7 +8,7 @@ import React from "react";
 import { ChevronDown, ChevronRight, ChevronUp, ExternalLink, Moon, Play, Share2, Square } from "lucide-react";
 import type { ResourceProcess } from "@codecast/shared/contracts";
 import { cn } from "../../lib/utils";
-import { KIND_LABEL, fmtAgo, fmtBytes, fmtCpu, projectName, type Sort, type SortBy, type TableRow, type Usage } from "./resourceModel";
+import { KIND_LABEL, fmtAgo, fmtBytes, fmtCpu, outsideLabel, projectName, type Sort, type SortBy, type TableRow, type Usage } from "./resourceModel";
 import type { ResourceActions, ResourceMachine, ResourceSession, ResourceSessionState } from "./types";
 
 const STATE_STYLE: Record<ResourceSessionState, { dot: string; label: string }> = {
@@ -51,6 +51,8 @@ function Head({ col, sort, onSort, right, className, title, children }: { col: S
   );
 }
 
+const outsideCount = (r: TableRow) => r.processes.filter((p) => p.detached).length;
+
 function Disabled({ why, children }: { why: string; children: React.ReactNode }) {
   return <span title={why} className="inline-flex cursor-not-allowed items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-sol-text-dim opacity-60">{children}</span>;
 }
@@ -76,7 +78,12 @@ function ProcessTable({ processes, totals, remainder, machines }: { processes: R
           <span className="tabular-nums text-sol-text-dim">{p.pid}</span>
           <span className="flex min-w-0 items-center gap-1">
             <span className="truncate" title={p.name}>{p.name}</span>
-            {p.detached && <span className="shrink-0 rounded border border-sol-border/40 px-1 text-[9px] text-sol-text-dim" title="Started by this session outside its process tree (backgrounded or reparented). It keeps running here if the session moves.">detached</span>}
+            {p.detached && (
+              <span
+                className="shrink-0 rounded border border-sol-orange/40 px-1 text-[9px] text-sol-orange"
+                title={p.detached === "tmux" ? "Started by this session in a tmux session it created, outside its own process tree. Stopped when the session moves." : "Started by this session and left running outside its own process tree (backgrounded or reparented). Stopped when the session moves."}
+              >{outsideLabel(p.detached)}</span>
+            )}
           </span>
           <span className="hidden text-sol-text-muted sm:block">{KIND_LABEL[p.kind].toLowerCase()}</span>
           <span className={cn("text-right tabular-nums", totals.cpu > 0 && p.cpu / totals.cpu > 0.3 && "text-sol-blue")}>{fmtCpu(p.cpu)}</span>
@@ -183,7 +190,7 @@ export function ResourceTable({ rows, sharedRows, totals, machines, now, selecte
               {s?.agentType && !/claude/i.test(s.agentType) && <span className="shrink-0 rounded border border-sol-border/40 px-1 text-[9px] text-sol-text-dim">{s.agentType}</span>}
             </span>
             <span className="ml-[18px] block truncate text-[10px] text-sol-text-dim">
-              {s ? [s.shortId, projectName(s.projectPath), showMachine ? machineName(r.deviceIds[0]) : undefined].filter(Boolean).join(" · ")
+              {s ? [s.shortId, projectName(s.projectPath), showMachine ? machineName(r.deviceIds[0]) : undefined, outsideCount(r) ? `${outsideCount(r)} outside its tree` : undefined].filter(Boolean).join(" · ")
                 : r.sublabel ?? (r.children ? `${r.children.length} ${r.children.length === 1 ? "row" : "rows"}${showMachine && r.type !== "machine" ? ` · ${r.deviceIds.map(machineName).join(", ")}` : ""}` : "")}
             </span>
           </button>

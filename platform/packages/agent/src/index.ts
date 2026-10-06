@@ -6,7 +6,9 @@
  */
 export { defineTool, runTool, toAgentTool } from "./tool";
 export type { RunToolContext, Tool, ToolContent, ToolContext, ToolMeter, ToolOutput, ToolRisk } from "./tool";
-export { DEFAULT_MAX_TOKENS, MAX_DEADLINE_MS, MIN_OUTPUT_TOKENS, THINKING_BUDGETS, declineText, gateByRisk, planOutput, runAssistant } from "./run";
+export { DEFAULT_MAX_TOKENS, MAX_DEADLINE_MS, MIN_OUTPUT_TOKENS, THINKING_BUDGETS, gateByRisk, planOutput, runAssistant } from "./run";
+export { declineText, notRunText, toolResultOutcome } from "./outcome";
+export type { ToolResultOutcome } from "./outcome";
 export type {
   Gate,
   GateDecision,

@@ -8,8 +8,9 @@ import {
   COMMAND_KEYS,
   LINE_PROFILE_DEFAULTS,
   LINE_PROFILE_REL_PATH,
-  hasLineControlChars,
-  isLineCount,
+  LINE_VALUE_KINDS,
+  parseLineValue,
+  type LineValueKind,
   lineProfileNotes,
   type LineFinderInput,
   type LineProfileEdit,
@@ -20,7 +21,7 @@ import { DAEMON_COMMAND_TTL_MS, deviceDisplayName, humanizeConvexError } from "@
 import { lineProjectParam } from "./line/lineStations";
 import { DISPATCH_REFUSED } from "./sessionCommands";
 
-export type LineFieldKind = "text" | "int" | "list";
+export type LineFieldKind = LineValueKind;
 
 export type LineField = {
   /** The dotted key the loader and the daemon edit name. */
@@ -34,6 +35,8 @@ export type LineField = {
 };
 
 export type LineSection = { id: "listens" | "holds" | "checks" | "limits"; title: string; what: string; fields: LineField[] };
+/** A field as written below; its kind comes from the shared key table. */
+type FieldDecl = Omit<LineField, "kind">;
 
 type FieldWords = Pick<LineField, "what" | "placeholder" | "unit">;
 
@@ -50,36 +53,38 @@ const CAPS_FIELDS: Record<(typeof CAPS_KEYS)[number], FieldWords & { label: stri
   cards: { label: "Cards", unit: "open", what: "The line starts no new build while this many cards wait on you." },
 };
 
-/** The profile's sections in reading order. Finders (Listens to) render their own rows. */
-export const LINE_SECTIONS: LineSection[] = [
+/** The sections as written; LINE_SECTIONS below adds each field's kind. Finders (Listens to) render their own rows. */
+const SECTION_DECLS: Array<Omit<LineSection, "fields"> & { fields: FieldDecl[] }> = [
   { id: "listens", title: "Listens to", what: "Finders: the automatic sources that file problems into this line, like an error tracker or the evals, and when each last filed.", fields: [] },
   {
     id: "holds",
     title: "Holds work to",
     what: "What the review station reads before it passes a change.",
     fields: [
-      { key: "principles", label: "Principles", kind: "list", what: "This project's own principles files, read beside the shared set.", placeholder: "docs/principles.md" },
-      { key: "prompting", label: "Prompting standard", kind: "text", what: "The standard a change to a prompt is held to.", placeholder: LINE_PROFILE_DEFAULTS.prompting },
+      { key: "principles", label: "Principles", what: "This project's own principles files, read beside the shared set.", placeholder: "docs/principles.md" },
+      { key: "prompting", label: "Prompting standard", what: "The standard a change to a prompt is held to.", placeholder: LINE_PROFILE_DEFAULTS.prompting },
     ],
   },
   {
     id: "checks",
     title: "Checks a change",
     what: "The commands each station runs on a change before it reaches you.",
-    fields: COMMAND_KEYS.map((k) => ({ key: `commands.${k}`, kind: "text" as const, ...COMMAND_FIELDS[k] })),
+    fields: COMMAND_KEYS.map((k) => ({ key: `commands.${k}`, ...COMMAND_FIELDS[k] })),
   },
   {
     id: "limits",
     title: "Limits",
     what: "How big a change may be, how long a shipped one is watched, and how many cards may wait on you.",
     fields: [
-      { key: "size_budget", label: "Size budget", kind: "int", unit: "lines", what: "A change larger than this is split before it builds." },
-      { key: "watch_days", label: "Watch", kind: "int", unit: "days", what: "A shipped cause stays watched this long; a repeat of its signal reopens it." },
-      ...CAPS_KEYS.map((k) => ({ key: `caps.${k}`, kind: "int" as const, ...CAPS_FIELDS[k] })),
+      { key: "size_budget", label: "Size budget", unit: "lines", what: "A change larger than this is split before it builds." },
+      { key: "watch_days", label: "Watch", unit: "days", what: "A shipped cause stays watched this long; a repeat of its signal reopens it." },
+      ...CAPS_KEYS.map((k) => ({ key: `caps.${k}`, ...CAPS_FIELDS[k] })),
     ],
   },
 ];
 
+/** The profile's sections in reading order, each field's kind read from the shared key table. */
+export const LINE_SECTIONS: LineSection[] = SECTION_DECLS.map((s) => ({ ...s, fields: s.fields.map((f) => ({ ...f, kind: LINE_VALUE_KINDS[f.key] })) }));
 export const LINE_FIELDS: LineField[] = LINE_SECTIONS.flatMap((s) => s.fields);
 
 type Facts = Partial<PublishedLineProfile> | null | undefined;
@@ -121,18 +126,11 @@ export function editForField(field: LineField, text: string, lp: Facts): { edit:
   const current = lineValue(lp, field.key);
   // Clearing a value the file sets puts back the default; a default is already that.
   if (!trimmed) return { edit: lineSource(lp, field.key) === "file" ? { op: "remove", key: field.key } : null };
-  if (field.kind === "int") {
-    const n = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
-    if (!isLineCount(n)) return { error: "A whole number, 1 or more" };
-    return { edit: n === current ? null : { op: "set", key: field.key, value: n } };
-  }
-  if (field.kind === "list") {
-    const items = trimmed.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
-    const same = Array.isArray(current) && current.length === items.length && current.every((x, i) => x === items[i]);
-    return { edit: same ? null : { op: "set", key: field.key, value: items } };
-  }
-  if (hasLineControlChars(trimmed)) return { error: "Control characters cannot go in the file" };
-  return { edit: trimmed === current ? null : { op: "set", key: field.key, value: trimmed } };
+  const parsed = parseLineValue(field.key, trimmed);
+  if ("error" in parsed) return parsed;
+  const v = parsed.value;
+  const same = Array.isArray(v) ? Array.isArray(current) && current.length === v.length && current.every((x, i) => x === v[i]) : v === current;
+  return { edit: same ? null : { op: "set", key: field.key, value: v } };
 }
 
 /** The dotted keys an edit touches, for its pending state and a refusal's restore. */

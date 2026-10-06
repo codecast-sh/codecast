@@ -195,6 +195,26 @@ confirmed pane absence and unchanged reservation. Wake clears the parked state.
 These checks reduce risk; they do not justify a zero-risk claim about concurrent
 OS and backend observations.
 
+### Sessions that die mid-work are revived
+
+An agent process can die under a session for reasons outside the session: a
+tmux server restart takes every pane, a crash takes one. When it dies mid-turn
+or while waiting on its own background work (a workflow, a background command,
+a monitor), that work dies too. The stale-status watchdog used to mark such a
+session completed, and it stayed stopped until a person typed "continue".
+
+Now the watchdog revives it instead (`packages/cli/src/midWorkRevive.ts`). Once
+the process table confirms the agent is gone, a session whose last status was
+working, thinking, compacting or waiting gets a system message queued to its
+conversation; delivery resumes it, and the agent relaunches what was stopped.
+It stays stopped when the person killed or dismissed it, interrupted the turn,
+when the turn ended on a usage limit (the account recovery chain owns those),
+when the status is over 12 hours old, or after three revives in six hours.
+Each pass revives at most three sessions, so a mass death drains over a few
+passes instead of resuming the whole fleet at once. Every decision is logged
+as a `Watchdog:` line in `daemon.log`, and the budget lives in
+`~/.codecast/revives.json` so daemon restarts do not reset it.
+
 ### Release candidate parking fallback
 
 Historical: `4c84473f9` sits on side branches and never landed on main. Main

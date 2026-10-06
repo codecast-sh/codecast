@@ -47,7 +47,9 @@ import { AppPopOutButton } from "./desktop/AppPopOutButton";
 import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
+import { ShellUsageMeter } from "./plan/UsageMeter";
 import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "./sidebar/SidebarNav";
+import { useSurfaceMode } from "../lib/surfaces";
 import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -600,6 +602,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // The workspace's agent is its root role (org-staffing.md S22): the rail
   // shows it by its name and face, and the entry opens its page.
   const rootAgent = useRootAgent();
+  // Hosted mode's rows and words (lib/surfaces.ts).
+  const surfaceMode = useSurfaceMode();
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -966,6 +970,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           />
         )}
         <SidebarNavView
+          mode={surfaceMode}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
@@ -1220,6 +1225,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       <div data-sidebar-scroll className="flex-1 overflow-y-auto scrollbar-auto pt-3 sm:pt-4">
         {sidebarContent}
       </div>
+      {/* Hosted mode's quiet usage meter: the month so far, opening Plan. */}
+      {!isNarrow && <ShellUsageMeter />}
       {offerNativeApp && nativeApp && !isNarrow && (
         <a
           href={NATIVE_APP_LINKS[nativeApp]}

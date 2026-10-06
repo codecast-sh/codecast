@@ -88,7 +88,12 @@ ref, quote, when). Lines carry stable ids, `ex-<project>-<n>`, active or
 retired. A proposal applies on its own when it only adds lines and each line
 quotes, with its date, words the record shows a person said: a chat line they
 typed, a decision they answered, what they said on a call (the server checks
-the quote against that record). Any other change waits for the project's
+the quote against that record), and the line shares at least two claim words
+with that quote (`followsFromQuote`). The shared words are a floor: they stop
+an invented line from riding in on an unrelated real quote, and they cannot
+tell a faithful line from one that reuses the quote's words to say something
+else, so every version records how it applied (`how: "auto"` or `"person"`)
+and a person can retire any line of it. Any other change waits for the project's
 person, as a card in their queue whose Apply lands it. `cast expectations show|propose|apply|drop`
 is the CLI; `/cli/expectations/brief` is what a judge reads (the active lines
 with ids under the version to cite). The line template's

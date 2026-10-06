@@ -1,15 +1,16 @@
 // The Evals foundation (U6): the fixture world answers every route in the
 // contract with contract-shaped values, the store turns each way the evals can
-// be out of reach into the right connection state, the shell paints the right
-// screen for each, and the chart parts draw what they say they draw. The
-// shell reads the app only through its host (host.tsx), which the last block
-// holds: another host's router and screens take over, and the shell's sources
-// carry no import of the app, no utility class and no --sol-* token.
+// be out of reach into the right connection state, the shared shell
+// (@platform/evals/react) paints codecast's screen for each through codecast's
+// host, and the chart parts draw what they say they draw. The last block holds
+// the seam: another host's router and screens take over, no copy of a shared
+// view lives in codecast, and codecast's own sheets in the area read only the
+// --ev-* tokens the shared tokens.css declares.
 
 import { afterAll, describe, expect, it } from "bun:test";
 import { act } from "react";
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { JSDOM } from "jsdom";
 import { formatUsd } from "@codecast/shared/render/changeCardHtml";
 import { EVALS_ROUTE_KEYS, matchEvalsRoute, runRowProblems, type EvalsRouteKey } from "@codecast/shared/contracts/evalsApi";
@@ -30,15 +31,14 @@ const restoreGlobals = replaceGlobals({
 });
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
-const { useEvalsStore, classifyEvalsFailure, evalsCacheKey } = await import("../../../store/evalsStore");
-const { EvalsRequestError, evalsRequest } = await import("../../../lib/evals/client");
+const { useEvalsStore, classifyEvalsFailure, evalsCacheKey, evalsRequest, evalsResourceCache, onEvalsFailure } = await import("../../../store/evalsStore");
 const { fixtureTransport, readEvalsFixtureMode } = await import("../../../lib/evals/fixtureTransport");
-const { EvalsShell } = await import("../EvalsShell");
-const { ScoreStrip } = await import("../charts/ScoreStrip");
-const { Well } = await import("../charts/Well");
-const { VerdictGlyph, SeparationMark, ScoreBar, ProvenanceChips, EvalsLink } = await import("../parts");
-const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
-const { usd } = await import("../format");
+const { EvalsShell } = await import("@platform/evals/react");
+const { ScoreStrip } = await import("@platform/evals/react");
+const { Well } = await import("@platform/evals/react");
+const { VerdictGlyph, SeparationMark, ScoreBar, ProvenanceChips, EvalsLink } = await import("@platform/evals/react");
+const { codecastEvalsHost, CodecastEvalsProvider } = await import("../host");
+const { usd, EvalsRequestError, createEvalsClient } = await import("@platform/evals/client");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -52,7 +52,7 @@ async function mount(node: React.ReactNode) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(<MemoryRouter initialEntries={["/evals"]}>{node}</MemoryRouter>));
+  await act(async () => root.render(<MemoryRouter initialEntries={["/evals"]}><CodecastEvalsProvider>{node}</CodecastEvalsProvider></MemoryRouter>));
   return { container, unmount: () => act(async () => root.unmount()) };
 }
 
@@ -155,13 +155,15 @@ describe("the store", () => {
   });
 
   it("caches an answer by its request and moves the area when the child crashes mid-session", async () => {
+    // The wiring the area's provider (CodecastEvalsProvider) hands its client: the store's cache and its failure rule.
+    const client = createEvalsClient<import("@codecast/shared/contracts/evalsApi").EvalsRoutes>({ transport: () => useEvalsStore.getState().transport, cache: evalsResourceCache, onFailure: onEvalsFailure });
     useEvalsStore.setState({ connection: "connected", transport: await fixtureTransport("on", { latencyMs: 0 }), resources: {} });
-    await useEvalsStore.getState().load("GET /surface/:id", { params: { id: "settle" } });
+    await client.load("GET /surface/:id", { params: { id: "settle" } });
     const res = useEvalsStore.getState().resources["GET /surface/settle"];
     expect(res.loading).toBe(false);
     expect((res.data as { surface: { id: string } }).surface.id).toBe("settle");
     useEvalsStore.setState({ transport: await fixtureTransport("child-crashed", { latencyMs: 0 }) });
-    await useEvalsStore.getState().load("GET /overview", {});
+    await client.load("GET /overview", {});
     expect(useEvalsStore.getState().connection).toBe("child-crashed");
     expect(useEvalsStore.getState().stderr?.length).toBeGreaterThan(0);
   });
@@ -175,7 +177,7 @@ describe("the shell", () => {
   ];
   for (const s of states) {
     it(`paints the ${s.connection} screen`, async () => {
-      useEvalsStore.setState({ connection: s.connection, unreachableReason: s.unreachableReason, unreachableDetail: "detail line", stderr: s.connection === "child-crashed" ? ["error: Cannot find module"] : null, health: null });
+      useEvalsStore.setState({ connection: s.connection, unreachableReason: s.unreachableReason, unreachableDetail: "detail line", stderr: s.connection === "child-crashed" ? ["error: Cannot find module"] : null });
       const { container, unmount } = await mount(<EvalsShell view={{ view: "home", cadence: null }}><div data-child>child</div></EvalsShell>);
       expect(container.textContent).toContain(s.text);
       expect(container.querySelector("[data-child]")).toBeNull();
@@ -187,7 +189,7 @@ describe("the shell", () => {
 
   it("paints the view under the nav once connected, with the fixture marked", async () => {
     const transport = await fixtureTransport("on", { latencyMs: 0 });
-    useEvalsStore.setState({ connection: "connected", transport, health: world.answer("GET /health", {}, {}) as never, ...{ unreachableReason: "none", unreachableDetail: null, stderr: null } });
+    useEvalsStore.setState({ connection: "connected", transport, ...{ unreachableReason: "none", unreachableDetail: null, stderr: null } });
     const { container, unmount } = await mount(<EvalsShell view={{ view: "sim" }}><div data-child>child</div></EvalsShell>);
     expect(container.querySelector("[data-child]")).not.toBeNull();
     expect(container.querySelector('[data-evals-section="sim"]')?.getAttribute("aria-current")).toBe("page");
@@ -263,7 +265,7 @@ describe("the chart parts", () => {
 
 describe("the host seam", () => {
   it("renders through the host a provider hands it: its screens and its router", async () => {
-    useEvalsStore.setState({ connection: "no-daemon", unreachableReason: "no-devices", unreachableDetail: null, stderr: null, health: null });
+    useEvalsStore.setState({ connection: "no-daemon", unreachableReason: "no-devices", unreachableDetail: null, stderr: null });
     const went: string[] = [];
     const host = {
       ...codecastEvalsHost,
@@ -271,12 +273,12 @@ describe("the host seam", () => {
       useNavigate: () => (href: string) => void went.push(href),
     };
     const { container, unmount } = await mount(
-      <EvalsHostProvider host={host}>
+      <CodecastEvalsProvider host={host}>
         <EvalsShell view={{ view: "home", cadence: null }}>
           <div data-child>child</div>
         </EvalsShell>
         <EvalsLink href="/evals/bisect" data-other-link>bisects</EvalsLink>
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     expect(container.querySelector("[data-evals-shell]")?.getAttribute("data-evals-connection")).toBe("elsewhere");
     expect(container.querySelector("[data-other-screen]")).not.toBeNull();
@@ -288,73 +290,25 @@ describe("the host seam", () => {
   });
 
   const EVALS = resolve(import.meta.dir, "..");
-  const WEB = resolve(EVALS, "../..");
-  const SHELL = ["EvalsShell.tsx", "EvalsNav.tsx", "parts.tsx", "format.ts", ...readdirSync(join(EVALS, "pages")).map((f) => `pages/${f}`)];
-  /** Each view group the shell's rules already hold, with its stylesheet. */
-  const BISECT_GROUP = ["AttributionView.tsx", "CommitPanel.tsx", "BisectRuler.tsx", "BisectView.tsx", "BisectListView.tsx", "BisectPlanPanel.tsx", "bisectModel.ts"];
-  const FREEZE_GROUP = ["FreezeView.tsx", "FreezeLedger.tsx", "freezeModel.ts", "CompareView.tsx", "ComparePanel.tsx", "EpochDiffSheet.tsx"];
-  const RUN_GROUP = ["RunView.tsx", "GateList.tsx", "JudgeChecks.tsx", "CostTrack.tsx", "runModel.ts"];
-  const SURFACE_GROUP = ["SurfaceView.tsx", "SurfaceWallView.tsx", "WhatMoved.tsx", "Seismograph.tsx", "seismographModel.ts", "surfaceModel.ts", "wallModel.ts", "verdictModel.ts", ...readdirSync(join(EVALS, "charts")).map((f) => `charts/${f}`)];
-  const SOURCES = [...SHELL, ...BISECT_GROUP, ...FREEZE_GROUP, ...RUN_GROUP, ...SURFACE_GROUP];
-  const STYLESHEETS = ["evals.css", "bisect.css", "freeze.css", "run.css", "runPanels.css", "surface.css", "wall.css"];
-  /** Codecast's run anatomy: the host renders it under a run (useRunPanels), so no shared view imports it. */
-  const ANATOMY = new Set(["CallPane", "AgentTranscript", "GuardLog", "RunFiles", "runPanels"].map((f) => `components/evals/${f}`));
-  /** What a shell file may import from outside the area: react, icons, the contract and the area's own hooks. */
-  const OUTSIDE = new Set(["react", "lucide-react", "@codecast/shared/contracts/evalsApi", "lib/evals/hooks"]);
+  const REACT = resolve(EVALS, "../../../../platform/packages/evals/src/react");
+  /** Every file under a directory, relative to it. */
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(join(dir, d.name)).map((f) => `${d.name}/${f}`) : [d.name]));
 
-  /** The literal class text of every className in a source: the strings and template runs inside each attribute's value. */
-  function classTokens(text: string): string[] {
-    const out: string[] = [];
-    for (const m of text.matchAll(/className=/g)) {
-      let i = m.index! + m[0].length;
-      let value: string;
-      if (text[i] === '"') value = text.slice(i, text.indexOf('"', i + 1) + 1);
-      else {
-        let depth = 0;
-        const from = i;
-        do depth += text[i] === "{" ? 1 : text[i] === "}" ? -1 : 0;
-        while (++i < text.length && depth > 0);
-        value = text.slice(from, i);
-      }
-      // A compared string (`x === "culprit" ?`) is not class text. Template holes are code, and each run between them
-      // continues the token before it (`ev-chip--${tone}`).
-      const literals = [...value.replace(/[!=]==?\s*"[^"]*"/g, "").replace(/\$\{[^}]*\}/g, "\u0000").matchAll(/"([^"]*)"|`([^`]*)`/g)].map((l) => l[1] ?? l[2]);
-      for (const lit of literals) out.push(...lit.split(/\s+/).filter((t) => t && !t.startsWith("\u0000")).map((t) => t.replaceAll("\u0000", "")));
-    }
-    return out;
-  }
-
-  it("keeps the shell's sources free of the app: no import of its own, no utility class, no CSS import", () => {
-    const problems: string[] = [];
-    for (const file of SOURCES) {
-      const text = readFileSync(join(EVALS, file), "utf8");
-      for (const m of text.matchAll(/^(?:import|export)\b[^;]*?\bfrom\s+"([^"]+)"|^import\s+"([^"]+)"/gm)) {
-        const spec = m[1] ?? m[2];
-        if (spec.endsWith(".css")) problems.push(`${file}: imports ${spec}; the mount root imports the stylesheets once`);
-        const inWeb = spec.startsWith(".") ? relative(WEB, resolve(dirname(join(EVALS, file)), spec)) : spec;
-        if (!OUTSIDE.has(inWeb) && !inWeb.startsWith("components/evals/")) problems.push(`${file}: imports ${spec}; the app is reached through useEvalsHost()`);
-        if (ANATOMY.has(inWeb)) problems.push(`${file}: imports ${spec}; codecast's run anatomy reaches a run through useRunPanels`);
-      }
-      for (const token of classTokens(text)) if (!token.startsWith("ev-")) problems.push(`${file}: class "${token}" is not an ev-* rule`);
-      if (text.includes("--sol-")) problems.push(`${file}: reads a --sol-* token; the views read --ev-*`);
-    }
-    expect(problems).toEqual([]);
+  it("keeps no copy of a shared view: the views, pages and sheets live in @platform/evals/react", () => {
+    const shared = new Set(walk(REACT).filter((f) => /\.(tsx|css)$/.test(f) && !f.includes(".test.")).map((f) => f.split("/").pop()!));
+    const ours = walk(EVALS).filter((f) => !f.startsWith("__"));
+    expect(ours.filter((f) => shared.has(f.split("/").pop()!))).toEqual([]);
   });
 
-  it("reads colour and type only through --ev-* tokens, each of which tokens.css declares", () => {
-    const tokens = readFileSync(join(EVALS, "tokens.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  it("reads colour and type in codecast's own sheets only through --ev-* tokens the shared tokens.css declares", () => {
+    const tokens = readFileSync(join(REACT, "tokens.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     const declared = new Set([...tokens.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
-    expect([...declared].filter((t) => !t.startsWith("--ev-"))).toEqual([]);
-    // A view's own inline variable (an animation delay, the ruler's geometry) is set where it is read, not a theme token.
-    const inline = new Set(SOURCES.concat(readdirSync(EVALS).filter((f) => f.endsWith(".tsx")), readdirSync(join(EVALS, "charts")).map((f) => `charts/${f}`)).flatMap((f) => [...readFileSync(join(EVALS, f), "utf8").matchAll(/["'](--ev-[\w-]+)["']/g)].map((m) => m[1])));
-    for (const sheet of STYLESHEETS) {
+    // sim.css is the Multiplayer sim's, which reads the app's --sol-* tokens directly (docs/architecture/evals-converge.md section 4).
+    for (const sheet of ["host.css", "runPanels.css"]) {
       const css = readFileSync(join(EVALS, sheet), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
       expect({ sheet, foreign: css.match(/--(?:sol|font)-[\w-]+/g) ?? [] }).toEqual({ sheet, foreign: [] });
-      // A sheet's own variable (the wall's column template) is declared where it is read, and only under --ev-*.
-      const own = new Set([...css.matchAll(/[{;]\s*(--[\w-]+)\s*:/g)].map((m) => m[1]));
-      expect({ sheet, declares: [...own].filter((t) => !t.startsWith("--ev-")) }).toEqual({ sheet, declares: [] });
       const read = new Set([...css.matchAll(/var\((--ev-[\w-]+)/g)].map((m) => m[1]));
-      expect({ sheet, undeclared: [...read].filter((t) => !declared.has(t) && !inline.has(t) && !own.has(t)) }).toEqual({ sheet, undeclared: [] });
+      expect({ sheet, undeclared: [...read].filter((t) => !declared.has(t)) }).toEqual({ sheet, undeclared: [] });
     }
   });
 

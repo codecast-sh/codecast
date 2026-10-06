@@ -177,7 +177,7 @@ export function CardStatusSignals({
                 staleness-aware) rather than the raw is_idle flag, so a frozen
                 is_idle:false row that's really finished shows idle, not nothing. */}
             {!isWorking && !isLive && !dismissed && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && !isRowRestarting && session.message_count > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Idle" />
             )}
             {/* A kill+restart owns the row's signal while it runs: the re-pended
                 message and the not-yet-live status are both part of the restart,

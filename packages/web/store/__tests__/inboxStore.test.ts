@@ -2359,6 +2359,40 @@ describe("reconcilePendingSendForSession — prune grace window", () => {
   });
 });
 
+describe("reconcilePendingSendForSession: an approval's answer in a hosted conversation", () => {
+  // The hosted turn consumes the answer and never writes it to the
+  // transcript, so no echo will retire its bubble.
+  const answer = () =>
+    ({ _id: "a1", _clientId: "a1", role: "user", content: 'Decision: Approve\n<cast-decision id="d1" question="Send it?"/>', timestamp: Date.now(), _isOptimistic: true, _sentBaselineTs: 100 }) as any;
+  const hosted = (over: Record<string, unknown>) => ({ agent_type: "codecast", agent_status: "idle", is_idle: false, has_pending: false, updated_at: 100, ...over }) as any;
+
+  it("settles the moment the row moves past the stamp it was sent at", () => {
+    const pm: Record<string, any[]> = { c1: [answer()] };
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ updated_at: 100 }), null)).toBe(false);
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ updated_at: 200, has_pending: true }), null)).toBe(false);
+    expect(convHasPendingSend(pm.c1)).toBe(true);
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ updated_at: 200 }), null)).toBe(true);
+    expect(pm.c1[0]._isSettled).toBe(true);
+    expect(convHasPendingSend(pm.c1)).toBe(false);
+  });
+
+  it("settles on the liveness overlay, which is all a finished conversation may still get", () => {
+    useInboxStore.setState({
+      sessions: { c1: { _id: "c1", agent_type: "codecast", agent_status: "working", has_pending: false, updated_at: 100 } } as any,
+      pendingMessages: { c1: [answer()] } as any,
+    });
+    useInboxStore.getState().syncOverlay("sessions", { c1: { updated_at: 200, agent_status: "done" } });
+    expect(useInboxStore.getState().pendingMessages.c1[0]._isSettled).toBe(true);
+    useInboxStore.setState({ sessions: {}, pendingMessages: {} } as any);
+  });
+
+  it("waits for its echo in a conversation whose agent writes one", () => {
+    const pm: Record<string, any[]> = { c1: [answer()] };
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ agent_type: "claude_code", updated_at: 200 }), null)).toBe(false);
+    expect(pm.c1[0]._isSettled).toBeUndefined();
+  });
+});
+
 describe("session-view recording (MRU order + unread divider anchor)", () => {
   const realNow = Date.now;
   let clock = 1000;
