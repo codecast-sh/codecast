@@ -174,6 +174,15 @@ export function isRemoteDevice(): boolean {
   if (cachedRemoteMarker === null) {
     try {
       cachedRemoteMarker = fs.existsSync(REMOTE_DEVICE_MARKER);
+      // A process launched as a remote device records it, so a daemon started
+      // later without the variable (a self-restart, a hand-run start over SSH)
+      // still knows. Without it a Mac host's daemon took itself for a laptop
+      // and froze on the window server it does not have (2026-10-05).
+      if (!cachedRemoteMarker && process.env.CODECAST_REMOTE_DEVICE === "1") {
+        fs.mkdirSync(path.dirname(REMOTE_DEVICE_MARKER), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(REMOTE_DEVICE_MARKER, "");
+        cachedRemoteMarker = true;
+      }
     } catch {
       cachedRemoteMarker = false;
     }
