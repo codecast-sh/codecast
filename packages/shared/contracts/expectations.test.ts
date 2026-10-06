@@ -2,7 +2,10 @@
 // proposal parser, the rule that lets a proposal apply on its own, applying a
 // proposal as a new version, and the text a judge reads.
 import { describe, expect, test } from "bun:test";
-import { applyOps, autoApplies, expectationPrefix, holdsQuote, parseProposal, renderExpectations, renderProposal, type Expectation, type ExpectationsVersion } from "./expectations";
+import { applyOps, autoApplies, expectationPrefix, followsFromQuote, holdsQuote, parseProposal, renderExpectations, renderProposal, type Expectation, type ExpectationsVersion,
+  expectationIdPrefix,
+  isExpectationId,
+} from "./expectations";
 
 const QUOTED = { kind: "call" as const, ref: "cl-96:58", quote: "the information should hold true", when: "2026-09-30" };
 const BARE = { kind: "task" as const, ref: "ct-50340" };
@@ -71,20 +74,45 @@ describe("parseProposal", () => {
 
 describe("autoApplies", () => {
   const said = () => true;
+  // A line about what QUOTED says.
+  const T = "A card's information holds true.";
   test("only additions, each with a quoted, dated source; a line added already retired is history and adds the same way", () => {
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [BARE, QUOTED] }], said)).toBe(true);
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [BARE] }], said)).toBe(false);
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [{ ...QUOTED, when: undefined }] }], said)).toBe(false);
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [QUOTED], status: "retired", reason: "r" }], said)).toBe(true);
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [QUOTED] }, { op: "edit", id: "ex-a-1", text: "x", citations: [QUOTED] }], said)).toBe(false);
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [BARE, QUOTED] }], said)).toBe(true);
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [BARE] }], said)).toBe(false);
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [{ ...QUOTED, when: undefined }] }], said)).toBe(false);
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [QUOTED], status: "retired", reason: "r" }], said)).toBe(true);
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [QUOTED] }, { op: "edit", id: "ex-a-1", text: "x", citations: [QUOTED] }], said)).toBe(false);
     expect(autoApplies([], said)).toBe(false);
   });
 
   test("the quoted source must be a person's own words the record holds: a task note or an unchecked quote waits for a person", () => {
-    const agentNote = { kind: "task" as const, ref: "ct-52376", quote: "a delivery now outranks a later temporary bounce", when: "2026-10-02" };
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [agentNote] }], said)).toBe(false);
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [QUOTED] }], () => false)).toBe(false);
-    expect(autoApplies([{ op: "add", part: "P", text: "T.", citations: [agentNote, QUOTED] }], (c) => c === QUOTED)).toBe(true);
+    const agentNote = { kind: "task" as const, ref: "ct-52376", quote: "a card's information now holds true after the fix", when: "2026-10-02" };
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [agentNote] }], said)).toBe(false);
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [QUOTED] }], () => false)).toBe(false);
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [agentNote, QUOTED] }], (c) => c === QUOTED)).toBe(true);
+  });
+
+  test("a real quote cannot carry a line about something else: the line shares two claim words with the quote or waits for a person", () => {
+    const leaveIt = { kind: "decision" as const, ref: "sd-127", quote: "No, leave it", when: "2026-09-22" };
+    const invented = "Refunds are issued within a day of the request.";
+    expect(autoApplies([{ op: "add", part: "P", text: invented, citations: [QUOTED] }], said)).toBe(false);
+    expect(autoApplies([{ op: "add", part: "P", text: "The cold-email ceiling is a deliberate choice.", citations: [leaveIt] }], said)).toBe(false);
+    // One line of the proposal riding on an unrelated quote holds the whole proposal.
+    expect(autoApplies([{ op: "add", part: "P", text: T, citations: [QUOTED] }, { op: "add", part: "P", text: invented, citations: [QUOTED] }], said)).toBe(false);
+    // The quote that is about the line must be the one the record holds, not another of its sources.
+    const about = { kind: "chat" as const, ref: "#team/x", quote: "refunds go out within a day", when: "2026-10-01" };
+    expect(autoApplies([{ op: "add", part: "P", text: invented, citations: [QUOTED, about] }], (c) => c === QUOTED)).toBe(false);
+    expect(autoApplies([{ op: "add", part: "P", text: invented, citations: [QUOTED, about] }], (c) => c === about)).toBe(true);
+  });
+
+  test("followsFromQuote counts claim words in any form, and never filler or short words", () => {
+    expect(followsFromQuote("A bounce is tracked as a record against the email address that bounced.", "yes we should track the bounce as an object with the email on it.")).toBe(true);
+    expect(followsFromQuote("Changes to system mechanics ship after an engineer reviews them.", "Engineers need to review any promoting changes")).toBe(true);
+    // One shared word is a topic, not a claim.
+    expect(followsFromQuote("Post-call feedback holds the caller only to what the card asked.", "the feedback is way off")).toBe(false);
+    // Filler and short words never count: "should", "never", "with", "the", "it".
+    expect(followsFromQuote("It should never be done with them.", "we should never do it with the others")).toBe(false);
+    expect(followsFromQuote("Anything at all.", "")).toBe(false);
   });
 
   test("a quote is held word for word, and an ellipsis splits it into pieces that must each appear", () => {
@@ -177,5 +205,18 @@ describe("rendering", () => {
     expect(expectationPrefix("Broker / Private Network")).toBe("broker-private");
     expect(expectationPrefix("Infrastructure")).toBe("infrastructure");
     expect(expectationPrefix("!!")).toBe("project");
+  });
+});
+
+describe("a line's id", () => {
+  test("is ex-<prefix>-<n>, and nothing else is", () => {
+    expect(isExpectationId("ex-agent-quality-3")).toBe(true);
+    expect(isExpectationId("ex-matching-engine2-14")).toBe(true);
+    for (const not of ["comms", "ex-agent-quality", "ex--3", "EX-agent-quality-3", "see ex-agent-quality-3", "", null, undefined]) expect(isExpectationId(not)).toBe(false);
+  });
+
+  test("carries the prefix that names its project", () => {
+    expect(expectationIdPrefix("ex-agent-quality-3")).toBe("agent-quality");
+    expect(expectationIdPrefix("ex-matching-engine2-14")).toBe("matching-engine2");
   });
 });

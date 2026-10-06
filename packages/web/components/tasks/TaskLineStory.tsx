@@ -2,16 +2,22 @@
 // A cause's story on its task page (the-line-model.md LM7, the-line-end-to-end
 // LE16), in one block: the station strip while a run is live, else the newest
 // run's phases at a glance; where the cause is now; the goal it serves (when
-// that is more than its project) and how it was rated; the signals behind it,
+// that is more than its project), the expectation its signals say it breaks
+// and how it was rated; the signals behind it,
 // read in the cause's own workspace; the card by what it decided; and every
 // run with what it came to. Each fact is read from its one home (the task row,
 // the signals, the runs, the decision); the card itself stays in the task's
 // decisions below, so it is drawn once. A task the line never ran on gets the
 // strip alone.
 import { useMemo } from "react";
+import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { StationStrip } from "./StationStrip";
 import { isLineRun, lineRunOutcome } from "@codecast/shared/contracts/changeCard";
+import { isExpectationId } from "@codecast/shared/contracts/expectations";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { lineTabHref } from "../../lib/lineSettings";
 import type { TaskItem } from "../../store/inboxStore";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
 import { useGoalChip } from "../../hooks/useGoalChip";
@@ -60,6 +66,10 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
   useSyncDecisionDetail(cardRun?.gate_decision_short_id);
   const card = useDecisionDetail(cardRun?.gate_decision_short_id)?.decision?.card ?? null;
   const sources = [...new Set(signals.map((s) => s.source))];
+  // A finder that judges behavior names the line it broke as the signal's
+  // subject (LM5); the words are read from that line's own document.
+  const cited = useMemo(() => [...new Set(signals.map((s) => s.subject).filter(isExpectationId))], [signals]);
+  const { data: lines } = useQueryNoThrow((api as any).expectations.lines, cited.length > 0 && workspace ? { workspace, ids: cited } : "skip");
   const live = !!latest && (latest.status === "running" || latest.status === "paused" || latest.status === "pending");
   // Once no run is live, the newest run's shape stands in for the strip.
   const phases = useMemo(() => (latest && !live ? runPath(latest, null, task) : null), [latest, live, task]);
@@ -78,9 +88,10 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
         </div>
       )}
       <div className="px-4 pb-3 pt-1 space-y-3">
-        {(goal || kind || readiness) && (
+        {(goal || kind || readiness || cited.length > 0) && (
           <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1 text-[12px]" data-cause-ground>
             {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
+            {cited.map((id) => <ExpectationRow key={id} id={id} line={(lines as ExpectationLine[] | undefined)?.find((l) => l.id === id)} />)}
             {kind && <><dt className="text-sol-text-dim">Kind</dt><dd className="text-sol-text-muted">{kind}</dd></>}
             {readiness && <><dt className="text-sol-text-dim">Readiness</dt><dd className={readiness === "ready" ? "text-sol-text-muted" : "text-sol-yellow"} title={task.readiness_note ?? undefined} data-cause-readiness>{readinessWords(readiness, task.readiness_note)}</dd></>}
           </dl>
@@ -117,6 +128,25 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
         )}
       </div>
     </section>
+  );
+}
+
+type ExpectationLine = { id: string; text: string; status: "active" | "retired"; project_id: string; project_short_id?: string; project_title: string };
+
+/** The line a cause breaks: its words, and its id opening it among the
+ *  project's expectations. Until the words arrive the id stands alone. */
+function ExpectationRow({ id, line }: { id: string; line?: ExpectationLine }) {
+  const chip = "shrink-0 font-mono text-[11px] text-sol-text-dim";
+  return (
+    <>
+      <dt className="text-sol-text-dim">Expects</dt>
+      <dd className="min-w-0 flex items-baseline gap-2" data-cause-expectation={id}>
+        {line && <span className="min-w-0 text-sol-text leading-snug">{line.text}{line.status === "retired" && <span className="text-sol-text-dim"> (retired since)</span>}</span>}
+        {line
+          ? <Link href={`${lineTabHref(line.project_short_id ?? line.project_id)}#${id}`} className={cn(chip, "hover:text-sol-blue hover:underline")} title={`Open this line in the expectations of ${line.project_title}`}>{id}</Link>
+          : <span className={chip}>{id}</span>}
+      </dd>
+    </>
   );
 }
 
