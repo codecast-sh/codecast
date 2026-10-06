@@ -34,6 +34,25 @@ export interface ImportOutcome {
   truncated: boolean;
 }
 
+/**
+ * A vendor call that failed, keeping what a caller acts on: the status (a
+ * refused token stops a bulk import, a 429 waits) and the vendor's
+ * Retry-After. The message is the adapter's, safe to show.
+ */
+export class VendorCallError extends Error {
+  readonly status?: number;
+  readonly retry_after_ms?: number;
+  /** The source has no working connection (none stored, or the vendor refused the token). */
+  readonly lost?: boolean;
+  constructor(failure: { error: string; status?: number; retry_after_ms?: number; lost?: boolean }) {
+    super(failure.error);
+    this.name = "VendorCallError";
+    if (failure.status) this.status = failure.status;
+    if (failure.lost || failure.status === 401 || failure.status === 403) this.lost = true;
+    if (failure.retry_after_ms !== undefined) this.retry_after_ms = failure.retry_after_ms;
+  }
+}
+
 type ImportCtx = { runQuery: (ref: any, args: any) => Promise<any>; runAction: (ref: any, args: any) => Promise<any> };
 
 /**
