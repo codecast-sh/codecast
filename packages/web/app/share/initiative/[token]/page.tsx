@@ -10,7 +10,7 @@ type SharedInitiative = NonNullable<FunctionReturnType<typeof api.publicShare.ge
 
 export default function SharedInitiativePage() {
   return (
-    <SharedObjectPage<SharedInitiative> kind="initiative" query={api.publicShare.getSharedInitiative} noun="initiative">
+    <SharedObjectPage<SharedInitiative> kind="initiative" query={api.publicShare.getSharedInitiative} noun="goal">
       {(ini) => (
         <>
           <ShareHead

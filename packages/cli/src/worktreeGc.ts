@@ -27,7 +27,9 @@
  * base with `merge-tree --write-tree` instead and compare the resulting tree
  * to the base tree: an identical tree proves the branch adds nothing, however
  * its commits were rewritten. The commit count stays as the fallback for a
- * host whose git predates that flag (2.38).
+ * host whose git predates that flag (2.38). A subagent worktree whose working
+ * tree is exactly what it last merged into its parent's checkout
+ * (mergeBack.ts) is released too: the parent holds all of it.
  */
 
 import * as fs from "node:fs";
@@ -40,6 +42,7 @@ import {
 import { execFileAsync } from "./proc.js";
 import { locateWorktree } from "./worktreeEnv.js";
 import { runSide, type SnapshotResult } from "./cloud/syncSide.js";
+import { MERGED_REF_PREFIX, worktreeMatchesMergedBack } from "./mergeBack.js";
 
 export type GcVerdict =
   | { action: "released"; name: string; path: string }
@@ -237,7 +240,9 @@ export async function releaseSessionWorktree(
   } catch (err) {
     return { action: "kept", name: wt.name, path: worktreePath, reason: `git probe failed: ${(err as Error).message.split("\n")[0]}` };
   }
-  const reason = keepReason(probe);
+  // A worker whose every change is already in its parent's checkout
+  // (mergeBack.ts) holds nothing the parent lacks, pushed or not.
+  const reason = (await worktreeMatchesMergedBack(worktreePath).catch(() => false)) ? null : keepReason(probe);
   if (reason) {
     log(`[WORKTREE-GC] kept ${wt.name}: ${reason}`);
     return { action: "kept", name: wt.name, path: worktreePath, reason };
@@ -250,6 +255,7 @@ export async function releaseSessionWorktree(
       await git(wt.repoRoot, ["worktree", "remove", "--force", worktreePath]);
       try { await git(wt.repoRoot, ["branch", "-D", `codecast/${wt.name}`]); } catch { /* branch may be named otherwise */ }
     }
+    try { await git(wt.repoRoot, ["update-ref", "-d", `${MERGED_REF_PREFIX}${wt.name}`]); } catch { /* never merged back */ }
     log(`[WORKTREE-GC] released ${wt.name} (${worktreePath})`);
     return { action: "released", name: wt.name, path: worktreePath };
   } catch (err) {

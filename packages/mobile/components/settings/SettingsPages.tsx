@@ -17,8 +17,11 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
-import { LANE_SWITCH, laneOf } from '@codecast/web/components/simple/lanePref';
-import { moveToLane } from '@/components/simple/laneRoute';
+import { LANE_SWITCH, writeLane } from '@codecast/web/components/simple/lanePref';
+import { useHostedMode } from '@codecast/web/lib/surfaces';
+import { LANE_COPY } from '@codecast/web/components/simple/lane';
+import { PlanPage } from '@/components/hosted/PlanPage';
+import { MailPage } from '@/components/hosted/MailPage';
 import { useTeamRosterIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { peopleOf } from '@codecast/shared/team/memberKind';
 import { Text as RNText, TextInput } from '@/components/Themed';
@@ -335,7 +338,7 @@ function AppearancePage() {
   const Theme = useTheme();
   const { theme, pick } = useThemePicker();
   const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
-  const simpleLane = useInboxStore((s) => laneOf(s.clientState?.ui) === 'simple');
+  const hostedMode = useHostedMode();
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   return (
     <SettingsScroll>
@@ -343,8 +346,8 @@ function AppearancePage() {
         <ToggleRow
           label={LANE_SWITCH.label}
           description={LANE_SWITCH.description}
-          value={simpleLane}
-          onValueChange={(on) => moveToLane(on ? 'simple' : 'full')}
+          value={hostedMode}
+          onValueChange={(on) => writeLane(on ? 'simple' : 'full')}
         />
         <NavRow
           label="Theme"
@@ -552,6 +555,8 @@ export const SETTINGS_PAGES: Record<string, { title: string; Page: ComponentType
   security: { title: 'Security', Page: SecurityPage },
   team: { title: 'Team', Page: TeamPage },
   about: { title: 'About', Page: AboutPage },
+  plan: { title: 'Plan', Page: PlanPage },
+  mail: { title: LANE_COPY.connections.mail, Page: MailPage },
 };
 
 const styles = themedStyles((Theme) => StyleSheet.create({

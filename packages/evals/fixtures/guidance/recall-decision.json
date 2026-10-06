@@ -1,0 +1,20 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "Recall of earlier work: search past sessions and decisions before reading code or memory notes.",
+  "label": {
+    "want": [
+      "cast\\s+(search|context|ask|decisions|feed)\\b",
+      "cast\\s+read\\b[^\\n]*--ask"
+    ],
+    "avoid": [
+      "^(Grep|Glob):",
+      "^Bash: (grep|rg|find|git log|git grep)\\b",
+      "^Read: .*(memory|MEMORY|docs/)",
+      "^Agent:"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "What did we decide earlier about how the sync host is elected between browser windows? Build on that decision rather than re-deriving it: give me the one-paragraph version."
+  }
+}

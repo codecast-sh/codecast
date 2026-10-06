@@ -38,18 +38,3 @@ names are not used by derivative works.
 
 The requirement for fonts to remain under this license does not apply to any
 document created using the fonts or their derivatives.
-
-## Instrument Sans, Newsreader and Fragment Mono
-
-Copyright 2022 The Instrument Sans Project Authors (https://github.com/Instrument/instrument-sans)
-Copyright 2020 The Newsreader Project Authors (http://github.com/productiontype/Newsreader)
-Copyright 2022 The Fragment-Mono Project Authors (https://github.com/weiweihuanghuang/fragment-mono)
-
-Static instances as Google Fonts serves them (the @expo-google-fonts
-packages). They are the faces of the family design (@platform/design) that
-the assistant lane (app/(simple)) shares with the web lane and Whisk:
-Instrument Sans for the interface, Newsreader for titles and for what the
-assistant writes, Fragment Mono for counts.
-
-This Font Software is licensed under the SIL Open Font License, Version 1.1,
-the same license as Space Mono above (https://openfontlicense.org).
