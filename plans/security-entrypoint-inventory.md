@@ -1,21 +1,21 @@
 # Public entrypoint inventory
 
-Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory.ts. Lexical classification of every exported Convex function and HTTP route; "unresolved" means no one has shown the boundary holds, never that it is safe.
+Generated 2026-10-06T05:16:22.811Z by packages/convex/scripts/security-inventory.ts. Lexical classification of every exported Convex function and HTTP route; "unresolved" means no one has shown the boundary holds, never that it is safe.
 
 | | count |
 |---|---|
-| generatedAt | 2026-09-24T00:10:31.887Z |
-| files | 266 |
-| functions | 1663 |
-| public | 1102 |
-| internal | 561 |
-| byKind | {"query":455,"mutation":575,"action":48,"httpAction":24} |
-| byAuthClass | {"authenticated":856,"token":26,"mixed":191,"anonymous":29} |
-| unresolved | 279 |
-| unresolvedByRisk | {"high":183,"medium":96,"low":0} |
-| publicWithoutTests | 1045 |
-| httpRoutes | 121 |
-| openCells | 1891 |
+| generatedAt | 2026-10-06T05:16:22.811Z |
+| files | 403 |
+| functions | 2117 |
+| public | 1296 |
+| internal | 821 |
+| byKind | {"query":531,"mutation":658,"action":72,"httpAction":35} |
+| byAuthClass | {"authenticated":946,"token":34,"mixed":195,"anonymous":121} |
+| unresolved | 397 |
+| unresolvedByRisk | {"high":253,"medium":144,"low":0} |
+| publicWithoutTests | 1123 |
+| httpRoutes | 133 |
+| openCells | 2455 |
 
 ## Unresolved public rows, highest risk first
 
@@ -25,12 +25,26 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | accountSwitch.recordCodexAccount | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | accountSwitch.requestAccountSwitch | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | agentTasks.linkRunConversation | mutation | mixed | agent_tasks | authenticated caller, takes ids for agent_tasks with no visible resource judge | 0 |
+| high | agentTasks.runTaskNow | mutation | mixed | agent_tasks | authenticated caller, takes ids for agent_tasks with no visible resource judge | 0 |
 | high | agentTasks.webDelete | mutation | authenticated | agent_tasks | authenticated caller, takes ids for agent_tasks with no visible resource judge | 0 |
+| high | agentTasks.webRunNow | mutation | authenticated | agent_tasks | authenticated caller, takes ids for agent_tasks with no visible resource judge | 1 |
 | high | artifacts.submitComments | mutation | authenticated | artifacts | authenticated caller, takes ids for artifacts with no visible resource judge | 1 |
+| high | artifactsHttp.mediaSign | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | artifactsHttp.playerJs | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | billing.stripeWebhook | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | bookmarks.setBookmarkV2 | mutation | authenticated | conversations,messages | authenticated caller, takes ids for conversations,messages with no visible resource judge | 0 |
 | high | bookmarks.toggleBookmark | mutation | authenticated | conversations,messages | authenticated caller, takes ids for conversations,messages with no visible resource judge | 0 |
 | high | buckets.webAssignV2 | mutation | authenticated | conversations,inbox_buckets | authenticated caller, takes ids for conversations,inbox_buckets with no visible resource judge | 0 |
 | high | buckets.webUpdateV2 | mutation | authenticated | inbox_buckets | authenticated caller, takes ids for inbox_buckets with no visible resource judge | 0 |
+| high | callChat.post | mutation | authenticated | transcripts | authenticated caller, takes ids for transcripts with no visible resource judge | 0 |
+| high | callFace.ensureFaces | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | callGuests.acceptGuestNotice | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | callGuests.guestHeartbeat | mutation | anonymous |  | no authentication or token check visible in the handler | 1 |
+| high | callGuests.leaveCall | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | callGuests.mintGuestToken | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | callGuests.requestJoin | mutation | anonymous |  | no authentication or token check visible in the handler | 1 |
+| high | callGuests.revokeGuestLink | mutation | authenticated | call_guest_links | authenticated caller, takes ids for call_guest_links with no visible resource judge | 0 |
+| high | callRecordings.guestStopRecording | mutation | anonymous |  | no authentication or token check visible in the handler | 1 |
 | high | calls.cancelInvite | mutation | authenticated | call_invites | authenticated caller, takes ids for call_invites with no visible resource judge | 0 |
 | high | calls.respondInvite | mutation | authenticated | call_invites | authenticated caller, takes ids for call_invites with no visible resource judge | 0 |
 | high | capabilityBindings.bindCapability | mutation | mixed | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
@@ -55,6 +69,7 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | cloud.claimSharedCheckout | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 1 |
 | high | cloud.hostGitCredential | action | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | cloud.placeConversation | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| high | cloud.reportLocalMirror | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | cloud.reportPlacementFailure | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | cloud.requestBrowserSync | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 1 |
 | high | codeComments.discardPendingReview | mutation | authenticated | pull_requests | authenticated caller, takes ids for pull_requests with no visible resource judge | 0 |
@@ -70,6 +85,7 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | conversations.backfillImagePreview | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | conversations.clearParentMessageUuid | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | conversations.generateShareLink | mutation | mixed | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| high | conversations.killSession | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | conversations.pinToProfile | mutation | mixed | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | conversations.publishToDirectory | mutation | mixed | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | conversations.repairSession | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
@@ -88,9 +104,13 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | decisionStacks.createStackWith | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | high | decisionStacks.reorderStack | mutation | authenticated | session_decisions | authenticated caller, takes ids for session_decisions with no visible resource judge | 0 |
 | high | devices.claimDeviceAccount | mutation | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
+| high | devices.enqueueCloudAgentLoginCommand | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | devices.moveSessionToDevice | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| high | devices.requestDeviceUpdate | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | devices.setConversationOwner | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| high | devices.setDeviceSnippet | mutation | anonymous |  | no authentication or token check visible in the handler | 1 |
 | high | devices.setDeviceSshHost | mutation | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
+| high | docLab.runOnDoc | action | anonymous | docs | no authentication or token check visible in the handler | 0 |
 | high | executionBindings.activateAfterLegacyQuiescence | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | executionBindings.activateExecutionSuccessor | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | executionBindings.beginLegacyQuiescence | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
@@ -109,13 +129,22 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | http:GET ? | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:GET ? | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:GET ? | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
+| high | http:GET ? | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:GET /cli/a/ | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:GET /cli/email/unsubscribe | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
+| high | http:GET /cli/player.js | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:OPTIONS ? | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:OPTIONS ? | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:POST ? | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
 | high | http:POST /cli/exchange-token | httpAction | anonymous |  | route handler is inline or defined outside the export scan | 0 |
+| high | ingest.createSource | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | ingest.removeSource | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | ingest.rotateKey | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | ingest.updateSource | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | ingestHttp.ingestPreflight | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | ingestHttp.ingestServe | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | initiatives.create | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| high | integrations.cliConnectToken | action | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | issueSync.addSource | mutation | authenticated | projects,teams | authenticated caller, takes ids for projects,teams with no visible resource judge | 0 |
 | high | issueSync.cliAddSource | mutation | mixed | projects,teams | authenticated caller, takes ids for projects,teams with no visible resource judge | 0 |
 | high | issueSync.cliRemoveSource | mutation | mixed | issue_sync_sources | authenticated caller, takes ids for issue_sync_sources with no visible resource judge | 0 |
@@ -123,26 +152,49 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | issueSync.removeSource | mutation | authenticated | issue_sync_sources | authenticated caller, takes ids for issue_sync_sources with no visible resource judge | 0 |
 | high | issueSync.updateSource | mutation | authenticated | issue_sync_sources | authenticated caller, takes ids for issue_sync_sources with no visible resource judge | 0 |
 | high | managedSessions.registerManagedSession | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
-| high | managedSessions.updateAgentStatus | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
-| high | messages.addMessage | mutation | authenticated | conversations,_storage | authenticated caller, takes ids for conversations,_storage with no visible resource judge | 0 |
-| high | messages.addMessages | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 1 |
+| high | managedSessions.updateAgentStatus | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 1 |
+| high | messages.addMessage | mutation | authenticated | conversations,_storage | authenticated caller, takes ids for conversations,_storage with no visible resource judge | 1 |
+| high | messages.addMessages | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 2 |
 | high | messages.backfillConversationImages | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
-| high | messages.deleteMessagesByUuid | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| high | messages.deleteMessagesByUuid | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 1 |
 | high | messages.generateMessageShareLink | mutation | mixed | messages | authenticated caller, takes ids for messages with no visible resource judge | 0 |
+| high | metrics.createWatch | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | modCalls.cliCall | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | modCalls.webCall | mutation | authenticated | mods | authenticated caller, takes ids for mods with no visible resource judge | 0 |
+| high | modLocal.cliClaimCalls | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | modLocal.cliFinishCall | mutation | anonymous | mod_calls | no authentication or token check visible in the handler | 0 |
+| high | modLocal.cliPublish | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | modLogs.webLog | mutation | authenticated | mods | authenticated caller, takes ids for mods with no visible resource judge | 0 |
+| high | modObjects.cliCreate | mutation | anonymous | teams | no authentication or token check visible in the handler | 0 |
+| high | modObjects.cliUpdate | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | modObjects.webCreate | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| high | modObjects.webUpdate | mutation | authenticated | mod_objects | authenticated caller, takes ids for mod_objects with no visible resource judge | 0 |
+| high | mods.cliPush | mutation | anonymous | teams | no authentication or token check visible in the handler | 0 |
+| high | mods.cliRemove | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | mods.cliRollback | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | mods.cliSetEnabled | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | mods.webSetEnabled | mutation | authenticated | mods | authenticated caller, takes ids for mods with no visible resource judge | 0 |
 | high | notifications.markAsRead | mutation | authenticated | notifications | authenticated caller, takes ids for notifications with no visible resource judge | 0 |
 | high | orgHealth.healthReport | action | anonymous | teams | no authentication or token check visible in the handler | 1 |
 | high | orgInit.analysisInputs | action | anonymous | teams | no authentication or token check visible in the handler | 0 |
+| high | orgLineMerge.record | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | orgProposals.create | mutation | authenticated | teams,docs | authenticated caller, takes ids for teams,docs with no visible resource judge | 0 |
 | high | orgRoles.reparentSession | mutation | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
+| high | orgRoles.reset | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | high | orgRoles.setProjectLead | mutation | authenticated | projects | authenticated caller, takes ids for projects with no visible resource judge | 0 |
 | high | orgRoles.setReports | mutation | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
+| high | orgRoute.route | action | anonymous | teams | no authentication or token check visible in the handler | 0 |
+| high | orgTemplateLearning.learnPass | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | orgTemplateLearning.setLearning | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| high | orgTemplates.activateRoutine | mutation | authenticated | agent_tasks | authenticated caller, takes ids for agent_tasks with no visible resource judge | 0 |
 | high | orgTemplates.publish | mutation | authenticated | teams,_storage,projects | authenticated caller, takes ids for teams,_storage,projects with no visible resource judge | 0 |
 | high | orgTemplates.setLessonStatus | mutation | authenticated | org_template_lessons,tasks | authenticated caller, takes ids for org_template_lessons,tasks with no visible resource judge | 0 |
 | high | orgTemplates.upsertInstance | mutation | authenticated | projects,org_roles | authenticated caller, takes ids for projects,org_roles with no visible resource judge | 0 |
+| high | pathStats.refreshPathStats | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | pendingMessages.ackInjectedMessages | mutation | authenticated | conversations,pending_messages,messages | authenticated caller, takes ids for conversations,pending_messages,messages with no visible resource judge | 1 |
 | high | pendingMessages.claimPendingMessageForDelivery | mutation | authenticated | pending_messages,conversations | authenticated caller, takes ids for pending_messages,conversations with no visible resource judge | 1 |
 | high | pendingMessages.resetInjectedMessages | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 1 |
-| high | pendingMessages.sendMessageToSession | mutation | authenticated | conversations,_storage | authenticated caller, takes ids for conversations,_storage with no visible resource judge | 0 |
+| high | pendingMessages.sendMessageToSession | mutation | authenticated | conversations,_storage | authenticated caller, takes ids for conversations,_storage with no visible resource judge | 1 |
 | high | pendingMessages.sendMessageV2 | mutation | authenticated | conversations,_storage | authenticated caller, takes ids for conversations,_storage with no visible resource judge | 0 |
 | high | permissions.cancelPermissionRequest | mutation | authenticated | pending_permissions | authenticated caller, takes ids for pending_permissions with no visible resource judge | 0 |
 | high | permissions.createPermissionRequest | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
@@ -152,6 +204,8 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | projectUpdates.webEdit | mutation | authenticated | project_updates | authenticated caller, takes ids for project_updates with no visible resource judge | 0 |
 | high | publicComments.deletePublicComment | mutation | authenticated | public_comments | authenticated caller, takes ids for public_comments with no visible resource judge | 0 |
 | high | pushRouter.reportPresence | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| high | replaysHttp.replayChunkPreflight | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | replaysHttp.replaySign | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | reviews.addReviewComment | mutation | authenticated | reviews | authenticated caller, takes ids for reviews with no visible resource judge | 0 |
 | high | reviews.resolveComment | mutation | authenticated | review_comments | authenticated caller, takes ids for review_comments with no visible resource judge | 0 |
 | high | reviews.unresolveComment | mutation | authenticated | review_comments | authenticated caller, takes ids for review_comments with no visible resource judge | 0 |
@@ -160,15 +214,30 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | sessionDecisions.grant | mutation | authenticated | org_roles,session_decisions | authenticated caller, takes ids for org_roles,session_decisions with no visible resource judge | 0 |
 | high | sessionDecisions.reopen | mutation | authenticated | session_decisions | authenticated caller, takes ids for session_decisions with no visible resource judge | 0 |
 | high | sessionDecisions.revoke | mutation | authenticated | decision_grants | authenticated caller, takes ids for decision_grants with no visible resource judge | 0 |
+| high | sessionDelete.deleteSession | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | sessionMigrations.beginSession | mutation | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
-| high | sessionMigrations.confirmSession | mutation | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
+| high | sessionMigrations.confirmSession | mutation | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 1 |
 | high | sessionMigrations.enqueueQuiesce | mutation | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
 | high | sessionMigrations.failSession | mutation | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
 | high | sessionMigrations.finishSession | mutation | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
 | high | sessionMigrations.reportSession | mutation | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
+| high | signals.ingest | action | anonymous |  | no authentication or token check visible in the handler | 3 |
+| high | slackSync.requestSlackMember | mutation | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 0 |
 | high | slackSync.shareMessageToSlack | mutation | authenticated | chat_messages | authenticated caller, takes ids for chat_messages with no visible resource judge | 0 |
 | high | slackSync.unlinkChannel | mutation | authenticated | slack_channel_links | authenticated caller, takes ids for slack_channel_links with no visible resource judge | 0 |
 | high | slackSync.updateLink | mutation | authenticated | slack_channel_links | authenticated caller, takes ids for slack_channel_links with no visible resource judge | 0 |
+| high | sources/app.doAction | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/app.grant | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/app.read | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/app.refresh | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/app.revoke | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/posthog.importRecording | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/posthog.listRecordings | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/posthog.query | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/sentry.issueDetail | action | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/sentry.sentryWebhook | httpAction | anonymous |  | no authentication or token check visible in the handler | 0 |
+| high | sources/sentry.setIssueStatus | action | anonymous |  | no authentication or token check visible in the handler | 1 |
+| high | sources/vendorReplay.importLinked | action | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | storyMode.generateStory | action | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | storyMode.generateSummary | action | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | high | syncCursors.clearSyncCursors | mutation | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
@@ -183,7 +252,7 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | teams.removeMember | mutation | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 0 |
 | high | teams.renameTeam | mutation | authenticated | teams,users | authenticated caller, takes ids for teams,users with no visible resource judge | 0 |
 | high | teams.sendInviteEmail | mutation | mixed | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
-| high | teams.setActiveTeam | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| high | teams.setActiveTeam | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
 | high | teams.setMemberRole | mutation | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 0 |
 | high | teams.setTeamVisibility | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | high | teams.updateTaskStatuses | mutation | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
@@ -199,9 +268,10 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | high | transcripts.setRoutes | mutation | authenticated | transcripts | authenticated caller, takes ids for transcripts with no visible resource judge | 0 |
 | high | transcripts.stop | mutation | authenticated | transcripts | authenticated caller, takes ids for transcripts with no visible resource judge | 1 |
 | high | users.resumeSession | mutation | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| high | users.sendDaemonCommandToAll | mutation | anonymous |  | no authentication or token check visible in the handler | 0 |
 | high | users.updateDirectoryTeamMapping | mutation | authenticated | teams,conversations | authenticated caller, takes ids for teams,conversations with no visible resource judge | 0 |
 | high | users.updateNotificationPreferences | mutation | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
-| high | workflow_runs.pauseAtGate | mutation | mixed | workflow_runs | authenticated caller, takes ids for workflow_runs with no visible resource judge | 0 |
+| high | workflow_runs.pauseAtGate | mutation | mixed | workflow_runs | authenticated caller, takes ids for workflow_runs with no visible resource judge | 1 |
 | high | workflow_runs.respondToGate | mutation | authenticated | workflow_runs | authenticated caller, takes ids for workflow_runs with no visible resource judge | 0 |
 | high | workflow_runs.respondToGateFromCli | mutation | mixed | workflow_runs | authenticated caller, takes ids for workflow_runs with no visible resource judge | 0 |
 | medium | agentDefinitions.resolve | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
@@ -212,37 +282,58 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | medium | agentTasks.webListRuns | query | authenticated | agent_tasks | authenticated caller, takes ids for agent_tasks with no visible resource judge | 0 |
 | medium | anchors.getAnchorSpace | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | anchors.resolveAnchorForScope | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | auth.signInProviders | query | anonymous |  | no authentication or token check visible in the handler | 1 |
+| medium | billing.billingAvailable | query | anonymous |  | no authentication or token check visible in the handler | 2 |
 | medium | bookmarks.getConversationBookmarks | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | bookmarks.isBookmarked | query | authenticated | messages | authenticated caller, takes ids for messages with no visible resource judge | 0 |
+| medium | callChat.list | query | authenticated | transcripts | authenticated caller, takes ids for transcripts with no visible resource judge | 1 |
+| medium | callGuests.describeGuestLink | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | callGuests.getGuestState | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | changesQueries.inTheWorks | query | anonymous | teams | no authentication or token check visible in the handler | 1 |
+| medium | changesQueries.listEditions | query | anonymous | teams | no authentication or token check visible in the handler | 1 |
+| medium | changesQueries.listStories | query | anonymous | teams | no authentication or token check visible in the handler | 1 |
+| medium | changesQueries.liveStatus | query | anonymous | teams | no authentication or token check visible in the handler | 1 |
+| medium | changesQueries.storyEvidence | query | anonymous | change_stories | no authentication or token check visible in the handler | 1 |
+| medium | changesQueries.storySessions | query | anonymous | change_stories | no authentication or token check visible in the handler | 1 |
 | medium | chat.getMessage | query | authenticated | chat_messages | authenticated caller, takes ids for chat_messages with no visible resource judge | 0 |
 | medium | chat.getThread | query | authenticated | chat_messages | authenticated caller, takes ids for chat_messages with no visible resource judge | 0 |
 | medium | chat.linesSince | query | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 0 |
 | medium | chat.listChannelMembers | query | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 0 |
 | medium | chat.listLiveVoiceBursts | query | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 0 |
-| medium | chat.listMessages | query | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 0 |
+| medium | chat.listMessages | query | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 1 |
 | medium | chat.markThreadRead | mutation | authenticated | chat_messages | delegates to api.threads.markRead which calls requireCaller | 0 |
-| medium | chatTyping.list | query | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 0 |
+| medium | chatTyping.list | query | authenticated | chat_channels | authenticated caller, takes ids for chat_channels with no visible resource judge | 1 |
 | medium | cloud.commandOutcome | query | authenticated | daemon_commands | authenticated caller, takes ids for daemon_commands with no visible resource judge | 1 |
+| medium | cloud.localMirrorActivity | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | cloud.placementTarget | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | codeComments.pendingReview | query | authenticated | pull_requests | authenticated caller, takes ids for pull_requests with no visible resource judge | 0 |
 | medium | commits.webGet | query | authenticated | commits | authenticated caller, takes ids for commits with no visible resource judge | 0 |
+| medium | conversations.conversationMessagesForCLI | query | anonymous |  | no authentication or token check visible in the handler | 0 |
 | medium | conversations.debugConversationVisibility | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| medium | conversations.exportConversationMessagesPage | query | anonymous |  | no authentication or token check visible in the handler | 1 |
 | medium | conversations.feedForCLI | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | conversations.getConversations | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
 | medium | conversations.getMessageCountsForReconciliation | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | conversations.getTeamUnreadCount | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
-| medium | conversations.listConversations | query | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 0 |
-| medium | conversations.listTeamInboxSessions | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
-| medium | conversations.searchConversations | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | conversations.listConversations | query | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 1 |
+| medium | conversations.listTeamInboxSessions | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
+| medium | conversations.searchConversations | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
 | medium | conversations.searchConversationTitles | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
-| medium | conversations.searchForCLI | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | conversations.searchForCLI | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
 | medium | conversations.teamSessionsLiveness | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | daemonLogs.adminList | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
+| medium | devices.watchedCommandOutcome | query | authenticated | daemon_commands | authenticated caller, takes ids for daemon_commands with no visible resource judge | 0 |
 | medium | docs.webList | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | follow.followersOf | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
 | medium | follow.following | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
 | medium | githubApp.listInstallations | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | googleOAuth.connectAvailable | query | anonymous |  | no authentication or token check visible in the handler | 0 |
 | medium | images.getImageUrl | query | authenticated | _storage | authenticated caller, takes ids for _storage with no visible resource judge | 0 |
+| medium | ingest.getSource | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | ingest.listEvents | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | ingest.listGroups | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | ingest.listSources | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | linkPreviews.get | query | anonymous |  | no authentication or token check visible in the handler | 2 |
 | medium | managedSessions.isSessionManaged | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | messages.findMessageByContentPublic | query | token | conversations | token authenticated but takes ids without a visible resource judge | 0 |
 | medium | messages.getConversationFileChangeIndex | query | token | conversations | token authenticated but takes ids without a visible resource judge | 0 |
@@ -250,8 +341,21 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | medium | messages.getConversationImages | query | token | conversations | token authenticated but takes ids without a visible resource judge | 0 |
 | medium | messages.getFileChangeBodies | query | token | conversations | token authenticated but takes ids without a visible resource judge | 0 |
 | medium | messages.getMessageCoverageV2 | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
+| medium | metrics.listWatches | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | modCalls.cliGetCall | query | anonymous | mod_calls | no authentication or token check visible in the handler | 0 |
+| medium | modCalls.webGetCall | query | authenticated | mod_calls | authenticated caller, takes ids for mod_calls with no visible resource judge | 0 |
+| medium | modLocal.cliLocalMods | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | modObjects.cliGet | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | modObjects.cliKinds | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | modObjects.cliList | query | anonymous | teams | no authentication or token check visible in the handler | 0 |
+| medium | mods.cliGetVersion | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | mods.cliGuide | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | mods.cliList | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | mods.cliLogs | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | mods.cliVersions | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | org.roles | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
 | medium | org.sessionsUnder | query | authenticated | users,org_roles,teams | authenticated caller, takes ids for users,org_roles,teams with no visible resource judge | 0 |
-| medium | org.tree | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
+| medium | org.tree | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 2 |
 | medium | orgChanges.list | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
 | medium | orgHealth.health | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | orgHealth.healthCorePart | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
@@ -259,58 +363,75 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | medium | orgHealth.healthWorkPart | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | orgInit.analysisPart | query | authenticated | teams,conversations | authenticated caller, takes ids for teams,conversations with no visible resource judge | 0 |
 | medium | orgInit.takeoverPreview | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
-| medium | orgProposals.list | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | orgLineMerge.check | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | orgProposals.list | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
+| medium | orgTemplateLearning.learning | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | orgTemplates.catalog | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | orgTemplates.get | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | orgTemplates.instanceForRole | query | authenticated | org_roles | authenticated caller, takes ids for org_roles with no visible resource judge | 0 |
 | medium | orgTemplates.listInstances | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | orgTemplates.listLessons | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | orgTemplates.release | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | orgWhere.where | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | pendingMessages.getConversationPendingMessage | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | pendingMessages.getPendingMessages | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
 | medium | permissions.getPendingPermissions | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | permissions.getPermissionDecision | query | authenticated | pending_permissions | authenticated caller, takes ids for pending_permissions with no visible resource judge | 0 |
 | medium | pull_requests.getPRById | query | authenticated | pull_requests | authenticated caller, takes ids for pull_requests with no visible resource judge | 0 |
+| medium | replays.list | query | anonymous | event_groups | no authentication or token check visible in the handler | 0 |
 | medium | reviews.getPendingReviews | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
 | medium | reviews.getReviewComments | query | authenticated | reviews | authenticated caller, takes ids for reviews with no visible resource judge | 0 |
 | medium | savedViews.webGet | query | authenticated | saved_views | authenticated caller, takes ids for saved_views with no visible resource judge | 0 |
+| medium | sessionCommands.results | query | mixed | daemon_commands | authenticated caller, takes ids for daemon_commands with no visible resource judge | 0 |
 | medium | sessionDecisions.findAskMessage | query | anonymous | session_decisions | no authentication or token check visible in the handler | 0 |
-| medium | sessionDecisions.get | query | anonymous | session_decisions | no authentication or token check visible in the handler | 0 |
 | medium | sessionDecisions.listForRole | query | authenticated | org_roles | authenticated caller, takes ids for org_roles with no visible resource judge | 0 |
+| medium | sessionMigrations.checkoutHolder | query | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
 | medium | sessionMigrations.commandStatus | query | authenticated | daemon_commands | authenticated caller, takes ids for daemon_commands with no visible resource judge | 0 |
 | medium | sessionMigrations.sessionFacts | query | authenticated | session_migrations | authenticated caller, takes ids for session_migrations with no visible resource judge | 0 |
+| medium | signals.listForCli | query | anonymous |  | no authentication or token check visible in the handler | 1 |
+| medium | signals.showForCli | query | anonymous |  | no authentication or token check visible in the handler | 1 |
+| medium | sources/app.capabilities | query | anonymous |  | no authentication or token check visible in the handler | 0 |
+| medium | sources/app.listCalls | query | anonymous |  | no authentication or token check visible in the handler | 0 |
 | medium | storyMode.getStory | query | anonymous | conversations | no authentication or token check visible in the handler | 0 |
 | medium | storyMode.getSummary | query | anonymous | conversations | no authentication or token check visible in the handler | 0 |
 | medium | syncCursors.getSyncCursor | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
 | medium | teams.getActiveTeamContext | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | teams.getTeam | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | teams.getTeamMembersV2 | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | teams.getUserTeams | query | anonymous |  | no authentication or token check visible in the handler | 1 |
 | medium | terminalStream.getPane | query | authenticated | conversations | authenticated caller, takes ids for conversations with no visible resource judge | 0 |
 | medium | threads.listMine | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
 | medium | threads.unreadCount | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
-| medium | transcripts.cliGetCall | query | mixed | transcripts | authenticated caller, takes ids for transcripts with no visible resource judge | 0 |
+| medium | transcripts.webCallPlaces | query | authenticated | transcripts | authenticated caller, takes ids for transcripts with no visible resource judge | 0 |
 | medium | transcripts.webGetCall | query | authenticated | transcripts | authenticated caller, takes ids for transcripts with no visible resource judge | 0 |
+| medium | users.getDirectoryTeamMappings | query | anonymous |  | no authentication or token check visible in the handler | 0 |
 | medium | users.getPendingCommands | query | authenticated | users | authenticated caller, takes ids for users with no visible resource judge | 0 |
 | medium | users.getSuggestedTeamProjects | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | users.getSyncSettings | query | anonymous |  | no authentication or token check visible in the handler | 0 |
 | medium | users.getTeamMembers | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 | medium | users.getUserAbstractActivity | query | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 0 |
 | medium | users.getUserActivityHeatmap | query | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 0 |
 | medium | users.getUserActivityPunchcard | query | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 0 |
 | medium | users.getUserByUsername | query | authenticated | users | anonymous callers gated on public_profile_enabled since 2026-09-23 (securityEntrypoints.test.ts) | 1 |
 | medium | users.getUserProfileFeed | query | authenticated | users,teams | authenticated caller, takes ids for users,teams with no visible resource judge | 0 |
+| medium | whisk.connectAvailable | query | anonymous |  | no authentication or token check visible in the handler | 1 |
 | medium | workflow_runs.get | query | authenticated | workflow_runs | authenticated caller, takes ids for workflow_runs with no visible resource judge | 0 |
-| medium | workflow_runs.listRuns | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
+| medium | workflow_runs.listRuns | query | authenticated | teams | authenticated caller, takes ids for teams with no visible resource judge | 1 |
 | medium | workflow_runs.listRunsFromCli | query | mixed | teams | authenticated caller, takes ids for teams with no visible resource judge | 0 |
 
 ## HTTP routes
 
 | method | path | handler | auth | status |
 |---|---|---|---|---|
+| POST | ? | billing.stripeWebhook | anonymous | unresolved |
+| GET | ? | http:GET ? | anonymous | unresolved |
 | GET | ? | http:GET ? | anonymous | unresolved |
 | GET | ? | http:GET ? | anonymous | unresolved |
 | GET | ? | http:GET ? | anonymous | unresolved |
 | GET | /cli/a/ | http:GET /cli/a/ | anonymous | unresolved |
 | GET | /cli/email/unsubscribe | http:GET /cli/email/unsubscribe | anonymous | unresolved |
 | POST | /cli/email/unsubscribe | http:GET /cli/email/unsubscribe | anonymous | unresolved |
+| GET | /cli/player.js | http:GET /cli/player.js | anonymous | unresolved |
 | OPTIONS | ? | http:OPTIONS ? | anonymous | unresolved |
 | OPTIONS | ? | http:OPTIONS ? | anonymous | unresolved |
 | POST | ? | http:POST ? | anonymous | unresolved |
@@ -320,6 +441,7 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | OPTIONS | /cli/claim-auth | http:POST /cli/exchange-token | anonymous | unresolved |
 | GET | /api/github-app/callback | http:POST /cli/exchange-token | anonymous | unresolved |
 | POST | /api/webhooks/github-app | http:POST /cli/exchange-token | anonymous | unresolved |
+| POST | /calls/face | http:POST /cli/exchange-token | anonymous | unresolved |
 | POST | /api/webhooks/linear | http:POST /cli/exchange-token | anonymous | unresolved |
 | POST | /api/webhooks/github | http:POST /cli/exchange-token | anonymous | unresolved |
 | POST | /cli/session-links | http:POST /cli/exchange-token | anonymous | unresolved |
@@ -426,3 +548,11 @@ Generated 2026-09-24T00:10:31.887Z by packages/convex/scripts/security-inventory
 | POST | /api/webhooks/slack | http:POST /cli/exchange-token | anonymous | unresolved |
 | POST | ? | http:POST /cli/exchange-token | anonymous | unresolved |
 | OPTIONS | ? | http:POST /cli/exchange-token | anonymous | unresolved |
+| GET | ? | http:POST /cli/exchange-token | anonymous | unresolved |
+| OPTIONS | ? | ingestHttp.ingestPreflight | anonymous | unresolved |
+| OPTIONS | ? | ingestHttp.ingestPreflight | anonymous | unresolved |
+| POST | ? | ingestHttp.ingestServe | anonymous | unresolved |
+| GET | ? | replaysHttp.replayChunk | authenticated | resolved |
+| OPTIONS | ? | replaysHttp.replayChunkPreflight | anonymous | unresolved |
+| POST | ? | replaysHttp.replaySign | anonymous | unresolved |
+| POST | /api/webhooks/sentry | sources/sentry.sentryWebhook | anonymous | unresolved |

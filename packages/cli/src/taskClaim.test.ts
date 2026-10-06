@@ -65,6 +65,14 @@ describe("cast task handoff argument parsing", () => {
     expect(() => parseHandoffStatus(undefined)).toThrow();
   });
 
+  test("a guide rides the update as change_guide and is named in the review comment", () => {
+    const guide = { summary: "Data first.", steps: [{ title: "Store it", why: "The page reads it.", file: "a.ts", start: 3, end: 3, hunk: "@@ -1,1 +1,1 @@\n-a\n+b" }] };
+    const input = { status: "done" as const, evidence: "ok", guide };
+    expect(buildTaskHandoffBody("ct-9", null, input).change_guide).toEqual(guide);
+    expect(handoffCommentText(input)).toContain("Guide: 1 step, on the task's evidence");
+    expect("change_guide" in buildTaskHandoffBody("ct-9", null, { status: "done", evidence: "ok" })).toBe(false);
+  });
+
   test("evidence is required; --files is optional and blanks are dropped", () => {
     expect(() => buildTaskHandoffBody("ct-9", null, { status: "done", evidence: "  " })).toThrow(/--evidence/);
     expect(parseFilesFlag(undefined)).toBeUndefined();

@@ -36,6 +36,7 @@ export const agentDefinitionFields = {
   prompt_mode: v.optional(v.union(v.literal("append"), v.literal("replace"))),
   mode: v.optional(v.union(v.literal("apply"), v.literal("propose"))),
   isolated: v.optional(v.boolean()),
+  merge_back: v.optional(v.boolean()),
 };
 
 export const agentChainStepValidator = v.object({
