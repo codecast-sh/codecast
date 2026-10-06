@@ -19,8 +19,11 @@ say what changed and why; never one commit for unrelated work.
 Description, in order: the goal in one sentence, what changed and why, how it
 was verified (commands and results, screenshots via `cast image`), what the
 reviewer should look at first, and the session link from `cast link`. Push
-and open with `gh pr create`. If the work is bound to a task, comment the PR
-url on it.
+and open with `cast pr create -t "<title>" -b -` (it runs `gh pr create`;
+`--dry-run` shows the description first). When the bound task has a change
+guide from its handoff, the description ends with it as a walkthrough, so
+don't retell the change file by file. If the work is bound to a task, comment
+the PR url on it.
 
 ## Shepherd it
 

@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { ChevronDown, Cpu, Ellipsis, List } from "lucide-react";
+import { agentDisplayName } from "@codecast/shared/contracts";
 import {
-  MOBILE_AGENT_LABEL,
   MOBILE_AGENT_LOGO_BG,
   MOBILE_AGENT_TINT,
   MOBILE_CHIP_STYLE,
@@ -134,7 +134,7 @@ export function PhoneSessionMeta({ agentType, ago, live, model, modelEditable, b
       <div className="overflow-hidden whitespace-nowrap" style={css({ ...S.sessionMeta, display: "flex" })}>
         <span className="shrink-0" style={css({ ...S.metaBadgeIcon, display: "flex" })}>
           <PhoneAgentLogo agentType={agentType} />
-          <span style={css({ ...MOBILE_CHIP_STYLE.text, color: agentTint(agentType) })}>{MOBILE_AGENT_LABEL[agentType] ?? agentType}</span>
+          <span style={css({ ...MOBILE_CHIP_STYLE.text, color: agentTint(agentType) })}>{agentDisplayName(agentType)}</span>
         </span>
         <span className="shrink-0 text-sol-text-muted" style={css(S.messageCountText)}>· {ago}</span>
         {live && (dot ?? <PhoneStatusDot color="#10b981" glow />)}
@@ -168,7 +168,7 @@ export function PhoneMessage({ role, name, agentType, model, time, showHeader = 
   children: ReactNode;
 }) {
   const user = role === "user";
-  const label = user ? name || "You" : MOBILE_AGENT_LABEL[agentType] ?? "Claude";
+  const label = user ? name || "You" : agentDisplayName(agentType);
   return (
     <div
       style={css({

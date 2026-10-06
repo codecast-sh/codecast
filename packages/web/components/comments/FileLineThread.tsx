@@ -12,6 +12,8 @@ import {
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
 import { PingAgentButton } from "./PingAgentButton";
+import { AnchorPlacementNote, placementBorderClass } from "./AnchorPlacementNote";
+import type { AnchorPlacement } from "@codecast/shared/comments";
 
 // A durable code-anchored comment thread, rendered inline under its diff line.
 // These are real `comments` rows (file_path + line_number anchor) — visible to
@@ -25,6 +27,7 @@ function FileLineThreadImpl({
   lineNumber,
   comments,
   composerClassName,
+  placement,
 }: {
   conversationId: string;
   filePath: string;
@@ -32,6 +35,8 @@ function FileLineThreadImpl({
   comments: Comment[];
   /** Frame class for the composer — see CommentComposer's `className`. */
   composerClassName?: string;
+  /** Where the thread's passage is now, when it moved or is gone. */
+  placement?: AnchorPlacement | null;
 }) {
   const { user, isAuthenticated } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
@@ -49,7 +54,8 @@ function FileLineThreadImpl({
   const closeComposer = () => { setComposing(false); setReplyTo(null); };
 
   return (
-    <div className="cc-fline my-1 ml-2 border-l-2 border-sol-cyan/40 pl-2.5 space-y-1 font-sans text-sol-text whitespace-normal">
+    <div className={`cc-fline my-1 ml-2 border-l-2 ${placementBorderClass(placement) ?? "border-sol-cyan/40"} pl-2.5 space-y-1 font-sans text-sol-text whitespace-normal`}>
+      <AnchorPlacementNote placement={placement} anchorLines={comments.find((c) => c.anchor_lines)?.anchor_lines} />
       {comments.map((c) => (
         <CommentCard
           key={c._id}

@@ -17,6 +17,9 @@ const restoreGlobals = replaceGlobals({
   document: dom.window.document,
   navigator: dom.window.navigator,
   HTMLElement: dom.window.HTMLElement,
+  // The change guide's diffs highlight with Prism, which reads these at load.
+  Element: dom.window.Element,
+  Node: dom.window.Node,
   KeyboardEvent: dom.window.KeyboardEvent,
   localStorage: dom.window.localStorage,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
@@ -405,5 +408,37 @@ test("a goal named only by its key is said in words, and the generic signal kind
   expect(facts).toContain("serves a project in another workspace");
   expect(facts).toContain("1 signal");
   expect(facts).not.toContain("from signal");
+  await unmount();
+});
+
+// The author's change guide (ct-57527) reads on the card just before the
+// verdict, at both densities that draw the whole card.
+const guide = {
+  summary: "The limiter never refilled. Read the bucket, then its caller.",
+  steps: [
+    { title: "Refill before every take", why: "Tokens are earned from elapsed time.", file: "src/rateLimit.ts", start: 6, end: 15, hunk: "@@ -3,1 +3,3 @@\n }\n+export const CAPACITY = 10;\n+export const REFILL_PER_SECOND = 2;" },
+    { title: "Tell the client when to come back", why: "A 429 carries `retryAfter`.", file: "src/server.ts", start: 5, end: 10, hunk: "@@ -8,1 +8,2 @@\n-  return take(bucket, now) ? 200 : 429;\n+  if (take(bucket, now)) return { status: 200 };\n+  return { status: 429, retryAfter: 1 };" },
+  ],
+};
+
+for (const density of ["full", "inline"] as const) {
+  test(`a ${density} card draws the change guide above the verdict`, async () => {
+    const { container, unmount } = await mount(<ChangeCardView card={card} density={density} guide={guide} />);
+    const walk = container.querySelector("[data-change-guide]")!;
+    expect(walk).not.toBeNull();
+    expect(Array.from(walk.querySelectorAll("[data-guide-step] h3")).map((h) => h.textContent)).toEqual(guide.steps.map((s) => s.title));
+    expect(walk.textContent).toContain("src/rateLimit.ts:6-15");
+    expect(walk.textContent).toContain("REFILL_PER_SECOND");
+    const verdict = container.querySelector("[data-cc-recommended]")!;
+    expect(verdict).not.toBeNull();
+    expect(walk.compareDocumentPosition(verdict) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    if (process.env.GUIDE_CARD_HTML) (await import("node:fs")).writeFileSync(`${process.env.GUIDE_CARD_HTML}-${density}.html`, container.innerHTML);
+    await unmount();
+  });
+}
+
+test("a card without a guide draws no walkthrough", async () => {
+  const { container, unmount } = await mount(<ChangeCardView card={card} />);
+  expect(container.querySelector("[data-change-guide]")).toBeNull();
   await unmount();
 });
