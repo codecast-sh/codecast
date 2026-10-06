@@ -39,3 +39,18 @@ test("the newest claim answers first", () => {
   a();
   expect(order).toEqual(["b", "a"]);
 });
+
+test("a window swapped in after load gets the handler: a test file's jsdom is not the one the module loaded under", () => {
+  const next = new EventTarget();
+  (globalThis as any).window = next;
+  const seen: string[] = [];
+  try {
+    setShortcutHandler((e) => seen.push(e.key));
+    next.dispatchEvent(key("ArrowLeft"));
+    win.dispatchEvent(key("j"));
+    expect(seen).toEqual(["ArrowLeft"]);
+  } finally {
+    setShortcutHandler(null);
+    (globalThis as any).window = win;
+  }
+});
