@@ -1,6 +1,6 @@
 // Routines: the things the assistant does on a schedule, each in a plain
-// sentence with when it runs next, and pause and delete (web
-// app/simple/routines/page.tsx).
+// sentence with when it runs next, and pause and delete (on the web, the
+// triggers page).
 import { useState } from 'react';
 import { View } from 'react-native';
 import { router } from 'expo-router';

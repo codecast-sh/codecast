@@ -5,10 +5,10 @@
 
 import { useCallback, useRef, useState } from "react";
 import { useEvalsChanges, useEvalsHealth, useEvalsResource } from "../../../lib/evals/hooks";
-import { evalsHref, type EvalsView } from "../evalsPaths";
+import { type EvalsView, seedNeighbours, tabOfHash } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 import { useEvalsHost } from "../host";
 import { RunView } from "../RunView";
-import { seedNeighbours, tabOfHash } from "../runModel";
 
 /** Sticky chrome above a gate or check when the page lands on it: the tab bar. */
 const LAND_MARGIN = 52;

@@ -4,10 +4,8 @@
 
 import type { BisectSummary } from "@codecast/shared/contracts/evalsApi";
 import { EvalsLink, StallChip, VerdictGlyph } from "./parts";
-import { EVALS_STALL_MS } from "../../lib/evals/hooks";
-import { bisectGlyph, bisectSummaryWord, endpointLabel, isBisectLive, isBisectStalled, sortBisects } from "./bisectModel";
+import { bisectGlyph, bisectSummaryWord, endpointLabel, isBisectLive, isBisectStalled, sortBisects, shortSha, usd , EVALS_STALL_MS } from "@platform/evals/client";
 import { evalsHref } from "./evalsPaths";
-import { shortSha, usd } from "./format";
 import { useEvalsHost } from "./host";
 
 export function BisectListView({ bisects, now }: { bisects: readonly BisectSummary[]; now: number }) {

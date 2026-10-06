@@ -10,8 +10,7 @@ import { AttributionAnswerCard, AttributionEvidence, CandidateList } from "./Att
 import { BisectRuler } from "./BisectRuler";
 import { CommitPanel } from "./CommitPanel";
 import { CopyCommand, EvalsLink, LogTail, SeparationMark, VerdictGlyph } from "./parts";
-import { splitBatchNames, plural, pLabel, shortSha, usd, batchLabel } from "./format";
-import { bisectStatusWord, endpointLabel, isBisectLive, answerStepText, rulerModel, tierWord, type RulerModel, bisectGlyph, bisectOutcomeOf, bisectSummaryWord, isStalled } from "./bisectModel";
+import { splitBatchNames, plural, pLabel, shortSha, usd, batchLabel, bisectStatusWord, endpointLabel, isBisectLive, answerStepText, rulerModel, tierWord, type RulerModel, bisectGlyph, bisectOutcomeOf, bisectSummaryWord, isStalled } from "@platform/evals/client";
 import { evalsHref } from "./evalsPaths";
 import { useEvalsHost } from "./host";
 

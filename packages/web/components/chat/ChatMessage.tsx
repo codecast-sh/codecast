@@ -112,8 +112,10 @@ export function ChatAttachments({
 
 const HOVER_TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const FULL_TIME = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-// Module scope so react-markdown keeps one component identity across renders.
-const CHAT_MD_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, blockquote: ChatBlockquote };
+let chatMdComponents: (typeof MESSAGE_MD_COMPONENTS & { blockquote: typeof ChatBlockquote }) | undefined;
+function getChatMdComponents() {
+  return chatMdComponents ??= { ...MESSAGE_MD_COMPONENTS, blockquote: ChatBlockquote };
+}
 
 function clockTime(ts: number): string {
   return HOVER_TIME.format(new Date(ts));
@@ -509,7 +511,7 @@ export const ChatMessage = memo(function ChatMessage({
               <ReactMarkdown
                 remarkPlugins={remarkPlugins}
                 rehypePlugins={MESSAGE_MD_REHYPE}
-                components={CHAT_MD_COMPONENTS}
+                components={getChatMdComponents()}
               >
                 {/* The digest's lead line moved into the header above. */}
                 {callHead ? callHead.body : message.content}

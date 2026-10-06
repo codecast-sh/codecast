@@ -395,7 +395,9 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
         partialText = "";
         events?.onPartial?.("");
         const text = typeof msg.transcript === "string" ? msg.transcript.trim() : "";
-        if (!text || isUnexpectedTranscript(text, languages)) return;
+        if (!text) return;
+        // Dropped on purpose, but never in silence: the scribe shows the drop.
+        if (isUnexpectedTranscript(text, languages)) return events?.onError?.("Dropped a line outside the call's languages");
         const t1 = clock();
         events?.onUtterance?.({ text, t0: utteranceStart || Math.max(0, t1 - 2000), t1 });
       } else if (msg.type === "conversation.item.input_audio_transcription.failed") {

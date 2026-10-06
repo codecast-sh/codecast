@@ -11,9 +11,8 @@ import { MiniTrace } from "../resources/HealthStrip";
 import { evalsHref } from "./evalsPaths";
 import { EvalsLink, LogTail, StallChip, VerdictGlyph } from "./parts";
 import "./sim.css";
-import type { JobState } from "./simJobState";
-import { shortSha } from "./format";
-import { isJobStalled } from "./bisectModel";
+import { isJobStalled, type JobState } from "./simJobState";
+import { shortSha } from "@platform/evals/client";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { type GridRow, gridRows, markersFor, cellFailure, rowTouches, ago, simExitedBad, simOutcome, simSessionOpen, SIM_OPEN_WORDS } from "./simModel";
 

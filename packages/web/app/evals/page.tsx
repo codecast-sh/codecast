@@ -9,7 +9,8 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { EvalsShell } from "../../components/evals/EvalsShell";
-import { parseEvalsPath, type EvalsView, type EvalsViewName } from "../../components/evals/evalsPaths";
+import type { EvalsView, EvalsViewName } from "@platform/evals/client";
+import { codecastEvalsPaths } from "../../components/evals/evalsPaths";
 import { codecastEvalsHost, EvalsHostProvider } from "../../components/evals/host";
 import "../../components/evals/tokens.css";
 import "../../components/evals/evals.css";
@@ -75,7 +76,7 @@ export default function EvalsPage() {
   const pathname = usePathname();
   const search = useSearchParams();
   const query = search.toString();
-  const view = useMemo(() => parseEvalsPath(pathname, query), [pathname, query]);
+  const view = useMemo(() => codecastEvalsPaths.parse(pathname, query), [pathname, query]);
   return (
     <AuthGuard>
       <div className="h-full min-h-0">

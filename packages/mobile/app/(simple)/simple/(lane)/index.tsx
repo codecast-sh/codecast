@@ -1,4 +1,4 @@
-// The assistant lane's home on the phone (web app/simple/page.tsx): one
+// The assistant lane's home on the phone (on the web, hosted mode's inbox): one
 // composer, then what needs you, what is happening and what is done.
 import { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
@@ -11,7 +11,7 @@ import { taskDisplayTitle } from '@codecast/web/components/triggerTasks';
 import { HOME_APPROVALS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeIdeas, homeView, routineLastRun, routineSchedule, runsToday } from '@codecast/web/components/simple/lane';
 import { useLaneData, useLaneRoutines } from '@codecast/web/components/simple/useLane';
 import { useLaneMailAbilities } from '@codecast/web/components/simple/useLaneMail';
-import { useStartConversation } from '@codecast/web/components/simple/startConversation';
+import { useStartHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { ApprovalCard } from '@/components/simple/ApprovalCard';
 import { Composer } from '@/components/simple/Composer';
 import { ConversationRow } from '@/components/simple/ConversationRow';
@@ -27,7 +27,7 @@ export default function SimpleHome() {
   const { routines } = useLaneRoutines(laneIds);
   const bands = useMemo(() => homeBands(conversations, approvalCounts, now), [conversations, approvalCounts, now]);
   const today = useMemo(() => routines.filter((r) => runsToday(r, now)), [routines, now]);
-  const start = useStartConversation();
+  const start = useStartHostedConversation();
   const mail = useLaneMailAbilities();
   const [seed, setSeed] = useState<{ text: string; at: number } | null>(null);
   const [allDone, setAllDone] = useState(false);

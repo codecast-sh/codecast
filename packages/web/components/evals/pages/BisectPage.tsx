@@ -5,10 +5,11 @@
 // the page keeps asking for it rather than saying there is no such bisect.
 
 import { useEffect, useState } from "react";
-import { EVALS_POLL_MS, useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
+import { EVALS_POLL } from "@platform/evals/client";
+import { useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
 import { BisectView } from "../BisectView";
-import { isBisectLive, isJustStarted } from "../bisectModel";
-import { evalsHref, type EvalsView } from "../evalsPaths";
+import { isBisectLive, isJustStarted, type EvalsView } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 import { useEvalsHost } from "../host";
 
 export function BisectPage({ view }: { view: Extract<EvalsView, { view: "bisect" }> }) {
@@ -27,7 +28,7 @@ export function BisectPage({ view }: { view: Extract<EvalsView, { view: "bisect"
   const { reload } = res;
   useEffect(() => {
     if (!waiting || !visible) return;
-    const t = setInterval(reload, EVALS_POLL_MS);
+    const t = setInterval(reload, EVALS_POLL.intervalMs);
     return () => clearInterval(t);
   }, [waiting, visible, reload]);
   const stop = async () => {

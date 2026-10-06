@@ -18,7 +18,7 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
 import type { BatchStats, Epoch, FootingMarker, RunRowStatus } from "@codecast/shared/contracts/evalsApi";
 import { useEvalsHost } from "../host";
-import { PASS_MARK, linear, nearestIndex, scoreScale, stepPath, jitter } from "./scale";
+import { PASS_MARK, linear, nearestIndex, scoreScale, stepPath, jitter } from "@platform/evals/client";
 
 export interface StripDot {
   batch: string;

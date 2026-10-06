@@ -11,7 +11,7 @@
 
 import { useState } from "react";
 import { AssistantBlock } from "@/components/conversation/blocks/turnBlocks";
-import { PageCard, PageFavicon, PublishedPageActions } from "@/components/PublishedPageEmbed";
+import { FramelessPage, PublishedPageActions } from "@/components/PublishedPageEmbed";
 import type { PartProps } from "./contract";
 import { fly } from "../filmClock";
 import { FilmSwap } from "../film";
@@ -57,26 +57,27 @@ function Page() {
   const [loaded, setLoaded] = useState(false);
   return (
     <div className="absolute inset-x-6 top-3" {...fly("page/publish.card")}>
-      <PageCard
-        icon={<PageFavicon className="h-4 w-4" />}
+      <FramelessPage
         title={PAGE.title}
         href={`https://${PAGE.url}`}
         actions={<PublishedPageActions slug={PAGE.slug} expanded={false} onToggleExpand={noop} />}
+        height={500}
+        loaded
       >
-        <div className="relative h-[500px] w-full overflow-hidden bg-sol-card" data-hero-live="" onPointerEnter={() => setLive(true)}>
+        <span className="relative block h-full w-full" data-hero-live="" onPointerEnter={() => setLive(true)}>
           <img src="/hero/page.jpg" alt="" className="absolute inset-0 h-full w-full object-cover object-top" decoding="async" draggable={false} />
           {live && (
             <iframe
               src="/hero/page.html"
-              className="absolute inset-0 h-full w-full transition-opacity duration-300"
+              className="absolute inset-0 h-full w-full border-0 transition-opacity duration-300"
               style={{ opacity: loaded ? 1 : 0 }}
               sandbox="allow-scripts"
               title={PAGE.title}
               onLoad={() => setLoaded(true)}
             />
           )}
-        </div>
-      </PageCard>
+        </span>
+      </FramelessPage>
     </div>
   );
 }

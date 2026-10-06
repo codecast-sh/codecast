@@ -10,10 +10,9 @@ import { attributionSearchable, EVALS_BATCH_TOKEN_RE, resolveEvalsBatchRef, type
 import { useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
 import { AttributionView, EndpointsBar, type EndpointsValue } from "../AttributionView";
 import { BisectPlanPanel, START_KEY, type PlanSettings } from "../BisectPlanPanel";
-import { bisectsOverRange, bisectSummaryWord, endpointLabel, isBisectLive, canStart } from "../bisectModel";
+import { bisectsOverRange, bisectSummaryWord, endpointLabel, isBisectLive, canStart, type EvalsView, usd } from "@platform/evals/client";
 import { EvalsLink, VerdictGlyph } from "../parts";
-import { evalsHref, type EvalsView } from "../evalsPaths";
-import { usd } from "../format";
+import { evalsHref } from "../evalsPaths";
 import { useEvalsHost } from "../host";
 
 const PRICE_DEBOUNCE_MS = 350;

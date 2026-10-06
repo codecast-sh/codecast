@@ -6,10 +6,10 @@
 import { useMemo, useState } from "react";
 import { resolveEvalsBatchRef } from "@codecast/shared/contracts/evalsApi";
 import { useEvalsResource } from "../../../lib/evals/hooks";
-import { evalsHref, type EvalsView } from "../evalsPaths";
+import { type EvalsView, defaultFreezePair, type FreezePair } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 import { FreezeView } from "../FreezeView";
 import { useEvalsHost } from "../host";
-import { defaultFreezePair, type FreezePair } from "../freezeModel";
 
 function ConnectedFreeze({ freezeId, batch, given }: { freezeId: string; batch: string | null; given: FreezePair | null }) {
   const { EmptyState } = useEvalsHost().ui;

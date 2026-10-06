@@ -2,7 +2,8 @@
 // both scores, both replies and both prompts.
 
 import { useEvalsResource } from "../../../lib/evals/hooks";
-import { evalsHref, type EvalsView } from "../evalsPaths";
+import type { EvalsView } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 import { CompareView } from "../CompareView";
 import { useEvalsHost } from "../host";
 

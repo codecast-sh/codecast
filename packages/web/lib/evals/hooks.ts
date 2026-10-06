@@ -1,12 +1,12 @@
 // The hooks every Evals page reads through: connect once, read a cached
 // answer, and follow live work. The data never leaves memory (store/evalsStore.ts).
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
-import type { ChangesResponse, EvalsRouteKey, EvalsResponse, HealthResponse } from "@codecast/shared/contracts/evalsApi";
-import { useEvalsStore, evalsCacheKey, type EvalsResource } from "../../store/evalsStore";
+import type { ChangesResponse, EvalsRouteKey, EvalsResponse, EvalsRoutes, HealthResponse } from "@codecast/shared/contracts/evalsApi";
+import { EVALS_POLL, followChanges, type CachedResource, type EvalsArgs, type Visibility } from "@platform/evals/client";
+import { useEvalsStore, evalsCacheKey } from "../../store/evalsStore";
 import { useTabVisible } from "../../hooks/usePagePresence";
-import type { EvalsArgs } from "./client";
 
 /** How long the shell waits before each automatic retry of a daemon that was live but slow to answer; the last step repeats. */
 export const EVALS_SLOW_RETRY_MS = [5_000, 15_000, 30_000] as const;
@@ -62,7 +62,7 @@ export interface EvalsResourceView<T> {
  * memory by its request. `null` args skip the load (a page waiting on a pick).
  * A cached answer paints at once; `reload` refetches in the background.
  */
-export function useEvalsResource<K extends EvalsRouteKey>(key: K, args: EvalsArgs<K> | null): EvalsResourceView<EvalsResponse<K>> {
+export function useEvalsResource<K extends EvalsRouteKey>(key: K, args: EvalsArgs<EvalsRoutes, K> | null): EvalsResourceView<EvalsResponse<K>> {
   const cacheKey = args ? evalsCacheKey(key, args) : null;
   const connected = useEvalsStore((s) => s.connection === "connected");
   const res = useEvalsStore((s) => (cacheKey ? s.resources[cacheKey] : undefined));
@@ -90,7 +90,7 @@ export function useEvalsHealth(): { health: HealthResponse | null; connected: bo
 }
 
 /** Every answer the area holds, by cache key: what the search can resolve without asking. */
-export function useEvalsLoaded(): Record<string, EvalsResource> {
+export function useEvalsLoaded(): Record<string, CachedResource> {
   return useEvalsStore((s) => s.resources);
 }
 
@@ -114,43 +114,47 @@ function subscribeVisibility(fn: () => void): () => void {
 }
 const documentVisible = () => typeof document === "undefined" || document.visibilityState === "visible";
 
-/** Every 3 s while `live` and this pane is on screen: polling pauses when the tab or window is hidden. */
-export const EVALS_POLL_MS = 3_000;
-/** A job with no new step for this long shows "stalled?". */
-export const EVALS_STALL_MS = 5 * 60_000;
+/** This pane as a poller reads it: on screen while the document is visible and the pane is shown, with a change heard from either. */
+function usePaneVisibility(): Visibility {
+  const paneVisible = useTabVisible();
+  const pane = useRef(paneVisible);
+  const [visibility] = useState(() => {
+    const listeners = new Set<() => void>();
+    return {
+      notify: () => listeners.forEach((fn) => fn()),
+      visible: () => documentVisible() && pane.current,
+      subscribe: (fn: () => void) => {
+        listeners.add(fn);
+        const off = subscribeVisibility(fn);
+        return () => {
+          listeners.delete(fn);
+          off();
+        };
+      },
+    };
+  });
+  useEffect(() => {
+    pane.current = paneVisible;
+    visibility.notify();
+  }, [paneVisible, visibility]);
+  return visibility;
+}
 
 /**
  * Follows `GET /changes` while a view shows live work (a landing batch, a
  * bisect, a shrink or a sweep), handing each answer with anything new to
- * `onChanges`. The cursor lives here, so each view follows from when it opened.
+ * `onChanges`. Polling pauses while the tab, the window or the pane is hidden
+ * and asks at once on return; the cursor lives in the follower, so each view
+ * follows from when it went live.
  */
 export function useEvalsChanges(live: boolean, onChanges: (changes: ChangesResponse) => void) {
-  const visible = useSyncExternalStore(subscribeVisibility, documentVisible, () => true);
-  const paneVisible = useTabVisible();
+  const visibility = usePaneVisibility();
   const connected = useEvalsStore((s) => s.connection === "connected");
-  const cursor = useRef<number | null>(null);
   const handler = useRef(onChanges);
   handler.current = onChanges;
-  const on = live && visible && paneVisible && connected;
   useEffect(() => {
-    if (!on) return;
-    let stopped = false;
-    const tick = async () => {
-      try {
-        const changes = await useEvalsStore.getState().call("GET /changes", { query: { since: cursor.current ?? 0 } });
-        if (stopped) return;
-        const first = cursor.current === null;
-        cursor.current = changes.cursor;
-        if (!first && (changes.runs.length || changes.bisects.length || changes.jobs.length)) handler.current(changes);
-      } catch {
-        // An area-wide failure already moved the connection; a one-off miss waits for the next tick.
-      }
-    };
-    void tick();
-    const id = setInterval(tick, EVALS_POLL_MS);
-    return () => {
-      stopped = true;
-      clearInterval(id);
-    };
-  }, [on]);
+    if (!live || !connected) return;
+    // An area-wide failure already moved the connection; a one-off miss waits for the next tick.
+    return followChanges((since) => useEvalsStore.getState().call("GET /changes", { query: { since } }), (changes) => handler.current(changes), EVALS_POLL, visibility);
+  }, [live, connected, visibility]);
 }

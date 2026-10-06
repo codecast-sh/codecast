@@ -56,6 +56,9 @@ export type SessionCardChrome = {
   showBranchPill: boolean;
   /** The workspace asks for every session to have a face. */
   personifyAll: boolean;
+  /** Branch, worktree and pull request chips at all (lib/surfaces.ts
+   *  "gitChips"; off in hosted mode). Absent means shown. */
+  showGitChips?: boolean;
 };
 
 /** The per-card live facts that are not fields of the session row. */
@@ -218,7 +221,9 @@ export function SessionCardView({
     liveness.blockedReviveAt,
     now,
   );
-  const { showModelBadge, showAgentIcon, showBranchPill } = chrome;
+  const { showModelBadge, showAgentIcon } = chrome;
+  const showGitChips = chrome.showGitChips !== false;
+  const showBranchPill = chrome.showBranchPill && showGitChips;
   // Personification is opt in (session-characters.md S2): a session shows a
   // face once somebody gives it one, or when the workspace asks for every
   // session to have one. A role's standing session always has one — the role
@@ -289,7 +294,7 @@ export function SessionCardView({
     onDropFiles,
   });
 
-  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
+  const worktreeChip = showGitChips && (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
     <SessionWorktreeChip
       name={session.worktree_name}
       branch={session.worktree_branch}
@@ -695,7 +700,7 @@ export function SessionCardView({
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
-            <PrStatusChip status={session.pr_status} />
+            {showGitChips && <PrStatusChip status={session.pr_status} />}
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">

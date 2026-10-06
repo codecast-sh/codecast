@@ -260,4 +260,9 @@ describe("reorientationNotice with a restored snapshot", () => {
     expect(n).toContain("Only work that was pushed");
     expect(n).not.toContain("rebuilt from the previous machine");
   });
+  test("names what the move stops on the previous machine, tagged by how it was started", () => {
+    const n = reorientationNotice({ destination: "host", newCwd: "/w", oldCwd: "/l", machineChanged: true, stoppedOnSource: [{ name: "ffmpeg", via: "background" }, { name: "bun", via: "tmux" }] })!;
+    expect(n).toContain("ffmpeg (backgrounded), bun (in a tmux pane)");
+    expect(reorientationNotice({ destination: "host", newCwd: "/w", machineChanged: true, stoppedOnSource: [] })).not.toContain("The move stops");
+  });
 });

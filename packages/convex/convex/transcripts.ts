@@ -123,6 +123,11 @@ type DeliverReason = "flush" | "settle" | "hold_expired" | "route_added";
 // A catch up delivery counts the room as quiet after this long without a
 // closed utterance: the scribe's own lull (scribeEngine GAP_MS).
 export const CATCH_UP_QUIET_MS = 2_500;
+// deliverRoutes reschedules itself at most this many times per run: a failed
+// final delivery backs off from DELIVER_RETRY_MS, a catch up that found the
+// room talking waits one more quiet window.
+export const DELIVER_RETRY_MAX = 3;
+export const DELIVER_RETRY_MS = 5_000;
 // The longest a fed agent may hold the room off in one ask.
 export const HOLD_MAX_MS = 30 * 60_000;
 
@@ -567,10 +572,26 @@ export const removeRoute = mutation({
     const isScribe = String(t.started_by) === String(userId);
     const isAdder = route.added_by && String(route.added_by) === String(userId);
     if (!isScribe && !isAdder) throw new Error("Not your route");
-    await ctx.db.patch(t._id, {
-      routes: t.routes.filter((r) => !(r.kind === args.kind && r.target === args.target)),
-    });
-    await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
+    await dropRoute(ctx, t, args.kind, args.target);
+  },
+});
+
+/** Take one route off a transcript and let the fed sessions follow. */
+async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string): Promise<void> {
+  await ctx.db.patch(t._id, {
+    routes: t.routes.filter((r) => !(r.kind === kind && r.target === target)),
+  });
+  await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
+}
+
+/** Delivery found the route's session killed or gone: the words have nowhere
+ *  to go, so the route leaves instead of retrying on every flush. */
+export const dropDeadRoute = internalMutation({
+  args: { transcript_id: v.id("transcripts"), target: v.string() },
+  handler: async (ctx, args) => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t) return;
+    await dropRoute(ctx, t, "session", args.target);
   },
 });
 
@@ -709,7 +730,7 @@ export async function fedSessionPacing(
   ctx: any,
   target: string,
   now: number,
-): Promise<{ conversation_id: string; names: string[]; busy: boolean } | null> {
+): Promise<{ conversation_id: string; names: string[]; busy: boolean; killed: boolean } | null> {
   const conv = await findConversationByAnyRefWhere(ctx, target, () => true);
   if (!conv) return null;
   const managed = await ctx.db
@@ -727,6 +748,8 @@ export async function fedSessionPacing(
     conversation_id: String(conv._id),
     names: agentSpokenNames({ name: character.name, agentType: (conv as any).agent_type }),
     busy: heartbeatFresh && MID_TURN_AGENT_STATUSES.has(status ?? ""),
+    // A killed session is gone for the room: its route is dropped, never retried.
+    killed: !!(conv as any).inbox_killed_at,
   };
 }
 
@@ -772,8 +795,13 @@ export const cliHoldCall = mutation({
       }
       const target = await findConversationByAnyRefWhere(ctx, r.target, () => true);
       const mine = target && String(target._id) === String(conv._id);
+      // Only the caller's own route changes: another agent's hold is its own.
+      if (!mine) {
+        routes.push(r);
+        continue;
+      }
       const { hold_until: _dropped, ...rest } = r;
-      routes.push(mine && holdUntil ? { ...rest, hold_until: holdUntil } : rest);
+      routes.push(holdUntil ? { ...rest, hold_until: holdUntil } : rest);
     }
     await ctx.db.patch(t._id, { routes });
     await ctx.scheduler.runAfter(holdUntil ? holdUntil - now : 0, internal.transcripts.deliverRoutes, {
@@ -2453,14 +2481,18 @@ export const readUnsent = internalQuery({
     // The pacing of every fed session, keyed by route target, read here so
     // the action decides from one consistent snapshot.
     const now = Date.now();
-    const pacing: Record<string, { conversation_id: string; names: string[]; busy: boolean }> = {};
+    const pacing: Record<string, { conversation_id: string; names: string[]; busy: boolean; killed: boolean }> = {};
+    // Session routes whose target is killed or gone: delivery drops them.
+    const dead: string[] = [];
     for (const r of t.routes) {
-      if (r.kind !== "session" || pacing[r.target]) continue;
+      if (r.kind !== "session" || pacing[r.target] || dead.includes(r.target)) continue;
       const p = await fedSessionPacing(ctx, r.target, now);
-      if (p) pacing[r.target] = p;
+      if (!p || p.killed) dead.push(r.target);
+      else pacing[r.target] = p;
     }
     return {
       now,
+      dead,
       transcript: {
         _id: t._id,
         room_key: t.room_key,
@@ -2518,12 +2550,17 @@ export const deliverToSession = internalMutation({
     to: v.string(),
     body: v.string(),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
+    // Deterministic per chunk: enqueuePendingMessage returns the existing row
+    // for a repeated client_id, so a second delivery of the same words (two
+    // overlapping deliverRoutes runs, a crash before markRouteSent) is a no-op.
+    client_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await performSessionSend(ctx, args.as_user, {
       to: args.to,
       body: args.body,
       image_storage_ids: args.image_storage_ids,
+      client_id: args.client_id,
     });
   },
 });
@@ -2585,7 +2622,7 @@ export function sessionDeliveryVerdict(opts: {
   route: { hold_until?: number };
   pacing: { names: string[]; busy: boolean } | null;
   unsent: Array<{ text: string; ended_at: number; speaker_id?: string }>;
-}): { deliver: false } | { deliver: true; lane: "ask" | "context"; held: boolean } {
+}): { deliver: false; wait?: "quiet" } | { deliver: true; lane: "ask" | "context"; held: boolean } {
   const { reason, now, route, pacing, unsent } = opts;
   // Only the team opens the ask lane. A guest naming the agent is talking
   // about it or to it, and their words still arrive as context, but they
@@ -2600,7 +2637,9 @@ export function sessionDeliveryVerdict(opts: {
   const clockDriven = reason === "settle" || reason === "hold_expired";
   if (clockDriven) {
     const lastEnd = Math.max(...unsent.map((s) => s.ended_at));
-    if (now - lastEnd < CATCH_UP_QUIET_MS) return { deliver: false };
+    // Not quiet yet: the caller schedules one more clock-driven run after
+    // the quiet window, so the words never wait for the call's end.
+    if (now - lastEnd < CATCH_UP_QUIET_MS) return { deliver: false, wait: "quiet" };
   }
   // Words said under a hold are a catch up however they leave: the hold's end
   // can find the agent still mid-turn, and the scribe's next lull ships them.
@@ -2613,16 +2652,31 @@ export const deliverRoutes = internalAction({
     transcript_id: v.id("transcripts"),
     include_after_routes: v.boolean(),
     reason: v.optional(DELIVER_REASON),
+    // How many times this run has already rescheduled itself (a failed final
+    // delivery, a catch up that found the room talking). Bounded.
+    attempt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const data = await ctx.runQuery(internal.transcripts.readUnsent, {
       transcript_id: args.transcript_id,
     });
     if (!data) return;
-    const { transcript, segments, pacing, now } = data;
+    const { transcript, segments, pacing, now, dead } = data;
     const reason: DeliverReason = args.reason ?? "flush";
+    const attempt = args.attempt ?? 0;
+    let failed = false;
+    let waitQuiet = false;
     for (const route of transcript.routes) {
       if (route.mode === "after" && !args.include_after_routes) continue;
+      if (route.kind === "session" && dead.includes(route.target)) {
+        // The session is killed or gone: the words have no reader, and a
+        // route that fails on every flush is noise. Drop it.
+        await ctx.runMutation(internal.transcripts.dropDeadRoute, {
+          transcript_id: args.transcript_id,
+          target: route.target,
+        });
+        continue;
+      }
       const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
       if (unsent.length === 0) continue;
       const chunk = formatChunk(unsent);
@@ -2642,7 +2696,10 @@ export const deliverRoutes = internalAction({
             : sessionDeliveryVerdict({ reason, now, route, pacing: target, unsent });
           // The watermark stays put: the words wait for the turn's end, the
           // hold's end or the next lull, whichever delivers them.
-          if (!verdict.deliver) continue;
+          if (!verdict.deliver) {
+            if (verdict.wait === "quiet") waitQuiet = true;
+            continue;
+          }
           // A session hearing its OWN room is being spoken to, not sent a
           // report about a meeting elsewhere, and the two want different
           // words in front of the same chunk.
@@ -2658,6 +2715,7 @@ export const deliverRoutes = internalAction({
             as_user: asUser,
             to: route.target,
             body: `${own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts)}\n\n${chunk}`,
+            client_id: deliveryClientId(transcript._id, route.target, maxSeq),
           });
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {
@@ -2697,8 +2755,32 @@ export const deliverRoutes = internalAction({
       } catch (err) {
         // A failing route never blocks the others; the watermark stays put so
         // the next flush retries this chunk.
+        failed = true;
         console.error("[transcripts] route delivery failed", route.kind, String(err).slice(0, 200));
       }
     }
+    // Two runs that reschedule themselves, each a bounded number of times.
+    // The end of the call has no later flush to retry a failed final
+    // delivery, so it comes back with backoff; a catch up that found the
+    // room still talking comes back once the quiet window has passed.
+    if (attempt >= DELIVER_RETRY_MAX) return;
+    const retry = args.include_after_routes && failed
+      ? { delay: DELIVER_RETRY_MS * 2 ** attempt, reason: args.reason }
+      : waitQuiet && (reason === "settle" || reason === "hold_expired")
+        ? { delay: CATCH_UP_QUIET_MS, reason }
+        : null;
+    if (!retry) return;
+    await ctx.scheduler.runAfter(retry.delay, internal.transcripts.deliverRoutes, {
+      transcript_id: args.transcript_id,
+      include_after_routes: args.include_after_routes,
+      reason: retry.reason,
+      attempt: attempt + 1,
+    });
   },
 });
+
+/** The pending-message client_id of one chunk to one session: the same words
+ *  to the same route carry the same id, so a repeat is deduped at insert. */
+export function deliveryClientId(transcriptId: string, target: string, maxSeq: number): string {
+  return `${transcriptId}:${target}:${maxSeq}`;
+}

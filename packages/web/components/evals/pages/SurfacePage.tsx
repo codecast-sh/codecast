@@ -8,9 +8,8 @@ import { resolveEvalsBatchRef, type SurfaceResponse } from "@codecast/shared/con
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
 import { useEvalsHost } from "../host";
 import { SurfaceView } from "../SurfaceView";
-import { evalsHref, type EvalsView } from "../evalsPaths";
-import { surfaceColumns } from "../seismographModel";
-import { DEFAULT_SURFACE_FILTERS, orderedPair, type SurfaceFilters } from "../surfaceModel";
+import { type EvalsView, surfaceColumns, DEFAULT_SURFACE_FILTERS, orderedPair, type SurfaceFilters } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 
 /** A batch whose newest rep landed this recently is still landing: follow /changes for it. */
 const LANDING_MS = 15 * 60_000;

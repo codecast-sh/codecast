@@ -14,6 +14,7 @@ import { formatModel } from "../../../lib/conversationProcessor";
 import type { DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "../../DecisionAnswerFooter";
 import { describeSmallToolGroup, describeToolGroup, extractNestedActions, isAgentTool, isAskTool, isPlanModeTool, isPlanWriteToolCall, isTodoTool } from "@codecast/shared/render";
+import { hostedReceipt } from "../../../lib/hostedReceipt";
 import { entityRoute } from "../../../lib/entityLinks";
 import { toast } from "sonner";
 import { MessageIdentityProvider } from "../../InlineDiff";
@@ -25,7 +26,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
 import { usePendingMessageStatus } from "../../../hooks/useSyncPendingPermissions";
-import { stripPastedContent } from "@codecast/shared/contracts";
+import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
 import { SentFileBlock, type SentFileData } from "../../tools/SentFileBlock";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
@@ -896,7 +897,7 @@ function CondensedImageThumb({ image }: { image: ImageData }) {
 // The disclosure triangle leads in both states so the open/closed change is
 // unmistakable, and the header keeps its position and size across the toggle
 // so the click target never moves under the pointer.
-const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expanded, onToggle, images, globalImageMap, resultFor, conversationId, renderTool }: {
+const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expanded, onToggle, images, globalImageMap, resultFor, conversationId, renderTool, agentType }: {
   entries: ReceiptEntry[];
   expanded: boolean;
   onToggle: () => void;
@@ -905,6 +906,8 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   resultFor: (tc: ToolCall) => ToolResult | undefined;
   conversationId?: Id<"conversations">;
   renderTool: (tc: ToolCall, entry: ReceiptEntry) => React.ReactNode;
+  /** A hosted conversation's receipt says its steps in plain words (lib/hostedReceipt). */
+  agentType?: string;
 }) {
   const carriedBrowserRows = useContext(CastBrowserRowContext);
   const { summary, counted, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
@@ -932,15 +935,16 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
         if (tab?.kind === "cast") droveCastBrowser = true;
       }
     }
-    const counted = [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
+    const hosted = isHostedAgentType(agentType) ? hostedReceipt(entries.flatMap((e) => e.tools), resultFor) : null;
+    const counted = hosted?.counted ?? [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
     return {
-      summary: (actions.length <= 2 && describeSmallToolGroup(actions)) || counted,
+      summary: hosted?.summary ?? ((actions.length <= 2 && describeSmallToolGroup(actions)) || counted),
       counted,
       screenshots: shots,
       browserTabs: [...tabs.values()],
       droveCastBrowser,
     };
-  }, [entries, images, globalImageMap, resultFor, carriedBrowserRows]);
+  }, [entries, images, globalImageMap, resultFor, carriedBrowserRows, agentType]);
   const header = (
     <div
       data-cc-tool-receipt
@@ -1390,7 +1394,9 @@ function AssistantBlockImpl({
           <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
             <AssistantWho conversationId={conversationId} agentType={agentType} />
           </span>
-          {model && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
+          {/* The hosted assistant is the author, whatever model answered; its
+              model stays in the tooltip above. */}
+          {model && !isHostedAgentType(agentType) && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -1484,6 +1490,7 @@ function AssistantBlockImpl({
             resultFor={resultFor}
             conversationId={conversationId}
             renderTool={(tc, entry) => renderToolBlock(tc, resultFor(tc), entry)}
+            agentType={agentType}
           />
         )}
 

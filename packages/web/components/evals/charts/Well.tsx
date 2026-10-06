@@ -5,7 +5,7 @@
 
 import type { CSSProperties } from "react";
 import type { LedgerCell } from "@codecast/shared/contracts/evalsApi";
-import { wellInk } from "./scale";
+import { wellInk } from "@platform/evals/client";
 
 export interface WellProps {
   cell: Pick<LedgerCell, "mean" | "majority" | "flip" | "reps"> | null;

@@ -4,11 +4,9 @@
 // will be held to.
 
 import type { RunResponse, ScoreJson, ScoreVersion } from "@codecast/shared/contracts/evalsApi";
-import { PASS_MARK } from "./charts/scale";
+import { PASS_MARK, score2, usd, whenLabel, checkAnchor, checkPasses } from "@platform/evals/client";
 import { AnchorLink } from "./GateList";
 import { Caret, ScoreBar, VerdictGlyph } from "./parts";
-import { score2, usd, whenLabel } from "./format";
-import { checkAnchor, checkPasses } from "./runModel";
 
 export function JudgeChecks({ score, target, anchorHref, onAnchor }: { score: ScoreJson; target: string | null; anchorHref: (anchor: string) => string; onAnchor: (anchor: string) => void }) {
   if (!score.checks.length) return <div className="ev-rows"><div className="ev-empty-note">No judged checks: this rep's score is its gates alone.</div></div>;

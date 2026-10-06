@@ -113,9 +113,9 @@ export function Figure({ caption, wide = false, children }: { caption: ReactNode
 }
 
 /** A framed screenshot with a mono caption; images live under public/blog/<slug>/. */
-export function Screenshot({ src, alt, caption }: { src: string; alt: string; caption: string }) {
+export function Screenshot({ src, alt, caption, wide = false }: { src: string; alt: string; caption: ReactNode; wide?: boolean }) {
   return (
-    <Figure caption={caption}>
+    <Figure caption={caption} wide={wide}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt={alt} className="w-full block" loading="lazy" />
     </Figure>

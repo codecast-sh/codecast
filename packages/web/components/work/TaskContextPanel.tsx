@@ -9,7 +9,6 @@
 
 import { useState } from "react";
 import { ArrowUpRight, Columns2 } from "lucide-react";
-import { directChildren, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
 import { ShortId } from "../ShortId";
 import { RailChip, RailDetail, RailProgress } from "../ContextRail";
 import { taskVisual } from "../TaskStatusBadge";
@@ -19,15 +18,8 @@ import { TaskStatusPicker } from "../tasks/TaskStatusPicker";
 import { useTaskRow } from "../../hooks/useThreadPreviews";
 import { openBeside } from "../../lib/stage";
 import { taskFacePath, useSwitchFace } from "../../lib/workUnit";
-import { useInboxStore, type TaskItem } from "../../store/inboxStore";
-
-/** "done/total" of the task's open subtasks, a plain string so the selector
- *  compares by value and wakes only when the tally moves. */
-function subtaskTally(taskId: string, tasks: Record<string, unknown>): string {
-  const children = directChildren(Object.values(tasks) as TaskItem[], taskId).filter((t: any) => isActiveTask(t));
-  const p = subtaskProgressOf(children as any[]);
-  return p.total > 0 ? `${p.done}/${p.total}` : "";
-}
+import { useInboxStore } from "../../store/inboxStore";
+import { subtaskTally } from "../../lib/subtaskTally";
 
 export function TaskContextPanel({ task: ref, sessionId }: {
   /** The session row's own snapshot of its task: paints before the store row lands. */

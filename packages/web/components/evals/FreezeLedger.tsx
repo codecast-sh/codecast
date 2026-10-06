@@ -10,9 +10,7 @@ import type { LedgerRow, VerdictFlip } from "@codecast/shared/contracts/evalsApi
 import { Well } from "./charts/Well";
 import { EvalsLink, LockBadge } from "./parts";
 import { evalsHref } from "./evalsPaths";
-import type { SurfaceColumn } from "./seismographModel";
-import { ledgerOrder } from "./surfaceModel";
-import { whenLabel } from "./format";
+import { type SurfaceColumn, ledgerOrder, whenLabel } from "@platform/evals/client";
 
 const WELL = 16;
 /** A day label is about three wells wide. */

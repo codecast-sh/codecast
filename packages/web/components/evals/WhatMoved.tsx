@@ -1,17 +1,21 @@
 // "What moved" (docs/architecture/evals-ui.md section 4.1): the last events
 // across every surface, one clickable line each. A prompt epoch began, the
-// footing changed, freezes flipped, a bisect finished, or the Multiplayer sim
-// caught a failure. Props only; the wall hands in GET /overview's `moved`.
+// footing changed, freezes flipped, a bisect finished, or something of the
+// host's own kind happened (codecast: the Multiplayer sim caught a failure),
+// drawn by the host's wall slot. Props only; the wall hands in GET /overview's
+// `moved`.
 
+import type { ReactNode } from "react";
 import type { MovedEvent } from "@codecast/shared/contracts/evalsApi";
 import { useEvalsHost } from "./host";
+import { evalsHref } from "./evalsPaths";
 import { EvalsLink } from "./parts";
-import { movedLine } from "./wallModel";
+import { movedLine } from "@platform/evals/client";
 
 const MAX_EVENTS = 12;
 
-/** The event's mark, drawn in the fixed colour meanings: magenta broke, cyan fixed, violet the judge. */
-function MovedMark({ e }: { e: MovedEvent }) {
+/** The event's mark, drawn in the fixed colour meanings: magenta broke, cyan fixed, violet the judge. A host's own kind brings its mark. */
+function MovedMark({ e, own }: { e: MovedEvent; own: ReactNode }) {
   const box = { width: 12, height: 12, viewBox: "-7 -7 14 14", "aria-hidden": true } as const;
   switch (e.kind) {
     case "epoch":
@@ -47,17 +51,16 @@ function MovedMark({ e }: { e: MovedEvent }) {
           <circle r={1.5} fill="currentColor" />
         </svg>
       );
-    case "sim-failure":
-      return (
-        <svg {...box} className="ev-fail">
-          <path d="M-4,-4 L4,4 M4,-4 L-4,4" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
-        </svg>
-      );
+    default:
+      return own;
   }
 }
 
+/** "a, b or c": the kinds of move the empty line says did not happen. */
+const orList = (words: string[]) => (words.length > 1 ? `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}` : words.join(""));
+
 export function WhatMoved({ events, now }: { events: MovedEvent[]; now: number }) {
-  const { format } = useEvalsHost();
+  const { format, wall } = useEvalsHost();
   const list = [...events].sort((a, b) => b.at.localeCompare(a.at)).slice(0, MAX_EVENTS);
   return (
     <aside className="ev-moved" aria-label="What moved" data-ev-moved>
@@ -70,13 +73,14 @@ export function WhatMoved({ events, now }: { events: MovedEvent[]; now: number }
       {list.length ? (
         <ol className="ev-moved-list">
           {list.map((e, i) => {
-            const { href, text } = movedLine(e);
+            const line = movedLine(evalsHref, e, wall?.moved);
+            const { href, text } = line;
             const at = Date.parse(e.at);
             return (
               <li key={`${e.kind}:${e.at}:${i}`} className="ev-settle" style={{ ["--ev-delay" as string]: `${120 + i * 30}ms` }}>
                 <EvalsLink href={href} className="ev-moved-line" data-ev-moved-kind={e.kind}>
                   <span className="ev-moved-mark">
-                    <MovedMark e={e} />
+                    <MovedMark e={e} own={"mark" in line ? line.mark : null} />
                   </span>
                   <span className="ev-moved-text">{text}</span>
                   <time className="ev-moved-at" dateTime={e.at} title={format.fullTimestamp(at)}>
@@ -88,7 +92,7 @@ export function WhatMoved({ events, now }: { events: MovedEvent[]; now: number }
           })}
         </ol>
       ) : (
-        <p className="ev-moved-empty">Nothing has moved in the window: no new epoch, footing change, flip, finished bisect or Multiplayer sim failure.</p>
+        <p className="ev-moved-empty">{`Nothing has moved in the window: no ${orList(["new epoch", "footing change", "flip", "finished bisect", ...(wall?.movedKinds ?? [])])}.`}</p>
       )}
     </aside>
   );

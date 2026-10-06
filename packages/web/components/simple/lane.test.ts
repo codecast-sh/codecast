@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { PLANS } from "@codecast/shared/contracts/assistant";
 import { disconnectNote, mailboxLine } from "./connectionWords";
 import { formatDecisionAnswer } from "@codecast/shared/contracts";
-import { mailTools } from "@codecast/convex/convex/assistant/tools/mail";
-import { calendarTools } from "@codecast/convex/convex/assistant/tools/calendar";
+import { calendarTools, mailTools } from "@platform/assistant";
 import { codecastTools } from "@codecast/convex/convex/assistant/tools/codecast";
 import { searchWebTool, webTools, WEB_SEARCH_TOOL } from "@codecast/convex/convex/assistant/tools/web";
 import {
@@ -16,17 +15,15 @@ import {
   planCard,
   topupLabel,
   workedTimes,
+  ledgerLines,
   LANE_PATHS,
   LANE_SECTIONS,
   laneSurfaceLabel,
   conversationPath,
-  STEPS_SHOWN,
   conversationSubline,
   draftIsLong,
-  visibleSteps,
   approvalAsk,
   accountLine,
-  mailSearch,
   answerTone,
   buildTranscript,
   conversationTitle,
@@ -39,7 +36,6 @@ import {
   isLaneRoutine,
   laneOf,
   meterFill,
-  personName,
   planPoints,
   planPrice,
   routineSchedule,
@@ -112,25 +108,11 @@ describe("approvals", () => {
   });
 });
 
+// The step wording itself is tested in @platform/assistant (steps.test.ts);
+// this checks it covers every tool codecast's assistant offers.
 describe("tool steps", () => {
-  it("reads common tools as plain lines", () => {
-    expect(stepText({ name: "send_email", input: { to: "dana@example.com", body: "hi" } })).toBe("Sent an email to Dana");
-    expect(stepText({ name: "draft_reply", input: JSON.stringify({ to: "Dana Ruiz <dana@x.org>" }) })).toBe("Drafted a reply to Dana Ruiz");
-    expect(stepText({ name: "search_mail", input: { q: "newer_than:7d" } }, { content: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] })).toBe("Read 12 emails from the past week");
-    expect(stepText({ name: "read_calendar", input: {} })).toBe("Checked your calendar");
-    expect(stepText({ name: "create_event", input: { title: "Dinner with Sam" } })).toBe('Added "Dinner with Sam" to your calendar');
-    expect(stepText({ name: "web_search", input: { query: "flights to Lisbon" } })).toBe('Searched the web for "flights to Lisbon"');
-    expect(stepText({ name: "web_fetch", input: { url: "https://www.example.com/a" } })).toBe("Read a page on example.com");
-  });
-
-  it("prefers the sentence a tool wrote for itself", () => {
-    expect(stepText({ name: "search_mail" }, { summary: "Read 12 emails from this week" })).toBe("Read 12 emails from this week");
-  });
-
-  it("never says a tool's name, even for one nobody has phrased", () => {
-    expect(stepText({ name: "frobnicateWidgets" })).toBe("Did a step");
-    expect(stepText({})).toBe("Did a step");
-  });
+  /** A step that came back fine. */
+  const DONE = { content: "ok" };
 
   it("phrases every tool the hosted assistant has", () => {
     // Factories only build their definitions here; no call runs.
@@ -143,28 +125,22 @@ describe("tool steps", () => {
     ].map((t) => t.name).concat(WEB_SEARCH_TOOL.name);
     expect(names.length).toBeGreaterThan(20);
     for (const name of names) {
-      const line = stepText({ name });
+      const line = stepText({ name }, DONE);
       expect({ name, line }).toEqual({ name, line: expect.not.stringMatching(/^Used |^Did a step$|go-ahead/) });
     }
-    expect(stepText({ name: "list_tasks" })).toBe("Checked your to-dos");
-    expect(stepText({ name: "update_task" })).toBe("Updated a to-do");
-    expect(stepText({ name: "archive" })).toBe("Tidied your inbox");
-    expect(stepText({ name: "label" })).toBe("Tidied your inbox");
-    expect(stepText({ name: "cancel_routine" })).toBe("Stopped a routine");
-    expect(stepText({ name: "list_routines" })).toBe("Checked your routines");
-    expect(stepText({ name: "replace_doc" })).toBe("Updated a note");
-    expect(stepText({ name: "read_doc" })).toBe("Read a note");
-    expect(stepText({ name: "recall" })).toBe("Remembered what you told me");
-    expect(stepText({ name: "ask_user" })).toBe("Asked for your go-ahead");
-    expect(stepText({ name: "suggest_reply" })).toBe("Wrote a reply in your voice");
-    expect(stepText({ name: "summarize_thread" })).toBe("Summed up an email");
-    expect(stepText({ name: "draft_reply", input: { to: "Dana <dana@x.com>" } })).toBe("Drafted a reply to Dana");
-  });
-
-  it("names people from addresses", () => {
-    expect(personName("sam.lee@x.org")).toBe("Sam");
-    expect(personName(["a@x.org", "b@x.org", "c@x.org"])).toBe("A and 2 others");
-    expect(personName("")).toBeNull();
+    expect(stepText({ name: "list_tasks" }, DONE)).toBe("Checked your to-dos");
+    expect(stepText({ name: "update_task" }, DONE)).toBe("Updated a to-do");
+    expect(stepText({ name: "archive" }, DONE)).toBe("Tidied your inbox");
+    expect(stepText({ name: "label" }, DONE)).toBe("Tidied your inbox");
+    expect(stepText({ name: "cancel_routine" }, DONE)).toBe("Stopped a routine");
+    expect(stepText({ name: "list_routines" }, DONE)).toBe("Checked your routines");
+    expect(stepText({ name: "replace_doc" }, DONE)).toBe("Updated a note");
+    expect(stepText({ name: "read_doc" }, DONE)).toBe("Read a note");
+    expect(stepText({ name: "recall" }, DONE)).toBe("Remembered what you told me");
+    expect(stepText({ name: "ask_user" }, DONE)).toBe("Asked for your go-ahead");
+    expect(stepText({ name: "suggest_reply" }, DONE)).toBe("Wrote a reply in your voice");
+    expect(stepText({ name: "summarize_thread" }, DONE)).toBe("Summed up an email");
+    expect(stepText({ name: "draft_reply", input: { to: "Dana <dana@x.com>" } }, DONE)).toBe("Drafted a reply to Dana");
   });
 });
 
@@ -184,15 +160,15 @@ describe("transcript", () => {
     const steps = items[1] as Extract<(typeof items)[number], { kind: "steps" }>;
     expect(steps.steps.map((s) => [s.text, s.state])).toEqual([
       ["Read 2 unread emails", "done"],
-      ["Drafted a reply to Dana", "failed"],
+      ["Couldn't draft a reply to Dana", "failed"],
     ]);
     expect((items[3] as any).text).toBe("You said: Approve");
     expect((items[4] as any).steps[0].state).toBe("running");
   });
 
-  it("settles an unanswered step once the turn is over", () => {
+  it("says an unanswered step waits on the person once the turn is over", () => {
     const items = buildTranscript(msgs, false);
-    expect((items[4] as any).steps[0].state).toBe("done");
+    expect((items[4] as any).steps[0]).toMatchObject({ state: "waiting", text: "Waiting for your go-ahead to send an email to Dana" });
   });
 
   it("shows an unsent message as pending", () => {
@@ -367,20 +343,6 @@ describe("plan history", () => {
   });
 });
 
-describe("mail searches", () => {
-  it("reads Gmail's search syntax as plain words", () => {
-    expect(mailSearch("from:dana is:unread newer_than:7d")).toEqual({ unread: true, scope: " from Dana from the past week" });
-    expect(mailSearch('from:"Dana Ruiz <dana@ruiz.studio>" subject:"kitchen plans"')).toEqual({ unread: false, scope: ' from Dana Ruiz about "kitchen plans"' });
-    expect(mailSearch("invoice newer_than:3d -label:spam")).toEqual({ unread: false, scope: ' matching "invoice" from the past 3 days' });
-    expect(mailSearch("has:attachment in:inbox")).toEqual({ unread: false, scope: "" });
-  });
-
-  it("says a search with no count by what it looked for", () => {
-    expect(stepText({ name: "search_mail", input: { query: "from:sam@x.org" } })).toBe("Looked for emails from Sam");
-    expect(stepText({ name: "search_mail", input: {} })).toBe("Looked through your email");
-  });
-});
-
 describe("shared list and fold rules", () => {
   it("says where a live conversation stands, and what came of a settled one", () => {
     const row = { idle_summary: "Sent the reply to Dana", last_user_message: "Answer Dana" };
@@ -396,15 +358,6 @@ describe("shared list and fold rules", () => {
     expect(draftIsLong("x".repeat(421))).toBe(true);
     expect(draftIsLong(Array(10).fill("a").join("\n"))).toBe(true);
     expect(draftIsLong(Array(9).fill("a").join("\n"))).toBe(false);
-  });
-
-  it("never folds away a single step", () => {
-    const steps = (n: number) => Array.from({ length: n }, (_, i) => i);
-    expect(visibleSteps(steps(STEPS_SHOWN + 1), false)).toEqual({ shown: steps(STEPS_SHOWN + 1), more: 0 });
-    const folded = visibleSteps(steps(9), false);
-    expect(folded.shown).toEqual(steps(STEPS_SHOWN - 1));
-    expect(folded.more).toBe(9 - (STEPS_SHOWN - 1));
-    expect(visibleSteps(steps(9), true)).toEqual({ shown: steps(9), more: 0 });
   });
 
   it("lists every lane surface once, home first", () => {
@@ -444,6 +397,15 @@ describe("page rules shared by the web and the phone", () => {
     expect(planCard("pro", figures, { known: true, plans: ["plus"] })).toEqual({ current: false, offer: "ask" });
     expect(planCard("plus", figures, { known: false, plans: [] }).offer).toBeNull();
     expect(planCard("free", { ...figures, known: false }, { known: true, plans: ["plus"] })).toEqual({ current: false, offer: null });
+  });
+
+  it("lists where the month went costliest first, with the sub-cent rest folded", () => {
+    const lines = [{ id: "a", cost_usd: 0.03 }, { id: "b", cost_usd: 0.001 }, { id: "c", cost_usd: 0.2 }, { id: "d", cost_usd: 0 }, { id: "e", cost_usd: 0.005 }];
+    const { shown, small } = ledgerLines(lines);
+    expect(shown.map((l) => l.id)).toEqual(["c", "a", "e"]);
+    expect(small).toBe(2);
+    expect(LANE_COPY.plan.smallLines(1)).toBe("1 other conversation, under a cent");
+    expect(ledgerLines([])).toEqual({ shown: [], small: 0 });
   });
 
   it("says top-ups, turns and the meter in plain words", () => {

@@ -8,11 +8,9 @@ import { forwardRef, useState, type AnchorHTMLAttributes, type HTMLAttributes, t
 import { Check, Copy, GitBranch, GitCompare, Globe, Lock } from "lucide-react";
 import type { PromptFilePair, RunRow, SeparationResult, EvalVisibility } from "@codecast/shared/contracts/evalsApi";
 import { useEvalsResource } from "../../lib/evals/hooks";
-import { PASS_MARK } from "./charts/scale";
+import { PASS_MARK, batchLabel, shortSha, score2, pLabel, offBranchWords, type VerdictState, verdictOfRow, type FlipRuns } from "@platform/evals/client";
 import { evalsHref } from "./evalsPaths";
-import { batchLabel, shortSha, score2, pLabel, offBranchWords } from "./format";
 import { useCopy, useEvalsHost } from "./host";
-import { type VerdictState, verdictOfRow, type FlipRuns } from "./verdictModel";
 
 // ── EvalsLink ───────────────────────────────────────────────────────────────
 

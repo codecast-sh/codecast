@@ -30,15 +30,14 @@ const restoreGlobals = replaceGlobals({
 });
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
-const { useEvalsStore, classifyEvalsFailure, evalsCacheKey } = await import("../../../store/evalsStore");
-const { EvalsRequestError, evalsRequest } = await import("../../../lib/evals/client");
+const { useEvalsStore, classifyEvalsFailure, evalsCacheKey, evalsRequest } = await import("../../../store/evalsStore");
 const { fixtureTransport, readEvalsFixtureMode } = await import("../../../lib/evals/fixtureTransport");
 const { EvalsShell } = await import("../EvalsShell");
 const { ScoreStrip } = await import("../charts/ScoreStrip");
 const { Well } = await import("../charts/Well");
 const { VerdictGlyph, SeparationMark, ScoreBar, ProvenanceChips, EvalsLink } = await import("../parts");
 const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
-const { usd } = await import("../format");
+const { usd, EvalsRequestError } = await import("@platform/evals/client");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -289,18 +288,20 @@ describe("the host seam", () => {
 
   const EVALS = resolve(import.meta.dir, "..");
   const WEB = resolve(EVALS, "../..");
-  const SHELL = ["EvalsShell.tsx", "EvalsNav.tsx", "parts.tsx", "format.ts", ...readdirSync(join(EVALS, "pages")).map((f) => `pages/${f}`)];
+  const SHELL = ["EvalsShell.tsx", "EvalsNav.tsx", "parts.tsx", ...readdirSync(join(EVALS, "pages")).map((f) => `pages/${f}`)];
   /** Each view group the shell's rules already hold, with its stylesheet. */
-  const BISECT_GROUP = ["AttributionView.tsx", "CommitPanel.tsx", "BisectRuler.tsx", "BisectView.tsx", "BisectListView.tsx", "BisectPlanPanel.tsx", "bisectModel.ts"];
-  const FREEZE_GROUP = ["FreezeView.tsx", "FreezeLedger.tsx", "freezeModel.ts", "CompareView.tsx", "ComparePanel.tsx", "EpochDiffSheet.tsx"];
-  const RUN_GROUP = ["RunView.tsx", "GateList.tsx", "JudgeChecks.tsx", "CostTrack.tsx", "runModel.ts"];
-  const SURFACE_GROUP = ["SurfaceView.tsx", "SurfaceWallView.tsx", "WhatMoved.tsx", "Seismograph.tsx", "seismographModel.ts", "surfaceModel.ts", "wallModel.ts", "verdictModel.ts", ...readdirSync(join(EVALS, "charts")).map((f) => `charts/${f}`)];
+  const BISECT_GROUP = ["AttributionView.tsx", "CommitPanel.tsx", "BisectRuler.tsx", "BisectView.tsx", "BisectListView.tsx", "BisectPlanPanel.tsx"];
+  const FREEZE_GROUP = ["FreezeView.tsx", "FreezeLedger.tsx", "CompareView.tsx", "ComparePanel.tsx", "EpochDiffSheet.tsx"];
+  const RUN_GROUP = ["RunView.tsx", "GateList.tsx", "JudgeChecks.tsx", "CostTrack.tsx"];
+  const SURFACE_GROUP = ["SurfaceView.tsx", "SurfaceWallView.tsx", "WhatMoved.tsx", "Seismograph.tsx", ...readdirSync(join(EVALS, "charts")).map((f) => `charts/${f}`)];
   const SOURCES = [...SHELL, ...BISECT_GROUP, ...FREEZE_GROUP, ...RUN_GROUP, ...SURFACE_GROUP];
   const STYLESHEETS = ["evals.css", "bisect.css", "freeze.css", "run.css", "runPanels.css", "surface.css", "wall.css"];
   /** Codecast's run anatomy: the host renders it under a run (useRunPanels), so no shared view imports it. */
   const ANATOMY = new Set(["CallPane", "AgentTranscript", "GuardLog", "RunFiles", "runPanels"].map((f) => `components/evals/${f}`));
-  /** What a shell file may import from outside the area: react, icons, the contract and the area's own hooks. */
-  const OUTSIDE = new Set(["react", "lucide-react", "@codecast/shared/contracts/evalsApi", "lib/evals/hooks"]);
+  /** Codecast's Multiplayer sim stays in codecast: the wall reaches it through the host's wall slot, so no shared view imports it. */
+  const SIM = new Set(["simModel", "simJobState", "simLanes", "SimCatalogView", "SimRunView", "DeliveryTimeline", "OrderStrip", "wallSim"].map((f) => `components/evals/${f}`));
+  /** What a shell file may import from outside the area: react, icons, the contract, the platform's client (models, paths, liveness) and the area's own hooks. */
+  const OUTSIDE = new Set(["react", "lucide-react", "@codecast/shared/contracts/evalsApi", "@platform/evals/client", "lib/evals/hooks"]);
 
   /** The literal class text of every className in a source: the strings and template runs inside each attribute's value. */
   function classTokens(text: string): string[] {
@@ -334,6 +335,8 @@ describe("the host seam", () => {
         const inWeb = spec.startsWith(".") ? relative(WEB, resolve(dirname(join(EVALS, file)), spec)) : spec;
         if (!OUTSIDE.has(inWeb) && !inWeb.startsWith("components/evals/")) problems.push(`${file}: imports ${spec}; the app is reached through useEvalsHost()`);
         if (ANATOMY.has(inWeb)) problems.push(`${file}: imports ${spec}; codecast's run anatomy reaches a run through useRunPanels`);
+        // The sim pages (pages/Sim*) are codecast's own and stay beside the sim views.
+        if (SIM.has(inWeb) && !file.startsWith("pages/Sim")) problems.push(`${file}: imports ${spec}; codecast's Multiplayer sim reaches the wall through the host's wall slot`);
       }
       for (const token of classTokens(text)) if (!token.startsWith("ev-")) problems.push(`${file}: class "${token}" is not an ev-* rule`);
       if (text.includes("--sol-")) problems.push(`${file}: reads a --sol-* token; the views read --ev-*`);

@@ -5,7 +5,7 @@
 // own: the host renders it through useRunPanels (runPanels.tsx).
 
 import type { CallDetail, TokenUsage } from "@codecast/shared/contracts/evalsApi";
-import { usd } from "./format";
+import { usd } from "@platform/evals/client";
 import { TextPane } from "./parts";
 
 const n = (v: number | null) => (v === null ? "n/a" : v.toLocaleString());

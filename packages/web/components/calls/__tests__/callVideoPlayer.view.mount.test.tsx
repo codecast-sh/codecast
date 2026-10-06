@@ -96,6 +96,8 @@ test("a phone refusing the room's sound under a screen asks for a tap, and the t
   try {
     const { root, handleRef } = mount();
     await React.act(async () => void handleRef.current.seek(150_000, { play: true, view: { screen: true } }));
+    // The controls draw once the screen's file has its metadata.
+    await React.act(async () => void document.querySelectorAll("video")[1]!.dispatchEvent(new (globalThis as any).Event("loadedmetadata")));
     const chip = () => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Tap for sound"));
     expect(chip()).toBeTruthy();
     refuse = false;

@@ -1,14 +1,14 @@
 // /welcome: where someone new to codecast starts (plan pl-840 onboarding,
 // docs/architecture/hosted-assistant.md). Three screens: sign in, connect
 // mail and calendar, and the first useful thing, which starts a conversation and lands
-// in it in the simple lane. Which screen shows is onboarding.ts welcomeStep;
+// in it in the main app in hosted mode. Which screen shows is onboarding.ts welcomeStep;
 // a move between screens runs as one view transition (the orb glides, the old
 // screen leaves the way the person is heading, the new one rises in order).
 //
 // Mail and calendar connect through Whisk, the family's mail app, and the
 // connect comes back here (convex/whisk.ts WHISK_RETURN_PATHS), so it always
 // mounts ConnectNotice, which says how it went. Anyone who acts here
-// (connects, skips, or starts) is moved to the simple lane
+// (connects, skips, or starts) is moved to hosted mode
 // (`client_state.ui.lane`).
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
@@ -28,10 +28,11 @@ import { Composer } from "../../components/simple/Composer";
 import { ConnectNotice } from "../../components/simple/ConnectNotice";
 import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
 import { LaneSync } from "../../components/simple/LaneSync";
-import { ASK_FIRST, LANE_COPY, LANE_PATHS, conversationPath, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
-import { laneOf, writeLane } from "../../components/simple/lanePref";
+import { ASK_FIRST, LANE_COPY, LANE_PATHS, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
+import { HOSTED_HOME, hostedConversationPath } from "../../components/simple/lanePaths";
+import { isHostedUi, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
-import { startConversationWith } from "../../components/simple/startConversation";
+import { startHostedConversation } from "../../lib/startHostedConversation";
 import "../../components/simple/laneLook";
 import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
 import { useLaneMail } from "../../components/simple/useLaneMail";
@@ -52,7 +53,7 @@ const rise = (i: number) => ({ ["--i" as any]: i }) as CSSProperties;
 /** Moving to the lane is what arriving through /welcome means, written the
  *  first time the person acts here. */
 function joinLane() {
-  if (laneOf(useInboxStore.getState().clientState?.ui) !== "simple") writeLane("simple");
+  if (!isHostedUi(useInboxStore.getState().clientState?.ui)) writeLane("simple");
 }
 
 /** Runs a screen change as a view transition where the browser has one and
@@ -299,16 +300,15 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
 
   // The conversation's code loads while the person reads, so the landing is instant.
   useMountEffect(() => {
-    void import("../../src/layouts/SimpleShell");
-    void import("../simple/c/[id]/page");
+    void import("../conversation/[id]/page");
   });
 
   const begin = (text: string) => {
     if (leaving) return;
     joinLane();
-    const id = startConversationWith(text);
+    const id = startHostedConversation(text);
     setLeaving(text);
-    window.setTimeout(() => navigate(conversationPath(id)), SEND_OFF_MS);
+    window.setTimeout(() => navigate(hostedConversationPath(id)), SEND_OFF_MS);
   };
 
   let i = 1;
@@ -363,7 +363,7 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
           </>
         ) : null}
         <Link
-          to={LANE_PATHS.home}
+          to={HOSTED_HOME}
           onClick={() => joinLane()}
         >
           Go to my assistant

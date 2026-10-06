@@ -1,5 +1,5 @@
-// One conversation in the assistant lane on the phone (web
-// app/simple/c/[id]/page.tsx): the transcript with its steps folded, any
+// One conversation in the assistant lane on the phone (on the web, the main
+// conversation page in hosted mode): the transcript with its steps folded, any
 // approval it is waiting on with the actual draft, and the reply box resting
 // on the bottom edge. It opens above the lane's tabs, without the tab bar.
 import { useRef } from 'react';

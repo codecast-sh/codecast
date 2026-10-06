@@ -10,17 +10,13 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { ArrowLeftRight, FolderOpen, RotateCcw, Scale } from "lucide-react";
 import type { FreezeResponse, RunResponse, RunRow, ScoreJson } from "@codecast/shared/contracts/evalsApi";
-import { PASS_MARK } from "./charts/scale";
+import { PASS_MARK, score2, shortSha, usd, verdictOfRow, RUN_TABS, RUN_TAB_WORDS, epochOfBatch, previousEpochRun, seedNeighbours, samePromptSpread, runCommands, compareCandidates, replyReading, rubricOfRun, dryGradeWords, dodgeOffsets, replyOfRun } from "@platform/evals/client";
 import { evalsHref } from "./evalsPaths";
 import { MomentPane, ProductionCard } from "./FreezeView";
 import { GateList } from "./GateList";
 import { useEvalsHost, type RunPanel } from "./host";
 import { JudgeCall, JudgeChecks, MissedFloors, RubricCard, ScoreHistory } from "./JudgeChecks";
 import { Caret, CopyButton, EvalsLink, KeyHint, LockBadge, ProvenanceChips, TextPane, VerdictGlyph } from "./parts";
-import { score2, shortSha, usd } from "./format";
-import { verdictOfRow } from "./verdictModel";
-import { RUN_TABS, RUN_TAB_WORDS, epochOfBatch, previousEpochRun, seedNeighbours, samePromptSpread, runCommands, compareCandidates, replyReading, rubricOfRun, dryGradeWords, dodgeOffsets } from "./runModel";
-import { replyOfRun } from "./freezeModel";
 
 // ── Header ──────────────────────────────────────────────────────────────────
 

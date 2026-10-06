@@ -7,10 +7,10 @@ import { useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import type { FreezeResponse, OverviewResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
 import { useDebounce, useEvalsClient, useEvalsHealth, useEvalsLoaded, useEvalsResource } from "../../lib/evals/hooks";
-import { evalsHref, evalsSearchTargets, evalsSection, type EvalsSearchKnown, type EvalsView } from "./evalsPaths";
+import { evalsSection, type EvalsSearchKnown, type EvalsView, shortSha } from "@platform/evals/client";
+import { codecastEvalsPaths, evalsHref } from "./evalsPaths";
 import { useEvalsHost } from "./host";
 import { EvalsLink } from "./parts";
-import { shortSha } from "./format";
 
 const SECTIONS = [
   { key: "surfaces", label: "Surfaces", href: evalsHref.home() },
@@ -85,7 +85,7 @@ function EvalsSearch() {
     for (const f of found.freezes) if (!freezes.has(f.id)) freezes.set(f.id, f);
     return { ...loaded, freezes: [...freezes.values()], runs: found.runs };
   }, [loaded, found]);
-  const targets = useMemo(() => evalsSearchTargets(q, known), [q, known]);
+  const targets = useMemo(() => codecastEvalsPaths.searchTargets(q, known), [q, known]);
   // The surfaces and their batches come from the wall's answer: fetch it when
   // the box is used, so it works from any view (cached, shared with the wall).
   const wantKnown = () => {

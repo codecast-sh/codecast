@@ -5,7 +5,7 @@
 import { Link2 } from "lucide-react";
 import type { GateResultJson } from "@codecast/shared/contracts/evalsApi";
 import { VerdictGlyph } from "./parts";
-import { gateAnchor, orderGates, gateEvidenceWords } from "./runModel";
+import { gateAnchor, orderGates, gateEvidenceWords } from "@platform/evals/client";
 
 /** A row's link to itself: a plain click moves the address in place (the page lands on it), a modified click is the browser's. */
 export function AnchorLink({ anchor, href, onAnchor, label }: { anchor: string; href: string; onAnchor: (anchor: string) => void; label: string }) {

@@ -1,4 +1,5 @@
-// The one integrations surface (docs/architecture/issue-sync.md S9): Slack,
+// The one integrations surface (docs/architecture/issue-sync.md S9): the
+// assistant's mail and calendar through Whisk (WhiskCard), then Slack,
 // GitHub, Linear, Google and Notion, each with connect, disconnect, who
 // connected it, health, and what it enables — plus the imported issue sources
 // inside the GitHub and Linear cards.
@@ -16,7 +17,7 @@
 // connectors redirect back here with a confirm token in the URL fragment, which
 // is read once, spent in this signed-in session, and cleared.
 
-import { User, Users } from "lucide-react";
+import { Sparkles, User, Users } from "lucide-react";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
@@ -29,6 +30,7 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useConnectorReturn } from "../../../hooks/useConnectorReturn";
 import { SettingsCallout, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { IntegrationCard } from "../../../components/integrations/IntegrationCard";
+import { WhiskCard } from "../../../components/integrations/WhiskCard";
 import { SourcesSection } from "../../../components/ops/SourcesSection";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
 import { TeamSwitcher } from "../../../components/TeamSwitcher";
@@ -76,6 +78,12 @@ export default function IntegrationsPage() {
           {describeConnectorError(notice.reason)}
         </SettingsCallout>
       )}
+
+      {/* The assistant's own connection: mail and calendar through Whisk,
+          personal, and first because it is what hosted mode runs on. */}
+      <SettingsSection title="Assistant" icon={Sparkles}>
+        <WhiskCard />
+      </SettingsSection>
 
       <BrowserExtensionSetup />
 

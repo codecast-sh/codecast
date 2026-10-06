@@ -73,6 +73,7 @@ import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { PaneControls } from "./stage/PaneControls";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useModeWords } from "../lib/surfaces";
 const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
 );
@@ -1121,6 +1122,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
   onOpenSession: (session: InboxSession) => void;
 }) {
   const now = useCoarseNow(30_000);
+  const words = useModeWords();
   const watching = useLiveWatchRows(session, now);
   const workflow = workflowBarVisible(session);
   const openWorkflow = useOpenWorkflowRun(session);
@@ -1134,8 +1136,8 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
   const monCount = watching.length - bgCount;
   const label = primary
     ? rows.length === 1
-      ? "Trigger — fires into this session"
-      : `${rows.length} triggers fire into this session`
+      ? `${words.trigger}: fires into ${words.thisConversation}`
+      : `${rows.length} ${words.triggersPlural} fire into ${words.thisConversation}`
     : workflow
       ? "Workflow — running inside this session"
       : "Background work — running inside this session";
@@ -1160,7 +1162,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
           <Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} />
           <SchedHealthDot accent={schedAccent(primary.task)} task={primary.task} />
           <span className="text-[11px] text-gray-400 truncate min-w-0">
-            {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} triggers`}
+            {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} ${words.triggersPlural}`}
           </span>
           {rows.length > 1 && (
             <span className="text-[10px] text-sol-text-dim truncate min-w-0">
@@ -1603,6 +1605,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
   onOpenSession: (session: InboxSession) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const words = useModeWords();
   // Keyboard cursor into the roster: −1 = nothing selected (mouse mode).
   const [cursor, setCursor] = useState(-1);
   const now = useCoarseNow(30_000);
@@ -1703,7 +1706,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
               <span className="ml-auto flex items-center gap-3">
                 <Link href="/triggers?new=1" onClick={close} className="text-sol-text-muted hover:text-sol-text no-underline">+ New</Link>
                 <Link href="/triggers" onClick={close} className="inline-flex items-center gap-0.5 font-medium text-sol-amber no-underline hover:underline underline-offset-2">
-                  All triggers <ArrowUpRight className="w-3 h-3" />
+                  All {words.triggersPlural} <ArrowUpRight className="w-3 h-3" />
                 </Link>
               </span>
             </div>
@@ -1750,7 +1753,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
         onClick={toggle}
         aria-expanded={open}
         aria-haspopup="true"
-        aria-label={`Triggers: ${rows.length} armed`}
+        aria-label={`${words.triggers}: ${rows.length} armed`}
         className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
       >
         <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -1758,7 +1761,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-sol-amber">
-          Triggers <span className="text-sol-amber/60 tabular-nums">{rows.length}</span>
+          {words.triggers} <span className="text-sol-amber/60 tabular-nums">{rows.length}</span>
         </span>
         {nextIn !== undefined && (
           <span className="text-[10px] text-sol-text-dim truncate min-w-0">

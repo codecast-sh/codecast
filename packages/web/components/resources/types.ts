@@ -1,3 +1,4 @@
+import type { ResourceProcess } from "@codecast/shared/contracts";
 // The resource monitor's view contract. The page renders only these shapes:
 // machines come from the machineResources feed joined to the device roster,
 // sessions from the managed fleet joined to canonical inbox rows, and the
@@ -64,6 +65,10 @@ export type OffloadCandidate = {
   /** A range: resident memory counts shared pages, so relief is never exact. */
   relief: { cpu?: number; rssLow?: number; rssHigh?: number };
   staysLocal: Array<{ label: string; pid?: number; cpu?: number; rss?: number; why: string }>;
+  /** Every process the move stops on this machine, busiest first: the agent's
+   *  tree, and what it left running outside it (`detached`: a tmux pane or a
+   *  backgrounded job), which the source stops once the handoff succeeds. */
+  stops: Array<{ label: string; pid: number; cpu: number; rss: number; detached?: ResourceProcess["detached"] }>;
   disruption: "idle" | "between_turns" | "mid_turn";
   perDestination: Record<string, {
     readiness: OffloadReadiness;

@@ -9,7 +9,7 @@ import { evalsHref } from "./evalsPaths";
 import { useEvalsHost } from "./host";
 import { CommitMarks } from "./CommitPanel";
 import { ChangedPrompts, EvalsLink } from "./parts";
-import { shortSha, whenLabel } from "./format";
+import { shortSha, whenLabel } from "@platform/evals/client";
 
 export interface EpochDiffSheetProps {
   /** The surface, so a commit opens with its diff limited to the declared sources. */

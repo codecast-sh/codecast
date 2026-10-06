@@ -97,6 +97,7 @@ import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearc
 import { FilePathContext } from "../lib/filePathLinks";
 import { WorktreesProvider } from "./worktree/WorktreesContext";
 import { SessionWorktreePills } from "./worktree/WorktreePill";
+import { Surface } from "../lib/surfaces";
 import { isStickyEligible, pickStickyFallback, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt } from "./sessionMessage";
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -104,7 +105,7 @@ import { composerPresenceEnabled } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
-import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView } from "../store/inboxStore";
+import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -385,7 +386,7 @@ const ConversationViewInner = (
   const simpleViewPref = useInboxStore((st) => resolveSimpleView(st.clientState.ui));
   // Minimal tucks the schedule, plan and workflow strips under the header
   // away; this preference (session menu, command palette) brings them back.
-  const minimalStyle = useInboxStore((st) => st.clientState.ui?.visual_style === "minimal");
+  const minimalStyle = useInboxStore((st) => resolveVisualStyle(st.clientState.ui) === "minimal");
   const showSessionContext = useInboxStore((st) => st.clientState.ui?.show_session_context === true);
   useWatchEffect(() => {
     if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
@@ -3793,8 +3794,10 @@ const ConversationViewInner = (
                     A share guest gets what ran and when; the rest links into a workspace they cannot open. */}
                 {!guest && <>
                 <CloudAgentLink actions={cloudAgentActions} />
-                <BranchCodeLink session={conversation} />
-                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
+                <Surface name="gitChips">
+                  <BranchCodeLink session={conversation} />
+                  <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
+                </Surface>
             {(conversation as any)?.active_plan && (
               <span data-simple-hide className="contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
@@ -3887,17 +3890,19 @@ const ConversationViewInner = (
                     "where is this running" reads as one thing. */}
                 <span data-cc-runner data-cc-keep="live" className="inline-flex items-center flex-shrink-0">
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
-                {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
-                {conversation?._id && !guest && <SessionHooksOffChip conversationId={String(conversation._id)} />}
+                {conversation?._id && !guest && <Surface name="machineChips">
+                  <SessionDaemonChip conversationId={String(conversation._id)} />
+                  <SessionHooksOffChip conversationId={String(conversation._id)} />
+                </Surface>}
                 {/* Kept in simple view (dimmed, copy sub-button hidden inside
                     the pill): the live tmux badge is how you reach the
                     terminal split, which simple view users still want. */}
-                {!guest && <span data-simple-dim className="inline-flex items-stretch">
+                {!guest && <Surface name="terminal"><span data-simple-dim className="inline-flex items-stretch">
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
-                </span>}
+                </span></Surface>}
                 </span>
                 {/* Where a cloud session's edits land on a laptop, when mirrored (LocalMirror.tsx). */}
-                {conversation?._id && !guest && <LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} />}
+                {conversation?._id && !guest && <Surface name="machineChips"><LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} /></Surface>}
 
                 {/* Who has this session open right now: teammates' faces off
                     the roster's viewing field. A solo session shows nothing. */}
@@ -4331,9 +4336,11 @@ const ConversationViewInner = (
             drag. */}
         {conversation && !guest && (
           <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
-            <Suspense fallback={null}>
-              <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
-            </Suspense>
+            <Surface name="terminal">
+              <Suspense fallback={null}>
+                <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+              </Suspense>
+            </Surface>
             <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} lastPage={lastBrowserPage} />
           </ErrorBoundary>
         )}

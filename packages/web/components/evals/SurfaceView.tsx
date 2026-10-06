@@ -17,10 +17,7 @@ import { EpochDiffSheet } from "./EpochDiffSheet";
 import { EvalsLink, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
 import { useEvalsHost } from "./host";
-import { score2, shortModel, usd, batchLabel } from "./format";
-import { baselineWords, newestBaseline, noiseFlipWords, noiseFlipsShort, separationTitle, verdictOfSet } from "./verdictModel";
-import { surfaceColumns, type SurfaceAxis } from "./seismographModel";
-import { type SurfaceCadence, type SurfaceFilters, orderedPair, nextPins } from "./surfaceModel";
+import { score2, shortModel, usd, batchLabel, baselineWords, newestBaseline, noiseFlipWords, noiseFlipsShort, separationTitle, verdictOfSet, surfaceColumns, type SurfaceAxis, type SurfaceCadence, type SurfaceFilters, orderedPair, nextPins } from "@platform/evals/client";
 
 export interface Loaded<T> {
   res: T | null;

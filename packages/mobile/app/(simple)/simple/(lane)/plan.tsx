@@ -1,4 +1,4 @@
-// The plan on the phone (web app/simple/plan/page.tsx): this month's usage as
+// The plan on the phone (web app/settings/plan/page.tsx): this month's usage as
 // a meter, the plans, and the ways to get more. The figures are the web's
 // (usePlanFigures), and checkout is the web's (useBilling); a Stripe page
 // opens in the browser and returns to the web plan page, and the meter here

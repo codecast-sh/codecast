@@ -13,10 +13,8 @@ import type { CommitRef, Epoch, FootingMarker, RunRow } from "@codecast/shared/c
 import { BrushRect } from "./charts/BrushRect";
 import { useDayBrush } from "./charts/useDayBrush";
 import { FootingGlyph } from "./charts/ScoreStrip";
-import { PASS_MARK, dayList, dayStart, jitter, nearestIndex, scoreScale, stepPath, timeAxisLabels } from "./charts/scale";
-import { score2, shortSha, usd, whenLabel } from "./format";
+import { PASS_MARK, dayList, dayStart, jitter, nearestIndex, scoreScale, stepPath, timeAxisLabels, score2, shortSha, usd, whenLabel, type SurfaceColumn, type SurfaceColumns, HOUR, type EpochBand, epochBandsOf, REP_HATCH_ID, scoredRep, gateDropped, repY, medianOf } from "@platform/evals/client";
 import { useEvalsHost } from "./host";
-import { type SurfaceColumn, type SurfaceColumns, HOUR, type EpochBand, epochBandsOf, REP_HATCH_ID, scoredRep, gateDropped, repY, medianOf } from "./seismographModel";
 
 /** Alternating faint bands, a perforation at each boundary and an e1, e2 label along the top. The label opens the epoch's diff when the chart can. */
 export function EpochBands({ bands, top, bottom, onOpenEpoch }: { bands: readonly EpochBand[]; top: number; bottom: number; onOpenEpoch?: (n: number) => void }) {

@@ -1,5 +1,5 @@
 // Every open approval, oldest first: the things the assistant is holding
-// until the person says yes (web app/simple/approvals/page.tsx).
+// until the person says yes (on the web, the questions page).
 import { View } from 'react-native';
 import { Text } from '@/components/Themed';
 import { useLaneData } from '@codecast/web/components/simple/useLane';

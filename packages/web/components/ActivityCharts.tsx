@@ -6,9 +6,9 @@ import { SegmentedToggle } from "./SegmentedToggle";
 import { HEAT_COLORS_LIGHT, HEAT_COLORS_DARK, heatColor, useContainerWidth, HoverTip } from "./ActivityHeatmap";
 import { BrushRect as DayBrushRect } from "./evals/charts/BrushRect";
 import { useDayBrush } from "./evals/charts/useDayBrush";
-import { MONTHS, timeAxisLabels } from "./evals/charts/scale";
+import { MONTHS, timeAxisLabels } from "@platform/evals/client";
 
-// The day axis and the brush are the Evals charts' own (components/evals/charts); these charts reuse them.
+// The day axis (@platform/evals/client) and the brush (components/evals/charts) are the Evals charts' own; these charts reuse them.
 export { timeAxisLabels, useDayBrush };
 
 // Detailed activity charts (hour-of-day punchcard + per-day/hourly series),

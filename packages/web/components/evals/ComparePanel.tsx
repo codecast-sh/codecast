@@ -10,8 +10,7 @@ import type { BatchStats, BatchesResponse, EvalRoute } from "@codecast/shared/co
 import { useEvalsHost } from "./host";
 import { ChangedPrompts, EvalsLink, FlipRunLinks, LockBadge, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
-import { plural, score2, shortModel, usd, batchLabel } from "./format";
-import { flipFreezeHref, verdictOfSet } from "./verdictModel";
+import { plural, score2, shortModel, usd, batchLabel, flipFreezeHref, verdictOfSet } from "@platform/evals/client";
 
 export interface ComparePanelProps {
   surface: string;
@@ -139,7 +138,7 @@ export function ComparePanel({ surface, route, a, b, res, loading, error, onClos
                     <div key={ex.freeze} className="ev-sf-example" data-ev-example={ex.direction}>
                       <div className="ev-sf-example-head">
                         <span className={ex.direction === "broke" ? "ev-fail" : "ev-pass"}>{ex.direction}</span>
-                        <EvalsLink href={f ? flipFreezeHref(f) : evalsHref.freeze(ex.freeze)} className="ev-sf-example-name">
+                        <EvalsLink href={f ? flipFreezeHref(evalsHref, f) : evalsHref.freeze(ex.freeze)} className="ev-sf-example-name">
                           {ex.name}
                         </EvalsLink>
                         {f && <LockBadge visibility={f.visibility} />}
