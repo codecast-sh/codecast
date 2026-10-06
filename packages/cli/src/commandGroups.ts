@@ -359,9 +359,13 @@ Subcommands:
   },
   {
     token: "ship",
-    description: `Ship signals: record that a surface deployed, for the team's Changes page
+    description: `Ship: land a change the project's way, or record that a surface deployed
 
 Subcommands:
+  cast ship run --task ct-42            Ship a task's change: checks, PR, shepherd (same as the web's Ship)
+  cast ship run --session <id>          Ship a session's diff
+  cast ship run --pr 123                Ship a pull request; this one merges once green
+  cast ship run --task ct-42 --dry-run  Print what Ship would do, start nothing
   cast ship mark --surface backend      Mark HEAD of this checkout as deployed
   cast ship mark --surface web --sha <sha> --version 1.2.3`,
     load: () => import("./shipCommand.js").then((m) => m.registerShipCommand),
@@ -402,7 +406,8 @@ host and token: cast integrations connect <provider>`,
 
   cast replay ls [--source s] [--group eg-N]
   cast replay show rp-N
-  cast replay repro rp-N [--base-url https://app] [--out file]`,
+  cast replay repro rp-N [--base-url https://app] [--out file]
+  cast replay import --source <posthog|sentry> [--since 30d|all] [--status|--stop]`,
     load: () => import("./replayCommand.js").then((m) => m.registerReplayCommand),
   },
   {

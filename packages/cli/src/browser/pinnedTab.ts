@@ -16,6 +16,7 @@ import { OWNER_HARNESS_ENV } from "./owner.js";
 import { sameDocument } from "./url.js";
 import { detachSessionDaemon, ownerState, scanLiveOwners, type LiveOwners } from "./engineReap.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
+import { paneOwnerId, socketOfTmuxEnv } from "../tmuxRoute.js";
 
 /** The engine daemon for this session, if one is alive. */
 export function sessionDaemonPid(session: string, stateDir = engineStateDir()): number | null {
@@ -129,7 +130,7 @@ export function tabHolderIsSelf(holder: string, session: string, env: NodeJS.Pro
   if (baseSessionKey(holder) === baseSessionKey(session)) return true;
   const pane = env.TMUX_PANE;
   if (pane) {
-    const paneKey = engineSessionKey(`pane:${pane}`);
+    const paneKey = engineSessionKey(`pane:${paneOwnerId(pane, socketOfTmuxEnv(env.TMUX))}`);
     if (holder === paneKey || holder === realSessionKey(paneKey) || holder === paneSessionKey(paneKey)) return true;
   }
   for (const name of OWNER_HARNESS_ENV) {

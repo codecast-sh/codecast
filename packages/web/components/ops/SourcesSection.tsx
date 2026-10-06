@@ -30,6 +30,7 @@ import { eventNameRows, KEYED_SOURCE_PROVIDERS, sourceConfigProblem } from "@cod
 import { appSourceSnippets, sourceSnippets, type ConfigSource } from "./opsModel";
 import { opsHref } from "./opsPaths";
 import { ProviderIcon, SOURCE_PROVIDER_LABEL } from "./parts";
+import { ReplayImportLine, hasVendorRecordings } from "./ReplayImport";
 import type { OpsSource } from "./opsTypes";
 import "./ops.css";
 
@@ -305,39 +306,46 @@ function SourceRow({ source: s, onRotated, unconnected }: { source: OpsSource; o
     }
   };
   return (
-    <div className="flex items-center gap-3 text-[12.5px] py-1.5 whitespace-nowrap border-b last:border-b-0 border-[color:color-mix(in_srgb,var(--sol-border)_60%,transparent)]">
-      <span className="ops-dot" data-status={unconnected && s.status === "active" ? "error" : s.status} />
-      <ProviderIcon provider={s.provider} className="w-3.5 h-3.5" />
-      <Link href={opsHref.tab("timeline", { source: s.name })} className="text-sol-text font-medium hover:underline shrink-0">{s.name}</Link>
-      <span className="ops-mono text-sol-text-dim text-[11px] shrink-0">{s.short_id}</span>
-      {s.key_prefix && <span className="ops-mono text-sol-text-dim text-[11px]" title="The key's first characters">{s.key_prefix}…</span>}
-      <span className="text-sol-text-muted text-[11.5px] ops-num shrink-0">
-        {s.events_today ?? 0} today{(s.dropped_today ?? 0) > 0 ? `, ${s.dropped_today} dropped` : ""}
-        {s.last_event_at ? `, last ${formatRelative(s.last_event_at, now)}` : ", nothing yet"}
-      </span>
-      {/* What is left of the line: the busiest event names, or the error. It truncates; the controls never wrap. */}
-      <span className="flex-1 min-w-0 flex items-center gap-3 overflow-hidden">
-        <SourceEventNames source={s} now={now} />
-        {unconnected && (
-          <span className="text-[11.5px] truncate" style={{ color: "var(--sol-orange)" }} title="Its connection is gone, so every read through it fails until it is connected again">
-            Reads nothing: connect {CONNECTION_LABEL[s.provider as Connected]} above
-          </span>
-        )}
-        {s.last_error && <span className="text-[11.5px] truncate" style={{ color: "var(--sol-red)" }} title={s.last_error}>{s.last_error}</span>}
-      </span>
-      {!stub && (
-        <>
-          {/* A source stopped on a lost connection resumes like a paused one. */}
-          <button type="button" className="text-[11px] text-sol-text-muted hover:text-sol-text" onClick={() => store().setOpsSourceStatus(s._id, s.status === "active" ? "paused" : "active")}>
-            {s.status === "active" ? "Pause" : "Resume"}
-          </button>
-          {s.keyed && (
-            <button type="button" className="text-[11px] text-sol-text-muted hover:text-sol-text" disabled={rotating} onClick={() => void rotate()}>
-              {rotating ? "Rotating" : "Rotate key"}
-            </button>
+    <div className="py-1.5 border-b last:border-b-0 border-[color:color-mix(in_srgb,var(--sol-border)_60%,transparent)]">
+      <div className="flex items-center gap-3 text-[12.5px] whitespace-nowrap">
+        <span className="ops-dot" data-status={unconnected && s.status === "active" ? "error" : s.status} />
+        <ProviderIcon provider={s.provider} className="w-3.5 h-3.5" />
+        <Link href={opsHref.tab("timeline", { source: s.name })} className="text-sol-text font-medium hover:underline shrink-0">{s.name}</Link>
+        <span className="ops-mono text-sol-text-dim text-[11px] shrink-0">{s.short_id}</span>
+        {s.key_prefix && <span className="ops-mono text-sol-text-dim text-[11px]" title="The key's first characters">{s.key_prefix}…</span>}
+        <span className="text-sol-text-muted text-[11.5px] ops-num shrink-0">
+          {s.events_today ?? 0} today{(s.dropped_today ?? 0) > 0 ? `, ${s.dropped_today} dropped` : ""}
+          {s.last_event_at ? `, last ${formatRelative(s.last_event_at, now)}` : ", nothing yet"}
+        </span>
+        {/* What is left of the line: the busiest event names, or the error. It truncates; the controls never wrap. */}
+        <span className="flex-1 min-w-0 flex items-center gap-3 overflow-hidden">
+          <SourceEventNames source={s} now={now} />
+          {unconnected && (
+            <span className="text-[11.5px] truncate" style={{ color: "var(--sol-orange)" }} title="Its connection is gone, so every read through it fails until it is connected again">
+              Reads nothing: connect {CONNECTION_LABEL[s.provider as Connected]} above
+            </span>
           )}
-          <ConfirmButton label="Remove" question="Its issues go too; the timeline keeps its rows." onConfirm={() => store().removeOpsSource(s._id)} />
-        </>
+          {s.last_error && <span className="text-[11.5px] truncate" style={{ color: "var(--sol-red)" }} title={s.last_error}>{s.last_error}</span>}
+        </span>
+        {!stub && (
+          <>
+            {/* A source stopped on a lost connection resumes like a paused one. */}
+            <button type="button" className="text-[11px] text-sol-text-muted hover:text-sol-text" onClick={() => store().setOpsSourceStatus(s._id, s.status === "active" ? "paused" : "active")}>
+              {s.status === "active" ? "Pause" : "Resume"}
+            </button>
+            {s.keyed && (
+              <button type="button" className="text-[11px] text-sol-text-muted hover:text-sol-text" disabled={rotating} onClick={() => void rotate()}>
+                {rotating ? "Rotating" : "Rotate key"}
+              </button>
+            )}
+            <ConfirmButton label="Remove" question="Its issues go too; the timeline keeps its rows." onConfirm={() => store().removeOpsSource(s._id)} />
+          </>
+        )}
+      </div>
+      {hasVendorRecordings(s) && (
+        <div className="pl-[38px] pt-1">
+          <ReplayImportLine source={s} />
+        </div>
       )}
     </div>
   );

@@ -1,0 +1,2 @@
+.spin { position: relative; flex: none; display: inline-block; border-radius: 50%; border: var(--line-thick); background: var(--paper); animation: orbit 1.2s linear infinite; }
+.spin::after { content: ""; position: absolute; top: 10%; left: 32%; width: 26%; height: 26%; border-radius: 50%; background: var(--tomato); }

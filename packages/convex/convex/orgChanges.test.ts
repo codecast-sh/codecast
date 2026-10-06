@@ -457,6 +457,8 @@ const CASES: Case[] = [
   { kind: "upgrade", setup: async (f) => { await f.role(); f.db._tables.org_templates = [TEMPLATE]; await f.apply(HIRE); }, change: { kind: "upgrade", instance: "seo-1", template: "seo", to: "1.1.0", digest: DIGEST } },
   { kind: "routine", setup: (f) => f.apply({ kind: "role", name: "Growth", handle: "growth", seat: { existing: "jx70001" } }), change: { kind: "routine", handle: "growth", title: "Review", prompt: "Review progress", every: "1d" } },
   { kind: "project_meta", change: { kind: "project_meta", project: "pr-1", goal: "Grow", priority: "p1" } },
+  // A charter edited in place (S7): the row holds the charter before and after, so the undo restores the words.
+  { kind: "charter_edit", setup: async (f) => { const r = await f.role(); await f.db.patch(r._id, { charter: "Keeps paid acquisition on budget and pointed at the funnel." }); }, change: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] } },
   { kind: "adopt", setup: (f) => f.role(), change: { kind: "adopt", handle: "growth", conversation: "jx70001" } },
   { kind: "file", change: { kind: "file", plan: "pl-1", project: "pr-1" } },
   { kind: "plan_status", change: { kind: "plan_status", plan: "pl-1", status: "done", reason: "finished" } },
