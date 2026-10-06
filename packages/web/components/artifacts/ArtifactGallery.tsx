@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Copy, Globe } from "lucide-react";
 import { ArtifactCard, type ArtifactRow } from "./ArtifactCard";
 import { ArtifactEditModal } from "./ArtifactEditModal";
+import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
 
 const EXAMPLE_CMD = "cast publish report.html";
 
@@ -85,6 +86,12 @@ export function ArtifactGallery() {
           cast publish &lt;file&gt;
         </span>
       </div>
+
+      <FeatureUpsell
+        slug="publish"
+        className="mb-5"
+        reason="Agents can publish their reports, dashboards and mockups here, each at a link you can share."
+      />
 
       {data === undefined ? (
         <SkeletonGrid />

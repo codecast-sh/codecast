@@ -1,0 +1,13 @@
+.scrim {
+  position: fixed; inset: 0; z-index: var(--z-modal); background: var(--scrim);
+  display: grid; place-items: center; padding: var(--s4); animation: fade var(--t-quick) var(--glide);
+}
+.modal {
+  background: var(--cream); border: var(--line-heavy); border-radius: var(--r-2xl); box-shadow: var(--pop-xl);
+  max-height: calc(100dvh - 32px); overflow: auto; animation: arrive var(--t-arrive) var(--squish);
+}
+@keyframes fade { from { opacity: 0; } }
+@media (max-width: 767px) {
+  .scrim { padding: 0; place-items: end stretch; }
+  .modal { width: 100% !important; max-height: 100dvh; height: 100dvh; border-radius: 0; border-width: 0; box-shadow: none; }
+}

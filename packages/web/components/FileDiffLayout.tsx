@@ -31,6 +31,12 @@ import { useTrackedStore } from "../store/inboxStore";
 import { findCommonPrefix, shortenPrefix, stripCommonPrefix, treeOrder } from "../lib/diffFileTree";
 import { FileSidebar } from "./FileDiffSidebar";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { usePaneShortcutAction, useShortcutContext } from "../shortcuts";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { useFollowSurface } from "../hooks/useFollowSurface";
+import { landOn } from "../hooks/useDiffAddress";
+import { notifyFollowView } from "../lib/follow";
+import type { AnchorPlacement, CodeAnchorText } from "@codecast/shared/comments";
 
 export interface DiffFile {
   filename: string;
@@ -50,9 +56,10 @@ export type FileLineThreads = {
    *  how a surface opens a composer where no thread exists yet. */
   threadsFor: (filename: string) => ReadonlyMap<string, unknown[]> | undefined;
   /** Render one anchor's thread (and its composer, when the surface wants one). */
-  render: (filename: string, anchor: DiffLineAnchor, items: unknown[]) => React.ReactNode;
-  /** Hover handle click. Omit to leave the diff read only. */
-  onComment?: (filename: string, anchor: DiffLineAnchor | undefined, code: string) => void;
+  render: (filename: string, anchor: DiffLineAnchor, items: unknown[], placement?: AnchorPlacement) => React.ReactNode;
+  /** Hover handle click. Omit to leave the diff read only. `anchorLines` is
+   *  the text to store with the comment (shared/comments/codeAnchor.ts). */
+  onComment?: (filename: string, anchor: DiffLineAnchor | undefined, code: string, anchorLines?: CodeAnchorText) => void;
 };
 
 /** What a surface knows about one file beyond its diff, for the tree and header. */
@@ -73,7 +80,10 @@ export interface FileDiffLayoutProps {
   onToggleViewed?: (filename: string) => void;
   title?: string;
   subtitle?: React.ReactNode;
+  /** Controls in the pane's header row, before the view buttons. */
   headerExtra?: React.ReactNode;
+  /** What an empty tree says, in place of "No files changed". */
+  emptyState?: React.ReactNode;
   sidebarHeader?: React.ReactNode;
   onFileComment?: (filename: string, lineNumber?: number) => void;
   renderFileExtra?: (file: DiffFile) => React.ReactNode;
@@ -125,7 +135,7 @@ export type DiffFlow = {
 type Layout = { [key: string]: number };
 const DEFAULT_FILE_DIFF_LAYOUT = { tree: 25, content: 75 };
 
-function getFileExtension(filePath: string): string | undefined {
+export function getFileExtension(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
   const langMap: Record<string, string> = {
     ts: "typescript",
@@ -237,7 +247,7 @@ function FileHeaderName({
   );
 }
 
-function FilePatchDiff({ patch, ...props }: { patch: string } & Omit<React.ComponentProps<typeof DiffView>, "hunks">) {
+export function FilePatchDiff({ patch, ...props }: { patch: string } & Omit<React.ComponentProps<typeof DiffView>, "hunks">) {
   const { hunks } = useMemo(() => parsePatch(patch), [patch]);
   return <DiffView {...props} hunks={hunks} />;
 }
@@ -343,7 +353,7 @@ function FileDiffContent({
   }
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden">
+    <div className="h-full overflow-y-auto overflow-x-hidden" data-follow-diff-scroll>
       <div className="sticky top-0 z-10 bg-sol-bg-alt border-b border-sol-border/30 px-3 py-1 flex items-center justify-between gap-x-3 gap-y-1 flex-wrap">
         <div className="flex items-center gap-1.5 min-w-[min(100%,10rem)] flex-1 basis-[10rem]">
           {onToggleSidebar && (
@@ -402,10 +412,11 @@ function lineThreadProps(lineThreads: FileLineThreads | undefined, file: DiffFil
   return {
     showLineNumbers: true,
     lineThreads: lineThreads.threadsFor(path),
-    renderLineThread: (anchor: DiffLineAnchor, items: unknown[]) =>
-      lineThreads.render(path, anchor, items),
+    renderLineThread: (anchor: DiffLineAnchor, items: unknown[], placement?: AnchorPlacement) =>
+      lineThreads.render(path, anchor, items, placement),
     onLineComment: lineThreads.onComment
-      ? (anchor: DiffLineAnchor | undefined, code: string) => lineThreads.onComment!(path, anchor, code)
+      ? (anchor: DiffLineAnchor | undefined, code: string, anchorLines?: CodeAnchorText) =>
+          lineThreads.onComment!(path, anchor, code, anchorLines)
       : undefined,
   };
 }
@@ -430,13 +441,13 @@ function ViewedToggle({
   const path = file.originalFilename ?? file.filename;
   const viewed = !!fileMarks?.(path)?.viewed;
   return (
+    <ShortcutTooltip label={viewed ? "Clear the viewed mark" : "Mark viewed: it folds until it changes again"} action="diff.toggleSeen">
     <label
       className={cn(
         "inline-flex items-center gap-1.5 cursor-pointer select-none text-[11px] transition-colors",
         viewed ? "text-sol-green" : "text-sol-text-dim hover:text-sol-text-muted",
         className,
       )}
-      title="Mark this file viewed (m)"
     >
       <input
         type="checkbox"
@@ -454,8 +465,13 @@ function ViewedToggle({
       </span>
       Viewed
     </label>
+    </ShortcutTooltip>
   );
 }
+
+/** The file a keyboard gesture acts on, by ORIGINAL path: each view answers
+ *  for itself (the card under the pinned header, the selected file). */
+type InHand = React.MutableRefObject<(() => string | undefined) | null>;
 
 function UnifiedDiffView({
   files,
@@ -466,6 +482,7 @@ function UnifiedDiffView({
   fileHref,
   fileMarks,
   onToggleViewed,
+  inHand,
 }: {
   files: DiffFile[];
   onComment?: (filename: string, lineNumber?: number) => void;
@@ -475,24 +492,65 @@ function UnifiedDiffView({
   fileHref?: FileDiffLayoutProps["fileHref"];
   fileMarks?: FileDiffLayoutProps["fileMarks"];
   onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
+  inHand: InHand;
 }) {
+  const pathOf = (f: DiffFile) => f.originalFilename ?? f.filename;
+  // A viewed file folds to its header, the way a reader puts a finished page
+  // face down; a click on the chevron wins either way until the mark moves.
+  const [folded, setFolded] = useState<Map<string, boolean>>(new Map());
+  const isFolded = (path: string) => folded.get(path) ?? !!fileMarks?.(path)?.viewed;
+  const toggleViewed = onToggleViewed
+    ? (path: string) => {
+        setFolded((prev) => { const next = new Map(prev); next.delete(path); return next; });
+        onToggleViewed(path);
+      }
+    : undefined;
+
+  // The file in hand is the one whose header is pinned: the last card whose
+  // top has reached the top of the scroller.
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  inHand.current = () => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return undefined;
+    const top = scroller.getBoundingClientRect().top + 8;
+    let current: string | undefined = files[0] && pathOf(files[0]);
+    for (const el of scroller.querySelectorAll<HTMLElement>("[data-unified-file]")) {
+      if (el.getBoundingClientRect().top <= top) current = el.dataset.unifiedFile;
+      else break;
+    }
+    if (current) setFolded((prev) => { const next = new Map(prev); next.delete(current!); return next; });
+    return current;
+  };
+
   // Files sit a little apart, so the eye finds where one ends and the next
   // begins without reading the headers; each header stays pinned while its
   // own diff scrolls under it.
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden pb-8">
+    <div ref={scrollerRef} className="h-full overflow-y-auto overflow-x-hidden pb-8" data-follow-diff-scroll>
       {files.map((file, index) => {
         const status = getFileStatus(file.status);
         const language = getFileExtension(file.filename);
+        const path = pathOf(file);
+        const shut = isFolded(path);
+        const viewed = !!fileMarks?.(path)?.viewed;
 
         return (
-          <div key={file.filename} className="overflow-hidden mb-4 last:mb-0" id={`file-${index}`} style={{ contentVisibility: "auto", containIntrinsicBlockSize: "auto 500px" }}>
-            <div className="sticky top-0 z-10 bg-sol-bg-alt px-3 py-1.5 flex items-center justify-between gap-x-3 gap-y-1 flex-wrap border-y border-sol-border/30">
+          <div key={file.filename} data-unified-file={path} className="overflow-hidden mb-4 last:mb-0" id={`file-${index}`} style={{ contentVisibility: shut ? undefined : "auto", containIntrinsicBlockSize: "auto 500px" }}>
+            <div className={cn("sticky top-0 z-10 bg-sol-bg-alt px-3 py-1.5 flex items-center justify-between gap-x-3 gap-y-1 flex-wrap border-y border-sol-border/30")}>
               <div className="flex items-center gap-1.5 min-w-[min(100%,10rem)] flex-1 basis-[10rem]">
+                <button
+                  type="button"
+                  onClick={() => setFolded((prev) => new Map(prev).set(path, !shut))}
+                  className="p-0.5 -ml-1 rounded text-sol-text-dim hover:text-sol-text transition-colors shrink-0"
+                  title={shut ? "Show this file" : "Fold this file"}
+                  aria-expanded={!shut}
+                >
+                  {shut ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
                 <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
                   {status.label}
                 </span>
-                <FileHeaderName file={file} fileHref={fileHref} />
+                <FileHeaderName file={file} fileHref={fileHref} className={cn(shut && viewed && "opacity-60")} />
               </div>
               <span className="flex items-center gap-2 text-[11px] text-sol-text-dim shrink-0">
                 <span>
@@ -500,10 +558,10 @@ function UnifiedDiffView({
                   <span className="mx-0.5 text-sol-text-dim/30">/</span>
                   <span className="text-sol-red">-{file.deletions}</span>
                 </span>
-                <ViewedToggle file={file} fileMarks={fileMarks} onToggleViewed={onToggleViewed} />
+                <ViewedToggle file={file} fileMarks={fileMarks} onToggleViewed={toggleViewed} />
               </span>
             </div>
-            {file.patch ? (
+            {shut ? null : file.patch ? (
               <FilePatchDiff
                 patch={file.patch}
                 language={language}
@@ -520,7 +578,7 @@ function UnifiedDiffView({
                   : "No changes to display"}
               </div>
             )}
-            {renderExtra && renderExtra(file)}
+            {!shut && renderExtra && renderExtra(file)}
           </div>
         );
       })}
@@ -578,6 +636,7 @@ function FlowDiffView({
   sidebarOpen: wideTreeOpen,
   onToggleSidebar: toggleWideTree,
   files: givenFiles,
+  inHand,
 }: {
   files: DiffFile[];
   commonPrefix: string;
@@ -591,6 +650,7 @@ function FlowDiffView({
   onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  inHand: InHand;
 }) {
   const pathOf = (f: DiffFile) => f.originalFilename ?? f.filename;
   const files = useMemo(() => treeOrder(givenFiles), [givenFiles]);
@@ -703,6 +763,13 @@ function FlowDiffView({
       if (!wasViewed && at < order.length - 1) flow.onJumpFile(order[at + 1]);
     }
   });
+
+  inHand.current = () => {
+    const path = active ?? flow.selected?.file ?? (files[0] && pathOf(files[0]));
+    // The shortcut folds what it marks, like m.
+    if (path) setFolded((prev) => { const next = new Map(prev); next.delete(path); return next; });
+    return path;
+  };
 
   const selectedTreePath = files.find((f) => pathOf(f) === (active ?? flow.selected?.file))?.filename ?? null;
   const allFolded = files.every((f) => isFolded(pathOf(f)));
@@ -889,6 +956,7 @@ export function FileDiffLayout({
   title,
   subtitle,
   headerExtra,
+  emptyState,
   sidebarHeader,
   onFileComment,
   renderFileExtra,
@@ -921,6 +989,18 @@ export function FileDiffLayout({
   const toggleViewMode = () => {
     s.updateClientUI({ file_diff_view_mode: viewMode === "split" ? "unified" : "split" });
   };
+
+  // Cmd+Option+Y marks the file in hand viewed, whichever form is showing.
+  const inHand: InHand = useRef(null);
+  useShortcutContext("diff", !!onToggleViewed);
+  usePaneShortcutAction("diff.toggleSeen", () => {
+    if (!onToggleViewed) return false;
+    const current = strippedFiles[currentFileIndex];
+    const path = !flow && viewMode === "split" ? current && (current.originalFilename ?? current.filename) : inHand.current?.();
+    if (!path) return false;
+    onToggleViewed(path);
+    return true;
+  });
 
   useMountEffect(() => {
     const mobile = window.innerWidth < MOBILE_BREAKPOINT;
@@ -1036,21 +1116,71 @@ export function FileDiffLayout({
 
   const selectedFileData = strippedFiles.find((f) => f.filename === selectedFile) || null;
 
+  // Follow mode (lib/follow.ts): a pane diff is a place, the file in hand and
+  // the line at the top of its scroller. The page form reports through its
+  // address instead (useDiffAddress).
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const landRef = useRef<(() => void) | null>(null);
+  useFollowSurface(
+    {
+      read: () => {
+        const root = paneRef.current;
+        if (!root || root.offsetParent === null) return null;
+        const at = topDiffRow(root);
+        const file = viewMode === "unified" && at?.fileIndex !== undefined ? strippedFiles[at.fileIndex] : selectedFileData;
+        return file ? { diff: { file: file.originalFilename ?? file.filename, line: at?.line } } : null;
+      },
+      apply: (view) => {
+        const want = view.diff;
+        const root = paneRef.current;
+        if (!want || !root || root.offsetParent === null) return [];
+        const index = strippedFiles.findIndex((f) => (f.originalFilename ?? f.filename) === want.file);
+        if (index < 0) return [];
+        setSelectedFile(strippedFiles[index].filename);
+        setCurrentFileIndex(index);
+        landRef.current?.();
+        landRef.current = landOnDiffRow(paneRef, viewMode === "unified" ? index : null, want.line);
+        return ["diff"];
+      },
+    },
+    !flow,
+    [selectedFile, viewMode, strippedFiles],
+  );
+  useWatchEffect(() => {
+    const root = paneRef.current;
+    if (flow || !root) return;
+    root.addEventListener("scroll", notifyFollowView, { capture: true, passive: true });
+    return () => {
+      root.removeEventListener("scroll", notifyFollowView, { capture: true });
+      landRef.current?.();
+    };
+  }, [flow, viewMode, isMobile, files.length === 0]);
+
   const showHeader = title || subtitle || headerExtra;
 
   if (files.length === 0) {
     return (
       <div className="h-full flex flex-col">
-        {showHeader && (
+        {(title || subtitle) && (
           <div className="border-b border-sol-border px-4 py-3 bg-sol-bg">
             {title && <h1 className="text-lg font-semibold text-sol-text">{title}</h1>}
             {subtitle && <div className="mt-1">{subtitle}</div>}
           </div>
         )}
+        {(headerExtra || onCloseDiffPanel) && !title && (
+          <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-between shrink-0 gap-2">
+            <div className="flex items-center gap-3 min-w-0">{headerExtra}</div>
+            {onCloseDiffPanel && (
+              <Button variant="ghost" size="icon" className="h-8 w-8 opacity-50 hover:opacity-100" onClick={onCloseDiffPanel} title="Close diff panel (d)">
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        )}
         <div className="flex-1 flex items-center justify-center text-sol-text-muted">
           <div className="text-center">
             <FileText className="w-12 h-12 mx-auto mb-3 opacity-30" />
-            <p>No files changed</p>
+            {emptyState ?? <p>No files changed</p>}
           </div>
         </div>
       </div>
@@ -1075,6 +1205,7 @@ export function FileDiffLayout({
         onToggleViewed={onToggleViewed}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={toggleSidebar}
+        inHand={inHand}
       />
     );
   }
@@ -1094,6 +1225,7 @@ export function FileDiffLayout({
     onToggleViewed,
   };
 
+  const viewedCount = fileMarks ? files.filter((f) => fileMarks(f.originalFilename ?? f.filename)?.viewed).length : 0;
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
   const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0);
 
@@ -1121,14 +1253,18 @@ export function FileDiffLayout({
 
   if (viewMode === "unified") {
     return (
-      <div className="h-full flex flex-col">
+      <div ref={paneRef} className="h-full flex flex-col">
         <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-between shrink-0 gap-2">
           <div className="flex items-center gap-3 text-sm min-w-0 truncate">
+            {headerExtra}
             <span className="text-sol-text-muted shrink-0">
               {files.length} {files.length === 1 ? "file" : "files"} changed
             </span>
             <span className="text-sol-green font-medium shrink-0">+{totalAdditions}</span>
             <span className="text-sol-red font-medium shrink-0">-{totalDeletions}</span>
+            {viewedCount > 0 && (
+              <span className="text-sol-green text-xs shrink-0">{viewedCount} viewed</span>
+            )}
             {commonPrefix && (
               <span className="font-mono text-sol-text-dim text-xs truncate" title={commonPrefix}>
                 {shortenPrefix(commonPrefix)}/
@@ -1170,6 +1306,7 @@ export function FileDiffLayout({
            
             fileMarks={fileMarks}
             onToggleViewed={onToggleViewed}
+            inHand={inHand}
           />
         </div>
       </div>
@@ -1208,7 +1345,8 @@ export function FileDiffLayout({
       </div>
     </div>
   ) : (
-    <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-end shrink-0 gap-2">
+    <div className={cn("px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center shrink-0 gap-2", headerExtra ? "justify-between" : "justify-end")}>
+      {headerExtra && <div className="flex items-center gap-3 min-w-0">{headerExtra}</div>}
       <div className="flex items-center gap-1 shrink-0">
         {viewModeButton}
         <Button
@@ -1237,7 +1375,7 @@ export function FileDiffLayout({
 
   if (isMobile) {
     return (
-      <div className="h-full flex flex-col">
+      <div ref={paneRef} className="h-full flex flex-col">
         {headerContent}
         <div className="flex-1 min-h-0 relative">
           {sidebarOpen && (
@@ -1261,7 +1399,7 @@ export function FileDiffLayout({
 
   if (!sidebarOpen) {
     return (
-      <div className="h-full flex flex-col">
+      <div ref={paneRef} className="h-full flex flex-col">
         {headerContent}
         <div className="flex-1 min-h-0">
           <FileDiffContent {...diffContentProps} />
@@ -1271,7 +1409,7 @@ export function FileDiffLayout({
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div ref={paneRef} className="h-full flex flex-col">
       {headerContent}
       <div className="flex-1 min-h-0">
         <Group
@@ -1300,5 +1438,42 @@ export function FileDiffLayout({
         </Group>
       </div>
     </div>
+  );
+}
+
+// Sticky file header height in a pane scroller: a row under it is not read.
+const PANE_HEADER_PX = 32;
+
+/** The diff row at the top of a pane's scroller: its new-side line, and the
+ *  file card it sits in when every file is stacked (`file-<index>`). */
+function topDiffRow(root: HTMLElement): { line?: number; fileIndex?: number } | null {
+  const scroller = root.querySelector<HTMLElement>("[data-follow-diff-scroll]");
+  if (!scroller) return null;
+  const edge = scroller.getBoundingClientRect().top + PANE_HEADER_PX;
+  for (const row of scroller.querySelectorAll<HTMLElement>("[data-ln^='R']")) {
+    if (row.getBoundingClientRect().bottom <= edge) continue;
+    const card = row.closest<HTMLElement>("[id^='file-']");
+    const fileIndex = card ? Number(card.id.slice(5)) : undefined;
+    return { line: Number(row.dataset.ln!.slice(1)), fileIndex: Number.isFinite(fileIndex) ? fileIndex : undefined };
+  }
+  return { line: undefined };
+}
+
+/** Bring a file (its card, when stacked) and a new-side line to the top of a
+ *  pane's scroller, the nearest line before it when the diff leaves it out. */
+function landOnDiffRow(paneRef: React.RefObject<HTMLElement | null>, fileIndex: number | null, line: number | undefined): () => void {
+  return landOn(
+    () => paneRef.current?.querySelector<HTMLElement>("[data-follow-diff-scroll]"),
+    (scroller) => {
+      const scope = fileIndex === null ? scroller : scroller.querySelector<HTMLElement>(`[id="file-${fileIndex}"]`);
+      if (!scope || line === undefined) return scope === scroller ? (scroller.firstElementChild as HTMLElement | null) : scope;
+      let best: HTMLElement | null = null;
+      for (const row of scope.querySelectorAll<HTMLElement>("[data-ln^='R']")) {
+        if (Number(row.dataset.ln!.slice(1)) > line) break;
+        best = row;
+      }
+      return best ?? scope;
+    },
+    (el) => (el.matches("[data-ln]") ? PANE_HEADER_PX : 0),
   );
 }

@@ -118,10 +118,12 @@ export function ListGroupHeader({ label, count, icon, badge, extra, collapsed, o
           <path d="M6 4l8 6-8 6V4z" />
         </svg>
         {icon}
-        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
+        <span data-cc-group-label className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
           {label}
         </span>
-        <span className="text-xs text-sol-text-dim">({count})</span>
+        {/* Hosted mode (globals.css) drops the brackets and sets the bare
+            count in the family's mono, as Whisk counts a list. */}
+        <span data-cc-group-count className="text-xs text-sol-text-dim tabular-nums"><span data-cc-bracket>(</span>{count}<span data-cc-bracket>)</span></span>
         {badge}
       </button>
       {extra}
