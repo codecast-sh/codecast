@@ -1,0 +1,133 @@
+// The composer's status line for a hosted conversation (plan pl-840). It
+// reads the turn engine's own work state (the managed row's agent_status,
+// written by assistant/turns.ts) and never a daemon's: there is no machine
+// to connect to, resume or restart. One wait reads one way ("Thinking…", or
+// the step in flight in the assistant's words), waiting names the request it
+// waits behind, an approval is said by its card alone, and a stop by the
+// notice in the transcript, which carries Try again.
+import { isHostedAgentType } from "@codecast/shared/contracts";
+import { useInboxStore } from "../../store/inboxStore";
+import { conversationTitle } from "../../lib/conversationTitle";
+import { usePlanMeter } from "../simple/usePlanFigures";
+import { useUpgradesOpen } from "../simple/billing";
+import { THINKING_DOWN, useThinkingAvailable } from "../simple/assistantPromise";
+import { TopUpLink } from "../plan/TopUpLink";
+import { lastNoticeKind } from "../../lib/hostedNotice";
+import { connectionChipCopy, useAppOffline } from "../../hooks/useAppOffline";
+
+/** The title of the person's other hosted conversation that is running now,
+ *  the one a waiting request waits behind. */
+function useBusyElsewhere(conversationId: string): string | null {
+  return useInboxStore((s) => {
+    for (const [id, row] of Object.entries(s.sessions)) {
+      if (id === conversationId || !isHostedAgentType(row?.agent_type)) continue;
+      if (row?.agent_status === "working" || row?.agent_status === "thinking") return conversationTitle(row);
+    }
+    return null;
+  });
+}
+
+function Dot({ className }: { className: string }) {
+  return <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${className}`} />;
+}
+
+function WaitingLine({ conversationId }: { conversationId: string }) {
+  const busy = useBusyElsewhere(conversationId);
+  // The wallet is fed elsewhere (the sidebar meter in the sync host); this
+  // reads what the store holds.
+  const { plan } = usePlanMeter(false);
+  // The pitch names a plan only while one can be bought.
+  const upgradesOpen = useUpgradesOpen();
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <Dot className="bg-sol-yellow/70 animate-pulse" />
+      <span className="truncate">{busy ? `Finishing “${busy}” first, then this` : "Waiting for your other request to finish"}</span>
+      {plan.id === "free" && upgradesOpen && (
+        <button
+          type="button"
+          onClick={() => useInboxStore.getState().openSettingsModal("plan")}
+          className="shrink-0 text-sol-text-dim/70 underline-offset-2 hover:text-sol-text hover:underline"
+        >
+          · Plus does two at once
+        </button>
+      )}
+    </span>
+  );
+}
+
+/** The one wait line, from a message on its way to the reply: the step in
+ *  flight when there is one, else "Thinking…". No stopwatch: a person waiting
+ *  on an answer reads a running clock as a slow one. */
+function ThinkingLine({ phrase }: { phrase?: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <Dot className="bg-sol-cyan/50 animate-pulse" />
+      <span className="truncate">{phrase ?? "Thinking…"}</span>
+    </span>
+  );
+}
+
+/** A used-up month: when it comes back, and extra credit when it can be
+ *  bought, so the line is never a dead end of weeks. */
+function AllowanceOutLine({ words }: { words: string }) {
+  return (
+    <span data-cc-allowance-out className="flex min-w-0 items-center gap-2 text-sol-text-muted">
+      <span className="truncate">{words}</span>
+      <TopUpLink />
+    </span>
+  );
+}
+
+export function HostedStatusLine({ conversationId, agentStatus, phrase, sending, allowanceOut }: {
+  conversationId: string;
+  agentStatus?: string;
+  /** The step in flight, in the assistant's words (deriveHostedRunningPhrase). */
+  phrase?: string;
+  /** A message of the person's is on its way to the engine. */
+  sending: boolean;
+  /** The month's allowance is used up (useAllowanceOut): said at rest, while
+   *  the composer holds Send. */
+  allowanceOut?: string | null;
+}) {
+  const thinking = useThinkingAvailable();
+  // A transcript that ends on a stop notice is settled, whatever the work
+  // state says: the engine writes the notice first and the state after it,
+  // so for a moment the two disagree. The notice says what happened.
+  const stopped = useInboxStore((s) => lastNoticeKind(s.messages[conversationId]) !== null);
+  // "Getting started…" is for a conversation's first turn only; a follow-up
+  // waits on the same "Thinking…" the run shows, so one wait reads one way.
+  const answeredBefore = useInboxStore((s) => (s.messages[conversationId] ?? []).some((m) => m.role === "assistant"));
+  // The same link state the developer header's sync chip shows. Hosted mode
+  // hides that chip, so a dropped link is said here instead of reading as a
+  // slow assistant.
+  const connection = connectionChipCopy(useAppOffline());
+  if (connection) {
+    return (
+      <span className="flex min-w-0 items-center gap-1.5 text-sol-text-muted">
+        <Dot className="bg-sol-yellow/70 animate-pulse" />
+        <span className="truncate">{sending ? "Reconnecting… your message will go as soon as we're back" : connection.label === "Offline" ? "You're offline" : "Reconnecting…"}</span>
+      </span>
+    );
+  }
+  if (stopped && !sending) {
+    if (allowanceOut) return <AllowanceOutLine words={allowanceOut} />;
+    // The conversation the outage stopped is where its reason belongs.
+    return thinking === false ? <span className="truncate text-sol-text-muted">{THINKING_DOWN}</span> : " ";
+  }
+  if (agentStatus === "working" || agentStatus === "thinking") return <ThinkingLine phrase={phrase} />;
+  if (agentStatus === "waiting") return <WaitingLine conversationId={conversationId} />;
+  // The approval card sits at the end of the transcript and the composer's
+  // placeholder points at it; a third line saying so would be noise.
+  if (agentStatus === "permission_blocked") return " ";
+  if (sending) {
+    return answeredBefore ? <ThinkingLine /> : (
+      <span className="flex items-center gap-1.5">
+        <Dot className="bg-sol-cyan/50 animate-pulse" />
+        Getting started…
+      </span>
+    );
+  }
+  if (allowanceOut) return <AllowanceOutLine words={allowanceOut} />;
+  if (thinking === false) return <span className="truncate text-sol-text-muted">{THINKING_DOWN}</span>;
+  return " ";
+}

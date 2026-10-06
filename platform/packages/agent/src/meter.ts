@@ -10,9 +10,9 @@ export interface Price {
   cacheWrite: number;
 }
 
-/** A list price from its input and output rates: cache reads bill at a tenth of input, cache writes at 1.25x. */
-export function listPrice(input: number, output: number): Price {
-  return { input, output, cacheRead: input / 10, cacheWrite: input * 1.25 };
+/** A list price from its input and output rates: cache reads bill at a tenth of input unless the model prices them itself, cache writes at 1.25x. */
+export function listPrice(input: number, output: number, cacheRead = input / 10): Price {
+  return { input, output, cacheRead, cacheWrite: input * 1.25 };
 }
 
 /**
@@ -22,13 +22,18 @@ export function listPrice(input: number, output: number): Price {
  * convex/lib/anthropic.ts) read it too.
  */
 export const PRICE_OVERRIDES: Readonly<Record<string, Price>> = {
+  "claude-fable-5-1": listPrice(10, 50, 0.25),
+  "claude-fable-5": listPrice(10, 50, 1),
+  "claude-opus-5-5": listPrice(4, 20, 0.2),
+  "claude-opus-5": listPrice(5, 25),
+  "claude-opus-4-8": listPrice(5, 25),
   "claude-sonnet-5-5": listPrice(2, 10),
-  "claude-opus-5-5": listPrice(4, 20),
+  "claude-sonnet-5": listPrice(2, 10),
   "claude-haiku-4-5": listPrice(1, 5),
 };
 
 /** The price for a model nothing else names: the dearest entry in the table, so a cap is not undercounted for a model we know of. */
-export const FALLBACK_PRICE: Price = PRICE_OVERRIDES["claude-opus-5-5"];
+export const FALLBACK_PRICE: Price = PRICE_OVERRIDES["claude-fable-5-1"];
 
 /** Strips a snapshot date (`claude-haiku-4-5-20251001` is priced as `claude-haiku-4-5`). */
 export function baseModelId(modelId: string): string {

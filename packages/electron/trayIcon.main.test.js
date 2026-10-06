@@ -16,6 +16,7 @@ function loadTray() {
   const context = vm.createContext({
     require, path, __dirname,
     tray: null,
+    loadAgentDock: () => ({ enabled: false, minimized: false }),
     app: { getVersion: () => "test", setBadgeCount: n => badges.push(n) },
     shellIpc: { handle: (name, handler) => handlers.set(name, handler) },
     Menu: { buildFromTemplate: items => items },

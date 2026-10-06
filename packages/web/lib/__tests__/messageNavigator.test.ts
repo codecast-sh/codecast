@@ -21,6 +21,7 @@ import {
 } from "../messageNavigator";
 import { NAV_ROW_SNIPPET_CHARS } from "@codecast/convex/convex/userMessagesFilter";
 import { formatSessionMessage } from "../../components/sessionMessage";
+import { MID_WORK_REVIVE_MESSAGE } from "@codecast/shared/contracts";
 
 const msg = (id: string, content: string, timestamp = 0) => ({ _id: id, content, timestamp });
 
@@ -338,8 +339,12 @@ describe("pickStickyFallback against the top visible row", () => {
       "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background.",
       "<turn_aborted>user aborted</turn_aborted>",
       "<turn_aborted>user aborted",
+      MID_WORK_REVIVE_MESSAGE,
     ].map((content, index) => user(`notice-${index}`, content, 400 + index));
-    for (const notice of notices) expect(isStickyEligible(notice.content)).toBe(false);
+    for (const notice of notices) {
+      expect(isStickyEligible(notice.content)).toBe(false);
+      expect(stickyPromptContent(notice.content)).toBeNull();
+    }
     expect(pickStickyFallback([...all, ...notices], new Set(["reply"]), 500)?.id).toBe("p3");
     expect(pickStickyFallback(notices, new Set(), Infinity)).toBeNull();
   });

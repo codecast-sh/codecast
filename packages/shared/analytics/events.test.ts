@@ -11,6 +11,8 @@ describe("the codecast event catalog", () => {
       ["install_script_viewed", { location: "landing", platform: "windows" }],
       ["desktop_download_clicked", { location: "download_page_auto" }],
       ["ios_app_clicked", { location: "landing_chip" }],
+      ["assistant_path_clicked", { location: "landing_hero" }],
+      ["first_run_start_chosen", { start: "assistant" }],
       ["install_script_downloaded", { script: "sh" }],
       ["desktop_dmg_downloaded", { version: "1.1.100" }],
       ["setup_token_generated", {}],
