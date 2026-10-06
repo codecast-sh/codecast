@@ -1,0 +1,12 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "Magnitude carries the meaning: an inline cast-canvas block.",
+  "label": {
+    "want": [],
+    "reply": "```cast-canvas"
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Compare these bundle sizes visually for me: main.js 1.2 MB, vendor.js 3.4 MB, styles.css 0.3 MB, fonts 0.9 MB."
+  }
+}

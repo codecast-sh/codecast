@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clayground · arcade direction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bagel+Fat+One&family=Gabarito:wght@400;500;600;700;800;900&family=Martian+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* Clayground, arcade direction. Software is clay: every surface is a chunky
+   toy with an ink outline and a hard drop shadow that squashes when pressed. */
+:root {
+  --ink: #1d1631;
+  --ink-soft: #4a4160;
+  --butter: #ffd84a;
+  --butter-deep: #f7c21b;
+  --cream: #fff7e0;
+  --paper: #fffdf6;
+  --tomato: #ff5b3a;
+  --pool: #3b7bff;
+  --mint: #2fd6a0;
+  --bubble: #ff9fd2;
+  --sky: #9fe3ff;
+
+  --display: "Bagel Fat One", "Gabarito", sans-serif;
+  --ui: "Gabarito", sans-serif;
+  --mono: "Martian Mono", ui-monospace, monospace;
+
+  --line: 3px solid var(--ink);
+  --pop: 5px 5px 0 var(--ink);
+  --pop-sm: 3px 3px 0 var(--ink);
+  --squish: cubic-bezier(.34, 1.56, .64, 1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+img { display: block; }
+body {
+  font-family: var(--ui);
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(255,255,255,.55) 0 180px, transparent 181px),
+    radial-gradient(circle at 92% 30%, rgba(255,159,210,.45) 0 260px, transparent 261px),
+    radial-gradient(circle at 6% 62%, rgba(47,214,160,.35) 0 220px, transparent 221px),
+    radial-gradient(rgba(29,22,49,.13) 1.6px, transparent 1.8px) 0 0 / 22px 22px,
+    var(--butter);
+  min-width: 1400px;
+  padding: 56px 0 120px;
+}
+
+/* ---------- page scaffolding (mockup only) ---------- */
+.board { width: 1320px; margin: 0 auto; }
+.intro { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 56px; }
+.intro h1 { font-family: var(--display); font-weight: 400; font-size: 76px; line-height: .9; letter-spacing: -1px; }
+.intro p { max-width: 430px; font-size: 19px; line-height: 1.4; font-weight: 500; }
+.scene { margin-bottom: 92px; animation: rise .7s var(--squish) both; }
+.scene:nth-of-type(2) { animation-delay: .08s; }
+.scene:nth-of-type(3) { animation-delay: .16s; }
+.scene:nth-of-type(4) { animation-delay: .24s; }
+.scene-tag {
+  display: inline-flex; align-items: center; gap: 12px;
+  background: var(--paper); border: var(--line); border-radius: 999px;
+  box-shadow: var(--pop-sm); padding: 6px 18px 6px 6px; margin: 0 0 22px 8px;
+  font-weight: 800; font-size: 18px; transform: rotate(-1.5deg);
+}
+.scene-tag b {
+  width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--ink); color: var(--butter); font-family: var(--display); font-weight: 400; font-size: 18px;
+}
+.scene-tag span { font-weight: 500; color: var(--ink-soft); }
+
+/* A desktop browser, drawn as a toy */
+.device {
+  border: 4px solid var(--ink); border-radius: 26px; background: var(--paper);
+  box-shadow: 10px 10px 0 var(--ink); overflow: hidden; position: relative;
+}
+.chrome {
+  height: 46px; display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  background: var(--cream); border-bottom: var(--line);
+}
+.chrome i { width: 13px; height: 13px; border-radius: 50%; border: 2.5px solid var(--ink); display: inline-block; margin-right: 6px; }
+.chrome i:nth-child(1) { background: var(--tomato); }
+.chrome i:nth-child(2) { background: var(--butter); }
+.chrome i:nth-child(3) { background: var(--mint); }
+.url {
+  flex: 1; max-width: 520px; margin: 0 auto; height: 28px; border: 2.5px solid var(--ink); border-radius: 999px;
+  background: var(--paper); font-family: var(--mono); font-size: 12px; display: flex; align-items: center; padding: 0 14px; gap: 6px;
+}
+.url em { font-style: normal; color: var(--ink-soft); }
+
+@keyframes rise { from { opacity: 0; transform: translateY(40px) scale(.98); } }
+@keyframes bob { 50% { transform: translateY(-4px) rotate(-2deg); } }
+@keyframes wobble { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-6deg) scale(1.04); } 75% { transform: rotate(5deg) scale(1.04); } }
+@keyframes blink { 50% { opacity: .25; } }
+@keyframes march { to { background-position: 28px 0; } }
+@keyframes typing { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-4px); } }
+@keyframes pulse-ring { from { box-shadow: 0 0 0 0 rgba(47,214,160,.7); } to { box-shadow: 0 0 0 12px rgba(47,214,160,0); } }
+@keyframes orbit { to { transform: rotate(360deg); } }
+@keyframes twinkle { 50% { opacity: .2; } }
+
+/* ---------- shared toy parts ---------- */
+.face {
+  width: 40px; height: 40px; border-radius: 14px; border: var(--line); overflow: hidden; flex: none;
+  background: var(--cream);
+}
+.face img { width: 100%; height: 100%; object-fit: cover; }
+.face.round { border-radius: 50%; }
+.face.sm { width: 30px; height: 30px; border-radius: 10px; border-width: 2.5px; }
+.face.xs { width: 24px; height: 24px; border-radius: 50%; border-width: 2px; }
+.stack { display: flex; }
+.stack .face { margin-left: -10px; box-shadow: 2px 2px 0 var(--ink); }
+.stack .face:first-child { margin-left: 0; }
+.stack .more {
+  margin-left: -8px; height: 30px; min-width: 30px; padding: 0 7px; border-radius: 10px; border: 2.5px solid var(--ink);
+  background: var(--ink); color: var(--butter); font-weight: 800; font-size: 13px; display: grid; place-items: center;
+}
+
+.btn {
+  font: 800 16px var(--ui); color: var(--ink); border: var(--line); border-radius: 16px; background: var(--paper);
+  box-shadow: var(--pop-sm); padding: 10px 18px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+  transition: transform .12s, box-shadow .12s;
+}
+.btn:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
+.btn:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
+.btn.hot { background: var(--tomato); color: var(--paper); }
+.btn.go { background: var(--mint); }
+.btn.blue { background: var(--pool); color: var(--paper); }
+.btn.sm { font-size: 13px; padding: 6px 12px; border-radius: 12px; border-width: 2.5px; box-shadow: 2px 2px 0 var(--ink); }
+
+.kbd {
+  font: 700 11px var(--mono); border: 2px solid var(--ink); border-bottom-width: 4px; border-radius: 7px;
+  background: var(--paper); padding: 1px 6px; display: inline-block; line-height: 1.5;
+}
+.live-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--mint); border: 2px solid var(--ink); animation: pulse-ring 1.6s infinite; display: inline-block; }
+
+/* ---------- 1. home ---------- */
+.home { background:
+    radial-gradient(circle at 85% 18%, var(--bubble) 0 120px, transparent 121px),
+    radial-gradient(circle at 78% 34%, var(--sky) 0 60px, transparent 61px),
+    var(--paper);
+  padding: 0 0 56px;
+}
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 22px 44px; }
+.logo { display: flex; align-items: center; gap: 12px; font-family: var(--display); font-size: 34px; }
+.blob {
+  width: 46px; height: 46px; background: var(--tomato); border: var(--line);
+  border-radius: 58% 42% 55% 45% / 48% 60% 40% 52%; box-shadow: var(--pop-sm); position: relative; animation: wobble 4s ease-in-out infinite;
+}
+.blob::before, .blob::after { content: ""; position: absolute; top: 15px; width: 7px; height: 9px; background: var(--ink); border-radius: 50%; }
+.blob::before { left: 13px; } .blob::after { left: 24px; }
+.you-chip {
+  display: flex; align-items: center; gap: 10px; border: var(--line); border-radius: 999px; padding: 4px 16px 4px 4px;
+  background: var(--paper); box-shadow: var(--pop-sm); font-weight: 800;
+}
+.you-chip small { font-weight: 500; color: var(--ink-soft); }
+
+.hero { padding: 40px 44px 0; display: grid; grid-template-columns: 1fr 300px; gap: 24px; align-items: end; }
+.hero h2 { font-family: var(--display); font-weight: 400; font-size: 112px; line-height: .86; letter-spacing: -2px; }
+.hero h2 .sticker {
+  display: inline-block; background: var(--pool); color: var(--paper); padding: 2px 22px 12px; border: 4px solid var(--ink);
+  border-radius: 34px; box-shadow: 7px 7px 0 var(--ink); transform: rotate(-3deg); margin: 4px 0;
+}
+.crowd { position: relative; height: 230px; }
+.crowd .face { position: absolute; width: 92px; height: 92px; border-radius: 30px; border-width: 4px; box-shadow: var(--pop); animation: bob 3.2s ease-in-out infinite; }
+.crowd .face:nth-child(1) { left: 0; top: 70px; transform: rotate(-8deg); }
+.crowd .face:nth-child(2) { left: 104px; top: 6px; animation-delay: -.8s; border-radius: 50%; }
+.crowd .face:nth-child(3) { left: 196px; top: 96px; animation-delay: -1.6s; }
+.crowd .bubble-say {
+  position: absolute; left: 60px; top: 168px; background: var(--ink); color: var(--butter); font-weight: 800; font-size: 14px;
+  padding: 8px 14px; border-radius: 16px 16px 16px 4px;
+}
+
+.maker {
+  margin: 44px 44px 0; display: flex; gap: 14px; align-items: stretch; background: var(--butter);
+  border: 4px solid var(--ink); border-radius: 30px; padding: 14px; box-shadow: 8px 8px 0 var(--ink);
+}
+.maker .field {
+  flex: 1; background: var(--paper); border: var(--line); border-radius: 20px; padding: 18px 22px;
+  font-size: 26px; font-weight: 600; display: flex; align-items: center; gap: 4px;
+}
+.maker .field .ph { color: var(--ink-soft); }
+.caret { width: 3px; height: 30px; background: var(--tomato); animation: blink 1s steps(1) infinite; }
+.maker .btn.hot { font-size: 26px; padding: 0 34px; border-radius: 20px; border-width: 4px; box-shadow: 5px 5px 0 var(--ink); font-family: var(--display); font-weight: 400; }
+.starters { display: flex; gap: 12px; margin: 22px 44px 0; flex-wrap: wrap; align-items: center; }
+.starters > span { font-weight: 700; margin-right: 4px; }
+.chip {
+  border: 2.5px solid var(--ink); border-radius: 999px; padding: 7px 16px; font-weight: 700; font-size: 15px;
+  background: var(--paper); box-shadow: 2px 2px 0 var(--ink); display: inline-flex; align-items: center; gap: 8px;
+}
+.chip .dot { width: 12px; height: 12px; border-radius: 4px; border: 2px solid var(--ink); }
+
+.gallery-head { display: flex; align-items: baseline; justify-content: space-between; margin: 60px 44px 20px; }
+.gallery-head h3 { font-family: var(--display); font-weight: 400; font-size: 44px; }
+.gallery-head p { font-weight: 600; color: var(--ink-soft); display: flex; align-items: center; gap: 8px; }
+.gallery { display: grid; grid-template-columns: 1.35fr 1fr 1fr; grid-auto-rows: 1fr; gap: 26px; margin: 0 44px; }
+.card {
+  border: var(--line); border-radius: 24px; background: var(--paper); box-shadow: var(--pop); overflow: hidden;
+  transition: transform .25s var(--squish), box-shadow .25s; display: flex; flex-direction: column;
+}
+.card:hover { transform: translate(-3px, -4px) rotate(-.6deg); box-shadow: 9px 10px 0 var(--ink); }
+.card.big { grid-row: span 2; }
+.thumb { flex: 1; min-height: 168px; border-bottom: var(--line); position: relative; overflow: hidden; }
+.card-foot { padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
+.card-foot .meta { flex: 1; min-width: 0; }
+.card-foot h4 { font-size: 20px; font-weight: 900; line-height: 1.1; }
+.card-foot small { font-weight: 600; color: var(--ink-soft); font-size: 13px; }
+.here {
+  position: absolute; top: 12px; left: 12px; background: var(--paper); border: 2.5px solid var(--ink); border-radius: 999px;
+  padding: 4px 10px 4px 8px; font-weight: 800; font-size: 13px; display: flex; align-items: center; gap: 6px; box-shadow: 2px 2px 0 var(--ink);
+}
+
+/* gallery thumbnails: stills of what each app looks like */
+.t-planets { background: radial-gradient(circle at 30% 70%, #2a1f5c, #120c2b); }
+.t-planets .p { position: absolute; border-radius: 50%; border: 3px solid var(--ink); }
+.t-planets .s { position: absolute; width: 4px; height: 4px; background: #fff; border-radius: 50%; animation: twinkle 2s infinite; }
+.t-frog { background: linear-gradient(#7fdc6e 0 62%, #3f9a54 62%); }
+.t-frog .fr { position: absolute; bottom: 30px; width: 54px; height: 38px; background: #2f8a3f; border: 3px solid var(--ink); border-radius: 50% 50% 40% 40%; }
+.t-frog .fr::before, .t-frog .fr::after { content: ""; position: absolute; top: -12px; width: 18px; height: 18px; background: #fff; border: 3px solid var(--ink); border-radius: 50%; }
+.t-frog .fr::before { left: 4px; } .t-frog .fr::after { right: 4px; }
+.t-frog .note { position: absolute; font-family: var(--display); font-size: 26px; color: var(--ink); }
+.t-snack { background: var(--bubble); padding: 22px 26px; display: flex; align-items: flex-end; gap: 14px; }
+.t-snack .bar { flex: 1; border: 3px solid var(--ink); border-radius: 10px 10px 4px 4px; background: var(--paper); position: relative; }
+.t-snack .bar span { position: absolute; top: -26px; left: 0; right: 0; text-align: center; font-weight: 900; font-size: 13px; }
+.t-haiku { background: #182b26; color: #d8f5e6; padding: 26px; font-family: var(--mono); font-size: 12px; line-height: 2; }
+.t-haiku b { color: var(--mint); font-weight: 700; }
+.t-bingo { background: var(--sky); display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 18px; }
+.t-bingo i { border: 2.5px solid var(--ink); border-radius: 8px; background: var(--paper); }
+.t-bingo i.hit { background: var(--tomato); }
+.t-pixel { background: var(--cream); display: grid; grid-template-columns: repeat(12, 1fr); }
+.t-pixel i { border-right: 1px solid rgba(29,22,49,.08); border-bottom: 1px solid rgba(29,22,49,.08); }
+
+/* ---------- 2 + 3. the app on its clean link ---------- */
+.app-stage { position: relative; height: 760px; overflow: hidden; }
+.planet-app {
+  position: absolute; inset: 0; color: #f3eeff; font-family: "Gabarito", sans-serif;
+  background:
+    radial-gradient(circle at 70% 120%, #3c2a8a 0, transparent 55%),
+    radial-gradient(circle at 10% -10%, #1d3d7a 0, transparent 50%),
+    #0f0b26;
+}
+.planet-app .stars { position: absolute; inset: 0;
+  background-image:
+    radial-gradient(1.5px 1.5px at 40px 60px, #fff, transparent),
+    radial-gradient(1px 1px at 220px 140px, #fff, transparent),
+    radial-gradient(2px 2px at 520px 80px, #ffe9a8, transparent),
+    radial-gradient(1px 1px at 760px 210px, #fff, transparent),
+    radial-gradient(1.5px 1.5px at 980px 120px, #fff, transparent),
+    radial-gradient(1px 1px at 300px 420px, #fff, transparent),
+    radial-gradient(2px 2px at 860px 520px, #bfe6ff, transparent),
+    radial-gradient(1px 1px at 1120px 380px, #fff, transparent);
+  background-size: 1200px 600px; animation: twinkle 3s ease-in-out infinite; }
+.planet-app header { position: absolute; top: 28px; left: 36px; right: 36px; display: flex; align-items: center; gap: 18px; }
+.planet-app h1 { font-family: Georgia, serif; font-weight: 400; font-size: 34px; letter-spacing: .5px; }
+.planet-app header p { color: #a99fd6; font-size: 15px; }
+.planet-app .plant {
+  margin-left: auto; background: #f3eeff; color: #0f0b26; border: none; border-radius: 999px; padding: 12px 22px;
+  font: 700 15px "Gabarito", sans-serif;
+}
+.orbit-ring { position: absolute; border: 1.5px dashed rgba(243,238,255,.18); border-radius: 50%; }
+.planet { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.planet .orb { border-radius: 50%; box-shadow: inset -10px -12px 0 rgba(0,0,0,.25), 0 0 40px rgba(255,255,255,.12); }
+.planet .label { background: rgba(15,11,38,.75); border: 1px solid rgba(243,238,255,.2); border-radius: 10px; padding: 6px 10px; font-size: 13px; max-width: 190px; text-align: center; line-height: 1.3; }
+.planet .label b { display: block; font-size: 11px; color: #a99fd6; font-weight: 600; }
+.sun { position: absolute; left: 50%; top: 52%; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff5c4, #ffbf3b 60%, #ff7a2a); box-shadow: 0 0 90px 20px rgba(255,180,60,.35); }
+
+/* the presence affordance */
+.presence {
+  position: absolute; right: 26px; bottom: 26px; display: flex; align-items: center; gap: 10px;
+  background: var(--butter); border: var(--line); border-radius: 22px; padding: 7px 7px 7px 6px; box-shadow: var(--pop);
+  font-family: var(--ui); color: var(--ink); z-index: 3;
+}
+.grip { width: 14px; height: 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px 2px; cursor: grab; }
+.grip i { width: 4px; height: 4px; border-radius: 50%; background: var(--ink); }
+.presence .talk {
+  display: flex; align-items: center; gap: 8px; background: var(--ink); color: var(--butter); border-radius: 15px;
+  padding: 9px 14px; font-weight: 800; font-size: 15px;
+}
+.speech { width: 18px; height: 15px; background: var(--butter); border-radius: 7px 7px 7px 2px; position: relative; }
+.speech::after { content: ""; position: absolute; left: 4px; top: 5px; width: 10px; height: 3px; border-radius: 2px; background: var(--ink); box-shadow: 0 0 0 0 var(--ink); }
+.presence .typing-face { position: relative; }
+.presence .typing-face::after {
+  content: "..."; position: absolute; top: -16px; right: -12px; background: var(--paper); border: 2px solid var(--ink); border-radius: 9px;
+  font-weight: 900; font-size: 12px; line-height: 1; padding: 0 5px 4px; animation: typing 1.2s infinite;
+}
+.callout {
+  position: absolute; z-index: 4; background: var(--paper); color: var(--ink); border: var(--line); border-radius: 16px;
+  padding: 10px 14px; font-weight: 700; font-size: 14px; box-shadow: var(--pop-sm); max-width: 240px; line-height: 1.35;
+}
+.callout small { display: block; font-weight: 500; color: var(--ink-soft); margin-top: 2px; }
+.ver-badge { position: absolute; left: 26px; bottom: 26px; z-index: 3; display: flex; align-items: center; gap: 8px;
+  background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); color: #cfc6f2; border-radius: 999px; padding: 6px 12px; font: 500 12px var(--mono); }
+
+/* ---------- 3. the room ---------- */
+.with-room .planet-app { right: 452px; }
+.picking {
+  position: absolute; outline: 3px dashed var(--butter); outline-offset: 5px; border-radius: 999px; pointer-events: none;
+  animation: march 1s linear infinite;
+}
+.picking-tag {
+  position: absolute; background: var(--butter); color: var(--ink); border: 2.5px solid var(--ink); border-radius: 10px;
+  font: 700 12px var(--mono); padding: 3px 8px; box-shadow: 2px 2px 0 var(--ink);
+}
+.viewing-pill {
+  position: absolute; left: 50%; top: 92px; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 12px;
+  background: var(--bubble); color: var(--ink); border: var(--line); border-radius: 999px; padding: 6px 6px 6px 16px;
+  box-shadow: var(--pop-sm); font-weight: 800; font-size: 15px; white-space: nowrap;
+}
+.viewing-pill .btn { padding: 5px 12px; font-size: 13px; border-radius: 999px; box-shadow: none; border-width: 2.5px; }
+
+.room {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 452px; background: var(--cream); border-left: 4px solid var(--ink);
+  display: flex; flex-direction: column; z-index: 2;
+}
+.room .resize { position: absolute; left: -9px; top: 50%; width: 14px; height: 58px; margin-top: -29px; background: var(--paper); border: var(--line); border-radius: 8px; }
+.room-head { padding: 16px 18px 14px; border-bottom: var(--line); background: var(--butter); display: flex; align-items: center; gap: 12px; }
+.room-head h3 { font-family: var(--display); font-weight: 400; font-size: 24px; line-height: 1; }
+.room-head .sub { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.room-head .sub .ver { font-family: var(--mono); font-size: 11px; background: var(--ink); color: var(--butter); padding: 2px 7px; border-radius: 7px; }
+.room-head .tools { margin-left: auto; display: flex; gap: 8px; }
+.icon-btn { width: 36px; height: 36px; border: 2.5px solid var(--ink); border-radius: 12px; background: var(--paper); box-shadow: 2px 2px 0 var(--ink); display: grid; place-items: center; font-weight: 900; font-size: 16px; }
+
+.stream { flex: 1; overflow: hidden; padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 14px; }
+.msg { display: flex; gap: 10px; align-items: flex-start; }
+.msg .body { min-width: 0; }
+.msg .who { font-weight: 800; font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+.msg .who time { font-weight: 500; color: var(--ink-soft); font-size: 12px; }
+.msg .text { background: var(--paper); border: 2.5px solid var(--ink); border-radius: 4px 16px 16px 16px; padding: 8px 12px; font-size: 15px; font-weight: 500; line-height: 1.35; margin-top: 4px; display: inline-block; }
+.elref { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; background: var(--butter); border: 2px solid var(--ink); border-radius: 9px; padding: 2px 8px; font: 700 11px var(--mono); color: var(--ink); }
+.elref::before { content: ""; width: 9px; height: 9px; border: 2px dashed var(--ink); border-radius: 3px; }
+
+.build {
+  border: var(--line); border-radius: 20px; background: var(--paper); box-shadow: var(--pop-sm); overflow: hidden;
+}
+.build .bhead { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 2.5px solid var(--ink); }
+.build .bhead .state { font-family: var(--display); font-size: 17px; }
+.build .bhead .asked { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.build .req { padding: 10px 14px 0; font-weight: 700; font-size: 15px; }
+.build.building .bhead { background:
+    repeating-linear-gradient(-45deg, var(--butter) 0 10px, var(--butter-deep) 10px 20px);
+  background-size: 28px 28px; animation: march 1s linear infinite; }
+.tool-spin { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--ink); background: var(--paper); position: relative; animation: orbit 1.2s linear infinite; }
+.tool-spin::after { content: ""; position: absolute; top: 2px; left: 8px; width: 5px; height: 5px; border-radius: 50%; background: var(--tomato); }
+.narration { list-style: none; padding: 10px 14px 4px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; }
+.narration li { display: flex; gap: 8px; align-items: baseline; }
+.narration li::before { content: ""; width: 9px; height: 9px; flex: none; border-radius: 3px; background: var(--mint); border: 2px solid var(--ink); transform: translateY(1px); }
+.narration li.now { font-weight: 800; }
+.narration li.now::before { background: var(--butter); animation: wobble .8s infinite; }
+.narration li.now::after { content: ""; width: 7px; height: 15px; background: var(--ink); animation: blink 1s steps(1) infinite; transform: translateY(2px); }
+.files { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px 12px; }
+.file { font: 700 11px var(--mono); border: 2px solid var(--ink); border-radius: 8px; padding: 2px 7px; background: var(--cream); }
+.file.w { background: var(--sky); }
+.meter { margin: 0 14px 12px; height: 12px; border: 2.5px solid var(--ink); border-radius: 999px; background: var(--cream); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 62%; background: repeating-linear-gradient(-45deg, var(--tomato) 0 8px, #ff7d61 8px 16px); animation: march .6s linear infinite; border-right: 2.5px solid var(--ink); }
+.build.live .bhead { background: var(--mint); }
+.build.live .vnum { font-family: var(--display); font-size: 30px; line-height: 1; }
+.build.live .summary { padding: 10px 14px; font-size: 15px; font-weight: 600; line-height: 1.35; }
+.build.live .acts { display: flex; gap: 8px; padding: 0 14px 12px; }
+.queued { display: flex; align-items: center; gap: 10px; border: 2.5px dashed var(--ink); border-radius: 16px; padding: 8px 12px; font-size: 14px; font-weight: 600; background: rgba(255,255,255,.5); }
+.queued .pos { font-family: var(--display); background: var(--ink); color: var(--butter); border-radius: 10px; padding: 2px 9px; font-size: 15px; }
+.typing-row { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--ink-soft); padding-left: 2px; }
+.dots { display: flex; gap: 3px; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink); animation: typing 1.2s infinite; }
+.dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+
+/* timeline: versions as candy beads on a string */
+.timeline { border-top: var(--line); background: var(--paper); padding: 12px 16px 12px; position: relative; }
+.timeline .tl-head { display: flex; align-items: center; justify-content: space-between; font-weight: 800; font-size: 13px; margin-bottom: 10px; }
+.timeline .tl-head span { display: flex; align-items: center; gap: 5px; font-weight: 600; color: var(--ink-soft); }
+.beads { display: flex; align-items: center; gap: 0; position: relative; height: 40px; }
+.beads::before { content: ""; position: absolute; left: 6px; right: 6px; top: 50%; height: 3px; background: var(--ink); border-radius: 2px; }
+.bead { position: relative; flex: 1; display: grid; place-items: center; }
+.bead i { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid var(--ink); display: block; transition: transform .2s var(--squish); }
+.bead.focus i { width: 28px; height: 28px; transform: translateY(-2px); box-shadow: 0 0 0 4px var(--paper), 0 0 0 6.5px var(--ink); }
+.bead.live i { width: 30px; height: 30px; background: var(--mint) !important; display: grid; place-items: center; font: 700 9px var(--mono); }
+.bead.restore i { border-style: dashed; }
+.bead.fork::after { content: ""; position: absolute; top: -2px; right: 2px; width: 9px; height: 9px; border-radius: 50%; background: var(--pool); border: 2px solid var(--ink); }
+.peek {
+  position: absolute; bottom: 74px; left: 162px; width: 270px; background: var(--paper); border: var(--line); border-radius: 18px;
+  box-shadow: var(--pop); padding: 12px; z-index: 5;
+}
+.peek::after { content: ""; position: absolute; bottom: -10px; left: 176px; width: 16px; height: 16px; background: var(--paper); border-right: var(--line); border-bottom: var(--line); transform: rotate(45deg); }
+.peek .ph { display: flex; align-items: center; gap: 8px; }
+.peek .ph b { font-family: var(--display); font-weight: 400; font-size: 26px; line-height: 1; }
+.peek .ph small { font-weight: 600; color: var(--ink-soft); font-size: 12px; }
+.peek p { font-weight: 700; font-size: 14px; margin: 8px 0 10px; line-height: 1.3; }
+.peek .acts { display: flex; gap: 8px; }
+.peek .keys { margin-top: 10px; font-size: 12px; font-weight: 600; color: var(--ink-soft); display: flex; gap: 6px; align-items: center; }
+
+.composer { padding: 12px 14px 14px; border-top: var(--line); background: var(--cream); }
+.mode { display: inline-flex; border: 2.5px solid var(--ink); border-radius: 12px; overflow: hidden; margin-bottom: 10px; background: var(--paper); }
+.mode span { padding: 5px 12px; font-weight: 800; font-size: 13px; }
+.mode span.on { background: var(--tomato); color: var(--paper); }
+.mode span + span { border-left: 2.5px solid var(--ink); }
+.compose-row { display: flex; gap: 8px; }
+.compose-row .input { flex: 1; background: var(--paper); border: var(--line); border-radius: 16px; padding: 10px 12px; font-size: 15px; font-weight: 600; display: flex; flex-direction: column; gap: 6px; }
+.compose-row .input .elref { margin-top: 0; align-self: flex-start; }
+.pick-btn { width: 46px; border: var(--line); border-radius: 16px; background: var(--butter); box-shadow: 2px 2px 0 var(--ink); display: grid; place-items: center; }
+.pick-btn i { width: 18px; height: 18px; border: 2.5px dashed var(--ink); border-radius: 5px; position: relative; }
+.pick-btn i::after { content: ""; position: absolute; right: -7px; bottom: -7px; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 12px solid var(--ink); transform: rotate(-45deg); }
+.send { width: 52px; border: var(--line); border-radius: 16px; background: var(--tomato); box-shadow: var(--pop-sm); display: grid; place-items: center; color: var(--paper); font-family: var(--display); font-size: 24px; }
+
+/* ---------- 4. character picker ---------- */
+.picker-stage { position: relative; height: 760px; background: var(--paper); overflow: hidden; }
+.picker-stage .ghost { position: absolute; inset: 0; opacity: .35; filter: blur(2px); }
+.picker-stage::after { content: ""; position: absolute; inset: 0; background: rgba(29,22,49,.45); }
+.picker {
+  position: absolute; z-index: 2; left: 50%; top: 50%; width: 1020px; transform: translate(-50%, -50%);
+  background: var(--cream); border: 4px solid var(--ink); border-radius: 34px; box-shadow: 12px 12px 0 var(--ink);
+  display: grid; grid-template-columns: 360px 1fr; overflow: hidden;
+}
+.me-side { background: var(--tomato); border-right: 4px solid var(--ink); padding: 30px 28px; display: flex; flex-direction: column; align-items: center; text-align: center; color: var(--paper); }
+.me-side h3 { font-family: var(--display); font-weight: 400; font-size: 40px; line-height: .95; color: var(--paper); }
+.big-face { width: 188px; height: 188px; border-radius: 56px; border: 5px solid var(--ink); box-shadow: 8px 8px 0 var(--ink); overflow: hidden; margin: 26px 0 22px; animation: wobble 2.6s ease-in-out infinite; }
+.big-face img { width: 100%; height: 100%; object-fit: cover; }
+.name-field { width: 100%; display: flex; gap: 8px; }
+.name-field .in { flex: 1; background: var(--paper); color: var(--ink); border: var(--line); border-radius: 16px; padding: 10px 14px; font-family: var(--display); font-size: 26px; text-align: left; display: flex; align-items: center; gap: 3px; }
+.name-field .dice { width: 54px; border: var(--line); border-radius: 16px; background: var(--butter); box-shadow: var(--pop-sm); position: relative; }
+.name-field .dice::before { content: ""; position: absolute; inset: 12px; border: 3px solid var(--ink); border-radius: 7px; background:
+  radial-gradient(circle at 30% 30%, var(--ink) 0 2.5px, transparent 3px),
+  radial-gradient(circle at 70% 70%, var(--ink) 0 2.5px, transparent 3px),
+  radial-gradient(circle at 50% 50%, var(--ink) 0 2.5px, transparent 3px), var(--paper); transform: rotate(-10deg); }
+.suggest { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-top: 14px; }
+.suggest .chip { font-size: 13px; padding: 4px 11px; color: var(--ink); }
+.me-side .note { margin-top: auto; padding-top: 18px; font-size: 13px; font-weight: 600; opacity: .9; }
+.grid-side { padding: 28px 30px; }
+.grid-side .gh { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+.grid-side h4 { font-family: var(--display); font-weight: 400; font-size: 28px; }
+.grid-side .gh span { font-weight: 600; color: var(--ink-soft); font-size: 14px; display: flex; gap: 6px; align-items: center; }
+.zoo { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; }
+.zoo .face { width: 100%; height: auto; aspect-ratio: 1; border-radius: 20px; box-shadow: var(--pop-sm); transition: transform .2s var(--squish); }
+.zoo .face:hover { transform: translateY(-4px) rotate(-4deg); }
+.zoo .face.sel { transform: translateY(-6px) rotate(-5deg) scale(1.08); box-shadow: 0 0 0 4px var(--cream), 0 0 0 7px var(--ink), 5px 9px 0 4px var(--ink); }
+.zoo .face.taken { position: relative; }
+.zoo .face.taken::after { content: ""; position: absolute; right: 4px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--mint); border: 2px solid var(--ink); }
+.picker-foot { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
+.picker-foot p { flex: 1; font-size: 14px; font-weight: 600; color: var(--ink-soft); display: flex; align-items: center; gap: 8px; }
+.picker-foot .btn.hot { font-family: var(--display); font-weight: 400; font-size: 22px; padding: 10px 26px; }
+
+/* ---------- proposal sheet ---------- */
+.sheet { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 26px; }
+.panel { background: var(--paper); border: 4px solid var(--ink); border-radius: 26px; box-shadow: 8px 8px 0 var(--ink); padding: 24px 26px; }
+.panel h5 { font-family: var(--display); font-weight: 400; font-size: 26px; margin-bottom: 14px; }
+.name-main { font-family: var(--display); font-size: 64px; line-height: 1; display: flex; align-items: center; gap: 14px; }
+.panel p { font-size: 15px; font-weight: 500; line-height: 1.45; }
+.alt { margin-top: 14px; padding-top: 12px; border-top: 2.5px dashed var(--ink); }
+.alt b { font-family: var(--display); font-weight: 400; font-size: 26px; display: block; }
+.swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.sw { border: var(--line); border-radius: 16px; height: 86px; padding: 8px; display: flex; flex-direction: column; justify-content: flex-end; font: 700 10px var(--mono); box-shadow: var(--pop-sm); }
+.sw b { font: 800 13px var(--ui); }
+.type-row { padding: 10px 0; border-bottom: 2.5px dashed var(--ink); }
+.type-row:last-child { border: 0; }
+.type-row .s1 { font-family: var(--display); font-size: 42px; line-height: 1; }
+.type-row .s2 { font-family: var(--ui); font-weight: 800; font-size: 26px; }
+.type-row .s3 { font-family: var(--mono); font-weight: 700; font-size: 18px; }
+.type-row small { display: block; font-weight: 600; color: var(--ink-soft); font-size: 13px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<main class="board">
+
+  <div class="intro">
+    <h1>Arcade</h1>
+    <p>A toy box where software is clay. Every surface is a chunky object with an ink outline and a hard shadow that squashes when you press it, and the animals are the players.</p>
+  </div>
+
+  <!-- 1. HOME -->
+  <section class="scene">
+    <div class="scene-tag"><b>1</b> Home <span>make something, then wander the gallery</span></div>
+    <div class="device">
+      <div class="chrome"><div><i></i><i></i><i></i></div><div class="url">clayground.app</div></div>
+      <div class="home">
+        <div class="topbar">
+          <div class="logo"><div class="blob"></div>Clayground</div>
+          <div class="you-chip"><div class="face sm round"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div>Pocket <small>that's you</small></div>
+        </div>
+
+        <div class="hero">
+          <h2>Make a thing.<br><span class="sticker">Pass it around.</span></h2>
+          <div class="crowd">
+            <div class="face"><img src="../../web/components/org/avatars/frog.webp" alt=""></div>
+            <div class="face"><img src="../../web/components/org/avatars/octopus.webp" alt=""></div>
+            <div class="face"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+            <div class="bubble-say">anyone can change it</div>
+          </div>
+        </div>
+
+        <div class="maker">
+          <div class="field"><span class="ph">a guestbook where every visitor plants a tiny planet</span><span class="caret"></span></div>
+          <button class="btn hot">Make it</button>
+        </div>
+        <div class="starters">
+          <span>Or start with</span>
+          <span class="chip"><i class="dot" style="background:var(--mint)"></i>a frog choir, one note per person</span>
+          <span class="chip"><i class="dot" style="background:var(--bubble)"></i>office snack leaderboard</span>
+          <span class="chip"><i class="dot" style="background:var(--sky)"></i>bus stop bingo</span>
+          <span class="chip"><i class="dot" style="background:var(--butter)"></i>a shared pixel pond</span>
+        </div>
+
+        <div class="gallery-head">
+          <h3>Busy right now</h3>
+          <p><span class="live-dot"></span>41 people building in 12 apps</p>
+        </div>
+        <div class="gallery">
+          <article class="card big">
+            <div class="thumb t-planets">
+              <span class="here"><span class="live-dot"></span>7 here</span>
+              <i class="s" style="left:12%;top:20%"></i><i class="s" style="left:70%;top:14%;animation-delay:.6s"></i><i class="s" style="left:40%;top:76%;animation-delay:1.1s"></i><i class="s" style="left:88%;top:62%"></i>
+              <i class="p" style="left:42%;top:36%;width:96px;height:96px;background:radial-gradient(circle at 35% 35%,#fff5c4,#ffbf3b 60%,#ff7a2a);border-color:#ffbf3b"></i>
+              <i class="p" style="left:16%;top:52%;width:44px;height:44px;background:#9fe3ff"></i>
+              <i class="p" style="left:72%;top:28%;width:58px;height:58px;background:#ff9fd2"></i>
+              <i class="p" style="left:66%;top:68%;width:30px;height:30px;background:#2fd6a0"></i>
+              <i class="p" style="left:26%;top:18%;width:24px;height:24px;background:#ff5b3a"></i>
+            </div>
+            <div class="card-foot">
+              <div class="meta"><h4>Tiny Planet Guestbook</h4><small>38 people changed it · v14</small></div>
+              <div class="stack">
+                <div class="face sm"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div>
+                <div class="face sm"><img src="../../web/components/org/avatars/moth.webp" alt=""></div>
+                <div class="face sm"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+                <div class="more">+4</div>
+              </div>
+            </div>
+          </article>
+          <article class="card">
+            <div class="thumb t-frog">
+              <span class="here"><span class="live-dot"></span>3 here</span>
+              <i class="fr" style="left:12%"></i><i class="fr" style="left:42%;bottom:44px"></i><i class="fr" style="left:72%"></i>
+              <span class="note" style="left:30%;top:22%">&#9834;</span><span class="note" style="left:62%;top:10%">&#9835;</span>
+            </div>
+            <div class="card-foot">
+              <div class="meta"><h4>Frog Choir</h4><small>12 changed it</small></div>
+              <div class="stack"><div class="face sm"><img src="../../web/components/org/avatars/frog.webp" alt=""></div><div class="face sm"><img src="../../web/components/org/avatars/swan.webp" alt=""></div><div class="face sm"><img src="../../web/components/org/avatars/koala.webp" alt=""></div></div>
+            </div>
+          </article>
+          <article class="card">
+            <div class="thumb t-snack">
+              <div class="bar" style="height:46%;background:var(--butter)"><span>chips</span></div>
+              <div class="bar" style="height:82%;background:var(--tomato)"><span>mochi</span></div>
+              <div class="bar" style="height:30%"><span>kale</span></div>
+              <div class="bar" style="height:60%;background:var(--mint)"><span>figs</span></div>
+            </div>
+            <div class="card-foot">
+              <div class="meta"><h4>Snack League</h4><small>9 changed it</small></div>
+              <div class="stack"><div class="face sm"><img src="../../web/components/org/avatars/bear.webp" alt=""></div><div class="face sm"><img src="../../web/components/org/avatars/squirrel.webp" alt=""></div></div>
+            </div>
+          </article>
+          <article class="card">
+            <div class="thumb t-haiku">
+              <span class="here" style="font-family:var(--ui);color:var(--ink)"><span class="live-dot"></span>2 here</span>
+              <div style="margin-top:28px">the kettle goes off<br><b>// Sage</b><br>everyone pretends not to hear<br><b>// Inky</b></div>
+            </div>
+            <div class="card-foot">
+              <div class="meta"><h4>Midnight Haiku Wall</h4><small>21 changed it · forked from Haiku Wall</small></div>
+              <div class="stack"><div class="face sm"><img src="../../web/components/org/avatars/owl.webp" alt=""></div><div class="face sm"><img src="../../web/components/org/avatars/octopus.webp" alt=""></div></div>
+            </div>
+          </article>
+          <article class="card">
+            <div class="thumb t-bingo">
+              <i></i><i class="hit"></i><i></i><i></i><i class="hit"></i>
+              <i class="hit"></i><i></i><i class="hit"></i><i></i><i></i>
+              <i></i><i class="hit"></i><i style="background:var(--butter)"></i><i></i><i class="hit"></i>
+            </div>
+            <div class="card-foot">
+              <div class="meta"><h4>Bus Stop Bingo</h4><small>6 changed it</small></div>
+              <div class="stack"><div class="face sm"><img src="../../web/components/org/avatars/penguin.webp" alt=""></div></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. CLEAN LINK -->
+  <section class="scene">
+    <div class="scene-tag"><b>2</b> The clean link <span>the app owns the screen; the animals wait in the corner</span></div>
+    <div class="device">
+      <div class="chrome"><div><i></i><i></i><i></i></div><div class="url">clayground.app/<em></em>tiny-planets</div></div>
+      <div class="app-stage">
+        <div class="planet-app">
+          <div class="stars"></div>
+          <header>
+            <h1>Tiny Planet Guestbook</h1>
+            <p>Leave a world behind. It keeps orbiting after you go.</p>
+            <button class="plant">Plant a planet</button>
+          </header>
+          <div class="orbit-ring" style="left:calc(50% - 260px);top:calc(52% - 200px);width:520px;height:400px"></div>
+          <div class="orbit-ring" style="left:calc(50% - 440px);top:calc(52% - 300px);width:880px;height:600px"></div>
+          <div class="sun"></div>
+          <div class="planet" style="left:300px;top:200px"><div class="orb" style="width:64px;height:64px;background:#9fe3ff"></div><div class="label"><b>Pebble</b>my cat would like it here</div></div>
+          <div class="planet" style="left:820px;top:150px"><div class="orb" style="width:86px;height:86px;background:#ff9fd2"></div><div class="label"><b>Luna</b>a planet made of gum</div></div>
+          <div class="planet" style="left:930px;top:470px"><div class="orb" style="width:40px;height:40px;background:#2fd6a0"></div><div class="label"><b>Ember</b>moss only</div></div>
+          <div class="planet" style="left:180px;top:480px"><div class="orb" style="width:52px;height:52px;background:#ff5b3a"></div><div class="label"><b>Bandit</b>hello from the 3am shift</div></div>
+          <div class="planet" style="left:560px;top:560px"><div class="orb" style="width:30px;height:30px;background:#ffd84a"></div><div class="label"><b>Inky</b>tiny but proud</div></div>
+        </div>
+
+        <div class="ver-badge">v14 · live</div>
+
+        <div class="callout" style="right:286px;bottom:92px;transform:rotate(-2deg)">Drag it to any edge, or tuck it to just the faces.<small>Opens the room. <span class="kbd">/</span> works too.</small></div>
+        <div class="presence">
+          <div class="grip"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="stack">
+            <div class="face sm"><img src="../../web/components/org/avatars/moth.webp" alt=""></div>
+            <div class="face sm typing-face"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+            <div class="face sm"><img src="../../web/components/org/avatars/otter.webp" alt=""></div>
+            <div class="face sm"><img src="../../web/components/org/avatars/octopus.webp" alt=""></div>
+            <div class="more">+3</div>
+          </div>
+          <div class="talk"><span class="speech"></span>Change it</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. ROOM OPEN -->
+  <section class="scene">
+    <div class="scene-tag"><b>3</b> The room <span>chat, builds narrating live, undo, and the bead timeline</span></div>
+    <div class="device">
+      <div class="chrome"><div><i></i><i></i><i></i></div><div class="url">clayground.app/<em></em>tiny-planets?room</div></div>
+      <div class="app-stage with-room">
+        <div class="planet-app">
+          <div class="stars"></div>
+          <header>
+            <h1>Tiny Planet Guestbook</h1>
+            <button class="plant">Plant a planet</button>
+          </header>
+          <div class="orbit-ring" style="left:calc(50% - 250px);top:calc(52% - 190px);width:500px;height:380px"></div>
+          <div class="sun"></div>
+          <div class="planet" style="left:170px;top:200px"><div class="orb" style="width:64px;height:64px;background:#9fe3ff"></div><div class="label"><b>Pebble</b>my cat would like it here</div></div>
+          <div class="planet" style="left:600px;top:170px"><div class="orb" style="width:86px;height:86px;background:#ff9fd2"></div><div class="label"><b>Luna</b>a planet made of gum</div></div>
+          <div class="planet" style="left:130px;top:500px"><div class="orb" style="width:52px;height:52px;background:#ff5b3a"></div><div class="label"><b>Bandit</b>hello from the 3am shift</div></div>
+          <div class="planet" style="left:620px;top:520px"><div class="orb" style="width:40px;height:40px;background:#2fd6a0"></div><div class="label"><b>Ember</b>moss only</div></div>
+        </div>
+        <div class="picking" style="right:488px;top:26px;width:150px;height:44px"></div>
+        <div class="picking-tag" style="right:488px;top:84px">button · Plant a planet</div>
+
+        <div class="room">
+          <div class="resize"></div>
+          <div class="room-head">
+            <div>
+              <h3>Tiny Planets</h3>
+              <div class="sub"><span class="live-dot"></span>live <span class="ver">v14</span> · 7 here</div>
+            </div>
+            <div class="tools">
+              <div class="stack">
+                <div class="face xs"><img src="../../web/components/org/avatars/moth.webp" alt=""></div>
+                <div class="face xs"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+                <div class="face xs"><img src="../../web/components/org/avatars/otter.webp" alt=""></div>
+              </div>
+              <div class="icon-btn" title="Copy link">&#8599;</div>
+              <div class="icon-btn" title="Close">&times;</div>
+            </div>
+          </div>
+
+          <div class="stream">
+            <div class="build live">
+              <div class="bhead"><span class="vnum">v14</span><span class="state">is live</span><span class="asked"><span class="face xs"><img src="../../web/components/org/avatars/moth.webp" alt=""></span>Luna asked</span></div>
+              <div class="summary">Planets glow and grow a little when you hover them.</div>
+              <div class="acts"><button class="btn sm go">See it</button><button class="btn sm">Undo</button><button class="btn sm" style="margin-left:auto">Copy v14 link</button></div>
+            </div>
+
+            <div class="msg">
+              <div class="face sm"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+              <div class="body"><div class="who">Juniper <time>now</time></div><div class="text">the plant button should make a little pop sound</div><br><span class="elref">button · Plant a planet</span></div>
+            </div>
+            <div class="build building">
+              <div class="bhead"><div class="tool-spin"></div><span class="state">Building</span><span class="asked"><span class="face xs"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></span>Pocket · 0:11</span></div>
+              <div class="req">Let the planets orbit, slowly</div>
+              <ul class="narration">
+                <li>Read planets.jsx and styles.css</li>
+                <li>Gave each planet an angle and a speed</li>
+                <li class="now">Easing the orbit so labels stay readable</li>
+              </ul>
+              <div class="files"><span class="file w">planets.jsx</span><span class="file w">orbit.js</span><span class="file">styles.css</span></div>
+              <div class="meter"><i></i></div>
+            </div>
+
+            <div class="queued"><span class="pos">2nd</span><span class="face xs"><img src="../../web/components/org/avatars/fox.webp" alt=""></span>Juniper: pop sound on plant</div>
+            <div class="typing-row"><span class="face xs"><img src="../../web/components/org/avatars/otter.webp" alt=""></span>Pebble is typing <span class="dots"><i></i><i></i><i></i></span></div>
+          </div>
+
+          <div class="timeline">
+            <div class="tl-head">14 versions <span><span class="kbd">&larr;</span><span class="kbd">&rarr;</span> to step</span></div>
+            <div class="beads">
+              <div class="bead"><i style="background:var(--butter)"></i></div>
+              <div class="bead"><i style="background:var(--bubble)"></i></div>
+              <div class="bead"><i style="background:var(--sky)"></i></div>
+              <div class="bead"><i style="background:var(--tomato)"></i></div>
+              <div class="bead"><i style="background:var(--butter)"></i></div>
+              <div class="bead fork"><i style="background:var(--mint)"></i></div>
+              <div class="bead"><i style="background:var(--bubble)"></i></div>
+              <div class="bead"><i style="background:var(--pool)"></i></div>
+              <div class="bead restore"><i style="background:var(--cream)"></i></div>
+              <div class="bead"><i style="background:var(--sky)"></i></div>
+              <div class="bead"><i style="background:var(--tomato)"></i></div>
+              <div class="bead focus"><i style="background:var(--bubble)"></i></div>
+              <div class="bead"><i style="background:var(--butter)"></i></div>
+              <div class="bead live"><i>14</i></div>
+            </div>
+            <div class="peek">
+              <div class="ph"><b>v12</b><span class="face xs"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></span><small>Bandit · 6 min ago</small></div>
+              <p>Every planet got its own little moon</p>
+              <div class="acts"><button class="btn sm go">Restore</button><button class="btn sm blue">Fork from here</button></div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <div class="mode"><span class="on">Change it</span><span>Just chat</span><span style="color:var(--ink-soft)">Auto</span></div>
+            <div class="compose-row">
+              <div class="pick-btn" title="Point at something"><i></i></div>
+              <div class="input"><span class="elref">button · Plant a planet</span><span>make this wobble when it's pressed<span class="caret" style="display:inline-block;height:16px;width:2px;vertical-align:-2px;margin-left:2px"></span></span></div>
+              <div class="send">&uarr;</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="viewing-pill" style="left:calc(50% - 226px)">You're viewing v12 <button class="btn sm">Back to live</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. CHARACTER PICKER -->
+  <section class="scene">
+    <div class="scene-tag"><b>4</b> Pick your animal <span>no signup, just a face and a name</span></div>
+    <div class="device">
+      <div class="chrome"><div><i></i><i></i><i></i></div><div class="url">clayground.app</div></div>
+      <div class="picker-stage">
+        <div class="ghost home"><div class="topbar"><div class="logo"><div class="blob"></div>Clayground</div></div><div class="hero"><h2>Make a thing.<br><span class="sticker">Pass it around.</span></h2></div></div>
+        <div class="picker">
+          <div class="me-side">
+            <h3>Who are you today?</h3>
+            <div class="big-face"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div>
+            <div class="name-field"><div class="in">Pocket<span class="caret" style="height:26px"></span></div><div class="dice" title="Shuffle name"></div></div>
+            <div class="suggest">
+              <span class="chip">Bandit</span><span class="chip">Rascal</span><span class="chip">Scout</span><span class="chip">Ziggy</span><span class="chip">Nook</span>
+            </div>
+            <div class="note">Everyone sees this face next to what you say and what you change.</div>
+          </div>
+          <div class="grid-side">
+            <div class="gh"><h4>24 animals</h4><span><i class="live-dot" style="animation:none"></i> someone in this room has it</span></div>
+            <div class="zoo">
+              <div class="face"><img src="../../web/components/org/avatars/fox.webp" alt="fox"></div>
+              <div class="face taken"><img src="../../web/components/org/avatars/owl.webp" alt="owl"></div>
+              <div class="face taken"><img src="../../web/components/org/avatars/otter.webp" alt="otter"></div>
+              <div class="face"><img src="../../web/components/org/avatars/crane.webp" alt="crane"></div>
+              <div class="face"><img src="../../web/components/org/avatars/bear.webp" alt="bear"></div>
+              <div class="face"><img src="../../web/components/org/avatars/hare.webp" alt="hare"></div>
+              <div class="face taken"><img src="../../web/components/org/avatars/moth.webp" alt="moth"></div>
+              <div class="face"><img src="../../web/components/org/avatars/whale.webp" alt="whale"></div>
+              <div class="face"><img src="../../web/components/org/avatars/hedgehog.webp" alt="hedgehog"></div>
+              <div class="face"><img src="../../web/components/org/avatars/stag.webp" alt="stag"></div>
+              <div class="face sel"><img src="../../web/components/org/avatars/raccoon.webp" alt="raccoon"></div>
+              <div class="face"><img src="../../web/components/org/avatars/penguin.webp" alt="penguin"></div>
+              <div class="face"><img src="../../web/components/org/avatars/seal.webp" alt="seal"></div>
+              <div class="face"><img src="../../web/components/org/avatars/lynx.webp" alt="lynx"></div>
+              <div class="face taken"><img src="../../web/components/org/avatars/octopus.webp" alt="octopus"></div>
+              <div class="face"><img src="../../web/components/org/avatars/toucan.webp" alt="toucan"></div>
+              <div class="face"><img src="../../web/components/org/avatars/frog.webp" alt="frog"></div>
+              <div class="face"><img src="../../web/components/org/avatars/goat.webp" alt="goat"></div>
+              <div class="face"><img src="../../web/components/org/avatars/swan.webp" alt="swan"></div>
+              <div class="face"><img src="../../web/components/org/avatars/snail.webp" alt="snail"></div>
+              <div class="face"><img src="../../web/components/org/avatars/elephant.webp" alt="elephant"></div>
+              <div class="face"><img src="../../web/components/org/avatars/koala.webp" alt="koala"></div>
+              <div class="face"><img src="../../web/components/org/avatars/squirrel.webp" alt="squirrel"></div>
+              <div class="face"><img src="../../web/components/org/avatars/robin.webp" alt="robin"></div>
+            </div>
+            <div class="picker-foot">
+              <p>Names can repeat. Faces tell you apart. Change it any time from the <span class="kbd">you</span> chip.</p>
+              <button class="btn">Surprise me</button>
+              <button class="btn hot">Be Pocket</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROPOSAL -->
+  <section class="scene">
+    <div class="scene-tag"><b>5</b> The kit <span>name, palette, type</span></div>
+    <div class="sheet">
+      <div class="panel">
+        <h5>Name</h5>
+        <div class="name-main"><div class="blob"></div>Clayground</div>
+        <p style="margin-top:10px">Software as clay you squish together in public: it says playful, shared and changeable in one word, and nobody owns it in this space.</p>
+        <div class="alt"><b>Mudpie</b><p>Something made by many hands, a little messy, proudly shown off; warm and instantly memorable.</p></div>
+        <div class="alt"><b>Squish</b><p>A verb you can say out loud ("squish it so the planets orbit"), which is exactly how a change feels here.</p></div>
+      </div>
+      <div class="panel">
+        <h5>Palette</h5>
+        <div class="swatches">
+          <div class="sw" style="background:var(--butter)"><b>Butter</b>#ffd84a</div>
+          <div class="sw" style="background:var(--ink);color:var(--butter)"><b>Ink</b>#1d1631</div>
+          <div class="sw" style="background:var(--paper)"><b>Paper</b>#fffdf6</div>
+          <div class="sw" style="background:var(--cream)"><b>Cream</b>#fff7e0</div>
+          <div class="sw" style="background:var(--tomato);color:var(--paper)"><b>Tomato</b>#ff5b3a</div>
+          <div class="sw" style="background:var(--pool);color:var(--paper)"><b>Pool</b>#3b7bff</div>
+          <div class="sw" style="background:var(--mint)"><b>Mint</b>#2fd6a0</div>
+          <div class="sw" style="background:var(--bubble)"><b>Bubble</b>#ff9fd2</div>
+        </div>
+        <p style="margin-top:14px">Butter dominates, ink draws every edge, tomato means "make it happen", mint means live, pool means fork.</p>
+      </div>
+      <div class="panel">
+        <h5>Type</h5>
+        <div class="type-row"><div class="s1">Bagel Fat One</div><small>Display: headlines, version numbers, build states</small></div>
+        <div class="type-row"><div class="s2">Gabarito 500 to 900</div><small>Interface and chat</small></div>
+        <div class="type-row"><div class="s3">Martian Mono</div><small>Files, element chips, keycaps, URLs</small></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

@@ -7,7 +7,6 @@ import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useRouter } from 'expo-router';
 import { chatPushIsOnScreen } from '@/lib/chatFocus';
-import { openConversationFromOutside } from '@/components/simple/laneRoute';
 import { useNotificationCatchUp } from '@/hooks/useNotificationCatchUp';
 import { acceptInvite, declineInvite, joinCall } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
@@ -154,8 +153,8 @@ export function usePushNotifications() {
         return;
       }
       if (data.conversationId) {
-        // A lane person's conversation opens in the lane, with its approval card.
-        openConversationFromOutside(String(data.conversationId));
+        // A hosted conversation opens as its own screen there, with its approval card.
+        router.push(`/session/${data.conversationId}` as never);
       } else if (data.channelId) {
         // A team chat push lands in the channel it came from — and when it was
         // a thread reply, in that thread, which is where the words actually

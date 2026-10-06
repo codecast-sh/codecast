@@ -19,9 +19,10 @@ import { resolveModel } from "./models";
 const tokens = { input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 };
 
 describe("pricing", () => {
-  it("prices the override models per million, cache reads at a tenth of input", () => {
+  it("prices the override models per million, cache reads at a tenth of input unless the model sets its own", () => {
     expect(usageCost(tokens, PRICE_OVERRIDES["claude-sonnet-5-5"])).toBeCloseTo(2 + 10 + 0.2, 10);
-    expect(usageCost(tokens, PRICE_OVERRIDES["claude-opus-5-5"])).toBeCloseTo(4 + 20 + 0.4, 10);
+    expect(usageCost(tokens, PRICE_OVERRIDES["claude-opus-5-5"])).toBeCloseTo(4 + 20 + 0.2, 10);
+    expect(usageCost(tokens, PRICE_OVERRIDES["claude-fable-5-1"])).toBeCloseTo(10 + 50 + 0.25, 10);
     expect(usageCost(tokens, PRICE_OVERRIDES["claude-haiku-4-5"])).toBeCloseTo(1 + 5 + 0.1, 10);
   });
 
