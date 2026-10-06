@@ -43,6 +43,7 @@ import { mintTokenForDevice } from "../remote/convexClient.js";
 import { readHostDeviceId } from "../cloud/prepare.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
+import { SSHD_KEEPALIVE_SCRIPT } from "../cloud/reach.js";
 import { SCREEN_DISPLAY, SCREEN_SIZE, RTSP_PORT, HLS_PORT, VNC_PORT, NOVNC_PORT } from "./hostScreen.js";
 export { SCREEN_DISPLAY, SCREEN_SIZE, RTSP_PORT, HLS_PORT, VNC_PORT, NOVNC_PORT };
 
@@ -87,14 +88,7 @@ if ! command -v google-chrome >/dev/null 2>&1; then
   sudo apt-get install -y -qq /tmp/chrome.deb && rm /tmp/chrome.deb
 fi
 
-# sshd drops a client that stopped answering within a minute. Without it a
-# laptop that went to sleep mid-connection leaves its session, and a reached
-# folder's sshfs with it, alive for TCP's two hours, and every read of the
-# folder hangs that long instead of failing.
-if [ ! -f /etc/ssh/sshd_config.d/cast-alive.conf ]; then
-  printf 'ClientAliveInterval 15\nClientAliveCountMax 4\n' | sudo tee /etc/ssh/sshd_config.d/cast-alive.conf >/dev/null
-  sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null || true
-fi
+${SSHD_KEEPALIVE_SCRIPT}
 
 echo "[2/6] swap"
 if [ ! -f /swapfile ]; then

@@ -81,7 +81,7 @@ async function findByName(ctx: any, userId: Id<"users">, table: Table, name: str
 
 function definitionSpec(row: any): AgentDefinitionSpec {
   const spec: AgentDefinitionSpec = { name: row.name, description: row.description };
-  for (const k of ["agent", "model", "effort", "tools", "disallowed_tools", "system_prompt", "prompt_mode", "mode", "isolated"] as const) {
+  for (const k of ["agent", "model", "effort", "tools", "disallowed_tools", "system_prompt", "prompt_mode", "mode", "isolated", "merge_back"] as const) {
     if (row[k] !== undefined && row[k] !== null) (spec as any)[k] = row[k];
   }
   return spec;

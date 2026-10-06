@@ -15,3 +15,6 @@ sim = "packages/web/store/__tests__/sim/tsconfig.json"
 # The eval home (docs/architecture/evals-home.md): its own code plus the
 # convex and cli files the surfaces import.
 evals = "packages/evals/tsconfig.json"
+# The playground (packages/playground/SPEC.md): its shell and its own Convex
+# deployment's functions, one program.
+playground = "packages/playground/tsconfig.json"

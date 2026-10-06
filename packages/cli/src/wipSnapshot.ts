@@ -46,7 +46,7 @@ const execFileAsync = promisify(execFile);
  * `ls-remote --heads` does not list it. Not refs/heads/* — see property 4. */
 export const WIP_REF_PREFIX = "refs/codecast/wip";
 
-const BRANCH_TRAILER = "codecast-branch";
+export const BRANCH_TRAILER = "codecast-branch";
 
 export interface WipSnapshot {
   /** The snapshot commit. Its parent is the source's real HEAD. */
@@ -73,18 +73,28 @@ export function wipRef(conversationId: string): string {
  * loop is how the daemon once froze past the watchdog's 180s stale-heartbeat
  * threshold and got force-restarted mid-move.
  */
-async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-    encoding: "utf-8",
-    maxBuffer: 64 * 1024 * 1024,
-    ...(env ? { env } : {}),
+export async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv, stdin?: string): Promise<string> {
+  if (stdin === undefined) {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+      ...(env ? { env } : {}),
+    });
+    return stdout.trim();
+  }
+  return new Promise((resolve, reject) => {
+    const child = execFile("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, ...(env ? { env } : {}) }, (err, stdout) => {
+      // check-ignore exits 1 when nothing matched: an answer, not a failure.
+      if (err && (err as { code?: number }).code !== 1) reject(err);
+      else resolve(String(stdout).trim());
+    });
+    child.stdin?.end(stdin);
   });
-  return stdout.trim();
 }
 
-async function gitTry(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string | null> {
+export async function gitTry(cwd: string, args: string[], env?: NodeJS.ProcessEnv, stdin?: string): Promise<string | null> {
   try {
-    return await git(cwd, args, env);
+    return await git(cwd, args, env, stdin);
   } catch {
     return null;
   }
@@ -126,7 +136,7 @@ export function parseSnapshotTrailer(message: string, key: string): string | und
 export const CLOUD_SEED_EXCLUDES = [".codecast/workspaces", ".codecast/worktrees", ".codecast/logs"];
 
 /** The author a snapshot object carries, so it never needs the machine's. */
-const SNAPSHOT_IDENTITY = {
+export const SNAPSHOT_IDENTITY = {
   GIT_AUTHOR_NAME: "codecast",
   GIT_AUTHOR_EMAIL: "codecast@localhost",
   GIT_COMMITTER_NAME: "codecast",

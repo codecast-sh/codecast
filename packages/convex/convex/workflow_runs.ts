@@ -278,6 +278,16 @@ export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = 
   await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
 }
 
+// A run created for a task logs into a session of its own, and nobody talks
+// in it: the person meets the run on the task (its status, its blocker
+// comment) and in the decision queue (its gates and its card). So that log is
+// born stashed and hidden, never a row in the inbox; an ask still brings it
+// back (isStashHidden). A run without a task is someone's own workflow and
+// stays in their inbox.
+function runLogInboxFields(taskBoundAt: number | undefined) {
+  return taskBoundAt ? { inbox_stashed_at: taskBoundAt, inbox_stash_hidden: true } : {};
+}
+
 export const create = mutation({
   args: {
     workflow_id: v.id("workflows"),
@@ -363,6 +373,7 @@ export const create = mutation({
         status: "active",
         workflow_run_id: runId,
         is_workflow_primary: true,
+        ...runLogInboxFields(args.task_id ? now : undefined),
       });
     }
 
@@ -495,6 +506,7 @@ export async function createRunCore(
     status: "active",
     workflow_run_id: runId,
     is_workflow_primary: true,
+    ...runLogInboxFields(opts.task ? now : undefined),
   });
 
   await ctx.db.patch(runId, { primary_conversation_id: primaryConvId });
