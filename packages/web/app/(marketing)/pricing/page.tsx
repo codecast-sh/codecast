@@ -6,6 +6,8 @@ import { useRouteMeta } from "../pageMeta";
 import { earlyAccessMailto } from "@/lib/siteLinks";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { ComparisonList } from "../compare/ComparisonList";
+import { PLANS } from "@codecast/shared/contracts/assistant";
+import { planPoints, planPrice } from "@/components/simple/planWords";
 
 function CheckIcon({ className, color }: { className?: string; color: string }) {
   return (
@@ -242,6 +244,47 @@ export default function PricingPage() {
           Prefer to run it all yourself? Codecast is MIT licensed and self-hostable — clone it,
           deploy it, own the whole stack.
         </p>
+      </section>
+
+      {/* The Codecast assistant: the hosted plans for people who do not
+          write code. Every figure and word comes from the PLANS catalog
+          through the same plan words Settings > Plan shows. */}
+      <section id="assistant" className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="text-center max-w-2xl mx-auto mb-10">
+          <h2 className="text-3xl font-bold mb-3 font-mono" style={{ color: "#002b36" }}>
+            The Codecast assistant
+          </h2>
+          <p className="text-lg leading-relaxed" style={{ color: "#657b83" }}>
+            For everyone, nothing to install. It runs your errands, notes and routines, and your mail
+            through Whisk, asking before anything goes out. We run the AI, so a plan covers it all.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-3 gap-6 items-start">
+          {Object.values(PLANS).map((plan) => (
+            <div key={plan.id} className="rounded-2xl p-7 h-full flex flex-col" style={{ backgroundColor: "#fdf6e3", border: "1px solid #eee8d5" }}>
+              <h3 className="text-xl font-semibold font-mono mb-3" style={{ color: "#002b36" }}>{plan.label}</h3>
+              <div className="flex items-baseline gap-2 mb-6">
+                <span className="text-4xl font-bold font-mono" style={{ color: "#002b36" }}>{planPrice(plan).replace(/ a month$/, "")}</span>
+                <span className="text-sm" style={{ color: "#657b83" }}>a month</span>
+              </div>
+              <ul className="space-y-3 flex-1">
+                {planPoints(plan).map((point) => (
+                  <li key={point} className="flex items-start gap-3 text-sm" style={{ color: "#586e75" }}>
+                    <CheckIcon className="w-5 h-5 shrink-0 mt-px" color="#cb4b16" />
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-center mt-8">
+          <Link href="/welcome">
+            <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0" style={{ background: "#cb4b16" }}>
+              Get started with the assistant
+            </Button>
+          </Link>
+        </div>
       </section>
 
       {/* CTA */}

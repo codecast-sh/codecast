@@ -1,4 +1,4 @@
-Some work is not in a web page. It is in Slack, Mail, System Settings, an installer, or a native dialog that a browser window shows and the page cannot reach: the address field, a file picker, a permission sheet. `cast computer` lets an agent work there. It reads one visible window of a macOS app as a compact indexed tree of text, acts on one element by its index, and returns a fresh tree.
+Some work is not in a web page. It is in Slack, Mail, System Settings, an installer, or a native dialog that a browser window shows and the page cannot reach: the address field, a file picker, a permission sheet. `cast computer` lets an agent work there. It reads one visible window of a macOS app as a compact indexed tree of text, acts on one element by its name or its index, and reports what the action changed.
 
 The design avoids two failures. The first is an agent that clicks the wrong thing because the window changed under it. The second is an agent that reports success for input the app never took. Indexes that fail when stale answer the first. A verification verdict that is separate from the exit code answers the second.
 
@@ -19,11 +19,16 @@ cast computer help click                          # one verb's flags, from the b
 
 ## Read, act, read
 
-`get-app-state` returns the tree. The agent acts on one element by the index the tree gave it. Every action returns a complete new snapshot, so no separate state call is needed between two steps.
+`get-app-state` returns the tree, and `find` returns only the elements that match some text. The agent acts on one element by name (`--element "Save"`, where several matches are listed and never guessed) or by the index the tree gave it. Every action prints what it changed in the tree, with the indexes to use next, so no separate state call is needed between two steps. "No change" means the app ignored the action.
 
 Indexes are sparse. The tree drops noise, so the numbers have gaps, and an agent must never count its way to an index or infer one from `elementCount`.
 
 An index is good only for the tree it came from. Navigation, scrolling, a focus change, a delay, or another agent in the same window all make it stale. A stale index fails as `element_not_found`. It does not click whatever now sits at that number. The failure is cheap and the recovery is always a fresh snapshot.
+
+```figure
+ReadActFigure
+Read the tree once, act, and read the change the action printed. An index from an older tree fails rather than landing on something else.
+```
 
 ## Exit code and verdict
 
@@ -32,12 +37,18 @@ Exit 0 means the helper delivered the action. It does not mean the app took it. 
 | Verdict | Meaning |
 |---------|---------|
 | `verified` | The helper read the change back, through the value, the selection, or the focused text |
-| `unverified`: `synthetic_input` | Keyboard or mouse events were sent. Nothing can assert them |
+| `unverified`: `synthetic_input` | Keyboard or mouse events were sent to the window in front. Nothing can assert them |
+| `unverified`: `background_input` | Keys were posted to a background app's own event queue. Nothing can assert them |
 | `unverified`: `clipboard_paste` | The text went through the clipboard |
 | `unverified`: `accessibility_action_unasserted` | An accessibility action ran and no readback exists for it |
 | `unverified`: `value_mismatch`, `window_changed`, `readback_unsupported`, `provider_unavailable` | The readback disagreed, the window changed, or no readback was possible |
 
 Human output opens with `completed` only for a verified action and `attempted` for every other one. An attempted action also prints the exact `get-app-state` command that settles the question, with the window selector filled in.
+
+```figure
+VerdictFigure
+Every one of these exits 0. Only an action whose change the helper read back opens with completed.
+```
 
 ## Verbs that leave the screen alone
 
@@ -48,12 +59,18 @@ No verb raises a window. Two flags move the human's screen and nothing else does
 | `set-value` | Accessibility write. The helper reads the value back: `verified`, or `value_mismatch` | No |
 | `perform-secondary-action` | One of the actions the element advertises in the tree | No |
 | `click` on an element that advertises a press | Accessibility press | No |
-| `type-text`, `press-key`, `hotkey`, `click` on a coordinate | Synthetic input, reported as `synthetic_input` | Yes |
-| `paste-text` | The clipboard, reported as `clipboard_paste` | Yes |
+| `type-text`, `press-key`, `hotkey` | Key events: the input stream when the window is in front (`synthetic_input`), the app's own event queue when it is not (`background_input`) | No |
+| `paste-text` | The clipboard, reported as `clipboard_paste` | No |
+| `click --mouse`, `drag`, a click on a control with no press | A real mouse event, reported as `synthetic_input` | Yes |
 
 The helper prefers an accessibility path even for the keyboard verbs. `paste-text` first tries to replace the selection in the focused element, and a select all `hotkey` first tries the element's own select all action; both need no focus and can be verified. Only when that path is absent does the helper send synthetic input.
 
-Synthetic input goes to whatever is focused. If the target window is not already in front, those verbs fail with `window_not_focused` and deliver nothing to the wrong app. The agent then asks once with `--restore-window`, or switches to `set-value`.
+Keys reach a window that is not in front. The helper makes the target the app's main window without activating the app, then posts the keys to that app's own event queue, so the human's front app keeps the keyboard. A mouse press is different: macOS drops a press on a background window. A real mouse event therefore needs the target window in front, and otherwise fails with `window_not_focused` and delivers nothing to the wrong app. The agent then looks for a route with no mouse (`set-value`, a Secondary Action, a keyboard shortcut), or asks once with `--restore-window`. While an action lands on a point, an orange agent pointer glides there and pulses on the press, without taking focus, so the human can see what the agent is doing.
+
+```figure
+FocusFigure
+Keys reach the window behind through its app's own queue. A mouse press there is refused, never sent to the app in front.
+```
 
 Modifiers are one flag, never two commands. `click --modifiers CmdOrCtrl+Shift` holds them for that click alone. An agent that is interrupted between a key down and a key up would leave a key held for the human, so the CLI offers no such pair. `press-key` takes exactly one key and `hotkey` takes a modifier and one key. `paste-text` restores the human's clipboard afterwards and refuses text above 16 MiB.
 
@@ -63,7 +80,16 @@ macOS attaches a permission to the program that asks for it. A grant to the term
 
 Accessibility lets the helper read a window and act inside it; every verb needs it. Screen Recording lets it capture the window it read. Without Screen Recording the tree still works and only the image fails.
 
-`cast computer permissions` reads both grants and shows nothing on screen, so an agent can run it at any time. `cast computer setup` is the human's command. It puts the helper in place, reads both grants, explains each missing one, asks before it opens anything, opens only the pane that is missing, and waits up to 5 minutes for the grant to land. Without a terminal and without `--yes` it opens nothing. Retries by the agent grant nothing; `permissions --reset` clears a stale deny.
+`cast computer permissions` reads both grants and shows nothing on screen, so an agent can run it at any time. On a machine where the human has granted both, it prints:
+
+```
+$ cast computer permissions
+Computer permissions checked.
+  Helper app: ~/.codecast/computer/codecast computer.app
+  Permissions: accessibility=granted, screenshots=granted
+```
+
+`cast computer setup` is the human's command. It puts the helper in place, reads both grants, explains each missing one, asks before it opens anything, opens only the pane that is missing, and waits up to 5 minutes for the grant to land. Without a terminal and without `--yes` it opens nothing. Retries by the agent grant nothing; `permissions --reset` clears a stale deny.
 
 ## Secrets and sensitive apps
 

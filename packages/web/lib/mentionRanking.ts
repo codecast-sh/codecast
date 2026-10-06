@@ -32,13 +32,27 @@ export function score(label: string, q: string): number {
 // exact/prefix/substring hit), order-independent — so "plain road" finds
 // "...The Roadmap, in Plain Language". Returns Infinity when any required word
 // is absent, so callers drop the candidate exactly as they do for score().
+/** The words of a text as every ranker splits them. */
+export function textWords(lower: string): string[] {
+  return lower.split(/[\s\-—,.;:/\\]+/).filter(Boolean);
+}
+
+let previousQuery: string | undefined;
+let normalizedQuery = "";
+let queryTokens: string[] = [];
+
 export function matchScore(text: string, query: string): number {
-  const q = query.trim().toLowerCase();
+  if (query !== previousQuery) {
+    previousQuery = query;
+    normalizedQuery = query.trim().toLowerCase();
+    queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  }
+  const q = normalizedQuery;
   if (!q) return 0;
-  const tokens = q.split(/\s+/).filter(Boolean);
+  const tokens = queryTokens;
   if (tokens.length <= 1) return score(text, q);
   const lower = text.toLowerCase();
-  const words = lower.split(/[\s\-—,.;:/\\]+/).filter(Boolean);
+  const words = textWords(lower);
   let total = 0;
   for (const tok of tokens) {
     let best = Infinity;
@@ -105,10 +119,8 @@ export function mentionViewTimes(state: {
 }
 
 export function withMentionViewTime(item: MentionItem, times: Map<string, number>): MentionItem {
-  return {
-    ...item,
-    viewedAt: Math.max(item.viewedAt ?? 0, times.get(`${item.type}:${item.id}`) ?? 0, times.get(`${item.type}:${item.shortId}`) ?? 0),
-  };
+  const viewedAt = Math.max(item.viewedAt ?? 0, times.get(`${item.type}:${item.id}`) ?? 0, times.get(`${item.type}:${item.shortId}`) ?? 0);
+  return item.viewedAt === viewedAt ? item : { ...item, viewedAt };
 }
 
 // Among equally named candidates, the kinds come in ⌘K's order: the session
@@ -158,12 +170,13 @@ export function mergeMentionSuggestions(local: MentionItem[], remote: MentionIte
     byId.set(key, contextAt ? { ...timed, contextAt } : timed);
   }
   const ranked = [...byId.values()];
-  const ranks = new Map<MentionItem, number>();
-  for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll) - (item.contextAt ? CONTEXT_LIFT : 0));
+  const hasQuery = query.trim().length > 0;
+  const ranks = hasQuery ? new Map<MentionItem, number>() : null;
+  if (ranks) for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll) - (item.contextAt ? CONTEXT_LIFT : 0));
   const counts = new Map<string, number>();
   const sorted = ranked
-    .sort((a, b) => ranks.get(a)! - ranks.get(b)! || (b.contextAt ?? 0) - (a.contextAt ?? 0)
-      || (query.trim() ? typeOrder(a.type) - typeOrder(b.type) : 0) || compareMentionRecency(a, b));
+    .sort((a, b) => (ranks ? ranks.get(a)! - ranks.get(b)! : Number(Boolean(b.contextAt)) - Number(Boolean(a.contextAt))) || (b.contextAt ?? 0) - (a.contextAt ?? 0)
+      || (hasQuery ? typeOrder(a.type) - typeOrder(b.type) : 0) || compareMentionRecency(a, b));
   // Workers spawned round after round share their brief's title: offer the
   // freshest one, not a page of copies.
   return collapseSameTitle(sorted, (item) => (item.worker ? `worker:${item.label}` : null))

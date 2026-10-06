@@ -7,7 +7,7 @@ import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
-import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, learnPass, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { bindTemplate, catalogTemplates, evidenceTemplate, installTemplate, learnPass, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, retireTemplate, yankRelease, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -147,9 +147,11 @@ class Server {
       case "/cli/org/template/learn/pass": { const part = this.passes.shift() ?? { template_id: body.template_id, read: 0, failed: 0, filed: [], refused: {}, remaining: 0 }; return part; }
       case "/cli/org/template/get": return { template_id: body.template_id, releases: Object.entries(this.releases).map(([digest, r]) => ({ version: r.manifest.version, digest, status: "canary" })) };
       case "/cli/images/upload-url": return "https://upload.test/snapshot";
+      case "/cli/org/template/yank": case "/cli/org/template/retire": return { endpoint, ...body };
       case "/cli/org/template/publish": {
+        if (body.dry_run) return { action: "created", template_id: body.manifest.id, version: body.manifest.version, class: "structure", dry_run: true };
         this.releases[body.digest] = { manifest: body.manifest, storage_url: body.storage_id ? `https://blob.test/${body.storage_id}` : null };
-        return { action: "created", template_id: body.manifest.id, latest: { version: body.manifest.version, digest: body.digest }, digest: body.digest, as_codecast: !!body.as_codecast, team_id: body.team_id, storage_id: body.storage_id, changelog: body.changelog };
+        return { action: "created", template_id: body.manifest.id, latest: { version: body.manifest.version, digest: body.digest }, class: "structure", digest: body.digest, as_codecast: !!body.as_codecast, team_id: body.team_id, storage_id: body.storage_id, changelog: body.changelog };
       }
       case "/cli/org/template/release": { const r = this.releases[body.digest]; if (!r) throw new Error("Release not published"); return { template_id: body.template_id, version: body.version, digest: body.digest, ...r }; }
       case "/cli/org/template/instances": return this.instances;
@@ -687,7 +689,7 @@ describe("instance record, readiness and the loader", () => {
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "catalog", "activate", "upgrade", "instructions"]);
+  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "yank", "retire", "catalog", "activate", "upgrade", "instructions"]);
   expect(template.commands.find((c) => c.name() === "learn")!.commands.map((c) => c.name())).toEqual(["pass", "status", "due", "rollout"]);
   expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
 });
@@ -823,11 +825,21 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     const good = folder(hired());
     const bad = tmp(); fs.writeFileSync(path.join(bad, "org-template.json"), "{}");
     const rows = await publishTemplates(server.deps, [good, bad, "/nowhere/at/all"], { codecast: true, status: "canary" });
-    expect(rows[0]).toMatchObject({ folder: good, template_id: "growth", version: "2.0.0", action: "created" });
+    expect(rows[0]).toMatchObject({ folder: good, template_id: "growth", version: "2.0.0", action: "created", class: "structure" });
     expect(rows[1]!.error).toMatch(/missing or unknown fields/);
     expect(rows[2]!.error).toMatch(/ENOENT|no such/i);
     expect(Object.keys(server.releases)).toHaveLength(1);
     expect(Object.keys(server.blobs)).toHaveLength(1);
+  });
+  test("a dry run uploads nothing and says the class; yank needs a reason; yank and retire speak as the publisher", async () => {
+    const server = new Server(tmp());
+    const [dry] = await publishTemplates(server.deps, [folder(hired())], { codecast: true, dryRun: true });
+    expect(dry).toMatchObject({ template_id: "growth", version: "2.0.0", class: "structure", dry_run: true });
+    expect(Object.keys(server.blobs)).toHaveLength(0);
+    expect(server.calls.find((c) => c.endpoint === "/cli/org/template/publish")!.body).toMatchObject({ dry_run: true, as_codecast: true });
+    await expect(yankRelease(server.deps, "growth", "2.0.0", { codecast: true })).rejects.toThrow(/--reason/);
+    expect(await yankRelease(server.deps, "growth", "2.0.0", { codecast: true, reason: "posts twice" })).toMatchObject({ endpoint: "/cli/org/template/yank", template_id: "growth", version: "2.0.0", reason: "posts twice", as_codecast: true });
+    expect(await retireTemplate(server.deps, "growth", { team: "team-1", undo: true })).toMatchObject({ endpoint: "/cli/org/template/retire", template_id: "growth", undo: true, team_id: "team-1" });
   });
   test("a release published without its snapshot cannot be installed from the record, and two projects with one name need --project", async () => {
     const source = folder(hired());

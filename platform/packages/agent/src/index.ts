@@ -6,7 +6,9 @@
  */
 export { defineTool, runTool, toAgentTool } from "./tool";
 export type { RunToolContext, Tool, ToolContent, ToolContext, ToolMeter, ToolOutput, ToolRisk } from "./tool";
-export { DEFAULT_MAX_TOKENS, MAX_DEADLINE_MS, MIN_OUTPUT_TOKENS, THINKING_BUDGETS, declineText, gateByRisk, planOutput, runAssistant } from "./run";
+export { DEFAULT_MAX_TOKENS, MAX_DEADLINE_MS, MIN_OUTPUT_TOKENS, THINKING_BUDGETS, gateByRisk, planOutput, runAssistant } from "./run";
+export { declineText, notRunText, toolResultOutcome } from "./outcome";
+export type { ToolResultOutcome } from "./outcome";
 export type {
   Gate,
   GateDecision,
@@ -41,6 +43,8 @@ export {
 } from "./meter";
 export type { Price } from "./meter";
 export { resolveModel } from "./models";
+export { providerFault } from "./faults";
+export type { ProviderFault } from "./faults";
 export { errorStream, streamModel } from "./stream";
 export { MESSAGE_ROW_FIELDS, messagesToRows, parseInput, prepareContext, rowsToMessages } from "./history";
 export type { AbsentField, ImageRow, MessageRow, RowMessage, RowOrigin, ToolCallRow, ToolResultRow, UsageRow } from "./history";

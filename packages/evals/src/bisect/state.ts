@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { join } from 'node:path';
 
 import type { BisectPlan, BisectState, BisectStep, BisectSummary } from '@codecast/shared/contracts/evalsApi';
+import { bisectSummaryOf } from '@platform/evals/analysis';
 
 import { evalsHome, writeJsonAtomic } from '../paths';
 
@@ -113,24 +114,6 @@ export function requestStop(id: string, home = evalsHome()): boolean {
 
 export const stopRequested = (id: string, home = evalsHome()): boolean => existsSync(bisectPaths(id, home).stop);
 
-/** The answer's culprit sha, when it named one. */
-const culpritOf = (s: BisectState): string | null => (s.answer?.kind === 'culprit' ? s.answer.commit.sha : null);
-
-export const summaryOf = (s: BisectState): BisectSummary => ({
-  id: s.id,
-  surface: s.surface,
-  good: s.range.good,
-  bad: s.range.bad,
-  status: s.status,
-  outcome: s.answer?.kind ?? null,
-  culprit: culpritOf(s),
-  spentUsd: s.spentUsd,
-  budgetUsd: s.budgetUsd,
-  startedAt: s.startedAt,
-  updatedAt: s.updatedAt,
-  finishedAt: s.finishedAt,
-});
-
 /** Every bisect with a state, newest first. */
 export function listBisects(home = evalsHome()): BisectSummary[] {
   const dir = bisectsDir(home);
@@ -139,13 +122,10 @@ export function listBisects(home = evalsHome()): BisectSummary[] {
     .filter((n) => BISECT_ID_RE.test(n))
     .flatMap((n) => {
       const s = readBisectState(n, home);
-      return s ? [summaryOf(s)] : [];
+      return s ? [bisectSummaryOf(s)] : [];
     })
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
 }
-
-/** The statuses a bisect leaves only by finishing or stopping. */
-export const LIVE_STATUSES: ReadonlySet<BisectState['status']> = new Set(['planning', 'controls', 'probing', 'confirming']);
 
 const alive = (pid: number): boolean => {
   try {

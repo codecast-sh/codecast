@@ -4,6 +4,11 @@ Codecast models the agents and people around a body of work as an organization. 
 
 So work routes to the responsibility instead of to whichever session is running. Assign a task to `@growth`, mention `@growth` in team chat, or send it a message, and the message reaches the session that holds the seat today.
 
+```figure
+SeatFigure
+Everything addresses @growth. The session holding the seat can change; the role and what it owns stay put.
+```
+
 ```bash
 cast org ls                          # people, roles with their scopes, the sessions under each
 cast org feed @growth                # everything in the scope, newest first
@@ -29,6 +34,11 @@ cast task ls --chain me              # everything in your reporting chain
 A session that reports to a role still has its owners; the role sits between the session and the person. In the host's inbox such a session nests under the role's card and does not count toward the host's needs input. A request travels up the reporting line as ordinary messages: a session under a role tells its role, and a role that cannot answer tells the role it reports to. The role that reports to a person raises it in its own standing thread, where its pinned state says what is asked, and a real choice is a `cast decide` card in that thread. The person sees one card per lead that needs them, filed the way any session that needs input is.
 
 Three trust stages gate what a role may do, and the server checks them. At `understand`, the stage every role starts at, the spawn path refuses a hand: "may not start hands". `decide` lets the role answer decisions inside its grants. `direct` lets it start hands inside its caps. The default caps are 6 hands, 40 wakes and 400,000 tokens a day (`DEFAULT_ROLE_CAPS`). Token use is counted from Claude transcripts only; the brief reports sessions on other backends as uncounted.
+
+```figure
+TrustFigure
+Each stage adds one power, and the server checks it. A person moves a role up from the role page.
+```
 
 ## The tree and scopes
 
@@ -78,7 +88,14 @@ One role is one context window, so the thresholds that size a seat live in one m
 
 The **line** is the [workflow](/documentation/workflows) a role's tasks run on, stored as `org_roles.line_workflow_slug` with the default `line`. A **station** is a task status: a run adds no states, it moves the task through its team's statuses. `cast role line @handle` prints the slug. `--set <slug>` refuses a slug that is neither a shipped template (`line`, `feature`) nor a workflow you pushed, and the server then applies the same rule that governs every scope edit, so the change is made on the Settings tab of the role page.
 
-The shipped line is analyze, implement, verify, review. Each agent node has `backend=session`, so every station is a codecast session you can open, `cast read` and `cast send`. Implement runs in its own worktree, three visits at most. Verify runs `cast ws check`. Review is a fresh session that receives only the branch, the title and the criteria.
+The shipped line takes one cause from a goal to a watched change. Ground ties it to a goal and rates it, and parks anything not ready. When the risk is `plan`, a plan goes to a person at the plan gate first. Analyze writes the acceptance criteria. Prove and red show the miss failing before anything is fixed, and a miss that does not reproduce dissolves the cause. Implement runs in its own worktree, three visits at most; verify runs the project's check command from its line profile (`.codecast/line.toml`), green reruns the reproduction, and eval runs the project's eval command. Review is an independent reviewer. The change card then goes to a person, who picks Ship, Revise or Drop, and a shipped change is watched for the profile's watch days. Each agent node has `backend=session`, so every station is a codecast session you can open, `cast read` and `cast send`.
+
+```figure
+LineFigure
+The shipped line, in order. Sessions do the work, scripts check it, and the two gates belong to a person.
+```
+
+![A workflow run paused at its review gate](/documentation/shots/automations.webp "A run on the stations implement, verify and review: verify passed 214 tests, the run is paused at Review for a person's approval, and the session's pinned state says what it is waiting on.")
 
 Stations pass work with structured commands instead of prose, and the edges route on the fields those commands write:
 
@@ -91,7 +108,7 @@ cast task verdict ct-4102 approve|changes|reject --note -
 
 **A verdict is a record, never a gate.** Who closes a task does not decide whether the close is allowed; a role closes the tasks in its own scope like anyone else. One rule holds a task in place: a pending blocking decision bound to the task at its current station refuses a status change from any session, and a person on the web may move past it.
 
-`orgLine.sweep` runs every two minutes. For each active role at `direct` trust, it starts a run for each open, unblocked task in scope whose assignee is `agent:<handle>` and that has no run yet, while today's hands are under `hands_per_day`. One sweep starts at most 10 runs. A task leaves `open` when its run exists, so it never starts twice.
+`orgLine.sweep` is the job that starts runs on its own, and its schedule is switched off for now, so a run on the line starts when someone starts it (`cast workflow run line.cast --task ct-N`). When the sweep is scheduled, every two minutes, it does this: for each active role at `direct` trust, it starts a run for each open, unblocked task in scope whose assignee is `agent:<handle>` and that has no run yet, while today's hands are under `hands_per_day`. One sweep starts at most 10 runs. A task leaves `open` when its run exists, so it never starts twice.
 
 ## The unattended contract
 

@@ -2,6 +2,9 @@
 // A row with no lastEventAt (a finished rep, or a product that records no
 // events) has no liveness to show.
 
+/** Live work (a running rep, a bisect, a job) with nothing written for this long shows "stalled?". One window for all of them. */
+export const EVALS_STALL_MS = 5 * 60_000;
+
 /**
  * `live` when the newest event is within `stallAfterMs` of `now`, `stalled`
  * past it, null when there is no readable event time.

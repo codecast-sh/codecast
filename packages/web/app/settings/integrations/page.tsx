@@ -1,4 +1,5 @@
-// The one integrations surface (docs/architecture/issue-sync.md S9): Slack,
+// The one integrations surface (docs/architecture/issue-sync.md S9): the
+// assistant's mail and calendar through Whisk (WhiskCard), then Slack,
 // GitHub, Linear, Google and Notion, each with connect, disconnect, who
 // connected it, health, and what it enables — plus the imported issue sources
 // inside the GitHub and Linear cards.
@@ -16,7 +17,8 @@
 // connectors redirect back here with a confirm token in the URL fragment, which
 // is read once, spent in this signed-in session, and cleared.
 
-import { User, Users } from "lucide-react";
+import { Surface } from "../../../lib/surfaces";
+import { Sparkles, User, Users } from "lucide-react";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
@@ -29,6 +31,7 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useConnectorReturn } from "../../../hooks/useConnectorReturn";
 import { SettingsCallout, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { IntegrationCard } from "../../../components/integrations/IntegrationCard";
+import { WhiskCard } from "../../../components/integrations/WhiskCard";
 import { SourcesSection } from "../../../components/ops/SourcesSection";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
 import { TeamSwitcher } from "../../../components/TeamSwitcher";
@@ -77,7 +80,15 @@ export default function IntegrationsPage() {
         </SettingsCallout>
       )}
 
-      <BrowserExtensionSetup />
+      {/* The assistant's own connection: mail and calendar through Whisk,
+          personal, and first because it is what hosted mode runs on. */}
+      <SettingsSection title="Assistant" icon={Sparkles}>
+        <WhiskCard />
+      </SettingsSection>
+
+      <Surface name="settings.browserExtension">
+        <BrowserExtensionSetup />
+      </Surface>
 
       <SettingsSection
         title="Team connections"
@@ -87,7 +98,7 @@ export default function IntegrationsPage() {
         // is in flight; the server's answer stands in when the client is on
         // Personal, since the ledger then falls back to the home team.
         actions={<TeamSwitcher teamsOnly value={activeTeamId ?? team?.id ?? null} />}
-        description="Shared by everyone on the team picked here, for work inside it. Tokens stay server-side — an agent asks the backend to act, it never holds the credential."
+        description="Shared by everyone on the team picked here, for their work inside it. The keys stay with codecast: your assistant asks codecast to act and never holds them."
       >
         {errorCallout}
         {teamKnown && !team ? (

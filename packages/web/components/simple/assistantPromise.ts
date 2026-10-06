@@ -20,9 +20,21 @@ export function useConnectAvailable(): ConnectAvailability {
   return { available: res.error ? undefined : res.data, failed: !!res.error };
 }
 
+/** Whether the assistant can think right now (assistant/incidents.ts
+ *  thinkingAvailable). True until the deployment says otherwise, and when
+ *  the question fails: a worry is said only when it is known. */
+export function useThinkingAvailable(): boolean {
+  return useQueryNoThrow(api.assistant.incidents.thinkingAvailable, {}).data !== false;
+}
+
+/** Said before the person types while no provider can serve a turn. */
+export const THINKING_DOWN = "I'm having trouble thinking right now. Anything you ask waits here, and I'll answer as soon as I'm back.";
+
 /** The link that invites a visitor who does not write code. */
 export function assistantInvite(mail: boolean): string {
-  return mail ? "Get an assistant for your email and calendar" : "Get a personal assistant";
+  return mail
+    ? "Get an assistant for your errands, notes and routines, mail included"
+    : "Get an assistant for your errands, notes and routines";
 }
 
 /** The one line under the sign in heading, in the assistant's own voice and

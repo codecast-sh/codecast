@@ -143,3 +143,88 @@ describe("publishFacts", () => {
     expect(publishFacts(resolveLineProfile({}, { root: "/src/x" })).file).toBeNull();
   });
 });
+
+describe("cast line set, unset and finder (editThisLineProfile)", () => {
+  // A repo of its own, so the edits and the loader run on real files; the
+  // publish is never reached (publish: false), so no server is needed.
+  const repo = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "line-edit-"));
+    fs.mkdirSync(path.join(root, ".git"));
+    fs.mkdirSync(path.join(root, ".codecast"));
+    fs.writeFileSync(path.join(root, ".codecast/line.toml"), [
+      "[line]",
+      'project = "Codecast"        # where signals go',
+      "size_budget = 400           # changed lines before a run returns to plan",
+      "",
+      "[[line.finders]]",
+      'id = "eval-drift"',
+      'source = "evals"',
+      'kind = ["regression"]',
+      'fingerprint = "evals:<surface>"',
+      "",
+    ].join("\n"));
+    return root;
+  };
+  const deps = {} as any;
+  const text = (root: string) => fs.readFileSync(path.join(root, ".codecast/line.toml"), "utf8");
+
+  test("set changes one value in place, comment kept; unset brings the default back", async () => {
+    const { editThisLineProfile } = await import("./lineProfileCommand");
+    const { parseLineValue } = await import("@codecast/shared/contracts/lineProfile");
+    const root = repo();
+    const v = parseLineValue("size_budget", "250");
+    const reply = await editThisLineProfile(deps, [{ op: "set", key: "size_budget", value: (v as any).value }], { publish: false, cwd: root });
+    expect(reply.changed).toBe(true);
+    expect(reply.published).toBeNull();
+    expect(text(root)).toContain("size_budget = 250           # changed lines before a run returns to plan");
+    expect(reply.profile.size_budget).toBe(250);
+    const back = await editThisLineProfile(deps, [{ op: "remove", key: "size_budget" }], { publish: false, cwd: root });
+    expect(back.sources.size_budget).toBe("default");
+    expect(text(root)).not.toContain("size_budget");
+  });
+
+  test("a value the loader refuses writes nothing", async () => {
+    const { editThisLineProfile } = await import("./lineProfileCommand");
+    const root = repo();
+    const before = text(root);
+    await expect(editThisLineProfile(deps, [{ op: "set", key: "commands.check", value: 7 as any }], { publish: false, cwd: root })).rejects.toThrow();
+    expect(text(root)).toBe(before);
+  });
+
+  test("finder set changes only the parts given, adds a new one whole, and rm drops it", async () => {
+    const { editThisLineProfile, finderEdit } = await import("./lineProfileCommand");
+    const { loadLineProfile } = await import("./lineProfile");
+    const root = repo();
+    const current = loadLineProfile(root).profile.finders[0];
+    const changed = finderEdit(current, "eval-drift", { runs: "./evals check --signal" });
+    expect(changed).toMatchObject({ id: "eval-drift", source: "evals", kind: ["regression"], fingerprint: "evals:<surface>", runs: "./evals check --signal" });
+    await editThisLineProfile(deps, [{ op: "set_finder", finder: changed }], { publish: false, cwd: root });
+    expect(loadLineProfile(root).profile.finders[0].runs).toBe("./evals check --signal");
+    expect(() => finderEdit(undefined, "sentry", { source: "sentry" })).toThrow(/--kind, --fingerprint/);
+    const added = finderEdit(undefined, "sentry", { source: "sentry", kind: "bug, regression", fingerprint: "sentry:<group>" });
+    await editThisLineProfile(deps, [{ op: "set_finder", finder: added }], { publish: false, cwd: root });
+    expect(loadLineProfile(root).profile.finders.map((f) => f.id)).toEqual(["eval-drift", "sentry"]);
+    await editThisLineProfile(deps, [{ op: "remove_finder", id: "sentry" }], { publish: false, cwd: root });
+    expect(loadLineProfile(root).profile.finders.map((f) => f.id)).toEqual(["eval-drift"]);
+  });
+
+  test("a failed publish keeps the write and says why", async () => {
+    const { editThisLineProfile } = await import("./lineProfileCommand");
+    const root = repo();
+    fs.writeFileSync(path.join(root, ".codecast/line.toml"), "[line]\nsize_budget = 400\n");
+    const reply = await editThisLineProfile(deps, [{ op: "set", key: "watch_days", value: 3 }], { publish: true, cwd: root });
+    expect(text(root)).toContain("watch_days = 3");
+    expect(reply.published).toMatchObject({ ok: false, detail: expect.stringMatching(/names no project/) });
+  });
+});
+
+describe("parseLineValue", () => {
+  test("reads each key by its kind, and refuses unknown keys and bad values", async () => {
+    const { parseLineValue } = await import("@codecast/shared/contracts/lineProfile");
+    expect(parseLineValue("watch_days", " 3 ")).toEqual({ value: 3 });
+    expect(parseLineValue("watch_days", "0")).toEqual({ error: "A whole number, 1 or more" });
+    expect(parseLineValue("principles", "docs/a.md,\n docs/b.md")).toEqual({ value: ["docs/a.md", "docs/b.md"] });
+    expect(parseLineValue("commands.ship", "bun ship")).toEqual({ value: "bun ship" });
+    expect(parseLineValue("finders", "x")).toMatchObject({ error: expect.stringMatching(/unknown key/) });
+  });
+});

@@ -37,6 +37,20 @@ fingerprint = "insight:<session>:<blocker hash>"
 runs = "convex signals.ingestInsightBlockers, scheduled from sessionInsights when an insight names a blocker"
 
 [[line.finders]]
+id = "fix-loop"
+source = "fixloop"
+kind = "regression"
+fingerprint = "szz:<introducing sha>"
+runs = "cast line fixloop --since 7d --json, read by the fix-loop-weekly routine of the line org template, which files one signal per confirmed regression"
+
+[[line.finders]]
+id = "promises"
+source = "promise"
+kind = "bug"
+fingerprint = "promise:<review comment id>"
+runs = "convex reviewNotes.sweepOverduePromises hourly (cron 'overdue promises'): a deferred review finding past its due date and still open, once per finding"
+
+[[line.finders]]
 id = "lessons"
 source = "lesson"
 kind = "cohesion"

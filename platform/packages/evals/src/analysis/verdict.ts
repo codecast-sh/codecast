@@ -97,15 +97,21 @@ export const footingWith = <R extends VerdictRun>(r: R, ruler: RulerOf<R>): Foot
 /** What moved between two footings: the model first, then the judge's ruler; null on the same footing. */
 export const footingChange = (a: Footing, b: Footing): 'model' | 'judge' | null => (a.model !== b.model ? 'model' : a.ruler !== b.ruler ? 'judge' : null);
 
+/** The one majority rule: a freeze passes when more than half its graded reps passed (a tie is no pass). */
+export const passesByMajority = (passes: boolean[]): boolean => passes.filter(Boolean).length * 2 > passes.length;
+
+/** The one flip rule: which way a freeze's verdict moved between two sides, or null when it held. */
+export const flipDirection = (before: boolean, after: boolean): 'fixed' | 'broke' | null => (before === after ? null : after ? 'fixed' : 'broke');
+
 /** Each freeze's verdict over its reps under a pass rule: passed by majority. */
 export const majorityBy = <R extends VerdictRun>(runs: R[], passed: (r: R) => boolean): Map<string, boolean> => {
-  const by = new Map<string, number[]>();
+  const by = new Map<string, boolean[]>();
   for (const r of runs) {
     const k = r.freezeId ?? '';
     if (!by.has(k)) by.set(k, []);
-    by.get(k)!.push(passed(r) ? 1 : 0);
+    by.get(k)!.push(passed(r));
   }
-  return new Map([...by].map(([k, v]) => [k, v.reduce((s, x) => s + x, 0) * 2 > v.length]));
+  return new Map([...by].map(([k, v]) => [k, passesByMajority(v)]));
 };
 
 /**
@@ -287,9 +293,11 @@ export function makeVerdict<P extends VerdictRun = VerdictRun>(policy: VerdictPo
       return [...mine.filter((r) => passed(r) === passes), ...mine.filter((r) => passed(r) !== passes)].map((r) => r.id);
     };
     return [...now].flatMap(([freezeId, passes]) => {
-      if (!before.has(freezeId) || before.get(freezeId) === passes) return [];
+      const was = before.get(freezeId);
+      const direction = was === undefined ? null : flipDirection(was, passes);
+      if (!direction) return [];
       const rep = current.find((r) => (r.freezeId ?? '') === freezeId);
-      return [{ freezeId, name: rep?.freezeName ?? freezeId, visibility: rep?.visibility ?? 'private', direction: passes ? 'fixed' : 'broke', before: ids(previous, freezeId, !passes), after: ids(current, freezeId, passes) } satisfies VerdictFlip];
+      return [{ freezeId, name: rep?.freezeName ?? freezeId, visibility: rep?.visibility ?? 'private', direction, before: ids(previous, freezeId, !passes), after: ids(current, freezeId, passes) } satisfies VerdictFlip];
     });
   }
 

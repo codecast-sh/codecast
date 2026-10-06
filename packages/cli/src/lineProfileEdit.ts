@@ -19,17 +19,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  CAPS_KEYS,
-  COMMAND_KEYS,
   FINDER_KEYS,
-  LINE_KEYS,
   LINE_PROFILE_REL_PATH,
   LineProfileError,
   parseLineProfileText,
   resolveLineProfile,
   type ResolvedLineProfile,
 } from "./lineProfile.js";
-import { hasLineControlChars, type LineFinderInput, type LineProfileEdit, type LineValue } from "@codecast/shared/contracts/lineProfile";
+import { hasLineControlChars, LINE_VALUE_KINDS, splitFinderKind, type LineFinderInput, type LineProfileEdit, type LineValue } from "@codecast/shared/contracts/lineProfile";
 
 export type { LineValue, LineFinderInput, LineProfileEdit };
 
@@ -211,11 +208,7 @@ function rewriteEntryLine(lines: string[], e: Entry, value: string): string {
 export function locateKey(key: string): { table: string; key: string } {
   if (typeof key !== "string") throw new LineProfileError("an edit needs a key");
   const [head, sub, ...rest] = key.split(".");
-  const known = [
-    ...LINE_KEYS.filter((k) => k !== "commands" && k !== "caps" && k !== "finders"),
-    ...COMMAND_KEYS.map((k) => `commands.${k}`),
-    ...CAPS_KEYS.map((k) => `caps.${k}`),
-  ];
+  const known = Object.keys(LINE_VALUE_KINDS);
   if (!rest.length && known.includes(key)) {
     if (sub === undefined) return { table: "line", key: head };
     return { table: `line.${head}`, key: sub };
@@ -281,8 +274,8 @@ function trimmedEnd(lines: string[]): number {
   return at;
 }
 
-/** Index of the [[line.finders]] block with this id, read through the TOML parser so the two always agree. */
-function finderIndex(lines: string[], id: string): number {
+/** The [[line.finders]] block with this id (its index, -1 when absent, and its values as parsed), read through the TOML parser so the two always agree. */
+function findFinder(lines: string[], id: string): { nth: number; current: Record<string, unknown> | null } {
   let raw: any;
   try {
     raw = Bun.TOML.parse(lines.join("\n"));
@@ -290,13 +283,18 @@ function finderIndex(lines: string[], id: string): number {
     throw new LineProfileError(`invalid TOML: ${err instanceof Error ? err.message : String(err)}`);
   }
   const finders = raw?.line?.finders;
-  if (finders === undefined) return -1;
+  if (finders === undefined) return { nth: -1, current: null };
   const blocks = parseDoc(lines).filter((t) => t.array && t.name === "line.finders");
   if (!Array.isArray(finders) || finders.length !== blocks.length) {
     throw new LineProfileError("finders are not written as [[line.finders]] tables; edit the file by hand");
   }
-  return finders.findIndex((f: any) => f?.id === id);
+  const nth = finders.findIndex((f: any) => f?.id === id);
+  return { nth, current: nth >= 0 ? finders[nth] : null };
 }
+
+/** A finder field as it resolves, so a value written another way ("bug" or ["bug"]) counts as the same. */
+const finderFieldKey = (k: string, v: unknown) =>
+  JSON.stringify(k === "kind" && v != null ? (() => { const kinds = typeof v === "string" ? splitFinderKind(v) : v; return Array.isArray(kinds) ? kinds.map((x) => String(x).toLowerCase()) : kinds; })() : v ?? null);
 
 function setFinder(lines: string[], finder: LineFinderInput): void {
   if (!finder || typeof finder.id !== "string" || !finder.id.trim()) throw new LineProfileError("a finder needs an id");
@@ -306,9 +304,11 @@ function setFinder(lines: string[], finder: LineFinderInput): void {
   const values = Object.fromEntries(
     FINDER_KEYS.map((k) => [k, k === "id" ? id : (finder as any)[k]]).filter(([, v]) => v !== undefined && v !== null && v !== ""),
   ) as Record<string, LineValue>;
-  const nth = finderIndex(lines, id);
+  const { nth, current } = findFinder(lines, id);
   if (nth >= 0) {
     for (const k of FINDER_KEYS) {
+      // A field the edit leaves meaning the same stays exactly as written.
+      if (finderFieldKey(k, current?.[k]) === finderFieldKey(k, values[k])) continue;
       if (values[k] === undefined) removeFromTable(lines, "line.finders", k, nth);
       else setInTable(lines, "line.finders", k, tomlValue(values[k], `finder "${id}" ${k}`), nth);
     }
@@ -320,7 +320,7 @@ function setFinder(lines: string[], finder: LineFinderInput): void {
 }
 
 function removeFinder(lines: string[], id: string): void {
-  const nth = finderIndex(lines, id);
+  const { nth } = findFinder(lines, id);
   if (nth < 0) throw new LineProfileError(`no finder with id "${id}"`);
   const block = parseDoc(lines).filter((t) => t.array && t.name === "line.finders")[nth];
   const from = block.header;
@@ -415,7 +415,8 @@ export async function runLineProfileEdit(
   deps: {
     admit: (file: string) => Promise<string | null>;
     write: (file: string, content: string) => void;
-    publish: (root: string) => PublishOutcome | Promise<PublishOutcome>;
+    /** Absent: write without republishing (the reply's published is null). */
+    publish?: (root: string) => PublishOutcome | Promise<PublishOutcome>;
   },
 ): Promise<LineProfileEditReply> {
   if (!args || typeof args.root !== "string" || !args.root.trim()) throw new LineProfileError("line_profile_edit needs a root");
@@ -430,7 +431,7 @@ export async function runLineProfileEdit(
   }
   const result = editLineProfile({ root, current, edits: args.edits, content: args.content });
   if (result.changed) deps.write(file, result.content);
-  const published = result.changed ? await deps.publish(root) : null;
+  const published = result.changed && deps.publish ? await deps.publish(root) : null;
   const r = result.resolved;
   return { file, content: result.content, changed: result.changed, profile: r.profile, sources: r.sources, notes: r.notes, warnings: r.warnings, published };
 }

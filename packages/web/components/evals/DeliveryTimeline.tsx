@@ -8,7 +8,7 @@
 // playhead can be dragged.
 
 import { useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
-import { useContainerWidth } from "../ActivityHeatmap";
+import { useEvalsHost } from "@platform/evals/react";
 import { feedTone, stepLabels, truncate, type Lane, type Mark, type Timeline } from "./simLanes";
 import { traceMatches, type SimLabels } from "../../store/__tests__/sim/labels";
 import "./sim.css";
@@ -70,7 +70,7 @@ function axisStep(colW: number): number {
 }
 
 export function DeliveryTimeline({ timeline, failAt, failLabel, playhead, onPlayhead, kept, showKept, trace, labels }: DeliveryTimelineProps) {
-  const { ref, width } = useContainerWidth(900);
+  const { ref, width } = useEvalsHost().useContainerWidth(900);
   const { rows, height } = useMemo(() => layoutLanes(timeline.lanes), [timeline.lanes]);
   const yOf = useMemo(() => new Map(rows.map((r) => [r.lane.id, r.y + r.h / 2])), [rows]);
   const n = Math.max(1, timeline.count);

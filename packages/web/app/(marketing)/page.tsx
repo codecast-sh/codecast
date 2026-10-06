@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LANE_PATHS } from "../../components/simple/lanePaths";
-import { assistantInvite, useConnectAvailable } from "../../components/simple/assistantPromise";
+import { AssistantWayIn } from "../../components/simple/AssistantWayIn";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useConvexAuth } from "convex/react";
@@ -140,9 +139,6 @@ export default function LandingPage() {
   const localAuthed = useLocalAuth();
   const router = useRouter();
   const [desktop, setDesktop] = useState(false);
-  // The invitation for visitors who don't write code promises mail and
-  // calendar only where this deployment can connect them.
-  const connect = useConnectAvailable();
 
   // The root is the marketing site for every browser, signed in or not (the
   // nav offers "Open app"). Only the desktop shell never shows it: a build
@@ -183,10 +179,15 @@ export default function LandingPage() {
               </div>
             </div>
             <p className="mt-2 text-xs" style={{ color: '#93a1a1' }}>One command. Your agents join as they are.</p>
+            {/* The second path, in the first screen: a visitor who does not
+                write code has no reason to scroll past the film to find it. */}
+            <div className="mt-3 flex justify-center">
+              <AssistantWayIn location="landing_top" tone="marketing" compact />
+            </div>
           </div>
         </div>
-        {/* The first screen goes to the film: its width follows the viewport's height (about 170px of headline, 48px of pitch and 112px of install strip above; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
-        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 380px) * 1280 / 760), 1240px))" }}>
+        {/* The first screen goes to the film: its width follows the viewport's height (about 170px of headline, 48px of pitch and 152px of install strip and the assistant's line above; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
+        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 420px) * 1280 / 760), 1240px))" }}>
           <HeroFlythrough />
         </div>
         <div className="flex flex-wrap gap-3 justify-center items-center mt-8">
@@ -208,13 +209,11 @@ export default function LandingPage() {
             </Button>
           </Link>
         </div>
-        {/* For a visitor who does not write code: the hosted assistant. */}
-        <p className="mt-5 text-center text-[14px]" style={{ color: '#657b83' }}>
-          Don't write code?{" "}
-          <Link href={LANE_PATHS.welcome} className="font-medium text-[#073642] underline underline-offset-4 decoration-[#93a1a1] hover:text-[#cb4b16] hover:decoration-[#cb4b16] transition-colors">
-            {assistantInvite(connect.available === true)}
-          </Link>
-        </p>
+        {/* The second path again, beside the developer buttons: the hosted
+            assistant, through /welcome. */}
+        <div className="mt-5 flex justify-center">
+          <AssistantWayIn location="landing_hero" tone="marketing" />
+        </div>
       </section>
 
       <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">

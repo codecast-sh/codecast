@@ -1,9 +1,9 @@
 import { join } from 'node:path';
 
 import type { BisectPlanRequest, BisectResponse, BisectStartRequest, BisectState } from '@codecast/shared/contracts/evalsApi';
-import { separate } from '@platform/evals/analysis';
+import { bisectResponseOf, isBisectLive } from '@platform/evals/analysis';
 
-import { BISECT_ID_RE, bisectPaths, bisectsDir, LIVE_STATUSES, listBisects, readBisectState, readSteps, requestStop } from '../bisect/state';
+import { BISECT_ID_RE, bisectPaths, bisectsDir, listBisects, readBisectState, readSteps, requestStop } from '../bisect/state';
 import { writeJsonAtomic } from '../paths';
 import { readJsonFile, tailLines } from './files';
 import { stillRunning, type Launched } from './spawn';
@@ -11,11 +11,9 @@ import { stillRunning, type Launched } from './spawn';
 // The api child's side of EVALS_HOME/bisects/<id>/ (evals-ui.md section 5,
 // "Process and state"). The runner (`./evals bisect start`) owns the folder
 // and bisect/state.ts reads it; this adds what the page needs on top: the
-// response with its stall flag, whether a bisect holds the machine, and the
-// argv that plans or starts one.
-
-/** No new step for this long while running: the page shows "stalled?". */
-export const STALL_MS = 5 * 60_000;
+// files a response is built from (@platform/evals/analysis bisectResponseOf
+// says what they mean, the stall flag and the controls), whether a bisect
+// holds the machine, and the argv that plans or starts one.
 
 /** Where the api child records how it launched a bisect (spawn.ts Launched), beside the bisect's own files. */
 export const launchPath = (id: string): string => join(bisectPaths(id).dir, 'launch.json');
@@ -53,31 +51,16 @@ export function readBisect(id: string, since: number, now = Date.now()): BisectR
   settlePendingBisects();
   const state = readBisectState(id);
   if (!state) return null;
-  const all = readSteps(id);
   const paths = bisectPaths(id);
   const job = state.pending || state.status === 'failed' ? tailLines(paths.job) : [];
-  const logTail = job.length ? job : tailLines(paths.log);
-  const lastAt = Math.max(Date.parse(all.at(-1)?.at ?? '') || 0, Date.parse(state.updatedAt) || 0);
-  return { state, steps: all.filter((s) => s.seq > since), cursor: Math.max(since, ...all.map((s) => s.seq)), logTail, stalled: LIVE_STATUSES.has(state.status) && now - lastAt > STALL_MS, controls: controlsOf(state) };
-}
-
-/** The controls' reps on the flipped freezes, and whether the bad end separated from the good (BisectResponse.controls). */
-export function controlsOf(state: BisectState): BisectResponse['controls'] {
-  const focus = new Set(state.plan.freezes?.filter((f) => f.role === 'flipped').map((f) => f.id) ?? []);
-  const side = (kind: 'control-good' | 'control-bad') => state.probes.filter((p) => p.kind === kind).flatMap((p) => p.reps).filter((r) => (!focus.size || focus.has(r.freezeId)) && r.passed !== null);
-  const good = side('control-good');
-  const bad = side('control-bad');
-  if (!good.length && !bad.length) return null;
-  const tally = (reps: typeof good) => ({ passed: reps.filter((r) => r.passed).length, reps: reps.length });
-  const scores = (reps: typeof good) => reps.map((r) => r.score ?? (r.passed ? 1 : 0));
-  return { good: tally(good), bad: tally(bad), separation: separate(scores(bad), scores(good)) };
+  return bisectResponseOf({ state, steps: readSteps(id), since, logTail: job.length ? job : tailLines(paths.log), now });
 }
 
 /** Asks a running bisect to stop between reps; a finished one is left as it is. Null when there is no such bisect. */
 export function stopBisect(id: string): { id: string; stopping: boolean } | null {
   const state = BISECT_ID_RE.test(id) ? readBisectState(id) : null;
   if (!state) return null;
-  return { id, stopping: LIVE_STATUSES.has(state.status) && requestStop(id) };
+  return { id, stopping: isBisectLive(state.status) && requestStop(id) };
 }
 
 /**

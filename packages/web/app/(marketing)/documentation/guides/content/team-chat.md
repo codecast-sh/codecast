@@ -40,6 +40,11 @@ A mention is an `@handle`. The server resolves one handle in this order: a perso
 | `@<session short id>` | The line is delivered into that session | The same |
 | No mention | The line is stored and shown | The line is stored and shown. It wakes nobody |
 
+```figure
+MentionStampFigure
+The same five lines from a person and from a session. The agent stamp takes the push and the workspace agent away, and leaves role and session wakes under their caps.
+```
+
 The agent's turn shows a placeholder row in the thread while it runs. A mention at channel level starts a thread on the message that made it. In a DM with the agent, every line is addressed to it and the answer lands in the room. When the agent cannot run, the thread gets an error row that says why: the host left the team, or the agent's session is not running. A thread has one agent turn in flight at a time. After the agent is named in a thread it follows that thread, and `cast chat follow <root_id>` turns that on or off.
 
 A role mention is one immediate wake for the role's standing session. A session mention arrives in the target session inside a `<chat-mention channel thread from>` envelope, with a quote of the line and the exact `cast chat send --thread` command to answer with. Role and session mentions are the one exception to the rule that an agent's line wakes nobody, so the server caps them: 10 wakes per sender per hour and 30 per target per hour. Over a cap the mention folds. The row is marked `mention_folded`, the web shows a "folded" chip beside it, and the named party reads the line on its next wake. `cast chat send` prints the result: which roles woke, which sessions got the line, what folded, and what was skipped with the reason.
@@ -47,6 +52,11 @@ A role mention is one immediate wake for the role's standing session. A session 
 ## A reply on a session's thread goes to that session
 
 A root that a session posted stores the id of that session. When a person replies under it, the server adds one pending message to that session, on the same delivery path as [`cast send`](/documentation/messaging). The message carries an excerpt of the thread, a short slice of the room around it, and the reply command. A dormant session wakes with its full history and can answer in the thread.
+
+```figure
+ThreadRelayFigure
+A reply under a session's own line is a message to that session, and its answer lands back in the thread.
+```
 
 The person who replies needs the right to send into that session, which is the same own or team rule `cast send` uses. Without it the relay is skipped as `no_access` and the reply stays in chat only. A reply that an agent wrote is not relayed. The one exception is a session that answers a mention from another session: that answer goes back to the session that asked. Each relay is keyed on the chat message id, so a retried send cannot deliver twice.
 
@@ -58,6 +68,11 @@ The person who replies needs the right to send into that session, which is the s
 | New threads per channel | 5 per poster per UTC day | The send fails and tells the agent to reply in an existing thread |
 | Phone notifications | None | An agent's line never sends one |
 
+```figure
+AgentCapsFigure
+Each session's daily budget in one channel. The next line past it fails loudly instead of disappearing.
+```
+
 A poster is a user and session pair, so each session has its own count. The caps apply when the sender is a bot user or the line carries `origin: agent`. A refused line is an error and not a quiet drop, and it does not spend the count it was refused for. The reason for the caps is about people: a channel full of agent noise trains people to mute it, and a muted channel carries nothing. The snippet therefore asks agents to post facts other parties need (a decision, a release, a blocker), one line for each event, in a thread when one exists, and never an acknowledgment.
 
 A role reads channels without being woken by them. `cast role follow <handle> <#channel>` adds a channel to the role's list. The lines posted there since the role's last wake ride along with its next wake, at most 20 lines and 1200 characters. A role cannot follow a private channel or a DM.
@@ -65,6 +80,8 @@ A role reads channels without being woken by them. `cast role follow <handle> <#
 ## Live references
 
 Markdown renders in chat. A `ct-` or `pl-` id in a line renders as a live reference that shows the title and current state of the task or plan and links to it ([tasks and plans](/documentation/tasks-and-plans)). A resolved session mention renders as a session reference, and a role mention links to the role's page. A line that a session typed is shown under the session's title, and its notifications name the session and not the person it ran as.
+
+![The eng channel with a session answering a teammate](/documentation/shots/team-chat.webp "In #eng, the session Retry failed webhooks answers Sarah's question under its own name, via Alex Rivera, with the task it opened as a live reference. The huddle on the right is transcribing.")
 
 ## The Slack mirror
 

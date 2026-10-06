@@ -4,10 +4,12 @@
 // left the store — so renames never leave the rail stale (lib/liveEntities
 // philosophy). Shared by the header RecentlyViewedMenu, the Ctrl+Tab
 // RecentSwitcher and the command palette's "Recently Visited" group.
-import { pathLabel } from "./pathLabel";
+import { modePathLabel, pathLabel } from "./pathLabel";
 import { channelDisplayName } from "./chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { cleanTitle } from "./conversationProcessor";
+import { sessionCardTitle } from "./sessionCard";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { convBucketMap, filterInboxScopeFromState, getProjectName, type RecentVisit } from "../store/inboxStore";
 import { formatShortDate } from "./utils";
 
@@ -114,7 +116,10 @@ export function resolveVisit(
     // Untitled blanks (pre-warm stubs the user summoned but never used) are
     // noise, and entries we can't name at all are unrenderable — skip both.
     if (sess && !sess.title && (sess.message_count ?? 0) === 0) return null;
-    const title = cleanTitle(sess?.title || v.label || "");
+    // A hosted conversation is named by the one rule every surface reads
+    // (sessionCardTitle), so an untitled one shows what was asked, never a
+    // stale "New conversation" label from its stub.
+    const title = sess && isHostedAgentType(sess.agent_type) ? sessionCardTitle(sess) : cleanTitle(sess?.title || v.label || "");
     if (!title) return null;
     return { key: v.key, kind: v.kind, ts: v.ts, title, objectType: "session", entity: sess, sessionId: v.key };
   }
@@ -140,7 +145,7 @@ export function resolveVisit(
   }
   const path = v.path ?? v.key.slice("page:".length);
   const obj = resolvePageObject(state, path);
-  const title = obj.title ?? v.label ?? pathLabel(path);
+  const title = obj.title ?? modePathLabel(path, state.clientState?.ui) ?? v.label ?? pathLabel(path);
   return { key: v.key, kind: v.kind, ts: v.ts, title, objectType: obj.objectType, entity: obj.entity, path };
 }
 
@@ -169,6 +174,12 @@ export const VISIT_OBJECT_LABEL: Record<VisitObjectType, string> = {
   project: "Project",
   page: "Page",
 };
+
+/** The kind's name in the viewer's words: a session is a conversation in
+ *  hosted mode (MODE_WORDS). */
+export function visitObjectLabel(type: VisitObjectType, words?: { conversation: string }): string {
+  return type === "session" && words ? words.conversation : VISIT_OBJECT_LABEL[type];
+}
 
 export function visitTimeAgo(ts: number): string {
   const mins = Math.floor((Date.now() - ts) / 60000);

@@ -59,7 +59,7 @@ function useWhiskActions(returnTo: WhiskReturnPath) {
     busy,
     error,
     connect: () =>
-      attempt(() => openMinted(() => getConnectUrl({ return_to: returnTo }), "Couldn't start connecting your mail", { sameTab: true }), "Couldn't reach Whisk"),
+      attempt(() => openMinted(() => getConnectUrl({ return_to: returnTo, origin: window.location.origin }), "Couldn't start connecting your mail", { sameTab: true }), "Couldn't reach Whisk"),
     disconnect: () =>
       attempt(async () => {
         settle(await disconnectWhisk({}), "Couldn't disconnect your mail");

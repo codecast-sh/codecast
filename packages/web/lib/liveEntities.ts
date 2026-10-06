@@ -497,6 +497,7 @@ const TYPE_BY_COLLECTION: Array<[string, EntityType]> = [
   ["sessionDecisions", "decision"],
   ["pullRequests", "pr"],
   ["commits", "commit"],
+  ["opsSources", "source"],
 ];
 
 export function entityTypeInStore(state: any, convexId: string): EntityType | undefined {
@@ -539,6 +540,9 @@ export function findEntityInStore(
     case "decision":
       // The viewer's decision queue (open rows, and answered ones for a day).
       return lookup(state.sessionDecisions, rawId);
+    case "source":
+      // The workspace's product sources, as the Ops page last fed them.
+      return lookup(state.opsSources, rawId);
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

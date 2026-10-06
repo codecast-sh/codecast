@@ -46,8 +46,12 @@ export const AGENT_BRIDGE_REMOTE =
   `mkdir -p ~/.codecast; ln -sfn "$SSH_AUTH_SOCK" ~/${HOST_AGENT_SOCK_REL}; ` +
   `(exec -a ${AGENT_BRIDGE_ARGV0} cat >/dev/null); rm -f ~/${HOST_AGENT_SOCK_REL}`;
 
-/** The ssh argv for one bridge connection (the laptop keeps its stdin open). */
-export function agentBridgeArgs(host: RemoteHost): string[] {
+/**
+ * The ssh argv for one held connection (cloud/heldConnection.ts): its own TCP
+ * session, never the shared control socket, so it neither dies with that
+ * socket nor counts as more than one connection to the idle watchdog.
+ */
+export function heldSshArgs(host: RemoteHost, remoteCommand: string, opts: { forwardAgent?: boolean } = {}): string[] {
   return [
     "-i", host.keyPath,
     "-o", "IdentitiesOnly=yes",
@@ -58,11 +62,16 @@ export function agentBridgeArgs(host: RemoteHost): string[] {
     "-o", "ServerAliveCountMax=3",
     "-o", "ControlMaster=no",
     "-o", "ControlPath=none",
-    "-o", "ForwardAgent=yes",
+    ...(opts.forwardAgent ? ["-o", "ForwardAgent=yes"] : []),
     "-T",
     `${host.user}@${host.address}`,
-    AGENT_BRIDGE_REMOTE,
+    remoteCommand,
   ];
+}
+
+/** The ssh argv for one bridge connection (the laptop keeps its stdin open). */
+export function agentBridgeArgs(host: RemoteHost): string[] {
+  return heldSshArgs(host, AGENT_BRIDGE_REMOTE, { forwardAgent: true });
 }
 
 /**
@@ -101,9 +110,9 @@ export interface BridgeBackoff { failures: number; notBefore: number }
  * past AGENT_BRIDGE_HEALTHY_MS was working, so its exit counts as the first
  * failure again.
  */
-export function nextBridgeBackoff(prev: BridgeBackoff | undefined, livedMs: number, now = Date.now()): BridgeBackoff {
+export function nextBridgeBackoff(prev: BridgeBackoff | undefined, livedMs: number, now = Date.now(), firstWaitMs = AGENT_BRIDGE_TICK_MS): BridgeBackoff {
   const failures = livedMs >= AGENT_BRIDGE_HEALTHY_MS ? 1 : (prev?.failures ?? 0) + 1;
-  const wait = Math.min(AGENT_BRIDGE_MAX_BACKOFF_MS, AGENT_BRIDGE_TICK_MS * 2 ** (failures - 1));
+  const wait = Math.min(AGENT_BRIDGE_MAX_BACKOFF_MS, firstWaitMs * 2 ** (failures - 1));
   return { failures, notBefore: now + wait };
 }
 

@@ -76,7 +76,9 @@ signals {
   title         one line, the finder's words
   detail_md     the observation, bounded
   evidence_url  where a person can see it
-  subject       optional: the file, surface, prompt id or route it concerns
+  subject       optional: the file, surface, prompt id or route it concerns; from a
+                finder that judges behavior, the id of the expectation it
+                breaks (`ex-<project>-<n>`, the-line-model.md LM5)
   goal_hint     optional: the initiative metric key the finder believes it threatens
   observed_at, created_at
   task_id       the cause it attached to (LE4)

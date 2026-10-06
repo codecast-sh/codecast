@@ -5,12 +5,13 @@ import type { Command } from 'commander';
 import type { BisectAnswer, BisectPlan, BisectState, Candidate } from '@codecast/shared/contracts/evalsApi';
 import { fmt } from '@platform/cli-kit/colors';
 import { formatCost } from '@platform/cli-kit/format';
+import { isBisectLive } from '@platform/evals/analysis';
 
 import { buildPlan, type PlanArgs } from '../bisect/plan';
 import { treeEnv } from '../bisect/probe';
 import { budgetRefusal, runBisect, startRefusal } from '../bisect/runner';
 import { listSimBisects, newSimBisectId, planSimBisect, readSimBisect, runSimBisect, simAnswerWords, simTreeEnv, type SimBisectPlan, type SimBisectRecord } from '../bisect/simProbe';
-import { bisectPaths, BISECT_ID_RE, listBisects, LIVE_STATUSES, newBisectId, readBisectState, readSteps, recordedState, requestStop } from '../bisect/state';
+import { bisectPaths, BISECT_ID_RE, listBisects, newBisectId, readBisectState, readSteps, recordedState, requestStop } from '../bisect/state';
 import { indexedRuns } from '../history/runIndex';
 import { surfaceMeta } from '../registry';
 import { bisectSignal, reportSignals } from '../signals';
@@ -260,7 +261,7 @@ async function bisectWatch(id: string): Promise<number> {
     } else {
       const s = readBisectState(id);
       if (!s) throw new Error(`no bisect ${id}`);
-      if (!LIVE_STATUSES.has(s.status)) {
+      if (!isBisectLive(s.status)) {
         console.log(fmt.bold(`${s.status}: ${answerWords(s.answer)}`));
         return exitOf(s);
       }

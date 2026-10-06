@@ -4,6 +4,8 @@ import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { sessionCardTitle } from "../lib/sessionCard";
+import { useSurface } from "../lib/surfaces";
 import { paletteSearchValue, paletteSessionValue } from "../lib/paletteRowValues";
 import { AvatarImg } from "../lib/avatarCache";
 import { getProjectName } from "../store/inboxStore";
@@ -15,6 +17,8 @@ import { parseSessionQuery } from "@codecast/shared/search";
 import { highlightMatch, getSnippet } from "../lib/searchHighlight";
 import { SearchOrigin } from "./search/SearchOrigin";
 import { StampTime } from "./StampTime";
+import { DeviceIcon, deviceDisplayName, type Device } from "./DeviceBadge";
+import { standingMark, type SessionStanding } from "../lib/instantSessionSearch";
 
 // Presentational rows of the Cmd+K palette. CommandPalette owns the data and
 // the select handlers; these draw a row from plain props, so the marketing
@@ -107,15 +111,66 @@ export type PaletteSessionRowConv = {
   [key: string]: unknown;
 };
 
-/** A "Recent Sessions" row: face, identity line, label, project, author, age. */
-export function PaletteSessionRow({ conv, bucket, onSelect }: {
+// Only the states that ask something of the reader get a mark: the rest
+// (done, dormant, idle) are the quiet default of a list of past sessions.
+// Colours are the inbox section captions', so the dot reads as the section.
+const STATE_MARK: Record<"needs_input" | "working", { dot: string; label: string; ping?: boolean }> = {
+  needs_input: { dot: "bg-sol-yellow", label: "Needs input" },
+  working: { dot: "bg-sol-green", label: "Working", ping: true },
+};
+
+/** The row's leading glyph with its state marked on the corner. */
+function StandingGlyph({ standing, children }: { standing?: SessionStanding; children: ReactNode }) {
+  const state = standingMark(standing);
+  const mark = state ? STATE_MARK[state] : undefined;
+  if (!mark) return <>{children}</>;
+  return (
+    <span className="relative flex flex-shrink-0" title={mark.label}>
+      {children}
+      <span className="absolute -right-[3px] -bottom-[3px] flex h-[7px] w-[7px]">
+        {mark.ping && <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${mark.dot}`} style={{ animationDuration: "2s" }} />}
+        <span className={`relative inline-flex h-[7px] w-[7px] rounded-full ring-2 ring-sol-bg ${mark.dot}`} />
+      </span>
+      <span className="sr-only">{mark.label}</span>
+    </span>
+  );
+}
+
+/** The inbox's mark for a worker under another session (SessionCardView). */
+function SubGlyph() {
+  return (
+    <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center text-sol-violet/60" title="Worker under another session">
+      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2} aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+      </svg>
+    </span>
+  );
+}
+
+/** A "Recent Sessions" row: face (state on its corner), identity line, label,
+ *  where it is when that is news (set aside, another machine), project,
+ *  whose, age. */
+export function PaletteSessionRow({ conv, bucket, standing, device, repeats = 1, onSelect }: {
   conv: PaletteSessionRowConv;
   bucket: { name: string } | null;
+  standing?: SessionStanding;
+  /** The machine it runs on, only when that differs from the usual one. */
+  device?: Device;
+  /** How many recent rows share this title (hosted mode folds them into one). */
+  repeats?: number;
   onSelect: () => void;
 }) {
   const getLabelColor = useLabelColor();
+  // Hosted mode keeps a row to its name, its labels and its age: no project,
+  // machine or set-aside state.
+  const gitShown = useSurface("gitChips");
+  const machineShown = useSurface("machineChips");
+  const shelfShown = useSurface("triageBar");
   const isTeam = conv.isOwn === false;
   const project = getProjectName(conv.git_root, conv.project_path);
+  const shelved = !!standing?.shelf;
+  const authorFirst = conv.authorName?.split(" ")[0];
   return (
     <CommandPrimitive.Item
       data-palette-type="session" data-palette-id={conv._id} data-palette-title={conv.title} data-palette-short-id={conv.short_id}
@@ -125,12 +180,24 @@ export function PaletteSessionRow({ conv, bucket, onSelect }: {
     >
       {/* Who the session is (session-characters.md S3): its face,
           else the mark this row always had. */}
-      <SessionGlyph
+      <StandingGlyph standing={standing}>
+        <SessionGlyph
+          row={identityRowOf(conv)}
+          className="flex-shrink-0"
+          fallback={standing?.sub ? <SubGlyph /> : authorGlyph(isTeam && !!(conv.authorAvatar || conv.authorName), conv.authorName, conv.authorAvatar)}
+        />
+      </StandingGlyph>
+      <SessionIdentityLine
         row={identityRowOf(conv)}
-        className="flex-shrink-0"
-        fallback={authorGlyph(isTeam && !!(conv.authorAvatar || conv.authorName), conv.authorName, conv.authorAvatar)}
+        title={sessionCardTitle(conv)}
+        className={`flex-1 ${shelved || standing?.sub ? "opacity-60 group-data-[selected=true]:opacity-100" : ""}`}
       />
-      <SessionIdentityLine row={identityRowOf(conv)} title={cleanTitle(conv.title || "Untitled")} className="flex-1" />
+      {repeats > 1 && (
+        <span className="text-[11px] text-sol-text-dim tabular-nums flex-shrink-0" title={`${repeats} recent conversations share this name`}>×{repeats}</span>
+      )}
+      {shelfShown && standing?.shelf && (
+        <span className="text-[10px] text-sol-text-dim/80 flex-shrink-0">{standing.shelf}</span>
+      )}
       {bucket && (() => {
         const bc = getLabelColor(bucket.name);
         return (
@@ -140,14 +207,20 @@ export function PaletteSessionRow({ conv, bucket, onSelect }: {
           </span>
         );
       })()}
-      {project !== "unknown" && (
+      {machineShown && device && (
+        <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim max-w-[110px]" title={`Runs on ${deviceDisplayName(device)}`}>
+          <DeviceIcon d={device} className="w-3 h-3 flex-shrink-0 opacity-70" />
+          <span className="truncate">{deviceDisplayName(device)}</span>
+        </span>
+      )}
+      {gitShown && project !== "unknown" && (
         <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim max-w-[120px]" title={conv.git_root || conv.project_path || project}>
           <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-60 ${getLabelColor(project).dot}`} />
           <span className="truncate">{project}</span>
         </span>
       )}
-      {isTeam && conv.authorName && (
-        <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {conv.authorName}</span>
+      {isTeam && authorFirst && (
+        <span className="text-[10px] text-sol-text-dim flex-shrink-0" title={`${conv.authorName}'s session`}>· {authorFirst}</span>
       )}
       <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
