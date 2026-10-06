@@ -5,6 +5,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 import ImageIO
+import Vision
 
 // The codecast computer helper. One signed app with a fixed identity asks for
 // Accessibility and Screen Recording, so the human grants them once and every
@@ -122,16 +123,34 @@ struct AppDescriptor {
 final class ElementRecord {
     let index: Int
     let element: AXUIElement
-    let localFrame: CGRect?
+    /// Refreshed when a cached snapshot is reused, so a click that falls back
+    /// to the mouse lands where the element is now.
+    var localFrame: CGRect?
     let actions: [String]
     let signature: String
+    /// Takes a press and has no name: words read off the pixels inside its
+    /// frame become its label.
+    let unnamedPressable: Bool
+    /// Set for words read off the pixels with no element behind them. `element`
+    /// is then the window, and an action on the index goes to the point.
+    let visibleText: String?
 
-    init(index: Int, element: AXUIElement, localFrame: CGRect?, actions: [String], signature: String) {
+    init(
+        index: Int,
+        element: AXUIElement,
+        localFrame: CGRect?,
+        actions: [String],
+        signature: String,
+        unnamedPressable: Bool = false,
+        visibleText: String? = nil
+    ) {
         self.index = index
         self.element = element
         self.localFrame = localFrame
         self.actions = actions
         self.signature = signature
+        self.unnamedPressable = unnamedPressable
+        self.visibleText = visibleText
     }
 }
 
@@ -149,6 +168,13 @@ struct Snapshot {
     let elements: [Int: ElementRecord]
     let truncated: Bool
     let maxDepthReached: Bool
+    /// The app's notification count when the walk began, nil when the app
+    /// cannot be observed. A count that has not moved since is the proof that
+    /// this snapshot still describes the window.
+    let eventMark: Int?
+    /// The pixels were read for this tree, so the next one must read them too
+    /// or the indexes that name visible text stop resolving.
+    let readPixels: Bool
 
     /// A cached snapshot exists to prove element identity. Holding megabytes of
     /// base64 in a process that lives for minutes is how a helper grows.
@@ -166,7 +192,9 @@ struct Snapshot {
             screenshotStatus: .skipped,
             elements: elements,
             truncated: truncated,
-            maxDepthReached: maxDepthReached
+            maxDepthReached: maxDepthReached,
+            eventMark: eventMark,
+            readPixels: readPixels
         )
     }
 }
@@ -196,6 +224,8 @@ final class Provider {
     /// The tree an action saw just before it acted, so the result can say what
     /// the action changed rather than hand back a whole tree to compare by eye.
     private var preActionTree: String?
+    /// The target app and its notification count just before the action ran.
+    private var settleMark: (pid: pid_t, count: Int?)?
 
     func handle(method: String, params: [String: JSONValue]) throws -> Any {
         switch method {
@@ -238,10 +268,11 @@ final class Provider {
     /// state between two actions.
     private func actionResult(params: [String: JSONValue], action runAction: () throws -> [String: Any]) throws -> [String: Any] {
         preActionTree = nil
+        settleMark = nil
         var action = try runAction()
         // An app updates its tree on its own run loop after the event lands; a
         // read in the same instant reports the old state as "no change".
-        usleep(ActionSettle.microseconds(path: action["path"] as? String))
+        waitForSettle(path: action["path"] as? String)
         do {
             return renderActionResult(action: action, snapshot: try observe(params: params))
         } catch let error as ProviderError
@@ -253,6 +284,15 @@ final class Provider {
                 action["verification"] = ["state": "unverified", "reason": "window_changed"]
             }
             return renderActionResult(action: action, snapshot: try observe(params: fallbackParams))
+        }
+    }
+
+    private func waitForSettle(path: String?) {
+        let pid = settleMark?.pid
+        let clock = { ProcessInfo.processInfo.systemUptime }
+        var settle = ActionSettle(path: path, countBeforeAction: settleMark?.count, now: clock())
+        while !settle.isSettled(count: pid.flatMap { AppEventMonitor.shared.count(pid: $0) }, now: clock()) {
+            usleep(ActionSettle.pollMicroseconds)
         }
     }
 
@@ -271,7 +311,8 @@ final class Provider {
             fullResolution: params["fullResolution"]?.bool == true,
             windowId: windowId,
             windowIndex: windowIndex,
-            restoreWindow: restoreWindow
+            restoreWindow: restoreWindow,
+            forcePixels: params["readPixels"]?.bool == true
         )
         rememberSnapshot(query: query, app: app, snapshot: snapshot.withoutScreenshotPayload(), windowIndex: windowIndex)
         return snapshot
@@ -316,11 +357,42 @@ final class Provider {
         let cached = try cachedSnapshot(params: params)
         if let cached {
             try ensureWindowStillAvailable(cached)
+            if let unchanged = try unchangedSince(cached, params: params) {
+                preActionTree = unchanged.treeText
+                settleMark = (unchanged.app.pid, unchanged.eventMark)
+                return unchanged
+            }
         }
-        let snapshot = try observe(params: params.merging(["noScreenshot": .bool(true)]) { _, replacement in replacement })
+        var observeParams = params.merging(["noScreenshot": .bool(true)]) { _, replacement in replacement }
+        if cached?.readPixels == true { observeParams["readPixels"] = .bool(true) }
+        let snapshot = try observe(params: observeParams)
         try validateRequestedElements(cached: cached, current: snapshot, params: params)
         preActionTree = snapshot.treeText
+        settleMark = (snapshot.app.pid, AppEventMonitor.shared.count(pid: snapshot.app.pid))
         return snapshot
+    }
+
+    /// The tree the agent read, when the app has posted no notification since
+    /// it was walked: every element in it is still the one the index named, so
+    /// the action skips a second walk. Values an app changes without telling
+    /// anyone can be stale here, which an action never reads; the frames it may
+    /// click at are read again.
+    private func unchangedSince(_ cached: Snapshot, params: [String: JSONValue]) throws -> Snapshot? {
+        guard params["restoreWindow"]?.bool != true,
+              let mark = cached.eventMark,
+              AppEventMonitor.shared.count(pid: cached.app.pid) == mark,
+              let window = cached.elements[0]?.element,
+              blockingSurface(among: copyArray(window, kAXChildrenAttribute as String) ?? []) == nil
+        else {
+            return nil
+        }
+        for key in ["elementIndex", "toElementIndex"] {
+            guard let index = try optionalInteger(params, key), let record = cached.elements[index], record.visibleText == nil else { continue }
+            record.localFrame = absoluteFrame(record.element).map {
+                $0.offsetBy(dx: -cached.windowBounds.minX, dy: -cached.windowBounds.minY)
+            }
+        }
+        return cached
     }
 
     private func cachedSnapshot(params: [String: JSONValue]) throws -> Snapshot? {
@@ -471,7 +543,8 @@ final class Provider {
         fullResolution: Bool,
         windowId: CGWindowID?,
         windowIndex: Int?,
-        restoreWindow: Bool
+        restoreWindow: Bool,
+        forcePixels: Bool
     ) throws -> Snapshot {
         guard accessibilityTrustedSettled() else {
             // Agents retry failed observations, so a runtime call stays quiet.
@@ -481,6 +554,8 @@ final class Provider {
                 "Accessibility permission is required. Run `cast computer permissions --id accessibility`, grant Accessibility to codecast computer in System Settings, then retry."
             )
         }
+        // Read before the walk, so a change during it marks the tree as old.
+        let eventMark = AppEventMonitor.shared.count(pid: app.pid)
         let appElement = AXUIElementCreateApplication(app.pid)
         enableManualAccessibilityIfNeeded(appElement, app: app)
         let windowCandidates = WindowCapture.candidates(pid: app.pid)
@@ -513,12 +588,46 @@ final class Provider {
             )
         }
         let title = stringAttribute(window, kAXTitleAttribute as String) ?? capture.title ?? app.name
-        let renderer = TreeRenderer(
-            windowBounds: capture.bounds,
-            focused: focusedElement(appElement: appElement),
-            compactBrowserTabs: app.isKnownBrowser
-        )
+        let focusedNow = focusedElement(appElement: appElement)
+        var renderer = TreeRenderer(windowBounds: capture.bounds, focused: focusedNow, compactBrowserTabs: app.isKnownBrowser)
         renderer.render(window)
+        if renderer.truncated, !renderer.maxDepthReached {
+            let onScreen = TreeRenderer(
+                windowBounds: capture.bounds,
+                focused: focusedNow,
+                compactBrowserTabs: app.isKnownBrowser,
+                reader: renderer.reader,
+                pruneOffscreen: true
+            )
+            onScreen.render(window)
+            onScreen.lines.append("\t" + VisibleRegion.note)
+            renderer = onScreen
+        }
+        var lines = renderer.lines
+        var records = renderer.records
+        if let modal = (copyArray(appElement, kAXWindowsAttribute as String) ?? []).first(where: {
+            !CFEqual($0, window) && boolAttribute($0, "AXModal") == true
+        }), let modalId = windowNumber(modal) {
+            let note = BlockingSurface.blockedNote(dialogTitle: stringAttribute(modal, kAXTitleAttribute as String) ?? "", windowId: Int(modalId))
+            lines.insert("\t" + note, at: min(1, lines.count))
+        }
+        let readPixels = forcePixels || !renderer.hasApplicationControl
+        if readPixels {
+            let image = capture.image ?? (CGPreflightScreenCaptureAccess()
+                ? WindowCapture.resolve(candidates: windowCandidates, titleHint: nil, windowId: capture.windowId, windowIndex: nil, captureImage: true)?.image
+                : nil)
+            if let image {
+                mergeVisibleText(
+                    TextRecognizer.read(image, size: capture.bounds.size),
+                    into: &lines,
+                    records: &records,
+                    window: window,
+                    nextIndex: renderer.nextIndex
+                )
+            } else {
+                lines.append("\t" + VisibleText.needsScreenRecording)
+            }
+        }
         let screenshot = includeScreenshot ? capture.screenshotPayload(fullResolution: fullResolution) : nil
         let screenshotStatus: ScreenshotStatus = if screenshot != nil {
             .captured
@@ -539,15 +648,17 @@ final class Provider {
             treeText: renderTreeText(
                 app: app,
                 title: title,
-                lines: renderer.lines,
+                lines: lines,
                 focused: renderer.focusedSummary
             ),
             focusedElementId: renderer.focusedElementId,
             screenshot: screenshot,
             screenshotStatus: screenshotStatus,
-            elements: renderer.records,
+            elements: records,
             truncated: renderer.truncated,
-            maxDepthReached: renderer.maxDepthReached
+            maxDepthReached: renderer.maxDepthReached,
+            eventMark: eventMark,
+            readPixels: readPixels
         )
     }
 
@@ -640,6 +751,9 @@ final class Provider {
         if let elementIndex = try optionalInteger(params, "elementIndex") {
             let record = try element(snapshot, elementIndex)
             let point = center(record.localFrame, in: snapshot.windowBounds)
+            if record.visibleText != nil, let point {
+                return try clickPoint(point, button: button, count: count, modifiers: modifiers, accessible: accessible, snapshot: snapshot, params: params)
+            }
             if !forceMouse, accessible {
                 pointAt(point, params: params)
                 if let actionName = performClickAction(element: record.element, mouseButton: button) {
@@ -658,7 +772,26 @@ final class Provider {
                 verification: syntheticVerification(route)
             )
         }
-        let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
+        return try clickPoint(
+            try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot),
+            button: button,
+            count: count,
+            modifiers: modifiers,
+            accessible: accessible,
+            snapshot: snapshot,
+            params: params
+        )
+    }
+
+    private func clickPoint(
+        _ point: CGPoint,
+        button: MouseButtonSelection,
+        count: Int,
+        modifiers: [KeyModifierName],
+        accessible: Bool,
+        snapshot: Snapshot,
+        params: [String: JSONValue]
+    ) throws -> [String: Any] {
         // A background window drops a real press, but the control under the
         // point can often be pressed through accessibility instead.
         if accessible, !isTargetWindowFocused(snapshot), let hit = pressableElement(at: point, snapshot: snapshot, button: button) {
@@ -1596,6 +1729,168 @@ extension KeyModifierName {
     var keyCode: CGKeyCode { CGKeyCode(KeyChord.modifierKeyCode(self)) }
 }
 
+/// The sheet or modal dialog among a window's children, if one is up.
+private func blockingSurface(among children: [AXUIElement]) -> (element: AXUIElement, role: String)? {
+    for child in children {
+        let role = stringAttribute(child, kAXRoleAttribute as String) ?? ""
+        if BlockingSurface.blocks(role: role, modal: boolAttribute(child, "AXModal") == true) {
+            return (child, role)
+        }
+    }
+    return nil
+}
+
+/// Words read off the pixels, folded into the tree: dropped where an element
+/// already says them, given to an unnamed control they sit on, and otherwise
+/// listed after the tree as elements of their own.
+private func mergeVisibleText(
+    _ items: [VisibleTextItem],
+    into lines: inout [String],
+    records: inout [Int: ElementRecord],
+    window: AXUIElement,
+    nextIndex: Int
+) {
+    var lineOf: [Int: Int] = [:]
+    for (position, line) in lines.enumerated() {
+        let body = line.drop { $0 == "\t" }
+        if let index = Int(body.prefix { $0.isNumber }) { lineOf[index] = position }
+    }
+    let anchors = records.values.compactMap { record -> VisibleText.Anchor? in
+        guard let frame = record.localFrame, let position = lineOf[record.index] else { return nil }
+        return VisibleText.Anchor(index: record.index, frame: frame, line: lines[position], unnamedPressable: record.unnamedPressable)
+    }
+    var seen: [Int: [String]] = [:]
+    var standalone: [VisibleTextItem] = []
+    for item in VisibleText.readingOrder(items).prefix(VisibleText.maxItems) {
+        switch VisibleText.place(item, anchors: anchors) {
+        case .duplicate: continue
+        case let .names(index): seen[index, default: []].append(item.text)
+        case .standalone: standalone.append(item)
+        }
+    }
+    for (index, texts) in seen {
+        if let position = lineOf[index] { lines[position] += VisibleText.seenSuffix(texts) }
+    }
+    guard !standalone.isEmpty else { return }
+    lines.append("\t" + VisibleText.sectionNote)
+    for (offset, item) in standalone.enumerated() {
+        let index = nextIndex + offset
+        lines.append("\t" + VisibleText.line(index: index, text: item.text))
+        records[index] = ElementRecord(
+            index: index,
+            element: window,
+            localFrame: item.frame,
+            actions: [],
+            signature: VisibleText.signature(item.text),
+            visibleText: item.text
+        )
+    }
+}
+
+/// Apple Vision, on this machine: the pixels never leave it.
+private enum TextRecognizer {
+    static func read(_ image: CGImage, size: CGSize) -> [VisibleTextItem] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        guard (try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])) != nil else { return [] }
+        return (request.results ?? []).compactMap { observation in
+            guard let candidate = observation.topCandidates(1).first, candidate.confidence >= 0.3 else { return nil }
+            let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            let box = observation.boundingBox
+            return VisibleTextItem(
+                text: text,
+                frame: CGRect(
+                    x: box.minX * size.width,
+                    y: (1 - box.maxY) * size.height,
+                    width: box.width * size.width,
+                    height: box.height * size.height
+                )
+            )
+        }
+    }
+}
+
+/// Counts each app's accessibility notifications, on a thread of its own.
+///
+/// Every change an app makes to its tree posts one, so the count is how the
+/// helper knows the app has reacted to an action, and that a tree it walked is
+/// still the window's tree. An app that cannot be observed answers nil, and
+/// both fall back to waiting and walking again.
+private final class AppEventMonitor: @unchecked Sendable {
+    static let shared = AppEventMonitor()
+
+    private static let notifications = [
+        kAXValueChangedNotification, kAXUIElementDestroyedNotification, kAXCreatedNotification,
+        kAXFocusedUIElementChangedNotification, kAXFocusedWindowChangedNotification, kAXWindowCreatedNotification,
+        kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowMiniaturizedNotification,
+        kAXTitleChangedNotification, kAXSelectedChildrenChangedNotification, kAXSelectedRowsChangedNotification,
+        kAXSelectedTextChangedNotification, kAXRowCountChangedNotification, kAXLayoutChangedNotification,
+        kAXMovedNotification, kAXResizedNotification, kAXSheetCreatedNotification, kAXMenuOpenedNotification,
+        kAXMenuClosedNotification, kAXElementBusyChangedNotification,
+    ]
+
+    private let lock = NSLock()
+    private var counts: [pid_t: Int] = [:]
+    private var observers: [pid_t: AXObserver] = [:]
+    private var unobservable: Set<pid_t> = []
+    private var runLoop: CFRunLoop?
+
+    private init() {
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [unowned self] in
+            runLoop = CFRunLoopGetCurrent()
+            RunLoop.current.add(NSMachPort(), forMode: .default)
+            ready.signal()
+            while true { RunLoop.current.run() }
+        }
+        thread.name = "codecast-ax-events"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
+    }
+
+    func count(pid: pid_t) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard pidIsLive(pid) else {
+            observers.removeValue(forKey: pid)
+            return nil
+        }
+        if observers[pid] == nil, !unobservable.contains(pid) { observe(pid) }
+        return observers[pid] == nil ? nil : counts[pid, default: 0]
+    }
+
+    fileprivate func bump(_ pid: pid_t) {
+        lock.lock()
+        counts[pid, default: 0] += 1
+        lock.unlock()
+    }
+
+    private func observe(_ pid: pid_t) {
+        var created: AXObserver?
+        let callback: AXObserverCallback = { _, _, _, refcon in
+            guard let refcon else { return }
+            AppEventMonitor.shared.bump(pid_t(Int(bitPattern: refcon)))
+        }
+        guard let runLoop, AXObserverCreate(pid, callback, &created) == .success, let observer = created else {
+            unobservable.insert(pid)
+            return
+        }
+        let app = AXUIElementCreateApplication(pid)
+        let refcon = UnsafeMutableRawPointer(bitPattern: Int(pid))
+        let added = Self.notifications.filter { AXObserverAddNotification(observer, app, $0 as CFString, refcon) == .success }
+        guard !added.isEmpty else {
+            unobservable.insert(pid)
+            return
+        }
+        CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .defaultMode)
+        CFRunLoopWakeUp(runLoop)
+        observers[pid] = observer
+    }
+}
+
 private func renderTreeText(app: AppDescriptor, title: String, lines: [String], focused: String?) -> String {
     var output = [
         "App=\(app.bundleId ?? app.name.replacingOccurrences(of: " ", with: "_")) (pid \(app.pid))",
@@ -1676,16 +1971,27 @@ private final class TreeRenderer {
     var focusedElementId: Int?
     var truncated = false
     var maxDepthReached = false
-    private let reader = AXSnapshotReader()
-    private var nextIndex = 0
+    /// Something an agent can act on by name; without one the pixels are read.
+    var hasApplicationControl = false
+    let reader: AXSnapshotReader
+    let pruneOffscreen: Bool
+    private(set) var nextIndex = 0
 
-    init(windowBounds: CGRect, focused: AXUIElement?, compactBrowserTabs: Bool) {
+    init(
+        windowBounds: CGRect,
+        focused: AXUIElement?,
+        compactBrowserTabs: Bool,
+        reader: AXSnapshotReader = AXSnapshotReader(),
+        pruneOffscreen: Bool = false
+    ) {
         self.windowBounds = windowBounds
         self.focused = focused
         self.compactBrowserTabs = compactBrowserTabs
+        self.reader = reader
+        self.pruneOffscreen = pruneOffscreen
     }
 
-    func render(_ element: AXUIElement, depth: Int = 0, ancestors: [AXUIElement] = []) {
+    func render(_ element: AXUIElement, depth: Int = 0, ancestors: [AXUIElement] = [], region: CGRect? = nil) {
         guard nextIndex < SnapshotLimits.maxNodes else {
             truncated = true
             return
@@ -1698,7 +2004,19 @@ private final class TreeRenderer {
         guard !ancestors.contains(where: { CFEqual($0, element) }) else { return }
 
         let role = reader.stringAttribute(element, kAXRoleAttribute as String) ?? "AXUnknown"
-        let children = reader.primaryChildren(element, role: role, windowBounds: windowBounds)
+        let localFrame = reader.frame(element, windowBounds: windowBounds)
+        let region = depth == 0 && pruneOffscreen ? CGRect(origin: .zero, size: windowBounds.size) : region
+        if depth > 0, VisibleRegion.isOutside(localFrame, region: region) { return }
+        var children = reader.primaryChildren(element, role: role, windowBounds: windowBounds)
+        var blockingNote: String?
+        if depth == 0, let surface = blockingSurface(among: children) {
+            children = [surface.element]
+            blockingNote = BlockingSurface.note(
+                noun: BlockingSurface.noun(role: surface.role),
+                windowTitle: reader.stringAttribute(element, kAXTitleAttribute as String) ?? ""
+            )
+        }
+        let childRegion = VisibleRegion.narrowed(region, role: role, frame: localFrame)
         let value = reader.valueString(element, role: role)
         let placeholder = reader.placeholderString(element)
         let rawActions = reader.actions(element)
@@ -1725,7 +2043,6 @@ private final class TreeRenderer {
         )
         let name = SnapshotRenderHeuristics.displayName(baseNode)
         let meaningful = SnapshotRenderHeuristics.meaningfulActions(rawActions, role: role)
-        let localFrame = reader.frame(element, windowBounds: windowBounds)
         let traits = reader.traitsFor(element, role: role)
         let webAreaDepth = reader.webAreaDepth(role: role, ancestors: ancestors)
         let summary = reader.genericTextSummary(element, role: role, name: name, actions: meaningful, traits: traits)
@@ -1747,7 +2064,7 @@ private final class TreeRenderer {
         )
         if SnapshotRenderHeuristics.shouldElide(node) {
             for child in children {
-                render(child, depth: depth, ancestors: ancestors + [element])
+                render(child, depth: depth, ancestors: ancestors + [element], region: childRegion)
             }
             return
         }
@@ -1756,12 +2073,27 @@ private final class TreeRenderer {
         nextIndex += 1
         let line = SnapshotRenderHeuristics.line(index: index, node: node)
         lines.append(String(repeating: "\t", count: depth) + line)
+        if let blockingNote {
+            lines.append(String(repeating: "\t", count: depth + 1) + blockingNote)
+        }
+        let subrole = role == kAXButtonRole as String ? reader.stringAttribute(element, kAXSubroleAttribute as String) : nil
+        let presses = rawActions.contains(kAXPressAction as String)
+        if !hasApplicationControl, VisibleText.isApplicationControl(
+            role: role,
+            subrole: subrole,
+            named: name != nil,
+            enabled: !traits.contains("disabled"),
+            hasAction: presses || !meaningful.isEmpty
+        ) {
+            hasApplicationControl = true
+        }
         records[index] = ElementRecord(
             index: index,
             element: element,
             localFrame: localFrame,
             actions: rawActions,
-            signature: ElementSignature.of(node)
+            signature: ElementSignature.of(node),
+            unnamedPressable: presses && name == nil && !VisibleText.isWindowControl(subrole)
         )
         if let focused, CFEqual(focused, element) {
             focusedElementId = index
@@ -1772,7 +2104,7 @@ private final class TreeRenderer {
         }
         if compactBrowserTabs, let compaction = tabStripCompaction(parent: node, children: children) {
             for (childIndex, child) in children.enumerated() where compaction.retainedIndexes.contains(childIndex) {
-                render(child, depth: depth + 1, ancestors: ancestors + [element])
+                render(child, depth: depth + 1, ancestors: ancestors + [element], region: childRegion)
             }
             lines.append(
                 RenderedBrowserTabCompaction.omittedLine(
@@ -1784,7 +2116,7 @@ private final class TreeRenderer {
         }
         let childLineStart = lines.count
         for child in children {
-            render(child, depth: depth + 1, ancestors: ancestors + [element])
+            render(child, depth: depth + 1, ancestors: ancestors + [element], region: childRegion)
         }
         if compactBrowserTabs {
             compactRenderedBrowserTabs(parent: node, startLine: childLineStart, depth: depth + 1)
@@ -1905,10 +2237,18 @@ private final class AXSnapshotReader {
     }
 
     func primaryChildren(_ element: AXUIElement, role: String, windowBounds: CGRect) -> [AXUIElement] {
-        if SnapshotRenderHeuristics.usesRowsAsPrimaryChildren(role: role),
-           let rows = copyArray(element, kAXRowsAttribute as String),
-           !rows.isEmpty {
-            return visibleRows(rows, parent: element, windowBounds: windowBounds)
+        // The rows on screen, when the list says which they are: one request,
+        // where reading every row's frame to find them cost seconds on a long
+        // table. Web areas answer with an empty list, so the frames remain the
+        // fallback.
+        if SnapshotRenderHeuristics.usesRowsAsPrimaryChildren(role: role) {
+            if let visible = copyArray(element, kAXVisibleRowsAttribute as String) ?? copyArray(element, kAXVisibleChildrenAttribute as String),
+               !visible.isEmpty {
+                return Array(visible.prefix(SnapshotLimits.maxRows))
+            }
+            if let rows = copyArray(element, kAXRowsAttribute as String), !rows.isEmpty {
+                return visibleRows(rows, parent: element, windowBounds: windowBounds)
+            }
         }
         return copyArray(element, kAXChildrenAttribute as String) ?? []
     }
@@ -2203,10 +2543,12 @@ struct WindowCapture {
     /// they belong to. A capture of the target alone showed a menu the tree said
     /// was open as missing, so the app's windows in front of the target that
     /// overlap it are composited in, clipped to the target's bounds so pixel to
-    /// point math is unchanged.
+    /// point math is unchanged. Another document window of the same app is not
+    /// one of these: composited in, it painted that window over the target.
     private static func captureWindowImage(_ candidate: WindowCandidate, siblings: [WindowCandidate]) -> CGImage? {
         let overlays = siblings.filter {
-            $0.windowId != candidate.windowId && $0.order < candidate.order && $0.bounds.intersects(candidate.bounds)
+            $0.windowId != candidate.windowId && $0.order < candidate.order && $0.bounds.intersects(candidate.bounds) &&
+                ($0.layer != 0 || ($0.title ?? "").isEmpty)
         }
         guard !overlays.isEmpty else {
             return CGWindowListCreateImage(.null, [.optionIncludingWindow], candidate.windowId, [.boundsIgnoreFraming, .bestResolution])
