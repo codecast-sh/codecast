@@ -176,7 +176,7 @@ export function useSyncOpsApp(sourceId: string | null) {
 
 // ── Readers ──
 
-const sourceSig = (s: OpsSource) => `${s.updated_at}|${s.status}|${s.short_id}|${s.last_event_at ?? 0}|${s.groups_open ?? 0}`;
+const sourceSig = (s: OpsSource) => `${s.updated_at}|${s.status}|${s.short_id}|${s.last_event_at ?? 0}|${s.groups_open ?? 0}|${s.replay_backfill?.status ?? ""}:${s.replay_backfill?.updated_at ?? 0}`;
 const groupSig = (g: OpsGroup) => `${g.updated_at}|${g.status}|${g.count}|${g.last_seen}|${g.signal_task_id ?? ""}`;
 const eventSig = (e: OpsEvent) => `${e.created_at}`;
 const replaySig = (r: OpsReplay) => `${r.updated_at}|${r.chunks}|${r.has_timeline ? 1 : 0}`;

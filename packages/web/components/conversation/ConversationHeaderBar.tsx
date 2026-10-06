@@ -33,7 +33,7 @@ export function ConversationHeaderTitle({
   onDoubleClick?: () => void;
 }) {
   return (
-    <h1 className="cc-panel__title truncate flex-1 min-w-0 cursor-default" title={tooltip} onDoubleClick={onDoubleClick}>
+    <h1 data-cc-conv-title className="cc-panel__title truncate flex-1 min-w-0 cursor-default" title={tooltip} onDoubleClick={onDoubleClick}>
       {text}
     </h1>
   );
