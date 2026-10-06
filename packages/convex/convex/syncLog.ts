@@ -1,12 +1,6 @@
 // Append-only per-scope sync action log — emission and read side.
 // Design: docs/architecture/sync-log-migration.md (pl-399).
 //
-// The write interceptor (functions.ts → changeLog.ts wrapper) calls emitSyncActions /
-// emitScopeAction on every tracked write, in the SAME serializable transaction as the
-// domain write. Position allocation reads and bumps the scope's sync_heads row, so per
-// scope positions are strictly increasing in commit order — that is the whole ordering
-// proof. No wall clock is ever an ordering key (`ts` is retention/debug metadata).
-//
 // Coalescing keeps the table bounded like change_log: an entity's active upsert row is
 // MOVED to the new head instead of appended again (patch position, not insert), so a
 // streaming conversation contributes one row per scope, not one per counter bump. Moves
@@ -51,6 +45,8 @@ export type SyncAckCollector = {
   positions: SyncAckPosition[];
   seen: Set<string>;
   heads: Map<SyncScopeKey, { id: any; position: number }>;
+  enqueue?: (scopeKey: string, entityType: ChangeEntity | LifecycleEntity, entityId: string, op: SyncOp, extra: ActionExtra) => Promise<void>;
+  receipts?: Array<{ id: string; revision: number; scope_key: string; entity_type: string; entity_id: string }>;
 };
 
 export function makeSyncAckCollector(): SyncAckCollector {
@@ -391,6 +387,10 @@ export async function appendSyncAction(
   extra: ActionExtra = {},
 ): Promise<void> {
   if (syncLogDisabled()) return;
+  if (collector?.enqueue) {
+    await collector.enqueue(scopeKey, entityType, entityId, op, extra);
+    return;
+  }
   // Dedupe is per (scope, entity, op) within the transaction, but a second
   // write to the same entity in one transaction still carries NEW cargo, so
   // dedupe only skips the position allocation — the cargo merges onto the row.
@@ -699,7 +699,15 @@ export async function readRangePage(
   const actions: RangeAction[] = [];
   let bytes = 0;
   for (let i = 0; i < page.length; i++) {
-    const a = projectAction(page[i], viewer, !!opts.cargo);
+    const row = page[i];
+    const pending = isLifecycleEntity(row.entity_type) ? null : await db
+      .query("sync_outbox")
+      .withIndex("by_scope_entity", (q: any) => q.eq("scope_key", scopeKey).eq("entity_id", row.entity_id))
+      .unique();
+    const a = pending?.pending
+      ? projectAction({ ...row, op: pending.op, access_owner: pending.access?.access_owner,
+          access_key: pending.access?.access_key, access_grants: pending.access?.access_grants }, viewer, false)
+      : projectAction(row, viewer, !!opts.cargo);
     const size = a.patch ? cargoBytes(a) + 64 : 64;
     if (actions.length > 0 && bytes + size > RANGE_PAGE_MAX_BYTES) {
       page = page.slice(0, i);

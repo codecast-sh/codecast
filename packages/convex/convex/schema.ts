@@ -1,4 +1,5 @@
 import { resourceOffloadIntent } from "./resourceOffloadSchema";
+import { syncOutboxTables } from "./syncOutboxSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
@@ -7327,12 +7328,7 @@ export default defineSchema({
   // ── Sync log ────────────────────────────────────────────────────────────────
   // Append-only per-scope sync action log (docs/architecture/sync-log-migration.md).
   // Supersedes change_log's Date.now() heuristic for NEW clients; change_log stays
-  // dual-written for deployed bundles. The write interceptor in functions.ts is
-  // the sole writer (see syncLog.ts). `position` is allocated from sync_heads in
-  // the same serializable transaction as the domain write, so per scope it is
-  // strictly increasing and a reader who has applied up to a head has provably
-  // seen every action at or below it. `ts` is retention/debug metadata only —
-  // never an ordering key.
+  // dual-written for deployed bundles.
   sync_actions: defineTable({
     // "user:<userId>" | "team:<teamId>" — same vocabulary as the workspace key.
     scope_key: v.string(),
@@ -7392,6 +7388,7 @@ export default defineSchema({
   // One row per scope: the head position (highest allocated) and the floor
   // (highest position retired by retention; a client whose cursor is below the
   // floor must resync via full backfill). Heads are never deleted.
+  ...syncOutboxTables,
   sync_heads: defineTable({
     scope_key: v.string(),
     position: v.number(),

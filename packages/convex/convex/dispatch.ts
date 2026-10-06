@@ -1,4 +1,5 @@
-import { mutation, syncAckPositions } from "./functions";
+import { mutation, syncAckPositions, syncAckReceipts } from "./functions";
+import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
@@ -182,7 +183,9 @@ export const dispatch = mutation({
 
     const out = sideEffect ? await sideEffect(ctx, userId, actionArgs, result) : undefined;
     if (ack_positions) {
-      return { __syncAckV1: syncAckPositions(ctx), result: out };
+      const held = new Set(await heldKeysFor(ctx, userId));
+      return { __syncAckV1: syncAckPositions(ctx),
+        __syncAckV2: syncAckReceipts(ctx).filter((r: any) => held.has(r.scope_key)), result: out };
     }
     return out;
   },

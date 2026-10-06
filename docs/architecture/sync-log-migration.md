@@ -32,6 +32,9 @@ is a strict improvement, not a regression, and it avoids inventing a coverage ma
 
 ### D1 — Ordering primitive: per scope counter, advanced in the writing transaction
 
+Superseded by [durable sync delivery](sync-outbox.md): domain saves now enqueue
+per-entity work atomically; short delivery transactions advance the scope counter.
+
 Two new tables (see schema.ts):
 
 ```
@@ -227,6 +230,9 @@ Applying a range:
    re-run the cold flow (the cold backfill heals the pre floor past).
 
 ### D8 — Position based acknowledgement for pending entries
+
+Extended by [durable sync delivery](sync-outbox.md): V2 receipts name an entity
+revision and resolve to its actual delivery position before retiring locks.
 
 `dispatch` gains optional `ack_positions: boolean`. The interceptor's collector accumulates
 `{ scope_key, position }` per appended action; with the flag set, dispatch returns

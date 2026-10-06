@@ -43,6 +43,19 @@ describe("dispatch binding", () => {
     expect(stamps).toEqual([]);
   });
 
+  it("stamps durable delivery receipts on their own entity and returns immediately after the save", async () => {
+    const patches = { conversations: { [ID]: { title: "Saved" } } };
+    const dispatch = makeDispatchBinding(async () => ({
+      __syncAckV1: [],
+      __syncAckV2: [{ id: "delivery", revision: 3, entity_type: "conversations", entity_id: ID }],
+      result: "saved",
+    }));
+    expect(await dispatch("renameSession", [ID], patches, undefined)).toBe("saved");
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0][0]).toEqual(patches);
+    expect(stamps[0][1]).toEqual([{ scope_key: "outbox:delivery", position: 3 }]);
+  });
+
   it("latches off on an ArgumentValidationError naming ack_positions and re-issues the call unflagged", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     const state = newDispatchAckState();

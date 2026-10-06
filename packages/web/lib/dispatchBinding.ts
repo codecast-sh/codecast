@@ -5,6 +5,7 @@
 // wires the same two functions to a simulated client. One copy of the ack
 // protocol and of the failure rules, whoever transports the call.
 import type { DispatchFn } from "@platform/engine";
+import { stampDeliveryReceipts } from "./syncDeliveryReceipts";
 import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
@@ -58,6 +59,9 @@ export function makeDispatchBinding(
     const sentAt = Date.now();
     const unwrap = (res: any) => {
       if (res && typeof res === "object" && "__syncAckV1" in res) {
+        if (Array.isArray(res.__syncAckV2)) {
+          stampDeliveryReceipts(useInboxStore.getState(), patches, res.__syncAckV2, sentAt);
+        }
         const ack = res.__syncAckV1;
         // Every window stamps its own locks, the host and a follower alike:
         // the follower never stamps a CURSOR (syncMeta replicates from the
