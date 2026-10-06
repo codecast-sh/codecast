@@ -6,6 +6,9 @@ import { useRouteMeta } from "../pageMeta";
 import { earlyAccessMailto } from "@/lib/siteLinks";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { ComparisonList } from "../compare/ComparisonList";
+import { PLANS } from "@codecast/shared/contracts/assistant";
+import { planPoints, planPrice } from "@/components/simple/planWords";
+import { useUpgradesOpen } from "@/components/simple/billing";
 
 function CheckIcon({ className, color }: { className?: string; color: string }) {
   return (
@@ -97,6 +100,7 @@ export default function PricingPage() {
   // Real page metadata in this SPA means writing document.title on mount; reuse the
   // blog surface's shared hook rather than duplicating the effect.
   useRouteMeta("/pricing");
+  const upgradesOpen = useUpgradesOpen();
 
   return (
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: "#fdf6e3" }}>
@@ -244,6 +248,54 @@ export default function PricingPage() {
         </p>
       </section>
 
+      {/* The Codecast assistant: the hosted plans for people who do not
+          write code. Every figure and word comes from the PLANS catalog
+          through the same plan words Settings > Plan shows. */}
+      <section id="assistant" className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="text-center max-w-2xl mx-auto mb-10">
+          <h2 className="text-3xl font-bold mb-3 font-mono" style={{ color: "#002b36" }}>
+            The Codecast assistant
+          </h2>
+          <p className="text-lg leading-relaxed" style={{ color: "#657b83" }}>
+            For everyone, nothing to install. It runs your errands, notes and routines, and your mail
+            through Whisk, asking before anything goes out. We run the AI, so a plan covers it all.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-3 gap-6 items-start">
+          {Object.values(PLANS).map((plan) => (
+            <div key={plan.id} className="rounded-2xl p-7 h-full flex flex-col" style={{ backgroundColor: "#fdf6e3", border: "1px solid #eee8d5" }}>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="text-xl font-semibold font-mono" style={{ color: "#002b36" }}>{plan.label}</h3>
+                {/* A paid plan says so while it cannot be bought yet, as the
+                    app's Plan settings do (useUpgradesOpen). */}
+                {plan.price_usd > 0 && !upgradesOpen ? (
+                  <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ backgroundColor: "#eee8d5", color: "#586e75" }}>Coming soon</span>
+                ) : null}
+              </div>
+              <div className="flex items-baseline gap-2 mb-6">
+                <span className="text-4xl font-bold font-mono" style={{ color: "#002b36" }}>{planPrice(plan).replace(/ a month$/, "")}</span>
+                <span className="text-sm" style={{ color: "#657b83" }}>a month</span>
+              </div>
+              <ul className="space-y-3 flex-1">
+                {planPoints(plan).map((point) => (
+                  <li key={point} className="flex items-start gap-3 text-sm" style={{ color: "#586e75" }}>
+                    <CheckIcon className="w-5 h-5 shrink-0 mt-px" color="#cb4b16" />
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-center mt-8">
+          <Link href="/welcome">
+            <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0" style={{ background: "#cb4b16" }}>
+              Get started with the assistant
+            </Button>
+          </Link>
+        </div>
+      </section>
+
       {/* CTA */}
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: "#eee8d5" }}>
@@ -251,13 +303,18 @@ export default function PricingPage() {
             Start free today
           </h2>
           <p className="text-lg mb-8 max-w-xl mx-auto" style={{ color: "#657b83" }}>
-            Install the CLI, connect your agents, and watch them from anywhere. Upgrade to Team
-            when you want your whole team to share the memory.
+            Write code? Install the CLI, connect your agents, and watch them from anywhere. Don&apos;t?
+            Start with the assistant, nothing to install.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/signup">
               <Button size="lg" className="text-white text-base px-8 h-12 font-medium" style={{ backgroundColor: "#002b36" }}>
                 Get started free
+              </Button>
+            </Link>
+            <Link href="/welcome">
+              <Button size="lg" className="text-base px-8 h-12 font-medium text-[#fdf6e3]" style={{ backgroundColor: "#cb4b16" }}>
+                Start with the assistant
               </Button>
             </Link>
             <a href={earlyAccessMailto("Team")}>

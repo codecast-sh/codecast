@@ -30,11 +30,16 @@
 
 /* ── Top: the mark, and how far along ────────────────────────────────── */
 
+/* The mark and the steps share the stage's column, so the logo and the
+   headline below start on one left edge. */
 .wl-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  width: 100%;
+  max-width: 31rem;
+  margin: 0 auto;
   height: 3.5rem;
 }
 
@@ -76,15 +81,24 @@
   animation: wl-fill 700ms var(--sl-ease) 120ms both;
 }
 
-.wl-rail-name { display: none; }
+/* Every step is named, so the rail says where the person is going as well
+   as where they are; the step they are on reads in full ink. */
+.wl-rail-name {
+  margin-right: 0.2rem;
+  color: var(--sl-faint);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.wl-rail li.is-done .wl-rail-name { color: var(--sl-soft); }
 
 .wl-rail li.is-here .wl-rail-name {
-  display: inline;
-  margin-right: 0.2rem;
-  color: var(--sl-soft);
-  font-size: 0.82rem;
-  font-weight: 560;
+  color: var(--sl-ink);
+  font-weight: 600;
   animation: sl-rise 420ms var(--sl-ease) 200ms both;
+}
+
+@media (max-width: 420px) {
+  .wl-rail li:not(.is-here) .wl-rail-name { display: none; }
 }
 
 /* ── The stage ───────────────────────────────────────────────────────── */
@@ -115,6 +129,14 @@
   animation: sl-rise 520ms var(--sl-ease) 300ms both;
 }
 
+/* While the next step loads, its shape: a heading, a line and a card, in
+   the sunken paper, so the page does not jump when the step arrives. */
+.wl-skeleton { display: flex; flex-direction: column; gap: 0.75rem; animation: sl-rise 520ms var(--sl-ease) 200ms both; }
+.wl-skeleton > span { display: block; border-radius: 8px; background: var(--pd-bg-sunken, color-mix(in srgb, var(--sl-ink) 6%, transparent)); }
+.wl-skeleton > .is-title { height: 2.1rem; width: 78%; }
+.wl-skeleton > .is-line { height: 1rem; width: 62%; }
+.wl-skeleton > .is-card { height: 7.5rem; width: 100%; margin-top: 0.75rem; border-radius: 14px; }
+
 /* ── The orb ─────────────────────────────────────────────────────────── */
 
 .wl-orb {
@@ -136,31 +158,27 @@
 
 .wl-orb[data-mood="signin"]::before { animation: sl-ripple 2.8s var(--sl-ease) 600ms infinite; }
 
+/* The assistant's one mark (components/simple/AssistantMark): the codecast
+   glyph knocked out of a solid ink disc, the same mark that later sits on
+   every one of the person's conversations, here at 68px. */
 .wl-orb-core {
   position: absolute;
   inset: 0;
+  display: grid;
+  place-items: center;
   border-radius: 999px;
-  background: conic-gradient(from 210deg, var(--sl-accent), color-mix(in srgb, var(--sl-accent) 45%, var(--sl-star)), var(--sl-star), var(--sl-accent));
-  box-shadow: 0 16px 36px -16px color-mix(in srgb, var(--sl-accent) 60%, transparent);
-  animation: wl-spin 18s linear infinite, sl-pop 520ms var(--sl-ease) both;
+  background: var(--pd-ink, var(--sl-ink));
+  color: var(--pd-bg-raised, var(--sl-paper));
+  box-shadow: 0 16px 36px -18px color-mix(in srgb, var(--pd-ink, var(--sl-ink)) 70%, transparent);
+  animation: sl-pop 520ms var(--sl-ease) both;
+  transition: box-shadow 520ms var(--sl-ease);
 }
+.wl-orb-core > svg { width: 60%; height: 60%; }
 
-.wl-orb-core::after {
-  content: "";
-  position: absolute;
-  inset: 0.95rem;
-  border-radius: 999px;
-  background: var(--sl-paper);
-  transition: inset 520ms var(--sl-ease);
-}
+.wl-orb[data-mood="loading"] .wl-orb-core { animation: wl-breathe 1.6s ease-in-out infinite; }
 
-.wl-orb[data-mood="loading"] .wl-orb-core { animation: wl-spin 18s linear infinite, wl-breathe 1.6s ease-in-out infinite; }
-
-/* Something to start: the ring thickens and glows. */
-.wl-orb[data-mood="start"] .wl-orb-core {
-  box-shadow: 0 0 0 7px var(--sl-accent-wash), 0 18px 44px -14px color-mix(in srgb, var(--sl-accent) 70%, transparent);
-}
-.wl-orb[data-mood="start"] .wl-orb-core::after { inset: 1.25rem; }
+/* Something to start: the plain solid disc the sidebar and the marketing
+   pill use, so the family has one mark. */
 
 /* Mail and calendar, circling in on the connect screen. */
 .wl-orb-moon {
@@ -182,13 +200,16 @@
   transition: background-color 360ms var(--sl-ease), color 360ms var(--sl-ease), border-color 360ms var(--sl-ease);
 }
 
+/* Both moons sit on one arc round the disc, 8px clear of its edge, at -35
+   and +35 degrees from its right side: distance = disc radius (2.125rem) +
+   gap (0.5rem) + moon radius (0.95rem) = 3.575rem; cos 35 = 0.819, sin 35 = 0.574. */
 .wl-orb[data-mood="connect"] .wl-orb-moon.is-mail {
-  --wl-to: translate(3.35rem, -1.15rem);
+  --wl-to: translate(2.93rem, -2.05rem);
   animation: wl-orbit-in 680ms var(--wl-spring) 260ms both, wl-bob 4.2s ease-in-out 1s infinite;
 }
 
 .wl-orb[data-mood="connect"] .wl-orb-moon.is-cal {
-  --wl-to: translate(3.1rem, 1.35rem);
+  --wl-to: translate(2.93rem, 2.05rem);
   animation: wl-orbit-in 680ms var(--wl-spring) 380ms both, wl-bob 4.2s ease-in-out 1.6s infinite;
 }
 
@@ -256,6 +277,37 @@
 }
 
 .wl-auth.is-quiet svg { width: 1.05rem; height: 1.05rem; }
+
+/* Email as a way in, where Google is not offered: a button like Apple's, and
+   the quiet provider (GitHub) moves below it. */
+.wl-auth.is-email { text-decoration: none; }
+.wl-auth-list:not(.has-lead) .wl-auth.is-quiet { order: 1; }
+
+/* ── The email form ──────────────────────────────────────────────────── */
+
+.wl-form { display: grid; gap: 0.9rem; max-width: 26rem; }
+
+.wl-field { display: grid; gap: 0.35rem; }
+.wl-field > span { color: var(--sl-ink-2); font-size: 0.9rem; font-weight: 560; }
+
+.wl-field input {
+  min-height: 3.1rem;
+  padding: 0 1rem;
+  border: 1px solid var(--sl-line-strong);
+  border-radius: var(--sl-radius-sm);
+  background: var(--sl-sheet);
+  color: var(--sl-ink);
+  font: inherit;
+  font-size: 1rem;
+  transition: box-shadow 200ms var(--sl-ease), border-color 200ms var(--sl-ease);
+}
+
+.wl-field input::placeholder { color: var(--sl-faint); }
+.wl-field input:focus-visible { outline: none; border-color: var(--sl-soft); box-shadow: 0 0 0 5px var(--sl-wash); }
+.wl-field.is-code input { font-family: var(--sl-mono); font-size: 1.2rem; letter-spacing: 0.4em; text-align: center; }
+
+.wl-form .wl-error { margin: 0; }
+.wl-form .wl-connect { justify-self: start; margin-top: 0.3rem; }
 
 .wl-aside {
   margin: 1.15rem 0 0;
@@ -407,6 +459,8 @@
   margin-top: 1rem;
 }
 
+/* The label fills the card before it wraps. */
+.wl-ask > span { flex: 1 1 auto; min-width: 0; }
 .wl-ask {
   display: flex;
   align-items: center;
@@ -488,3 +542,57 @@ html[data-welcome-move="back"]::view-transition-new(wl-stage) { animation: wl-en
 @keyframes wl-sheen { to { transform: translateX(110%); } }
 @keyframes wl-dim { to { opacity: 0.35; filter: blur(1px); } }
 @keyframes wl-send { to { opacity: 0; transform: translateY(-14px) scale(0.98); } }
+
+/* The wordmark: the app's mark and its name, upright in the interface face,
+   so the door and the app read as one product. */
+.wl-brand {
+  font-family: var(--pd-font-ui);
+  font-style: normal;
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  gap: 0.45rem;
+}
+
+/* Headlines break evenly: no one-word last line. */
+.wl-screen :is(h1, .sl-hello, .sl-page-title) { text-wrap: balance; }
+
+/* An ask starts a conversation here: its arrow points on, and slides on hover. */
+.wl-ask svg { transition: transform var(--pd-t-fast), color var(--pd-t-fast); }
+.wl-ask:hover svg { transform: translateX(2px); }
+
+/* The way into the app without asking anything yet: a plain link, since the
+   asks and the composer above are the step's one action. */
+.wl-foot { align-items: center; }
+.wl-aside a.wl-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--sl-soft);
+  font-weight: 500;
+  text-decoration: none;
+}
+.wl-aside a.wl-go:hover { color: var(--sl-ink); }
+/* The offer to connect mail, one quiet line under the composer. */
+.wl-mail-note { margin-top: 0.6rem; }
+.wl-aside a.wl-go svg { transition: transform var(--pd-t-fast); }
+.wl-aside a.wl-go:hover svg { transform: translateX(2px); }
+.wl-link.wl-quiet { color: var(--sl-soft); font-weight: 500; }
+
+/* Dark: a card is a step above the page, with a hairline and full ink, so it
+   reads as something to tap rather than a disabled grey block. */
+.dark [data-welcome] .wl-ask {
+  background: color-mix(in srgb, var(--pd-ink) 7%, var(--pd-bg));
+  border-color: color-mix(in srgb, var(--pd-ink) 12%, transparent);
+  color: var(--pd-ink);
+}
+.dark [data-welcome] .wl-ask svg { color: var(--pd-ink-muted); }
+.dark [data-welcome] .wl-ask:hover { border-color: color-mix(in srgb, var(--pd-accent) 60%, transparent); }
+.dark [data-welcome] .wl-ask:hover svg { color: var(--pd-accent); }
+
+/* "Connect with Whisk": Whisk's own envelope leads the label, so the hand-off
+   to whisk.email reads as the family's mail app, not another site. */
+.wl-whisk-glyph {
+  margin-right: 0.45em;
+  font-size: 1.05em;
+}

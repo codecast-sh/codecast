@@ -2059,6 +2059,33 @@ export class SyncService {
     });
   }
 
+  /**
+   * The daemon took a working tree snapshot at a turn end or in the sweep
+   * (treeSnapshot.ts): record which sha stands for the tree of which
+   * conversation at which turn (convex treeSnapshots.record). Idempotent on
+   * the server; a failure is logged by the caller, never retried here, because
+   * the next turn records the next snapshot and the chain in git is complete
+   * regardless.
+   */
+  async recordTreeSnapshots(rows: Array<{
+    conversation_id: string; sha: string; tree_sha: string; base_sha: string; prev_sha?: string; branch?: string;
+    depth: number; changed_paths: string[]; changed_count: number; dirty: boolean; checkout_key: string;
+    source: "turn" | "sweep"; taken_at: number; turn_completed_at?: number; took_ms?: number;
+  }>): Promise<{ written: number } | null> {
+    if (!this.apiToken || !rows.length) return null;
+    try {
+      return await this.mutate("treeSnapshots:record" as any, { rows, device_id: deviceId(), api_token: this.apiToken });
+    } catch {
+      return null;
+    }
+  }
+
+  /** What a merge_back command did with a worker's worktree (subagentFleet.reportMergeBack). */
+  async reportMergeBack(args: { conversation_id: string; state: "merged" | "empty" | "conflict" | "failed"; files?: string[]; reason?: string }): Promise<void> {
+    if (!this.apiToken) return;
+    await this.mutate("subagentFleet:reportMergeBack", { api_token: this.apiToken, ...args });
+  }
+
   async setSessionError(conversationId: string, error?: string, opts: { force?: boolean } = {}): Promise<void> {
     if (!this.apiToken) return;
     try {

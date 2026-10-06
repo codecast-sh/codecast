@@ -35,4 +35,13 @@ does not carry, post it where they will see it: the bound task
 (`cast chat send --channel <id> "@<handle> …"`), one message. If the task
 should change assignee, `cast task update <id> --assignee <member>`.
 
+When the work lives in uncommitted or unpushed changes, the transcript
+alone leaves them without the files. Name the command that recreates this
+tree on their machine, in the pin and the message:
+`cast ws acquire <name> --from <this session's short id>` gives them a
+worktree on this session's branch with its changes as uncommitted work.
+It reads the snapshot this machine's daemon last pushed to the remote
+(every few minutes while it runs), so the last few minutes of edits may
+not be in it yet.
+
 Then stop. The next move is theirs.

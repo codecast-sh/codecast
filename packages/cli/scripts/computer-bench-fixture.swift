@@ -65,6 +65,10 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
     /// Every time the app took the front, and what had just happened.
     var activations: [String] = []
     var lastEvent = "launch"
+    /// Ticks (20 ms apart) in which the helper's agent cursor was on screen
+    /// while the form window was covered by another app, and was not.
+    var cursorWhileCovered = 0
+    var cursorWhileVisible = 0
     /// Presses that reached a control while the sheet covered it.
     var blockedPresses = 0
 
@@ -80,6 +84,9 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
         }
         windows.append(makeCanvasWindow())
         for window in windows { window.orderBack(nil) }
+        Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.watchCursor() }
+        }
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             activations.append(lastEvent)
@@ -256,6 +263,28 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
         }
     }
 
+    private func watchCursor() {
+        guard let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
+              let form = windows.first(where: { $0.title == "Bench Form" })
+        else { return }
+        let cursorUp = infos.contains {
+            ($0[kCGWindowOwnerName as String] as? String ?? "").lowercased().contains("codecast computer") &&
+                ($0[kCGWindowAlpha as String] as? CGFloat ?? 0) > 0.01
+        }
+        guard cursorUp else { return }
+        let own = ProcessInfo.processInfo.processIdentifier
+        let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        let center = CGPoint(x: form.frame.midX, y: primaryHeight - form.frame.midY)
+        let front = infos.first {
+            guard ($0[kCGWindowLayer as String] as? Int ?? 1) == 0,
+                  let dictionary = $0[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dictionary) else { return false }
+            return bounds.contains(center)
+        }
+        if (front?[kCGWindowOwnerPID as String] as? pid_t) == own { cursorWhileVisible += 1 } else { cursorWhileCovered += 1 }
+        writeStatus()
+    }
+
     private func writeStatus() {
         guard let statusFile else { return }
         lastEvent = "after submissions=\(submissions) launches=\(probeLaunches) sheet=\(sheetOpen) subscribe=\(subscribe.state == .on)"
@@ -271,6 +300,8 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
             "probeLaunches": probeLaunches,
             "active": NSApp.isActive,
             "activations": activations,
+            "cursorWhileCovered": cursorWhileCovered,
+            "cursorWhileVisible": cursorWhileVisible,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) else { return }
         try? data.write(to: URL(fileURLWithPath: statusFile), options: .atomic)

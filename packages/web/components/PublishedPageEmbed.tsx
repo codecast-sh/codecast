@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation } from "convex/react";
-import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Link as LinkIcon, Link2, ArrowUpRight, Check, Columns2, Maximize2, MessageSquarePlus, Minimize2 } from "lucide-react";
 import { toast } from "sonner";
@@ -15,10 +14,8 @@ import { isDesktop } from "../lib/desktop";
 import { openBrowserPane } from "../lib/stage";
 import { pageFrameSrc, pageShareUrl } from "../lib/publishedPageUrls";
 import { claudeArtifactUrl } from "../lib/entityLinks";
-import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
-import { snippetEnabledOn } from "../lib/newSnippets";
+import { FeatureUpsell } from "./agentFeatures/FeatureUpsell";
 import { ClaudeIcon } from "./BrandIcons";
-import { useDevices } from "./DeviceBadge";
 import { HeightGrip, savedGripHeight } from "./HeightGrip";
 import { KeyCap } from "./KeyCap";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -504,30 +501,11 @@ function useCanPaneClaude(): boolean {
   return isDesktop() && nativeReady;
 }
 
-const PUBLISH_SNIPPET = SNIPPET_CATALOG.find((s) => s.slug === "publish");
-
 /** A Claude artifact in the thread is a page the reader cannot see in place.
  *  The fix is on their side: with the Publish feature on, their agents put
  *  deliverables on codecast pages, which the thread frames live. So the card
- *  suggests it — only to a reader whose machines all have it off (a reader
- *  with it on already knows; a roster not loaded yet says nothing). */
-function usePublishSuggestion(): boolean {
-  const { devices, loaded } = useDevices();
-  if (!loaded || !PUBLISH_SNIPPET) return false;
-  return !devices.some((d) => snippetEnabledOn(d.settings, PUBLISH_SNIPPET));
-}
-
-function PublishSuggestion() {
-  return (
-    <span className="block border-t border-sol-border bg-sol-bg-alt px-3 py-1.5 text-[11px] leading-snug text-sol-text-muted">
-      Turn on{" "}
-      <Link href="/agent-features" className="text-sol-blue hover:underline">
-        Publish
-      </Link>{" "}
-      in agent features and your agents put pages like this on codecast, where the thread shows them live.
-    </span>
-  );
-}
+ *  offers it (useFeatureOffer decides who sees the offer). */
+const PUBLISH_REASON = "Turn on Publish and your agents put pages like this on codecast, where the thread shows them live.";
 
 /** Block-level card for a Claude artifact URL standing alone on its line.
  *  claude.ai publishes no per-artifact title (its page metadata is the same
@@ -536,7 +514,6 @@ function PublishSuggestion() {
 export function ClaudeArtifactEmbed({ id, caption }: { id: string; caption?: string }) {
   const url = claudeArtifactUrl(id);
   const canPane = useCanPaneClaude();
-  const suggestPublish = usePublishSuggestion();
   return (
     <PageCard
       icon={<ClaudeFavicon className="h-4 w-4" />}
@@ -568,7 +545,7 @@ export function ClaudeArtifactEmbed({ id, caption }: { id: string; caption?: str
         </span>
         <ArrowUpRight className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-sol-text-dim transition-transform group-hover:-translate-y-px group-hover:translate-x-px group-hover:text-sol-orange" />
       </a>
-      {suggestPublish && <PublishSuggestion />}
+      <FeatureUpsell slug="publish" variant="inline" reason={PUBLISH_REASON} />
     </PageCard>
   );
 }

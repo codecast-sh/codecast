@@ -12,8 +12,8 @@ import QuartzCore
 /// catch a click meant for the app under it.
 ///
 /// Requests arrive on the socket thread; drawing happens on the main thread.
-/// `move` waits for the glide so a press lands after the cursor arrives, which
-/// is what makes the motion read as cause and effect.
+/// Nothing waits for the drawing: the action runs while the cursor glides, and
+/// a press that comes before the cursor has arrived pulses when it does.
 @MainActor
 final class AgentCursor {
     static let shared = AgentCursor()
@@ -26,6 +26,10 @@ final class AgentCursor {
     private var pulseLayer: CAShapeLayer?
     private var lastPoint: CGPoint?
     private var hideWork: DispatchWorkItem?
+    /// Bumped by every glide, so only the latest one's arrival counts.
+    private var glideGeneration = 0
+    private var gliding = false
+    private var pulseOnArrival = false
 
     /// `CODECAST_COMPUTER_CURSOR=0` turns it off for a whole session.
     nonisolated static var enabledByEnvironment: Bool {
@@ -34,18 +38,11 @@ final class AgentCursor {
 
     // MARK: socket thread entry points
 
-    /// Glide to a point (global, top-left origin) and wait until it arrives.
-    nonisolated static func move(to point: CGPoint, press: Bool = false) {
-        let arrived = DispatchSemaphore(value: 0)
+    /// Glide to a point (global, top-left origin).
+    nonisolated static func move(to point: CGPoint) {
         DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                shared.glide(to: point, duration: nil) {
-                    if press { shared.pulse() }
-                    arrived.signal()
-                }
-            }
+            MainActor.assumeIsolated { shared.glide(to: point, duration: nil) {} }
         }
-        _ = arrived.wait(timeout: .now() + 1.2)
     }
 
     /// Follow a drag: glide along without waiting, since the events are
@@ -57,7 +54,11 @@ final class AgentCursor {
     }
 
     nonisolated static func press() {
-        DispatchQueue.main.async { MainActor.assumeIsolated { shared.pulse() } }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                if shared.gliding { shared.pulseOnArrival = true } else { shared.pulse() }
+            }
+        }
     }
 
     // MARK: drawing
@@ -75,6 +76,9 @@ final class AgentCursor {
             panel.alphaValue = 0
             panel.orderFrontRegardless()
         }
+        glideGeneration += 1
+        let generation = glideGeneration
+        gliding = true
         let distance = from.map { hypot($0.x - point.x, $0.y - point.y) } ?? 40
         let duration = requested ?? min(0.42, max(0.16, 0.12 + Double(distance) / 2600))
         NSAnimationContext.runAnimationGroup({ context in
@@ -86,7 +90,13 @@ final class AgentCursor {
             panel.animator().alphaValue = 1
         }, completionHandler: { [weak self] in
             completion()
-            self?.scheduleHide()
+            guard let self, generation == glideGeneration else { return }
+            gliding = false
+            if pulseOnArrival {
+                pulseOnArrival = false
+                pulse()
+            }
+            scheduleHide()
         })
     }
 

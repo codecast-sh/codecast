@@ -28,6 +28,11 @@ export interface LineProfile {
   watch_days: number;
   commands: { check: string; prove: string | null; eval: string | null; ship: string | null };
   caps: { cards: number };
+  /**
+   * Whether Ship merges on its own (`[line.merge]`). Absent on a profile
+   * published by a CLI older than the key: read it as the default.
+   */
+  merge?: { auto: boolean; method: "squash" | "merge" | "rebase" };
   finders: LineFinder[];
 }
 
@@ -90,6 +95,7 @@ export const LINE_PROFILE_DEFAULTS: LineProfile = {
   watch_days: 7,
   commands: { check: "cast ws check", prove: null, eval: null, ship: null },
   caps: { cards: 5 },
+  merge: { auto: false, method: "squash" },
   finders: [],
 };
 
@@ -98,6 +104,8 @@ export const LINE_SIGNAL_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 export const COMMAND_KEYS = ["check", "prove", "eval", "ship"] as const;
 export const CAPS_KEYS = ["cards"] as const;
+export const MERGE_KEYS = ["auto", "method"] as const;
+export const MERGE_METHODS = ["squash", "merge", "rebase"] as const;
 
 // ── Value rules: the loader, the daemon's editor and the settings page judge a value the same way ──
 
@@ -189,7 +197,7 @@ export type LineProfileEdit =
   | { op: "set_finder"; finder: LineFinderInput }
   | { op: "remove_finder"; id: string };
 
-const FACT_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "sources", "notes", "warnings"] as const;
+const FACT_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "sources", "notes", "warnings"] as const;
 
 /** The content changed_at tracks: every fact but where it lives and who published it. */
 export function lineProfileContentKey(p: Omit<PublishedLineProfile, "changed_at"> | null | undefined): string {

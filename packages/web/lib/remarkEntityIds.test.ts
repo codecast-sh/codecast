@@ -204,3 +204,14 @@ describe("entityRemarkPlugins contextual pull request references", () => {
     expect(html).toContain(">pr:?#3263|#3263</a>");
   });
 });
+
+describe("an object id inside a file path", () => {
+  // Regression: a line run's worktree is named after its task
+  // (.git/worktrees/line-ct-57458/cast-line). The id matched first and split
+  // the path into two links around a task pill.
+  test("stays part of one path link, with no entity pill", () => {
+    const html = render("logs: /Users/ashot/src/union-mobile/.git/worktrees/line-ct-57458/cast-line and ct-57458 alone");
+    expect(html).toContain(">/Users/ashot/src/union-mobile/.git/worktrees/line-ct-57458/cast-line</a>");
+    expect(html.match(/>ct-57458<\/a>/g)?.length).toBe(1);
+  });
+});

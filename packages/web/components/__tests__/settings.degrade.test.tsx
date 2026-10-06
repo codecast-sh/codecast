@@ -28,6 +28,7 @@ const { SettingsModal } = await import("../settings/SettingsModal");
 const SECTIONS: Record<SettingsSectionId, true> = {
   general: true,
   accounts: true,
+  plan: true,
   notifications: true,
   sounds: true,
   calls: true,
@@ -36,7 +37,6 @@ const SECTIONS: Record<SettingsSectionId, true> = {
   integrations: true,
   agents: true,
   "agent-library": true,
-  "agent-features": true,
   harness: true,
   daemon: true,
   "provider-keys": true,
