@@ -13,18 +13,19 @@ import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { MobileIdentityFace, useSessionIdentityRow } from '@/components/identity';
 import { openLink } from '@/lib/links';
+import { useModeWords } from '@codecast/web/lib/surfaces';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 import {
-  agentNames,
   notificationActor,
+  notificationAgentName,
+  notificationTypeLabel,
   sessionLabel,
   sessionTypes,
   showsAgentIcon,
   socialTypes,
   taskTypes,
   typeColors,
-  typeLabels,
 } from '@codecast/web/lib/notificationTypes';
 
 type Notification = {
@@ -115,9 +116,6 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
   }
 }
 
-function typeLabel(type: string): string {
-  return typeLabels[type] || type.replace(/_/g, " ");
-}
 
 function NotificationItem({ notification, onPress, onMarkRead }: {
   notification: Notification;
@@ -138,9 +136,9 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
 
   // The title is what the notification is about — the session, else the person.
   // The event itself is a small colored word, never the headline.
-  const typeLbl = typeLabel(notification.type);
+  const typeLbl = notificationTypeLabel(notification.type, notification.conversation?.agent_type);
   const title = label || actorName || typeLbl;
-  const who = actorName || (isSessionNotif ? (agentNames[agentType] || agentType) : null);
+  const who = actorName || (isSessionNotif ? notificationAgentName(agentType) : null);
   const showWho = !!who && who !== title;
   // Don't echo the type when it already IS the title (a bare task/plan row with
   // no session or actor to name).
@@ -229,6 +227,8 @@ export default function NotificationsScreen() {
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const router = useRouter();
   const navigation = useNavigation();
+  // The session filter is named by mode (lib/surfaces MODE_WORDS).
+  const words = useModeWords();
 
   // The persisted store list (fed app-wide by useSyncWorkspaceData), newest
   // first. The live answer only tells a cold cache apart from an empty inbox;
@@ -319,7 +319,7 @@ export default function NotificationsScreen() {
   const tabs: { key: FilterTab; label: string }[] = [
     { key: "all", label: "All" },
     { key: "unread", label: unreadCount > 0 ? `Unread (${unreadCount})` : "Unread" },
-    { key: "sessions", label: "Sessions" },
+    { key: "sessions", label: words.conversations },
     { key: "tasks", label: "Tasks" },
     { key: "social", label: "Social" },
   ];

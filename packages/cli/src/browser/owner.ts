@@ -19,6 +19,8 @@
  * a new pane minted a second Cast tab and left the old one in the group.
  */
 
+import { paneOwnerId, socketOfTmuxEnv } from "../tmuxRoute.js";
+
 /** Env vars that identify an agent process. Order is the fallback order. */
 export const OWNER_HARNESS_ENV = [
   "CLAUDE_CODE_SESSION_ID",
@@ -59,7 +61,7 @@ export function ownerKey(detectSessionId?: () => string | null, env: NodeJS.Proc
   // 3. The tmux pane the agent runs in. Last because a resume in a new pane
   //    would otherwise look like a new browser session and open a new tab.
   const pane = env.TMUX_PANE;
-  if (pane) return `pane:${pane}`;
+  if (pane) return `pane:${paneOwnerId(pane, socketOfTmuxEnv(env.TMUX))}`;
 
   // Nothing to go on — a human in a bare shell. Falls back to the shared
   // "last tab touched" behaviour, which is right for a single interactive user.

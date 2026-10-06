@@ -1,37 +1,8 @@
-import { useState } from "react";
 import Link from "next/link";
-import { useAuthActions } from "@convex-dev/auth/react";
+import { useResetRequest } from "../../hooks/useEmailAuth";
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState("");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const { signIn } = useAuthActions();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    try {
-      await signIn("password", { email, flow: "reset" });
-      setSuccess(true);
-    } catch (err) {
-      if (err instanceof Error) {
-        if (err.message.includes("not found")) {
-          setError("No account found with this email.");
-        } else {
-          setError("Failed to send reset code. Please try again.");
-        }
-      } else {
-        setError("An unexpected error occurred.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { email, setEmail, error, loading, sent: success, submit: handleSubmit, again } = useResetRequest();
 
   if (success) {
     return (
@@ -59,7 +30,7 @@ export default function ForgotPasswordPage() {
             <p className="mt-6 text-sm text-sol-text-muted">
               Didn&apos;t receive the email?{" "}
               <button
-                onClick={() => setSuccess(false)}
+                onClick={again}
                 className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
               >
                 Try again

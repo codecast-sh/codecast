@@ -84,7 +84,7 @@ test("goal, project and owner cards wear the proposal's ghost chrome", async () 
   const cardOf = (id: string) => q(`[data-card='${id}']`, el)!;
 
   expect(cardOf("company").textContent).toContain("Codecast");
-  expect(q("[data-company-tally]", el)!.textContent).toBe("5 goals, carried by 3 projects");
+  expect(q("[data-company-tally]", el)!.textContent).toBe("5 goals · 3 projects");
   // A live goal: no ghost chrome, its health in words.
   const live = cardOf(goalNodeId("init-org"));
   expect(q("[data-org-node='goal']", live)).not.toBeNull();
@@ -169,10 +169,11 @@ test("the pane reads its address, draws the proposal, and follows the thread's n
   const root = createRoot(el);
   const render = () => act(async () => { root.render(h(OrgChartPane, { goalsData: GOALS_FIXTURE_DATA })); });
   await render();
-  // A proposal that changes goals opens in the goals lens, with its changes on the canvas.
-  expect(q("[data-org-chart-pane]", el)!.getAttribute("data-org-chart-pane")).toBe("goals");
-  expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("goals");
+  // The map opens on everything, with the proposal's changes drawn over it ("As proposed" is on).
+  expect(q("[data-org-chart-pane]", el)!.getAttribute("data-org-chart-pane")).toBe("everything");
+  expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("everything");
   expect(q("[data-graph-changes]", el)!.getAttribute("data-graph-changes")).toBe("5");
+  expect(q("[data-map-proposed]", el)!.getAttribute("data-map-proposed")).toBe("on");
   expect(q("[data-chart-proposal='op-8']", el)!.textContent).toContain("Name the goals the work already serves");
   // Counted in cards: two of the five changes land on one goal.
   expect(q("[data-proposal-meta]", el)!.getAttribute("data-proposal-meta")).toBe("4 to decide");
@@ -189,14 +190,28 @@ test("the pane reads its address, draws the proposal, and follows the thread's n
   await render();
   expect(q("[data-graph-focus]", el)!.getAttribute("data-graph-focus")).toBe("change:g-owner");
 
-  // The person picks the people lens: it holds, in the address.
-  await act(async () => { q("[data-org-lens-pick='people']", el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&focus=4&lens=people&s=conv-hop");
-  // Follow off: a newer pointer no longer moves the pane.
-  await act(async () => { q("[data-chart-follow]", el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&focus=4&s=conv-hop&follow=0");
+  // The person picks the People filter: it holds, in the address, and the focus (a goal change, not on that chart) is dropped.
+  await act(async () => { q("[data-map-filter-pick='people']", el)!.click(); });
+  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&lens=people&s=conv-hop");
   search = replaced.at(-1)!.split("?")[1];
   await render();
+  expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("people");
+  // The overlay off: the company as it is, the proposal still named in the bar.
+  await act(async () => { q("[data-map-proposed]", el)!.click(); });
+  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&lens=people&proposed=0&s=conv-hop");
+  search = replaced.at(-1)!.split("?")[1];
+  await render();
+  expect(q("[data-graph-changes]", el)!.getAttribute("data-graph-changes")).toBe("0");
+  expect(q("[data-chart-proposal='op-8']", el)).not.toBeNull();
+  search = "view=chart&proposal=op-8&focus=4&lens=people&s=conv-hop";
+  await render();
+  // Follow off: a newer pointer no longer moves the pane.
+  await act(async () => { q("[data-chart-follow]", el)!.click(); });
+  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&focus=4&lens=people&s=conv-hop&follow=0");
+  search = replaced.at(-1)!.split("?")[1];
+  await render();
+  // A goal change in focus has no place on the reporting chart: the map shows everything for it.
+  expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("everything");
   const before = replaced.length;
   await act(async () => {
     useInboxStore.setState((s: any) => ({ messages: { ...s.messages, "conv-hop": [...s.messages["conv-hop"], { _id: "m3", role: "assistant", content: "op-7", timestamp: 3 }] } }));
@@ -210,7 +225,7 @@ test("the pane reads its address, draws the proposal, and follows the thread's n
   el.remove();
 });
 
-test("a ghost's answer joins the batch of the conversation beside the pane; alone, the pane sends from its own reply box", async () => {
+test("the pane is read only: no reply box, no answer handlers, and the card hovered in the conversation lights its node without a pan", async () => {
   useInboxStore.setState({
     orgTree: ORG_FIXTURE,
     orgProposals: { [ORG_GOALS_FIXTURE_PROPOSAL._id]: (({ changes: _c, ...row }) => row)(ORG_GOALS_FIXTURE_PROPOSAL) },
@@ -218,43 +233,45 @@ test("a ghost's answer joins the batch of the conversation beside the pane; alon
     messages: { "conv-hop": [{ _id: "m1", role: "assistant", content: "op-8", timestamp: 1 }] },
     reviewComments: {},
   } as any);
-  search = "view=chart&proposal=op-8&s=conv-hop";
+  for (const s of ["view=chart&proposal=op-8&s=conv-hop", "view=chart&proposal=op-8"]) {
+    search = s;
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    const root = createRoot(el);
+    await act(async () => { root.render(h(OrgChartPane, { goalsData: GOALS_FIXTURE_DATA })); });
+    expect(q("[data-chart-reply]", el)).toBeNull();
+    expect(q("[data-ghost-actions]", el)).toBeNull();
+    const graph = graphProps.at(-1)!;
+    expect(graph.ghostAnswers).toBeUndefined();
+    expect(graph.onEditAccept).toBeUndefined();
+    expect(graph.canDrag({ kind: "role" })).toBe(false);
+    expect(graph.view.sessionCards).toBe(false);
+    await act(async () => { root.unmount(); });
+    el.remove();
+  }
+});
+
+test("the map lights the change a card in the conversation points at, and pans only when it is off screen", async () => {
+  const { OrgMap } = await import("./OrgMap");
   const el = document.createElement("div");
   document.body.appendChild(el);
   const root = createRoot(el);
-  const render = () => act(async () => { root.render(h(OrgChartPane, { goalsData: GOALS_FIXTURE_DATA })); });
-  await render();
-  // Beside a conversation: the composer's tray is where the batch shows, so the pane mounts no reply box of its own.
-  expect(q("[data-chart-reply]", el)).toBeNull();
-  const graph = () => graphProps.at(-1)!;
-  expect(graph().ghostAnswers.byChange).toEqual({});
-  // Approve on the owner change's ghost: one answer in that conversation's batch, nothing decided.
-  await act(async () => { graph().ghostAnswers.onAnswer("g-owner", { verdict: "approve" }); });
-  const batch = () => useInboxStore.getState().reviewComments["conv-hop"] ?? [];
-  expect(batch().length).toBe(1);
-  expect(batch()[0].proposal).toMatchObject({ short_id: "op-8", verdict: "approve", change_ids: ["g-owner"] });
-  expect(useInboxStore.getState().orgProposalChanges["g-owner"].status).toBe("proposed");
-  // The strip reads it back from the batch.
-  expect(graph().ghostAnswers.byChange["g-owner"]).toEqual({ verdict: "approve" });
-  // Reject with words replaces it (one answer per card); withdrawing empties the batch.
-  await act(async () => { graph().ghostAnswers.onAnswer("g-owner", { verdict: "reject", text: "keep the owner" }); });
-  expect(batch().length).toBe(1);
-  expect(batch()[0].body).toBe("keep the owner");
-  expect(graph().ghostAnswers.byChange["g-owner"]).toEqual({ verdict: "reject", text: "keep the owner" });
-  await act(async () => { graph().ghostAnswers.onAnswer("g-owner", null); });
-  expect(batch()).toEqual([]);
-
-  // Alone: the proposal's own key, and the reply box at the pane's foot.
-  search = "view=chart&proposal=op-8";
-  await render();
-  expect(q("[data-chart-reply]", el)).not.toBeNull();
-  expect(q("[data-chart-reply] [data-reply-hint]", el)!.textContent).toBe("Answer the changes above, then send.");
-  await act(async () => { graph().ghostAnswers.onAnswer("g-owner", { verdict: "approve" }); });
-  const own = Object.keys(useInboxStore.getState().reviewComments).find((k) => k !== "conv-hop")!;
-  expect(own).toMatch(/^proposal:/);
-  expect(useInboxStore.getState().reviewComments[own].length).toBe(1);
-  expect(q("[data-chart-reply] [data-send-answers]", el)!.textContent).toBe("Send 1 answer");
-  await act(async () => { useInboxStore.getState().removeReviewComment(own, useInboxStore.getState().reviewComments[own][0].id); });
+  const render = (highlightChangeId: string | null) => act(async () => { root.render(h(OrgMap, { tree: ORG_FIXTURE, goals: GOALS_FIXTURE_DATA, proposal: { changes: GOALS_FIXTURE_CHANGES }, filter: "everything", onFilter() {}, asProposed: true, onAsProposed() {}, highlightChangeId })); });
+  await render(null);
+  expect(graphProps.at(-1)!.focusTarget).toBeNull();
+  expect(graphProps.at(-1)!.changes.length).toBe(5);
+  await render("g-owner");
+  const target = graphProps.at(-1)!.focusTarget;
+  expect(target).toMatchObject({ kind: "change", id: "g-owner", ifHidden: true });
+  expect(graphProps.at(-1)!.focusChangeId).toBe("g-owner");
+  // The same hover re-rendered is the same ask, not a new pan.
+  await render("g-owner");
+  expect(graphProps.at(-1)!.focusTarget).toBe(target);
+  await render(null);
+  expect(graphProps.at(-1)!.focusTarget).toBeNull();
+  // The filter chips and the overlay toggle are in the map's own bar.
+  expect(q("[data-map-filter='everything']", el)).not.toBeNull();
+  expect(q("[data-map-proposed='on']", el)).not.toBeNull();
   await act(async () => { root.unmount(); });
   el.remove();
 });

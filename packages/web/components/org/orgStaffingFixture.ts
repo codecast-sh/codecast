@@ -157,7 +157,7 @@ export const ORG_STAFFING_FIXTURE_SESSION_PROPOSAL: OrgProposalRow = {
     {
       _id: "fixture-change-10", proposal_id: "fixture-proposal-8", seq: 2, status: "proposed",
       change: { kind: "initiative", title: "Win the private network", description: "Three brokers trade through us every week and Quiet is onboarded.", projects: ["Growth", "pr-77"], owner: "@growth" },
-      rationale: "Growth and Broker outreach both name the private network as their Q3 goal; the initiatives page holds no goal for it.",
+      rationale: "Growth and Broker outreach both name the private network as their Q3 goal; the goals page holds no goal for it.",
       evidence: [{ label: "Growth charter", href: "/projects/Growth" }],
       expected_effect: "One page says what winning the private network looks like, with both projects under it.",
     },

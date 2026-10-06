@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { codeThreadRootKey } from "@codecast/shared/comments";
+import { codeThreadRootKey, type CodeAnchorText } from "@codecast/shared/comments";
 import { repoObjectGitHubUrl } from "@codecast/shared/entities";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -16,6 +16,7 @@ import { PRChecks } from "../../../../../components/pr/PRChecks";
 import { PRCommits } from "../../../../../components/pr/PRCommits";
 import { PRHeader } from "../../../../../components/pr/PRHeader";
 import { MergeMenu, MoreMenu, ReviewMenu } from "../../../../../components/pr/PRActions";
+import { ShipControl } from "../../../../../components/ShipControl";
 import { PRLineThread, type NoteMode } from "../../../../../components/pr/PRThread";
 import { PRReviewBar } from "../../../../../components/pr/PRReviewBar";
 import { PRTimeline } from "../../../../../components/pr/PRTimeline";
@@ -26,6 +27,7 @@ import { useEventListener } from "../../../../../hooks/useEventListener";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { repoBlobHref } from "../../../../../lib/repoView";
 import { landOn, useDiffAddress } from "../../../../../hooks/useDiffAddress";
+import { useFollowScroll } from "../../../../../hooks/useFollowSurface";
 import { useLinkedSessions } from "../../../../../hooks/useLinkedSessions";
 import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
 import { useSyncPRExternalEvents, useExternalEvents } from "../../../../../hooks/useSyncExternalEvents";
@@ -175,9 +177,10 @@ export function PRContent({
     rootRef,
     stickyTop: TAB_BAR_PX,
   });
+  useFollowScroll("pr", rootRef);
 
   const details = usePRDetails(prId, pr?.head_sha, isAuthenticated && (tab === "commits" || tab === "checks") ? tab : null);
-  const [composing, setComposing] = useState<{ file: string; anchor: DiffLineAnchor } | null>(null);
+  const [composing, setComposing] = useState<{ file: string; anchor: DiffLineAnchor; anchorLines?: CodeAnchorText } | null>(null);
 
   // The review: where a new note goes (held, or out at once), a preference
   // that follows the person; the notes waiting; and the menu that sends them.
@@ -295,7 +298,7 @@ export function PRContent({
   const lineThreads: FileLineThreads = useMemo(
     () => ({
       threadsFor: (filename) => threadsByFile.get(filename),
-      render: (filename, anchor, items) => (
+      render: (filename, anchor, items, placement) => (
         <div data-pr-thread={`${filename}|${diffLineKey(anchor)}`}>
         <PRLineThread
           repository={repository}
@@ -304,6 +307,7 @@ export function PRContent({
           authed={isAuthenticated}
           lineNumber={anchor.lineNumber}
           lineEnd={anchor.lineEnd}
+          placement={placement}
           noteMode={noteMode}
           onNoteMode={setNoteMode}
           pendingCount={notes.length}
@@ -323,6 +327,9 @@ export function PRContent({
               // A reply sent before the root's server row lands would carry a
               // stub id the validator rejects; post it unparented instead.
               parent_id: serverCommentId((items as CodeCommentRow[])[0]?._id),
+              // A new thread keeps the text it was written on; a reply inherits
+              // its root's on the server.
+              ...(items.length === 0 && composing?.file === filename ? { anchor_lines: composing.anchorLines } : {}),
             })
           }
           onResolve={(resolved) => setCodeThreadResolved(items as CodeCommentRow[], resolved)}
@@ -333,11 +340,11 @@ export function PRContent({
         />
         </div>
       ),
-      onComment: (filename, anchor) => {
-        if (anchor) setComposing({ file: filename, anchor });
+      onComment: (filename, anchor, _code, anchorLines) => {
+        if (anchor) setComposing({ file: filename, anchor, anchorLines });
       },
     }),
-    [threadsByFile, isAuthenticated, post, repository, pr?.head_sha, noteMode, setNoteMode, notes.length, landing, number, family, goTo],
+    [threadsByFile, isAuthenticated, post, repository, pr?.head_sha, noteMode, setNoteMode, notes.length, landing, number, family, goTo, composing],
   );
 
   // What the tree shows beside each file: open threads, waiting notes, viewed.
@@ -494,6 +501,7 @@ export function PRContent({
                 onWalk={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
               />
             )}
+            {isAuthenticated && pr.state === "open" && <ShipControl target={{ kind: "pull_request", id: String(pr._id) }} size="compact" />}
             {isAuthenticated && <MergeMenu pr={pr} />}
             <MoreMenu pr={pr} canWrite={isAuthenticated} onEditTitle={editTitle} />
           </>

@@ -15,6 +15,9 @@ test("initiative titles resolve ids and short ids only in the active workspace",
   expect(initiativeTabTitle("/initiatives/in-2", initiatives, "user:me")).toBe("Private plan");
   expect(initiativeTabTitle("/initiatives/in-3", initiatives, "team:a")).toBeNull();
   expect(initiativeTabTitle("/initiatives/in-1", initiatives, null)).toBeNull();
+  // The goals page's address, and its old one a saved tab still carries.
+  expect(initiativeTabTitle("/goals/in-1", initiatives, "team:a")).toBe("Team plan");
+  expect(initiativeTabTitle("/goalsx/in-1", initiatives, "team:a")).toBeNull();
 });
 
 test("tab titles forward the workspace boundary", () => {

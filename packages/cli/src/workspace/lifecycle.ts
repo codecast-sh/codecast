@@ -21,7 +21,7 @@
 import { execFileAsync, execSync } from "../proc.js";
 import { execFileSync } from "../proc.js";
 import { randomUUID } from "node:crypto";
-import { WIP_SNAPSHOT_SUBJECT } from "../wipSnapshot.js";
+import { WIP_REF_PREFIX, WIP_SNAPSHOT_SUBJECT } from "../wipSnapshot.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -832,13 +832,14 @@ function branchTip(repoRoot: string, branch: string): string | null {
 const SEED_REF_PREFIX = "refs/codecast/cloud/";
 
 /**
- * After a seeded worktree is removed: drop its hidden seed ref, and the
- * branch when its tip still equals the seed base (nothing host-made to lose;
- * a branch that advanced deliberately keeps its unpublished commits). Best
- * effort — a release must not fail on cleanup.
+ * After a seeded worktree is removed: drop its hidden seed ref (a cloud seed,
+ * or a session snapshot fetched by `acquire --from`), and the branch when its
+ * tip still equals the seed base (nothing made there to lose; a branch that
+ * advanced deliberately keeps its unpublished commits). Best effort — a
+ * release must not fail on cleanup.
  */
 function dropSeed(repoRoot: string, state: PersistedWorkspaceState): void {
-  if (!state.startPoint?.startsWith(SEED_REF_PREFIX)) return;
+  if (!state.startPoint?.startsWith(SEED_REF_PREFIX) && !state.startPoint?.startsWith(`${WIP_REF_PREFIX}/`)) return;
   // A branch still AT the snapshot commit (creation failed before the reset)
   // holds nothing host-made either: only the laptop's tree, which the laptop has.
   let snapshot: string | null = null;

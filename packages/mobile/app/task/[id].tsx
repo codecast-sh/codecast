@@ -24,6 +24,7 @@ import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskAction
 import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
 import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
+import { CollapsibleBody } from "@/components/CollapsibleBody";
 import { formatRelativeTime } from "@/components/SessionItem";
 import {
   STATUS_CONFIG,
@@ -61,6 +62,8 @@ export default function TaskDetailScreen() {
   const titleInputRef = useRef<RNTextInput>(null);
   const [commentText, setCommentText] = useState("");
   const [subtaskTitle, setSubtaskTitle] = useState("");
+  const [addingSubtask, setAddingSubtask] = useState(false);
+  const [showFiles, setShowFiles] = useState(false);
 
   const parentRow = useMemo(() => {
     const pid = (task as any)?.parent_id;
@@ -229,7 +232,6 @@ export default function TaskDetailScreen() {
         ) : (
           <TouchableOpacity onPress={startEditTitle} activeOpacity={0.7}>
             <RNText style={styles.title}>{task.title}</RNText>
-            <RNText style={styles.editHint}>Tap to edit</RNText>
           </TouchableOpacity>
         )}
 
@@ -244,16 +246,11 @@ export default function TaskDetailScreen() {
             <RNText style={[styles.badgeText, { color: priority.color }]}>{priority.label}</RNText>
           </TouchableOpacity>
 
-          {task.source && (
-            <RNView style={[styles.badge, { borderColor: Theme.borderLight }]}>
-              <FontAwesome
-                name={task.source === "human" ? "user" : "bolt"}
-                size={10}
-                color={Theme.textMuted0}
-              />
-              <RNText style={[styles.badgeText, { color: Theme.textMuted0 }]}>{task.source}</RNText>
+          {labels.map((l) => (
+            <RNView key={l} style={styles.labelChip}>
+              <RNText style={styles.labelChipText}>{l}</RNText>
             </RNView>
-          )}
+          ))}
         </RNView>
 
         {/* Render whenever the task HAS a parent, mirroring web — a subtask must
@@ -272,13 +269,27 @@ export default function TaskDetailScreen() {
           </TouchableOpacity>
         )}
 
+        {task.plan && (
+          <TouchableOpacity
+            style={styles.parentLink}
+            onPress={() => router.push(`/plan/${task.plan!.short_id}` as any)}
+            activeOpacity={0.6}
+          >
+            <FontAwesome name="map-o" size={11} color={Theme.textMuted0} />
+            <RNText style={styles.parentLinkLabel}>Plan</RNText>
+            <RNText style={styles.parentLinkTitle} numberOfLines={1}>{task.plan.title}</RNText>
+          </TouchableOpacity>
+        )}
+
         {task.description && (
           <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Description</RNText>
-            <RNText style={styles.description}>{task.description}</RNText>
+            <CollapsibleBody fadeColor={Theme.bg} height={180}>
+              <MarkdownContent text={task.description} baseStyle={styles.description} />
+            </CollapsibleBody>
           </RNView>
         )}
 
+        {subtasks.length > 0 || addingSubtask ? (
         <RNView style={styles.section}>
           <RNView style={styles.subtaskHeader}>
             <RNText style={styles.sectionLabel}>Subtasks</RNText>
@@ -317,38 +328,19 @@ export default function TaskDetailScreen() {
               placeholderTextColor={Theme.textMuted0}
               returnKeyType="done"
               onSubmitEditing={addSubtask}
+              onBlur={() => { if (!subtaskTitle.trim()) setAddingSubtask(false); }}
+              autoFocus={addingSubtask && subtasks.length === 0}
               blurOnSubmit={false}
             />
           </RNView>
         </RNView>
-
-        {task.plan && (
-          <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Plan</RNText>
-            <TouchableOpacity
-              style={styles.planLink}
-              onPress={() => router.push(`/plan/${task.plan!.short_id}` as any)}
-              activeOpacity={0.6}
-            >
-              <FontAwesome name="map" size={12} color={Theme.cyan} />
-              <RNText style={styles.planLinkText}>{task.plan.title}</RNText>
-              <FontAwesome name="chevron-right" size={10} color={Theme.textMuted0} />
-            </TouchableOpacity>
-          </RNView>
+        ) : (
+          <TouchableOpacity style={styles.addSubtaskLink} onPress={() => setAddingSubtask(true)} activeOpacity={0.6}>
+            <FontAwesome name="plus" size={11} color={Theme.textMuted0} />
+            <RNText style={styles.parentLinkLabel}>Add subtask</RNText>
+          </TouchableOpacity>
         )}
 
-        {labels.length > 0 && (
-          <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Labels</RNText>
-            <RNView style={styles.labelRow}>
-              {labels.map((l) => (
-                <RNView key={l} style={styles.labelChip}>
-                  <RNText style={styles.labelChipText}>{l}</RNText>
-                </RNView>
-              ))}
-            </RNView>
-          </RNView>
-        )}
 
         {criteria.length > 0 && (
           <RNView style={styles.section}>
@@ -393,13 +385,13 @@ export default function TaskDetailScreen() {
 
         {task.files_changed && task.files_changed.length > 0 && (
           <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Files Changed ({task.files_changed.length})</RNText>
-            {task.files_changed.slice(0, 10).map((f, i) => (
+            <TouchableOpacity style={styles.subtaskHeader} onPress={() => setShowFiles((v) => !v)} activeOpacity={0.6}>
+              <RNText style={styles.sectionLabel}>{task.files_changed.length} {task.files_changed.length === 1 ? "file" : "files"} changed</RNText>
+              <FontAwesome name={showFiles ? "angle-up" : "angle-down"} size={14} color={Theme.textMuted0} />
+            </TouchableOpacity>
+            {showFiles && task.files_changed.map((f, i) => (
               <RNText key={i} style={styles.fileText}>{f}</RNText>
             ))}
-            {task.files_changed.length > 10 && (
-              <RNText style={styles.moreText}>+{task.files_changed.length - 10} more</RNText>
-            )}
           </RNView>
         )}
 
@@ -491,12 +483,14 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: "700",
     color: Theme.text,
     lineHeight: 26,
-    marginBottom: 2,
-  },
-  editHint: {
-    fontSize: 11,
-    color: Theme.textMuted0,
     marginBottom: Spacing.md,
+  },
+  addSubtaskLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 6,
+    marginBottom: Spacing.lg,
   },
   titleInput: {
     fontSize: 20,

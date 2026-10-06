@@ -24,6 +24,7 @@ import { engineSessionKey, engineStateDir, realSessionKey } from "./engine.js";
 import { sessionTarget } from "./engineReap.js";
 import { parseTabLine } from "./tabId.js";
 import { OWNER_HARNESS_ENV } from "./owner.js";
+import { paneOwnerEnv } from "../tmuxRoute.js";
 
 /** Every env var ownerKey reads: the child must see exactly one identity. */
 const IDENTITY_ENV = [...OWNER_HARNESS_ENV, "TMUX_PANE"];
@@ -56,7 +57,7 @@ export function reopenIdentityEnv(candidates: string[], stateDir = engineStateDi
   const envFor = (cand: string): Record<string, string> | null => {
     const m = cand.match(/^(session|env|pane):(.+)$/);
     if (!m) return null;
-    return m[1] === "pane" ? { TMUX_PANE: m[2] } : { CAST_SESSION_ID: m[2] };
+    return m[1] === "pane" ? paneOwnerEnv(m[2]) : { CAST_SESSION_ID: m[2] };
   };
   let best: { env: Record<string, string>; mtimeMs: number } | null = null;
   for (const cand of candidates) {
