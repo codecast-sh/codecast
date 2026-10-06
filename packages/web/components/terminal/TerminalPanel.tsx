@@ -73,7 +73,7 @@ export function TerminalPanel() {
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   const [maximized, setMaximized] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  const everOpened = useRef(false);
+  const started = useRef(false);
   const restoredOnce = useRef(false);
 
   const tabCtxMenu = useContextMenu<TermTabState>();
@@ -138,12 +138,23 @@ export function TerminalPanel() {
     [convex, openShellTab],
   );
 
+  // Connect as soon as the panel mounts (TerminalDock warms it while closed),
+  // so opening the dock shows a live shell instead of a spinner. A warm-up
+  // that found no daemon tries again when someone actually opens the dock.
   useWatchEffect(() => {
-    if (open && !everOpened.current) {
-      everOpened.current = true;
+    if (!started.current) {
+      started.current = true;
       void resolve();
+    } else if (open && ep.phase === "unavailable") {
+      void resolve(true);
     }
   }, [open, resolve]);
+
+  // Opening the dock moves typing into the terminal. Also runs when the first
+  // tab lands after a cold open, so keystrokes never stay in the composer.
+  useWatchEffect(() => {
+    if (open && activeId) getInstance(activeId)?.term.focus();
+  }, [open, activeId]);
 
   // --- drag resize ---
   const heightRef = useRef(storedHeight);
