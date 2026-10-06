@@ -25,6 +25,8 @@ export type PendingMessageInsertFields = {
   // Park the row as "held" (a standing session's turn, released by the wake
   // rail's flush) instead of "pending".
   held?: boolean;
+  // Held for the end of the agent's turn (schema pending_messages.queued).
+  queued?: boolean;
 };
 
 export class PendingMessageWriteError extends Error {
@@ -108,7 +110,8 @@ async function insertPendingMessageRow(
     client_id: fields.clientId,
     origin: fields.origin,
     human: fields.human || undefined,
-    status: fields.held ? ("held" as const) : ("pending" as const),
+    status: fields.held || fields.queued ? ("held" as const) : ("pending" as const),
+    ...(fields.queued ? { queued: true } : {}),
     created_at: fields.createdAt,
     retry_count: 0,
     ...(delivery
@@ -185,4 +188,18 @@ export async function insertRiskResendPendingMessage(
     fields.delivery,
     fields.resendOfDeliveryId,
   );
+}
+
+/**
+ * Release what was queued for the end of the agent's turn (pending_messages
+ * .queued): held rows go to "pending" in queue order, so the session takes
+ * them next. Called where a turn is seen to end (managedSessions'
+ * applyAgentStatus) and by anyone who may send into the session. Idempotent.
+ */
+export async function releaseQueuedRows(ctx: { db: any }, conversationId: Id<"conversations">): Promise<number> {
+  const held: any[] = await ctx.db.query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "held")).collect();
+  const queued = held.filter((r) => r.queued);
+  for (const row of queued) await ctx.db.patch(row._id, { status: "pending" });
+  return queued.length;
 }

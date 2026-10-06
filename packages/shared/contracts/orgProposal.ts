@@ -133,6 +133,23 @@ export type OrgAdoptChange = { kind: "adopt"; handle: string; conversation: stri
 /** File a plan under a project (plans.project_id), so a role's scope can see it. Both are refs. */
 export type OrgFileChange = { kind: "file"; plan: string; project: string };
 
+// A role's charter edited in place (org-staffing.md S7): the change carries
+// only what moves, never the whole text, so the card draws each passage
+// before and after and a reader sees the edit, not two charters. A passage
+// names an exact, unique stretch of the charter as it stands; the apply path
+// substitutes it (applyCharterEdits) and writes the result through the role's
+// own update. The charter stays short: the job in a few sentences.
+export const ORG_CHARTER_MAX = 800;
+export const ORG_CHARTER_PASSAGE_MAX = 300;
+export const ORG_CHARTER_EDITS_MAX = 5;
+/** How to bring a charter under the cap, said once wherever the cap refuses. */
+export const ORG_CHARTER_CONDENSE = `a charter is the job in a few sentences, at most ${ORG_CHARTER_MAX} characters: what the role watches, what it does on its own, and what it brings to a person; cut examples, procedures, and anything its routine or its scope already says`;
+export type OrgCharterEdit =
+  | { op: "replace"; before: string; after: string }
+  | { op: "add"; line: string }
+  | { op: "remove"; before: string };
+export type OrgCharterEditChange = { kind: "charter_edit"; handle: string; edits: OrgCharterEdit[] };
+
 // Bring records in line (org-staffing.md S9): a plan, task or project whose
 // evidence says it is finished gets its status set, through the same update
 // paths a person uses. `reason` is the evidence, for the person deciding.
@@ -141,11 +158,11 @@ export type OrgFileChange = { kind: "file"; plan: string; project: string };
 // not hold that team's records, so the title travels with the proposal (the
 // analyzer writes it from its inputs; the server fills it at post time when
 // the record is in the workspace).
-export type OrgPlanStatusChange = { kind: "plan_status"; plan: string; status: "done" | "abandoned" | "active"; reason: string; title?: string };
+export type OrgPlanStatusChange = { kind: "plan_status"; plan: string; status: "done" | "abandoned" | "active"; reason: string; title?: string; /** The project the plan is filed under (pr-N), so the proposal groups by it (orgRecordGroups); the server fills it at post time. */ project?: string };
 /** A task's status set: done or dropped closes it; open (or backlog, where the
  *  team's statuses have it) puts a row that was marked in progress but never
  *  worked back where it belongs, instead of dropping real backlog. */
-export type OrgTaskStatusChange = { kind: "task_status"; task: string; status: "done" | "dropped" | "open" | "backlog"; reason: string; title?: string };
+export type OrgTaskStatusChange = { kind: "task_status"; task: string; status: "done" | "dropped" | "open" | "backlog"; reason: string; title?: string; /** The plan (pl-N) and project (pr-N) the task sits under; the server fills them at post time. A task under a plan the same proposal closes is settled by that close (orgRecordRedundancyErrors). */ plan?: string; project?: string };
 export type OrgProjectStatusChange = { kind: "project_status"; project: string; status: "paused" | "done" | "active"; reason: string; title?: string };
 export type OrgRecordStatusChange = OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange;
 
@@ -200,10 +217,10 @@ export type OrgInitiativeOwnerChange = { kind: "initiative_owner"; initiative: s
 export type OrgInitiativeShapeChange = { kind: "initiative_shape"; initiative: string; parent?: string | null; metrics?: OrgInitiativeMetric[]; title?: string } & OrgInitiativeRecord;
 export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange | OrgInitiativeShapeChange;
 
-export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
+export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange | OrgCharterEditChange
   | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange;
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape"] as const;
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "charter_edit", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape"] as const;
 /** The kinds the pane groups under "Bring records in line" (S9). */
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 /** The kinds that set, extend or staff a goal; one ask holds them (I1, revised). */
@@ -221,6 +238,42 @@ export function quietChangeSentence(c: OrgChange, name?: string): string {
 }
 export const isOrgGoalChange = (c: { kind: string }): c is OrgGoalChange => (ORG_GOAL_KINDS as readonly string[]).includes(c.kind);
 export type OrgChangeKind = OrgChange["kind"];
+
+// A proposal holds one kind of work: the records brought in line, the
+// structure (roles, reporting, areas, charters), or the goals. A person reads
+// each as its own thing, so one spec never mixes them (parseOrgProposalSpec
+// refuses a mixed one and says how to split it). Records are uncapped, since
+// a review settles every stale record it finds and the groups keep them
+// readable; a structure or goal proposal stays small enough to read whole.
+// The cap is read off Union's real proposals: the largest structure proposal
+// held 9 changes and the first goal tree 11 (op-55, op-54, 2026-10-06); 12
+// holds both and refuses the 64-row record shape that has no place here.
+export type OrgProposalWork = "records" | "structure" | "goals";
+export const ORG_PROPOSAL_WORKS: readonly OrgProposalWork[] = ["records", "structure", "goals"];
+export const ORG_PROPOSAL_MAX: Record<OrgProposalWork, number | null> = { records: null, structure: 12, goals: 12 };
+export function orgWorkOfChange(c: { kind: string }): OrgProposalWork {
+  return (ORG_SYNC_KINDS as readonly string[]).includes(c.kind) ? "records" : (ORG_GOAL_KINDS as readonly string[]).includes(c.kind) ? "goals" : "structure";
+}
+/** The work the changes hold, or null when they mix kinds. */
+export function orgProposalWork(changes: ReadonlyArray<{ change: { kind: string } }>): OrgProposalWork | null {
+  const works = new Set(changes.map((c) => orgWorkOfChange(c.change)));
+  return works.size === 1 ? [...works][0] : null;
+}
+/** Why the changes are not one proposal: mixed work, or a structure or goal proposal too large to read whole. */
+export function orgProposalWorkErrors(changes: ReadonlyArray<{ change: { kind: string } }>): string[] {
+  if (!changes.length) return [];
+  const byWork = new Map<OrgProposalWork, string[]>();
+  for (const c of changes) { const w = orgWorkOfChange(c.change); byWork.set(w, [...(byWork.get(w) ?? []), c.change.kind]); }
+  if (byWork.size > 1) {
+    const noun: Record<OrgProposalWork, string> = { records: "record", structure: "structure", goals: "goal" };
+    const parts = ORG_PROPOSAL_WORKS.filter((w) => byWork.has(w)).map((w) => { const kinds = byWork.get(w)!; return `${kinds.length} ${noun[w]} ${kinds.length === 1 ? "change" : "changes"} (${[...new Set(kinds)].join(", ")})`; });
+    return [`a proposal holds one kind of work, and this one mixes ${andList(parts)}: post the records as one proposal, the structure as another and the goals as a third, each with its own title and summary`];
+  }
+  const [work, kinds] = [...byWork][0];
+  const max = ORG_PROPOSAL_MAX[work];
+  if (max !== null && kinds.length > max) return [`a ${work === "goals" ? "goal" : work} proposal holds at most ${max} changes, and this one has ${kinds.length}: split it by area (one proposal per lead, project or goal) or leave the smaller changes for the next review`];
+  return [];
+}
 
 /** Accept order (S4, S9): the record syncs first (a plan, task or project
  *  whose status the evidence contradicts), then projects, then roles
@@ -242,7 +295,7 @@ export type OrgChangeKind = OrgChange["kind"];
 export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
   task_status: 0, plan_status: 1, project_status: 2,
   projects: 3, file: 4, role: 5, project_meta: 6, initiative: 7, initiative_projects: 8, initiative_owner: 9, initiative_shape: 10,
-  move: 11, scope: 12, budget: 13, trust: 14, authority: 15, adopt: 16, routine: 17, hire: 18, upgrade: 19, retire: 20,
+  move: 11, scope: 12, charter_edit: 13, budget: 14, trust: 15, authority: 16, adopt: 17, routine: 18, hire: 19, upgrade: 20, retire: 21,
 };
 const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
@@ -331,6 +384,8 @@ export function orgChangeError(raw: any): string | null {
         const h = handle(); if (h) return h;
         if (raw.tenure !== undefined) { const t = orgTenureError(raw.tenure); if (t) return t; }
         if (raw.avatar !== undefined && !nonEmpty(raw.avatar)) return "avatar is an avatar key";
+        if (raw.charter !== undefined && typeof raw.charter !== "string") return "charter is a string";
+        if (typeof raw.charter === "string" && raw.charter.trim().length > ORG_CHARTER_MAX) return `charter is ${raw.charter.trim().length} characters; ${ORG_CHARTER_CONDENSE}`;
         if (raw.line !== undefined && !(typeof raw.line === "string" && LINE_SLUG_RE.test(raw.line))) return "line is a workflow slug: 1 to 64 characters of a-z, 0-9 and -";
         if (raw.caps?.cards !== undefined && !(Number.isSafeInteger(raw.caps.cards) && raw.caps.cards > 0)) return "caps.cards is a positive whole number";
         if (raw.seat !== undefined) {
@@ -412,6 +467,14 @@ export function orgChangeError(raw: any): string | null {
     }
     case "file":
       return nonEmpty(raw.plan) && nonEmpty(raw.project) ? null : "file needs a plan ref and a project ref";
+    case "charter_edit": {
+      const h = handle(); if (h) return h;
+      if (!Array.isArray(raw.edits) || !raw.edits.length || raw.edits.length > ORG_CHARTER_EDITS_MAX) return `charter_edit edits is a list of one to ${ORG_CHARTER_EDITS_MAX} edits: { op: "replace", before, after }, { op: "add", line } or { op: "remove", before }`;
+      for (const e of raw.edits) {
+        const fault = orgCharterEditError(e); if (fault) return fault;
+      }
+      return null;
+    }
     case "plan_status":
       if (!nonEmpty(raw.plan)) return "plan_status needs a plan ref";
       if (!(PLAN_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `plan_status status is one of ${PLAN_STATUS_CHANGES.join(", ")}`;
@@ -437,19 +500,19 @@ export function orgChangeError(raw: any): string | null {
       { const m = metricsError("initiative", raw.metrics) ?? recordError("initiative", raw); if (m) return m; }
       return optStrings(raw.evidence) ? null : "initiative evidence is a list of strings";
     case "initiative_projects":
-      if (!nonEmpty(raw.initiative)) return "initiative_projects needs an initiative ref (in-N, an id or its title)";
+      if (!nonEmpty(raw.initiative)) return "initiative_projects needs a goal ref (in-N, an id or its title)";
       if (!strings(raw.projects) || !raw.projects.length) return "initiative_projects projects is a non-empty list of project refs";
-      return optString(raw.title) ? null : "initiative_projects title is the initiative's title, a string";
+      return optString(raw.title) ? null : "initiative_projects title is the goal's title, a string";
     case "initiative_owner":
-      if (!nonEmpty(raw.initiative)) return "initiative_owner needs an initiative ref (in-N, an id or its title)";
+      if (!nonEmpty(raw.initiative)) return "initiative_owner needs a goal ref (in-N, an id or its title)";
       if (!nonEmpty(raw.owner)) return "initiative_owner owner is \"@handle\" for a role, \"me\" or a member's name for a person";
-      return optString(raw.title) ? null : "initiative_owner title is the initiative's title, a string";
+      return optString(raw.title) ? null : "initiative_owner title is the goal's title, a string";
     case "initiative_shape":
-      if (!nonEmpty(raw.initiative)) return "initiative_shape needs an initiative ref (in-N, an id or its title)";
+      if (!nonEmpty(raw.initiative)) return "initiative_shape needs a goal ref (in-N, an id or its title)";
       if (raw.parent !== undefined && raw.parent !== null && !nonEmpty(raw.parent)) return "initiative_shape parent is the top level goal it feeds (a ref), or null for a top level goal";
       { const m = metricsError("initiative_shape", raw.metrics) ?? recordError("initiative_shape", raw); if (m) return m; }
       if (raw.parent === undefined && raw.metrics === undefined && !carriesRecord(raw)) return "initiative_shape needs a parent, metrics, why, done_when, milestones, sources, questions or decisions: what it changes about the goal";
-      return optString(raw.title) ? null : "initiative_shape title is the initiative's title, a string";
+      return optString(raw.title) ? null : "initiative_shape title is the goal's title, a string";
   }
   return null;
 }
@@ -958,6 +1021,7 @@ function askWords(names?: OrgAskNames) {
       case "retire": return `Retire ${agent(c.handle)}`;
       case "move": return `Move ${agent(c.handle)}`;
       case "scope": return `Change what ${agent(c.handle)} looks after`;
+      case "charter_edit": return `Change what ${agent(c.handle)}'s charter says`;
       case "trust": return `${autonomyOn(c.trust) ? "Turn on" : "Turn off"} starting work on its own for ${agent(c.handle)}`;
       case "initiative": case "initiative_projects": case "initiative_owner": case "initiative_shape": { const s = goalChangeSentence(c, names); return s.charAt(0).toUpperCase() + s.slice(1); }
       default: return describeOrgChange(c);
@@ -980,17 +1044,18 @@ function askWords(names?: OrgAskNames) {
         const parts = [c.add?.length ? `takes on ${things(c.add)}` : "", c.remove?.length ? `hands off ${things(c.remove)}` : ""].filter(Boolean);
         return `${agent(c.handle)} ${andList(parts)}.`;
       }
-      case "initiative": return `A new goal, ${c.title.trim()}, appears on the initiatives page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}${c.parent ? `, feeding ${names?.initiative?.(c.parent) ?? c.parent}` : ""}${c.metrics?.length ? `. It is read against ${metricsWords(c.metrics)}` : ""}. ${recordEffect(c) ? `${fullStop(c.description)} ${recordEffect(c)}` : c.description.trim()}`;
+      case "charter_edit": return `${agent(c.handle)}'s charter changes in ${c.edits.length === 1 ? "one place" : `${c.edits.length} places`}; each passage is shown before and after. Its area and its reporting line stay as they are.`;
+      case "initiative": return `A new goal, ${c.title.trim()}, appears on the goals page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}${c.parent ? `, feeding ${names?.initiative?.(c.parent) ?? c.parent}` : ""}${c.metrics?.length ? `. It is read against ${metricsWords(c.metrics)}` : ""}. ${recordEffect(c) ? `${fullStop(c.description)} ${recordEffect(c)}` : c.description.trim()}`;
       case "initiative_projects": return `${projects(c.projects)} ${c.projects.length === 1 ? "counts" : "count"} toward the goal from now on, and its owner's area grows to include ${c.projects.length === 1 ? "it" : "them"}.`;
       case "initiative_owner": return `${parent(c.owner)} drives the goal from now on: its health is what ${c.owner.trim().toLowerCase() === "me" ? "you say" : "they say"}, and the goal's projects join their area.`;
       case "initiative_shape": return `${c.parent !== undefined ? (c.parent ? `The goal feeds ${names?.initiative?.(c.parent) ?? c.parent} from now on, and every role under it sees that chain. ` : "The goal stands on its own at the top level. ") : ""}${c.metrics !== undefined ? (c.metrics.length ? `On track means against ${metricsWords(c.metrics)}; its owner reports the numbers. ` : "It is no longer read against a number. ") : ""}${recordEffect(c)}`.trim();
       default: return describeOrgChange(c);
     }
   };
-  /** Why, when the author gave no rationale: the charter or reason the
-   *  change itself carries, else an honest blank that points at the control. */
+  /** Why, when the author gave no rationale: the reason the change itself
+   *  carries, else an honest blank that points at the control. A role's
+   *  charter is its job, not the reason to create it, so it never stands in. */
   const why = (c: OrgChange): string => {
-    if (c.kind === "role" && c.charter?.trim()) return c.charter.trim();
     if (c.kind === "retire" && c.reason?.trim()) return c.reason.trim();
     return "The author did not say why. Ask about this.";
   };
@@ -1015,7 +1080,7 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   // A move of a role this proposal creates rides in that role's ask (a named
   // session put under an existing role, R2), so the person can accept the
   // name and skip the move from one card; any other move is its own ask.
-  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "scope" || (c.change.kind === "move" && !created.has(askHandle(c.change) ?? "")));
+  const own = live.filter((c) => c.change.kind === "role" || c.change.kind === "retire" || c.change.kind === "scope" || c.change.kind === "charter_edit" || (c.change.kind === "move" && !created.has(askHandle(c.change) ?? "")));
   const riders = new Map<AskRow, AskRow[]>();
   const rest: AskRow[] = [];
   for (const c of live) {
@@ -1027,12 +1092,19 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const seqs = (rows: AskRow[]) => rows.map((c) => c.seq).sort((a, b) => a - b);
   const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
   const out: OrgAsk[] = [];
-  if (records.length) out.push({
-    title: `Bring ${n(records.length, "record", "records")} up to date`,
-    why: "These plans, tasks and projects show as active, but the work on them is finished, was dropped, or never started.",
-    effect: `${n(records.length, "record changes", "records change")} status. No work starts or stops.`,
-    seqs: seqs(records),
-  });
+  // One ask per group (a project, a plan, or the records filed under none):
+  // the person settles a project's records together, and a group's line is
+  // its totals, never the list. A group of one reads as that change.
+  for (const g of orgRecordGroups(records, names)) {
+    const one = g.seqs.length === 1 ? records.find((c) => c.seq === g.seqs[0])! : null;
+    const where = g.kind === "project" ? `in ${g.title ?? g.ref}` : g.kind === "plan" ? `under the plan ${g.title ?? g.ref}` : "filed under no project";
+    out.push({
+      title: one ? changeLine(one.change, { names, brief: true }) : `Settle ${n(g.seqs.length, "record", "records")} ${where}`,
+      why: one ? one.rationale?.trim() || (one.change as OrgRecordStatusChange).reason.trim() : "These plans, tasks and projects show as active, but the work on them is finished, was dropped, or never started.",
+      effect: `${recordGroupTotalsLine(g)}. No work starts or stops.`,
+      seqs: g.seqs,
+    });
+  }
   // The goals ask: one goal change reads as its own sentence; several read as
   // a count, with each sentence inside the fold. The author's own why and
   // effect stand when a lone change carries them.
@@ -1041,8 +1113,8 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
     const sets = goals.filter((c) => c.change.kind === "initiative").length;
     out.push({
       title: one ? words.title(one.change) : `${n(sets, "goal", "goals")} to set${goals.length > sets ? `, and ${n(goals.length - sets, "change", "changes")} to the goals that exist` : ""}`,
-      why: one?.rationale?.trim() || "The projects' own goals, and what the company said in its calls and threads, point at these goals; the initiatives page does not hold them yet.",
-      effect: one?.expected_effect?.trim() || (one ? words.effect(one.change) : `${n(goals.length, "change", "changes")} on the initiatives page: a goal set, a project added to one, or an owner named. No work starts or stops.`),
+      why: one?.rationale?.trim() || "The projects' own goals, and what the company said in its calls and threads, point at these goals; the goals page does not hold them yet.",
+      effect: one?.expected_effect?.trim() || (one ? words.effect(one.change) : `${n(goals.length, "change", "changes")} on the goals page: a goal set, a project added to one, or an owner named. No work starts or stops.`),
       seqs: seqs(goals),
     });
   }
@@ -1122,6 +1194,7 @@ export function orgChangeKey(c: OrgChange): string | null {
     case "project_status": return `project_status:${c.project.trim().toLowerCase()}`;
     case "file": return `file:${c.plan.trim()}`;
     case "project_meta": return `project_meta:${c.project.trim().toLowerCase()}`;
+    case "charter_edit": return `charter_edit:${h(c.handle)}`;
     case "role": return `role:${h(c.handle)}`;
     case "adopt": return `adopt:${h(c.handle)}`;
     case "retire": return `retire:${h(c.handle)}`;
@@ -1246,7 +1319,7 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
   let changes: any[] = r.changes;
   let notes: string[] = [];
   let asks: OrgAsk[] | undefined;
-  if (!errors.length) errors.push(...orgSeatErrors(r.changes));
+  if (!errors.length) errors.push(...orgSeatErrors(r.changes), ...orgProposalWorkErrors(r.changes), ...orgRecordRedundancyErrors(r.changes));
   if (!errors.length && r.asks !== undefined) errors.push(...orgAsksErrors(r.asks, r.changes));
   if (!errors.length) {
     const folded = foldRepeatedSubjects(r.changes);
@@ -1379,13 +1452,14 @@ export function describeOrgChange(c: OrgChange): string {
     case "hire": return `hire ${at(c.handle)} from template ${c.template}@${c.version} on ${c.project} as ${c.instance}`;
     case "upgrade": return `upgrade instance ${c.instance} to ${c.template}@${c.to}`;
     case "file": return `file plan ${c.plan} under project ${c.project}`;
+    case "charter_edit": return `charter ${at(c.handle)}: ${c.edits.map(charterEditTerse).join("; ")}`;
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
     case "project_status": return `mark project ${c.project} ${c.status}`;
-    case "initiative": return `create initiative ${c.title} over ${list(c.projects)}${c.owner ? ` owned by ${c.owner}` : ""}${c.parent ? ` under ${c.parent}` : ""}${c.metrics?.length ? ` measured by ${metricsWords(c.metrics)}` : ""}${recordTerse(c)}`;
-    case "initiative_projects": return `initiative ${c.initiative} +${list(c.projects)}`;
-    case "initiative_owner": return `initiative ${c.initiative} owner ${c.owner}`;
-    case "initiative_shape": return `initiative ${c.initiative}${c.parent !== undefined ? ` under ${c.parent ?? "nothing"}` : ""}${c.metrics !== undefined ? ` metrics ${c.metrics.length ? metricsWords(c.metrics) : "none"}` : ""}${recordTerse(c)}`;
+    case "initiative": return `set goal ${c.title} over ${list(c.projects)}${c.owner ? ` owned by ${c.owner}` : ""}${c.parent ? ` under ${c.parent}` : ""}${c.metrics?.length ? ` measured by ${metricsWords(c.metrics)}` : ""}${recordTerse(c)}`;
+    case "initiative_projects": return `goal ${c.initiative} +${list(c.projects)}`;
+    case "initiative_owner": return `goal ${c.initiative} owner ${c.owner}`;
+    case "initiative_shape": return `goal ${c.initiative}${c.parent !== undefined ? ` under ${c.parent ?? "nothing"}` : ""}${c.metrics !== undefined ? ` metrics ${c.metrics.length ? metricsWords(c.metrics) : "none"}` : ""}${recordTerse(c)}`;
   }
 }
 /** The record a goal change carries, for the terse line: " why done_when +2 milestones +1 sources". */
@@ -1541,6 +1615,19 @@ export function changeClauses(c: OrgChange, words: ChangeWords = {}): string[] {
     case "hire": return [`hire ${subject(who(c.handle))} from the template ${c.template} (${c.version}) to lead ${project(c.project)}`];
     case "upgrade": return [`move ${subject(c.instance, "the instance")} to ${c.template} ${c.to}`];
     case "file": return [`put ${subject(plan(c.plan), brief ? "the plan" : "plan")} under the project ${project(c.project)}`];
+    case "charter_edit": {
+      // What the edit does, never the words: the card shows each passage before and after.
+      const s = subject(who(c.handle));
+      const own = (r: string) => (r === "it" ? "its charter" : `${r}'s charter`);
+      const k = (op: OrgCharterEdit["op"]) => c.edits.filter((e) => e.op === op).length;
+      const clauses = [
+        k("replace") > 0 && ((r: string) => `rewrite ${k("replace") === 1 ? "a passage" : `${k("replace")} passages`} of ${own(r)}`),
+        k("add") > 0 && ((r: string) => `add ${k("add") === 1 ? "a line" : `${k("add")} lines`} to ${own(r)}`),
+        k("remove") > 0 && ((r: string) => `cut ${k("remove") === 1 ? "a passage" : `${k("remove")} passages`} from ${own(r)}`),
+      ].filter(isClause);
+      // The card reads one clause per thing done; every other form is one sentence.
+      return brief ? clausesAbout(s, clauses) : [andList(clausesAbout(s, clauses))];
+    }
     case "plan_status": case "task_status": case "project_status": {
       const parts = recordChangeParts(c)!;
       // The log and the terminal keep the id beside the title; the card says it as an act on the record, by its title.
@@ -1644,4 +1731,160 @@ export function applyProposalChanges<T extends OrgProposal>(proposal: T, answerT
     } catch { /* prose that happens to open with a brace */ }
   }
   return { proposal, note: text };
+}
+
+// ── Record groups (org-staffing.md S9, revised) ─────────────────────────────
+// A record proposal is read by project: the person settles one project's
+// records together and sees the totals, never the list. Every record change
+// is in exactly one group; the group is the project the change names or
+// sits under, else its plan, else the records filed under none. Removed
+// changes belong to no group.
+
+export type OrgRecordAct = "done" | "dropped" | "abandoned" | "reopened" | "backlog" | "paused";
+export type OrgRecordTotal = { noun: "project" | "plan" | "task"; act: OrgRecordAct; count: number };
+export type OrgRecordGroup = {
+  /** "project:<ref>", "plan:<ref>" or "loose". */
+  key: string;
+  kind: "project" | "plan" | "loose";
+  /** The project's or plan's ref as the changes carry it (pr-N, pl-N, or a title). */
+  ref?: string;
+  /** The project's or plan's title: from a change on that record in this proposal, else the reader's names; absent when neither knows it, and the ref stands. */
+  title?: string;
+  /** The changes in the group, ascending. */
+  seqs: number[];
+  /** What the group does, as counts: projects first, then plans, then tasks. Zero counts are left out. */
+  totals: OrgRecordTotal[];
+};
+
+const RECORD_ACTS: readonly OrgRecordAct[] = ["done", "dropped", "abandoned", "reopened", "backlog", "paused"];
+const RECORD_NOUNS = ["project", "plan", "task"] as const;
+/** What a record change does to its record, as the totals count it: a reopen is "reopened" whatever the row's open word. */
+export function recordAct(c: OrgRecordStatusChange): OrgRecordAct {
+  return c.status === "active" || c.status === "open" ? "reopened" : c.status;
+}
+const recordNoun = (c: OrgRecordStatusChange): "project" | "plan" | "task" => (c.kind === "plan_status" ? "plan" : c.kind === "task_status" ? "task" : "project");
+const recordRef = (c: OrgRecordStatusChange): string => (c.kind === "plan_status" ? c.plan : c.kind === "task_status" ? c.task : c.project).trim();
+
+export function orgRecordGroups(changes: ReadonlyArray<{ seq: number; change: OrgChange; status?: string }>, names?: OrgAskNames): OrgRecordGroup[] {
+  const live = changes.filter((c): c is { seq: number; change: OrgRecordStatusChange; status?: string } => c.status !== "removed" && (ORG_SYNC_KINDS as readonly string[]).includes(c.change.kind));
+  const lc = (ref: string) => ref.trim().toLowerCase();
+  // What this proposal itself knows about the records it names: a plan's project, a record's title.
+  const titleOf = new Map<string, string>();
+  const planProject = new Map<string, string>();
+  for (const { change: c } of live) {
+    if (c.title?.trim()) titleOf.set(lc(recordRef(c)), c.title.trim());
+    if (c.kind === "plan_status" && c.project?.trim()) planProject.set(lc(c.plan), c.project.trim());
+  }
+  const placeOf = (c: OrgRecordStatusChange): { kind: OrgRecordGroup["kind"]; ref?: string } => {
+    if (c.kind === "project_status") return { kind: "project", ref: c.project.trim() };
+    if (c.kind === "plan_status") return c.project?.trim() ? { kind: "project", ref: c.project.trim() } : { kind: "plan", ref: c.plan.trim() };
+    const project = c.project?.trim() || (c.plan ? planProject.get(lc(c.plan)) : undefined);
+    if (project) return { kind: "project", ref: project };
+    if (c.plan?.trim()) return { kind: "plan", ref: c.plan.trim() };
+    return { kind: "loose" };
+  };
+  const groups = new Map<string, OrgRecordGroup>();
+  const counts = new Map<string, Map<string, number>>();
+  for (const row of live) {
+    const place = placeOf(row.change);
+    const key = place.kind === "loose" ? "loose" : `${place.kind}:${lc(place.ref!)}`;
+    let g = groups.get(key);
+    if (!g) {
+      const title = place.ref ? titleOf.get(lc(place.ref)) ?? (place.kind === "project" ? names?.project?.(place.ref) : names?.plan?.(place.ref)) : undefined;
+      g = { key, kind: place.kind, ...(place.ref ? { ref: place.ref } : {}), ...(title && title.toLowerCase() !== lc(place.ref!) ? { title } : {}), seqs: [], totals: [] };
+      groups.set(key, g);
+      counts.set(key, new Map());
+    }
+    g.seqs.push(row.seq);
+    const k = `${recordNoun(row.change)}:${recordAct(row.change)}`;
+    counts.get(key)!.set(k, (counts.get(key)!.get(k) ?? 0) + 1);
+  }
+  for (const [key, g] of groups) {
+    g.seqs.sort((a, b) => a - b);
+    const c = counts.get(key)!;
+    g.totals = RECORD_NOUNS.flatMap((noun) => RECORD_ACTS.flatMap((act) => { const n = c.get(`${noun}:${act}`); return n ? [{ noun, act, count: n }] : []; }));
+  }
+  // The biggest group first, the loose records last, ties by first seq.
+  return [...groups.values()].sort((a, b) => (a.kind === "loose" ? 1 : 0) - (b.kind === "loose" ? 1 : 0) || b.seqs.length - a.seqs.length || a.seqs[0] - b.seqs[0]);
+}
+
+/** "2 plans done, 11 tasks done and 3 tasks reopened": the group's one line, in the words the card uses for each act. */
+export const RECORD_ACT_WORDS: Record<OrgRecordAct, string> = { done: "done", dropped: "dropped", abandoned: "abandoned", reopened: "reopened", backlog: "to the backlog", paused: "paused" };
+export function recordGroupTotalsLine(g: Pick<OrgRecordGroup, "totals">): string {
+  return andList(g.totals.map((t) => `${t.count} ${t.noun}${t.count === 1 ? "" : "s"} ${RECORD_ACT_WORDS[t.act]}`));
+}
+
+/**
+ * A task close the proposal's own plan close already covers (S9, revised):
+ * closing a plan drops its open tasks (never done: the plan closed without
+ * them), so a task change under that plan that drops it is refused as a
+ * second row for one act. A task done on its own evidence keeps its own
+ * change, which lands before the plan's by apply rank and is already closed
+ * when the cascade reads the plan.
+ */
+export function orgRecordRedundancyErrors(changes: ReadonlyArray<{ change: OrgChange }>): string[] {
+  const closing = new Map<string, { i: number; status: "done" | "abandoned" }>();
+  changes.forEach((row, i) => {
+    const c = row.change;
+    if (c.kind === "plan_status" && (c.status === "done" || c.status === "abandoned")) closing.set(c.plan.trim().toLowerCase(), { i, status: c.status });
+  });
+  if (!closing.size) return [];
+  const errors: string[] = [];
+  changes.forEach((row, i) => {
+    const c = row.change;
+    if (c.kind !== "task_status" || !c.plan?.trim()) return;
+    const plan = closing.get(c.plan.trim().toLowerCase());
+    if (!plan) return;
+    if (c.status === "dropped") errors.push(`changes[${i}] (${describeOrgChange(c)}) is covered by changes[${plan.i}], which marks its plan ${c.plan.trim()} ${plan.status}: closing the plan drops its open tasks, so drop this change (a task finished on its own evidence keeps its own done change)`);
+  });
+  return errors;
+}
+
+// ── Charter edits ───────────────────────────────────────────────────────────
+
+/** Why one edit is not one, or null. */
+export function orgCharterEditError(e: any): string | null {
+  if (!e || typeof e !== "object" || Array.isArray(e)) return "a charter edit is { op: \"replace\", before, after }, { op: \"add\", line } or { op: \"remove\", before }";
+  const passage = (field: string, text: unknown): string | null =>
+    !nonEmpty(text) ? `charter_edit ${e.op}: ${field} is the passage, a non-empty string` : text.trim().length > ORG_CHARTER_PASSAGE_MAX ? `charter_edit ${e.op}: ${field} is ${text.trim().length} characters; a passage is at most ${ORG_CHARTER_PASSAGE_MAX}, so quote the sentence that changes, not the whole charter` : null;
+  switch (e.op) {
+    case "replace": {
+      const fault = passage("before", e.before) ?? passage("after", e.after); if (fault) return fault;
+      return e.before.trim() === e.after.trim() ? "charter_edit replace: after is the same as before" : null;
+    }
+    case "add": return passage("line", e.line);
+    case "remove": return passage("before", e.before);
+    default: return `charter_edit op is replace, add or remove, not ${JSON.stringify(e.op)}`;
+  }
+}
+
+/** A long passage shortened for a terminal line. */
+const clip = (text: string, n = 48): string => { const t = text.trim().replace(/\s+/g, " "); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+const charterEditTerse = (e: OrgCharterEdit): string => (e.op === "replace" ? `replace "${clip(e.before)}" with "${clip(e.after)}"` : e.op === "add" ? `add "${clip(e.line)}"` : `remove "${clip(e.before)}"`);
+
+/**
+ * The charter after the edits, or why they do not apply: a passage must
+ * occur exactly once in the charter as it stands (matched on its words,
+ * whatever the spacing), and the result must fit the cap. Pure, so the
+ * server applies it and a page can preview it.
+ */
+export function applyCharterEdits(charter: string | null | undefined, edits: ReadonlyArray<OrgCharterEdit>): { charter: string; error?: undefined } | { charter?: undefined; error: string } {
+  let text = (charter ?? "").replace(/\r\n/g, "\n");
+  const find = (passage: string): { at: number; len: number } | string => {
+    const words = passage.trim().split(/\s+/).filter(Boolean).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const re = new RegExp(words.join("\\s+"), "g");
+    const hits = [...text.matchAll(re)];
+    if (!hits.length) return `the passage "${clip(passage)}" is not in the charter as it stands; quote it exactly`;
+    if (hits.length > 1) return `the passage "${clip(passage)}" appears ${hits.length} times in the charter; quote more of it so it names one place`;
+    return { at: hits[0].index!, len: hits[0][0].length };
+  };
+  for (const e of edits) {
+    if (e.op === "add") { text = `${text.trim()}${text.trim() ? "\n\n" : ""}${e.line.trim()}`; continue; }
+    const hit = find(e.before);
+    if (typeof hit === "string") return { error: hit };
+    text = `${text.slice(0, hit.at)}${e.op === "replace" ? e.after.trim() : ""}${text.slice(hit.at + hit.len)}`;
+  }
+  text = text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").replace(/ ([.,;:])/g, "$1").trim();
+  if (text.length > ORG_CHARTER_MAX) return { error: `the charter would be ${text.length} characters after this edit; ${ORG_CHARTER_CONDENSE}` };
+  return { charter: text };
 }

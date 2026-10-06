@@ -5,8 +5,9 @@
 // them from the address bar (the code is a credential), and hands them to
 // whisk.finishConnect from the signed-in session, which checks the state
 // names this person, trades the code server to server and stores the token.
-// Then it lands on the lane page the connect started from, which says how it
-// went (ConnectNotice).
+// Then it lands on the page the connect started from: Settings >
+// Integrations (the main shell toasts how it went, ConnectToast) or /welcome
+// (which says it in place, ConnectNotice).
 //
 // A return can land in a browser not signed in to codecast: the desktop app
 // opens the connect in the system browser. The return is then held in this
@@ -21,6 +22,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { WHISK_RETURN_KEY } from "../../../lib/connectorReturn";
 import { returnStash, type StashedReturn } from "../../../lib/returnStash";
 import { LANE_COPY, LANE_PATHS } from "../../../components/simple/lane";
+import { settingsPathFor } from "../../../lib/settingsSections";
 import { useLaneDocumentTitle } from "../../../components/simple/useLaneTitle";
 import "../../../components/simple/laneLook";
 import "../../../components/simple/simple.css";
@@ -44,7 +46,10 @@ function takeReturn(): StashedReturn | null {
   return stash.read("");
 }
 
-/** The lane page with the outcome on it. */
+/** Where a return with no verified page to go back to lands. */
+const FALLBACK_LANDING = settingsPathFor("integrations");
+
+/** The page with the outcome on it. */
 function landing(returnTo: string, ok: boolean, reason?: string): string {
   const query = new URLSearchParams(ok ? { [WHISK_RETURN_KEY]: "connected" } : { [WHISK_RETURN_KEY]: "error", ...(reason ? { reason } : {}) });
   return `${returnTo}?${query.toString()}`;
@@ -63,7 +68,7 @@ export default function WhiskReturn() {
     if (started.current) return;
     if (!pending) {
       started.current = true;
-      navigate(landing(LANE_PATHS.connections, false, "bad_state"), { replace: true });
+      navigate(landing(FALLBACK_LANDING, false, "bad_state"), { replace: true });
       return;
     }
     if (isLoading) return;
@@ -80,7 +85,7 @@ export default function WhiskReturn() {
     }
     void finish({ code: pending.code ?? undefined, state: pending.state ?? undefined, error: pending.error ?? undefined })
       .then((res) => navigate(landing(res.return_to, res.ok, res.reason), { replace: true }))
-      .catch(() => navigate(landing(LANE_PATHS.connections, false), { replace: true }))
+      .catch(() => navigate(landing(FALLBACK_LANDING, false), { replace: true }))
       .finally(() => stash.clear(pending));
   }, [pending, isLoading, isAuthenticated]);
 

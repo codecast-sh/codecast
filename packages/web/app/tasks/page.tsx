@@ -1,4 +1,7 @@
 "use client";
+import { useHostedMode, useModeWords } from "../../lib/surfaces";
+import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
+import { createTaskAndAdopt } from "../../lib/taskActions";
 import { useState, useCallback, useMemo } from "react";
 import { sharePageUrl } from "../../lib/utils";
 import { ShortId } from "../../components/ShortId";
@@ -41,6 +44,7 @@ import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../l
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { applyTaskDrop, closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undoActions";
+import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import {
   Plus,
@@ -573,6 +577,10 @@ export type TaskListScope = { projectIds: string[]; planIds: string[] };
 const RUNS_FEED_ARGS = { limit: 200 };
 
 export function TaskListContent({ projectId, scope }: { projectId?: string; scope?: TaskListScope } = {}) {
+  const modeWords = useModeWords();
+  const hostedMode = useHostedMode();
+  // An add row's writes name their workspace, as the create form's do.
+  const workspaceArgs = useWorkspaceArgs();
   const router = useRouter();
   const params = useParams();
   const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
@@ -1187,10 +1195,17 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   return (
     <>
     <GenericListView<TaskItem>
+          banner={
+            <FeatureUpsell
+              slug="tasks"
+              className="mx-4 mt-3"
+              reason="Let agents file and update their own tasks, so work they take on shows up on this board with its progress."
+            />
+          }
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
           getComposeRef={(t) => t.short_id}
-          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
+          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : modeWords.tasksPage}
           tabs={[
             // The three answers worth a click: everything, the open work, the
             // finished work. Anything finer is the Status filter in the bar
@@ -1313,8 +1328,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           getItemRoute={(t) => (projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`)}
           getSearchText={(t) => `${t.short_id} ${t.title}`}
           emptyIcon={<Circle className="w-8 h-8 opacity-30" />}
-          emptyMessage="No tasks found"
+          emptyMessage={hostedMode ? "No to-dos yet" : "No tasks found"}
           onCreate={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
+          // Hosted mode adds a to-do the way one writes a list: type, Enter.
+          quickAdd={hostedMode ? { placeholder: "New to-do", onAdd: (title) => void createTaskAndAdopt({ title, task_type: "task", status: "open", ...(workspaceArgs === "skip" ? {} : workspaceArgs), ...(projectId ? { project_id: projectId } : {}) }) } : undefined}
           hasMore={hasMore}
           onLoadMore={loadMore}
           paletteShortcuts={[

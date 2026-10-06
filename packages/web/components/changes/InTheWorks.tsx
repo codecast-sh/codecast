@@ -7,6 +7,7 @@
 import { foldShepherdState } from "@codecast/shared/contracts";
 import { useState, type ReactNode } from "react";
 import type { WorksRow } from "../../hooks/useSyncChanges";
+import { ImageGalleryProvider, useImageGallery } from "../ImageGallery";
 import { PrStatusChip } from "../PrStatusChip";
 import { areaFill, areaLabel, ink, STUCK_RULE } from "./areaColor";
 import type { AreaTouch } from "./editionModel";
@@ -50,9 +51,27 @@ function Capped<T>({ label, rows, cap, render }: { label: string; rows: readonly
 function Quote({ row, rule }: { row: Insight; rule: string }) {
   return (
     // The 2px rule is the quote mark. The pill sits at the end of the last line, never on a row of its own.
-    <div className="flex items-end gap-2 border-l-2 pl-2.5" style={{ borderColor: rule }}>
-      <p className="chg-ui line-clamp-2 min-w-0 flex-1 text-[12.5px] leading-[1.5] text-sol-text/60" title={row.headline}>{row.headline}</p>
-      <SessionPills story={{ conversation_ids: [String(row.conversation_id)] }} max={1} className="shrink-0 leading-[1.5]" />
+    <div className="border-l-2 pl-2.5" style={{ borderColor: rule }}>
+      <div className="flex items-end gap-2">
+        <p className="chg-ui line-clamp-2 min-w-0 flex-1 text-[12.5px] leading-[1.5] text-sol-text/60" title={row.headline}>{row.headline}</p>
+        <SessionPills story={{ conversation_ids: [String(row.conversation_id)] }} max={1} className="shrink-0 leading-[1.5]" />
+      </div>
+      {row.shots?.length ? <Shots shots={row.shots} /> : null}
+    </div>
+  );
+}
+
+/** The session's latest screenshots, a glance at the work before it lands; each opens in the lightbox. */
+function Shots({ shots }: { shots: readonly string[] }) {
+  const gallery = useImageGallery();
+  const images = shots.map((src) => ({ src, href: src }));
+  return (
+    <div className="mt-1.5 flex gap-1.5">
+      {shots.map((src, i) => (
+        <button key={src} type="button" onClick={() => gallery?.openList(images, i)} className="overflow-hidden rounded-[4px] border border-sol-border/30 hover:border-sol-border/70">
+          <img src={src} alt="" loading="lazy" className="h-14 w-24 object-cover object-top" />
+        </button>
+      ))}
     </div>
   );
 }
@@ -143,6 +162,7 @@ export function InTheWorks({ works, areas, areasLabel, live, viewed, activeAreas
   );
   const rule = bars && <div className="h-px bg-sol-border/15" />;
   return (
+    <ImageGalleryProvider>
     <div className="chg-works-inner space-y-4">
       {/* A past edition leads with the one group that is its own. */}
       {!live && bars}
@@ -159,5 +179,6 @@ export function InTheWorks({ works, areas, areasLabel, live, viewed, activeAreas
       {live && rule}
       {live && bars}
     </div>
+    </ImageGalleryProvider>
   );
 }

@@ -3,7 +3,7 @@
 // sessions that worked on it. The data and every rule about it are web's PR
 // page's (hooks/useSyncTimeline, usePRDetails, lib/prView); the diff and line
 // threads stay on GitHub, one tap away.
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
@@ -44,6 +44,7 @@ export default function PullRequestScreen() {
     [pr?.linked_session_ids, sessions],
   );
   const githubUrl = repoObjectGitHubUrl({ type: 'pr', repository, number } as any);
+  const [showPassed, setShowPassed] = useState(false);
 
   if (!pr) {
     return (
@@ -64,6 +65,10 @@ export default function PullRequestScreen() {
   const decision = reviewDecisionMeta(pr.review_decision);
   const checks = [...((pr.checks ?? []) as PrCheck[])].sort(compareChecks);
   const fold = foldChecks(pr.checks);
+  // Passing checks say nothing a count can't; they fold so the ones needing
+  // attention lead. When every check passed, the list stays folded too.
+  const passed = checks.filter((c) => checkOutcome(c) === 'passed');
+  const shown = showPassed ? checks : checks.filter((c) => checkOutcome(c) !== 'passed');
 
   return (
     <>
@@ -83,7 +88,7 @@ export default function PullRequestScreen() {
         <Section title={fold.total ? `Checks · ${fold.failed ? `${fold.failed} failed · ` : ''}${fold.passed}/${fold.total} passed` : 'Checks'}>
           {checks.length === 0 ? (
             details.loading ? <ActivityIndicator color={Theme.textMuted} /> : <RNText style={styles.dim}>No checks</RNText>
-          ) : checks.map((c, i) => {
+          ) : shown.map((c, i) => {
             const outcome = checkOutcome(c);
             const tint = color(CHECK_OUTCOME_ACCENT[outcome], Theme);
             return (
@@ -94,6 +99,13 @@ export default function PullRequestScreen() {
               </TouchableOpacity>
             );
           })}
+          {passed.length > 0 && !showPassed ? (
+            <TouchableOpacity style={styles.row} onPress={() => setShowPassed(true)}>
+              <FontAwesome name="check-circle" size={15} color={color(CHECK_OUTCOME_ACCENT.passed, Theme)} />
+              <RNText style={[styles.rowTitle, styles.dimRow]}>{passed.length} passed</RNText>
+              <FontAwesome name="angle-down" size={14} color={Theme.textMuted} />
+            </TouchableOpacity>
+          ) : null}
         </Section>
 
         {(reviews as any[] | undefined)?.length ? (
@@ -168,6 +180,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   review: { paddingVertical: 4 },
   reviewBody: { fontSize: 13, color: Theme.textMuted, marginBottom: Spacing.sm },
   dim: { fontSize: 13, color: Theme.textMuted },
+  dimRow: { color: Theme.textMuted },
   githubButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
     marginTop: Spacing.xl, paddingVertical: 12, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.border,

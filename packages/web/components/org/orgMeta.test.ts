@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changeLine, chipLine, SEVERITY_META, standingLineOf } from "./orgMeta";
+import { changeLine, chipLine, SEVERITY_META, standingLineOf, stateWords } from "./orgMeta";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
 
 // The founder reads a lead's colour from the lead's own declaration, not from
@@ -56,5 +56,18 @@ describe("changeLine and chipLine", () => {
     expect(SEVERITY_META.warn).toMatchObject({ dot: "ring", tag: false });
     expect(SEVERITY_META.info).toMatchObject({ dot: "none", tag: false });
     expect(SEVERITY_META.warn.color).not.toBe(SEVERITY_META.blocker.color);
+  });
+});
+
+// A card's sessions in words (org-staffing.md S40): what a person acts on
+// first, so a bar of colours is never the only reading.
+describe("stateWords", () => {
+  test("needs input leads, then working, then one more state up to the cap; nothing for an empty card", () => {
+    expect(stateWords({ needs_input: 4, working: 2, done: 9 })).toEqual(["4 need input", "2 working"]);
+    expect(stateWords({ needs_input: 1, dormant: 3 })).toEqual(["1 needs input", "3 dormant"]);
+    expect(stateWords({ done: 2, idle: 5 })).toEqual(["2 done", "5 idle"]);
+    expect(stateWords({ needs_input: 4, working: 2 }, 1)).toEqual(["4 need input"]);
+    expect(stateWords({ working: 3, dormant: 1, done: 2 }, 3)).toEqual(["3 working", "1 dormant", "2 done"]);
+    expect(stateWords({})).toEqual([]);
   });
 });

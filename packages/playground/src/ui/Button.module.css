@@ -1,0 +1,32 @@
+.btn, .icon {
+  --pop-n: 3px;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+  border: var(--line); color: var(--ink); background: var(--paper); white-space: nowrap;
+  box-shadow: var(--pop-n) var(--pop-n) 0 var(--ink);
+  transition: transform var(--t-press), box-shadow var(--t-press);
+  user-select: none;
+}
+.btn:hover:not(:disabled), .icon:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: calc(var(--pop-n) + 1px) calc(var(--pop-n) + 1px) 0 var(--ink);
+}
+.btn:active:not(:disabled), .icon:active:not(:disabled) {
+  transform: translate(var(--pop-n), var(--pop-n)); box-shadow: 0 0 0 var(--ink); transition-duration: 0s;
+}
+.btn:focus-visible, .icon:focus-visible { box-shadow: var(--focus); }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+
+.sm { --pop-n: 2px; font: 800 13px var(--ui); padding: 6px 12px; border-radius: var(--r-sm); }
+.md { font: 800 16px var(--ui); padding: 10px 18px; border-radius: var(--r-md); }
+.lg { --pop-n: 5px; font: 400 26px var(--display); height: 64px; padding: 0 34px; border: var(--line-heavy); border-radius: var(--r-lg); }
+
+.paper { background: var(--paper); }
+.make { background: var(--tomato); }
+.live { background: var(--mint); }
+.fork { background: var(--pool); }
+.ink { background: var(--ink); color: var(--butter); }
+/* Paper reads on tomato and pool only at display sizes (DESIGN 4.1). */
+.lg.make, .lg.fork { color: var(--paper); }
+
+.icon { --pop-n: 2px; border-radius: var(--r-sm); padding: 0; flex: none; }
+.icon svg { width: 18px; height: 18px; }

@@ -110,7 +110,7 @@ const recordSig = (r: InitiativeRow): string =>
 export const newInitiativeKey = (): string => `in_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
 /** The address of an initiative's page: its `in-N`, or its key while it is a stub. */
-export const initiativeHref = (r: Pick<InitiativeRow, "_id" | "short_id">): string => `/initiatives/${r.short_id || r._id}`;
+export const initiativeHref = (r: Pick<InitiativeRow, "_id" | "short_id">): string => `/goals/${r.short_id || r._id}`;
 
 /** The conversation an initiative opens beside (I1 "The page"): a role
  *  owner's standing session, or a person owner's own anchor in this workspace.

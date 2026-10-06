@@ -111,7 +111,7 @@ async function verifyInitiatives() {
     ...realNav,
     useRouter: () => ({ replace: (u: string) => { calls.push(`replace:${u}`); env.search = u.split("?")[1] ?? ""; }, push: (u: string) => calls.push(`push:${u}`) }),
     useSearchParams: () => new URLSearchParams(env.search),
-    usePathname: () => "/initiatives",
+    usePathname: () => "/goals",
   }));
   // The feed is the scope page's own engine (its mount test proves it); here it says which scope it was asked for.
   mock.module("../org/scope/ScopeFeed", () => ({ ScopeFeed: (props: any) => React.createElement("div", { "data-scope-feed": JSON.stringify(props.scope), "data-scope-feed-fill": props.fill ? "1" : "0" }, "feed") }));
@@ -160,7 +160,7 @@ async function verifyInitiatives() {
   assert.deepEqual(qa("[data-initiative-group='active'] [data-initiative-row]").map((r) => r.getAttribute("data-initiative-row")), ["in-1", "in-2"], "the sub initiative sits under its parent");
   assert.equal(q("[data-initiative-row='in-2']")!.getAttribute("data-initiative-nested"), "1");
   const first = q("[data-initiative-row='in-1']")!;
-  assert.equal(first.getAttribute("href"), "/initiatives/in-1");
+  assert.equal(first.getAttribute("href"), "/goals/in-1");
   assert.ok(first.querySelector("[data-face='role:growth']"), "a role owner shows its face");
   assert.equal(first.querySelector("[data-initiative-health]")!.getAttribute("data-initiative-health"), "at_risk");
   assert.equal(first.querySelector("[data-initiative-target]")!.getAttribute("data-initiative-target"), "ahead");
@@ -219,7 +219,7 @@ async function verifyInitiatives() {
   await type(q("[data-initiative-create] input"), "Ship the mobile app");
   await act(async () => { q<HTMLFormElement>("[data-initiative-create]")!.dispatchEvent(new (dom.window as any).Event("submit", { bubbles: true, cancelable: true })); });
   assert.ok(calls.includes("create:Ship the mobile app:team:user"), calls.join("\n"));
-  assert.ok(calls.some((c) => /^push:\/initiatives\/in_/.test(c)), "opens the new initiative by its key");
+  assert.ok(calls.some((c) => /^push:\/goals\/in_/.test(c)), "opens the new initiative by its key");
   assert.match(q("[data-initiative-group='proposed']")!.textContent!, /Ship the mobile app/);
 
   // ── a page whose owner is a role: its standing conversation, the initiative beside it ──
@@ -289,7 +289,7 @@ async function verifyInitiatives() {
   };
   assert.deepEqual(expectedScope.scope.project_ids, ["proj-org", "proj-inbox"], "each project once, the goal's own first");
   await click(q("[data-scope-tab='activity']"));
-  assert.ok(calls.includes("replace:/initiatives/in-1?tab=activity"), calls.join("\n"));
+  assert.ok(calls.includes("replace:/goals/in-1?tab=activity"), calls.join("\n"));
   await act(async () => root.render(page("in-1")));
   assert.equal(q("[data-initiative-panel]")!.getAttribute("data-scope-tab-active"), "activity");
   assert.equal(q("[data-scope-tab='activity']")!.getAttribute("aria-current"), "page");
@@ -298,7 +298,7 @@ async function verifyInitiatives() {
   assert.equal(qa("[data-initiative-section]").length, 0, "the record is one tab away");
   assert.ok(q("header [data-initiative-health]"), "the header stays");
   await click(q("[data-scope-tab='goal']"));
-  assert.equal(calls.at(-1), "replace:/initiatives/in-1", "the goal is the bare address");
+  assert.equal(calls.at(-1), "replace:/goals/in-1", "the goal is the bare address");
   await act(async () => root.render(page("in-1")));
   assert.equal(q("[data-scope-feed]"), null);
   assert.ok(q("[data-initiative-section='description']"));
@@ -390,7 +390,7 @@ async function verifyInitiatives() {
 
   // An id that names nothing here says so.
   await mount(page("in-999"));
-  assert.match(q("[data-initiative-missing]")!.textContent!, /No initiative in-999 in this workspace/);
+  assert.match(q("[data-initiative-missing]")!.textContent!, /No goal in-999 in this workspace/);
 
   // ── the phone: the conversation leads, the initiative is a sheet one tap away ──
   env.phone = true; env.wide = false;

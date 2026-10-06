@@ -600,9 +600,7 @@ export class TaskScheduler {
     if (!entry) return;
 
     // Check if tmux session still exists
-    try {
-      await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
-    } catch {
+    if ((await tmuxRunAsync(["has-session", "-t", entry.tmuxSession])).status !== 0) {
       this.log(`tmux session ${entry.tmuxSession} ended for task ${taskId}`);
       await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended", undefined, entry.runSessionUuid);
       this.cleanupTask(taskId);
@@ -613,7 +611,7 @@ export class TaskScheduler {
     const elapsed = Date.now() - entry.startedAt;
     if (elapsed > entry.maxRuntimeMs) {
       this.log(`Task ${taskId} exceeded max runtime (${entry.maxRuntimeMs}ms), killing`);
-      try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
+      await tmuxRunAsync(["kill-session", "-t", entry.tmuxSession]);
       await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
@@ -622,7 +620,7 @@ export class TaskScheduler {
     // Detect if the agent has exited: the pane's shell has nothing under it.
     if (await runPaneFinished(entry.tmuxSession)) {
       this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
-      try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
+      await tmuxRunAsync(["kill-session", "-t", entry.tmuxSession]);
       await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited", undefined, entry.runSessionUuid);
       this.cleanupTask(taskId);
     }
