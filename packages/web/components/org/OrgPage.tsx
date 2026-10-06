@@ -1168,7 +1168,6 @@ export function OrgPageInner() {
               focusTarget={graphFocus}
               onFocusChange={selectChange}
               ghostAnswers={ghostAnswers}
-              onEditAccept={(id, edits) => decideChange(id, "accept", edits, { revised_at: latestOrgRevisionAt(proposal?.changes ?? []) })}
               onEditRoleChange={setEditRoleChange}
             />
           ) : (
