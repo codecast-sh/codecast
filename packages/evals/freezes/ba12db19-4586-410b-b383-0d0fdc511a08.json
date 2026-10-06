@@ -1,0 +1,26 @@
+{
+  "name": "guidance quick-lookup",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:quick-lookup"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:quick-lookup",
+    "title": "guidance quick-lookup"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/quick-lookup.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "ba12db19-4586-410b-b383-0d0fdc511a08",
+  "createdAt": "2026-10-06T21:49:14.326Z"
+}

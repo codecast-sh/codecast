@@ -1,0 +1,69 @@
+/* Clayground tokens (DESIGN.md section 4). Components never use a raw hex. */
+:root {
+  /* core */
+  --butter: #ffd84a;
+  --butter-deep: #f7c21b;
+  --ink: #1d1631;
+  --ink-soft: #4a4160;
+  --ink-faint: rgba(29, 22, 49, 0.13);
+  --paper: #fffdf6;
+  --cream: #fff7e0;
+
+  /* meaning: each color means exactly one thing */
+  --tomato: #ff5b3a;
+  --tomato-soft: #ffd6cc;
+  --mint: #2fd6a0;
+  --pool: #3b7bff;
+  --bubble: #ff9fd2;
+  --sky: #9fe3ff;
+
+  --scrim: rgba(29, 22, 49, 0.45);
+
+  --display: "Bagel Fat One", "Gabarito", sans-serif;
+  --ui: "Gabarito", system-ui, sans-serif;
+  --mono: "Martian Mono", ui-monospace, monospace;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px;
+  --s6: 24px; --s8: 32px; --s11: 44px; --s15: 60px;
+
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 20px;
+  --r-xl: 24px;
+  --r-2xl: 34px;
+  --r-pill: 999px;
+
+  --line-thin: 2px solid var(--ink);
+  --line: 2.5px solid var(--ink);
+  --line-thick: 3px solid var(--ink);
+  --line-heavy: 4px solid var(--ink);
+
+  --pop-xs: 2px 2px 0 var(--ink);
+  --pop-sm: 3px 3px 0 var(--ink);
+  --pop: 5px 5px 0 var(--ink);
+  --pop-lg: 8px 8px 0 var(--ink);
+  --pop-xl: 12px 12px 0 var(--ink);
+
+  --focus: 0 0 0 3px var(--paper), 0 0 0 6px var(--ink);
+  --dot-grid: radial-gradient(var(--ink-faint) 1.6px, transparent 1.8px) 0 0 / 22px 22px;
+  --stripes: repeating-linear-gradient(-45deg, var(--butter) 0 10px, var(--butter-deep) 10px 20px);
+
+  --squish: cubic-bezier(.34, 1.56, .64, 1);
+  --glide: cubic-bezier(.2, .8, .2, 1);
+  --t-press: 120ms;
+  --t-quick: 180ms;
+  --t-move: 260ms;
+  --t-arrive: 360ms;
+
+  /* layers (4.5) */
+  --z-frame: 0;
+  --z-outline: 10;
+  --z-picking: 15;
+  --z-dock: 20;
+  --z-room: 30;
+  --z-capsule: 40;
+  --z-popover: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+}

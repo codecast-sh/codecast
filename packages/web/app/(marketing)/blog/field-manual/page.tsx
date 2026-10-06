@@ -46,8 +46,7 @@ export default function FieldManualHub() {
           Running one coding agent is a conversation. Running thirty is a job, and most of it is overhead: finding the
           session that is waiting on you, remembering which agent owns which area, carrying a half-finished thought from
           Claude to Codex, noticing that a check went red at two in the morning. Codecast exists to take that overhead
-          away. This manual walks through how, one piece at a time, using the real product, the real commands and their
-          real output.
+          away. This manual walks through how, one piece at a time, with the real product on every page.
         </P>
         <P>
           Part one covers the operating model: the org your agents report into, the inbox that sorts every session by

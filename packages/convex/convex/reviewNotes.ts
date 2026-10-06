@@ -23,6 +23,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { normalizeRepository } from "./lib/gitRefs";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
 import { buildReviewBatchPrompt, type ReviewVerdict } from "@codecast/shared/comments";
+import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 
 /** The notes one author wrote in one worktree, oldest first. */
 async function batchRows(
@@ -64,6 +65,8 @@ export const add = mutation({
     // Absent or 0 means the note is about the whole file.
     line_number: v.optional(v.number()),
     line_end: v.optional(v.number()),
+    // The noted lines' text and context (shared/comments/codeAnchor.ts).
+    anchor_lines: v.optional(codeAnchorValidator),
     content: v.string(),
     diff_identity: v.optional(v.string()),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
@@ -98,6 +101,7 @@ export const add = mutation({
       file_path: args.file_path,
       line_number: args.line_number || undefined,
       line_end: args.line_end || undefined,
+      anchor_lines: args.line_number ? args.anchor_lines : undefined,
       author_user_id: userId,
       author_kind: args.author_kind ?? ("user" as const),
       content,
@@ -315,15 +319,22 @@ export async function sendNotesToSession(
   });
 
   const now = Date.now();
-  await enqueuePendingMessage(ctx, conversation, userId, {
-    content,
-    // Idempotency is sent_at, not this key: a retry finds the batch already
-    // stamped and stops. The key only has to be distinct per delivery, so a
-    // second batch to the same session is not mistaken for the first.
-    client_id: `review-batch:${conversation._id}:${rows[0]?._id ?? opts.verdict ?? "review"}:${now}`,
-    human: true,
-  });
-  for (const row of rows) await ctx.db.patch(row._id, { sent_at: now });
+  // Idempotency is sent_at, not this key: a retry finds the batch already
+  // stamped and stops. The key only has to be distinct per delivery, so a
+  // second batch to the same session is not mistaken for the first. The
+  // delivered message keeps it, which is how a reply is matched to its batch
+  // (lib/reviewAnswered).
+  const clientId = `review-batch:${conversation._id}:${rows[0]?._id ?? opts.verdict ?? "review"}:${now}`;
+  await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true });
+  for (const row of rows) {
+    await ctx.db.patch(row._id, {
+      sent_at: now,
+      sent_to_conversation_id: conversation._id,
+      sent_client_id: clientId,
+      answered_message_id: undefined,
+      answered_at: undefined,
+    });
+  }
 
   return { sent: rows.length, conversation_id: conversation._id, short_id: conversation.short_id ?? undefined, content };
 }

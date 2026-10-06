@@ -77,7 +77,8 @@ export type RouteLayout =
   | "people"
   | "callPanel"
   | "settings"
-  | "simple";
+  | "welcome"
+  | "redirect";
 
 // -- Lazy component refs — import targets copied verbatim from App.tsx / TabContent.tsx so
 //    the manifest points at the exact same modules. --
@@ -110,17 +111,14 @@ const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-requ
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
+const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
+const BlogFieldManualChapter = lazy(() => import("@/app/(marketing)/blog/field-manual/ChapterPage"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
-// The simple lane
-const SimpleHome = lazy(() => import("@/app/simple/page"));
-const SimpleConversation = lazy(() => import("@/app/simple/c/[id]/page"));
-const SimpleApprovals = lazy(() => import("@/app/simple/approvals/page"));
-const SimpleRoutines = lazy(() => import("@/app/simple/routines/page"));
-const SimpleConnections = lazy(() => import("@/app/simple/connections/page"));
-const SimplePlan = lazy(() => import("@/app/simple/plan/page"));
+// The hosted assistant's front door, and the retired simple lane's addresses
 const Welcome = lazy(() => import("@/app/welcome/page"));
+const LaneRedirect = lazy(() => import("@/components/LaneRedirect"));
 
 // Auth
 const Login = lazy(() => import("@/app/login/page"));
@@ -160,6 +158,7 @@ const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
+const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
@@ -173,7 +172,8 @@ const Projects = lazy(() => import("@/app/projects/page"));
 const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 // Routines = our DOT-graph orchestration page at /routines (App import: @/app/workflows/page).
 // Workflows = Anthropic dynamic-workflow runs dashboard at /workflows (import: @/app/workflows/dashboard).
-const Routines = lazy(() => import("@/app/workflows/page"));
+// The entry redirects to /triggers in hosted mode, where Routines names it.
+const Routines = lazy(() => import("@/app/workflows/entry"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 // One run's page (the-line.md L10): the run panel, its gate as a decision card.
 const WorkflowRun = lazy(() => import("@/app/workflows/runs/[id]/page"));
@@ -200,7 +200,6 @@ const Ops = lazy(() => import("@/app/ops/page"));
 
 // Standalone shell pages (outside the shared shell — page-specific props / not tab-routable)
 const Explore = lazy(() => import("@/app/explore/page"));
-const Timeline = lazy(() => import("@/app/timeline/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 const Orchestration = lazy(() => import("@/app/orchestration/page"));
 const Roadmap = lazy(() => import("@/app/roadmap/page"));
@@ -303,6 +302,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/one-repository-twenty-checkouts", component: cast(BlogWorktrees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/fewer-bigger-jumps", component: cast(BlogJumps), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/field-manual", component: cast(BlogFieldManual), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/field-manual/:chapter", component: cast(BlogFieldManualChapter), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare", component: cast(CompareIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare/:slug", component: cast(Compare), layout: "marketing", guestOk: true, guestKind: "public" },
 
@@ -336,8 +337,8 @@ export const ROUTES: RouteEntry[] = [
   // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
   { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org", fullWidth: true },
   { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },
-  { path: "initiatives", component: cast(Initiatives), layout: "dashboardShell", tab: "/initiatives" },
-  { path: "initiatives/:id", component: cast(InitiativeDetail), layout: "dashboardShell", tab: "/initiatives/:id" },
+  { path: "goals", component: cast(Initiatives), layout: "dashboardShell", tab: "/goals" },
+  { path: "goals/:id", component: cast(InitiativeDetail), layout: "dashboardShell", tab: "/goals/:id" },
   // Chat is full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions and
   // /anchor), not via a DashboardLayout isOnXPage flag — so it carries no
   // fullWidth here. See the reverse-drift check in routes.manifest.test.ts.
@@ -363,6 +364,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "conversation/:id/diff", component: cast(ConversationDiff), layout: "dashboardShell", tab: "/conversation/:id/diff", fullWidth: true, guestOk: true, guestKind: "shell" },
   { path: "docs", component: cast(Docs), layout: "dashboardShell", tab: "/docs", fullWidth: true },
   { path: "capabilities", component: cast(Capabilities), layout: "dashboardShell", tab: "/capabilities", fullWidth: true },
+  { path: "agent-features", component: cast(AgentFeatures), layout: "dashboardShell", tab: "/agent-features" },
   { path: "files", component: cast(Vault), layout: "dashboardShell", tab: "/files", fullWidth: true },
   { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // permanent pre-rename alias for /files
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },
@@ -408,7 +410,6 @@ export const ROUTES: RouteEntry[] = [
   // `windows` is NOT in DashboardShell in App.tsx, yet TabContent CAN render it in
   // place — so it carries a `tab` here even though its layout is "standalone".
   { path: "explore", component: cast(Explore), layout: "standalone" },
-  { path: "timeline", component: cast(Timeline), layout: "standalone", tab: "/timeline" },
   { path: "windows", component: cast(Windows), layout: "standalone", tab: "/windows", fullWidth: true },
   { path: "orchestration", component: cast(Orchestration), layout: "standalone" },
   { path: "roadmap", component: cast(Roadmap), layout: "standalone" },
@@ -507,16 +508,24 @@ export const ROUTES: RouteEntry[] = [
   //    drawn on the sharer's own screen, over what the share captures. --
   { path: "share-cursors", component: cast(ShareCursors), layout: "palette" },
 
-  // -- The simple lane (SimpleShell; the hosted assistant, pl-840). Outside the
-  //    tab shell: lib/tabRoutes lists /simple and /welcome as NON_TAB prefixes.
-  //    /welcome is where someone new starts, so a signed-out visitor reads it. --
-  { path: "simple", component: cast(SimpleHome), layout: "simple" },
-  { path: "simple/c/:id", component: cast(SimpleConversation), layout: "simple" },
-  { path: "simple/approvals", component: cast(SimpleApprovals), layout: "simple" },
-  { path: "simple/routines", component: cast(SimpleRoutines), layout: "simple" },
-  { path: "simple/connections", component: cast(SimpleConnections), layout: "simple" },
-  { path: "simple/plan", component: cast(SimplePlan), layout: "simple" },
-  { path: "welcome", component: cast(Welcome), layout: "simple", guestOk: true, guestKind: "public" },
+  // -- The hosted assistant's front door (pl-840). Outside the tab shell:
+  //    lib/tabRoutes lists /welcome as a NON_TAB prefix. Someone new starts
+  //    here, so a signed-out visitor reads it. The simple lane folded into the
+  //    main app; /simple and below redirect to their main-app pages
+  //    (lib/laneRedirect.ts). --
+  { path: "welcome", component: cast(Welcome), layout: "welcome", guestOk: true, guestKind: "public" },
+  { path: "simple/*", component: cast(LaneRedirect), layout: "redirect" },
+  // The hosted page names as addresses (lib/laneRedirect.ts PAGE_ALIASES):
+  // /approvals is /questions, /plan and /mail are settings sections. Ahead of
+  // the :username catch-all, so a typed or shared name never reads as a
+  // profile 404.
+  { path: "approvals", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "plan", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "mail", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "integrations", component: cast(LaneRedirect), layout: "redirect" },
+  // Renamed pages' old addresses (lib/renamedPages.ts): /initiatives is /goals.
+  { path: "initiatives", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "initiatives/:id", component: cast(LaneRedirect), layout: "redirect" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },
