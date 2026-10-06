@@ -54,6 +54,10 @@ export interface SessionRef {
   title: string;
   author_name?: string;
   message_id?: string;
+  // The line run the session worked under and its role, when it had them.
+  run_id?: string;
+  role_id?: string;
+  role_handle?: string;
 }
 
 export interface BlameResolution {
@@ -366,7 +370,7 @@ async function resolveSessions(
 // the content-line list (for authoring-session attribution), then calls the
 // resolve endpoint. Degrades to no attribution on any failure — a blame must
 // stay a faithful git blame even when the network blinks.
-async function resolveFromParsed(
+export async function resolveFromParsed(
   parsed: ParsedBlame,
   absFilePath: string,
   config: { auth_token?: string; convex_url?: string },

@@ -7,6 +7,7 @@ import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import { tabTitle, tabSessionId, chatTabTitle, initiativeTabTitle, recordTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
+import { isHostedMode } from "../lib/surfaces";
 import { detachTab } from "../lib/openIntent";
 import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
 import { PageIcon } from "./RecentVisitRow";
@@ -39,6 +40,8 @@ export function TabBar() {
     (s) => s.tabs.map((t) => initiativeTabTitle(t.path, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id)) ?? "").join("\x1f"),
     // And for a task, project or run tab: its record's name, by key.
     (s) => s.tabs.map((t) => recordTabTitle(t.path, s) ?? "").join("\x1f"),
+    // And for a page named by a mode word (the triggers page): the mode.
+    isHostedMode,
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);

@@ -6,11 +6,11 @@
 
 import { useState } from "react";
 import type { RunResponse } from "@codecast/shared/contracts/evalsApi";
+import type { RunPanel, RunPanelContext } from "@platform/evals/react";
 import { useEvalsResource } from "../../lib/evals/hooks";
 import { AgentTranscript } from "./AgentTranscript";
 import { CallPane } from "./CallPane";
 import { GuardLog } from "./GuardLog";
-import type { RunPanel, RunPanelContext } from "./host";
 import { RunFiles } from "./RunFiles";
 
 export type AnatomyTab = "calls" | "agent" | "guard" | "files";

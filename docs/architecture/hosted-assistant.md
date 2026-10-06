@@ -18,6 +18,103 @@ default Convex runtime, which is the only one our self-hosted deployment uses.
 Machines come back later for work that genuinely needs one (a browser, a
 shell): the personal computer, a separate phase.
 
+## Revised 2026-10-05: hosted mode inside codecast, and a platform core
+
+The founder's direction, which supersedes the separate lane described under
+"The simple lane" below:
+
+1. **A platform core.** Everything Averil and codecast can reasonably share
+   lives in `@platform`: the harness (`agent`), billing, design tokens
+   (`design`), and a new `assistant` package with the storage-free parts of
+   the assistant: plan types, wallet arithmetic, approval-rule matching, the
+   system prompt builder, and the Whisk mail and calendar tools and web tools
+   over an injected transport. Codecast's Convex code keeps only storage and
+   wiring. Averil adopts the core on its own schedule.
+2. **No separate shell.** Codecast itself gains a hosted, minimal mode: the
+   same power dashboard (inbox, conversations, tasks, docs, routines,
+   questions, pages, teams) for general-purpose work, with our inference as
+   the default and developer-only surfaces hidden. It is the existing Minimal
+   style and Simple view taken further, not a different product. The
+   `/simple` routes redirect into the main app and the lane's duplicated
+   components (its own transcript, conversation row, shell) are retired;
+   the parts worth keeping (step wording, plan page, connections copy,
+   onboarding) move into the main app.
+3. **Packaged end to end, and funnelled.** Codecast.sh routes a
+   non-developer from the marketing page through `/welcome` (sign in, connect
+   mail and calendar through Whisk, first useful result) into the main app
+   in hosted mode. A signed-in person with no machine is offered the hosted
+   assistant instead of only "install the CLI".
+
+### The mode
+
+- One preference, `client_state.ui.lane` (already exists; one home): `"simple"`
+  means hosted mode, anything else the developer default. `/welcome` sets
+  it; settings and the command palette switch it.
+- One central registry of developer-only surfaces (`lib/surfaces.ts` or
+  similar, one `useSurface(name)` hook) consulted by every gated place:
+  sidebar rows (changes, projects, repo, files, line, ops, windows), shell
+  banners (setup prompt, CLI offline, tmux missing, device setup, resource
+  pressure), the terminal dock and split, diff layouts, PR, worktree and git
+  chips, machine chips, model and effort pickers, the settings "Machines"
+  group, and the install-CLI empty state. No scattered `if (lane)` checks.
+- Hosted mode implies the Minimal style and Simple view, condensed
+  transcript density, and general-purpose words where the developer words
+  would confuse ("conversation", not "session"; "assistant", not "agent").
+- The hosted assistant is a pickable agent everywhere (a picker list that
+  includes it, separate from the daemon's local-only registry), allowed as a
+  pin, and the default agent in hosted mode through a default-agent
+  preference that replaces today's hard-coded `"claude_code"` defaults.
+  When the agent is hosted, compose skips device, cloud placement, project
+  and model pickers.
+- Plan and usage become a Settings section in the Account group, with a
+  quiet usage meter in the shell; mail and calendar through Whisk become a
+  row on the Integrations page; approvals are the existing questions page
+  and inline decision cards; routines are the existing triggers.
+- Mobile follows the same mode in its existing tabs rather than a separate
+  route group.
+
+### The fold (built 2026-10-06)
+
+The web lane is retired; hosted mode is the main app.
+
+- **Plan and usage.** Settings > Plan (`app/settings/plan/page.tsx`, section
+  `plan` in `lib/settingsSections.ts`) is built from the lane's plan rules
+  and hooks (`usePlanFigures`, `useBilling`, `useBillingReturn`).
+  `BILLING_RETURN.path` is `/settings/plan`, so Stripe returns open the modal
+  on Plan with `?billing=` carried over. In hosted mode the sidebar's foot
+  shows a quiet meter (`components/plan/UsageMeter.tsx ShellUsageMeter`,
+  reading `usePlanMeter`; its wallet feeder runs only in the sync host window).
+- **Mail and calendar.** Integrations leads with an "Assistant" section
+  holding the "Mail and calendar (Whisk)" row
+  (`components/integrations/WhiskCard.tsx`, on `useLaneMail`).
+  `WHISK_RETURN_PATHS[0]` is `/settings/integrations`; `/welcome` and
+  `/inbox` stay, and `/simple/connections` stays for links already out
+  there (the phone's Connect opens `/settings/integrations`).
+- **Transcript.** The step wording moved to `@platform/assistant/steps`
+  (`stepText`, `visibleSteps`, `stepCount`). A step says how it came out
+  (`stepOutcome`: done, pending, declined, not run, failed), read through
+  `@platform/agent/outcome`'s `toolResultOutcome`, which is built from the
+  same builders the run writes its refusals with, so rewording one keeps the
+  receipts right. A hosted conversation's condensed receipt says its steps
+  in those words (`lib/hostedReceipt.ts`, wired in `CondensedToolsGroup`).
+  Approvals are the existing decision cards, and their question is the
+  step's own words (`stepAsk`: "Update a note?"), so the card and the receipt
+  name an action one way. A hosted conversation never shows machine status:
+  no Disconnected pill (`sessionDisconnected`), no "Session idle" line and no
+  unresponsive banner (`sessionLooksAbandoned`).
+- **Plan wording.** Dollars are only money the person pays (plan prices, the
+  top-up buttons). Work is a share of their month (`lane.ts monthShare`):
+  the meter, the ledger, extra credit, history, and a top-up's note ("About
+  half a month on Plus"). A plan's allowance reads as a multiple of Free's.
+- **Routes.** `/simple/*` is one redirect route (`components/LaneRedirect.tsx`,
+  rule in `lib/laneRedirect.ts`): home to `/inbox`, a conversation to
+  `/conversation/:id`, approvals to `/questions`, routines to `/triggers`,
+  connections and plan to their settings sections, query and fragment kept.
+  `/simple` stays a NON_TAB prefix so the router, not a tab, runs it.
+  `/welcome` lands on the main app's pages.
+- **The phone** has no lane of its own either: hosted mode lives in its
+  tabs ("How hosted mode is wired on the phone" below).
+
 ## Mail and calendar go through Whisk
 
 Decided 2026-10-05, built the same day. Codecast never holds Gmail or
@@ -91,7 +188,7 @@ routes) are edited only by the stage named here.
 | pi cost | `packages/cli/src/parser.ts` | Read pi's per-message `usage.cost` into `usage_totals`. |
 | Simple lane (web) | `packages/web/src/layouts/SimpleShell.tsx`, `packages/web/app/simple/**`, `packages/web/components/simple/**`, route manifest entries | Its own layout, not DashboardLayout. Reads the store. |
 | Onboarding | `packages/web/app/welcome/**` | Three screens: sign in, connect, first useful thing. |
-| Simple lane (mobile) | `packages/mobile/app/(simple)/**` | Same surfaces, phone first. |
+| Hosted mode (mobile) | `packages/mobile/components/hosted/**`, the tabs, `app/session/[id].tsx` | The same mode in the phone's tabs. |
 
 ## Data model
 
@@ -290,17 +387,26 @@ On a deployment that cannot reach Whisk (`whiskConfigured()` is false) no
 mail or calendar tool is offered and the note says they are not available
 there, rather than offering a connect flow that cannot work.
 
+The mail, calendar and web tools, the Whisk transport, the approval rules,
+the system prompt and the wallet arithmetic live in `@platform/assistant`
+(`~/src/platform/packages/assistant`, its README maps the modules); the file
+names below are its `src/`. Codecast keeps storage and wiring:
+`tools/web.ts` binds the web tools to `lib/publicFetch` and `lib/anthropic`,
+`tools/index.ts` joins every tool's Always allow narrowing into
+`ALLOW_SCOPES`, `turns.ts` binds `withRules` and `systemPrompt` to it, and
+`lib/wallet.ts` binds `walletRules` to `PLAN_CATALOG`.
+
 - **Mail and calendar seam.** The mail tools (`mail.ts`) are written against
   a `Mailbox` and the calendar tools (`calendar.ts`) against a `Calendar`:
   the few thread and event verbs any engine offers. The tool definitions,
   their wording, their risk and the gate rules live there and do not depend
-  on the engine. `whisk.ts` (`whiskMailbox`, `whiskCalendar`) is the engine:
+  on the engine. `whiskEngine.ts` (`whiskMailbox`, `whiskCalendar`) is the engine:
   each verb is a Whisk function the `whisk` CLI calls (`search:runFullSearch`,
   `sync:threadsByIds`, `sync:threadMessages`, `sync:listLabels`,
   `sync:getAccount`, `calendar/read:listCalendars`, `calendar/read:listEvents`,
   `ai/actions:draftReply`, `ai/actions:summarizeThread`, and `dispatch:dispatch`
   with `saveDraft`, `sendMessage`, `applyThreadOps`, `createEvent`,
-  `updateEvent`). Tests use `whisk.testkit.ts fakeWhisk`.
+  `updateEvent`). Tests use `fakeWhisk` (`@platform/assistant/testkit`).
 - **Mail** (`mail.ts` over Whisk): what a connection allows is
   `whiskAbilities(scopes)`, the rule the Connections screen shows too.
   `search_mail`, `read_thread` and `summarize_thread` need `mail.read`;
@@ -477,6 +583,8 @@ charge.refunded and charge.dispute.created.
 
 ## The simple lane
 
+Superseded on 2026-10-05 by "Revised 2026-10-05" above: the lane folds into codecast's own shell as hosted mode. Kept for the history of what was built.
+
 A person in the simple lane never sees a repo, a terminal, a device, a model
 picker or the word "session". Same store, same data, different shell.
 
@@ -501,7 +609,7 @@ How the web lane is wired (`packages/web/components/simple/`):
   with `windowEffects={false}`: the same feeders and dispatch as the full
   app, without call rings, chat toasts or mods. `/simple` and `/welcome` are
   NON_TAB prefixes. `DashboardShell` sends `/inbox` to `/simple` when the
-  lane is set. `lanePref.ts` holds `laneOf`, `LANE_HOME`, `writeLane` and
+  lane is set. `lanePref.ts` holds `laneOf`, `writeLane` and
   the settings switch's words, with no router in it, so the full app and
   the phone use them without loading the lane; `useSetLane.ts` is the web
   gesture that writes the preference and moves the view.
@@ -519,16 +627,15 @@ How the web lane is wired (`packages/web/components/simple/`):
   /welcome) carries the family. Shape is the family's two radii:
   `--sl-radius-sm` is `--pd-radius` (buttons, tabs, menu rows, drafts) and
   `--sl-radius` is `--pd-radius-lg` (cards, lists, sheets, the composer,
-  bubbles); the phone reads the same two as `LANE_RADIUS_SM` and
-  `LANE_RADIUS`. Fully round is kept for what is round by nature or a chip
+  bubbles). Fully round is kept for what is round by nature or a chip
   in Whisk too: the ring mark, dots, the send and icon buttons, idea chips,
   pills, badges, notes and the meter. Vermilion is spent
   on what needs the person and on the yes; the assistant at work moves in
   quiet ink; what the assistant writes and every draft are set in
   Newsreader, like a letter in Whisk.
   Motion is the family's one curve: `--sl-ease` is `--pd-t-ease`, and the
-  phone draws on `LANE_EASE` (`Easing.bezier(...MOTION_CURVE)`, the same
-  control points as numbers). /welcome names its three deliberate
+  phone's hosted parts draw on `HOSTED_EASE` (`Easing.bezier(...MOTION_CURVE)`,
+  the same control points as numbers). /welcome names its three deliberate
   departures once at its top (`--wl-leave`, `--wl-spring`, `--wl-glide`),
   on `:root` because view transition pseudo-elements read only what html
   carries.
@@ -578,77 +685,49 @@ How the web lane is wired (`packages/web/components/simple/`):
   the opener (the web leaves for the page; the phone opens it in the
   browser), and `usePlanFigures` is the screen's figures for both.
 
-How the phone lane is wired (`packages/mobile`):
+How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
 
-- **Routes.** `app/(simple)/simple/(lane)` holds the five tabs at the web's
-  own addresses (`/simple`, `/simple/approvals`, ...), and
-  `app/(simple)/simple/c/[id]` a conversation above them, so `LANE_PATHS`
-  and `conversationPath` from `lane.ts` route on the phone unchanged, and
-  `lib/linkRoutes.ts` opens any `/simple` link in the app.
-- **Which lane.** `components/simple/laneRoute.ts useLaneLanding`, mounted
-  in the root AuthGate, sends a lane person to `/simple` when they arrive
-  at the tabs (at launch or coming back to them). Only a gesture on this
-  phone (`moveToLane`: Settings, Appearance, or the lane's "Open the full
-  app") moves the view at once; a flip made on another device never pulls
-  the phone out of what it is showing. After sign-in, `landAfterSignIn`
-  lands on the home of the person's lane and puts the link they came from
-  on top of it.
-- **From outside.** A push, a deep link and a tapped codecast link all
-  open through `lib/laneOpen.ts laneRouteFor`: for a lane person a
-  conversation opens in the lane (unless its row is known to be a coding
-  session) and a decision opens in its lane conversation, or on the lane's
-  approvals while the decision is not in the store yet. A push tapped on a
-  killed app, or a link that launched it, arrives before the cache is read
-  back, so each entry waits for `clientStateInitialized` (`laneKnown`, at
-  most 3 seconds) before choosing. Links are routed synchronously, so a
-  conversation or decision link stops at `app/open/[...to]`, which waits
-  and then replaces itself with the right screen.
-- **Shared rules and words.** The lane's sections, row sublines, draft and
-  step folds, home's ideas and counts, and each page's rules live in
-  `lane.ts` (`LANE_SECTIONS`, `conversationSubline`, `draftIsLong`,
-  `visibleSteps`, `homeIdeas`, `homeView`, `planCard`, `meterLegend`,
-  `topupLabel`, `workedTimes`, `connectionControls`), every fixed line the
-  pages say is `LANE_COPY`, and a conversation screen's model is
-  `useLane.ts useLaneConversation(id, onRealId)`; each platform keeps its
-  scrolling and views. The answer controls' own words are
-  `lib/decisionAnswer.ts ANSWER_WORDS`, shared with the web's
-  `DecisionAnswerControls`. A pick-several, ranking or form approval answers in
-  place in its conversation through `components/decisions/AnswerControls`
-  (shared with the decision screen, drawn in the lane's colours, Feather
-  icons and shrinking press, without option numbers) and
-  elsewhere points to the conversation, as on the web.
-- **Store.** `StoreSyncBridge` is mounted once in the root AuthGate, so both
-  lanes read one replica. Every screen reads the web lane's own hooks and
-  model (`useLane.ts`, `lane.ts`, `startConversation.ts`, `useLaneMail.ts`,
-  `connectionWords.ts`, `usePlanFigures.ts`, `billing.ts`); only the views
-  are native.
-- **Look.** The phone reads the family look from `@platform/design`, as the
-  web lane and Whisk do. `components/simple/laneTheme.ts laneColors(scheme)`
-  takes `PALETTE.light` or `PALETTE.dark` (the app's appearance switch) and
-  computes every colour from web `components/simple/laneTokens.ts
-  LANE_TOKENS`, the one table of the lane's colour names over the palette
-  (`accent`, `accentText`, `wash`, `quiet`, `lamp` and the rest, each a
-  palette colour or a mix of two). simple.css declares the same table as
-  `--sl-*` properties, and `laneTokens.test.ts` fails when the two disagree
-  or a rule repeats a token's mix inline, so a new lane colour is one line
-  in the table plus its declaration. Its radii come from `SHAPE`. The
-  sheet is `constants/Theme.ts schemedStyles`, the per scheme form of
-  `themedStyles`. Instrument Sans (400, 500, 600), Newsreader (400, 500,
-  600, italic, medium italic) and Fragment Mono ship as static faces under
-  `assets/fonts`; the lane layout loads them (useFonts, so an update can
-  ship them) and provides the interface faces through
-  `constants/fonts.ts FaceContext`, which the Themed `Text` reads. LaneUI's
-  `Reading` provides the Newsreader faces to a subtree: what the assistant
-  says and every draft are set in it, bold and italic included. Titles,
-  the approval question, the meter headline and prices name
-  `LANE_READ_FACES` directly; counts are `LANE_MONO_FACE`; the wordmark is
-  `LANE_BRAND_FACE` beside the accent ring mark.
-- **Whisk and Stripe.** A mail connect must finish in a signed-in browser
-  session (Whisk returns to /connect/whisk there), so Connect opens the web
-  Connections page in the browser; the phone's screen updates when the
-  connection lands. Open Whisk opens whisk.email.
-  Checkout and the portal open in the browser and return to the web plan
-  page.
+- **One mode, one registry.** The phone reads the web's own registry and
+  words (`lib/surfaces.ts`: `useSurface`, `useHostedMode`, `useModeWords`),
+  through the shared store, so a surface's rule is one line for both. The
+  Appearance switch writes `client_state.ui.lane` (`lanePref.writeLane`) and
+  nothing moves the view: the tabs change in place.
+- **Inbox.** The new conversation sheet starts on the default agent
+  (`useDefaultAgentType`; the hosted assistant in hosted mode or with no
+  machine) and lists the hosted assistant among the pinned agents
+  (`usePinnedPickerOptions`). With the assistant picked it is just the first
+  ask (`components/hosted/AssistantStart.tsx`): the intro, starters and a
+  composer, sent through `startHostedConversation`, with no machine, folder,
+  model or context rows; where only the assistant can answer, the agent row
+  is not offered. An empty inbox in hosted mode shows the same intro
+  (`empty.installCli`), and project chips follow `gitChips`.
+- **A hosted conversation** opens at `/session/<id>` like any other; the
+  route renders `components/hosted/HostedConversation.tsx` when the row is
+  hosted (`useIsHostedConversation`, asked by the live id so a stub follows its
+  real row). It is the web's model (`useLane.ts useLaneConversation`): the
+  transcript with steps in `@platform/assistant/steps` wording, an approval
+  inline with its draft (`ApprovalCard`, the decision screen's
+  `AnswerControls` for a pick-several, ranking or form), and the reply box.
+  No machine, model or terminal chrome. Pushes and links open it directly;
+  nothing waits on the lane any more.
+- **Tasks** gains a routines segment, named by mode ("Triggers" or
+  "Routines"), listing every armed trigger with pause, open and delete
+  (`components/hosted/Routines.tsx`).
+- **Settings** has an Assistant group: Plan (`components/hosted/PlanPage.tsx`,
+  the web plan page's sections over `usePlanFigures`, `useBilling`, checkout
+  and portal in the browser) and Mail and calendar
+  (`components/hosted/MailPage.tsx`, `useLaneMail`; Connect opens the web's
+  `/settings/integrations`, where the signed-in session finishes it). Devices
+  follows `settings.machines`.
+- **Look.** Hosted parts are drawn in codecast's own palette and face:
+  `components/hosted/hostedTheme.ts` names each colour by meaning over
+  `constants/Theme` (action blue for the yes, orange for what waits on the
+  person). The assistant wears the codecast mark (`AgentLogoSvg`,
+  `@codecast/shared/render/codecastMark`, shared with the web's `Logo`).
+- **Old addresses.** `/simple/...` links go where the web sends them
+  (`lib/laneRedirect.ts`) and on to the phone's screen (`lib/linkRoutes.ts
+  PAGE_ROUTES`): home to the inbox, approvals to `/decisions`, routines to
+  the Tasks tab, plan and connections to their settings pages.
 
 How onboarding is wired (`packages/web/app/welcome/`):
 
@@ -659,8 +738,13 @@ How onboarding is wired (`packages/web/app/welcome/`):
   move between screens is one view transition (`page.tsx moveTo`), skipped
   for reduced motion or a hidden tab.
 - **Sign in** is `AuthProviderButtons` with the lane's own classes and words
-  (`classFor`, `labelFor`), Google first when `auth.signInProviders` offers
-  it, and email through `/signup` or `/login` with `return_to=/welcome`.
+  (`classFor`, `labelFor`), ordered for someone who does not write code:
+  Google first when `auth.signInProviders` offers it; without it Apple and a
+  "Continue with email" button lead and GitHub sits quietly last. Email never
+  leaves the page: `/welcome?email=signup|signin` shows `EmailStep.tsx`, the
+  form in /welcome's look, running the same flow as `/signup` and `/login`
+  (`hooks/useEmailAuth.ts`: `useEmailAuth` and, for a mailed code,
+  `useEmailCode`).
 - **The promise** follows what the deployment can do:
   `components/simple/assistantPromise.ts` words the sign in line and the
   entry links once, and promises mail and calendar only where
@@ -699,10 +783,38 @@ How onboarding is wired (`packages/web/app/welcome/`):
   connected. Signed in, the page mounts `LaneSync` (the lane's store wiring) so
   these writes go out. Acting on any screen (connect, Not now, an ask)
   writes `ui.lane = "simple"` (`lanePref.writeLane`).
-- **Ways in.** The signup page and the marketing home page each carry one
-  "Don't write code?" line to /welcome. Both import the lane's paths from
-  `components/simple/lanePaths.ts`, which imports nothing, so the public
-  pages never load the store.
+- **Ways in.** The marketing home page carries one link to /welcome twice:
+  as a quiet line in its first screen, under the install command
+  (`compact`, location `landing_top`), and as a pill under its developer
+  buttons (`landing_hero`). Signup carries the pill above its form. All are
+  `components/simple/AssistantWayIn.tsx`: "Don't write code?" and
+  `assistantInvite`. It imports only `lanePaths.ts`, `assistantPromise.ts`
+  and analytics, so the public pages never load the store. A click sends
+  `assistant_path_clicked` with its location.
+- **First run in the inbox.** `lib/firstRun.ts firstRun` is the one reading
+  of it: "yes" when no CLI has ever checked in (`cliNeverConnected`) and the
+  person has no conversation. A composer's unsent stub is not a
+  conversation, and an empty cold cache is "unknown" until the sessions
+  floor has been cut (`inboxFloorStamped`), so someone who only uses the
+  assistant never sees the card on a new device. On "yes" the home shows
+  `EmptyState variant="onboarding"` whichever home is chosen (board or
+  feed). In developer mode the card offers two starts, worded so each reader
+  knows which is theirs: "Ask the Codecast assistant", which opens the
+  composer on the hosted assistant (`openCompose(undefined, { agentType })`,
+  the `ComposeContext.agentType` a caller passes to start on a given agent),
+  and "Connect your coding tools", marked for developers (the install
+  command, or one click in the desktop app). The choice sends
+  `first_run_start_chosen`. In hosted mode only the assistant start shows
+  (surface `empty.installCli`).
+- **A first message to the assistant joins hosted mode.** When the first
+  conversation of someone with no machine is created on the hosted assistant
+  (`ComposeView`'s create, `joinHostedOnFirstRun`), `ui.lane` becomes
+  "simple", so the inbox card and /welcome end in the same product. Opening
+  the composer and closing it changes nothing.
+- **Nothing covers the first run or the first reply.** The device permissions
+  dialog and the inbox tour wait until `firstRun` is "no", so the dialog
+  opens once a developer-mode person has a conversation, and neither opens
+  unasked in hosted mode (surfaces `banner.deviceSetup`, `tour.agentInbox`).
 
 ## Working in this tree
 

@@ -33,6 +33,8 @@ import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskAc
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
 import { showActionSheet } from "@/lib/actionSheet";
+import { useModeWords } from "@codecast/web/lib/surfaces";
+import { RoutineList } from "@/components/hosted/Routines";
 
 const ICON_EMOJI: Record<string, string> = {
   rocket: "🚀", flame: "🔥", zap: "⚡", star: "⭐", diamond: "💎", crown: "👑",
@@ -40,7 +42,8 @@ const ICON_EMOJI: Record<string, string> = {
   sun: "☀️", moon: "🌙", cloud: "☁️", bolt: "🔩", atom: "⚛️", dna: "🧬",
 };
 
-type Segment = "tasks" | "plans" | "docs";
+type Segment = "tasks" | "plans" | "docs" | "routines";
+const SEGMENTS: Segment[] = ["tasks", "plans", "docs", "routines"];
 type SourceFilter = "" | "human" | "bot";
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type GroupBy = "status" | "assignee" | "priority" | "plan";
@@ -195,6 +198,9 @@ export default function TasksScreen() {
   // Search folds behind its header icon; it stays open while it holds text.
   const [searchOpen, setSearchOpen] = useState(false);
   const router = useRouter();
+  // Routines are the triggers, named by mode (lib/surfaces MODE_WORDS).
+  const words = useModeWords();
+  const segmentLabel = (s: Segment) => (s === "tasks" ? "Tasks" : s === "plans" ? "Plans" : s === "docs" ? "Docs" : words.triggers);
 
   const { teamId, activeTeam, validTeams } = useActiveTeam();
   const switchTeam = useSwitchActiveTeam();
@@ -598,10 +604,10 @@ export default function TasksScreen() {
       <RNView style={styles.header}>
         <RNView style={styles.headerLeft}>
           <RNText style={styles.headerTitle}>
-            {segment === "tasks" ? "Tasks" : segment === "plans" ? "Plans" : "Docs"}
+            {segmentLabel(segment)}
           </RNText>
           {(() => {
-            const count = segment === "tasks" ? activeTaskCount : segment === "plans" ? activePlanCount : docCount;
+            const count = segment === "tasks" ? activeTaskCount : segment === "plans" ? activePlanCount : segment === "docs" ? docCount : 0;
             return count > 0 ? (
               <RNView style={styles.countBadge}>
                 <RNText style={styles.countBadgeText}>{count}</RNText>
@@ -621,6 +627,7 @@ export default function TasksScreen() {
               <FontAwesome name="search" size={15} color={Theme.textMuted} />
             </TouchableOpacity>
           )}
+          {segment !== "routines" && (
           <TouchableOpacity
             style={[styles.filterBtn, activeFilters.length > 0 && styles.filterBtnActive]}
             onPress={openFilterMenu}
@@ -632,6 +639,7 @@ export default function TasksScreen() {
               <RNText style={styles.filterBtnCount}>{activeFilters.length}</RNText>
             )}
           </TouchableOpacity>
+          )}
           <TouchableOpacity style={styles.workspaceBtn} onPress={showWorkspacePicker} activeOpacity={0.7}>
             {teamId && activeTeam ? (
               <>
@@ -653,7 +661,7 @@ export default function TasksScreen() {
 
       <RNView style={styles.segmentBar}>
         <RNView style={styles.segmentContainer}>
-          {(["tasks", "plans", "docs"] as Segment[]).map((s) => (
+          {SEGMENTS.map((s) => (
             <TouchableOpacity
               key={s}
               style={[styles.segmentBtn, segment === s && styles.segmentBtnActive]}
@@ -661,7 +669,7 @@ export default function TasksScreen() {
               activeOpacity={0.7}
             >
               <RNText style={[styles.segmentText, segment === s && styles.segmentTextActive]}>
-                {s === "tasks" ? "Tasks" : s === "plans" ? "Plans" : "Docs"}
+                {segmentLabel(s)}
               </RNText>
             </TouchableOpacity>
           ))}
@@ -772,6 +780,10 @@ export default function TasksScreen() {
               PLAN_STATUS_ORDER.map((s) => renderPlanSection(s))
             )}
           </>
+        ) : segment === "routines" ? (
+          <RNView style={styles.routines}>
+            <RoutineList />
+          </RNView>
         ) : (
           <>
             {!docsReady && docsList.length === 0 ? (
@@ -990,6 +1002,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   listContent: {
     paddingBottom: Spacing.xl,
+  },
+  routines: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
   },
   sectionHeader: {
     flexDirection: "row",

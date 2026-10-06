@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   AGENT_SWITCH_NOTICE_PREFIX,
-  agentDisplayName,
   formatAgentSwitchNotice,
   isAgentSwitchNotice,
   isModelSwitchCommandName,
@@ -10,6 +9,7 @@ import {
   modelSwitchStdoutLabel,
   parseAgentSwitchNotice,
 } from "./agentSwitch";
+import { agentDisplayName } from "./agentClients";
 
 describe("agent switch notice", () => {
   test("names Claude and Codex from either spelling", () => {

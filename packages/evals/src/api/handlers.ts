@@ -1,13 +1,14 @@
 import { rmSync } from 'node:fs';
 
-import { matchEvalsRoute, searchRows, type BisectPlan, type BisectPlanRequest, type BisectStartRequest, type EvalsBridgeRequest, type EvalsBridgeResponse, type EvalsRouteKey } from '@codecast/shared/contracts/evalsApi';
+import { matchEvalsRoute, searchRows, type BisectPlan, type BisectPlanRequest, type BisectStartRequest, type EvalsBridgeRequest, type EvalsBridgeResponse, type EvalsRouteKey, type EvalsRoutes } from '@codecast/shared/contracts/evalsApi';
+import type { EvalsViewRouteKey } from '@platform/evals/contract';
+import { answer, BadRequest, createEvalsHandler, endpointRef, isViewRoute, need, NotFound, posInt, posNum, ranFreezes, rowById, type AnyRouteHandler, type RouteHandler } from '@platform/evals/query';
 
 import { REPO_ROOT, writeJsonAtomic } from '../paths';
 import { surfaceMeta } from '../registry';
 import { planFrom } from '../bisect/plan';
 import { startRefusal } from '../bisect/runner';
 import { bisectPaths, newBisectId, writePendingState } from '../bisect/state';
-import { answer, BadRequest, createEvalsHandler, endpointRef, isViewRoute, need, NotFound, posInt, posNum, ranFreezes, rowById, type AnyRouteHandler, type EvalsViewRouteKey, type RouteHandler } from '../core/query';
 import { bisectPlanArgs, bisectStartArgs, launchPath, runningBisect, stopBisect } from './bisects';
 import { OutsideRunFolder, runFile } from './files';
 import { BadSha, patchDetail } from './git';
@@ -16,7 +17,7 @@ import { codecastPolicy, codecastSources, rows } from './sources';
 import { evalsTool, hasTmux, launch, runTool } from './spawn';
 
 // The api child's dispatch (evals-ui.md section 3.4): the routes every
-// product shares are answered by core/query.ts over codecast's sources
+// product shares are answered by @platform/evals/query over codecast's sources
 // (sources.ts); the ones only codecast has (run files, kept patches, search,
 // starting and stopping bisects, the sim) are answered here first. Both read
 // the contract's one route table through matchEvalsRoute, so the daemon's
@@ -50,7 +51,7 @@ async function bisectRequest(body: unknown): Promise<BisectStartRequest> {
 
 type OwnRouteKey = Exclude<EvalsRouteKey, EvalsViewRouteKey>;
 
-const OWN: { [K in OwnRouteKey]: RouteHandler<K> } = {
+const OWN: { [K in OwnRouteKey]: RouteHandler<EvalsRoutes, K> } = {
   'GET /run/:id/file': async ({ params, query }) => {
     rowById(await rows(), params.id);
     try {

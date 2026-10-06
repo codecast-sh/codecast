@@ -9,6 +9,12 @@ describe("command menu action coverage", () => {
   test("session operations include agent switching, forks, rename and lifecycle actions", () => {
     expect(keys("session")).toEqual(expect.arrayContaining(["agent_switch", "agent_fork", "rename", "model", "session_pin", "session_favorite", "session_stash", "session_stash_hide", "session_defer", "session_dormant", "session_kill", "copy", "copylink", "forward", "newtab"]));
   });
+  test("a hosted assistant conversation offers no agent moves and no machine move", () => {
+    const hosted = keys("session", { ...session, agent_type: "codecast" });
+    for (const key of ["agent_switch", "agent_fork", "agent_handoff", "device"]) expect(hosted).not.toContain(key);
+    expect(hosted).toEqual(expect.arrayContaining(["rename", "session_pin", "session_favorite", "session_delete"]));
+    expect(keys("session")).toEqual(expect.arrayContaining(["agent_switch", "agent_fork", "agent_handoff", "device"]));
+  });
   test("foreign and unresolved sessions expose reading and sharing only", () => {
     for (const user of ["other", ""]) {
       expect(keys("session", session, user)).toEqual(["open", "newtab", "copy", "copylink", "forward"]);

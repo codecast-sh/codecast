@@ -1,0 +1,36 @@
+/* Codecast's own rules inside the Evals area: what codecast's host slots and
+   its Multiplayer sim draw there. The shared views style the default slots'
+   classes (.ev-pair-*, .ev-chip); codecast's slots draw the app's own
+   components, so their rules live here. Colour only through --ev-* tokens. */
+
+/* A flip's ExamplePair (ChangeCardView) tints Before red and After green,
+   which reads a regression backwards. Inside the Evals area each side wears
+   its outcome instead: the passing reply cyan, the failing one magenta, and
+   After keeps the tinted tile so the newer reply still reads as the result. */
+[data-ev-flip] .cc-side .cc-side-label { color: var(--ev-magenta); }
+[data-ev-flip="broke"] .cc-before .cc-side-label,
+[data-ev-flip="fixed"] .cc-after .cc-side-label { color: var(--ev-cyan); }
+[data-ev-flip="fixed"] .cc-after { border-color: color-mix(in srgb, var(--ev-cyan) 45%, transparent); background: color-mix(in srgb, var(--ev-cyan) 9%, transparent); }
+[data-ev-flip="broke"] .cc-after { border-color: color-mix(in srgb, var(--ev-magenta) 45%, transparent); background: color-mix(in srgb, var(--ev-magenta) 8%, transparent); }
+
+/* A bisect tile's session pill (EntityIdPill): its name gives way first. */
+.ev-b-tile-session .entity-ref > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A bisect's evidence card: the change card's example on the area's card. */
+.ev-b-examples .cc-example { background: var(--ev-card); border: 1px solid var(--ev-rule); border-radius: 8px; padding: 10px 12px; }
+
+/* The wall foot's latest Multiplayer sim session (wallSim.tsx). */
+.ev-wall-simline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--ev-text);
+  background: var(--ev-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 6px;
+}
+.ev-wall-simline:hover { border-color: var(--ev-border); }
+.ev-wall-simline > span { white-space: nowrap; }
+.ev-wall-simline > .ev-wall-simline-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

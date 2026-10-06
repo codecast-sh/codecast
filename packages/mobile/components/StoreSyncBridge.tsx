@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { useSyncCore } from '@codecast/web/hooks/useSyncCore';
+import { usePendingMessageCoverage } from '@codecast/web/hooks/usePendingMessageCoverage';
 import { useSessionCommandResults } from '@codecast/web/hooks/useSessionCommands';
 import { useSyncDevices } from '@codecast/web/hooks/useSyncDevices';
 import { useRecentProjectsFeed } from '@codecast/web/hooks/useRecentProjectsFeed';
@@ -47,6 +48,12 @@ export function StoreSyncBridge() {
 
 function StoreSyncBridgeInner() {
   useSyncCore('mobile');
+  // Settles the sends the server holds and fails the ones it refused, every
+  // minute and on wake, as web's DashboardSyncEffects does for each window.
+  // A send the server consumes without a transcript row (an approval's answer
+  // in a hosted conversation) has no echo to retire its bubble, so without
+  // this pass its conversation would read as working for good.
+  usePendingMessageCoverage();
   // Settles the daemon commands this phone asked for (restart, device move),
   // as web's DashboardLayout does for each window.
   useSessionCommandResults();

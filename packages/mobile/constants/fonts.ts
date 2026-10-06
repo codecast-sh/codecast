@@ -21,8 +21,7 @@ export type FaceSet = { readonly [K in keyof typeof Mono]: string };
 
 /**
  * The typeface a subtree sets its unstyled text in. Absent, it is Mono. A
- * surface with its own voice (the assistant lane, app/(simple)) provides its
- * faces here, so every Themed Text under it, the markdown renderer's nested
+ * surface with its own voice provides its faces here, so every Themed Text under it, the markdown renderer's nested
  * bold included, resolves weights into that face. A style that names a
  * family keeps it: an explicit mono family (a code block) stays mono.
  */
@@ -32,8 +31,8 @@ export const FaceContext = createContext<FaceSet | null>(null);
  * The colour a subtree sets its uncoloured text in. Absent, it is the app
  * palette's text colour. Every Themed Text paints a colour, so a nested one
  * (a plain run inside a markdown paragraph) would repaint the app's colour
- * over the paragraph's; a surface with its own palette (the assistant lane)
- * names its ink here so nested runs keep it.
+ * over the paragraph's; a surface with its own palette names its ink here so
+ * nested runs keep it.
  */
 export const InkContext = createContext<string | null>(null);
 

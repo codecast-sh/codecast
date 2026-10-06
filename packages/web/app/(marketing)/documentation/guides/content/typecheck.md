@@ -2,6 +2,11 @@ A typecheck is a function of the tree, not of the session that asks for it. The 
 
 `cast check` replaces the fresh `tsc` with a question to a process that already holds the answer. One `tsc --watch` per tree and project keeps the program in memory and checks only the files that changed. Any number of sessions can ask, and ten asks at once cost the same as one.
 
+```figure
+SharedProgramFigure
+A fresh tsc in every session builds the same program again each time. cast check asks one watcher that already holds it.
+```
+
 The `check` snippet ([how snippets work](/documentation/agent-snippets)) writes a `## Typechecking` section into the agent's instruction file. It tells the agent to use `cast check` and never `tsc --noEmit`. Install it with `cast install check`.
 
 ```bash
@@ -52,6 +57,11 @@ The watcher is a detached `cast check-watch` process that wraps `tsc --noEmit --
 
 An ask takes the lock, reads `state.json`, and starts a watcher only if none is alive. The lock means that two sessions that ask at the same moment start one watcher, not two. The asker then stamps `askedAt`, waits 750 ms so that a file saved a moment ago reaches the compiler, and polls the state every 300 ms. It returns when `inProgress` is false and a pass has finished. The output ends with one line for each project, for example `✓ web: 0 errors (pass 4s old)`.
 
+```figure
+AskFigure
+An ask and the watcher meet only in state.json: the ask stamps askedAt, settles 750 ms, and polls until a finished pass is on disk.
+```
+
 ## First ask, later asks, and a pass that is still running
 
 The first ask on a tree starts the watcher, and that first pass builds the whole program. It takes as long as a plain `tsc`. Later asks read a finished pass or wait for a small one, and take seconds.
@@ -72,6 +82,22 @@ The tree is the unit of sharing. Sessions in one checkout share a watcher for ea
 
 Watchers build incrementally. Each records its last pass in its state directory, so a watcher that was stopped and started again rechecks only what changed since. A worktree's first watcher starts from the main checkout's last pass: files that match main are trusted, and only the files the worktree changed, plus whatever depends on them, are checked again. Paths a worktree links back into the main checkout, such as a shared `node_modules`, keep pointing at main. The worktree still holds a whole program in memory, so a worktree for every agent of a fan-out costs gigabytes each. Keep worktrees for edits that would collide.
 
-Each watcher holds a whole program in memory, so two rules bound the total. A watcher exits after 45 minutes with no ask, measured from the later of the last ask and the last finished pass. A pass in flight never counts as idle, because a first pass on a loaded machine can take longer than the idle window. A machine also keeps at most six watchers. When a seventh is needed, the one asked least recently is stopped, and the ask prints which one. The environment variable `CAST_CHECK_MAX_WATCHERS` changes the cap.
+Each watcher holds a whole program in memory, so two rules bound the total. A watcher exits after 45 minutes with no ask, measured from the later of the last ask and the last finished pass. A pass in flight never counts as idle, because a first pass on a loaded machine can take longer than the idle window. A machine also keeps at most six watchers. When a seventh is needed, the idle watcher asked least recently is stopped, and the ask prints which one. A watcher whose pass someone is waiting on is never stopped this way: when all six hold such a pass, the ask joins a queue, oldest first, prints its place, and starts when a slot frees. The environment variable `CAST_CHECK_MAX_WATCHERS` changes the cap.
+
+```figure
+SlotsFigure
+A seventh program takes the slot of the idle watcher asked least recently. When every slot holds a pass someone waits on, the ask queues.
+```
 
 `cast check-status` lists each live watcher with its project, tree, pid and last pass, or `checking` while a pass runs. A state file whose process has died is removed during that listing, so a later ask starts a new watcher.
+
+On this repository's machine, with several sessions at work, it printed:
+
+```
+$ cast check-status
+packages-tidemark @ ~/src/platform  pid 97749  0 errors, 1m ago
+evals @ ~/src/codecast  pid 23517  checking
+web @ ~/src/codecast  pid 2268  checking
+cli @ ~/src/codecast  pid 71293  checking
+convex @ ~/src/codecast  pid 17167  checking
+```

@@ -23,7 +23,7 @@ public struct ProviderCapabilities: Codable, Equatable, Sendable {
         public var screenshot = true
         public var annotatedScreenshot = false
         public var elementFrames = true
-        public var ocr = false
+        public var ocr = true
     }
 
     public struct Actions: Codable, Equatable, Sendable {

@@ -1,5 +1,6 @@
 import { GUIDES, guideHref } from "../app/(marketing)/documentation/guides/guides";
 import { POSTS } from "../app/(marketing)/blog/posts";
+import { CHAPTERS, chapterHref } from "../app/(marketing)/blog/field-manual/chapters";
 import { COMPARISONS, compareHref } from "../app/(marketing)/compare/comparisons";
 import { FEATURE_DEEP_DIVES, featureHref } from "../app/(marketing)/features/catalog";
 
@@ -27,6 +28,8 @@ export type SeoEntry = {
   description: string;
   /** The page's own name for its social card, when the title carries a site suffix. */
   heading?: string;
+  /** ISO date an article first went live (guides and posts), for datePublished. */
+  published?: string;
 };
 
 export const SITE_URL = "https://codecast.sh";
@@ -131,12 +134,20 @@ export const SEO_ROUTES: SeoEntry[] = [
     title: `${g.title} — Codecast docs`,
     heading: g.title,
     description: g.dek,
+    published: g.published,
   })),
   ...POSTS.map((p) => ({
     path: `/blog/${p.slug}`,
     title: `${p.title} — Codecast`,
     heading: p.title,
     description: p.dek,
+    published: p.date,
+  })),
+  ...CHAPTERS.map((c) => ({
+    path: chapterHref(c.slug),
+    title: `${c.title} — Codecast field manual`,
+    heading: c.title,
+    description: c.dek,
   })),
 ];
 

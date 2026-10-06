@@ -28,12 +28,21 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/share/doc')).toBeNull();
   });
 
-  test('the assistant lane opens at its own address', () => {
-    expect(mobileRouteForUrl('https://codecast.sh/simple')).toBe('/simple');
-    expect(mobileRouteForUrl('https://codecast.sh/simple/approvals')).toBe('/simple/approvals');
-    expect(mobileRouteForUrl('https://codecast.sh/simple/c/jx7abc123?x=1')).toBe('/simple/c/jx7abc123');
-    expect(mobileRouteForUrl('/simple/plan/')).toBe('/simple/plan');
+  test('the retired assistant lane leads to the main app screens', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/simple')).toBe('/(tabs)/inbox');
+    expect(mobileRouteForUrl('https://codecast.sh/simple/approvals')).toBe('/decisions');
+    expect(mobileRouteForUrl('https://codecast.sh/simple/routines')).toBe('/(tabs)/tasks');
+    expect(mobileRouteForUrl('https://codecast.sh/simple/c/jx7abc123?x=1')).toBe('/session/jx7abc123');
+    expect(mobileRouteForUrl('/simple/plan/')).toBe('/settings/plan');
+    expect(mobileRouteForUrl('https://codecast.sh/simple/connections?whisk=connected')).toBe('/settings/mail');
     expect(mobileRouteForUrl('https://codecast.sh/simpler')).toBeNull();
+  });
+
+  test('web pages the phone has a screen for open there', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/inbox')).toBe('/(tabs)/inbox');
+    expect(mobileRouteForUrl('https://codecast.sh/questions')).toBe('/decisions');
+    expect(mobileRouteForUrl('https://codecast.sh/settings/plan?billing=done')).toBe('/settings/plan');
+    expect(mobileRouteForUrl('https://codecast.sh/settings/integrations')).toBe('/settings/mail');
   });
 
   test('invites, chat and calls land on the chat tab', () => {
@@ -132,9 +141,8 @@ describe('redirectSystemPath (+native-intent)', () => {
   const { redirectSystemPath } = require('../app/+native-intent');
 
   test('web URLs re-route to their screens', () => {
-    // A conversation stops at app/open, which waits for the lane (lib/laneOpen).
     expect(redirectSystemPath({ path: 'https://codecast.sh/conversation/abc123', initial: true }))
-      .toBe('/open/session/abc123');
+      .toBe('/session/abc123');
     expect(redirectSystemPath({ path: 'https://codecast.sh/share/doc/1a221088-1fc3-48c8-a814-71119676adf0', initial: false }))
       .toBe('/share/doc/1a221088-1fc3-48c8-a814-71119676adf0');
   });

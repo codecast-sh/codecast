@@ -13,9 +13,9 @@ import { inboxFloorFlags } from "../../hooks/useSyncInboxSessions";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useRetryConversationStart } from "./startConversation";
+import { useRetryHostedStart } from "../../lib/startHostedConversation";
 import {
-  buildTranscript, conversationState, conversationTitle, countByConversation, isLaneConversation, isLaneRoutine, isOpenApproval, isUnsent, oldestFirst,
+  buildTranscript, conversationState, conversationTitle, countByConversation, isLaneConversation, isLaneRoutine, isOpenApproval, oldestFirst, placeAnswerBubbles,
   type ConversationState, type LaneMessage, type TranscriptItem,
 } from "./lane";
 
@@ -110,7 +110,7 @@ export function useLaneConversation(id: string, onRealId: (liveId: string) => vo
     return row ? conversationState(row, 0, now) : null;
   });
   const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
-  const retryStart = useRetryConversationStart();
+  const retryStart = useRetryHostedStart();
 
   useWatchEffect(() => {
     if (liveId !== id && isConvexId(liveId)) onRealId(liveId);
@@ -119,9 +119,11 @@ export function useLaneConversation(id: string, onRealId: (liveId: string) => vo
   const ids = useMemo(() => new Set([String(liveId)]), [liveId]);
   const approvals = useOpenApprovals(ids);
   const state: ConversationState = approvals.length > 0 ? "waiting" : rowState ?? "done";
-  const messages = (conversation?.messages ?? []) as LaneMessage[];
-  const unsent = messages.some(isUnsent);
-  const working = state === "working" || (unsent && approvals.length === 0);
+  // The row's server stamp, which says when an approval's answer was picked up.
+  const rowUpdatedAt = useInboxStore((s) => s.sessions[liveId]?.updated_at ?? 0);
+  const all = (conversation?.messages ?? []) as LaneMessage[];
+  const { messages, answering, unsent } = useMemo(() => placeAnswerBubbles(all, rowUpdatedAt), [all, rowUpdatedAt]);
+  const working = state === "working" || ((unsent || answering) && approvals.length === 0);
   const items = useMemo(() => buildTranscript(messages, working), [messages, working]);
   // Nothing to show yet, and something is on its way: no row and no page,
   // or a row that has messages the page has not read back.

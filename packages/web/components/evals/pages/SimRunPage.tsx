@@ -5,9 +5,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangesResponse } from "@codecast/shared/contracts/evalsApi";
-import { EVALS_POLL_MS, useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
-import { evalsHref, type EvalsView } from "../evalsPaths";
-import { useEvalsHost } from "../host";
+import { EVALS_POLL } from "@platform/evals/client";
+import { useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
+import type { EvalsView } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
+import { useEvalsHost } from "@platform/evals/react";
 import { SimRunView, type ShrinkState } from "../SimRunView";
 import { jobLive, jobState, shownJobState } from "../simJobState";
 
@@ -39,7 +41,7 @@ export function SimRunPage({ view }: { view: Extract<EvalsView, { view: "sim-run
   // minimal.json.tmp moves between job reports; re-read it on the same clock while on screen.
   useEffect(() => {
     if (!live || !visible) return;
-    const id = setInterval(reload, EVALS_POLL_MS);
+    const id = setInterval(reload, EVALS_POLL.intervalMs);
     return () => clearInterval(id);
   }, [live, visible, reload]);
 
