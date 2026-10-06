@@ -974,25 +974,96 @@ function detectDefaultBranch(cwd: string): string {
 // A person decides what happens next (the-line.md L4): a review reject or
 // retries exhausted queues a blocking decision from the session that started
 // the run. Without one (a daemon run with no spawner) the comment says so.
-export type TaskDecisionKind = "reject" | "exhausted";
-async function queueTaskDecision(options: RunOptions, context: Record<string, string>, kind: TaskDecisionKind, note: string, nodeId?: string): Promise<boolean> {
+async function queueTaskDecision(options: RunOptions, question: string, note: string, nodeId: string): Promise<boolean> {
   if (!options.taskId || !options.spawnerSession) return false;
-  const title = context["task_title"] || options.taskId;
   const result = await cliCall(options, "/cli/decide", {
     session_id: options.spawnerSession,
     task: options.taskId,
     // A failure gate is the run's decision too (the-line.md L4).
-    ...(options.runId ? { workflow_run_id: options.runId, gate_node_id: nodeId ?? kind } : {}),
-    question: `${title}: ${kind === "reject" ? "review rejected" : "retries exhausted"}. What next?`,
+    ...(options.runId ? { workflow_run_id: options.runId, gate_node_id: nodeId } : {}),
+    question,
     options: [
-      { label: "Reopen for another implement round" },
-      { label: "Drop the task" },
-      { label: "I will take it myself" },
+      { label: "Reopen for another implement round", description: "Run the line on this task again. If the cause below is outside the change, fix that first or the run stops the same way." },
+      { label: "Drop the task", description: "Close the task and land nothing." },
+      { label: "I will take it myself", description: "The task stays parked in review for you to finish by hand." },
     ],
     context_md: note.slice(0, 4000),
     blocking: true,
   });
   return !!result;
+}
+
+const quotedTitle = (context: Record<string, string>, fallback: string) => {
+  const title = context["task_title"] || fallback;
+  return `“${title.length > 80 ? `${title.slice(0, 79)}…` : title}”`;
+};
+
+// A fence that cannot be closed by the text inside it.
+function fenced(text: string): string {
+  const longest = Math.max(2, ...[...text.matchAll(/`{3,}/g)].map((m) => m[0].length));
+  const fence = "`".repeat(longest + 1);
+  return `${fence}text\n${text}\n${fence}`;
+}
+
+/**
+ * What a station said when it failed, for a person reading cold. A check
+ * that prints `{ steps: [{ name, ok, detail }], logs }` on stdout (line-
+ * profile.md LP4) reads as a checklist; the rest of its output, the human
+ * log, follows as a code block rather than prose a markdown renderer would
+ * fold into one paragraph.
+ */
+export function stationFailureMarkdown(context: Record<string, string>, nodeId: string): string {
+  let json: any;
+  try { json = JSON.parse(context[`${nodeId}.json`] ?? ""); } catch {}
+  const steps = Array.isArray(json?.steps) ? json.steps.filter((s: any) => typeof s?.name === "string") : [];
+  const list = steps.map((s: any) => `- ${s.ok === false ? "✗" : "✓"} ${s.name}${s.ok === false && s.detail ? `: ${String(s.detail)}` : ""}`).join("\n");
+  const raw = context[`${nodeId}.output`] || context["last_error"] || "";
+  const log = raw.split("\n").filter((line) => !(json && /^\s*\{/.test(line) && extractJsonOutput(line) !== undefined)).join("\n").trim();
+  const tail = log.length > 1500 ? `…${log.slice(-1500)}` : log;
+  return [list, tail ? fenced(tail) : "", typeof json?.logs === "string" ? `Logs: ${json.logs}` : ""].filter(Boolean).join("\n\n");
+}
+
+/**
+ * The failure path's card (the-line.md L4): a question that says what
+ * stopped the run and a body that shows why, from the station that sent the
+ * last round back. The blocker comment is `summary` over the same body.
+ */
+export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, taskId: string): { question: string; summary: string; body: string } {
+  const reason = state.failReason || "workflow failed";
+  const label = (id: string) => graph.nodes.get(id)?.label || id;
+  const title = quotedTitle(state.context, taskId);
+  const handoff = state.context["handoff"];
+  const at = state.currentNodeId;
+  const hand = at ? state.context[`${at}.session_id`] : undefined;
+  const footer = hand ? `\n\n${label(at)} session: ${hand}` : "";
+  if (handoff === "blocked" || handoff === "needs_context") {
+    const said = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
+    return {
+      question: `${label(at)} handed off ${handoff} on ${title}. What next?`,
+      summary: `Workflow stopped: the hand handed off ${handoff} (${reason}); task left in review.`,
+      body: `${said}${footer}`.trim(),
+    };
+  }
+  if (/max_visits/.test(reason)) {
+    const visits = graph.nodes.get(at)?.max_visits ?? state.visitCounts[at] - 1;
+    // The station that routed into the visit over the limit: its edge label
+    // ("checks failed", "changes") is the reason the round was sent back.
+    const from = state.completed[state.completed.length - 1];
+    const sentBack = from && from !== at ? from : undefined;
+    const edgeLabel = sentBack ? graph.edges.find((e) => e.from === sentBack && e.to === at)?.label : undefined;
+    const says = sentBack ? `${label(sentBack)} still says “${edgeLabel || state.context[`${sentBack}.outcome`] || "failed"}”` : "";
+    const lead = `**${label(at)} ran ${visits} times, the most this line allows${sentBack ? `, and ${label(sentBack)} sent the last round back` : ""}.** The task is parked in review as blocked.`;
+    const detail = !sentBack ? ""
+      : state.context[`${sentBack}.outcome`] === "failure" ? `\n\n**${label(sentBack)}**\n\n${stationFailureMarkdown(state.context, sentBack)}`
+      : state.context["review_note"] ? `\n\n**${label(sentBack)}**\n\n${state.context["review_note"]}` : "";
+    return {
+      question: `${sentBack ? `${says} after` : "Stopped after"} ${visits} ${label(at)} rounds on ${title}. What next?`,
+      summary: `Workflow stopped: retries exhausted (${reason}); task left in review as blocked.`,
+      body: `${lead}${detail}${footer}`,
+    };
+  }
+  const detail = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
+  return { question: `${title} failed. What next?`, summary: `Workflow failed (${reason}); task returned to open.`, body: `${detail}${footer}`.trim() };
 }
 
 // A station's name, fixed at spawn: the node and what it works on, so the row
@@ -1017,29 +1088,24 @@ export function handTimeoutMs(node: Pick<WorkflowNode, "timeout">, options: Pick
 // Retries exhausted parks it in review as blocked. Anything else (a killed
 // hand, a hand that ended without a handoff) returns it to open. Either way
 // a blocker comment says what happened, and a parked task gets a decision.
-async function returnTaskOnFailure(options: RunOptions, state: WorkflowRunState): Promise<void> {
+async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, state: WorkflowRunState): Promise<void> {
   // A dry run validates the graph; it never moves or comments on the real task.
   if (!options.taskId || options.dryRun) return;
-  const reason = state.failReason || "workflow failed";
-  const exhausted = /max_visits/.test(reason);
+  const exhausted = /max_visits/.test(state.failReason || "");
   const handoff = state.context["handoff"];
   const parkedByHand = handoff === "blocked" || handoff === "needs_context";
-  // The station's session, which a nested worker no longer puts in the inbox
-  // on its own: the comment names it so the blocker leads straight there.
-  const hand = state.currentNodeId ? state.context[`${state.currentNodeId}.session_id`] : undefined;
-  const detail = (state.context["last_error"] ? `\n\n${state.context["last_error"].slice(0, 1500)}` : "") + (hand ? `\n\nStation session: ${hand}` : "");
-  let text: string;
-  if (parkedByHand) {
-    text = `Workflow stopped: the hand handed off ${handoff} (${reason}); task left in review.${detail}`;
-  } else if (exhausted) {
-    await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_review", execution_status: "blocked" });
-    text = `Workflow stopped: retries exhausted (${reason}); task left in review as blocked.${detail}`;
-  } else {
-    await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "open" });
-    text = `Workflow failed (${reason}); task returned to open.${detail}`;
+  // The card names the station's session, which a nested worker no longer
+  // puts in the inbox on its own, so the blocker leads straight there.
+  const card = taskStopCard(graph, state, options.taskId);
+  let text = card.body ? `${card.summary}\n\n${card.body}` : card.summary;
+  // A hand that handed off blocked already parked the task in review.
+  if (!parkedByHand) {
+    await cliCall(options, "/cli/work/update", exhausted
+      ? { short_id: options.taskId, status: "in_review", execution_status: "blocked" }
+      : { short_id: options.taskId, status: "open" });
   }
   if (parkedByHand || exhausted) {
-    const queued = await queueTaskDecision(options, state.context, "exhausted", text, state.currentNodeId);
+    const queued = await queueTaskDecision(options, card.question, card.body || card.summary, state.currentNodeId);
     if (!queued) text += "\n\nNo decision queued: the run has no owning session.";
   }
   await cliCall(options, "/cli/work/comment", { short_id: options.taskId, comment_type: "blocker", text });
@@ -1255,7 +1321,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     // blocked until a person decides (the-line.md L4).
     if (options.taskId && state.context["review_verdict"] === "reject") {
       const note = state.context["review_note"] ? `Reviewer note:\n${state.context["review_note"]}` : "The reviewer rejected the branch.";
-      const queued = await queueTaskDecision(options, state.context, "reject", note, current.id);
+      const queued = await queueTaskDecision(options, `${quotedTitle(state.context, options.taskId)}: review rejected. What next?`, note, current.id);
       await cliCall(options, "/cli/work/comment", {
         short_id: options.taskId,
         comment_type: "blocker",
@@ -1287,7 +1353,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     }
   } else if (state.failed) {
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
-    await returnTaskOnFailure(options, state);
+    await returnTaskOnFailure(options, graph, state);
     if (options.runId) {
       await reportProgress(options, {
         current_node_id: current.id,
@@ -1319,6 +1385,7 @@ async function runNodeLoop(
     // ── Stage 1: Increment visit count, enforce max_visits ───────────────────
     // Fabro: checked first, before anything else. Exceeding limit = hard abort.
     // Visit counts are NEVER reset (even after retry_target jumps).
+    state.currentNodeId = current.id;
     const visits = (state.visitCounts[current.id] || 0) + 1;
     state.visitCounts[current.id] = visits;
 

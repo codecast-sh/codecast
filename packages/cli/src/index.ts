@@ -115,7 +115,7 @@ import {
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
-import { agentDisplayName } from "@codecast/shared/contracts";
+import { agentDisplayName, normalizeSubagentCaps } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
@@ -126,6 +126,7 @@ import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, rol
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
 import { planReadiness, resolvedTaskIds, isUnblocked } from "./planReadiness.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
+import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
@@ -4772,11 +4773,15 @@ const PANE_POLL_INTERVAL_MS = 400;
  * nest. Returns false when tmux would not take us there.
  */
 function attachOrSwitchTmux(target: string): boolean {
-  const inTmux = !!process.env.TMUX;
-  const r = spawnSync("tmux", [inTmux ? "switch-client" : "attach-session", "-t", target], {
-    stdio: inTmux ? "ignore" : "inherit",
-  });
-  return r.status === 0;
+  // switch-client moves a client only between sessions of its own server; an
+  // agent session on a server of its own (tmuxRoute.ts) is attached nested.
+  const [attach] = routeTmuxArgs(["attach-session", "-t", target]);
+  const sameServer = !!process.env.TMUX && socketOfTmuxEnv(process.env.TMUX) === (attach[0] === "-L" ? attach[1] : "default");
+  if (sameServer) return spawnSync("tmux", ["switch-client", "-t", target], { stdio: "ignore" }).status === 0;
+  const env = { ...process.env };
+  delete env.TMUX;
+  delete env.TMUX_PANE;
+  return spawnSync("tmux", routeTmuxArgs(["attach-session", "-t", target], env)[0], { stdio: "inherit", env }).status === 0;
 }
 
 /** What /cli/sessions/resume and /cli/sessions/restart both hand back. */
@@ -5728,12 +5733,19 @@ program
     "Examples:\n" +
     "  cast config                    # View all configuration\n" +
     "  cast config excluded_paths     # View specific setting\n" +
-    "  cast config excluded_paths \"**/node_modules/**\"  # Set value"
+    "  cast config excluded_paths \"**/node_modules/**\"  # Set value\n" +
+    "  cast config set subagents.per_session 6   # workers one session runs at once (default 10)\n" +
+    "  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer)")
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer, tmux_server_per_session, subagents.per_session, subagents.per_machine)")
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
-  .action(async (key, value) => {
+  .allowExcessArguments()
+  .action(async (rawKey, rawValue, _options, cmd) => {
+    // `cast config set <key> <value>` reads the same as `cast config <key> <value>`.
+    const verb = rawKey === "set" || rawKey === "get";
+    const key = verb ? rawValue : rawKey;
+    const value = verb ? (cmd.args as string[])[2] : rawValue;
     const config = readConfig();
 
     if (!key) {
@@ -5753,6 +5765,9 @@ program
         if (config.sync_never) console.log(`  sync_never: ${config.sync_never}`);
         if (config.cloud_mirror_include) console.log(`  cloud_mirror_include: ${config.cloud_mirror_include}`);
         console.log(`  session_trailer: ${config.session_trailer !== false}`);
+        const fleet = normalizeSubagentCaps(config.subagents);
+        console.log(`  subagents.per_session: ${fleet.per_session}`);
+        console.log(`  subagents.per_machine: ${fleet.per_machine}`);
         if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
         if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
         if (config.agent_args) {
@@ -5882,10 +5897,29 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer"] as const;
+    // The fleet limits: whole numbers of workers, read by cast spawn --subagent.
+    const fleetKey = /^subagents\.(per_session|per_machine)$/.exec(key ?? "")?.[1] as "per_session" | "per_machine" | undefined;
+    if (fleetKey) {
+      if (value === undefined) {
+        console.log(`${key}: ${normalizeSubagentCaps(config?.subagents)[fleetKey]}`);
+        return;
+      }
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1) {
+        console.error(`${key} takes a whole number of workers, 1 or more`);
+        process.exit(1);
+      }
+      const next: Config = config || {};
+      next.subagents = { ...(next.subagents ?? {}), [fleetKey]: n };
+      writeConfig(next);
+      console.log(`Updated ${key}: ${n}`);
+      return;
+    }
+
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session"] as const;
     const sensitiveKeys = ["auth_token"];
     // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
-    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer"]);
+    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -9676,6 +9710,9 @@ program
   .option("--week", "Aggregate changes from this week's sessions")
   .option("--full", "Include full file content diffs")
   .option("--patch", "Show only the unified diff patch")
+  .option("--turns", "List the session's turn snapshots: the working tree as it stood at the end of each turn, edits by the shell and by people included")
+  .option("--turn <n>", "Show what turn N changed in the working tree (the diff between its snapshot and the one before); N from --turns, or 'last'")
+  .option("--stat", "With --turn: only the file list and line counts")
   .action(async (sessionId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -9685,6 +9722,10 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const projectPath = process.cwd();
+    if ((options.turns || options.turn) && (options.today || options.week)) {
+      console.error("--turns and --turn read one session; drop --today/--week");
+      process.exit(1);
+    }
 
     if (options.today || options.week) {
       const now = Date.now();
@@ -9787,6 +9828,18 @@ program
       if ("error" in result) {
         console.error(`Error: ${cliErrorMessage(result.error)}`);
         process.exit(1);
+      }
+
+      if (options.turns || options.turn) {
+        const { printTurnSnapshots } = await import("./turnsCommand.js");
+        await printTurnSnapshots({
+          conversationId: result.conversation.id,
+          messages: result.messages as any,
+          cwd: projectPath,
+          turn: options.turn,
+          stat: !!options.stat,
+        });
+        return;
       }
 
       const { formatDiffResults } = await import("./formatter.js");
@@ -9975,6 +10028,16 @@ function fmtCallDuration(row: { started_at: number; ended_at: number | null }): 
 /** The call a reference names, or a thrown error whose `code` says why not
  *  ("not_found", "ambiguous"). A short id (cl-42) or full id resolves on the
  *  server; anything else is a unique prefix of a recent call's id. */
+/** A task's `--from-call` value: a call as `cast calls` names it, resolved
+ *  to the id the server stores; '' passes through to unlink. */
+async function taskCallArg(ref: string): Promise<string> {
+  if (!ref.trim()) return "";
+  return findCallId(ref.trim(), { throwOnError: true }).catch((err: Error) => {
+    console.error(err.message);
+    process.exit(1);
+  });
+}
+
 async function findCallId(ref: string, opts: { throwOnError?: boolean } = {}): Promise<string> {
   const { isServerCallRef } = await import("./callSnap.js");
   if (parseCallRef(ref) || isServerCallRef(ref)) return ref.toLowerCase();
@@ -10485,6 +10548,10 @@ program
     if ((call.action_items || []).length > 0) {
       console.log(`\n${c.bold}Action items${c.reset}`);
       call.action_items.forEach((a: string, i: number) => console.log(`  ${i + 1}. ${a}`));
+    }
+    if ((call.tasks || []).length > 0) {
+      console.log(`\n${c.bold}Tasks${c.reset}`);
+      for (const t of call.tasks) console.log(`  ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(${t.status})${c.reset}`);
     }
     if ((call.sessions || []).length > 0) {
       console.log(`\n${c.bold}Sessions${c.reset}`);
@@ -12030,6 +12097,8 @@ program
   .option("--account <name>", "Claude account profile to run on, without switching the machine's login (needs: cast accounts token <name>)")
   .option("--isolated", "Give each session its own git worktree")
   .option("--worktree <name>", "Name the worktree (implies --isolated; one task only)")
+  .option("--merge-back", "With --subagent --isolated: bring each worker's changes into this checkout when it finishes done (an isolated definition does this by default)")
+  .option("--no-merge-back", "Leave each worker's changes in its worktree")
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--cloud [host]", "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id")
   .option("--shared", "With --cloud: run in the host's main checkout instead of a fresh worktree (one task only; refused when that checkout is dirty or already used by a live session)")
@@ -12157,7 +12226,12 @@ program
       }
     }
 
-    const roster: { short_id: string; conversation_id: string; prompt: string; parent_short_id?: string; worktree?: string; workspace?: "isolated" | "shared"; branch?: string; ports?: Record<string, number>; seed?: Record<string, unknown> }[] = [];
+    const roster: { short_id: string; conversation_id: string; prompt: string; parent_short_id?: string; worktree?: string; workspace?: "isolated" | "shared"; branch?: string; ports?: Record<string, number>; seed?: Record<string, unknown>; queued?: boolean }[] = [];
+    // A worker counts against this machine's fleet limits (cast config
+    // subagents.per_session / per_machine); past them it waits in a queue.
+    const fleetCaps = normalizeSubagentCaps(config.subagents);
+    const { deviceId: localDeviceId } = await import("./remote/device.js");
+    const fleetDevice = localDeviceId();
 
     // --cloud --shared: the row is created PARKED first (the /cli/spawn insert
     // is the atomic claim of the host's main checkout — a refusal here means
@@ -12297,10 +12371,12 @@ program
           model: options.model,
           effort: options.effort,
           cc_account: options.account,
-          isolated: (options.isolated && !cloud) || undefined,
+          isolated: ((options.isolated || options.worktree) && !cloud) || undefined,
           device: options.device,
           parent_session: parentSession,
           spawner_session: spawnerSession,
+          ...(parentSession ? { subagent_caps: fleetCaps, spawn_device_id: fleetDevice } : {}),
+          ...(options.mergeBack !== undefined ? { merge_back: options.mergeBack === true } : {}),
           ...placement,
         }),
       });
@@ -12310,7 +12386,7 @@ program
         process.exit(1);
       }
       const result = await resp.json() as any;
-      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt, parent_short_id: result.parent_short_id, worktree: worktree?.name, ...(cloud ? { workspace: "isolated" as const } : {}), branch: worktree?.branch, ports: worktree?.ports, seed: worktree?.seed });
+      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt, parent_short_id: result.parent_short_id, worktree: worktree?.name, ...(cloud ? { workspace: "isolated" as const } : {}), branch: worktree?.branch, ports: worktree?.ports, seed: worktree?.seed, ...(result.queued ? { queued: true } : {}) });
     }
 
     let labelResult: { createdLabel: boolean; failures: number } | null = null;
@@ -12345,7 +12421,12 @@ program
       const wt = s.workspace === "shared"
         ? `  ${c.yellow}shared checkout ${s.branch}${c.reset}${portsNote}`
         : s.worktree ? `  ${c.yellow}${s.worktree}${c.reset}${portsNote}` : "";
-      console.log(`  ${c.cyan}${s.short_id}${c.reset}${wt}  ${promptGist(s.prompt)}`);
+      const queued = s.queued ? `  ${c.yellow}queued${c.reset}` : "";
+      console.log(`  ${c.cyan}${s.short_id}${c.reset}${wt}${queued}  ${promptGist(s.prompt)}`);
+    }
+    const waiting = roster.filter((s) => s.queued).length;
+    if (waiting) {
+      console.log(`  ${c.dim}${waiting} waiting for a slot (${fleetCaps.per_session} per session, ${fleetCaps.per_machine} per machine): each starts when a running worker ends done, blocked or killed. cast config subagents.per_session <n> changes the limit${c.reset}`);
     }
     if (labelResult?.failures) {
       console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} session${labelResult.failures === 1 ? "" : "s"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
@@ -16406,6 +16487,7 @@ work
   .option("--parent <task_id>", "Nest this task under a parent task (e.g. ct-4102)")
   .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
   .option("--from-meeting", "This task came out of a meeting with people in it, not from your own work")
+  .option("--from-call <call>", "The call this task was pulled from (cl-42, from `cast calls`); implies --from-meeting, and the task shows on the call's page")
   .option("--json", "Output the created task as JSON (one object for one title, an array for several)")
   .action(async (title: string, options: any) => {
     // Bulk decomposition: `cast task create --parent ct-x -` gives one subtask
@@ -16422,6 +16504,7 @@ work
     // every subtask, and resolving inside the loop would be N identical lookups.
     const projectId = options.project ? await resolveProjectId(options.project, options.team) : undefined;
     const scope = options.team ? workspaceScope(await readWorkspace(options.team)) : {};
+    const fromCall = options.fromCall !== undefined ? await taskCallArg(options.fromCall) : undefined;
     const created: Array<{ short_id: string; title: string }> = [];
     for (const t of titles) {
       const body: Record<string, any> = {
@@ -16448,7 +16531,8 @@ work
       // A meeting task is something PEOPLE decided; the agent only transcribed
       // it. It belongs on the human board on its own, with no promotion stamp —
       // so this overrides the "agent" default a session would otherwise set.
-      if (options.fromMeeting) body.source = "meeting";
+      if (options.fromMeeting || fromCall) body.source = "meeting";
+      if (fromCall) body.from_call = fromCall;
       body.project_path = getRealCwd();
 
       const result = await cliPost("/cli/work/create", body);
@@ -16467,7 +16551,7 @@ work
   .description("List work items (default: active only)")
   .option("--team <name|id|personal>", "Workspace to list: a team, or personal (default: the directory's mapping, else the active team)")
   .option("-p, --project <ref>", "Filter by project ID, short ID, or title substring")
-  .option("--initiative <in-N>", "Only the tasks of the initiative's projects (with -p, that project must be one of them)")
+  .option("--initiative <in-N>", "Only the tasks of the goal's projects (with -p, that project must be one of them)")
   .option("-s, --status <status>", "Filter by status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today")
   .option("-r, --ready", "Show only ready items (open, no blockers)")
   .option("-a, --all", "Include done/dropped tasks")
@@ -16747,9 +16831,13 @@ work
   .option("--files <paths>", "Comma-separated files changed")
   .option("--pr <url>", "Pull request URL")
   .option("--page <slug|url>", "Attach a published page as evidence (repeatable; the-line.md L6)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
+  .option("--guide <markdown>", stdinText("Change guide: a walkthrough of the change in reading order, one heading per step with its file:start-end on the heading line and the reason under it. With --evidence - too, stdin holds the evidence, a --- line, then the guide"))
+  .option("--guide-base <ref>", "Diff the guide's hunks against this ref (default: where HEAD branched from origin/main)")
   .action(async (shortId: string, options: any) => {
     const { buildTaskHandoffBody, handoffCommentText, parseFilesFlag, parseHandoffStatus } = await import("./taskClaim.js");
     const { pageSlugFromRef } = await import("./publishCommand.js");
+    const { parseChangeGuide } = await import("@codecast/shared/contracts/changeGuide");
+    const { guideDiffReader } = await import("./changeGuideDiff.js");
     let input!: Parameters<typeof buildTaskHandoffBody>[2];
     let body!: Record<string, any>;
     try {
@@ -16758,7 +16846,13 @@ work
         if (!slug) throw new Error(`--page ${ref}: expected a page slug or a codecast.sh/a/<slug> url`);
         return slug;
       });
-      input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages };
+      // The guide's hunks are captured now, so the review reads the code as it was handed off.
+      const guide = options.guide ? parseChangeGuide(String(options.guide), guideDiffReader(getRealCwd(), options.guideBase).diffFor) : undefined;
+      if (guide) {
+        const bare = guide.steps.filter((s) => !s.hunk).map((s) => s.file);
+        if (bare.length) console.error(`${c.yellow}note${c.reset} no diff found for ${[...new Set(bare)].join(", ")}; those steps show text only`);
+      }
+      input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages, guide };
       body = buildTaskHandoffBody(shortId, ownSessionId(getRealCwd()), input);
     } catch (err) {
       console.error(`Error: ${(err as Error).message}`);
@@ -16771,7 +16865,7 @@ work
     const commentBody: Record<string, any> = { short_id: shortId, text: handoffCommentText(input), comment_type: "review" };
     if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
     await cliPost("/cli/work/comment", commentBody);
-    console.log(`${c.green}ok${c.reset} Handed off ${c.cyan}${shortId}${c.reset} (${input.status}) → in_review${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}`);
+    console.log(`${c.green}ok${c.reset} Handed off ${c.cyan}${shortId}${c.reset} (${input.status}) → in_review${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}${input.guide ? ` · guide, ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}` : ""}`);
     if (body.conversation_id) clearTaskPulseIfBound(body.conversation_id, shortId);
     await warnIfThreadStateStale();
   });
@@ -16858,6 +16952,7 @@ work
   .option("--project <ref>", "Project ID, short ID, or title substring")
   .option("--project-path <path>", "Project directory path")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
+  .option("--from-call <call>", "The call this task was pulled from (cl-42, from `cast calls`); pass '' to unlink")
   .option("--parent <task_id>", "Nest under a parent task; pass '' to move it back to the top level")
   .option("--cascade", "When closing: also close this task's open subtasks")
   .option("--only-parent", "When closing: close just this task, leaving open subtasks")
@@ -16905,6 +17000,7 @@ work
     if (options.project !== undefined) body.project_id = await resolveProjectId(options.project);
     if (options.projectPath !== undefined) body.project_path = options.projectPath;
     if (options.plan) body.plan_id = options.plan;
+    if (options.fromCall !== undefined) body.from_call = await taskCallArg(options.fromCall);
     await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${shortId}${c.reset}`);
   });
@@ -17512,17 +17608,19 @@ projectCmd
     }
   });
 
-// --- Initiatives ---
+// --- Goals ---
 // A goal the company is trying to reach, carried by projects, with one owner
-// (docs/architecture/initiatives-projects-role-page.md I1). `update` posts an
-// update (how it is going); `set` changes the fields; `milestone`, `ask`,
-// `answer`, `decide` and `source` each write one entry of the intent record
-// (I5) through the record's one door.
+// (docs/architecture/initiatives-projects-role-page.md I1). The word a person
+// reads is "goal" (the top one is the mission); the data and the wire keep
+// their older name, initiative, so `cast initiative` and `cast in` stay as
+// aliases. `update` posts an update (how it is going); `set` changes the
+// fields; `milestone`, `ask`, `answer`, `decide` and `source` each write one
+// entry of the intent record (I5) through the record's one door.
 
 const initiativeCmd = program
-  .command("initiative")
-  .alias("in")
-  .description("Manage initiatives (a goal above projects, with an owner and a health)")
+  .command("goal")
+  .aliases(["initiative", "in"])
+  .description("Manage goals (what the company is trying to reach, carried by projects, with an owner and a health)")
   .showHelpAfterError(true);
 
 // An argument read by the pure half (initiativeCommand.ts), or the exit that says why it could not be.
@@ -17556,7 +17654,7 @@ async function initiativeWrite(ref: string, built: Read<RecordWrite>): Promise<v
   let op = write.op;
   if (write.pick) {
     const row = await cliPost("/cli/initiatives/get", { id: ref });
-    if (!row) { console.error("Initiative not found (or not visible to you)"); process.exit(1); }
+    if (!row) { console.error("Goal not found (or not visible to you)"); process.exit(1); }
     op = { ...op, key: initiativeArg(pickRecordEntry(row, list, write.pick.text, write.pick)).key };
   }
   let result = await post(op);
@@ -17607,8 +17705,8 @@ function printInitiativeWrite(verb: string, result: any, detail?: any): void {
 
 initiativeCmd
   .command("create")
-  .description("Create an initiative")
-  .argument("<title>", stdinText("Initiative title"))
+  .description("Create a goal")
+  .argument("<title>", stdinText("Goal title"))
   .option("-d, --description <text>", stdinText("Purpose, scope and context ('-' reads stdin)"))
   .option("--owner <who>", "Who drives it: me, @handle (a role first, then a person), or or-N")
   .option("--status <status>", "proposed (default), planned, active, completed, cancelled")
@@ -17647,13 +17745,13 @@ initiativeCmd
     const project_ids = await initiativeProjectIds(options.project, options.team);
     if (project_ids) body.project_ids = project_ids;
     const result = await cliPost("/cli/initiatives/create", body);
-    printInitiativeWrite("Created initiative", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
+    printInitiativeWrite("Created goal", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
   });
 
 initiativeCmd
   .command("ls")
   .alias("list")
-  .description("List initiatives by status, with owner, health, target and progress")
+  .description("List goals by status, with owner, health, target and progress")
   .option("--team <name|id|personal>", "Workspace to list: a team, or personal (default: every workspace you belong to)")
   .option("-s, --status <status>", "Filter by status: proposed, planned, active, completed, cancelled")
   .option("--json", "Output as JSON")
@@ -17667,32 +17765,32 @@ initiativeCmd
     const rows = await cliPost("/cli/initiatives/list", body);
     if (options.json) { printJson(rows); return; }
     if (!Array.isArray(rows) || rows.length === 0) {
-      console.log(fmt.muted("No initiatives yet. Create one with: cast initiative create \"Title\" --owner @role --project <ref>"));
+      console.log(fmt.muted("No goals yet. Create one with: cast goal create \"Title\" --owner @role --project <ref>"));
       return;
     }
     // By status in the order a goal moves through them, active first.
     const order = ["active", "planned", "proposed", "completed", "cancelled"];
     rows.sort((a: any, b: any) => order.indexOf(a.status) - order.indexOf(b.status) || a.short_id.localeCompare(b.short_id, undefined, { numeric: true }));
     for (const row of rows) console.log(initiativeLine(c, row));
-    console.log(fmt.muted(`\n  ${rows.length} initiatives`));
+    console.log(fmt.muted(`\n  ${rows.length} goals`));
   });
 
 initiativeCmd
   .command("show")
-  .description("Show an initiative whole: why, what done looks like, owner, metrics with their trend, milestones, questions, decisions, sources, projects, updates")
-  .argument("<in-N>", "Initiative short id or id")
+  .description("Show a goal whole: why, what done looks like, owner, metrics with their trend, milestones, questions, decisions, sources, projects, updates")
+  .argument("<in-N>", "Goal short id or id")
   .option("--json", "Output as JSON")
   .action(async (ref: string, options: any) => {
     const row = await cliPost("/cli/initiatives/get", { id: ref });
-    if (!row) { console.error("Initiative not found (or not visible to you)"); process.exit(1); }
+    if (!row) { console.error("Goal not found (or not visible to you)"); process.exit(1); }
     if (options.json) { printJson(row); return; }
     for (const line of initiativeShowLines(c, row, { ago: formatRelativeTime, projectIcons: PROJECT_STATUS_ICONS })) console.log(line);
   });
 
 initiativeCmd
   .command("update")
-  .description("Post an update: how the initiative is going, in the owner's words")
-  .argument("<in-N>", "Initiative short id or id")
+  .description("Post an update: how the goal is going, in the owner's words")
+  .argument("<in-N>", "Goal short id or id")
   .argument("[body]", stdinText("The update ('-' reads a heredoc)"))
   .option("--health <h>", "on_track, at_risk, or off_track (default: as the last update said)")
   .action(async (ref: string, bodyArg: string | undefined, options: any) => {
@@ -17708,8 +17806,8 @@ initiativeCmd
 
 initiativeCmd
   .command("add-project")
-  .description("Add a project to an initiative (an owner role gains it in its scope)")
-  .argument("<in-N>", "Initiative short id or id")
+  .description("Add a project to a goal (an owner role gains it in its scope)")
+  .argument("<in-N>", "Goal short id or id")
   .argument("<project>", "Project id, short id or title substring")
   .option("--team <name|id|personal>", "Workspace the project title is matched in")
   .action(async (ref: string, project: string, options: any) => {
@@ -17719,8 +17817,8 @@ initiativeCmd
 
 initiativeCmd
   .command("remove-project")
-  .description("Remove a project from an initiative (the owner role's scope is left as it is)")
-  .argument("<in-N>", "Initiative short id or id")
+  .description("Remove a project from a goal (the owner role's scope is left as it is)")
+  .argument("<in-N>", "Goal short id or id")
   .argument("<project>", "Project id, short id or title substring")
   .option("--team <name|id|personal>", "Workspace the project title is matched in")
   .action(async (ref: string, project: string, options: any) => {
@@ -17730,8 +17828,8 @@ initiativeCmd
 
 initiativeCmd
   .command("set")
-  .description("Change an initiative's fields")
-  .argument("<in-N>", "Initiative short id or id")
+  .description("Change a goal's fields")
+  .argument("<in-N>", "Goal short id or id")
   .option("--title <text>", stdinText("New title"))
   .option("-d, --description <text>", stdinText("New description ('none' clears)"))
   .option("--status <status>", "proposed, planned, active, completed, cancelled")
@@ -17764,7 +17862,7 @@ initiativeCmd
       process.exit(1);
     }
     const result = await cliPost("/cli/initiatives/update", body);
-    printInitiativeWrite("Updated initiative", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
+    printInitiativeWrite("Updated goal", result, await tryCliPost("/cli/initiatives/get", { id: result.id }));
   });
 
 // A role reports a metric's value the way a template instance reports its
@@ -17793,7 +17891,7 @@ initiativeCmd
 initiativeCmd
   .command("milestone")
   .description("Add a milestone, or mark one reached (--done), change one (--edit) or take one off (--remove)")
-  .argument("<in-N>", "Initiative short id or id")
+  .argument("<in-N>", "Goal short id or id")
   .argument("[title]", stdinText("The milestone to add, as \"Title\" or \"Title=YYYY-MM-DD\"; with --edit, its new title"))
   .option("--date <date>", "The day it is due (YYYY-MM-DD; with --edit, 'none' clears)")
   .option("--source <ref>", "Where it was set: an address (call:<id>#<line>, a session short id, ct-N, a link) or the words said (with --edit, 'none' clears)")
@@ -17808,7 +17906,7 @@ initiativeCmd
 initiativeCmd
   .command("ask")
   .description("Put an open question on the record: something still undecided (--edit changes one)")
-  .argument("<in-N>", "Initiative short id or id")
+  .argument("<in-N>", "Goal short id or id")
   .argument("[question]", stdinText("The question; with --edit, its new words"))
   .option("--by <who>", "Who asks: a name or an @handle (default: you, or the role this session works as)")
   .option("--source <ref>", "Where it was asked: an address or the words said")
@@ -17820,7 +17918,7 @@ initiativeCmd
 initiativeCmd
   .command("answer")
   .description("Answer an open question; it stays on the record with its answer")
-  .argument("<in-N>", "Initiative short id or id")
+  .argument("<in-N>", "Goal short id or id")
   .argument("<n|text>", "The question, by its number in `show` or its words")
   .argument("<answer>", stdinText("The answer"))
   .option("--replace", "Put this answer in place of the one an answered question has")
@@ -17832,7 +17930,7 @@ initiativeCmd
 initiativeCmd
   .command("decide")
   .description("Put a decision on the record: what was decided, by whom and where (--edit changes one)")
-  .argument("<in-N>", "Initiative short id or id")
+  .argument("<in-N>", "Goal short id or id")
   .argument("[decision]", stdinText("The decision; with --edit, its new words"))
   .option("--by <who>", "Who decided: a name or an @handle (default: you, or the role this session works as)")
   .option("--source <ref>", "Where it was decided: an address or the words said")
@@ -17844,7 +17942,7 @@ initiativeCmd
 initiativeCmd
   .command("source")
   .description("Add where the goal was stated: who said it and where. An address already on the record gains the quote, who and when it lacks")
-  .argument("<in-N>", "Initiative short id or id")
+  .argument("<in-N>", "Goal short id or id")
   .argument("<ref>", "call:<id>#<line>, chat:<id>, doc:<id>, a session short id with an optional :line, ct-N, pl-N, a link, or the words said")
   .option("--quote <text>", stdinText("The words as said"))
   .option("--by <name>", "Who said it: a name or an @handle")
@@ -17856,8 +17954,8 @@ initiativeCmd
 // The one way to take a question, a decision or a source back off the record.
 initiativeCmd
   .command("record")
-  .description("Remove one entry from an initiative's record")
-  .argument("<in-N>", "Initiative short id or id")
+  .description("Remove one entry from a goal's record")
+  .argument("<in-N>", "Goal short id or id")
   .requiredOption("--list <list>", INITIATIVE_RECORD_LISTS.join(", "))
   .requiredOption("--remove <n|key>", "The entry, by its number in `show`, its key (a source's address) or its words")
   .action(async (ref: string, options: any) => {
@@ -18684,7 +18782,7 @@ plan
   .description("Spawn parallel agents to implement plan tasks")
   .argument("<plan_id>", "Plan short ID")
   .option("--dry-run", "Show what would be spawned without doing it")
-  .option("--max <n>", "Max parallel agents", "3")
+  .option("--max <n>", "Max parallel agents (default: subagents.per_session, 4)")
   .option("--watch", "Monitor agents after spawning")
   .action(async (planId: string, options: any) => {
     const orchSessionId = detectCurrentSessionId();
@@ -18706,7 +18804,7 @@ plan
       return;
     }
 
-    const maxAgents = parseInt(options.max, 10) || 3;
+    const maxAgents = parseInt(options.max, 10) || normalizeSubagentCaps(readConfig()?.subagents).per_session;
     const toSpawn = readyTasks.slice(0, maxAgents);
 
     console.log(`\n  ${c.bold}Plan:${c.reset} ${inlineForeignText(plan.title)} ${c.dim}(${planId})${c.reset}`);
@@ -19014,7 +19112,7 @@ plan
   .command("autopilot")
   .description("Continuously orchestrate a plan: spawn agents, monitor, spawn next wave")
   .argument("<plan_id>", "Plan short ID")
-  .option("--max <n>", "Max parallel agents per wave", "3")
+  .option("--max <n>", "Max parallel agents per wave (default: subagents.per_session, 4)")
   .option("--interval <mins>", "Minutes between status checks", "2")
   .option("--max-runtime <duration>", "Max runtime before self-rescheduling (e.g., 30m, 2h)")
   .option("--max-waves <n>", "Max number of waves before stopping")
@@ -19024,7 +19122,7 @@ plan
   .action(async (planId: string, options: any) => {
     const orchSessionId = detectCurrentSessionId();
     const orchCtx = orchSessionId ? { conversation_id: orchSessionId } : {};
-    const maxAgents = parseInt(options.max, 10) || 3;
+    const maxAgents = parseInt(options.max, 10) || normalizeSubagentCaps(readConfig()?.subagents).per_session;
     const maxWaves = options.maxWaves ? parseInt(options.maxWaves, 10) : undefined;
     const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
     const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
@@ -20630,12 +20728,18 @@ workflow
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
     const { runWorkflow } = await import("./workflow/runner.js");
 
-    // No file: the calling session's role owns a line (the-line.md L2); a
-    // session outside a role runs the shipped "line".
-    const file = fileArg || (await ownRole().catch(() => null))?.line_workflow_slug || "line";
+    // No file: a run bound to a task in a checkout with its own line runs
+    // that (line-map.md LX5); else the calling session's role owns a line
+    // (the-line.md L2); a session outside a role runs the shipped "line".
+    const { chooseLineSource } = await import("./repoLine.js");
+    const choice = chooseLineSource({
+      file: fileArg, taskBound: !!options.task, cwd: process.cwd(),
+      roleSlug: fileArg ? null : (await ownRole().catch(() => null))?.line_workflow_slug,
+    });
+    const file = choice.kind === "repo" ? choice.resolved.label : choice.name;
     // A path on disk, or a shipped template by name (line, feature, ...),
     // else one of the caller's own pushed workflows by slug (L2).
-    let resolved = resolveWorkflowSource(file);
+    let resolved = choice.kind === "repo" ? choice.resolved : resolveWorkflowSource(file);
     if (!resolved) {
       const own = (await cliPost("/cli/workflows/list", {}).catch(() => null))?.workflows?.find((w: any) => w.slug === file && w.source);
       if (own) resolved = { source: own.source, label: `workflow:${own.slug}` };
@@ -20704,8 +20808,10 @@ workflow
     }
 
     if (!options.dryRun && apiToken) {
-      // Push workflow to Convex so the web UI can render it
-      const slug = graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      // Push workflow to Convex so the web UI can render it. A repo's line
+      // goes under its own slug, never over the row a role's sweep runs.
+      const { REPO_LINE_SLUG } = await import("@codecast/shared/contracts/lineProfile");
+      const slug = choice.kind === "repo" ? REPO_LINE_SLUG : graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
       // the-line.md L8 node fidelity: the one serializer carries definition,
       // reviewer, timeout, temperature, doc and category per node.
       const { graphToPushPayload, runRegistrationIsFatal } = await import("./workflow/runner.js");

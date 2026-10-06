@@ -1,0 +1,1 @@
+.dot { flex: none; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--mint); border: var(--line-thin); animation: pulse-ring 1.6s infinite; }

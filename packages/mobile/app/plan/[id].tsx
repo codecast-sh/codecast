@@ -1,5 +1,4 @@
-import {
-  useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   StyleSheet,
   ScrollView,
@@ -23,6 +22,7 @@ import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { PLAN_STATUS_CONFIG } from "@/components/PlanItem";
 import { TaskItemRow, showTaskActions } from "@/components/TaskItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
+import { CollapsibleBody } from "@/components/CollapsibleBody";
 
 type PlanStatus = keyof typeof PLAN_STATUS_CONFIG;
 
@@ -89,6 +89,7 @@ export default function PlanDetailScreen() {
   // (null = no access / missing). While still loading (undefined) keep the
   // spinner so a cold deep-link doesn't flash "not found" before the fetch
   // lands. With a share token, its query must settle too.
+  const [showCompleted, setShowCompleted] = useState(false);
   const hasSynced = !plansLoading && planDetail !== undefined && (!share || storePlan || sharedPlan !== undefined);
 
   if (!plan) {
@@ -156,22 +157,19 @@ export default function PlanDetailScreen() {
         </RNView>
 
         {plan.goal && (
-          <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Goal</RNText>
-            <RNText style={styles.goalText}>{plan.goal}</RNText>
-          </RNView>
+          <RNText style={[styles.goalText, styles.section]}>{plan.goal}</RNText>
         )}
 
         {body && (
           <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Description</RNText>
-            <MarkdownContent text={body} baseStyle={styles.bodyText} />
+            <CollapsibleBody fadeColor={Theme.bg} height={160}>
+              <MarkdownContent text={body} baseStyle={styles.bodyText} />
+            </CollapsibleBody>
           </RNView>
         )}
 
         {progress && progress.total > 0 && (
           <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Progress</RNText>
             <RNView style={styles.progressContainer}>
               <RNView style={styles.progressBar}>
                 <RNView
@@ -187,24 +185,16 @@ export default function PlanDetailScreen() {
                   ]}
                 />
               </RNView>
-              <RNView style={styles.progressStats}>
-                <RNText style={styles.progressStatText}>
-                  <RNText style={{ color: Theme.green, fontWeight: "700" }}>{progress.done}</RNText> done
-                </RNText>
-                <RNText style={styles.progressStatText}>
-                  <RNText style={{ color: Theme.accent, fontWeight: "700" }}>{progress.in_progress}</RNText> in progress
-                </RNText>
-                <RNText style={styles.progressStatText}>
-                  <RNText style={{ fontWeight: "700" }}>{progress.total}</RNText> total
-                </RNText>
-              </RNView>
+              <RNText style={styles.progressStatText}>
+                {progress.done} of {progress.total} done{progress.in_progress ? ` · ${progress.in_progress} in progress` : ""}
+              </RNText>
             </RNView>
           </RNView>
         )}
 
         {activeTasks.length > 0 && (
           <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Active Tasks ({activeTasks.length})</RNText>
+            <RNText style={styles.sectionLabel}>Tasks</RNText>
             <RNView style={styles.taskList}>
               {activeTasks.map((t) => (
                 <TaskItemRow
@@ -220,8 +210,11 @@ export default function PlanDetailScreen() {
 
         {completedTasks.length > 0 && (
           <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Completed ({completedTasks.length})</RNText>
-            <RNView style={styles.taskList}>
+            <TouchableOpacity style={styles.foldRow} onPress={() => setShowCompleted((v) => !v)} activeOpacity={0.6}>
+              <RNText style={styles.sectionLabel}>{completedTasks.length} completed</RNText>
+              <FontAwesome name={showCompleted ? "angle-up" : "angle-down"} size={14} color={Theme.textMuted0} />
+            </TouchableOpacity>
+            {showCompleted && <RNView style={styles.taskList}>
               {completedTasks.map((t) => (
                 <TaskItemRow
                   key={t._id}
@@ -230,7 +223,7 @@ export default function PlanDetailScreen() {
                   onLongPress={() => showTaskActions(t, updateTask)}
                 />
               ))}
-            </RNView>
+            </RNView>}
           </RNView>
         )}
 
@@ -333,9 +326,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     height: 6,
     backgroundColor: Theme.accent,
   },
-  progressStats: {
+  foldRow: {
     flexDirection: "row",
-    gap: 16,
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   progressStatText: {
     fontSize: 12,

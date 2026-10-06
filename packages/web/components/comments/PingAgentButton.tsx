@@ -1,5 +1,5 @@
 import { AgentIcon } from "../ConversationList";
-import { agentDisplayName } from "../../lib/commentThread";
+import { agentDisplayName } from "@codecast/shared/contracts";
 
 // "Ping Claude" / "Ping Codex" — the conversation's own agent logo + name, styled
 // like the other comment buttons (no sparkle, no violet). Asks that agent to
