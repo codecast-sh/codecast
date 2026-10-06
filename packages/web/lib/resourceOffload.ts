@@ -1,4 +1,4 @@
-import { RESOURCE_STALE_MS, movesWithSession, sustainedResourcePressure, evaluateOffloadRequirements, type HostReadiness, type CloudHostReport, type ResourcePoint } from "@codecast/shared/contracts";
+import { RESOURCE_STALE_MS, sustainedResourcePressure, evaluateOffloadRequirements, type HostReadiness, type CloudHostReport, type ResourcePoint } from "@codecast/shared/contracts";
 import { memoryUsed } from "../components/resources/resourceModel";
 import type { OffloadPlan, OffloadCandidate, ResourceMachine, ResourceSession } from "../components/resources/types";
 import { eligibilityFor, type MigrationCandidate, type MigrationDevice } from "./migrationPlan";
@@ -36,7 +36,7 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
   };
   for (const session of sessions.filter(s => s.deviceId === source.deviceId)) {
     const migration = candidates.find(c => c._id === session.conversationId);
-    const processes = source.snapshot!.processes.filter(p => movesWithSession(p, session.sessionId));
+    const processes = source.snapshot!.processes.filter(p => p.sessionId === session.sessionId);
     const shared = source.snapshot!.processes.some(p => p.sharedSessionIds?.includes(session.sessionId));
     const reason = session.pinned ? "Pinned sessions stay on this machine unless you move them manually"
       : input.blockedSessions?.[session.sessionId]
@@ -70,10 +70,7 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
       sessionId: session.sessionId, reason: `${processes.length} exclusively attributed processes; ${cpu.toFixed(0)}% CPU across cores${macRequired ? "; Apple tooling observed" : "; project portability still needs verification"}`,
       ...(macRequired ? { requiresMac: "Apple build or simulator tooling observed in the process tree" } : {}),
       confidence: "low", relief: { cpu, rssLow: 0, rssHigh: rss },
-      staysLocal: [
-        ...source.snapshot!.processes.filter(p => p.detached && p.sessionId === session.sessionId).map(p => ({ label: p.name, pid: p.pid, cpu: p.cpu, rss: p.rss, why: "Started by this session outside its process tree; it keeps running here until it finishes" })),
-        ...source.snapshot!.processes.filter(p => !p.sessionId && ["browser", "simulator", "tool"].includes(p.kind)).map(p => ({ label: p.name, pid: p.pid, cpu: p.cpu, rss: p.rss, why: "Not owned exclusively by this session; moving it will not stop this process" })),
-      ].slice(0, 4),
+      staysLocal: source.snapshot!.processes.filter(p => !p.sessionId && ["browser", "simulator", "tool"].includes(p.kind)).slice(0, 4).map(p => ({ label: p.name, pid: p.pid, cpu: p.cpu, rss: p.rss, why: "Not owned exclusively by this session; moving it will not stop this process" })),
       disruption: session.state === "working" ? "mid_turn" : "idle", perDestination,
       ...(viable[0] ? { suggestedDestinationId: viable[0].deviceId } : {}),
     });

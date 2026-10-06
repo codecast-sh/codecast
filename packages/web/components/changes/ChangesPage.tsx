@@ -354,6 +354,7 @@ export function ChangesPage() {
 
   return (
     <TooltipProvider delayDuration={300}>
+      <div className="h-full overflow-y-auto" data-main-scroll>
       <div ref={rootRef} className="chg-root mx-auto w-full max-w-[52rem] px-6 pb-24">
         <TimelineHeader
           repos={repos}
@@ -406,6 +407,7 @@ export function ChangesPage() {
           ))}
           {feed.error && cold && <p className="mt-6 font-mono text-[11px] text-sol-text/55">Changes could not load: {feed.error.message}</p>}
         </StoryCtx.Provider>
+      </div>
       </div>
     </TooltipProvider>
   );

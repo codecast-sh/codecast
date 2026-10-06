@@ -33,6 +33,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { isLaunchToken, LAUNCH_TOKEN_VAR } from "../agentEnv.js";
 import { tmuxExecSync as defaultTmuxExecSync } from "../tmux.js";
+import { tmuxLiteralArg } from "../tmuxPaste.js";
 import type { Config } from "../config/types.js";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
@@ -204,7 +205,7 @@ export async function spawnAgentTmux(
     const command = isLaunchToken(req.launchToken)
       ? `${LAUNCH_TOKEN_VAR}=${req.launchToken} ${req.command}`
       : req.command;
-    tmux(["send-keys", "-t", req.tmuxSession, "-l", command]);
+    tmux(["send-keys", "-t", req.tmuxSession, "-l", tmuxLiteralArg(command)]);
     tmux(["send-keys", "-t", req.tmuxSession, "Enter"]);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

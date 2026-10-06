@@ -26,7 +26,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
 import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
-import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, listedModels, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, listedModels, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
 import { useDevices, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
@@ -74,6 +74,8 @@ import {
 } from "lucide-react";
 import { popOutPeople } from "./people/popOutPeople";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
+import { startHostedConversation } from "../lib/startHostedConversation";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { settleComposerAttachments } from "../lib/draftImages";
 import type { ChatAttachment } from "../store/chatSlice";
@@ -3415,6 +3417,19 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               </span>
               <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
             </CommandPrimitive.Item>
+            {/* The hosted assistant, asked straight from the palette: the
+                query is the first message (lib/startHostedConversation). The
+                standalone palette window has no stage to open it on. */}
+            {!standalone && (
+              <CommandPrimitive.Item
+                value="__ask_assistant__ ask codecast assistant hosted"
+                onSelect={() => navigateToSession({ _id: startHostedConversation(query.trim()) })}
+                className={itemClass}
+              >
+                <AgentTypeIcon agentType={HOSTED_AGENT_TYPE} className="w-4 h-4" />
+                <span className="truncate">Ask the {AGENT_CLIENTS.codecast.displayName}: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
+              </CommandPrimitive.Item>
+            )}
             {vaultReady && (
               <CommandPrimitive.Item
                 key="vault-new-named"

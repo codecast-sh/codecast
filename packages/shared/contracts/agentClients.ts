@@ -1112,6 +1112,10 @@ export const HOSTED_AGENT_CLIENTS: { codecast: HostedAgentClientDescriptor } = {
     id: "codecast",
     displayName: "Codecast assistant",
     convexId: "codecast",
+    // Off the developer's agent row until pinned. It still shows wherever it
+    // is the default agent (hosted mode, or no machine), because a picker
+    // always keeps the agent in use (pinnedPickerOptions `keep`).
+    pinnedByDefault: false,
     executionTransports: ["hosted"],
     capabilities: { panePromptMonitoring: false },
   },
@@ -1192,21 +1196,65 @@ export interface AgentLaunchOption {
   label: string;
 }
 
-/** The agent row of every new-session surface (web AgentSwitcher, mobile
- *  sheet), derived from the local registry in declaration order — adding a
- *  client descriptor is all it takes to appear in the pickers. The hosted
- *  assistant is started from its own lane, never launched on a machine. */
+/** The agents a machine launches, in registry declaration order: the daemon's
+ *  side of every launch, switch, fork and hand-off (moveAgentOptions, the
+ *  agent library's client pick). Never the hosted assistant, which no machine
+ *  runs; a new-session picker reads AGENT_PICKER_OPTIONS instead. */
 export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(LOCAL_AGENT_CLIENTS).map((d) => ({
   id: d.id,
   convexType: d.convexId,
   label: d.displayName,
 }));
 
+/** One new-conversation agent choice, local or hosted. `hosted` is the
+ *  hosted assistant: no device, project or model to pick. */
+export interface AgentPickerOption {
+  id: AgentClientId;
+  convexType: ConvexAgentType;
+  label: string;
+  hosted: boolean;
+}
+
+/** The agent row of every new-conversation surface (web AgentSwitcher and
+ *  context composer, mobile sheet): every client, local then hosted, so
+ *  adding a descriptor is all it takes to appear in the pickers. */
+export const AGENT_PICKER_OPTIONS: AgentPickerOption[] = (Object.values(AGENT_CLIENTS) as AgentClientCommon[]).map((d) => ({
+  id: d.id,
+  convexType: d.convexId,
+  label: d.displayName,
+  hosted: d.executionTransports.includes("hosted"),
+}));
+
 /** The agents a user has pinned: their own list (users.pinned_agents) once
  *  they have set one, else every client pinned by default. Unknown ids drop. */
-export function pinnedAgentIds(pins: readonly string[] | null | undefined): LocalAgentClientId[] {
-  if (pins) return (Object.keys(LOCAL_AGENT_CLIENTS) as LocalAgentClientId[]).filter((id) => pins.includes(id));
-  return Object.values(LOCAL_AGENT_CLIENTS).filter((d) => d.pinnedByDefault !== false).map((d) => d.id);
+export function pinnedAgentIds(pins: readonly string[] | null | undefined): AgentClientId[] {
+  const all = Object.values(AGENT_CLIENTS) as AgentClientCommon[];
+  if (pins) return all.filter((d) => pins.includes(d.id)).map((d) => d.id);
+  return all.filter((d) => d.pinnedByDefault !== false).map((d) => d.id);
+}
+
+/** Whether `id` is a client a user may pin (users.setPinnedAgents). */
+export function isPinnableAgentId(id: string): id is AgentClientId {
+  return Object.prototype.hasOwnProperty.call(AGENT_CLIENTS, id);
+}
+
+/** A new-conversation picker's row: the pinned agents plus `keep` (the agent
+ *  the conversation already has, or the default) so it always names itself. */
+export function pinnedPickerOptions(pins: readonly string[] | null | undefined, keep?: AgentClientId | null): AgentPickerOption[] {
+  const shown = new Set<AgentClientId>(pinnedAgentIds(pins));
+  if (keep) shown.add(keep);
+  return AGENT_PICKER_OPTIONS.filter((o) => shown.has(o.id));
+}
+
+/** The registry's name for an agent_type in either spelling (and the legacy
+ *  `codex_cli`), for every surface that names an agent: web rows and labels,
+ *  the CLI's session lists. A value the registry does not know (`cowork`, a
+ *  future client) is returned as is; absent means a legacy Claude row. */
+export function agentDisplayName(agentType: string | null | undefined): string {
+  if (!agentType) return AGENT_CLIENTS.claude.displayName;
+  if (agentType === "codex_cli") return AGENT_CLIENTS.codex.displayName;
+  if (!isPinnableAgentId(agentType) && !(Object.values(CONVEX_BY_ID) as string[]).includes(agentType)) return agentType;
+  return AGENT_CLIENTS[fromConvexAgentType(agentType)].displayName;
 }
 
 /** The agent row a picker shows: the pinned agents, plus `keep` (the agent a
