@@ -4,6 +4,9 @@ import {
   snippetBySlug,
   allSnippetSlugs,
   FORKS_SNIPPET,
+  guideText,
+  guideTopics,
+  renderGuidanceFile,
   stubSectionBody,
 } from "./snippets";
 
@@ -99,9 +102,35 @@ describe("delegated worker guidance", () => {
   });
 
   it("keeps worker briefs and labeled launches out of the inbox", () => {
-    expect(FORKS_SNIPPET).toContain("cast spawn --subagent -- - <<'EOF'");
-    expect(FORKS_SNIPPET).toContain('cast spawn --subagent --label rollout "<task>" "<task>"');
-    expect(FORKS_SNIPPET).toContain("A label or a task/plan binding does not nest it");
+    expect(FORKS_SNIPPET).toContain("cast spawn --subagent -- - - <<'EOF'");
+    const guide = guideText(snippetBySlug("forks")!);
+    expect(guide).toContain('cast spawn --subagent --label rollout "<task>" "<task>"');
+    expect(guide).toContain("A label or a task/plan binding does not nest it");
     expect(FORKS_SNIPPET).not.toContain("Use it to hand off self-contained work — a parallel audit");
+  });
+});
+
+describe("guidance size", () => {
+  // Every installed byte is read by every session on the machine, in every
+  // repo. The body carries behavior and the reference (served by `cast guide`)
+  // carries flags and rare paths; these budgets keep detail from creeping
+  // back into the file. Raise one only with an eval showing the words pay
+  // (./evals check guidance).
+  it("keeps the whole installed guidance and each section under budget", () => {
+    expect(renderGuidanceFile("full", "0.0.0").length).toBeLessThan(36_000);
+    for (const topic of guideTopics()) {
+      expect(`${topic.slug} ${topic.section!.body.length < 4_000}`).toBe(`${topic.slug} true`);
+    }
+  });
+
+  it("serves the reference after the body, never inside the installed file", () => {
+    const file = renderGuidanceFile("full", "0.0.0");
+    for (const topic of guideTopics()) {
+      const ref = topic.section!.reference;
+      if (!ref) continue;
+      expect(guideText(topic).endsWith(ref.trim())).toBe(true);
+      expect(file.includes(ref.trim())).toBe(false);
+      expect(topic.section!.body).toContain(`cast guide ${topic.slug}`);
+    }
   });
 });
