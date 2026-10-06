@@ -50,9 +50,12 @@ export const JOB_AREAS: Record<string, Area[]> = {
   // them and is its own area, not part of "shared".
   "test-platform": ["platform"],
   // Every area, because the shared suite reads more than shared: the max lines
-  // ratchet walks every package under packages/, and the head of people prompt
-  // test reads its spec from docs/. Gating it on less would let a change break
-  // it without CI running it.
+  // ratchet walks every package under packages/, the head of people prompt
+  // test reads its spec from docs/, and the doc references guard
+  // (packages/shared/ratchet/docRefs.guard.test.ts) checks every path the
+  // architecture docs and CLAUDE.md name against the whole tree, so a rename
+  // anywhere can turn it red. Gating it on less would let a change break it
+  // without CI running it.
   "test-shared": [...AREAS],
   // The guard tests walk the native bundle's import graph, which reaches into
   // packages/web, packages/convex and packages/shared, and they borrow the

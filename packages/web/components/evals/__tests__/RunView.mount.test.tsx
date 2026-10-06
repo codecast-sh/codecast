@@ -40,19 +40,17 @@ const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { runFixture } = await import("../__fixtures__/run");
 const { fixtureWorldNow, evalsFixtureWorld } = await import("../__fixtures__/world");
-const { RunView } = await import("../RunView");
-const { tabOfHash, epochOfBatch, previousEpochRun, seedNeighbours, runCommands, compareCandidates, replyReading } = await import("../runModel");
-const { CompareView } = await import("../CompareView");
-const { diffWords, compareFooting } = await import("../runModel");
-const { orderGates, gateEvidenceWords } = await import("../runModel");
+const { RunView } = await import("@platform/evals/react");
+const { tabOfHash, epochOfBatch, previousEpochRun, seedNeighbours, runCommands, compareCandidates, replyReading, diffWords, compareFooting, orderGates, gateEvidenceWords } = await import("@platform/evals/client");
+const { CompareView } = await import("@platform/evals/react");
 const { anatomyTabs } = await import("../runPanels");
 const { guardCounts } = await import("../GuardLog");
 const { fileTree } = await import("../RunFiles");
-const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
-const { RunPage } = await import("../pages/RunPage");
-const { ComparePage } = await import("../pages/ComparePage");
+const { codecastEvalsHost, CodecastEvalsProvider } = await import("../host");
+const { RunPage } = await import("@platform/evals/react");
+const { ComparePage } = await import("@platform/evals/react");
 const { formatShortcutParts, getShortcutsForAction } = await import("../../../shortcuts");
-type RunViewProps = import("../RunView").RunViewProps;
+type RunViewProps = import("@platform/evals/react").RunViewProps;
 type RunFixtureCase = import("../__fixtures__/run").RunFixtureCase;
 
 // A loaded machine renders a DiffView in seconds, not milliseconds.
@@ -69,8 +67,8 @@ async function mount(node: React.ReactNode, at = "/evals") {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(<MemoryRouter initialEntries={[at]}>{node}</MemoryRouter>));
-  return { container, rerender: (n: React.ReactNode) => act(async () => root.render(<MemoryRouter initialEntries={[at]}>{n}</MemoryRouter>)), unmount: () => act(async () => root.unmount()) };
+  await act(async () => root.render(<MemoryRouter initialEntries={[at]}><CodecastEvalsProvider>{node}</CodecastEvalsProvider></MemoryRouter>));
+  return { container, rerender: (n: React.ReactNode) => act(async () => root.render(<MemoryRouter initialEntries={[at]}><CodecastEvalsProvider>{n}</CodecastEvalsProvider></MemoryRouter>)), unmount: () => act(async () => root.unmount()) };
 }
 
 const noop = () => {};
@@ -312,9 +310,9 @@ describe("RunView", () => {
       },
     };
     const { container, rerender, unmount } = await mount(
-      <EvalsHostProvider host={host}>
+      <CodecastEvalsProvider host={host}>
         <RunView {...props(fx.call, { tab: "funnel" })} />
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     expect(qa(container, "[data-ev-tab]").map((t) => t.getAttribute("data-ev-tab"))).toEqual(["verdict", "moment", "funnel", "story"]);
     expect(q(container, "[data-other-panel]")).not.toBeNull();
@@ -324,9 +322,9 @@ describe("RunView", () => {
     expect(seen).toEqual({ run: fx.call.run.row.id, previous: previousEpochRun(fx.call.run.row, fx.call.freeze.runs, fx.call.freeze.epochs).id });
     const { useRunPanels: _, ...bare } = host;
     await rerender(
-      <EvalsHostProvider host={bare}>
+      <CodecastEvalsProvider host={bare}>
         <RunView {...props(fx.call, { tab: "calls" })} />
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     expect(qa(container, "[data-ev-tab]").map((t) => t.getAttribute("data-ev-tab"))).toEqual(["verdict", "moment"]);
     expect(q(container, "[role=tabpanel]")!.getAttribute("data-ev-panel")).toBe("verdict");

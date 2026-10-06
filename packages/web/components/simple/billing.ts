@@ -13,7 +13,7 @@ import type { PlanId } from "@codecast/shared/contracts/assistant";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 
 /** A plan to subscribe to, or a top-up in one of `TOPUP.amounts_usd`. Where
- *  Stripe sends the person back is BILLING_RETURN, this lane's plan page. */
+ *  Stripe sends the person back is BILLING_RETURN, Settings > Plan. */
 export type CheckoutRequest = { plan: PlanId } | { topup_usd: number };
 
 const DIDNT_OPEN = "Stripe didn't open. Try again in a moment.";

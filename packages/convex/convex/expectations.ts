@@ -6,7 +6,8 @@
 // - `brief`: the active lines as compact text under the version to cite, the
 //   route a judge calls.
 // - `propose`: store a proposal. One that only adds lines a person said, each
-//   with the quote the record holds, applies on its own; anything else waits
+//   with the quote the record holds and about what that quote says, applies
+//   on its own; anything else waits
 //   for the project's person, as a card in their queue when an agent session
 //   proposed it.
 // - `resolve`: a person applies or drops a proposal (the CLI, the web). The
@@ -33,14 +34,15 @@ import { EXPECTATION_CARD_OPTIONS, latestExpectations, performApply } from "./li
 import {
   applyOps,
   autoApplies,
+  expectationIdPrefix,
+  groundingCandidates,
   holdsQuote,
-  isQuotedAndDated,
+  isExpectationId,
   LIMITS,
   normalizeOp,
   opErrors,
   renderExpectations,
   renderProposal,
-  PERSON_SOURCE_KINDS,
   type ExpectationCitation,
   type ExpectationOp,
   type ExpectationsVersion,
@@ -62,6 +64,8 @@ const scopeArgs = {
 const VERSIONS_LISTED = 30;
 const PROPOSALS_READ = 50;
 const PROPOSALS_SHOWN = 30;
+// The ids one story reads at once.
+const LINES_READ = 20;
 
 async function requireUser(ctx: Ctx, apiToken?: string): Promise<Id<"users">> {
   const userId = await getAuthenticatedUserId(ctx, apiToken);
@@ -153,6 +157,31 @@ export const forProject = query({
 });
 
 /**
+ * The lines some ids name (LM5, LM7): what a cause's story shows for the
+ * expectation its signals cite. An id's prefix names one project in the
+ * workspace, and each line is read through that project, so a person sees a
+ * line exactly when they can open its project. An id nothing answers to is
+ * left out.
+ */
+export const lines = query({
+  args: { workspace: v.string(), ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx);
+    if (!userId) return [];
+    const out: Array<{ id: string; text: string; status: "active" | "retired"; version: number; project_id: Id<"projects">; project_short_id?: string; project_title: string }> = [];
+    for (const id of [...new Set(args.ids)].filter(isExpectationId).slice(0, LINES_READ)) {
+      const any = await ctx.db.query("project_expectations").withIndex("by_workspace_prefix", (q: any) => q.eq("workspace", args.workspace).eq("prefix", expectationIdPrefix(id))).first();
+      const project = any ? await ctx.db.get(any.project_id) : null;
+      if (!project || !(await canAccessProject(ctx, userId, project))) continue;
+      const doc = await latestExpectations(ctx, project._id);
+      const line = doc?.items.find((e: any) => e.id === id);
+      if (line) out.push({ id, text: line.text, status: line.status, version: doc.version, project_id: project._id, project_short_id: (project as any).short_id, project_title: project.title });
+    }
+    return out;
+  },
+});
+
+/**
  * What a judge reads (LM5): the active lines with their ids, grouped by part,
  * under the version a finding cites. `version` reads an earlier one, so a
  * finding can be traced to the words it was graded against.
@@ -236,7 +265,7 @@ async function citationsPersonSaid(ctx: Ctx, project: Doc<"projects">, ops: Expe
   const said = new Set<ExpectationCitation>();
   for (const op of ops) {
     if (op.op !== "add") continue;
-    for (const c of op.citations) if (isQuotedAndDated(c) && PERSON_SOURCE_KINDS.includes(c.kind) && (await personSaid(ctx, project, c))) said.add(c);
+    for (const c of groundingCandidates(op)) if (await personSaid(ctx, project, c)) said.add(c);
   }
   return said;
 }

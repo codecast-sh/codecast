@@ -19,7 +19,7 @@ import { decisionAnswerClientId } from "@codecast/shared/contracts";
 import { ensureWallet, LEAK_GRACE_MS, reserve } from "../lib/wallet";
 import { allModules as modules, loadPiAi } from "../testModules.testkit";
 import { toolsFor } from "./tools";
-import { ALWAYS_ALLOW, APPROVE, DECLINE, allowScope, approvalContext, leaseTurn, systemPrompt, turnDeps, withRules } from "./turns";
+import { ALWAYS_ALLOW, APPROVE, DECLINE, allowScope, alwaysCovers, approvalContext, leaseTurn, systemPrompt, turnDeps, withRules } from "./turns";
 import { strandedCalls } from "./history";
 import { hostedInputWaits } from "./input";
 
@@ -246,7 +246,7 @@ describe("approvals", () => {
       pending_call: { tool_call_id: "call_send", tool: "send_mail", args: draft },
     });
     expect(s.decisions).toHaveLength(1);
-    expect(s.decisions[0]).toMatchObject({ question: "Send an email?", blocking: true, status: "pending", asked_user_ids: [user] });
+    expect(s.decisions[0]).toMatchObject({ question: "Send an email to Dana?", blocking: true, status: "pending", asked_user_ids: [user] });
     expect(s.decisions[0].options.map((o) => o.label)).toEqual([APPROVE, ALWAYS_ALLOW, DECLINE]);
     expect(s.decisions[0].context_md).toContain("dana@example.com");
     expect(s.decisions[0].context_md).toContain("Thursday at noon works for me.");
@@ -999,6 +999,14 @@ describe("pieces", () => {
       covers: "Add events with dana@example.com, lee@example.com as the guests, without emailing them",
     });
     expect(allowScope({ name: "create_event", input: {} })).toMatchObject({ kind: "match", match: "no one" });
+  });
+
+  test("a whole-tool Always allow names the tool, not this call", () => {
+    const covers = (name: string, input: Record<string, unknown>) => alwaysCovers({ name }, allowScope({ name, input }));
+    // Each rule lets every later call of the tool run, for any note or anyone.
+    expect(covers("write_doc", { title: "Packing list", content: "x" })).toBe("Write a note");
+    expect(covers("create_draft", { to: ["dana@example.com"], body: "x" })).toBe("Draft a reply");
+    expect(covers("create_event", { attendees: ["dana@example.com"] })).toBe("Add events with dana@example.com as the guests, without emailing them");
   });
 
   test("the card shows every field literally, long text whole", () => {

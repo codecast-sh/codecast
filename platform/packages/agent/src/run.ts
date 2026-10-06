@@ -21,7 +21,8 @@ import { messagesToRows, prepareContext, rowsToMessages, type MessageRow, type R
 import { affordableOutputTokens, billedUsage, messageCost, priceFor, projectInputCost } from "./meter";
 import { resolveModel } from "./models";
 import { streamModel } from "./stream";
-import { meteredContext, runTool, stoppedText, toAgentTool, type Tool, type ToolMeter, type ToolRisk } from "./tool";
+import { CUT_OFF_TEXT, WAITING_TEXT, declineText, refusalText, startedText, stoppedText, unavailableText, unrecordedText } from "./outcome";
+import { meteredContext, runTool, toAgentTool, type Tool, type ToolMeter, type ToolRisk } from "./tool";
 import { UNTRUSTED_GUIDANCE } from "./untrusted";
 
 /**
@@ -249,25 +250,6 @@ function verdictOf(decision: GateDecision): { verdict: GateVerdict; reason?: str
   return typeof decision === "string" ? { verdict: decision } : decision;
 }
 
-function refusalText(name: string): string {
-  return `The person has not allowed ${name}. It did not run. Do not try it again; tell them what you would have done.`;
-}
-
-/** The result a declined call answers with. Exported so a host that settles a
- *  declined call outside a run writes the same words the run would. */
-export function declineText(name: string, note?: string): string {
-  return note
-    ? `The person declined ${name}. It did not run. They said: ${note}`
-    : `The person declined ${name}. It did not run.`;
-}
-
-function startedText(name: string): string {
-  return `${name} started in an earlier run that stopped before it reported back, so it may or may not have happened. It was not run again. Check whether it took effect before trying it again.`;
-}
-
-const WAITING_TEXT = "Waiting for the person's approval.";
-const CUT_OFF_TEXT = "This call was cut off before its arguments were complete, so it did not run.";
-
 /**
  * Runs the assistant over a conversation: the pi-agent-core loop, with a gate
  * in front of every tool call, a meter on every model message, a cost ceiling
@@ -373,7 +355,7 @@ export async function runAssistant(options: RunAssistantOptions): Promise<RunRes
         await options.onToolStart(call);
         return undefined;
       } catch (error) {
-        return `${call.name} did not run: its start could not be recorded (${error instanceof Error ? error.message : String(error)}).`;
+        return unrecordedText(call.name, error instanceof Error ? error.message : String(error));
       }
     };
     const decide = async (call: ToolCallRequest): Promise<{ verdict: GateVerdict; reason?: string }> => {
@@ -391,7 +373,7 @@ export async function runAssistant(options: RunAssistantOptions): Promise<RunRes
       if (errorText !== undefined) {
         result = { content: [{ type: "text", text: errorText }], details: undefined };
       } else if (!tool) {
-        result = { content: [{ type: "text", text: `${call.name} is no longer available, so it did not run.` }], details: undefined };
+        result = { content: [{ type: "text", text: unavailableText(call.name) }], details: undefined };
         isError = true;
       } else if (stopped()) {
         // Checked before markStarted, so a stopped run records no start either.

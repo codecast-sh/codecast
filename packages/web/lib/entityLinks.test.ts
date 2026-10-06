@@ -721,3 +721,24 @@ describe("calls (cl-N) and their lines (cl-N:a-b)", () => {
     expect(parseEntityUrl(`/calls/${CALL_ID}`)).toEqual({ type: "call", id: CALL_ID });
   });
 });
+
+describe("product sources (src-N)", () => {
+  // `src` is a path segment (src-tauri), so a source takes digits only, and
+  // its page is the Ops timeline narrowed to it: addressed by query.
+  test("src-N resolves to the source type, and paths are never sources", () => {
+    expect(inferEntityTypeFromShortId("src-13")).toBe("source");
+    expect(entityTypeFromId("SRC-2")).toBe("source");
+    for (const word of ["src-tauri", "src-gen", "src-"]) expect(isEntityId(word)).toBe(false);
+    const prose = "| src-11 codecast-web (SDK) |\nsrc-13 stays in error; packages/src-tauri is a path.";
+    expect(prose.match(bareEntityIdRegex())).toEqual(["src-11", "src-13"]);
+  });
+
+  test("a source routes to the Ops timeline by query and its url parses back", () => {
+    expect(entityRoute("source", "src-13")).toBe("/ops?source=src-13");
+    expect(parseEntityUrl("https://codecast.sh/ops?source=src-13")).toEqual({ type: "source", id: "src-13" });
+    // Ops itself, its tabs and its issue pages name no source.
+    expect(parseEntityUrl("/ops")).toBeNull();
+    expect(parseEntityUrl("/ops/issues?source=src-13")).toBeNull();
+    expect(parseEntityUrl("/ops/issues/eg-4")).toBeNull();
+  });
+});

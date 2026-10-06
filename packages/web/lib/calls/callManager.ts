@@ -1360,7 +1360,9 @@ export async function startTranscribing(
  *  switching back on resumes it. */
 export async function stopTranscribing(roomKey: string): Promise<void> {
   void useInboxStore.getState().setRoomTranscribeOff(roomKey, true);
-  await stopScribe();
+  // Somebody pressed stop mid-sentence: commit the line being spoken (a
+  // bounded wait) instead of dropping it with the socket.
+  await stopScribe({ graceful: true });
 }
 
 // Knock at a locked room. The row paints "knocked" immediately; when someone

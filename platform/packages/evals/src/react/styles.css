@@ -1,0 +1,8 @@
+/* Every rule the shared Evals views draw with, in one import. A host imports
+   this and tokens.css once at its mount root; no component imports CSS. */
+@import './shell/shell.css';
+@import './shell/defaults.css';
+@import './surface/surface.css';
+@import './run/run.css';
+@import './freeze/freeze.css';
+@import './bisect/bisect.css';

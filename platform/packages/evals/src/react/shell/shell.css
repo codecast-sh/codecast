@@ -1,0 +1,493 @@
+/* The Evals area: a lab bench. Colour and type only through the --ev-*
+   tokens (tokens.css), which resolve the host's theme: codecast's light,
+   .dark and .minimal-style all flow through them. Every class here is an
+   ev-* rule; the views use no utility classes. */
+
+.ev-area {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--ev-text);
+  background: var(--ev-bg);
+  font-family: var(--ev-font-ui);
+  container-type: inline-size;
+  container-name: evals;
+}
+
+/* The ground the views were drawn on: a host without a CSS reset (codecast
+   has Tailwind's preflight) would otherwise underline every link, pad every
+   list and give every heading its browser margin. :where() keeps it at zero
+   specificity, so every ev-* rule wins, and in a host that already resets
+   these it changes nothing. Portaled sheets and tips get it too. What a host
+   draws itself (.ev-host: its run tabs, verdict foot, wall foot) keeps the
+   host's own ground: these rules are unlayered, so in a host whose utilities
+   sit in a cascade layer (Tailwind v4) they would beat every utility there. */
+:where(.ev-area, .ev-sheet-layer, .ev-tip),
+:where(.ev-area, .ev-sheet-layer, .ev-tip) :where(*, ::before, ::after):not(:where(.ev-host *)) { box-sizing: border-box; border-width: 0; border-style: solid; border-color: var(--ev-rule); }
+:where(.ev-area, .ev-sheet-layer) :where(h1, h2, h3, h4, h5, h6):not(:where(.ev-host *)) { font-size: inherit; font-weight: inherit; }
+:where(.ev-area, .ev-sheet-layer) :where(h1, h2, h3, h4, h5, h6, p, blockquote, figure, pre, dl, dd, ol, ul):not(:where(.ev-host *)) { margin: 0; }
+:where(.ev-area, .ev-sheet-layer) :where(ol, ul, menu):not(:where(.ev-host *)) { list-style: none; padding: 0; }
+:where(.ev-area, .ev-sheet-layer) :where(a):not(:where(.ev-host *)) { color: inherit; text-decoration: inherit; }
+:where(.ev-area, .ev-sheet-layer) :where(button, input, select, textarea):not(:where(.ev-host *)) { font: inherit; letter-spacing: inherit; color: inherit; margin: 0; padding: 0; background-color: transparent; }
+:where(.ev-area, .ev-sheet-layer) :where(button, [role="button"]):not(:where(.ev-host *)) { cursor: pointer; }
+:where(.ev-area, .ev-sheet-layer) :where(img, svg, video, canvas):not(:where(.ev-host *)) { display: block; vertical-align: middle; }
+:where(.ev-area, .ev-sheet-layer) :where(table):not(:where(.ev-host *)) { border-collapse: collapse; text-indent: 0; }
+
+/* A host-drawn part of a view: no box of its own, and outside the ground above. */
+.ev-host { display: contents; }
+
+/* Fixed colour meanings. Glyphs and marks draw in currentColor. */
+.ev-pass { color: var(--ev-cyan); }
+.ev-fail { color: var(--ev-magenta); }
+.ev-gate { color: var(--ev-red); }
+.ev-live { color: var(--ev-red); }
+.ev-refused { color: var(--ev-orange); }
+.ev-unserved { color: var(--ev-yellow); }
+.ev-ruler { color: var(--ev-violet); }
+.ev-quiet { color: var(--ev-text-dim); }
+.ev-model-0 { color: var(--ev-blue); }
+.ev-model-1 { color: var(--ev-green); }
+.ev-model-2 { color: var(--ev-violet); }
+
+/* ── Local nav ──────────────────────────────────────────────────────────── */
+
+.ev-nav {
+  display: flex;
+  align-items: stretch;
+  gap: 20px;
+  height: 46px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--ev-rule);
+  background: var(--ev-bg);
+  flex-shrink: 0;
+}
+.ev-mark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ev-text);
+  white-space: nowrap;
+}
+.ev-mark-flask { width: 18px; height: 18px; }
+.ev-tabs { display: flex; align-items: stretch; gap: 2px; }
+.ev-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  color: var(--ev-text-dim);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: inset 0 -2px 0 transparent;
+  transition: color 120ms ease, box-shadow 160ms ease;
+}
+.ev-tab:hover { color: var(--ev-text); }
+.ev-tab[aria-current="page"] {
+  color: var(--ev-text);
+  box-shadow: inset 0 -2px 0 var(--ev-cyan);
+}
+.ev-tab-count {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ev-text-dim);
+}
+.ev-nav-spacer { flex: 1; }
+
+.ev-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex: 0 1 320px;
+  min-width: 150px;
+}
+.ev-search input {
+  width: 100%;
+  height: 28px;
+  padding: 0 34px 0 28px;
+  font: 12px var(--ev-font-ui);
+  color: var(--ev-text);
+  background: var(--ev-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 6px;
+  outline: none;
+  font-variant-ligatures: none;
+}
+.ev-search input:focus { border-color: var(--ev-cyan); }
+.ev-search input::placeholder { color: var(--ev-text-dim); }
+.ev-search-icon { position: absolute; left: 9px; width: 13px; height: 13px; color: var(--ev-text-dim); pointer-events: none; }
+.ev-search-key { position: absolute; right: 6px; pointer-events: none; }
+.ev-search-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 4px;
+  background: var(--ev-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.28);
+}
+.ev-search-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: left;
+  color: var(--ev-text);
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ev-search-item[aria-selected="true"] { background: var(--ev-bg-highlight); }
+.ev-search-kind { width: 52px; flex-shrink: 0; font-size: 10.5px; color: var(--ev-text-dim); }
+.ev-search-empty { padding: 8px; font-size: 12px; color: var(--ev-text-dim); }
+/* Under the matches: the keys that choose and open one. */
+.ev-search-keys { display: flex; align-items: center; gap: 12px; padding: 6px 8px 2px; font-size: 10.5px; color: var(--ev-text-dim); }
+.ev-search-keys > span { display: inline-flex; align-items: center; gap: 4px; }
+
+.ev-status { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ev-text-dim); white-space: nowrap; }
+
+/* A split pane or a narrow window: the search shrinks first, then the status
+   line and the mark's word give way, so the sections stay reachable. */
+@container evals (max-width: 860px) {
+  .ev-status { display: none; }
+  .ev-nav { gap: 12px; padding: 0 12px; }
+}
+@container evals (max-width: 640px) {
+  .ev-mark-word, .ev-nav-spacer, .ev-search-key { display: none; }
+  .ev-tab { padding: 0 6px; }
+  /* The field narrows to its icon and still takes typing; its list keeps a readable width. */
+  .ev-search { flex: 1 1 auto; min-width: 30px; }
+  .ev-search input { padding-right: 6px; }
+  .ev-search input:not(:focus)::placeholder { color: transparent; }
+  .ev-search-list { left: auto; right: 0; width: 280px; }
+}
+
+/* ── Body ───────────────────────────────────────────────────────────────── */
+
+.ev-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.ev-page { padding: 20px 24px 40px; }
+
+/* The bench paper: an 8px grid, only under charts and lanes. */
+.ev-bench {
+  background-color: var(--ev-bg);
+  background-image:
+    linear-gradient(to right, var(--ev-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--ev-grid) 1px, transparent 1px);
+  background-size: 8px 8px;
+  background-position: -1px -1px;
+}
+.ev-card {
+  background: var(--ev-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 8px;
+}
+/* Every view's h1, at one size: the wall, a surface, a freeze, a run, a
+   comparison, the bisects and the Multiplayer sim. .ev-title (13px) is for
+   sections inside a page. */
+.ev-page-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--ev-text);
+}
+.ev-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ev-text);
+}
+.ev-num {
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+/* One line that waits or explains: "Reading the run folder...". --center fills the pane and sits in its middle. */
+.ev-note { font-size: 12px; color: var(--ev-text-dim); }
+.ev-note--center { height: 100%; display: flex; align-items: center; justify-content: center; }
+/* A page that could not be read: its empty state, then the way to try again. */
+.ev-stack { display: flex; flex-direction: column; align-items: center; }
+.ev-grow { flex: 1 1 0%; }
+.ev-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-small { font-size: 12px; }
+/* Read by a screen reader, never drawn. */
+.ev-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+/* A link that reads as text until it is pointed at. */
+.ev-link { text-underline-offset: 2px; }
+.ev-link:hover { text-decoration-line: underline; }
+/* A lucide icon beside a line of text. */
+.ev-icon { width: 14px; height: 14px; flex-shrink: 0; }
+.ev-mono { font-family: var(--ev-font-mono); font-variant-ligatures: none; }
+.ev-tabular { font-variant-numeric: tabular-nums; }
+
+/* The judge's voice: mono italic, muted, a violet rule. */
+.ev-judge {
+  font-family: var(--ev-font-mono);
+  font-style: italic;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ev-text-muted);
+  border-left: 2px solid var(--ev-violet);
+  padding: 2px 0 2px 10px;
+  white-space: pre-wrap;
+}
+
+/* ── Chips ──────────────────────────────────────────────────────────────── */
+
+.ev-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ev-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-family: var(--ev-font-mono);
+  font-variant-ligatures: none;
+  color: var(--ev-text-muted);
+  background: var(--ev-bg-alt);
+  border: 1px solid var(--ev-rule);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+a.ev-chip, button.ev-chip { cursor: pointer; }
+a.ev-chip:hover, button.ev-chip:hover { color: var(--ev-text); border-color: var(--ev-border); }
+.ev-chip svg { width: 11px; height: 11px; }
+.ev-chip--dirty {
+  color: var(--ev-text);
+  background-image: repeating-linear-gradient(135deg, var(--ev-hatch) 0 3px, transparent 3px 6px);
+  border-color: color-mix(in srgb, var(--ev-yellow) 45%, transparent);
+}
+.ev-chip--live {
+  color: var(--ev-red);
+  background: color-mix(in srgb, var(--ev-red) 10%, transparent);
+  border-color: color-mix(in srgb, var(--ev-red) 40%, transparent);
+}
+.ev-chip--offbranch { border-style: dashed; }
+.ev-chip--private { color: var(--ev-text); }
+
+/* ── Glyphs ─────────────────────────────────────────────────────────────── */
+
+.ev-glyph { flex-shrink: 0; }
+.ev-sep { display: inline-flex; align-items: center; gap: 6px; }
+.ev-sep-word { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+
+/* ── Score bar ──────────────────────────────────────────────────────────── */
+
+.ev-scorebar { display: inline-flex; align-items: center; gap: 8px; }
+.ev-scorebar-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ev-text) 9%, transparent);
+  overflow: visible;
+}
+.ev-scorebar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: currentColor; }
+.ev-scorebar-mark { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--ev-text); opacity: 0.55; }
+.ev-scorebar-floor { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--ev-magenta); opacity: 0.7; }
+.ev-scorebar-value { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ev-text); min-width: 2.6em; }
+
+/* ── Reply card ─────────────────────────────────────────────────────────── */
+
+.ev-reply { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.ev-reply-head { display: flex; align-items: center; gap: 10px; }
+.ev-reply-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ev-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ev-reply-gates { display: flex; flex-wrap: wrap; gap: 4px; }
+.ev-reply-gates .ev-chip { border-color: color-mix(in srgb, var(--ev-red) 45%, transparent); }
+.ev-reply-open { font-size: 11.5px; color: var(--ev-text-dim); text-underline-offset: 2px; }
+.ev-reply-open:hover { color: var(--ev-text); text-decoration-line: underline; }
+
+/* ── Prompt diff ────────────────────────────────────────────────────────── */
+
+.ev-pdiff { overflow: hidden; }
+.ev-pdiff-head { padding: 8px 12px; border-bottom: 1px solid var(--ev-rule); }
+.ev-pdiff-file { font-size: 12px; font-weight: 400; }
+.ev-pdiff-same { font-size: 11.5px; font-weight: 400; color: var(--ev-text-dim); }
+.ev-pdiff-note { padding: 16px 12px; font-size: 12px; color: var(--ev-text-dim); }
+
+/* ── Copy command ───────────────────────────────────────────────────────── */
+
+.ev-copy {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--ev-rule);
+  border-radius: 6px;
+  background: var(--ev-bg-inset);
+  overflow: hidden;
+}
+.ev-copy code {
+  padding: 5px 10px;
+  font: 11.5px var(--ev-font-mono);
+  color: var(--ev-text);
+  overflow-x: auto;
+  white-space: nowrap;
+  font-variant-ligatures: none;
+}
+.ev-copy button {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  font-size: 11px;
+  color: var(--ev-text-dim);
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--ev-rule);
+  cursor: pointer;
+}
+.ev-copy button svg { width: 12px; height: 12px; }
+.ev-copy button:hover { color: var(--ev-text); background: var(--ev-bg-highlight); }
+
+/* ── Index progress (first build) ───────────────────────────────────────── */
+
+.ev-index {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  font-size: 12px;
+  color: var(--ev-text-muted);
+  border-bottom: 1px solid var(--ev-rule);
+}
+.ev-index-track { flex: 1; max-width: 360px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--ev-text) 8%, transparent); overflow: hidden; }
+.ev-index-fill { display: block; height: 100%; background: var(--ev-cyan); transition: width 300ms ease-out; }
+
+/* ── Charts ─────────────────────────────────────────────────────────────── */
+
+.ev-strip { display: block; overflow: visible; }
+.ev-strip-mark { stroke: var(--ev-text); stroke-width: 0.75; stroke-dasharray: 2 3; opacity: 0.45; }
+.ev-strip-median { fill: none; stroke: var(--ev-text); stroke-width: 1.5; stroke-linejoin: round; }
+.ev-strip-cursor { stroke: var(--ev-text); stroke-width: 1; opacity: 0.35; }
+.ev-strip-notch { stroke: var(--ev-text-dim); stroke-width: 1.25; }
+.ev-strip-hit { fill: transparent; cursor: crosshair; }
+
+.ev-well { display: block; overflow: visible; }
+.ev-well-ink { fill: var(--ev-text); }
+.ev-well-ring { fill: none; stroke: currentColor; stroke-width: 1.25; }
+.ev-well-empty { fill: none; stroke: var(--ev-border); stroke-width: 0.75; stroke-dasharray: 1.5 1.5; }
+button.ev-well-button { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; }
+button.ev-well-button:focus-visible { outline: 2px solid var(--ev-cyan); outline-offset: 1px; }
+
+/* ── Motion: one orchestrated moment per view, stopped under reduced motion ─ */
+
+@keyframes ev-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes ev-pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes ev-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ev-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.ev-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: ev-draw 400ms ease-out both;
+  animation-delay: var(--ev-delay, 0ms);
+}
+.ev-pop {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ev-pop 120ms ease-out both;
+  animation-delay: var(--ev-delay, 0ms);
+}
+.ev-settle { animation: ev-fade-in 260ms ease-out both; animation-delay: var(--ev-delay, 0ms); }
+.ev-pulse { animation: ev-pulse 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ev-area *, .ev-area *::before, .ev-area *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* A flip's two reps, beside its name: the hop from a flip to its failing run. */
+.ev-flip-runs { display: inline-flex; gap: 8px; margin-left: auto; font-size: 11px; flex-shrink: 0; }
+.ev-flip-runs a { white-space: nowrap; color: var(--ev-text-dim); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--ev-text-dim) 40%, transparent); }
+.ev-flip-runs a:hover { color: var(--ev-text); }
+
+/* "stalled?" beside a live bisect anywhere it is listed: the dashed yellow of the bisect page's stall banner. */
+.ev-stall-chip { display: inline-flex; align-items: center; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 10.5px; line-height: 16px; color: var(--ev-text); border: 1px dashed color-mix(in srgb, var(--ev-yellow) 70%, transparent); background: color-mix(in srgb, var(--ev-yellow) 12%, transparent); }
+
+/* ChangedPrompts (parts.tsx): the prompt files that held still, on one quiet line. */
+.ev-sf-unchanged { margin: 0; font: 11.5px var(--ev-font-mono); color: var(--ev-text-dim); font-variant-ligatures: none; }
+
+/* A flip's before and after pair (the ExamplePair slot): each side wears its
+   outcome, the passing reply cyan and the failing one magenta, and After keeps
+   the tinted tile so the newer reply still reads as the result. A host that
+   draws its own pair styles it the same way under [data-ev-flip]. */
+[data-ev-flip] .ev-pair-label { color: var(--ev-magenta); }
+[data-ev-flip="broke"] .ev-pair-before .ev-pair-label,
+[data-ev-flip="fixed"] .ev-pair-after .ev-pair-label { color: var(--ev-cyan); }
+[data-ev-flip="fixed"] .ev-pair-after { border-color: color-mix(in srgb, var(--ev-cyan) 45%, transparent); background: color-mix(in srgb, var(--ev-cyan) 9%, transparent); }
+[data-ev-flip="broke"] .ev-pair-after { border-color: color-mix(in srgb, var(--ev-magenta) 45%, transparent); background: color-mix(in srgb, var(--ev-magenta) 8%, transparent); }
+
+/* A job's log tail (parts.tsx LogTail): bisects, shrinks and sweeps. */
+.ev-logtail { display: flex; flex-direction: column; gap: 6px; }
+.ev-logtail-label { font-size: 11px; color: var(--ev-text-dim); }
+.ev-log { font: 11px/1.55 var(--ev-font-mono); font-variant-ligatures: none; color: var(--ev-text-muted); background: var(--ev-bg-inset); border: 1px solid var(--ev-rule); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; display: flex; flex-direction: column-reverse; }
+
+/* ── The area's one button ───────────────────────────────────────────────────
+   24px for a tool beside data (swap, overlay, compare), --lg (30px) for an
+   action that starts or stops something. --go is the one primary: an accent
+   fill with a solid finish (a lit top edge, a hairline and a one-pixel drop;
+   brighter on hover, pressed in on click), the same on every page and every
+   theme. --stop is a quiet magenta outline. */
+.ev-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 9px;
+  font-size: 11.5px; color: var(--ev-text-muted);
+  background: var(--ev-card); border: 1px solid var(--ev-rule); border-radius: 5px;
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+.ev-btn:hover:not(:disabled) { color: var(--ev-text); border-color: var(--ev-border); }
+.ev-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--ev-cyan) 70%, transparent); outline-offset: 2px; }
+.ev-btn[aria-pressed="true"] { color: var(--ev-text); border-color: var(--ev-cyan); background: color-mix(in srgb, var(--ev-cyan) 8%, var(--ev-card)); }
+.ev-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ev-btn svg { width: 12px; height: 12px; flex: none; }
+.ev-btn--lg { height: 30px; padding: 0 12px; gap: 8px; font-size: 12.5px; font-weight: 500; color: var(--ev-text); border-radius: 6px; }
+.ev-btn--lg svg { width: 13px; height: 13px; }
+.ev-btn--go {
+  color: var(--ev-bg); background-color: var(--ev-cyan); border-color: transparent; font-weight: 600;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14), inset 0 -1px 0 rgb(0 0 0 / 0.05), 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 1px 1px rgb(0 0 0 / 0.1);
+}
+.ev-btn--go:hover:not(:disabled) {
+  color: var(--ev-bg); border-color: transparent; filter: brightness(1.05);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(0 0 0 / 0.05), 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.ev-btn--go:active:not(:disabled) { filter: brightness(0.97); transform: translateY(0.5px); box-shadow: inset 0 1px 1px rgb(0 0 0 / 0.1), 0 0 0 0.5px rgb(0 0 0 / 0.14); }
+.ev-btn--go:disabled { box-shadow: none; filter: none; }
+@media (prefers-reduced-motion: reduce) { .ev-btn--go:active:not(:disabled) { transform: none; } }
+.ev-btn--go kbd { color: var(--ev-bg) !important; background: transparent !important; border-color: color-mix(in srgb, var(--ev-bg) 45%, transparent) !important; box-shadow: none !important; }
+.ev-btn--stop { color: var(--ev-magenta); border-color: color-mix(in srgb, var(--ev-magenta) 40%, transparent); }
+.ev-btn--stop:hover:not(:disabled) { color: var(--ev-magenta); border-color: var(--ev-magenta); }
+
+/* LivenessChip: a rep still sending events, beside its verdict. */
+.ev-live-chip { display: inline-flex; align-items: center; gap: 5px; margin-left: 6px; padding: 0 6px; border-radius: 3px; font-size: 10.5px; line-height: 16px; color: var(--ev-text); border: 1px solid color-mix(in srgb, var(--ev-cyan) 45%, transparent); background: color-mix(in srgb, var(--ev-cyan) 10%, transparent); }
+.ev-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ev-cyan); }

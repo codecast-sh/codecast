@@ -17,7 +17,7 @@ import { connectionNote, toolsFor } from "./index";
 import { SEARCH_MAX_PER_TURN } from "./web";
 import { sealWhiskToken, type WhiskAccess } from "../../whisk";
 import { WHISK_PROVIDER } from "../../lib/whisk";
-import { fakeWhisk } from "./whisk.testkit";
+import { fakeWhisk } from "@platform/assistant/testkit";
 
 setDefaultTimeout(120_000);
 

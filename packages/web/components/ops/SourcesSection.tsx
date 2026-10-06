@@ -29,7 +29,7 @@ import { ConfirmButton } from "../integrations/parts";
 import { eventNameRows, KEYED_SOURCE_PROVIDERS, sourceConfigProblem } from "@codecast/shared/contracts/ingest";
 import { appSourceSnippets, sourceSnippets, type ConfigSource } from "./opsModel";
 import { opsHref } from "./opsPaths";
-import { ProviderIcon } from "./parts";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL } from "./parts";
 import type { OpsSource } from "./opsTypes";
 import "./ops.css";
 
@@ -39,7 +39,7 @@ type Kind = CreateOpsSourceInput["provider"];
 type Vendor = Extract<Kind, "sentry" | "posthog">;
 
 const VENDORS: Vendor[] = ["sentry", "posthog"];
-const KIND_LABEL: Record<Kind, string> = { sdk: "SDK", http: "HTTP", app: "App", sentry: "Sentry", posthog: "PostHog" };
+const KIND_LABEL: Record<Kind, string> = SOURCE_PROVIDER_LABEL;
 const VENDOR_READS: Record<Vendor, string> = { sentry: "its unresolved issues", posthog: "its recordings and the metrics you watch" };
 
 /** Sources that read through a connection rather than a key: the connection's card above has to say connected. */

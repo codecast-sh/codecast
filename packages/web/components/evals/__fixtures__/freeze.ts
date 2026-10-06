@@ -5,7 +5,7 @@
 
 import type { FootingMarker, FreezeResponse, LedgerCell, RunResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
 import { evalsFixtureWorld } from "./world";
-import { defaultFreezePair, type DefaultFreezePair } from "../freezeModel";
+import { defaultFreezePair, type DefaultFreezePair } from "@platform/evals/client";
 
 export interface FreezeFixture {
   freeze: FreezeResponse;

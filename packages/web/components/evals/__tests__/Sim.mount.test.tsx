@@ -34,6 +34,7 @@ const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { ShortcutProvider, useShortcuts } = await import("../../../shortcuts/ShortcutProvider");
 const { useEvalsStore } = await import("../../../store/evalsStore");
+const { CodecastEvalsProvider } = await import("../host");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { SimCatalogView } = await import("../SimCatalogView");
 const { cellFailure, gridRows, markersFor } = await import("../simModel");
@@ -64,7 +65,7 @@ async function mount(node: React.ReactNode, path = "/evals/sim") {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>));
+  await act(async () => root.render(<MemoryRouter initialEntries={[path]}><CodecastEvalsProvider>{node}</CodecastEvalsProvider></MemoryRouter>));
   return { container, unmount: () => act(async () => root.unmount()) };
 }
 

@@ -122,7 +122,7 @@ export interface RunnerIo {
   transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string; migrationId: string; batchId: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
   transferToLocal(facts: Extract<BeginResult, { ok: true }>): Promise<TransferResult>;
   /** The reorientation notice for the moved agent, from what the transfer proved. */
-  notice(facts: Extract<BeginResult, { ok: true }>, transfer: TransferResult): string | null;
+  notice(facts: Extract<BeginResult, { ok: true }>, transfer: TransferResult, stoppedOnSource?: Array<{ name: string; via?: string }>): string | null;
 }
 
 /** Statuses that mean "a turn is being produced"; the wait is for these to end. */
@@ -213,6 +213,8 @@ export async function migrateRow(
   // Set once the session's running agent was stopped for the move: a failure
   // after that restarts it where it is.
   let stoppedRunning = false;
+  // What the source's quiesce named as started outside the agent's tree; its release stops them.
+  let outside: Array<{ name: string; via?: string }> = [];
   const fail = async (error: string): Promise<RowOutcome> => {
     io.log(`FAILED ${tag}: ${error}${stoppedRunning ? " (restarting it here)" : ""}`);
     await io.fail(id, error, false, stoppedRunning);
@@ -273,6 +275,7 @@ export async function migrateRow(
       let parsed: any = {};
       try { parsed = st.result ? JSON.parse(st.result) : {}; } catch { /* non-JSON result: treat as done */ }
       if (parsed.quiesced === true && parsed.had_pane) stoppedRunning = true;
+      if (parsed.quiesced === true && Array.isArray(parsed.outside)) outside = parsed.outside;
       if (parsed.quiesced === false) {
         // A turn began between our check and the stop. Keep waiting inside
         // the same window; past it, force.
@@ -327,7 +330,7 @@ export async function migrateRow(
       source_path: transfer.sourcePath,
     });
     if (!fin.ok) return fail(`handoff refused: ${fin.reason}`);
-    const notice = io.notice(facts, transfer);
+    const notice = io.notice(facts, transfer, outside);
     if (notice) await io.sendNotice(facts.conversation_id, notice);
 
     // ── 5. confirm the resume landed ────────────────────────────────────────

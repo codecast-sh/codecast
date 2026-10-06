@@ -12,6 +12,7 @@ import {
   Network,
   Phone,
   Signpost,
+  Radio,
   Target,
   Zap,
 } from "lucide-react";
@@ -55,6 +56,7 @@ import { TranscriptTurnList } from "./calls/TranscriptTurns";
 import { groupTurns } from "./calls/transcriptTurnModel";
 import { firstName, fmtCallLength } from "./calls/speakers";
 import { CallMomentFrame } from "./calls/CallMomentFrame";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -81,6 +83,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   pr: GitPullRequest,
   commit: GitCommitHorizontal,
   call: Phone,
+  source: Radio,
 };
 
 /** The words a call reference names (`cl-42:15-25`), as turns; null for a whole call. */
@@ -203,6 +206,17 @@ export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }
     );
     const who = (entity.participants ?? []).map((p: any) => firstName(p.name)).join(", ");
     if (who) push(<span className="truncate">{who}</span>, "who", true);
+  } else if (type === "source") {
+    const state = SOURCE_STATE[entity.status as keyof typeof SOURCE_STATE] ?? SOURCE_STATE.active;
+    push(<span className={`whitespace-nowrap font-medium ${state.ink}`}>{state.label}</span>, "state");
+    push(
+      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+        <ProviderIcon provider={entity.provider} className="h-2.5 w-2.5" />
+        {SOURCE_PROVIDER_LABEL[entity.provider as keyof typeof SOURCE_PROVIDER_LABEL] ?? entity.provider}
+      </span>,
+      "provider",
+    );
+    sourceFacts(entity).forEach((fact, i) => push(<span className="whitespace-nowrap">{fact}</span>, `fact${i}`));
   } else {
     push(<span className="font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>, "type");
   }
@@ -374,6 +388,10 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
       </div>
     );
   }
+  if (type === "source") {
+    if (!entity.last_error) return null;
+    return <p className={`text-[12px] leading-relaxed text-sol-red ${clamp}`}>{entity.last_error}</p>;
+  }
   if (type === "commit") {
     const body = commitBody(entity);
     if (!body) return null;
@@ -535,6 +553,11 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
         <FileDiffList files={entity.files} emptyText="No file changes synced" className="overflow-hidden rounded border border-sol-border/40" />
       </div>
     );
+  }
+  if (type === "source") {
+    return entity.last_error
+      ? <p className="text-[12px] leading-relaxed text-sol-red">{entity.last_error}</p>
+      : <p className="text-[11px] italic text-sol-text-dim">Its errors, checks and deploys are on the Ops page.</p>;
   }
   if (type === "call") {
     if (entity.turns) return <CallTurns call={entity} />;
