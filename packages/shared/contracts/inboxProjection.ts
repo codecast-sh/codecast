@@ -411,7 +411,7 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
 // a needs-input row is ranked by when it started needing you, a done row by
 // when its turn ended, a working row by the last time it asked for or got
 // attention (so a session that just came back from a settle outranks one that
-// has been grinding for an hour), a dormant row by the wake it parks on, and an
+// has been grinding for an hour), a dormant row by when it parked, and an
 // idle row — blank or retired — by plain recency.
 //
 // Every class but idle reads an EVENT stamp, never conversations.updated_at, so
@@ -419,7 +419,7 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
 // blank or killed (classifyWorkState), so its updated_at does not churn either.
 //
 // The stamp is direction free. A list that puts the freshest on top reads
-// `key`; a queue the reader clears top-down (Needs Input, Done) reads `at`
+// `key`; a queue the reader clears top-down (Needs Input, Done, Dormant) reads `at`
 // ascending and keeps its own direction.
 
 // A session created this recently holds the top of a freshest-first list: the
@@ -429,11 +429,6 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
 // smart-sort.ts CREATE_GRACE_MS).
 export const INBOX_CREATE_GRACE_MS = 5 * 60_000;
 
-// A dormant row whose wake nothing can name sits after every named one,
-// freshest park first. The base is far past any wall-clock wake, so the two
-// ranges never interleave.
-const UNNAMED_WAKE_BASE = Number.MAX_SAFE_INTEGER;
-
 export interface InboxSortTimeInput {
   /** The row's placed verdict — the class whose stamp applies. */
   work_state: WorkState;
@@ -441,8 +436,6 @@ export interface InboxSortTimeInput {
   statusStartedAt?: number | null;
   /** managed_sessions.turn_completed_at: when the turn behind the current status ended (ct-49533). While a row works this still names the PREVIOUS turn's end — its last attention event. */
   turnCompletedAt?: number | null;
-  /** The wake a parked row sleeps on, when the system can name its time (a snooze, a live loop wakeup). */
-  wakeAt?: number | null;
   /** conversations.updated_at: the row's last activity. */
   activityAt?: number | null;
   /** conversations.started_at: when the session was created. */
@@ -451,11 +444,11 @@ export interface InboxSortTimeInput {
 
 export type InboxSortTime = {
   /** The class's own event stamp, direction free. A section the reader clears
-   *  top-down (the settled queues) orders by this, oldest first. */
+   *  top-down (the settled queues and Dormant) orders by this, oldest first. */
   at: number;
   /** The freshest-first comparator key, ASCENDING (a lower key sits higher),
    *  with the creation grace folded in. Every "newest on top" order reads this:
-   *  the flat active list, j/k, the working section, and dormant's wake order.
+   *  the flat active list, j/k, and the working section.
    *  The grace lives here and not in `at` because a floor that lifts a row to
    *  the top of a freshest-first list would sink it to the bottom of a queue
    *  cleared oldest first — where a brand new row belongs anyway. */
@@ -483,15 +476,12 @@ export function inboxSortTime(input: InboxSortTimeInput, now: number): InboxSort
   const turn = sortStamp(input.turnCompletedAt);
   const activity = sortStamp(input.activityAt);
   if (input.work_state === "dormant") {
-    // The named wake, soonest first: the row nearest to waking is the one the
-    // reader wants at the top of Dormant. The creation grace does not apply —
-    // a named wake is a fact about the future, and no grace improves on it.
-    const wake = sortStamp(input.wakeAt);
-    if (wake > 0) return { at: wake, key: wake };
-    // No wake to name: when the row parked, the same fallback chain the other
-    // classes read (the status start, then plain activity).
+    // When the row parked, oldest first: the longest parked sits at the top of
+    // Dormant. The key keeps that direction too (positive, so a dormant row
+    // files after every freshest-first row in a mixed list), and the creation
+    // grace does not apply to a section read oldest first.
     const parked = status || activity;
-    return { at: parked, key: UNNAMED_WAKE_BASE - parked };
+    return { at: parked, key: parked };
   }
   let at: number;
   switch (input.work_state) {
@@ -526,7 +516,7 @@ export function inboxSortTime(input: InboxSortTimeInput, now: number): InboxSort
 // building a projectable row for a comparator.
 export type InboxSortRow = Pick<
   ProjectableInboxRow,
-  "updated_at" | "started_at" | "agent_status_updated_at" | "turn_completed_at" | "inbox_snoozed_until" | "loop_state"
+  "updated_at" | "started_at" | "agent_status_updated_at" | "turn_completed_at"
 >;
 
 // The row adapter, the twin of placeProjectableRow: every replica reads the
@@ -537,16 +527,11 @@ export function inboxSortTimeOfRow(
   work_state: WorkState,
   now: number,
 ): InboxSortTime {
-  const loop = row.loop_state;
-  // The wakes the row can NAME a time for. An armed trigger's next run is not
-  // replicated, so a trigger home files with the unnamed wakes.
-  const wakeAt = row.inbox_snoozed_until ?? (loop?.status === "armed" ? loop.wakeup_at : null);
   return inboxSortTime(
     {
       work_state,
       statusStartedAt: row.agent_status_updated_at ?? null,
       turnCompletedAt: row.turn_completed_at ?? null,
-      wakeAt,
       activityAt: row.updated_at,
       createdAt: row.started_at ?? null,
     },
@@ -1603,6 +1588,7 @@ export const INBOX_ROW_FIELDS = [
   "character_avatar", "character_name", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
   "owner_device_id", "owner_user_id", "author_avatar", "local_mirror", "migration_batch_id",
   "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large",
+  "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subagent_caps", "merge_back",
   // The viewer stamps (stampInboxViewerFields).
   "owned_by_me", "author_name", "author_email", "assigned_ping", "owner_name", "owner_email",
 ] as const;

@@ -21,6 +21,8 @@ import {
   X,
 } from "lucide-react";
 import { useInboxStore, useMyUserId, useTrackedStore } from "../../store/inboxStore";
+import { stageFollowTarget } from "../../lib/follow";
+import { callParticipantKind } from "@codecast/shared/contracts";
 import {
   getCallTiles,
   getRoom,
@@ -80,6 +82,9 @@ import { AgentReplyPeek } from "./AgentReplyPeek";
 import { soundAgentReply } from "../../lib/sounds";
 import { takeCallThreadRequest } from "../../lib/calls/callStage";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
+
+/** How long a speaker holds the floor before a follower's app moves to them. */
+const STAGE_FOLLOW_SETTLE_MS = 1500;
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -285,6 +290,25 @@ export function CallStage({
     const first = call.speaking?.[0];
     if (first) setLastSpeaker(String(first));
   }, [call.speaking]);
+  // Following someone on the call while the stage follows the speaker moves
+  // the follow to that face once they hold the floor for a moment, so a
+  // quick interjection does not yank the app away (lib/follow.ts).
+  const followLeaderId = useInboxStore((s) => s.followLeaderId);
+  const rosterIds = roster.map((m: any) => String(m.user_id)).join(",");
+  useWatchEffect(() => {
+    const next = stageFollowTarget({
+      view,
+      pinned,
+      speaker: lastSpeaker,
+      leader: followLeaderId,
+      self: myUserId ?? null,
+      inCall: (id) => rosterIds.split(",").includes(id),
+      isPerson: (id) => callParticipantKind(id) === "person",
+    });
+    if (!next) return;
+    const t = setTimeout(() => useInboxStore.getState().setFollowLeader(next), pinned ? 0 : STAGE_FOLLOW_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [view, pinned, lastSpeaker, followLeaderId, myUserId, rosterIds]);
 
   useWatchEffect(() => {
     // In the panel there is nothing behind the stage for Esc to reveal, and a

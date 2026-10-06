@@ -81,7 +81,9 @@ import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
 import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
-import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
+import { defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
+import { createTurnSnapshot, type TurnSnapshot } from "./treeSnapshot.js";
+import { hashPath } from "./hash.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
 import { buildWorktreeMirror, mainRootFor, workspaceStatesFor, worktreeFingerprint } from "./worktreeMirror.js";
 import { recordWorkspaceSession } from "./workspace/contract.js";
@@ -242,7 +244,8 @@ import {
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { TokenDecryptError } from "./tokenEncryption.js";
-import { bearerFromStored, storedFromBearer } from "./bearerToken.js";
+import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
+import { startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -274,7 +277,8 @@ import {
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, transcriptScopeRefusal, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
-import { hasTmux, isTmuxSessionMissingError, listCodecastPanesAsync, startsTmuxServer, startTmuxGuarded, startTmuxGuardedSync } from "./tmux.js";
+import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
+import { sessionServerSockets, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath } from "./herdr.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -465,7 +469,7 @@ function tmuxExecSync(args: string[], opts?: { timeout?: number; killSignal?: st
     encoding: "utf-8",
     env: { ...TMUX_ENV, ...opts?.env },
   }).toString();
-  return startsTmuxServer(args) ? startTmuxGuardedSync(args, exec) : exec(args);
+  return runTmuxSync(args, { ...TMUX_ENV, ...opts?.env }, exec, joinText);
 }
 
 /**
@@ -496,7 +500,7 @@ async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: 
     killSignal: (opts?.killSignal ?? "SIGKILL") as any,
     env: { ...TMUX_ENV, ...opts?.env },
   });
-  return startsTmuxServer(args) ? startTmuxGuarded(args, exec) : exec(args);
+  return runTmux(args, { ...TMUX_ENV, ...opts?.env }, exec, (results) => ({ stdout: joinText(results), stderr: "" }));
 }
 
 
@@ -8404,6 +8408,29 @@ async function executeRemoteCommand(
         result = JSON.stringify({ quiesced: true, mode, had_pane: hadPane, status: status ?? null, outside: [...outsideTmux.map((name) => ({ name: `tmux session ${name}` })), ...outside.map((p) => ({ pid: p.pid, name: p.name, via: p.detached }))] });
         break;
       }
+      case "merge_back": {
+        // An isolated subagent finished done: bring its worktree's changes
+        // into its parent's checkout, all or nothing (mergeBack.ts), and
+        // report the outcome; the server tells the parent and paints the chip.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = parsed.conversation_id;
+        if (!conversationId || !parsed.worktree_path || !parsed.target_path) {
+          error = "merge_back: missing conversation_id, worktree_path or target_path";
+          break;
+        }
+        const { mergeBack } = await import("./mergeBack.js");
+        const outcome = await mergeBack(parsed.worktree_path, parsed.target_path)
+          .catch((err: Error) => ({ state: "failed" as const, files: [] as string[], reason: err.message.split("\n")[0] }));
+        log(`[MERGE-BACK] ${conversationId.slice(0, 12)} ${outcome.state}${outcome.files.length ? ` (${outcome.files.length} files)` : ""}${"reason" in outcome && outcome.reason ? `: ${outcome.reason}` : ""}`);
+        await syncServiceRef?.reportMergeBack({
+          conversation_id: conversationId,
+          state: outcome.state,
+          files: outcome.files,
+          ...("reason" in outcome && outcome.reason ? { reason: outcome.reason } : {}),
+        });
+        result = JSON.stringify({ state: outcome.state, files: outcome.files.length });
+        break;
+      }
       case "release_session": {
         // Ownership was reassigned AWAY from this device ("Run here" on another
         // machine). Targeted at us — the previous owner — so we must NOT sit
@@ -9197,6 +9224,7 @@ function resolveTranscriptProjectPath(filePath: string, dirName: string): string
   let recordedCwd: string | undefined;
   try { recordedCwd = extractCwd(readFileHeadLines(filePath)); } catch {}
   const result = pickProjectPath({ decodedSlugPath, recordedCwd, home: process.env.HOME });
+  trackKnownValueCwd(recordedCwd ?? result);
   // Only memoize a trustworthy answer: a found cwd, or a slug that resolved to a
   // real non-$HOME project. A not-yet-populated transcript (no cwd line yet)
   // stays re-checkable so a transient guess isn't cached for the session's life.
@@ -10169,6 +10197,9 @@ async function resolveTeamLeadConversation(
   );
   const myPane: string | undefined = me?.tmuxPaneId;
   if (!myPane || !myPane.startsWith("%") || !hasTmux()) return null;
+  // A pane id names a pane only within one tmux server; with agent sessions on
+  // servers of their own the same id exists on many, so it identifies no lead.
+  if (sessionServerSockets().length > 0) return null;
 
   try {
     const { stdout: sessOut } = await tmuxExec(["display-message", "-p", "-t", myPane, "#{session_name}"]);
@@ -20891,6 +20922,95 @@ function collectGitSweepTargets(
   return targets;
 }
 
+// ─── Turn snapshots ──────────────────────────────────────────────────────────
+// A lead turn ended (the Stop hook). The transcript carries the edits the
+// agent made through Edit and Write; the working tree also carries what a
+// shell command, a formatter or a person did. So the daemon snapshots the
+// checkout's tree at the turn's end (treeSnapshot.ts) and records which sha
+// stands for the tree of which session at which turn (treeSnapshots.record).
+//
+// Cheap by construction, and measured (2026-10-06, this repo, 7,800 files):
+// a persistent index per checkout makes a full pass a stat walk, 0.18 s at
+// rest, against 1.8 s for the sweep's old from-scratch index and 170 s for
+// the same under a load average of 250. On top of that:
+//   - never on the hook path: the Stop hook returns at once; the snapshot
+//     runs from a timer.
+//   - one snapshot per checkout: turn ends that land within the window share
+//     one pass, and every session in the group gets a row for the same sha.
+//   - adaptive: a pass that took longer than TURN_SNAPSHOT_SLOW_MS parks turn
+//     snapshots for that checkout for a while; the 5 min sweep still runs.
+//   - the off switch the sweep honors (wip_snapshots_enabled) covers this too.
+const TURN_SNAPSHOT_COALESCE_MS = 1_500;
+const TURN_SNAPSHOT_SLOW_MS = 5_000;
+const TURN_SNAPSHOT_BACKOFF_MS = 10 * 60_000;
+const pendingTurnSnapshots = new Map<string, { timer: ReturnType<typeof setTimeout>; turns: Map<string, number> }>();
+const turnSnapshotParkedUntil = new Map<string, number>();
+
+function noteSnapshotCost(root: string, snap: TurnSnapshot): void {
+  if (snap.tookMs > TURN_SNAPSHOT_SLOW_MS) {
+    turnSnapshotParkedUntil.set(root, Date.now() + TURN_SNAPSHOT_BACKOFF_MS);
+    log(`[WIP] snapshot of ${path.basename(root)} took ${snap.tookMs}ms; turn snapshots parked for ${TURN_SNAPSHOT_BACKOFF_MS / 60_000} min`);
+  }
+}
+
+async function recordTreeSnapshot(
+  root: string,
+  snap: TurnSnapshot,
+  sessions: Array<{ conversationId: string; turnCompletedAt?: number }>,
+  source: "turn" | "sweep",
+): Promise<void> {
+  if (!syncServiceRef || !sessions.length) return;
+  const rows = sessions.map((s) => ({
+    conversation_id: s.conversationId,
+    sha: snap.sha, tree_sha: snap.tree, base_sha: snap.base, prev_sha: snap.prev, branch: snap.branch,
+    depth: snap.depth, changed_paths: snap.changedPaths, changed_count: snap.changedCount, dirty: snap.dirty,
+    checkout_key: hashPath(root), source, taken_at: snap.takenAt, turn_completed_at: s.turnCompletedAt, took_ms: snap.tookMs,
+    shared_sessions: sessions.length - 1,
+  }));
+  const res = await syncServiceRef.recordTreeSnapshots(rows);
+  if (!res) log(`[WIP] snapshot record failed for ${path.basename(root)} (${rows.length} rows)`);
+}
+
+/** Queue a turn snapshot for the checkout this session runs in. Returns at once. */
+function requestTurnSnapshot(sessionId: string, turnCompletedAt: number): void {
+  if (readConfig()?.wip_snapshots_enabled === false) return;
+  const [target] = collectGitSweepTargets([sessionId]);
+  if (!target) return;
+  void (async () => {
+    const root = (await repoRootFor(target.cwd)) ?? target.cwd;
+    if (wipSnapshotGivenUp.has(root) && !fs.existsSync(path.join(root, ".git"))) return;
+    if ((turnSnapshotParkedUntil.get(root) ?? 0) > Date.now()) return;
+    const pending = pendingTurnSnapshots.get(root);
+    if (pending) {
+      pending.turns.set(target.conversationId, turnCompletedAt);
+      pending.timer.refresh();
+      return;
+    }
+    const turns = new Map([[target.conversationId, turnCompletedAt]]);
+    const timer = setTimeout(() => {
+      pendingTurnSnapshots.delete(root);
+      void takeTurnSnapshot(root, turns);
+    }, TURN_SNAPSHOT_COALESCE_MS);
+    pendingTurnSnapshots.set(root, { timer, turns });
+  })().catch((e) => log(`[WIP] turn snapshot request error: ${(e as Error)?.message ?? e}`));
+}
+
+async function takeTurnSnapshot(root: string, turns: Map<string, number>): Promise<void> {
+  try {
+    const snap = await createTurnSnapshot(root);
+    if (!snap) return;
+    noteSnapshotCost(root, snap);
+    await recordTreeSnapshot(
+      root, snap,
+      [...turns.entries()].map(([conversationId, turnCompletedAt]) => ({ conversationId, turnCompletedAt })),
+      "turn",
+    );
+    log(`[WIP] turn snapshot ${snap.sha.slice(0, 10)} of ${path.basename(root)}: ${snap.unchanged ? "unchanged" : `${snap.changedCount} paths`} in ${snap.tookMs}ms for ${turns.size} session(s)`);
+  } catch (e) {
+    log(`[WIP] turn snapshot error for ${path.basename(root)}: ${(e as Error)?.message ?? e}`);
+  }
+}
+
 async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
   if (!sessionIds.length) return;
   // Off switch, read fresh each pass so it takes effect without a restart. This
@@ -20948,8 +21068,13 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
     try {
       const remote = await defaultRemote(t.cwd);
       if (!remote) return; // no remote = nowhere to publish; the notice covers it
-      const snap = await createWipSnapshot(t.cwd);
+      // The chain tip (treeSnapshot.ts): the same persistent index the turn
+      // snapshots use, so a pass costs a stat walk, not a rehash of every
+      // file, and pushing the tip publishes every turn's tree behind it.
+      const snap = await createTurnSnapshot(t.cwd);
       if (!snap) return;
+      noteSnapshotCost(t.cwd, snap);
+      if (!snap.unchanged) await recordTreeSnapshot(t.cwd, snap, t.sessions.map((s) => ({ conversationId: s.conversationId })), "sweep");
       // Keyed by checkout: the tree belongs to the repo, not the session.
       if (lastPushedWipTree.get(t.cwd) === snap.tree) {
         skipped++;
@@ -22279,7 +22404,9 @@ async function attemptHibernation(cand: HibernationCandidate, io: HibernationPas
   hibernationInFlight.set(cand.sessionId, reservation);
   for (const target of lockTargets) tmuxTargetLocks.set(target, reservation.done);
   const deadline = setTimeout(() => reservation.cancel(), Math.min(io.attemptTimeoutMs ?? HIBERNATION_ATTEMPT_TIMEOUT_MS, HIBERNATION_ATTEMPT_TIMEOUT_MS));
-  const work = Promise.resolve().then(async () => {
+  // Pane and session ids repeat across tmux servers, so every id this attempt
+  // reads or targets stays on the server the session lives on (tmuxRoute.ts).
+  const work = Promise.resolve().then(() => withTmuxSession(cand.tmux, async () => {
     const refusal = await hibernationRefusalReason(cand, io);
     if (refusal) return refusal;
     if (!hibernationLocalUnchanged(cand, io, reservation)) return "evidence-changed";
@@ -22313,7 +22440,7 @@ async function attemptHibernation(cand: HibernationCandidate, io: HibernationPas
     if (!await boundary.revalidate()) return "evidence-changed";
     return await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000), boundary)
       ? null : "teardown-refused";
-  }).catch(err => {
+  })).catch(err => {
     log(`[HIBERNATE] refused ${cand.sessionId}: ${String(err)}`);
     return "evidence-unavailable";
   }).finally(() => {
@@ -29030,6 +29157,20 @@ async function main(): Promise<void> {
     userId: config.user_id,
   });
   syncServiceRef = syncService;
+  // Before any transcript is read: redactSecrets replaces this machine's real
+  // secret values from here on (knownValueRedaction.ts).
+  startKnownValueRedaction({
+    home: process.env.HOME || require("os").homedir(),
+    configDir: CONFIG_DIR,
+    env: () => process.env,
+    cwds: () => [...transcriptProjectPathCache.values(), ...sessionCwdCache.values()],
+    codecastSecrets: () => {
+      const token = readConfig()?.auth_token;
+      if (!token) return [];
+      try { return [token, secretFromStored(token)]; } catch { return [token]; }
+    },
+    log,
+  });
   resumeStartedSessionDiscovery();
 
   // Listen NOW, before the forced update check, the warm restart scan and the
@@ -29878,7 +30019,13 @@ async function main(): Promise<void> {
       // The Stop hook is the only event that names the end of a lead turn.
       // Stamp it before the settle resolution below can turn this "idle" into
       // a "waiting" whose status then stops moving (ct-49533).
-      if (data.turn_completed_at) markTurnCompleted(sessionId, data.turn_completed_at * 1000);
+      if (data.turn_completed_at) {
+        markTurnCompleted(sessionId, data.turn_completed_at * 1000);
+        // The tree at the end of this turn, recorded off the loop (see
+        // requestTurnSnapshot): the transcript knows the tool edits, the
+        // snapshot knows what the shell and the person did to the files.
+        if (!prev || (prev.turn_completed_at ?? 0) !== data.turn_completed_at) requestTurnSnapshot(sessionId, data.turn_completed_at * 1000);
+      }
 
       if (deferHibernationHookStop(sessionId, data.status, () => handleStatusData(sessionId, data, filePath, opts))) return;
 

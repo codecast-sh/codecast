@@ -1,6 +1,7 @@
 import { query, mutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
+import { isStaff } from "./lib/staff";
 
 // Admin-gated upsert of a single system_config row. Shared by every "minimum
 // version" lever (CLI binary, desktop app) so the auth + upsert lives once.
@@ -16,7 +17,7 @@ async function setSystemConfig(
   }
 
   const user = await ctx.db.get(result.userId);
-  if (!user || user.role !== "admin") {
+  if (!user || !isStaff(user)) {
     throw new Error("Admin access required");
   }
 

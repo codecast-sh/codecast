@@ -58,8 +58,10 @@ const GOALS_READABLE_ZOOM = 0.6;
 const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard, healthRole: HealthRoleCard, ...GOALS_NODE_TYPES };
 const ORG_EDGE_TYPES = { ...ORG_FLOW_EDGE_TYPES, ...GOALS_EDGE_TYPES };
 
-/** Which picture the canvas draws (org-staffing.md S36): who reports to whom, or who owns what. */
-export type OrgLens = "people" | "goals";
+/** Which picture the canvas draws (org-staffing.md S36, S40): everything (the
+ *  goal outline with every person and role beside it), the goals alone, or
+ *  who reports to whom. */
+export type OrgLens = "everything" | "people" | "goals";
 const NO_LAYOUT: ReturnType<typeof layoutOrgTree> = { nodes: [], edges: [], width: 0, height: 0 };
 
 export type OrgReparentRequest = {
@@ -179,7 +181,9 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
       connectable: false,
       zIndex: n.id === draggingId ? 1000 : n.kind === "session" || n.kind === "cluster" ? 1 : 2,
     };
-    const common = { selected: n.id === selectedId, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers, flags: flags[n.id] };
+    // The change in focus lights the card that carries it (its stub, its retire or move, one of its chips), the way a click would.
+    const carries = !!ghosts.focusChangeId && (n.kind === "person" || n.kind === "role" || n.kind === "session") && (n.ghost?.change_id === ghosts.focusChangeId || n.retire?.change_id === ghosts.focusChangeId || n.move?.change_id === ghosts.focusChangeId || !!n.chips?.some((c) => c.change_id === ghosts.focusChangeId));
+    const common = { selected: n.id === selectedId || carries, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers, flags: flags[n.id] };
     const decor = n.kind === "person" || n.kind === "role" || n.kind === "session"
       ? (n.ghost || n.retire || n.move || n.chips ? { ghost: n.ghost, retire: n.retire, move: n.move, chips: n.chips, ...ghosts } : {})
       : {};
@@ -220,10 +224,9 @@ function OrgGraphInner(props: OrgGraphProps) {
   // Each zoom level is laid out at its own card sizes (orgZoom), so the
   // resting chart keeps no room for what only the close card says.
   const level = useZoomLevel();
-  const focusAnswered = !!focusChangeId && !!ghostAnswers?.byChange[focusChangeId];
   const rawGoals = useMemo<GoalsLayout | null>(
-    () => (lens === "goals" ? layoutGoals({ tree, initiatives: goalsData?.initiatives ?? storeGoals, projects: goalsData?.projects ?? projects, changes, focusChangeId, focusAnswered }, level) : null),
-    [lens, tree, goalsData, storeGoals, projects, changes, focusChangeId, focusAnswered, level],
+    () => (lens !== "people" ? layoutGoals({ tree, initiatives: goalsData?.initiatives ?? storeGoals, projects: goalsData?.projects ?? projects, changes, people: lens === "everything" ? "everyone" : "none" }, level) : null),
+    [lens, tree, goalsData, storeGoals, projects, changes, level],
   );
   const rawLayout = useMemo(() => (rawGoals ? NO_LAYOUT : layoutOrgTree(tree, view, ghosts, level)), [rawGoals, tree, view, ghosts, level]);
   // Crossing a zoom stop swaps one layout for another. The new one is placed
@@ -417,6 +420,15 @@ function OrgGraphInner(props: OrgGraphProps) {
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!focusNodeId || !el || !viewportReady) return;
+    // A hover from the conversation lights the node and pans only when it is off screen, so a pointer moving down a list of cards never drags the map about.
+    if (focusTarget?.ifHidden) {
+      const n = boxes.find((b) => b.id === focusNodeId);
+      const cur = rf.getViewport();
+      if (n) {
+        const left = n.x * cur.zoom + cur.x, top = n.y * cur.zoom + cur.y, right = (n.x + n.w) * cur.zoom + cur.x, bottom = (n.y + n.h) * cur.zoom + cur.y;
+        if (left >= 0 && top >= 0 && right <= el.clientWidth - panelWidth && bottom <= el.clientHeight * (1 - panelHeightFraction)) return;
+      }
+    }
     const vp = computeOrgViewport(boxes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction, readableZoom);
     if (!vp) return;
     userMoved.current = true;
@@ -560,7 +572,7 @@ function OrgGraphInner(props: OrgGraphProps) {
           zoomable
           position="bottom-right"
           nodeStrokeWidth={0}
-          nodeColor={(n) => n.type === "person" || n.type === "goal" || n.type === "company" ? "var(--sol-cyan)" : n.type === "role" || n.type === "owner" ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
+          nodeColor={(n) => n.type === "person" || n.type === "goal" || n.type === "company" ? "var(--sol-cyan)" : n.type === "role" || n.type === "owner" ? "var(--sol-violet)" : n.type === "loose" ? "transparent" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
           maskColor="color-mix(in srgb, var(--sol-bg) 70%, transparent)"
           style={{ background: "var(--sol-bg-alt)", border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", borderRadius: 10 }}
         />
@@ -640,18 +652,19 @@ function EdgeCue({ side, hidden, onPan, offset }: { side: "left" | "right"; hidd
   );
 }
 
-/** The goals lens as React Flow nodes: nothing drags, a card carries its own ghost. */
+/** The goals outline as React Flow nodes: nothing drags, a card carries its own ghost. */
 function goalsFlowNodes(goals: GoalsLayout, selectedId: string | null, ghosts: GhostHandlers): Node[] {
   return goals.nodes.map((n) => {
-    // The card showing the focused change's action strip rises over the tight row beneath it.
-    const focused = !!ghosts.focusChangeId && (n.kind === "goal" ? !!goalFocusedChange(ghosts.focusChangeId, n.goal.ghost, n.goal.chips) : n.kind === "project" ? n.project.ghost?.kind === "initiative_projects" && !!goalFocusedChange(ghosts.focusChangeId, n.project.ghost) : false);
+    // The card carrying the change in focus is lit the way a selected one is, and rises over the tight row beneath it.
+    const focused = !!ghosts.focusChangeId && (n.kind === "goal" ? !!goalFocusedChange(ghosts.focusChangeId, n.goal.ghost, n.goal.chips) : n.kind === "project" ? !!goalFocusedChange(ghosts.focusChangeId, n.project.ghost) : false);
     const base = { id: n.id, type: n.kind, position: { x: n.x, y: n.y }, width: n.w, height: n.h, draggable: false, selectable: true, connectable: false, zIndex: focused ? 10 : 2 };
-    const selected = n.id === selectedId;
+    const selected = n.id === selectedId || focused;
     switch (n.kind) {
-      case "company": return { ...base, data: { selected, name: n.name, goals: n.goals, projects: n.projects } };
-      case "goal": return { ...base, data: { selected, goal: n.goal, metrics: n.metrics, rows: n.rows, refs: n.refs, running: n.running, ...ghosts } };
-      case "project": return { ...base, data: { selected, project: n.project, ...ghosts } };
-      case "owner": return { ...base, data: { selected, owner: n.owner, owns: n.owns, line: n.line } };
+      case "company": return { ...base, data: { selected, name: n.name, goals: n.goals, projects: n.projects, mission: n.mission } };
+      case "loose": return { ...base, data: { selected, projects: n.projects } };
+      case "goal": return { ...base, data: { selected, goal: n.goal, metrics: n.metrics, rows: n.rows, refs: n.refs, running: n.running, mission: n.mission, ...ghosts } };
+      case "project": return { ...base, data: { selected, project: n.project, counts: n.counts, ...ghosts } };
+      case "owner": return { ...base, data: { selected, owner: n.owner, owns: n.owns, line: n.line, counts: n.counts, reportsTo: n.reportsTo } };
     }
   });
 }

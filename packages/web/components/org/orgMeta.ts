@@ -78,6 +78,7 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
   file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
   role: { label: "New roles", describe: "Adds a role with a name and an area to look after." },
+  charter_edit: { label: "Charter edits", describe: "Changes a passage of a role's charter, or adds or removes a line, leaving the rest as it is." },
   move: { label: "Reporting changes", describe: "Moves a role under a different person or role, and can change what it looks after." },
   scope: { label: "Area changes", describe: "Adds or removes the projects and plans a role looks after." },
   budget: { label: "Daily limit changes", describe: "Raises or lowers how much a role may do in one day." },
@@ -157,6 +158,7 @@ export function chipLine(change: OrgChange): string {
  *  it accepts on a card carrying several changes. */
 export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   projects: "projects",
+  charter_edit: "charter",
   file: "filing",
   role: "role",
   move: "move",

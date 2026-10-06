@@ -41,6 +41,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/plans(\/|$)/,
   /^\/docs(\/|$)/,
   /^\/capabilities$/,
+  // Agent features: a category rail beside a card grid, its own scroll.
+  /^\/agent-features$/,
   // The resource monitor: strip, table and review drawer, each its own scroll.
   /^\/resources$/,
   /^\/crosstalk$/,
@@ -49,7 +51,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/org(\/|$)/,
   // The daily edition sets its own 1180px column and scrolls itself.
   /^\/changes$/,
-  /^\/initiatives(\/|$)/,
+  /^\/goals(\/|$)/,
   // /vault = pre-rename alias for /files; both stay full-width.
   /^\/files(\/|$)/,
   /^\/vault(\/|$)/,
