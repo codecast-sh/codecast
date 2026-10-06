@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "A native app: cast computer.",
+  "label": {
+    "want": [
+      "cast\\s+computer\\b"
+    ],
+    "avoid": [
+      "osascript",
+      "sqlite3",
+      "screencapture"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "In the macOS Notes app, find the note titled 'Groceries' and tell me what is in it."
+  }
+}

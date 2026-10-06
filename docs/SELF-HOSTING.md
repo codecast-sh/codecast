@@ -153,10 +153,10 @@ npx convex env set GITHUB_APP_WEBHOOK_SECRET "your-webhook-secret"
 After creating your account, grant yourself admin:
 
 ```bash
-npx convex run migrations:setAdminRole '{"email": "you@yourdomain.com"}'
+npx convex run migrations:setStaff '{"email": "you@yourdomain.com", "staff": true}'
 ```
 
-This enables the admin dashboard (daemon logs, user management, system commands). `setAdminRole` is an internal mutation, so it runs only with the admin key in `packages/convex/.env.local`.
+This enables the admin dashboard (daemon logs, user management, system commands). `setStaff` is an internal mutation, so it runs only with the admin key in `packages/convex/.env.local`.
 
 ---
 
@@ -702,5 +702,5 @@ The callback URL registered in GitHub must point to your **Convex** domain: `htt
 
 Run the admin migration:
 ```bash
-npx convex run migrations:setAdminRole '{"email": "you@yourdomain.com"}'
+npx convex run migrations:setStaff '{"email": "you@yourdomain.com", "staff": true}'
 ```

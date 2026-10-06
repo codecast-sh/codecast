@@ -1,3 +1,4 @@
+import { useHostedMode } from "../lib/surfaces";
 import { useRouter } from "next/navigation";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSwitchWorkspace } from "../hooks/useSwitchWorkspace";
@@ -14,6 +15,7 @@ import { Check, ChevronDown, Plus, User, UserPlus } from "lucide-react";
 import { useState, lazy, Suspense, forwardRef, type ButtonHTMLAttributes } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamCrest } from "./team/TeamCrest";
+import { useSurface } from "../lib/surfaces";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
@@ -22,9 +24,14 @@ export const TeamSwitcherButton = forwardRef<
   HTMLButtonElement,
   ButtonHTMLAttributes<HTMLButtonElement> & { team?: { icon?: string; icon_color?: string } | null; label: string }
 >(function TeamSwitcherButton({ team, label, ...props }, ref) {
+  // Hosted mode marks a workspace by its initial, in ink, rather than a
+  // team's chosen emoji, which read as developer flair beside the calm bar.
+  const hosted = useHostedMode();
   return (
     <button ref={ref} {...props} className="flex h-7 items-center gap-1.5 pl-1 pr-1.5 rounded-md text-sm transition-colors hover:bg-sol-bg-alt data-[state=open]:bg-sol-bg-alt">
-      {team ? (
+      {team && hosted ? (
+        <span data-cc-team-initial aria-hidden className="flex h-5 w-5 items-center justify-center rounded bg-sol-bg-alt text-[11px] font-semibold text-sol-text">{label.trim().charAt(0).toUpperCase()}</span>
+      ) : team ? (
         <TeamCrest icon={team.icon} color={team.icon_color} size="sm" className="w-5 h-5 rounded" />
       ) : (
         <User className="w-4 h-4 text-sol-base1" />
@@ -56,6 +63,7 @@ export function TeamSwitcher({
   const switchWorkspace = useSwitchWorkspace();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const [inviteOpen, setInviteOpen] = useState(false);
+  const createShown = useSurface("topbar.createTeam");
 
   if (!user) {
     return null;
@@ -73,6 +81,7 @@ export function TeamSwitcher({
   };
 
   if (!teams || teams.length === 0) {
+    if (!createShown) return null;
     return (
       <button
         onClick={() => router.push("/settings/team/create")}

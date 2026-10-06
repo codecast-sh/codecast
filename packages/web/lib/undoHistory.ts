@@ -91,7 +91,7 @@ const OBJECT_KINDS: Partial<Record<ClientSyncStoreKey, { noun: string; path?: (i
   projects: { noun: "project", path: (id) => paletteObjectPath("project", { _id: id }) },
   agentTasks: { noun: "trigger", path: (id) => paletteObjectPath("trigger", { _id: id }) },
   foreignTriggers: { noun: "trigger", path: (id) => paletteObjectPath("trigger", { _id: id }) },
-  initiatives: { noun: "initiative", path: (id, row) => initiativeHref({ _id: id, short_id: row?.short_id }) },
+  initiatives: { noun: "goal", path: (id, row) => initiativeHref({ _id: id, short_id: row?.short_id }) },
   chatChannels: { noun: "channel", path: (id) => `/chat/${id}` },
   decisionStacks: { noun: "stack", path: (id, row) => `/decisions/stacks/${row?.short_id ?? id}` },
   savedViews: { noun: "view" },

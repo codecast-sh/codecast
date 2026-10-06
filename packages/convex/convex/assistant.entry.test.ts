@@ -242,6 +242,41 @@ describe("routines", () => {
     expect(due.map((d: any) => d._id)).toEqual([taskId]);
     expect((await t.mutation(internal.agentTasks.dispatchCloudTriggers, {})).dispatched).toBe(0);
   });
+
+  test("a hosted routine from the routines page starts its own home and fires from the server", async () => {
+    const { t, user, authed } = await setup();
+    const created = await authed.mutation(api.agentTasks.webCreate, {
+      prompt: "Summarize my unread mail.",
+      title: "Morning mail",
+      schedule_type: "once",
+      run_at: Date.now() - 1_000,
+      agent_type: "codecast",
+      project_path: "/Users/someone/src/app",
+    });
+    const { task, conversations } = await t.run(async (ctx) => ({
+      task: await ctx.db.get(created.id as Id<"agent_tasks">),
+      conversations: await ctx.db.query("conversations").collect(),
+    }));
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]).toMatchObject({ user_id: user, agent_type: "codecast", title: "Morning mail" });
+    expect(task).toMatchObject({ originating_conversation_id: conversations[0]._id, hosted_home: true, agent_type: "codecast" });
+    expect(task?.project_path).toBeUndefined();
+
+    expect(await t.query(api.agentTasks.getDueTasks, { api_token: TOKEN })).toHaveLength(0);
+    expect((await t.mutation(internal.agentTasks.dispatchCloudTriggers, {})).dispatched).toBe(1);
+    expect(await wakes(t)).toEqual([{ conversation_id: conversations[0]._id, cause: "routine" }]);
+  });
+
+  test("a hosted routine the plan refuses leaves no conversation behind", async () => {
+    const { t, authed } = await setup();
+    await expect(authed.mutation(api.agentTasks.webCreate, {
+      prompt: "Tell me when a PR opens.",
+      schedule_type: "event",
+      event_filter: { event_type: "pull_request", action: "opened" },
+      agent_type: "codecast",
+    })).rejects.toThrow(/on a schedule, not on events/);
+    expect(await t.run((ctx) => ctx.db.query("conversations").collect())).toHaveLength(0);
+  });
 });
 
 describe("the engine's internal writers", () => {

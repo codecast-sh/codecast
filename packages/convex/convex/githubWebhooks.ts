@@ -49,6 +49,7 @@ import {
   resolveTaskLinksFromText,
   shortSha,
 } from "./lib/gitRefs";
+import { anchorFromDiffHunk } from "@codecast/shared/comments";
 
 const MERGE_STATE_DELAY_MS = 15 * 1000;
 // A finished check changes whether GitHub will let the branch merge, but it
@@ -994,6 +995,13 @@ async function ingestReviewComment(ctx: any, payload: any): Promise<boolean> {
     line_number: rangeStart ?? rangeEnd,
     line_end: rangeStart != null ? rangeEnd : undefined,
     side: comment.side,
+    // GitHub's hunk ends at the commented line, which is enough to find the
+    // passage again after a push moves it.
+    anchor_lines: anchorFromDiffHunk(
+      comment.diff_hunk,
+      comment.side,
+      rangeStart != null && rangeEnd != null ? rangeEnd - rangeStart + 1 : 1,
+    ),
     content: comment.body,
     resolved: false,
     created_at: new Date(comment.created_at).getTime(),

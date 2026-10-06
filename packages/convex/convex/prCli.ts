@@ -519,6 +519,10 @@ async function threadRow(ctx: any, comment: any) {
     short_id: shortCommentId(comment._id),
     file_path: comment.file_path ?? null,
     line_number: comment.line_number ?? null,
+    line_end: comment.line_end ?? null,
+    side: comment.side ?? null,
+    // The commented text, so a reader in a checkout can find where it is now.
+    anchor_lines: comment.anchor_lines ?? null,
     author: await commentAuthor(ctx, comment),
     resolved: !!comment.resolved,
     // One line is all a list needs; `cast pr show` carries the whole comment.

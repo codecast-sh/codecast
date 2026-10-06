@@ -19,6 +19,8 @@ export interface SegmentedItem {
   title?: string;
   /** A small count after the label (unread, matches, …). Hidden when absent or 0. */
   count?: number;
+  /** Shown, not choosable: the option has nothing to offer here (its title says why). */
+  disabled?: boolean;
 }
 
 export function SegmentedToggle({
@@ -55,9 +57,10 @@ export function SegmentedToggle({
         const btn = (
           <button
             key={it.key}
-            onClick={() => onChange(it.key)}
+            onClick={() => { if (!it.disabled) onChange(it.key); }}
             aria-pressed={selected}
-            className={`h-full flex items-center justify-center gap-1.5 ${sm ? "text-[11px]" : "text-xs"} transition-colors ${
+            aria-disabled={it.disabled || undefined}
+            className={`h-full flex items-center justify-center gap-1.5 ${sm ? "text-[11px]" : "text-xs"} transition-colors ${it.disabled ? "opacity-40 cursor-default" : ""} ${
               fullWidth ? "flex-1" : ""
             } ${
               bare
