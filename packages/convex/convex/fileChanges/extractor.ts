@@ -15,6 +15,8 @@ export interface FileChange {
   newContent: string;
   commitMessage?: string;
   commitHash?: string;
+  /** The branch the commit landed on, as git commit printed it. */
+  commitBranch?: string;
   timestamp: number;
 }
 
@@ -220,6 +222,7 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
           }
 
           const commitHash = result && !result.is_error ? extractCommitHashFromContent(result.content) : undefined;
+          const commitBranch = result && !result.is_error ? extractCommitBranchFromContent(result.content) : undefined;
 
           changes.push({
             id: toolCall.id,
@@ -231,6 +234,7 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
             newContent: commitMessage,
             commitMessage,
             commitHash,
+            ...(commitBranch ? { commitBranch } : {}),
             timestamp: message.timestamp,
           });
         }
@@ -251,18 +255,22 @@ export function extractFileChanges(messages: ExtractableMessage[]): FileChange[]
  * (timestamp, in-message sequence), then renumber sequenceIndex to the merged
  * position so cumulative-diff ordering stays correct across both sources.
  */
-export function mergeFileChanges<T extends Pick<FileChange, "id" | "timestamp" | "sequenceIndex" | "commitHash">>(
+export function mergeFileChanges<T extends Pick<FileChange, "id" | "timestamp" | "sequenceIndex" | "commitHash" | "commitBranch">>(
   serverChanges: T[],
   clientChanges: T[],
 ): T[] {
   const byId = new Map<string, T>();
-  // Client first so server wins on conflict — except a git-commit hash, which
-  // is parsed from the tool result and may land on a later message patch after
-  // the row was already materialized hash-less; keep the client's if present.
+  // Client first so server wins on conflict — except a git-commit hash and
+  // branch, which are parsed from the tool result and may land on a later
+  // message patch after the row was already materialized without them (or on
+  // rows from before the branch was kept); keep the client's if present.
   for (const c of clientChanges) byId.set(c.id, c);
   for (const c of serverChanges) {
     const prev = byId.get(c.id);
-    byId.set(c.id, prev && !c.commitHash && prev.commitHash ? { ...c, commitHash: prev.commitHash } : c);
+    if (!prev) { byId.set(c.id, c); continue; }
+    const commitHash = c.commitHash ?? prev.commitHash;
+    const commitBranch = c.commitBranch ?? prev.commitBranch;
+    byId.set(c.id, commitHash === c.commitHash && commitBranch === c.commitBranch ? c : { ...c, commitHash, commitBranch });
   }
 
   const merged = Array.from(byId.values()).sort(
@@ -304,4 +312,11 @@ export function extractCommitHashFromContent(content: string): string | undefine
   // preceded by the `[` itself, whitespace, or the marker's closing paren.
   const hashMatch = content.match(/\[(?:[^\]\n]*[\s()])?([a-f0-9]{7,40})\]/);
   return hashMatch ? hashMatch[1] : undefined;
+}
+
+/** The branch out of the same `[<branch> <short-hash>]` line; none for a
+ *  detached HEAD, which names no branch. */
+export function extractCommitBranchFromContent(content: string): string | undefined {
+  const match = content.match(/\[([^\s\]]+)(?: \(root-commit\))? [a-f0-9]{7,40}\]/);
+  return match && match[1] !== "detached" ? match[1] : undefined;
 }

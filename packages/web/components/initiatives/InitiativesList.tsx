@@ -101,7 +101,7 @@ export function InitiativesList() {
           {/* The sentence has the full width under the title, so the controls never squeeze it into a column. */}
           <header>
             <div className="flex items-center justify-between gap-4">
-              <h1 className={cn("min-w-0 font-semibold tracking-tight leading-none", phone ? "text-[20px]" : "text-[26px]")} style={{ fontFamily: "var(--font-serif)" }}>Initiatives</h1>
+              <h1 className={cn("min-w-0 font-semibold tracking-tight leading-none", phone ? "text-[20px]" : "text-[26px]")} style={{ fontFamily: "var(--font-serif)" }}>Goals</h1>
               <div className="flex shrink-0 items-center gap-3">
                 {/* The same goals as one page to read top to bottom, with their projects, roles and people. */}
                 <Link href="/company" className="inline-flex items-center gap-1.5 text-[12.5px] no-underline hover:underline" style={{ color: "var(--sol-text-muted)" }} data-initiatives-document><FileText className="w-3.5 h-3.5" /> {layout === "stacked" ? "Document" : "Read as a document"}</Link>
@@ -193,7 +193,7 @@ function Row({ row, index, now, progress, partial, nested }: { row: InitiativeRo
 function NewButton({ onClick }: { onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} className="shrink-0 h-[32px] inline-flex items-center gap-1.5 px-3 rounded-lg text-[12.5px] font-medium hover:brightness-110 transition-[filter]" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)" }} data-initiative-new>
-      <Plus className="w-3.5 h-3.5" /> New initiative
+      <Plus className="w-3.5 h-3.5" /> New goal
     </button>
   );
 }
@@ -202,9 +202,9 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="mt-16 mx-auto max-w-md text-center" data-initiatives-empty>
       <span className="mx-auto w-11 h-11 rounded-full inline-flex items-center justify-center" style={{ background: `color-mix(in srgb, ${INITIATIVE_ACCENT} 12%, transparent)`, color: INITIATIVE_ACCENT }}><Flag className="w-5 h-5" /></span>
-      <h2 className="mt-4 text-[17px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)" }}>No initiatives yet</h2>
+      <h2 className="mt-4 text-[17px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)" }}>No goals yet</h2>
       <p className="mt-2 text-[13px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>
-        An initiative is a goal above your projects: what you are trying to reach, which projects carry it, who drives it, and how it is going.
+        A goal sits above your projects: what you are trying to reach, which projects carry it, who drives it, and how it is going.
       </p>
       <div className="mt-5 flex justify-center"><NewButton onClick={onCreate} /></div>
     </div>
@@ -238,7 +238,7 @@ function CreateInitiative({ onDone }: { onDone: () => void }) {
         onKeyDown={(e) => { if (e.key === "Escape") onDone(); }}
         placeholder="What are you trying to reach?"
         className="flex-1 min-w-0 bg-transparent outline-none text-[13.5px] placeholder:text-sol-text-dim"
-        aria-label="Initiative title"
+        aria-label="Goal title"
       />
       <button type="button" onClick={onDone} className="h-7 px-2.5 rounded-md text-[12px] hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
       <button type="submit" disabled={!title.trim() || !ready} className="h-7 px-3 rounded-md text-[12px] font-medium disabled:opacity-45" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)" }}>Create</button>

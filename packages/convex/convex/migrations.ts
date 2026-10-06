@@ -202,9 +202,10 @@ export const backfillMessageSenders = internalMutation({
   },
 });
 
-export const setAdminRole = internalMutation({
+export const setStaff = internalMutation({
   args: {
     email: v.string(),
+    staff: v.boolean(),
   },
   handler: async (ctx, args) => {
     const users = await ctx.db.query("users").collect();
@@ -212,8 +213,8 @@ export const setAdminRole = internalMutation({
     if (!user) {
       return { success: false, error: `User with email ${args.email} not found` };
     }
-    await ctx.db.patch(user._id, { role: "admin" });
-    return { success: true, userId: user._id, email: user.email };
+    await ctx.db.patch(user._id, { staff: args.staff || undefined });
+    return { success: true, userId: user._id, email: user.email, staff: args.staff };
   },
 });
 
