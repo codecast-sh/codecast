@@ -179,7 +179,7 @@ async function startScribeOnce(opts: {
  * handoff is what needs it — the huddle carries on in another window, and a
  * transcript must not end at a window boundary the speakers never saw.
  */
-export async function stopScribe(opts?: { keepLive?: boolean }): Promise<void> {
+export async function stopScribe(opts?: { keepLive?: boolean; graceful?: boolean }): Promise<void> {
   roomListener?.();
   roomListener = null;
   room = null;
