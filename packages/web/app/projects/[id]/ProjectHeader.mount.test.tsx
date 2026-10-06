@@ -118,8 +118,9 @@ async function verifyProjectHeader() {
   mock.module("../../../components/DocDates", () => ({ DocDates: () => null }));
   mock.module("../../../components/line/ProjectLineTab", () => ({ ProjectLineTab: mark("project-line") }));
   mock.module("../../../components/charter/CharterBlock", () => ({ CharterBlock: (props: any) => React.createElement("div", { "data-charter": props.title, "data-charter-goal": props.charter?.goal ?? "" }) }));
-  mock.module("../../../components/charter/ProjectLeadChip", () => ({ ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }) }));
-  mock.module("../../../components/org/OrgScopePanel", () => ({ InlineEdit: ({ value, placeholder, ariaLabel }: any) => React.createElement("span", { "data-inline-edit": ariaLabel }, value || placeholder) }));
+  mock.module("../../../components/charter/ProjectLeadChip", () => ({ ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }), ProjectLeadMark: () => null, HireLeadDialog: () => null }));
+  const realScopeEditors = { ...(await import("../../../components/org/scope/ScopeEditors")) };
+  mock.module("../../../components/org/scope/ScopeEditors", () => ({ ...realScopeEditors, InlineEdit: ({ value, placeholder, ariaLabel }: any) => React.createElement("span", { "data-inline-edit": ariaLabel }, value || placeholder) }));
   mock.module("../../../components/EntityIdPill", () => ({ EntityIdPill: ({ id, type }: any) => React.createElement("span", { "data-pill": `${type}:${id}` }, id) }));
   // A popover that is simply open: the list inside is what the test reads.
   mock.module("../../../components/ui/popover", () => ({ Popover: through, PopoverTrigger: through, PopoverAnchor: through, PopoverContent: ({ children }: any) => React.createElement("div", { "data-popover": true }, children) }));

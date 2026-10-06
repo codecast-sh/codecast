@@ -1,18 +1,18 @@
 // The batch tray rendered INSIDE the composer block (above the textarea, like the
 // queued-message and pasted-image strips) while there are pending inline quotes /
 // comments or answers to an org proposal's cards (org-staffing.md S39). It
-// previews what's ATTACHED to your next message: sending (Enter / the send
-// button) carries these automatically, even with nothing typed: the quotes as
-// text, the answers applied and written in plain words. Each row is removable
-// with an ✕; "Edit in input" optionally materializes the quotes as editable
-// text in the composer (answers stay); "Clear" discards everything.
+// previews what the next send carries: the quotes as text, the answers applied
+// and written in plain words. The head is one sentence from batchSendWords (the
+// one home for the counting); each row is removable with an x; "Edit in input"
+// optionally materializes the quotes as editable text in the composer (answers
+// stay); "Clear" discards everything.
 
 import React, { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { X, Trash2, PencilLine } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useReviewComposer } from "./reviewContext";
-import { cancelReview } from "../lib/reviewActions";
+import { batchSendWords, cancelReview } from "../lib/reviewActions";
 import { andList, ORG_REPLY_WORDS, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { isProposalAnswer, sortPendingComments, type PendingComment, type PendingProposalAnswer } from "../lib/quoteFormat";
 import { PageFavicon } from "./PublishedPageEmbed";
@@ -22,67 +22,66 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 
 type Answer = PendingComment & { proposal: PendingProposalAnswer };
 
-/** "3 answers and 2 quotes", "3 answers", "2 quotes": what the next message carries. */
-export function batchHeadWords(comments: readonly PendingComment[]): string {
-  const answers = comments.filter(isProposalAnswer).length;
-  const quotes = comments.length - answers;
-  const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  return andList([...(answers ? [count(answers, "answer")] : []), ...(quotes ? [count(quotes, "quote")] : [])]);
-}
-
 /** One tray row as the person reads it: the verdict word, who it is about, and the words. */
 export type BatchRow = {
-  /** The items the row stands for; ✕ withdraws them all. */
+  /** The items the row stands for; the x withdraws them all. */
   items: PendingComment[];
   verdict?: OrgReplyVerdict;
-  /** "Approve 1, 3 and 4", "Reject 2", "On all of it". */
+  /** "Approve", "Reject", "On", "On all of it". */
   label?: string;
-  /** The card's sentence, in quiet ink. */
+  /** The subjects the row is about, in quiet ink. */
   sentence?: string;
   /** The person's words. */
   body?: string;
 };
 
-/** The ordinals the person sees, or a count when the list does not number its cards. */
-const whichCards = (answers: Answer[]): string => {
-  const ordinals = answers.map((a) => a.proposal.ordinal).filter((n): n is number => n !== undefined);
-  if (ordinals.length === answers.length) return andList([...ordinals].sort((a, b) => a - b).map(String));
-  return `${answers.length} change${answers.length === 1 ? "" : "s"}`;
-};
+/** What names an answer in the tray: the card's or the group's title, else its sentence. */
+const subjectOf = (a: Answer) => a.proposal.subject || a.quote;
 
-/** A proposal's answers as rows: bare approvals fold into one, every other
- *  answer is its own. A card the list does not number (a closed ask in the org
- *  panel) is named by its sentence beside the verdict word, the way an
- *  ordinal-less reject or note already is, so a lone approval reads
- *  "Approve <ask title>", never "Approve 1 change". */
+/** One, two or three subjects in full; past that the first three and a count. */
+function subjectsLine(answers: Answer[]): string {
+  const subjects = answers.map(subjectOf);
+  if (subjects.length <= 3) return andList(subjects);
+  return `${subjects.slice(0, 3).join(", ")} and ${subjects.length - 3} more`;
+}
+
+/** A proposal's answers as rows: bare approvals fold into one row named by
+ *  their subjects; every reject and note is its own row with its subject and
+ *  words. A note on the whole proposal (a legacy item with no seqs) reads
+ *  "On all of it"; no surface creates them any more. */
 export function answerRows(answers: Answer[]): BatchRow[] {
   const folded = answers.filter((a) => a.proposal.verdict === "approve" && !a.body.trim() && a.proposal.seqs.length);
-  const loneUnnumbered = folded.length === 1 && folded[0].proposal.ordinal === undefined;
-  const rows: BatchRow[] = folded.length
-    ? [loneUnnumbered
-      ? { items: folded, verdict: "approve", label: ORG_REPLY_WORDS.approve.act, sentence: folded[0].quote }
-      : { items: folded, verdict: "approve", label: `${ORG_REPLY_WORDS.approve.act} ${whichCards(folded)}` }]
-    : [];
+  const rows: BatchRow[] = folded.length ? [{ items: folded, verdict: "approve", label: ORG_REPLY_WORDS.approve.act, sentence: subjectsLine(folded) }] : [];
   for (const a of answers) {
     if (folded.includes(a)) continue;
     const v = a.proposal.verdict;
     const whole = !a.proposal.seqs.length;
-    const word = v === "note" ? "On" : ORG_REPLY_WORDS[v].act;
-    const label = whole ? "On all of it" : a.proposal.ordinal !== undefined ? `${word} ${a.proposal.ordinal}` : word;
-    rows.push({ items: [a], verdict: v, label, ...(whole ? {} : { sentence: a.quote }), ...(a.body.trim() ? { body: a.body } : {}) });
+    const label = whole ? "On all of it" : v === "note" ? "On" : ORG_REPLY_WORDS[v].act;
+    rows.push({ items: [a], verdict: v, label, ...(whole ? {} : { sentence: subjectOf(a) }), ...(a.body.trim() ? { body: a.body } : {}) });
   }
   return rows;
 }
 
+const FLASH_MS = 1200;
+
+/** Scroll the thread to the entry a row answers (its card for a note on the
+ *  whole) and flash it once. The card is the one scroll target every surface
+ *  uses (`data-proposal-card`); the entry is its `data-subject`. */
+function jumpToAnswer(a: Answer): void {
+  const card = `[data-proposal-card="${a.proposal.short_id}"]`;
+  const el = document.querySelector<HTMLElement>(a.proposal.card ? `${card} [data-subject="${a.proposal.card.replace(/["\\]/g, "\\$&")}"]` : card);
+  if (!el) return;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.setAttribute("data-flash", "");
+  setTimeout(() => el.removeAttribute("data-flash"), FLASH_MS);
+}
+
 /**
  * The rows of a batch, answers first grouped by proposal, then the quotes in
- * reading order. The composer's tray and a reply box with no composer
- * (ProposalReplyBox) draw the same rows. `onJump` scrolls to a row's source
- * where the host can; an answer carries no message to jump to unless the
- * host anchored it, so its row does nothing. `proposalId` narrows the rows to
- * one proposal's answers: a reply box stands under ONE proposal, and two
- * proposals on one thread key (the company page) must not show each other's
- * rows; the quotes stay out too, since that box cannot send them.
+ * reading order. `onJump` scrolls to a quote's source where the host can; an
+ * answer's row scrolls to its entry on the card itself. `proposalId` narrows
+ * the rows to one proposal's answers for a surface that stands under one
+ * proposal and cannot send the quotes.
  */
 export function PendingBatchRows({ batchKey, proposalId, onJump }: { batchKey: string; proposalId?: string; onJump?: (comment: PendingComment) => void }) {
   const comments = useInboxStore(useShallow((s) => s.reviewComments[batchKey] ?? []));
@@ -96,21 +95,18 @@ export function PendingBatchRows({ batchKey, proposalId, onJump }: { batchKey: s
       {[...byProposal.values()].map((group) => (
         <React.Fragment key={group[0].proposal.id}>
           <div className="cc-review-tray-group" data-review-proposal={group[0].proposal.short_id}>{group[0].proposal.title || group[0].proposal.short_id}</div>
-          {answerRows(group).map((row) => {
-            const jump = onJump && row.items.length === 1 && row.items[0].messageId ? () => onJump(row.items[0]) : undefined;
-            return (
-              <div key={row.items.map((c) => c.id).join("+")} className="cc-review-tray-item" data-review-answer={row.verdict}>
-                <button type="button" className="cc-review-tray-item-main cc-review-tray-jump" title={jump ? "Jump to this change" : undefined} disabled={!jump} onClick={jump}>
-                  <span className="cc-review-tray-verdict" data-verdict={row.verdict}>{row.label}</span>
-                  {row.sentence ? <span className="cc-review-tray-quote cc-review-tray-sentence">{row.sentence}</span> : null}
-                  {row.body ? <span className="cc-review-tray-note block">{row.body}</span> : null}
-                </button>
-                <button type="button" className="cc-review-tray-x" title="Withdraw from message" aria-label="Withdraw this answer" onClick={() => remove(row.items)}>
-                  <X size={13} />
-                </button>
-              </div>
-            );
-          })}
+          {answerRows(group).map((row) => (
+            <div key={row.items.map((c) => c.id).join("+")} className="cc-review-tray-item" data-review-answer={row.verdict} data-review-count={row.items.length}>
+              <button type="button" className="cc-review-tray-item-main cc-review-tray-jump" title="Show this on the card" onClick={() => jumpToAnswer(row.items[0] as Answer)}>
+                <span className="cc-review-tray-verdict" data-verdict={row.verdict}>{row.label}</span>
+                {row.sentence ? <span className="cc-review-tray-quote cc-review-tray-sentence">{row.sentence}</span> : null}
+                {row.body ? <span className="cc-review-tray-note block">{row.body}</span> : null}
+              </button>
+              <button type="button" className="cc-review-tray-x" title="Undo" aria-label="Undo this answer" onClick={() => remove(row.items)}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
         </React.Fragment>
       ))}
       {quotes.map((c) => (
@@ -162,6 +158,7 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
   // Answers are the reply being built, so the list grows to show them (the
   // reply box's cap); a quote-only batch keeps the composer's short tray.
   const hasAnswers = comments.some(isProposalAnswer);
+  const words = batchSendWords(comments);
 
   // Clear discards the whole batch, so it arms on first click ("Discard N?") and
   // only fires on the second; the armed state disarms itself after a beat.
@@ -175,15 +172,11 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
   if (!count) return null;
 
   return (
-    <div className="cc-review-tray">
+    <div className="cc-review-tray" data-applies={words.applies > 0 ? "" : undefined}>
         <div className="cc-review-tray-head">
-          <span className="cc-review-tray-title">
+          <span className="cc-review-tray-title" data-review-head={words.head ?? undefined}>
             <span className="cc-review-dot" />
-            {batchHeadWords(comments)}
-            {/* Say where they go: the batch rides along on the next send, even
-                with nothing typed. Without this the tray states a count and
-                leaves the user hunting for an "attach" step that doesn't exist. */}
-            <span className="cc-review-tray-dest">on your next message</span>
+            {words.head}
           </span>
           <div className="cc-review-tray-actions">
             <button

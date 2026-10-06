@@ -17,6 +17,7 @@ import { useFeederError } from "./useSyncCollection";
 import { onSyncWake } from "./syncWake";
 import { useWatchEffect } from "./useWatchEffect";
 import { cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { inboxCrawlWsKey, inboxFloorStamped } from "./syncMetaKeys";
 import { collectGhostSweepCandidates } from "./ghostSweep";
 import { applyEntityIds, emptyIdsByCollection } from "./useSyncChangeFeed";
 
@@ -103,9 +104,7 @@ export function shouldPlayWaitingSound(
   return { play, keys, nextWaiting };
 }
 
-export function inboxCrawlWsKey(principalId: string | null | undefined): string {
-  return principalId ? `inbox:${principalId}` : "skip";
-}
+export { inboxCrawlWsKey, inboxFloorStamped };
 
 // The floor's second half, pure: the cached rows a complete floor did not
 // return. A recut floor cannot carry what left the inbox scan while this
@@ -166,7 +165,7 @@ export function inboxFloorFlags(s: ReturnType<typeof useInboxStore.getState>, pr
     wsKey,
     principalId,
     hydrated: s.clientStateInitialized,
-    floorStamped: !!s.syncMeta[syncMetaKey("sessions", wsKey)]?.backfilledAt,
+    floorStamped: inboxFloorStamped(s, principalId),
     logStamped: principalId != null && s.syncLogScopeStamps[`user:${principalId}`] !== undefined,
   };
 }
@@ -339,6 +338,9 @@ export function useSyncInboxSessions() {
 
   useConvexSync(clientState, useCallback((data: any) => {
     useInboxStore.getState().syncTable("clientState", data);
+    // The server has answered for this person, so the merged lane is known:
+    // keep the device's boot hint in step with it.
+    if (data && typeof data === "object") useInboxStore.getState().noteLaneHint(useInboxStore.getState().clientState.ui);
     // One-time self-heal: if the server's client_state has accumulated more
     // drafts than Convex can patch (>~1000), prune dead entries. Otherwise
     // every subsequent dispatch that touches client_state would fail with

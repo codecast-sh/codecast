@@ -16,7 +16,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Command } from "commander";
-import { FORKS_SNIPPET } from "@codecast/shared/contracts";
+import { guideText, snippetBySlug } from "@codecast/shared/contracts";
 
 const indexSrc = fs.readFileSync(path.join(import.meta.dir, "index.ts"), "utf8");
 
@@ -64,8 +64,8 @@ function argvOf(line: string): string[] {
   return tokens.slice(1).map((t) => t.replace(/^"|"$/g, ""));
 }
 
-/** Every `cast spawn …` line in the snippet's fenced examples. */
-const spawnExamples = FORKS_SNIPPET.split("\n")
+/** Every `cast spawn …` line in the guide's fenced examples: the installed body and its reference. */
+const spawnExamples = guideText(snippetBySlug("forks")!).split("\n")
   .map((l) => l.trim())
   .filter((l) => l.startsWith("cast spawn "));
 

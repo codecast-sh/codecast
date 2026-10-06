@@ -24,15 +24,18 @@ items that were floated and not agreed. Add ones the summary missed.
 ## File
 
 ```bash
-cast task create "<what, in the owner's words>" --from-meeting --assignee <member> -p <priority> -d - <<'DESC'
+cast task create "<what, in the owner's words>" --from-call <call id> --assignee <member> -p <priority> -d - <<'DESC'
 Agreed on the call <title> (<date>).
 <speaker>: "<the line, quoted>"
 Due: <if said>
 DESC
 ```
 
-`--from-meeting` puts the task on the human's board because a person agreed
-to it; never use it for work you decided on your own. When the call named a
+`--from-call` links the task to the call, so it shows on the call's page and
+in `cast call <id>`, and marks it as decided in a meeting, which puts it on
+the human's board because a person agreed to it; never use it for work you
+decided on your own. A task filed earlier joins the call with `cast task
+update <task> --from-call <call id>`. When the call named a
 project or plan, file under it with `--project` or `--plan`. Decisions made
 on the call that are not tasks: `cast decisions add "<title>" --reason
 "<the quoted line>"`.

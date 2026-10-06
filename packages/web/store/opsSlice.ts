@@ -12,6 +12,7 @@
 import { action, asyncAction } from "./mutativeMiddleware";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import { KEYED_SOURCE_PROVIDERS, normalizeSourceName, type GroupStatus, type SourceProvider } from "@codecast/shared/contracts/ingest";
+import { DEFAULT_REPLAY_BACKFILL_WINDOW, replayBackfillResumes, replayBackfillSince, type ReplayBackfill, type ReplayBackfillWindow } from "@codecast/shared/contracts/replay";
 
 /** Writes are explicit: the caller names the workspace it is looking at. */
 export type CreateOpsSourceInput = {
@@ -32,6 +33,9 @@ export type CreatedOpsSource = { source_id: string; short_id: string; name: stri
 export type OpsSliceActions = {
   setOpsGroupStatus: (groupId: string, status: GroupStatus) => void;
   setOpsSourceStatus: (sourceId: string, status: "active" | "paused") => void;
+  /** Import every recording a PostHog or Sentry source still keeps; a stopped import continues where it was. */
+  startOpsReplayImport: (sourceId: string, window?: ReplayBackfillWindow) => void;
+  stopOpsReplayImport: (sourceId: string) => void;
   removeOpsSource: (sourceId: string) => void;
   grantOpsAction: (sourceId: string, actionName: string) => void;
   revokeOpsAction: (sourceId: string, actionName: string) => void;
@@ -69,6 +73,29 @@ export function createOpsSlice(): OpsSliceActions {
       row.status = status;
       // Resuming clears the reason it stopped, as updateSource does.
       if (status === "active") delete row.last_error;
+    }),
+
+    // The progress is the server's (opsSources leaves replay_backfill
+    // unprotected): this paints "importing" now, the first echo the truth.
+    // Resuming keeps the counts, as replayBackfill.start does.
+    startOpsReplayImport: action(function (this: OpsDraft, sourceId: string, window?: ReplayBackfillWindow) {
+      const row = this.opsSources[sourceId];
+      if (!row) return;
+      const now = Date.now();
+      const prev: ReplayBackfill | undefined = row.replay_backfill;
+      const w = window ?? prev?.window ?? DEFAULT_REPLAY_BACKFILL_WINDOW;
+      if (prev && replayBackfillResumes(prev, now) && w === prev.window) {
+        row.replay_backfill = { ...prev, status: "running", last_error: undefined, started_at: now, updated_at: now };
+        return;
+      }
+      if (prev?.status === "running") return;
+      const since = replayBackfillSince(w, now);
+      row.replay_backfill = { status: "running", window: w, ...(since !== undefined ? { since } : {}), until: now, listed: 0, imported: 0, skipped: 0, failed: 0, started_at: now, updated_at: now };
+    }),
+
+    stopOpsReplayImport: action(function (this: OpsDraft, sourceId: string) {
+      const b = this.opsSources[sourceId]?.replay_backfill;
+      if (b?.status === "running") Object.assign(b, { status: "paused", last_error: "Stopped", updated_at: Date.now() });
     }),
 
     // The server purges the source's groups and samples (ingest.purgeSourceRows),
