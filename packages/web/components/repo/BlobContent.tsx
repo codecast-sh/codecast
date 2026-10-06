@@ -10,7 +10,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Download, ExternalLink, UserSquare2 } from "lucide-react";
-import { codeThreadRootKey } from "@codecast/shared/comments";
+import { captureAnchor, codeThreadRootKey, placeAnchor, type AnchorPlacement } from "@codecast/shared/comments";
 import { useRepoLocation } from "./useRepoFamily";
 import { LoadingSkeleton } from "../LoadingSkeleton";
 import { PRLineThread } from "../pr/PRThread";
@@ -325,33 +325,55 @@ function CommentedBlobView({ repository, path, anchorRef, content, selection, se
   // Source is the file as it stands at this ref, so every line is the RIGHT
   // side of the diff vocabulary the comment table speaks. Threads anchored to a
   // deleted line (LEFT) belong to a diff, not to this view, and stay out of it.
-  const threadsByLine = useMemo(() => {
+  //
+  // Each thread hangs where its passage is in THIS version of the file, found
+  // by the text it was written on (shared/comments/codeAnchor.ts); a thread
+  // whose passage is gone stays at its old line, marked outdated.
+  const fileLines = useMemo(() => content.split("\n"), [content]);
+  const placed = useMemo(() => {
     const byAnchor = lineComments.threadsByFile.get(path);
     if (!byAnchor) return undefined;
     const byLine = new Map<number, CodeCommentRow[]>();
+    const placementByLine = new Map<number, AnchorPlacement>();
     for (const [key, thread] of byAnchor) {
       const anchor = parseDiffLineKey(key);
-      if (anchor.side === "RIGHT") byLine.set(anchor.lineNumber, thread);
+      if (anchor.side !== "RIGHT") continue;
+      const placement = placeAnchor(
+        { line_number: anchor.lineNumber, line_end: anchor.lineEnd, anchor_lines: thread.find((c) => c.anchor_lines)?.anchor_lines },
+        fileLines,
+      );
+      if (!placement) continue;
+      const line = Math.min(placement.line, fileLines.length);
+      if (byLine.has(line)) continue;
+      byLine.set(line, thread);
+      placementByLine.set(line, placement);
     }
-    return byLine;
-  }, [lineComments.threadsByFile, path]);
+    return { byLine, placementByLine };
+  }, [lineComments.threadsByFile, path, fileLines]);
 
   const anchorFor = (line: number): DiffLineAnchor => ({ side: "RIGHT", lineNumber: line });
 
   return <BlobView repository={repository} path={path} content={content} selection={selection} onSelectLine={selectLine} blameRanges={blameRanges} blameMode={blameMode}
           sessionRanges={sessionRanges} sessionColors={sessionColors} focusSession={focusSession}
-          threadsByLine={threadsByLine}
-          onComment={(line) => lineComments.openComposer(path, anchorFor(line))}
-          renderThread={(line, items) => (
+          threadsByLine={placed?.byLine}
+          threadStateByLine={placed?.placementByLine}
+          onComment={(line) =>
+            lineComments.openComposer(path, anchorFor(line), captureAnchor(fileLines, line, commentRangeEnd(selection, line)))}
+          renderThread={(line, items) => {
+            const placement = placed?.placementByLine.get(line);
+            // The thread's identity is the line it was written on, wherever it is drawn.
+            const anchorLine = placement && placement.state !== "current" ? placement.from : line;
+            return (
             <PRLineThread
               repository={repository}
-              threadKey={codeThreadRootKey(repository, anchorRef, { file_path: path, line_number: line })}
+              threadKey={codeThreadRootKey(repository, anchorRef, { file_path: path, line_number: anchorLine })}
               comments={items as CodeCommentRow[]}
               authed={lineComments.authed}
+              placement={placement}
               onReply={(content) =>
                 lineComments.post({
                   file_path: path,
-                  line_number: line,
+                  line_number: anchorLine,
                   side: "RIGHT",
                   content,
                   // Commenting from inside a selected range comments on the
@@ -367,5 +389,6 @@ function CommentedBlobView({ repository, path, anchorRef, content, selection, se
               }
               onClose={lineComments.closeComposer}
             />
-          )} />;
+            );
+          }} />;
 }

@@ -1,0 +1,26 @@
+{
+  "name": "guidance product-call",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:product-call"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:product-call",
+    "title": "guidance product-call"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/product-call.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "2d8c3c9f-99ec-4d51-8568-800ce4aad37d",
+  "createdAt": "2026-10-06T21:49:12.178Z"
+}

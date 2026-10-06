@@ -123,6 +123,8 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
     writeFileSync(file, text);
     return file;
   });
+  const claudeMdFile = opts.claudeMd === undefined ? null : join(dir, 'CLAUDE.md');
+  if (claudeMdFile) writeFileSync(claudeMdFile, opts.claudeMd!);
   if (flags.dry) {
     return { runSubdir, said: ['(dry run: no agent ran)'], turns: [['(dry run: no agent ran)']], wrote: [[]], calls: [], costUsd: 0, modelUsage: { [opts.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: opts.model, realMs: 0 };
   }
@@ -135,6 +137,7 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
       ...(opts.maxTurns ? ['--max-turns', String(opts.maxTurns)] : []),
       ...(opts.tools ? ['--tools', opts.tools.join(',')] : []),
       ...thenFiles.flatMap((f) => ['--then', f]),
+      ...(claudeMdFile ? ['--claude-md', claudeMdFile] : []),
     ],
     dir,
   );

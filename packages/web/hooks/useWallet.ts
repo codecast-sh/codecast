@@ -12,8 +12,11 @@ import { useSyncCollection } from "./useSyncCollection";
 
 const PERIOD_CHECK_MS = 60_000;
 
-export function useWallet(): { wallet: WalletSummary | null; ready: boolean } {
-  const { ready } = useSyncCollection("wallet", api.wallet.mine, {});
+/** `feed` false reads the store without subscribing: an always-mounted
+ *  surface (the shell's usage meter) feeds only in the sync host window, and
+ *  followers read the wallet the host replicates to them. */
+export function useWallet(feed = true): { wallet: WalletSummary | null; ready: boolean } {
+  const { ready } = useSyncCollection("wallet", api.wallet.mine, feed ? {} : "skip");
   const stored = useInboxStore((s) => s.wallet);
   const anchor = stored?.period_anchor ?? null;
   const now = useNowWhen((t) => (anchor === null ? "" : String(periodAt(anchor, t).start)), PERIOD_CHECK_MS);
