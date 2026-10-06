@@ -31,6 +31,9 @@ import { useTrackedStore } from "../store/inboxStore";
 import { findCommonPrefix, shortenPrefix, stripCommonPrefix, treeOrder } from "../lib/diffFileTree";
 import { FileSidebar } from "./FileDiffSidebar";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { useFollowSurface } from "../hooks/useFollowSurface";
+import { landOn } from "../hooks/useDiffAddress";
+import { notifyFollowView } from "../lib/follow";
 
 export interface DiffFile {
   filename: string;
@@ -343,7 +346,7 @@ function FileDiffContent({
   }
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden">
+    <div className="h-full overflow-y-auto overflow-x-hidden" data-follow-diff-scroll>
       <div className="sticky top-0 z-10 bg-sol-bg-alt border-b border-sol-border/30 px-3 py-1 flex items-center justify-between gap-x-3 gap-y-1 flex-wrap">
         <div className="flex items-center gap-1.5 min-w-[min(100%,10rem)] flex-1 basis-[10rem]">
           {onToggleSidebar && (
@@ -480,7 +483,7 @@ function UnifiedDiffView({
   // begins without reading the headers; each header stays pinned while its
   // own diff scrolls under it.
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden pb-8">
+    <div className="h-full overflow-y-auto overflow-x-hidden pb-8" data-follow-diff-scroll>
       {files.map((file, index) => {
         const status = getFileStatus(file.status);
         const language = getFileExtension(file.filename);
@@ -1036,6 +1039,46 @@ export function FileDiffLayout({
 
   const selectedFileData = strippedFiles.find((f) => f.filename === selectedFile) || null;
 
+  // Follow mode (lib/follow.ts): a pane diff is a place, the file in hand and
+  // the line at the top of its scroller. The page form reports through its
+  // address instead (useDiffAddress).
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const landRef = useRef<(() => void) | null>(null);
+  useFollowSurface(
+    {
+      read: () => {
+        const root = paneRef.current;
+        if (!root || root.offsetParent === null) return null;
+        const at = topDiffRow(root);
+        const file = viewMode === "unified" && at?.fileIndex !== undefined ? strippedFiles[at.fileIndex] : selectedFileData;
+        return file ? { diff: { file: file.originalFilename ?? file.filename, line: at?.line } } : null;
+      },
+      apply: (view) => {
+        const want = view.diff;
+        const root = paneRef.current;
+        if (!want || !root || root.offsetParent === null) return [];
+        const index = strippedFiles.findIndex((f) => (f.originalFilename ?? f.filename) === want.file);
+        if (index < 0) return [];
+        setSelectedFile(strippedFiles[index].filename);
+        setCurrentFileIndex(index);
+        landRef.current?.();
+        landRef.current = landOnDiffRow(paneRef, viewMode === "unified" ? index : null, want.line);
+        return ["diff"];
+      },
+    },
+    !flow,
+    [selectedFile, viewMode, strippedFiles],
+  );
+  useWatchEffect(() => {
+    const root = paneRef.current;
+    if (flow || !root) return;
+    root.addEventListener("scroll", notifyFollowView, { capture: true, passive: true });
+    return () => {
+      root.removeEventListener("scroll", notifyFollowView, { capture: true });
+      landRef.current?.();
+    };
+  }, [flow, viewMode, isMobile, files.length === 0]);
+
   const showHeader = title || subtitle || headerExtra;
 
   if (files.length === 0) {
@@ -1121,7 +1164,7 @@ export function FileDiffLayout({
 
   if (viewMode === "unified") {
     return (
-      <div className="h-full flex flex-col">
+      <div ref={paneRef} className="h-full flex flex-col">
         <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-between shrink-0 gap-2">
           <div className="flex items-center gap-3 text-sm min-w-0 truncate">
             <span className="text-sol-text-muted shrink-0">
@@ -1237,7 +1280,7 @@ export function FileDiffLayout({
 
   if (isMobile) {
     return (
-      <div className="h-full flex flex-col">
+      <div ref={paneRef} className="h-full flex flex-col">
         {headerContent}
         <div className="flex-1 min-h-0 relative">
           {sidebarOpen && (
@@ -1261,7 +1304,7 @@ export function FileDiffLayout({
 
   if (!sidebarOpen) {
     return (
-      <div className="h-full flex flex-col">
+      <div ref={paneRef} className="h-full flex flex-col">
         {headerContent}
         <div className="flex-1 min-h-0">
           <FileDiffContent {...diffContentProps} />
@@ -1271,7 +1314,7 @@ export function FileDiffLayout({
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div ref={paneRef} className="h-full flex flex-col">
       {headerContent}
       <div className="flex-1 min-h-0">
         <Group
@@ -1300,5 +1343,42 @@ export function FileDiffLayout({
         </Group>
       </div>
     </div>
+  );
+}
+
+// Sticky file header height in a pane scroller: a row under it is not read.
+const PANE_HEADER_PX = 32;
+
+/** The diff row at the top of a pane's scroller: its new-side line, and the
+ *  file card it sits in when every file is stacked (`file-<index>`). */
+function topDiffRow(root: HTMLElement): { line?: number; fileIndex?: number } | null {
+  const scroller = root.querySelector<HTMLElement>("[data-follow-diff-scroll]");
+  if (!scroller) return null;
+  const edge = scroller.getBoundingClientRect().top + PANE_HEADER_PX;
+  for (const row of scroller.querySelectorAll<HTMLElement>("[data-ln^='R']")) {
+    if (row.getBoundingClientRect().bottom <= edge) continue;
+    const card = row.closest<HTMLElement>("[id^='file-']");
+    const fileIndex = card ? Number(card.id.slice(5)) : undefined;
+    return { line: Number(row.dataset.ln!.slice(1)), fileIndex: Number.isFinite(fileIndex) ? fileIndex : undefined };
+  }
+  return { line: undefined };
+}
+
+/** Bring a file (its card, when stacked) and a new-side line to the top of a
+ *  pane's scroller, the nearest line before it when the diff leaves it out. */
+function landOnDiffRow(paneRef: React.RefObject<HTMLElement | null>, fileIndex: number | null, line: number | undefined): () => void {
+  return landOn(
+    () => paneRef.current?.querySelector<HTMLElement>("[data-follow-diff-scroll]"),
+    (scroller) => {
+      const scope = fileIndex === null ? scroller : scroller.querySelector<HTMLElement>(`[id="file-${fileIndex}"]`);
+      if (!scope || line === undefined) return scope === scroller ? (scroller.firstElementChild as HTMLElement | null) : scope;
+      let best: HTMLElement | null = null;
+      for (const row of scope.querySelectorAll<HTMLElement>("[data-ln^='R']")) {
+        if (Number(row.dataset.ln!.slice(1)) > line) break;
+        best = row;
+      }
+      return best ?? scope;
+    },
+    (el) => (el.matches("[data-ln]") ? PANE_HEADER_PX : 0),
   );
 }

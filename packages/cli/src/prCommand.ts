@@ -534,7 +534,7 @@ export function convexUrlFromSiteUrl(siteUrl: string): string {
   return siteUrl.replace(".site", ".cloud");
 }
 
-async function locate(
+export async function locate(
   deps: PublishDeps,
   ref: string | undefined,
   opts: { repo?: string } = {},

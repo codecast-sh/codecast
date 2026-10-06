@@ -12,7 +12,7 @@
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
 const TASK_VERSION = "9"; // bumped: product events and --source, and the external data verbs (sources, events, replay, metrics, connector)
-const WORK_VERSION = "11"; // bumped: an assignee is who answers for a task, never who may work it (R7)
+const WORK_VERSION = "12"; // bumped: hand a code change off with a change guide (--guide)
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "2";
 const MESSAGING_VERSION = "10";

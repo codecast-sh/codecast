@@ -2,6 +2,7 @@ import { mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
@@ -34,7 +35,7 @@ import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { startHostedConversationFor } from "./assistant/entry";
-import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser, reorderQueuedForUser, mergeQueuedForUser } from "./pendingMessages";
 import { enqueueCloudSpawn, performCloudHostAction, performSetLocalMirror } from "./cloud";
 import type { CloudHostAction, LocalMirrorMode, MirrorResolve } from "@codecast/shared/contracts";
 import { effectiveStartFrom, parkOnCloudHost, resolveCloudDevice } from "./cloudPlacement";
@@ -57,6 +58,7 @@ import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, canAccessProject, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
+import { startShipCore } from "./ship";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -1260,6 +1262,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   cancelPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
     cancelPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
+  // A shared session's queue, steered by anyone who may send into it.
+  reorderQueued: async (ctx, userId, [convId, messageId, beforeId]: [string, string, string | null]) =>
+    reorderQueuedForUser(ctx, userId, convId as Id<"conversations">, { messageId, beforeId }),
+  mergeQueued: async (ctx, userId, [convId, messageId, intoId]: [string, string, string]) =>
+    mergeQueuedForUser(ctx, userId, convId as Id<"conversations">, { messageId, intoId }),
 
   sendMessage: async (
     ctx,
@@ -1769,12 +1776,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // client's stub id, so rewrite it with the real id in the same transaction.
   // The stub id doubles as the idempotency key: a replayed dispatch returns
   // the team the first run made instead of minting a duplicate.
-  dispatchCreateTeam: async (ctx, userId, [stubId, opts]: [string, { name: string; icon?: string; icon_color?: string }]) => {
+  dispatchCreateTeam: async (ctx, userId, [stubId, opts]: [string, { name: string; icon?: string; icon_color?: string; discoverable?: boolean }]) => {
     const teamId = await (ctx as any).runMutation(api.teams.createTeam, {
       name: opts.name,
       icon: opts.icon,
       icon_color: opts.icon_color,
       client_key: stubId,
+      ...(opts.discoverable ? { discoverable: true } : {}),
     });
     await applyPatches(ctx, userId, {
       client_state: { _: { ui: { active_team_id: teamId } } },
@@ -2043,6 +2051,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       parentCommentId?: string;
       filePath?: string;
       lineNumber?: number;
+      anchorLines?: CodeAnchorText;
       clientId: string;
       commandId?: string;
     }>(result);
@@ -2058,6 +2067,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       parent_comment_id: r.parentCommentId ? (r.parentCommentId as Id<"comments">) : undefined,
       file_path: r.filePath || undefined,
       line_number: typeof r.lineNumber === "number" ? r.lineNumber : undefined,
+      anchor_lines: r.anchorLines,
       client_id: r.clientId,
     });
   },
@@ -2153,6 +2163,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Code review threads (review_comments). The server settles a whole thread
   // from any one comment in it, so one call per gesture is enough; a stub
   // (no server row yet) has nothing to resolve.
+  // One Ship control (ship.ts): the store paints the press on shipTargets,
+  // this starts it. A press on a target that is not a server row yet waits.
+  startShip: async (ctx, userId, [target, clientKey]: [{ kind: "task" | "conversation" | "pull_request"; id: string }, string]) => {
+    if (!isServerId(target?.id)) throw new Error("Nothing to ship yet");
+    return await startShipCore(ctx as any, userId, target, { clientKey });
+  },
   setPrShepherd: async (ctx, _userId, [prId, conversationId, enabled]: [string, string | undefined, boolean]) => {
     return await ctx.runMutation!((api as any).prShepherd.setShepherd, { pr_id: prId, ...(conversationId ? { conversation_id: conversationId } : {}), enabled });
   },

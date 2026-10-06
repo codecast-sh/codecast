@@ -26,6 +26,7 @@ export * from "./sessionRead";
 export * from "./loopState";
 export * from "./taskStats";
 export * from "./threadState";
+export * from "./subagentFleet";
 export * from "./apiErrorBanner";
 // Cloud placement: the one predicate the web composer and the Convex start
 // chokepoint share for "does this launch need a laptop to prepare the host".

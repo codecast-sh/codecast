@@ -16747,9 +16747,13 @@ work
   .option("--files <paths>", "Comma-separated files changed")
   .option("--pr <url>", "Pull request URL")
   .option("--page <slug|url>", "Attach a published page as evidence (repeatable; the-line.md L6)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
+  .option("--guide <markdown>", stdinText("Change guide: a walkthrough of the change in reading order, one heading per step with its file:start-end on the heading line and the reason under it. With --evidence - too, stdin holds the evidence, a --- line, then the guide"))
+  .option("--guide-base <ref>", "Diff the guide's hunks against this ref (default: where HEAD branched from origin/main)")
   .action(async (shortId: string, options: any) => {
     const { buildTaskHandoffBody, handoffCommentText, parseFilesFlag, parseHandoffStatus } = await import("./taskClaim.js");
     const { pageSlugFromRef } = await import("./publishCommand.js");
+    const { parseChangeGuide } = await import("@codecast/shared/contracts/changeGuide");
+    const { guideDiffReader } = await import("./changeGuideDiff.js");
     let input!: Parameters<typeof buildTaskHandoffBody>[2];
     let body!: Record<string, any>;
     try {
@@ -16758,7 +16762,13 @@ work
         if (!slug) throw new Error(`--page ${ref}: expected a page slug or a codecast.sh/a/<slug> url`);
         return slug;
       });
-      input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages };
+      // The guide's hunks are captured now, so the review reads the code as it was handed off.
+      const guide = options.guide ? parseChangeGuide(String(options.guide), guideDiffReader(getRealCwd(), options.guideBase).diffFor) : undefined;
+      if (guide) {
+        const bare = guide.steps.filter((s) => !s.hunk).map((s) => s.file);
+        if (bare.length) console.error(`${c.yellow}note${c.reset} no diff found for ${[...new Set(bare)].join(", ")}; those steps show text only`);
+      }
+      input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages, guide };
       body = buildTaskHandoffBody(shortId, ownSessionId(getRealCwd()), input);
     } catch (err) {
       console.error(`Error: ${(err as Error).message}`);
@@ -16771,7 +16781,7 @@ work
     const commentBody: Record<string, any> = { short_id: shortId, text: handoffCommentText(input), comment_type: "review" };
     if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
     await cliPost("/cli/work/comment", commentBody);
-    console.log(`${c.green}ok${c.reset} Handed off ${c.cyan}${shortId}${c.reset} (${input.status}) → in_review${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}`);
+    console.log(`${c.green}ok${c.reset} Handed off ${c.cyan}${shortId}${c.reset} (${input.status}) → in_review${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}${input.guide ? ` · guide, ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}` : ""}`);
     if (body.conversation_id) clearTaskPulseIfBound(body.conversation_id, shortId);
     await warnIfThreadStateStale();
   });
@@ -18684,7 +18694,7 @@ plan
   .description("Spawn parallel agents to implement plan tasks")
   .argument("<plan_id>", "Plan short ID")
   .option("--dry-run", "Show what would be spawned without doing it")
-  .option("--max <n>", "Max parallel agents", "3")
+  .option("--max <n>", "Max parallel agents (default: subagents.per_session, 4)")
   .option("--watch", "Monitor agents after spawning")
   .action(async (planId: string, options: any) => {
     const orchSessionId = detectCurrentSessionId();
@@ -18706,7 +18716,7 @@ plan
       return;
     }
 
-    const maxAgents = parseInt(options.max, 10) || 3;
+    const maxAgents = parseInt(options.max, 10) || normalizeSubagentCaps(readConfig()?.subagents).per_session;
     const toSpawn = readyTasks.slice(0, maxAgents);
 
     console.log(`\n  ${c.bold}Plan:${c.reset} ${inlineForeignText(plan.title)} ${c.dim}(${planId})${c.reset}`);
@@ -19014,7 +19024,7 @@ plan
   .command("autopilot")
   .description("Continuously orchestrate a plan: spawn agents, monitor, spawn next wave")
   .argument("<plan_id>", "Plan short ID")
-  .option("--max <n>", "Max parallel agents per wave", "3")
+  .option("--max <n>", "Max parallel agents per wave (default: subagents.per_session, 4)")
   .option("--interval <mins>", "Minutes between status checks", "2")
   .option("--max-runtime <duration>", "Max runtime before self-rescheduling (e.g., 30m, 2h)")
   .option("--max-waves <n>", "Max number of waves before stopping")
@@ -19024,7 +19034,7 @@ plan
   .action(async (planId: string, options: any) => {
     const orchSessionId = detectCurrentSessionId();
     const orchCtx = orchSessionId ? { conversation_id: orchSessionId } : {};
-    const maxAgents = parseInt(options.max, 10) || 3;
+    const maxAgents = parseInt(options.max, 10) || normalizeSubagentCaps(readConfig()?.subagents).per_session;
     const maxWaves = options.maxWaves ? parseInt(options.maxWaves, 10) : undefined;
     const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
     const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;

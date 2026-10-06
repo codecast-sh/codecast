@@ -43,6 +43,7 @@ export function fileChangeRef(row: Doc<"file_changes">, sequenceIndex: number): 
     newBytes: row.new_bytes ?? row.new_content?.length ?? 0,
     commitMessage: row.commit_message,
     commitHash: row.commit_hash,
+    ...(row.commit_branch ? { commitBranch: row.commit_branch } : {}),
     timestamp: row.timestamp,
   };
 }

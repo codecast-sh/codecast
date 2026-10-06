@@ -810,6 +810,7 @@ export const DiffView = memo(function DiffView({
           const row = (
             <div
               data-diff-row={interactive ? i : undefined}
+              data-ln={rowAnchor ? `${rowAnchor.side === "LEFT" ? "L" : "R"}${rowAnchor.lineNumber}` : undefined}
               id={rowId && rowAnchor ? rowId(rowAnchor) : undefined}
               className={`${rowBg} ${wrap ? "flex items-start" : "whitespace-pre"} ${rowId ? "cc-diff-target" : ""} ${selected ? "cc-diff-selected" : ""} ${selected && selection && rowAnchor!.lineNumber === selection.range.end ? "cc-diff-selected-end" : ""} ${rowPlus ? "cc-diff-row" : ""}`}
             >

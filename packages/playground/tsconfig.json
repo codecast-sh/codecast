@@ -1,0 +1,21 @@
+{
+  // One program for the shell (src/) and the playground's Convex functions, so
+  // `cast check playground` covers both. convex/tsconfig.json stays the config
+  // the Convex CLI bundles and checks against on push.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["vite/client", "bun"]
+  },
+  "include": ["src", "convex", "vite.config.ts"]
+}

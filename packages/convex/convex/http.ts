@@ -4824,6 +4824,23 @@ for (const verb of ["resolve", "unresolve"] as const) {
 // Reviewing, merging and closing reach GitHub, so each is an action and each
 // answers with GitHub's own words when GitHub refuses.
 cliRoute("/cli/pr/review", async (ctx, body) => ctx.runAction((api as any).prCli.review, body));
+// One Ship control (ship.ts): `cast ship run`. A --pr ref resolves the way
+// every cast pr verb resolves one, then the same action the web dispatches runs.
+cliRoute("/cli/ship/run", async (ctx, body) => {
+  const { pr_locator, dry_run, task, session, requester_session, api_token } = body;
+  let pull_request_id: string | undefined;
+  if (pr_locator) {
+    const resolved = await ctx.runQuery((api as any).prCli.resolve, { api_token, ...pr_locator });
+    if (!resolved?.pull_request) return { error: "No pull request matched that reference" };
+    pull_request_id = resolved.pull_request.id;
+  }
+  const args = { api_token, task, session, pull_request_id, requester_session };
+  try {
+    return await ctx.runMutation(dry_run ? (api as any).ship.previewFromCli : (api as any).ship.startFromCli, args);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message.replace(/^.*Uncaught Error: /s, "").split("\n")[0] : String(err) };
+  }
+});
 cliRoute("/cli/pr/merge", async (ctx, body) => ctx.runAction((api as any).prCli.merge, body));
 cliRoute("/cli/pr/close", async (ctx, body) => ctx.runAction((api as any).prCli.close, body));
 cliRoute("/cli/pr/reopen", async (ctx, body) => ctx.runAction((api as any).prCli.reopen, body));
