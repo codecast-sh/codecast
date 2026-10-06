@@ -7,10 +7,10 @@ import { useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import type { FreezeResponse, OverviewResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
 import { useDebounce, useEvalsClient, useEvalsHealth, useEvalsLoaded, useEvalsResource } from "../../lib/evals/hooks";
-import { evalsHref, evalsSearchTargets, evalsSection, type EvalsSearchKnown, type EvalsView } from "./evalsPaths";
+import { evalsSection, type EvalsSearchKnown, type EvalsView, shortSha } from "@platform/evals/client";
+import { evalsHref, evalsSearchTargets } from "./evalsPaths";
 import { useEvalsHost } from "./host";
 import { EvalsLink } from "./parts";
-import { shortSha } from "./format";
 
 const SECTIONS = [
   { key: "surfaces", label: "Surfaces", href: evalsHref.home() },

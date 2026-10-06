@@ -12,15 +12,11 @@ import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronRight, Crosshair } from "lucide-react";
 import type { Epoch, FootingMarker, FreezeResponse, LedgerCell, MomentMessage, RunResponse, RunRow } from "@codecast/shared/contracts/evalsApi";
 import { FootingGlyph } from "./charts/ScoreStrip";
-import { PASS_MARK, jitter, scoreScale, stepPath } from "./charts/scale";
+import { PASS_MARK, jitter, scoreScale, stepPath, shortSha, batchLabel, whenLabel, verdictOfRow, type FreezePair, type DefaultFreezePair, shownRep, graded, batchColumns, attributionEnds, pairStory, replyOfRun, reasoningOfRun, promptFilePairs, dayLabel, tickLabel, FREEZE_WIDE_PX, epochBandsOf, medianOf, repY, scoredRep, type ColumnRail } from "@platform/evals/client";
 import { EpochBands, RepHatch, RepMark, RepTip } from "./Seismograph";
 import { evalsHref } from "./evalsPaths";
 import { useEvalsHost } from "./host";
 import { CopyCommand, EvalsLink, LockBadge, PromptDiff, ReplyCard, ScoreBar, VerdictGlyph } from "./parts";
-import { shortSha, batchLabel, whenLabel } from "./format";
-import { verdictOfRow } from "./verdictModel";
-import { type FreezePair, type DefaultFreezePair, shownRep, graded, batchColumns, attributionEnds, pairStory, replyOfRun, reasoningOfRun, promptFilePairs, dayLabel, tickLabel, FREEZE_WIDE_PX } from "./freezeModel";
-import { epochBandsOf, medianOf, repY, scoredRep, type ColumnRail } from "./seismographModel";
 
 // ── Left pane ───────────────────────────────────────────────────────────────
 

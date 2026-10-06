@@ -9,7 +9,7 @@ import { useMemo, useRef, useState } from "react";
 import { GitCommitHorizontal } from "lucide-react";
 import type { CommitRef, CommitResponse, PatchResponse } from "@codecast/shared/contracts/evalsApi";
 import { useEvalsResource } from "../../lib/evals/hooks";
-import { offBranchWords, shortSha } from "./format";
+import { offBranchWords, shortSha } from "@platform/evals/client";
 import { evalsHref } from "./evalsPaths";
 import { useEvalsHost, type EvalsHost } from "./host";
 import { EvalsLink } from "./parts";

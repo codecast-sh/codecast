@@ -29,9 +29,9 @@ import { ConnectNotice } from "../../components/simple/ConnectNotice";
 import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
 import { LaneSync } from "../../components/simple/LaneSync";
 import { ASK_FIRST, LANE_COPY, LANE_PATHS, conversationPath, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
-import { laneOf, writeLane } from "../../components/simple/lanePref";
+import { isHostedUi, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
-import { startConversationWith } from "../../components/simple/startConversation";
+import { startHostedConversation } from "../../lib/startHostedConversation";
 import "../../components/simple/laneLook";
 import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
 import { useLaneMail } from "../../components/simple/useLaneMail";
@@ -52,7 +52,7 @@ const rise = (i: number) => ({ ["--i" as any]: i }) as CSSProperties;
 /** Moving to the lane is what arriving through /welcome means, written the
  *  first time the person acts here. */
 function joinLane() {
-  if (laneOf(useInboxStore.getState().clientState?.ui) !== "simple") writeLane("simple");
+  if (!isHostedUi(useInboxStore.getState().clientState?.ui)) writeLane("simple");
 }
 
 /** Runs a screen change as a view transition where the browser has one and
@@ -306,7 +306,7 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
   const begin = (text: string) => {
     if (leaving) return;
     joinLane();
-    const id = startConversationWith(text);
+    const id = startHostedConversation(text);
     setLeaving(text);
     window.setTimeout(() => navigate(conversationPath(id)), SEND_OFF_MS);
   };

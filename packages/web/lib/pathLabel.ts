@@ -12,6 +12,16 @@ import { modTabLabel, objectTabLabel } from "./mods/label";
 import { weekMonday } from "@codecast/shared/changes";
 import { evalsTabLabel } from "../components/evals/evalsPaths";
 import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
+import { modePageLabel } from "./surfaceRules";
+import { isHostedUi } from "../components/simple/lanePaths";
+
+/** The mode's name for the page at `path` under this client_state.ui, or
+ *  null when the page is named the same in both modes. A label that a stored
+ *  title or record would otherwise win reads this first, since the stored
+ *  name was stamped in whichever mode opened the page. */
+export function modePathLabel(path: string, ui?: { lane?: string } | null): string | null {
+  return modePageLabel(path, isHostedUi(ui));
+}
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -23,7 +33,9 @@ const REPO_SECTION_LABEL: Record<string, string> = {
   search: "Search",
 };
 
-export function pathLabel(path: string): string {
+/** `ui` is client_state.ui, for the pages named by mode (modePathLabel);
+ *  absent reads as developer mode. */
+export function pathLabel(path: string, ui?: { lane?: string } | null): string {
   // A browser pane is named by what it shows — the page's title once a
   // backend could read one, else the host ("localhost:3000"). "Browser" would
   // make three open pages three identical tabs.
@@ -67,6 +79,7 @@ export function pathLabel(path: string): string {
   // return to day mode, else a day ("Changes, Fri 2 Oct"). With neither in
   // the query it is today's, and the bare name says so.
   if (clean === "/mods") return "Mods";
+  if (clean === "/agent-features") return "Agent features";
   if (clean.startsWith("/m/")) return modTabLabel(clean);
   if (clean.startsWith("/objects/") || clean.startsWith("/o/")) return objectTabLabel(clean);
   if (clean === "/changes") {
@@ -146,7 +159,7 @@ export function pathLabel(path: string): string {
     "/settings": "Settings",
     "/team/activity": "Activity",
   };
-  return segments[clean] || clean.split("/").pop() || "Tab";
+  return modePathLabel(clean, ui) || segments[clean] || clean.split("/").pop() || "Tab";
 }
 
 /** The session an /inbox?s=<id> tab is pinned to, if any. */

@@ -3,7 +3,7 @@
 // code a rep ran opens from anywhere a rep is named.
 
 import { CommitPanel, PatchPanel } from "../CommitPanel";
-import type { EvalsView } from "../evalsPaths";
+import type { EvalsView } from "@platform/evals/client";
 
 export function CommitPage({ view }: { view: Extract<EvalsView, { view: "commit" }> }) {
   return (

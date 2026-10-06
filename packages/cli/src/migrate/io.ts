@@ -303,7 +303,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       return { destinationPath: dest.localCwd, gitRoot, sourcePath: remoteCwd, verification };
     },
 
-    notice: (facts: Facts, transfer: TransferResult) => {
+    notice: (facts: Facts, transfer: TransferResult, stoppedOnSource) => {
       const entry = hosts.get(facts.direction === "to_cloud" ? facts.to_device_id : (facts.owner_device_id ?? ""));
       const hostName = entry ? `${entry.host.user}@${entry.host.address}` : null;
       return moveNotice({
@@ -311,6 +311,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         newCwd: transfer.destinationPath,
         oldCwd: facts.direction === "to_cloud" ? `${transfer.sourcePath} on ${os.hostname()}` : `${transfer.sourcePath} on ${hostName ?? facts.owner_label ?? "the cloud host"}`,
         verification: transfer.verification,
+        stoppedOnSource,
       });
     },
   };

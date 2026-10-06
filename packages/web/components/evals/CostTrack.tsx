@@ -3,10 +3,8 @@
 // It shares the chart's columns and hover, so a bar sits under its batch.
 
 import { useState } from "react";
-import { axisUsd, niceCeil } from "./charts/scale";
-import { usd } from "./format";
+import { axisUsd, niceCeil, usd, type SurfaceColumns } from "@platform/evals/client";
 import { useEvalsHost } from "./host";
-import type { SurfaceColumns } from "./seismographModel";
 
 const H = 46;
 const TOP = 6;

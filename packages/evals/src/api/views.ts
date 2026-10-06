@@ -1,21 +1,21 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { CompareResponse, FreezeInfo, FreezeResponse, MomentMessage, MovedEvent, RunRow, SimSessionSummary, StalenessWord, SurfaceInfo } from '@codecast/shared/contracts/evalsApi';
+import type { CompareResponse, FreezeInfo, FreezeResponse, MomentMessage, RunResponse, RunRow, SimFailureMoved, SimSessionSummary, StalenessWord, SurfaceInfo } from '@codecast/shared/contracts/evalsApi';
 import type { ConvoMessage, Freeze } from '@platform/evals';
+import { BadRequest, NotFound } from '@platform/evals/query';
 import { diffRuns } from '@platform/evals/render';
 
 import { sessionsDir } from '../../../web/store/__tests__/sim/history';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { PASS_AT } from '../adapters/judge';
 import { describeFreeze, freezeMeta, loadLabel, loadSnapshot, productionReplyOf, type LoadedSnapshot } from '../adapters/resolver';
-import { BadRequest, NotFound, type RunDetail } from '../core/query';
 import { labelPath } from '../labels';
 import { surfaceMeta } from '../registry';
 import { agentsOf, callsOf, filesOf, guardOf, judgeOf, logTailOf, readJsonFile, replyOf, resultOf, runDir, runJsonOf, scoreOf, scoreVersionsOf, sendsOf } from './files';
 import { latestSimSession, simSessions } from './simHistory';
 
-// Codecast's own parts of the shared views (core/query.ts builds the rest):
+// Codecast's own parts of the shared views (@platform/evals/query builds the rest):
 // what only codecast's homes hold, its freeze stores and labels, its run
 // folders, the staleness worker and the sim history. Nothing here writes.
 
@@ -95,12 +95,12 @@ export const stalenessWords = kept(askWorker, 30_000);
 const sessionDirOf = (id: string): string => join(sessionsDir(), id);
 
 /** The newest failing sim run, as a "What moved" line, and the newest session: what the wall shows of the sim. */
-export function simOverview(): { failure: MovedEvent | null; latest: SimSessionSummary | null } {
+export function simOverview(): { failure: SimFailureMoved | null; latest: SimSessionSummary | null } {
   const sessions = simSessions();
   return { failure: simFailureEvent(sessions), latest: latestSimSession(sessions) };
 }
 
-function simFailureEvent(sessions: ReturnType<typeof simSessions>): MovedEvent | null {
+function simFailureEvent(sessions: ReturnType<typeof simSessions>): SimFailureMoved | null {
   for (const { session, runs } of sessions) {
     if (session.unsessioned) continue;
     const failed = runs.filter((r) => !r.passed && r.dir).at(-1);
@@ -127,7 +127,7 @@ export async function freezeById(id: string): Promise<Freeze> {
   return f;
 }
 
-/** A freeze's page from its stores, labels and the reps that ran it; core/query.ts adds its epochs. */
+/** A freeze's page from its stores, labels and the reps that ran it; the shared handler adds its epochs. */
 export async function freezePage(id: string, rows: RunRow[]): Promise<Omit<FreezeResponse, 'epochs'>> {
   const f = await freezeById(id);
   const m = freezeMeta(f);
@@ -177,7 +177,10 @@ export async function freezePage(id: string, rows: RunRow[]): Promise<Omit<Freez
 
 // ── One run ────────────────────────────────────────────────────────────────
 
-/** A rep's folder as the run page reads it; core/query.ts adds the row and its neighbours. */
+/** A rep's detail as its folder holds it; the shared handler adds the row and its neighbours. */
+type RunDetail = Omit<RunResponse, 'row' | 'siblings' | 'adjacent'>;
+
+/** A rep's folder as the run page reads it, codecast's anatomy included (calls, agents, guard, files). */
 export async function runFolder(row: RunRow): Promise<RunDetail> {
   const dir = runDir(row.id);
   const meta = surfaceMeta(row.surface);

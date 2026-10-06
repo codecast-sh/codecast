@@ -11,7 +11,7 @@ import { formatShortcutParts, getShortcutsForAction, useShortcutAction, useShort
 import { useTabActive } from "../../hooks/usePagePresence";
 import { evalsHref } from "./evalsPaths";
 import { CopyCommand, EvalsLink, LogTail, StallChip, VerdictGlyph } from "./parts";
-import { isJobStalled } from "./bisectModel";
+import { isJobStalled, plural, shortSha, whenLabel } from "@platform/evals/client";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { DeliveryTimeline } from "./DeliveryTimeline";
 import { OrderStrip } from "./OrderStrip";
@@ -20,7 +20,6 @@ import { splitOrderLine } from "../../store/__tests__/sim/shrink";
 import { SimLabels } from "../../store/__tests__/sim/labels";
 import { buildTimeline, failIndex, feedTone, keptIndexes, rowDiffSides, splitRowDiff, traceLabels } from "./simLanes";
 import "./sim.css";
-import { plural, shortSha, whenLabel } from "./format";
 import { PLAY_STEP_MS } from "./simModel";
 import type { JobState } from "./simJobState";
 

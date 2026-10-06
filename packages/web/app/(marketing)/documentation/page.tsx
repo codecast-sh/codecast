@@ -4,6 +4,7 @@ import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
 import { GUIDES, GUIDE_CATEGORIES, guideHref } from "./guides/guides";
+import { GuideCard } from "./guides/GuideCard";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { SITE_LINKS } from "@/lib/siteLinks";
@@ -760,19 +761,7 @@ $ cast sharing share ~/src/app --team acme-eng --dry-run`}</Code>
                   {cat}
                 </div>
                 <div className="grid sm:grid-cols-2 gap-3">
-                  {inCat.map((g) => (
-                    <Link
-                      key={g.slug}
-                      href={guideHref(g.slug)}
-                      className="rounded-lg p-4 block transition-colors hover:shadow-sm"
-                      style={{ backgroundColor: `${SOL.base2}55`, border: `1px solid ${SOL.base2}` }}
-                    >
-                      <div className="font-mono text-sm font-semibold mb-1" style={{ color: SOL.base03 }}>
-                        {g.title}
-                      </div>
-                      <div className="text-[13px] leading-relaxed" style={{ color: SOL.base00 }}>{g.dek}</div>
-                    </Link>
-                  ))}
+                  {inCat.map((g) => <GuideCard key={g.slug} guide={g} />)}
                 </div>
               </div>
             );

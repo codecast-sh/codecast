@@ -116,15 +116,24 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
   template.command("publish <folder...>").description("Publish release folders as templates under a workspace, or as Codecast for every workspace; several folders publish in one run (a gallery: packs/*)")
     .option("--team <name|id>", "Publishing team workspace").option("--personal", "Publish under your personal workspace").option("--codecast", "Publish as Codecast (its admins only)")
     .option("--status <draft|canary|stable>", "Release status", "draft").option("--changelog <text>", "What changed in this version; '-' reads stdin; default: the folder's CHANGELOG.md")
-    .option("--review-project <id>", "Where this template's lessons are reviewed").option("--json", "Machine-readable output")
+    .option("--review-project <id>", "Where this template's lessons are reviewed").option("--dry-run", "Say each folder's class and whether publish would accept its version; uploads and writes nothing")
+    .option("--json", "Machine-readable output: every folder's row, with its changes")
     .action(async (folders: string[], options: any) => {
-      const { publishTemplate, publishTemplates } = await import("./orgTemplateRun.js");
+      const { publishTemplates } = await import("./orgTemplateRun.js");
       const changelog = options.changelog === "-" ? readStdinBody() : options.changelog;
-      if (folders.length === 1) { console.log(JSON.stringify(await publishTemplate(deps, folders[0]!, { ...options, changelog }), null, 2)); return; }
+      // Each folder publishes on its own; its class is the server's diff against the release before it.
       const rows = await publishTemplates(deps, folders, { ...options, changelog });
-      console.log(JSON.stringify(rows, null, 2));
+      if (options.json) output(rows);
+      else for (const r of rows) console.log(r.error ? `${r.folder}: refused: ${r.error}` : `${r.template_id}@${r.version}: ${r.dry_run ? `would be ${r.action}` : r.action}, a ${r.class} release (${r.folder})`);
       if (rows.some((r) => r.error)) process.exitCode = 1;
     });
+  const publisher = (command: Command) => command.option("--team <name|id>", "The publishing team workspace").option("--personal", "Your personal workspace").option("--codecast", "As Codecast (its admins only)").option("--json", "Machine-readable output");
+  publisher(template.command("yank <template> <version>").description("Withdraw a release: no catalog, hire or update offers it again, latest falls back to the newest release left, and instances on it are offered that fallback as a rollback"))
+    .requiredOption("--reason <text>", "Why it is withdrawn; the instances on it read this")
+    .action(async (id: string, version: string, options: any) => output(await (await import("./orgTemplateRun.js")).yankRelease(deps, id, version, options)));
+  publisher(template.command("retire <template>").description("Hide a template from every catalog; the roles hired from it keep running on their releases"))
+    .option("--reason <text>", "Why, for the record").option("--undo", "Offer it in the catalog again")
+    .action(async (id: string, options: any) => output(await (await import("./orgTemplateRun.js")).retireTemplate(deps, id, options)));
   template.command("catalog").description("The templates this workspace may hire: its own and Codecast's")
     .option("--team <name|id>", "Team workspace").option("--personal", "Personal workspace").option("--json", "Machine-readable output")
     .action(async (options: any) => {

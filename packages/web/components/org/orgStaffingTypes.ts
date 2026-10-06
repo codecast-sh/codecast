@@ -36,6 +36,11 @@ export type OrgRoleHealth = {
     handoffs_7d: { done: number; blocked: number; needs_context: number };
     review_stalls: number;
     sends_7d: { to: { role_id: string; n: number }[]; from: { role_id: string; n: number }[] };
+    /** The fix loop: defects its runs introduced (szz signals), promises it owns, hands that finished with a concern. */
+    bugs_introduced_30d?: number;
+    promises_open?: number;
+    promises_overdue?: number;
+    done_with_concerns_7d?: number;
   };
   last_move_at: number | null;
   idle_days: number;

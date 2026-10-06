@@ -114,6 +114,14 @@ export function parseConnectorReturn<X extends string = never>(
   return null;
 }
 
+/** Whether the address is a return from `provider` (success or refusal),
+ *  for a reader that must not take another connector's return off the
+ *  address: it mounts only when this is true. */
+export function isReturnFrom(hash: string, search: string, provider: string): boolean {
+  const hit = parseConnectorReturn(hash, search, [provider]);
+  return !!hit && hit.kind !== "confirm" && hit.provider === provider;
+}
+
 /** The reason table lives in the shared contract so `cast integrations`
  *  describes a refusal in the same words as every web surface. */
 export { describeConnectorError } from "@codecast/shared/contracts/connectorReasons";

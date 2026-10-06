@@ -19,7 +19,7 @@ import { needsYou, type NeedsYouItem } from "./staffingModel";
 import { companyFlow, flowDays, moveAsk, projectCap, projectMove, type RoleFlow } from "./orgFlow";
 import { DayBars, FLOW_TONE, InOutBars, RoleWeekBody } from "./orgFlowViz";
 import type { QueueItem } from "../../lib/decisionQueue";
-import type { OrgHealth, OrgProposalRow } from "./orgStaffingTypes";
+import type { OrgHealth, OrgProposalRow, OrgRoleHealth } from "./orgStaffingTypes";
 import type { OrgRole, OrgTree } from "./orgTypes";
 
 export type HealthBoardProps = {
@@ -229,6 +229,22 @@ function DrawerHeader({ f, onClose }: { f: RoleFlow; onClose: () => void }) {
   );
 }
 
+/** The fix loop under the week line, in its style: defects the seat's runs
+ *  introduced, the promises it owns and how many are late, and hands that
+ *  finished with a concern. Silent while every count is zero. */
+function FixLoopLine({ flow }: { flow: OrgRoleHealth["flow"] | undefined }) {
+  if (!flow) return null;
+  const bugs = flow.bugs_introduced_30d ?? 0, open = flow.promises_open ?? 0, late = flow.promises_overdue ?? 0, concerns = flow.done_with_concerns_7d ?? 0;
+  if (bugs + open + concerns === 0) return null;
+  return (
+    <p className="mt-1 text-[12px] tabular-nums" style={{ color: "var(--sol-text-secondary)" }} data-fix-loop>
+      <span style={{ color: bugs > 0 ? "var(--sol-red)" : undefined }}>{bugs} {bugs === 1 ? "bug" : "bugs"} introduced</span> <span style={{ color: "var(--sol-text-dim)" }}>30d</span>
+      {" · "}<span style={{ color: late > 0 ? "var(--sol-yellow)" : undefined }}>{open} {open === 1 ? "promise" : "promises"}{late > 0 ? `, ${late} late` : ""}</span>
+      {" · "}{concerns} with concerns
+    </p>
+  );
+}
+
 /** Its week large, its own latest word, what is stuck under it, and the
  *  levers: three columns on a desktop, one under the other on a phone. */
 function DrawerBody({ f, board, days, stacked }: { f: RoleFlow; board: HealthBoardProps; days: string[]; stacked?: boolean }) {
@@ -244,6 +260,7 @@ function DrawerBody({ f, board, days, stacked }: { f: RoleFlow; board: HealthBoa
         <p className="mt-2 text-[12px] tabular-nums" style={{ color: "var(--sol-text-secondary)" }}>
           <span style={{ color: FLOW_TONE.reached }}>{f.wakesTotal} in</span> · <span style={{ color: FLOW_TONE.closed }}>{f.doneTotal} closed</span>{f.decisionsTotal > 0 ? ` · ${f.decisionsTotal} decided for you` : ""} · limit {f.cap} a day
         </p>
+        <FixLoopLine flow={f.health?.flow} />
         {line && <p className="mt-2 text-[12px] leading-snug" style={{ color: "var(--sol-text-muted)" }} title={line.project}>“{line.text}”{line.written_on && <span style={{ color: "var(--sol-text-dim)" }}> · {line.written_on.slice(5)}</span>}</p>}
       </div>
       <div className="min-w-0 -mx-2.5">

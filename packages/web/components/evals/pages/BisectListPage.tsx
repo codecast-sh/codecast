@@ -3,8 +3,7 @@
 
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
 import { BisectListView } from "../BisectListView";
-import { isBisectLive } from "../bisectModel";
-import type { EvalsView } from "../evalsPaths";
+import { isBisectLive, type EvalsView } from "@platform/evals/client";
 import { useEvalsHost } from "../host";
 
 export function BisectListPage(_props: { view: Extract<EvalsView, { view: "bisect-list" }> }) {

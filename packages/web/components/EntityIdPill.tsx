@@ -25,6 +25,7 @@ import {
   GitPullRequest,
   GitCommitHorizontal,
   ChevronDown,
+  Radio,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { InitiativeHoverContent } from "./initiatives/InitiativeHoverContent";
@@ -89,6 +90,7 @@ import { TimeAgo } from "./tasks/TaskCommentStream";
 import { useRevealRef } from "../lib/revealHost";
 import { RevealOpenLink } from "./ObjectReveal";
 import { ModObjectPill } from "./mods/ModObjectPill";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 
@@ -345,6 +347,38 @@ function DecisionHoverContent({ decision }: { decision: SessionDecisionItem }) {
         {decision.short_id ? <ShortId id={decision.short_id} className="text-[10px] text-gray-500" /> : <span />}
         <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// What a source reference has to answer at a glance: which feed it is, whether
+// it is healthy, and if not, the error in its own words. The vocabulary is the
+// Ops page's (ops/parts), so a source reads the same in prose and on Ops.
+function SourceHoverContent({ source }: { source: any }) {
+  const state = SOURCE_STATE[source.status as keyof typeof SOURCE_STATE] ?? SOURCE_STATE.active;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <ProviderIcon provider={source.provider} className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{source.name}</div>
+          <div className="flex items-center gap-2 mt-1 text-[10px]">
+            <span className={`font-medium ${state.ink}`}>{state.label}</span>
+            <span className="text-gray-600">·</span>
+            <span className="text-gray-400">{SOURCE_PROVIDER_LABEL[source.provider as keyof typeof SOURCE_PROVIDER_LABEL] ?? source.provider}</span>
+          </div>
+        </div>
+      </div>
+      {source.last_error && (
+        <p className="text-[11px] text-sol-red line-clamp-3 leading-relaxed pl-[22px]">{source.last_error}</p>
+      )}
+      <div className="pl-[22px] text-[10px] text-gray-500">{sourceFacts(source).join(" · ")}</div>
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        <ShortId id={source.short_id} className="text-[10px] text-gray-500" />
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Open in Ops <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -1158,6 +1192,8 @@ export function EntityIdPill({
               ? decisionV.icon
             : type === "call"
               ? Phone
+            : type === "source"
+              ? Radio
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1185,6 +1221,9 @@ export function EntityIdPill({
               ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
             : type === "call"
               ? "bg-sol-red/[0.08] text-sol-red hover:bg-sol-red/[0.16]"
+            // A source wears the Ops orange, the colour of what wakes triggers.
+            : type === "source"
+              ? "bg-sol-orange/[0.08] text-sol-orange hover:bg-sol-orange/[0.16]"
             : isPr
               ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
@@ -1274,7 +1313,7 @@ export function EntityIdPill({
             ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
-              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : ""}`} />
+              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : ""}`} />
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
@@ -1328,6 +1367,7 @@ export function EntityIdPill({
             : type === "initiative" ? <InitiativeHoverContent initiative={entity} />
             : type === "decision" ? <DecisionHoverContent decision={entity} />
             : type === "call" ? <CallHoverContent call={entity} rawId={rawId} />
+            : type === "source" ? <SourceHoverContent source={entity} />
             : isPr ? <PullRequestHoverContent pr={entity} />
             : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />

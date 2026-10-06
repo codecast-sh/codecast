@@ -67,6 +67,28 @@ export function flushDue(opts: {
   const heldTooLong = opts.heldForMs !== null && opts.heldForMs >= limit;
   return (quiet && !waitForTurn) || heldTooLong;
 }
+
+/** A segment the server refused or the network dropped, waiting for the gap
+ *  watcher's next tick to send it again. `at` is the first failure, so the
+ *  age bound counts from the words, not from the latest retry. */
+export type FailedAppend<S = unknown> = { at: number; segment: S };
+// The retry list is small and short-lived: a transcript the server keeps
+// refusing must not grow it for the length of a call.
+export const APPEND_RETRY_MAX = 20;
+export const APPEND_RETRY_MAX_AGE_MS = 60_000;
+
+/** Fold freshly failed appends into the retry list under both bounds. Pure:
+ *  returns the list to keep and how many segments were given up on, which
+ *  the caller surfaces as a lasting status error. */
+export function settleFailedAppends<S>(
+  queue: FailedAppend<S>[],
+  failed: FailedAppend<S>[],
+  now: number,
+): { queue: FailedAppend<S>[]; dropped: number } {
+  const all = [...queue, ...failed].filter((f) => now - f.at < APPEND_RETRY_MAX_AGE_MS);
+  const kept = all.slice(-APPEND_RETRY_MAX);
+  return { queue: kept, dropped: queue.length + failed.length - kept.length };
+}
 /** How much of the transcript the status snapshot carries: enough for a
  *  caption strip or a recording pill, never the transcript itself. */
 const TAIL = 6;
@@ -139,9 +161,28 @@ export function createScribeEngine(): ScribeEngine {
   let lastFlushAt = 0;
   let gapTimer: ReturnType<typeof setInterval> | null = null;
   let pacing: ScribePacing | null = null;
+  type Segment = { speaker_id: string; speaker_name: string; text: string; t0: number; t1: number };
+  let failedAppends: FailedAppend<Segment>[] = [];
 
   function nowMs(): number {
     return Date.now() - epoch;
+  }
+
+  // The one path words take to the server. A refused or dropped append keeps
+  // its segments for the gap watcher's next tick; past the bounds the loss
+  // stays visible in status.error rather than vanishing.
+  function append(items: FailedAppend<Segment>[]) {
+    const id = transcriptId;
+    if (!convex || !id || items.length === 0) return;
+    convex
+      .mutation(api.transcripts.appendSegments, { transcript_id: id, segments: items.map((i) => i.segment) })
+      .catch((err) => {
+        const settled = settleFailedAppends(failedAppends, items, Date.now());
+        failedAppends = settled.queue;
+        if (settled.dropped > 0) {
+          emit({ error: `${settled.dropped} line(s) never reached the transcript: ${String(err?.message ?? err).slice(0, 100)}` });
+        }
+      });
   }
 
   function detach(key: string) {
@@ -181,12 +222,7 @@ export function createScribeEngine(): ScribeEngine {
           if (pacing?.addressed(text)) addressedSinceFlush = true;
           if (!firstUnflushedAt) firstUnflushedAt = Date.now();
           emit({ tail: [...status.tail, { speaker: speakerName, text }].slice(-TAIL) });
-          convex
-            ?.mutation(api.transcripts.appendSegments, {
-              transcript_id: transcriptId,
-              segments: [{ speaker_id: speakerId, speaker_name: speakerName, text, t0, t1 }],
-            })
-            .catch(() => {});
+          append([{ at: Date.now(), segment: { speaker_id: speakerId, speaker_name: speakerName, text, t0, t1 } }]);
         },
         onError: (message) => emit({ error: message }),
         onFailed: (message) => {
@@ -245,6 +281,7 @@ export function createScribeEngine(): ScribeEngine {
       firstUnflushedAt = 0;
       lastFlushAt = Date.now();
       pacing = opts.pacing ?? null;
+      failedAppends = [];
       emit({ active: true, transcriptId, error: null, tail: [], startedAt });
 
       // The gap watcher: flush the live routes when nobody has spoken for
@@ -255,6 +292,8 @@ export function createScribeEngine(): ScribeEngine {
       // once the VAD closes them.
       gapTimer = setInterval(() => {
         if (!status.active || !transcriptId || !convex) return;
+        // Words a previous append lost go first, so the flush below has them.
+        if (failedAppends.length) append(failedAppends.splice(0));
         if (!anySegmentsSinceFlush) return;
         const now = Date.now();
         const due = flushDue({
@@ -303,6 +342,8 @@ export function createScribeEngine(): ScribeEngine {
       if (opts?.graceful) {
         await Promise.all([...pipes.values()].map((p) => p.finish().catch(() => {})));
       }
+      // One last try for words an append lost; the run is over after this.
+      if (failedAppends.length) append(failedAppends.splice(0));
       for (const key of [...pipes.keys()]) detach(key);
       if (gapTimer) clearInterval(gapTimer);
       gapTimer = null;

@@ -43,6 +43,8 @@ const { wallOrder, newestWorsePair, attributeHref, rowHref, wallWindowFrom, wall
 const { movedLine, wallSpend } = await import("../wallModel");
 const { usd } = await import("../format");
 const { endpointLabel } = await import("../bisectModel");
+const { EvalsHostProvider, codecastEvalsHost } = await import("../host");
+type EvalsHost = import("../host").EvalsHost;
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -52,7 +54,7 @@ afterAll(() => {
 const data = homeFixture();
 const quiet = quietHomeFixture();
 
-async function mount(d = data, active = true) {
+async function mount(d = data, active = true, host: EvalsHost = codecastEvalsHost) {
   const opened: string[] = [];
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -61,7 +63,9 @@ async function mount(d = data, active = true) {
     root.render(
       <MemoryRouter initialEntries={["/evals"]}>
         <ShortcutProvider>
-          <SurfaceWallView data={d} now={HOME_NOW} cadence="all" onCadence={() => {}} onOpen={(h) => opened.push(h)} active={active} />
+          <EvalsHostProvider host={host}>
+            <SurfaceWallView data={d} now={HOME_NOW} cadence="all" onCadence={() => {}} onOpen={(h) => opened.push(h)} active={active} />
+          </EvalsHostProvider>
         </ShortcutProvider>
       </MemoryRouter>,
     ),
@@ -259,7 +263,7 @@ describe("the wall", () => {
     expect([...times].sort().reverse()).toEqual(times);
     const sim = data.moved.find((e) => e.kind === "sim-failure");
     if (sim && sim.kind === "sim-failure") expect(lines.some((a) => a.getAttribute("href") === `/evals/sim/${encodeURIComponent(sim.session)}/${encodeURIComponent(sim.run)}`)).toBe(true);
-    for (const e of data.moved) expect(movedLine(e).text).not.toMatch(/undefined|null/);
+    for (const e of data.moved) expect(movedLine(e, codecastEvalsHost.wall!.moved).text).not.toMatch(/undefined|null/);
     // The open bisect rides the foot as a ribbon; the finished one does not.
     expect(m.container.querySelector('[data-ev-bisect-ribbon="b-settle-1003"]')).not.toBeNull();
     expect(m.container.querySelector('[data-ev-bisect-ribbon="b-settle-0927"]')).toBeNull();
@@ -294,6 +298,26 @@ describe("the wall", () => {
     const ok = await mount({ ...data, sim: { ...base, exit: 0, failed: 0, failing: [], runs: Math.max(1, base.runs), finishedAt: base.finishedAt ?? base.startedAt } });
     expect(ok.container.querySelector("[data-ev-sim-line] [data-ev-verdict]")!.getAttribute("data-ev-verdict")).toBe("pass");
     await ok.unmount();
+  });
+
+  it("draws a host's own parts only through its wall slot: no slot, no sim", async () => {
+    const plain: EvalsHost = { ...codecastEvalsHost, wall: undefined };
+    expect(data.moved.some((e) => e.kind === "sim-failure")).toBe(true);
+    const m = await mount(data, true, plain);
+    expect(m.container.querySelector("[data-ev-sim-line]")).toBeNull();
+    expect(m.container.textContent).not.toContain("Multiplayer");
+    // The event still lands, as a plain line home, rather than vanishing.
+    const line = m.container.querySelector<HTMLAnchorElement>('[data-ev-moved-kind="sim-failure"]')!;
+    expect(line.getAttribute("href")).toBe("/evals");
+    expect(line.querySelector(".ev-moved-mark")!.childElementCount).toBe(0);
+    await m.unmount();
+    const q = await mount(quiet, true, plain);
+    expect(q.container.textContent).toContain("Nothing has moved in the window: no new epoch, footing change, flip or finished bisect.");
+    await q.unmount();
+    // Codecast's slot names its own kind in the empty line and marks a sim failure with its X.
+    const c = await mount(quiet);
+    expect(c.container.textContent).toContain("Nothing has moved in the window: no new epoch, footing change, flip, finished bisect or Multiplayer sim failure.");
+    await c.unmount();
   });
 
   it("never shows a pass for a Multiplayer sim session that has not finished", async () => {

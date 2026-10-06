@@ -5,7 +5,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useEvalsHealth } from "../../lib/evals/hooks";
 import { EvalsNav } from "./EvalsNav";
-import type { EvalsView } from "./evalsPaths";
+import type { EvalsView } from "@platform/evals/client";
 import { useEvalsHost } from "./host";
 
 /** While the api child builds its index for the first time: how far it is, read from GET /health every 2 s. */

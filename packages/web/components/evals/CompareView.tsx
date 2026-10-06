@@ -7,9 +7,7 @@ import { ArrowLeftRight } from "lucide-react";
 import type { CompareResponse, RunRow } from "@codecast/shared/contracts/evalsApi";
 import { evalsHref } from "./evalsPaths";
 import { EvalsLink, LockBadge, ProvenanceChips, PromptDiff, ReplyCard, ScoreBar, VerdictGlyph } from "./parts";
-import { usd } from "./format";
-import { verdictOfRow } from "./verdictModel";
-import { diffWords, compareFooting } from "./runModel";
+import { usd, verdictOfRow, diffWords, compareFooting } from "@platform/evals/client";
 
 function Side({ tag, row }: { tag: "A" | "B"; row: RunRow }) {
   return (

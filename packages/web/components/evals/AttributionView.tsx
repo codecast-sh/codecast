@@ -11,11 +11,9 @@ import { ATTRIBUTION_CLASSES, answerFreezeIds, type Attribution, type Attributio
 import { useEvalsResource } from "../../lib/evals/hooks";
 import { CommitMarks, CommitPanel, PatchPanel } from "./CommitPanel";
 import { ChangedPrompts, EvalsLink, FlipRunLinks, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
-import { candidateKey, endpointLabel, orderCandidates } from "./bisectModel";
+import { candidateKey, endpointLabel, orderCandidates, plural, score2, shortSha, flipFreezeHref } from "@platform/evals/client";
 import { evalsHref } from "./evalsPaths";
-import { plural, score2, shortSha } from "./format";
 import { useEvalsHost } from "./host";
-import { flipFreezeHref } from "./verdictModel";
 
 const CLASS_NAMES: Record<AttributionClass, string> = { footing: "Footing", freeze: "Freeze", "live-reads": "Live reads", source: "Source", noise: "Noise" };
 
@@ -475,7 +473,7 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
                     <span className={ex.direction === "broke" ? "ev-fail" : "ev-pass"}>{ex.direction}</span>
                     {f && <FlipRunLinks flip={f} />}
                   </div>
-                  <ExamplePair ex={ex} />
+                  <ExamplePair ex={ex} stack={false} />
                 </div>
               );
             })}

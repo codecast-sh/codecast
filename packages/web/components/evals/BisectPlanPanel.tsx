@@ -8,8 +8,7 @@
 import type { BisectPlan } from "@codecast/shared/contracts/evalsApi";
 import { evalsHref } from "./evalsPaths";
 import { CopyCommand, EvalsLink, VerdictGlyph } from "./parts";
-import { plural, shortSha, usd } from "./format";
-import { PLAN_REPS, planOverBudget, canStart } from "./bisectModel";
+import { plural, shortSha, usd, PLAN_REPS, planOverBudget, canStart } from "@platform/evals/client";
 import { useEvalsHost } from "./host";
 
 /** The key that starts the bisect, the way the list chord opens an item: the page binds it, the button draws it. */

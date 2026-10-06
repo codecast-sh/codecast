@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangesResponse } from "@codecast/shared/contracts/evalsApi";
 import { EVALS_POLL_MS, useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
-import { evalsHref, type EvalsView } from "../evalsPaths";
+import type { EvalsView } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 import { useEvalsHost } from "../host";
 import { SimRunView, type ShrinkState } from "../SimRunView";
 import { jobLive, jobState, shownJobState } from "../simJobState";

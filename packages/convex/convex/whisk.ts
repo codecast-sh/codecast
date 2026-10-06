@@ -53,9 +53,10 @@ const internalApi = internal as any;
 
 const TOKEN_HKDF_INFO = "codecast-whisk-app-token-v1";
 
-/** The lane pages a connect may come back to. A fixed list: the return path
+/** The pages a connect may come back to: the lane's, and the main shell's
+ *  inbox for a connect started in hosted mode. A fixed list: the return path
  *  rides the signed state, and finishConnect sends the browser only here. */
-export const WHISK_RETURN_PATHS = ["/simple/connections", "/welcome"] as const;
+export const WHISK_RETURN_PATHS = ["/simple/connections", "/welcome", "/inbox"] as const;
 export type WhiskReturnPath = (typeof WHISK_RETURN_PATHS)[number];
 
 export function whiskReturnPath(raw: unknown): WhiskReturnPath | undefined {

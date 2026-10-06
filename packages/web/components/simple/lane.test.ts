@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { PLANS } from "@codecast/shared/contracts/assistant";
 import { disconnectNote, mailboxLine } from "./connectionWords";
 import { formatDecisionAnswer } from "@codecast/shared/contracts";
-import { mailTools } from "@codecast/convex/convex/assistant/tools/mail";
-import { calendarTools } from "@codecast/convex/convex/assistant/tools/calendar";
+import { calendarTools, mailTools } from "@platform/assistant";
 import { codecastTools } from "@codecast/convex/convex/assistant/tools/codecast";
 import { searchWebTool, webTools, WEB_SEARCH_TOOL } from "@codecast/convex/convex/assistant/tools/web";
 import {

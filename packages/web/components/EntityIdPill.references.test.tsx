@@ -109,6 +109,19 @@ const FAKE_PAGE = {
   user: { name: "Ashot", image: null },
 };
 
+// A product source on the Ops page, failing: the shape agents write about
+// ("src-13 will stay in error until ...").
+const FAKE_SOURCE = {
+  _id: "tx72qtvpbmmrmwcjqmhzawejsx8bq9gm",
+  short_id: "src-13",
+  name: "union",
+  provider: "app",
+  status: "error",
+  last_error: "Union's API answers 401",
+  events_today: 0,
+  groups_open: 0,
+};
+
 // What the proposal feeder asked the server for. A proposal is store-fed, so
 // this fake never answers it: the pill paints from the seeded row.
 const PROPOSAL_GETS: string[] = [];
@@ -122,6 +135,7 @@ function fakeQuery(fn: unknown, args: any) {
   }
   if (name === "entities:resolveIdType") return TYPE_OF_CONVEX_ID[args?.id] ?? null;
   if (name === "artifacts:getShared") return args?.slug === PAGE_SLUG ? FAKE_PAGE : null;
+  if (name === "ingest:webGetSource") return [FAKE_SOURCE].find((r) => r.short_id === args?.ref || r._id === args?.ref) ?? null;
   const rows = ROWS[name];
   if (!rows) return undefined;
   return rows.find((r) =>
@@ -699,5 +713,21 @@ describe("one change of a proposal (op-N#seq)", () => {
     const html = render("Ask about op-77#2 when it lands.");
     expect(pillTexts(html)).toEqual(["op-77#2"]);
     expect(html).toContain('href="/org?proposal=op-77&amp;focus=2"');
+  });
+});
+
+describe("product sources (src-N)", () => {
+  test("a src-N reads as the source's name, linked to Ops narrowed to it", () => {
+    const html = render("src-13 will stay in error until Union's API is up.");
+    expect(pillText(html)).toBe("union");
+    expect(html).toContain('href="/ops?source=src-13"');
+    // A failing source says so on its glyph.
+    expect(html).toContain("text-sol-red");
+  });
+
+  test("a table cell of source ids becomes pills, a src- path stays text", () => {
+    const html = render("| Source |\n| --- |\n| src-13 union (app connector) |\n\nSee packages/src-tauri.");
+    expect(pillTexts(html)).toEqual(["union"]);
+    expect(html).toContain("src-tauri");
   });
 });

@@ -4,11 +4,10 @@
 
 import { useCallback } from "react";
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
-import { evalsHref, type EvalsView } from "../evalsPaths";
+import { type EvalsView, isBisectLive, DEFAULT_WALL_CADENCE } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 import { useEvalsHost } from "../host";
 import { SurfaceWallView } from "../SurfaceWallView";
-import { isBisectLive } from "../bisectModel";
-import { DEFAULT_WALL_CADENCE } from "../wallModel";
 
 export function HomePage({ view }: { view: Extract<EvalsView, { view: "home" }> }) {
   const host = useEvalsHost();

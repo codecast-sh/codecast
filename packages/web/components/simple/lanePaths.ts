@@ -30,6 +30,12 @@ export function laneOf(ui: { lane?: string } | null | undefined): Lane {
   return ui?.lane === "simple" ? "simple" : "full";
 }
 
+/** Hosted mode: the person lives in the hosted assistant's lane. Every
+ *  reader of hosted mode asks this rather than comparing the lane string. */
+export function isHostedUi(ui: { lane?: string } | null | undefined): boolean {
+  return laneOf(ui) === "simple";
+}
+
 export function conversationPath(id: string): string {
   return LANE_CONVERSATION_ROUTE.replace(":id", id);
 }

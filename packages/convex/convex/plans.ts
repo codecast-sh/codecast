@@ -1835,7 +1835,7 @@ export const generateShareLink = mutation({
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
     const share_token = plan.share_token ?? crypto.randomUUID();
-    await claimShareToken(ctx, "plans", plan, share_token);
+    await claimShareToken(ctx, "plans", plan, share_token, userId);
     return { share_token };
   },
 });
@@ -1851,7 +1851,7 @@ export const unsharePlan = mutation({
       .first();
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
-    await claimShareToken(ctx, "plans", plan, null);
+    await claimShareToken(ctx, "plans", plan, null, userId);
     return { success: true };
   },
 });

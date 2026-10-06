@@ -25,7 +25,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
 import { usePendingMessageStatus } from "../../../hooks/useSyncPendingPermissions";
-import { stripPastedContent } from "@codecast/shared/contracts";
+import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
 import { SentFileBlock, type SentFileData } from "../../tools/SentFileBlock";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
@@ -1390,7 +1390,9 @@ function AssistantBlockImpl({
           <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
             <AssistantWho conversationId={conversationId} agentType={agentType} />
           </span>
-          {model && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
+          {/* The hosted assistant is the author, whatever model answered; its
+              model stays in the tooltip above. */}
+          {model && !isHostedAgentType(agentType) && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"

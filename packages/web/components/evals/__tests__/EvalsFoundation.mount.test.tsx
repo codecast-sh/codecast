@@ -299,6 +299,8 @@ describe("the host seam", () => {
   const STYLESHEETS = ["evals.css", "bisect.css", "freeze.css", "run.css", "runPanels.css", "surface.css", "wall.css"];
   /** Codecast's run anatomy: the host renders it under a run (useRunPanels), so no shared view imports it. */
   const ANATOMY = new Set(["CallPane", "AgentTranscript", "GuardLog", "RunFiles", "runPanels"].map((f) => `components/evals/${f}`));
+  /** Codecast's Multiplayer sim stays in codecast: the wall reaches it through the host's wall slot, so no shared view imports it. */
+  const SIM = new Set(["simModel", "simJobState", "simLanes", "SimCatalogView", "SimRunView", "DeliveryTimeline", "OrderStrip", "wallSim"].map((f) => `components/evals/${f}`));
   /** What a shell file may import from outside the area: react, icons, the contract and the area's own hooks. */
   const OUTSIDE = new Set(["react", "lucide-react", "@codecast/shared/contracts/evalsApi", "lib/evals/hooks"]);
 
@@ -334,6 +336,8 @@ describe("the host seam", () => {
         const inWeb = spec.startsWith(".") ? relative(WEB, resolve(dirname(join(EVALS, file)), spec)) : spec;
         if (!OUTSIDE.has(inWeb) && !inWeb.startsWith("components/evals/")) problems.push(`${file}: imports ${spec}; the app is reached through useEvalsHost()`);
         if (ANATOMY.has(inWeb)) problems.push(`${file}: imports ${spec}; codecast's run anatomy reaches a run through useRunPanels`);
+        // The sim pages (pages/Sim*) are codecast's own and stay beside the sim views.
+        if (SIM.has(inWeb) && !file.startsWith("pages/Sim")) problems.push(`${file}: imports ${spec}; codecast's Multiplayer sim reaches the wall through the host's wall slot`);
       }
       for (const token of classTokens(text)) if (!token.startsWith("ev-")) problems.push(`${file}: class "${token}" is not an ev-* rule`);
       if (text.includes("--sol-")) problems.push(`${file}: reads a --sol-* token; the views read --ev-*`);

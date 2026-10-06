@@ -8,7 +8,7 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router";
 import { useInboxStore } from "../../store/inboxStore";
 import type { UndoCardFrame } from "../undo/UndoTimeline";
-import { conversationPath, laneOf } from "./lanePaths";
+import { conversationPath, isHostedUi } from "./lanePaths";
 
 export function useLaneUndoFrame(): UndoCardFrame {
   const navigate = useNavigate();
@@ -21,6 +21,6 @@ export function useLaneUndoFrame(): UndoCardFrame {
 /** The lane's frame for a lane reader; undefined (the full app's acts) for anyone else. */
 export function useReaderUndoFrame(): UndoCardFrame | undefined {
   const lane = useLaneUndoFrame();
-  const simple = useInboxStore((s) => laneOf(s.clientState?.ui) === "simple");
+  const simple = useInboxStore((s) => isHostedUi(s.clientState?.ui));
   return simple ? lane : undefined;
 }

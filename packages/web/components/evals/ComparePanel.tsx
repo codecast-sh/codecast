@@ -10,8 +10,7 @@ import type { BatchStats, BatchesResponse, EvalRoute } from "@codecast/shared/co
 import { useEvalsHost } from "./host";
 import { ChangedPrompts, EvalsLink, FlipRunLinks, LockBadge, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
-import { plural, score2, shortModel, usd, batchLabel } from "./format";
-import { flipFreezeHref, verdictOfSet } from "./verdictModel";
+import { plural, score2, shortModel, usd, batchLabel, flipFreezeHref, verdictOfSet } from "@platform/evals/client";
 
 export interface ComparePanelProps {
   surface: string;

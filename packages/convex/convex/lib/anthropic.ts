@@ -4,6 +4,7 @@
 // missing answer means.
 
 import { priceFor, usageCost } from "@platform/agent/meter";
+import { replyText, type MessagesRequest } from "@platform/assistant/messages";
 
 /** The small model the server's summaries and briefs run on. */
 export const CHEAP_MODEL = "claude-haiku-4-5-20251001";
@@ -24,16 +25,7 @@ export interface ModelReply {
  * One Messages API request, as the server sends it. The evals replay the same
  * object, so a prompt measured offline is the prompt prod posts.
  */
-export type SurfaceRequest = {
-  model: string;
-  system?: string;
-  prompt: string;
-  max_tokens: number;
-  /** Left out of the body when undefined, so the API default applies. */
-  temperature?: number;
-  /** Tool definitions (server tools such as web_search included). Left out when undefined. */
-  tools?: unknown[];
-};
+export type SurfaceRequest = MessagesRequest;
 
 /**
  * The JSON body prod posts for a request. Key order is model, max_tokens,
@@ -68,18 +60,9 @@ export async function postMessages(req: SurfaceRequest, opts: { signal?: AbortSi
   });
 }
 
-/**
- * The reply's text: every text block, in order, trimmed. Newer models can open
- * the reply with a block that carries no text (thinking), so the first block
- * is not the answer.
- */
-export function replyText(data: any): string {
-  return (Array.isArray(data?.content) ? data.content : [])
-    .filter((b: any) => b?.type === "text" && typeof b.text === "string")
-    .map((b: any) => b.text)
-    .join("")
-    .trim();
-}
+// The reply's text: every text block, in order, trimmed (@platform/assistant,
+// whose own tools read Messages replies the same way).
+export { replyText } from "@platform/assistant/messages";
 
 export async function callModel(args: Omit<SurfaceRequest, "model"> & {
   model?: string;

@@ -298,3 +298,17 @@ describe("runLineProfileEdit", () => {
     await expect(runLineProfileEdit({ root: tmp() } as any, d)).rejects.toThrow(/needs edits or content/);
   });
 });
+
+test("a finder edit leaves the fields it does not change exactly as written", () => {
+  const text = [
+    "[[line.finders]]",
+    'id = "lessons"',
+    'source = "lesson"',
+    'kind = "cohesion"          # one kind, written bare',
+    'fingerprint = "lesson:<x>"',
+    'runs = "weekly"',
+    "",
+  ].join("\n");
+  const out = applyLineProfileEdits(text, [{ op: "set_finder", finder: { id: "lessons", source: "lesson", kind: ["cohesion"], fingerprint: "lesson:<x>", runs: "daily" } }]);
+  expect(out).toBe(text.replace('runs = "weekly"', 'runs = "daily"'));
+});

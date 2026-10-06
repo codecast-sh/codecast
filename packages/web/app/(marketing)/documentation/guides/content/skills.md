@@ -2,10 +2,15 @@ A snippet teaches an agent that a command exists. It does not teach a procedure.
 
 A skill is a packaged set of instructions for one kind of task. It is a directory with a `SKILL.md` file: a name, a description that says when to use it, and the steps. Claude Code lists each skill by its description and loads the body only when the skill is invoked, as a slash command (`/cast-handoff`) or because the task matches the description. A skill you never invoke costs the description line and nothing more.
 
+```figure
+SkillLoadingFigure
+The descriptions are always listed; a skill's steps enter the context only when it runs.
+```
+
 The `cast-*` skills are the procedures that need what one session cannot see: the task board, the team's session history, other live sessions, pull requests, calls and chat. Each one is a sequence of ordinary `cast` commands. A skill adds no capability of its own. It fixes the order, the checks, and what evidence to leave behind.
 
 ```bash
-cast install skills             # write all 23 skills
+cast install skills             # write all 24 skills
 cast install skills --disable   # remove them
 ls ~/.claude/skills/            # cast-pickup/SKILL.md, cast-ship/SKILL.md, and the rest
 ```
@@ -22,7 +27,12 @@ The skill files are compiled into the CLI binary as text imports. A compiled bin
 
 The whole set installs as one catalog snippet named `skills` ([how snippets work](/documentation/agent-snippets)). The wizard, `cast install skills`, and the toggle on the web Settings page all reach the same installer. It writes each skill to `~/.claude/skills/<name>/SKILL.md`. An install with no interactive terminal turns skills on by default, the same as memory.
 
-The installer compares each file byte for byte. A file that already matches is not touched. After a CLI update, the refresh of enabled snippets rewrites only the skills whose text changed, so a revised skill reaches the machine without a version bump. `--disable` removes the 23 `cast-*` directories and nothing else, so your own skills in `~/.claude/skills/` are safe. The orchestrate skill is separate: it belongs to the `orchestration` snippet, which also installs three agent types and two hooks ([orchestration](/documentation/orchestration)).
+The installer compares each file byte for byte. A file that already matches is not touched. After a CLI update, the refresh of enabled snippets rewrites only the skills whose text changed, so a revised skill reaches the machine without a version bump. `--disable` removes the 24 `cast-*` directories and nothing else, so your own skills in `~/.claude/skills/` are safe. The orchestrate skill is separate: it belongs to the `orchestration` snippet, which also installs three agent types and two hooks ([orchestration](/documentation/orchestration)).
+
+```figure
+SkillInstallFigure
+Every route to the skills reaches the same installer, which writes only what changed and never touches a skill it does not own.
+```
 
 ## The catalog
 
@@ -73,12 +83,20 @@ Learn, and keep the records true:
 | `/cast-lessons` | Collects the corrections humans made across the team's sessions in a window and proposes the guidance that would have prevented each | `cast search`, `cast read`, `cast decisions` |
 | `/cast-from-call` | Checks each action item of a call against the transcript and files it as a task marked as decided in a meeting | `cast call`, `cast task create --from-meeting` |
 | `/cast-org` | Reads what the code and sessions show, proposes seats, scopes and record fixes with evidence, and posts the result for the person to accept | `cast org` |
+| `/cast-mod` | Builds a codecast mod (a pane, a command or a new block type in the app) with the person watching, pushing each change live | `cast mod new`, `cast mod build`, `cast mod push`, `cast mod logs` |
 
 ## How a skill composes the primitives
 
 `/cast-bakeoff` shows the pattern. It runs one `cast fork --tip --label bakeoff-<topic>` with one direction for each approach, so every branch keeps the whole thread ([forks and spawn](/documentation/forks-and-spawn)). It tells each branch to work in its own worktree. It then watches `cast sessions --label bakeoff-<topic> -w --json`, a stream that prints nothing until a branch changes state. When the branches settle it reads `cast diff` and `cast read` for each one, puts the results in a table, gives a verdict, and stashes the branches that lost.
 
+```figure
+BakeoffFigure
+/cast-bakeoff is fork, watch, read and stash, in a fixed order with a verdict at the end.
+```
+
 `/cast-loop` is built on [triggers](/documentation/triggers) and [tasks](/documentation/tasks-and-plans). The task board is the queue. A recurring `--spawn` trigger starts a fresh session for each run, and the `--precheck` command exits with a failure when `cast task ready` returns nothing, so an idle loop spends no session. Each run claims one task, works in a worktree, runs `/cast-verify`, and opens a pull request with `/cast-ship`. It does not merge. The skill also states when to cancel the trigger: when the queue is empty, when two runs in a row fail the same way, or at the time limit given with `--for`.
+
+![A pull request page with its shepherd session](/documentation/shots/pull-request.webp "What /cast-ship leaves behind: the pull request bound to its session, shown on the Shepherd line as waking on changes, with checks and the review beside it.")
 
 `/cast-ask-team` combines three primitives so that a question does not block a session. It posts to a channel with `cast chat send` and mentions its own short session ID, so a reply on the thread arrives as a session message ([messaging](/documentation/messaging)). It declares `cast state --status dormant` and names the thread as the wake ([thread state](/documentation/thread-state)). When the default answer is safe to reverse, it arms a `cast trigger add --in <time>` that takes the default if nobody replies.
 

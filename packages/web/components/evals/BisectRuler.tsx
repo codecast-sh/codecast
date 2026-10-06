@@ -11,11 +11,9 @@ import type { BisectPlan, BisectProbe, BisectRep, BisectState } from "@codecast/
 import { Well } from "./charts/Well";
 import { useCommitSession } from "./CommitPanel";
 import { EvalsLink, VerdictGlyph } from "./parts";
-import { endpointLabel, repState, repTally, rulerModel, type RulerModel, type RulerTile } from "./bisectModel";
+import { endpointLabel, repState, repTally, rulerModel, type RulerModel, type RulerTile, offBranchWords, shortSha, type VerdictState } from "@platform/evals/client";
 import { evalsHref } from "./evalsPaths";
-import { offBranchWords, shortSha } from "./format";
 import { useEvalsHost } from "./host";
-import type { VerdictState } from "./verdictModel";
 
 const W = 124;
 /** The control column: wide enough that "good control" and "bad control" each sit on one line, so both cards line up. */

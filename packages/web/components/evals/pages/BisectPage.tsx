@@ -7,8 +7,8 @@
 import { useEffect, useState } from "react";
 import { EVALS_POLL_MS, useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
 import { BisectView } from "../BisectView";
-import { isBisectLive, isJustStarted } from "../bisectModel";
-import { evalsHref, type EvalsView } from "../evalsPaths";
+import { isBisectLive, isJustStarted, type EvalsView } from "@platform/evals/client";
+import { evalsHref } from "../evalsPaths";
 import { useEvalsHost } from "../host";
 
 export function BisectPage({ view }: { view: Extract<EvalsView, { view: "bisect" }> }) {

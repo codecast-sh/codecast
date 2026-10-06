@@ -19,10 +19,12 @@ import { SessionQuerySuggestList } from "./SessionQuerySuggestList";
 import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions";
 import { SearchField, SearchGlyph } from "./search/SearchField";
 import { SearchResultRow } from "./search/SearchResultRow";
+import { useModeWords } from "../lib/surfaces";
 
 export { parseSearchTerms, highlightMatch, getSnippet };
 
 export function GlobalSearch() {
+  const words = useModeWords();
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   // Narrow top bar: the field collapses to a lone icon button. The input is
@@ -257,14 +259,15 @@ export function GlobalSearch() {
             setIsOpen(true);
             setTimeout(() => inputRef.current?.focus(), 0);
           }}
-          aria-label="Search sessions"
-          title="Search sessions"
+          aria-label={words.search}
+          title={words.search}
         >
           <SearchGlyph />
         </TopbarButton>
       )}
       <SearchField
         value={query}
+        placeholder={words.search}
         expanded={isExpanded}
         compact={compact}
         hideCaps={hideCaps}

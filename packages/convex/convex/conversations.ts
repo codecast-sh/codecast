@@ -114,6 +114,7 @@ import { isDaemonManagedRow, liveConversationIdSet } from "./lib/liveSessions";
 import { isDeletedSession } from "./lib/deletedSessions";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { claimShareToken } from "./publicShare";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
 import {
   FAVORITES_GRANT_KEY,
   FAVORITES_VIEW_CONTRACT_ID,
@@ -3234,9 +3235,7 @@ export const generateShareLink = mutation({
       return conversation.share_token;
     }
     const shareToken = generateShareToken();
-    await ctx.db.patch(args.conversation_id, {
-      share_token: shareToken,
-    });
+    await claimShareToken(ctx, "conversations", conversation, shareToken, authUserId);
     return shareToken;
   },
 });
@@ -3257,7 +3256,7 @@ export async function writeShareLink(ctx: Pick<MutationCtx, "db">, userId: Id<"u
     throw new Error("Unauthorized: can only change sharing on your own conversations");
   if (token === null && conversation.profile_pinned_at)
     await ctx.db.patch(conversation._id, { profile_pinned_at: undefined });
-  await claimShareToken(ctx, "conversations", conversation, token);
+  await claimShareToken(ctx, "conversations", conversation, token, userId);
 }
 
 // Pin a session to the owner's PUBLIC profile. This is the consent act that
@@ -3279,7 +3278,8 @@ export const pinToProfile = mutation({
       profile_pinned_at: Date.now(),
     };
     if (!conversation.share_token) patch.share_token = generateShareToken();
-    await ctx.db.patch(args.conversation_id, patch);
+    await ctx.db.patch(args.conversation_id, { profile_pinned_at: patch.profile_pinned_at });
+    if (patch.share_token) await claimShareToken(ctx, "conversations", conversation, patch.share_token, authUserId);
     return { pinned: true, share_token: conversation.share_token ?? patch.share_token };
   },
 });
@@ -3335,6 +3335,14 @@ export const redeemShareToken = mutation({
         created_at: Date.now(),
       });
     }
+    await recordAuthorityEvent(ctx, {
+      kind: "share_link_redeemed",
+      actor_user_id: userId,
+      conversation,
+      share_table: "conversations",
+      share_token: args.share_token,
+      detail: { after: { redeemer: userId, renewed: !!existing } },
+    });
     return { conversation_id: conversation._id };
   },
 });
@@ -4177,7 +4185,7 @@ export const backfillUserTeamIds = internalMutation({
         }
         // Why: same as backfillTeamIds — the chokepoint patches the row and
         // rewrites the workspace key of every linked work item (ct-49655).
-        rescoped += await patchConversationVisibility(ctx, conv, { team_id: teamId });
+        rescoped += await patchConversationVisibility(ctx, conv, { team_id: teamId }, userId);
         updated++;
         if (updated >= RESCOPE_BATCH) break;
       }
@@ -4314,7 +4322,7 @@ export const getSessionLinks = mutation({
     let shareToken = conversation.share_token;
     if (!shareToken) {
       shareToken = generateShareToken();
-      await ctx.db.patch(conversation._id, { share_token: shareToken });
+      await claimShareToken(ctx, "conversations", conversation, shareToken, authUserId);
     }
 
     return {
