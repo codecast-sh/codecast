@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { LogoMark } from "./Logo";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { cn } from "../lib/utils";
-import { onLanePage } from "./simple/laneBoot";
+import { hostedBoot } from "./simple/laneBoot";
 
 /**
  * Holding state for app boot / auth gates and full-page route/data loads:
@@ -18,9 +20,10 @@ import { onLanePage } from "./simple/laneBoot";
  * the single loader for any holding state — don't hand-roll
  * `<div>Loading...</div>` fallbacks or spinner SVGs.
  *
- * On a simple lane page it takes the lane's form instead (the family paper
- * and the lane's ring mark, styled beside #boot-shell in index.html), so
- * someone opening the lane never sees the full app's splash.
+ * On a hosted boot (/welcome, or an app page on a device last seen in hosted
+ * mode) it takes the hosted form instead: the family paper and the
+ * assistant's solid disc over the same bar, styled beside #boot-shell in
+ * index.html, so a hosted person never sees the developer splash.
  */
 export function AppLoader({
   className,
@@ -33,28 +36,52 @@ export function AppLoader({
   label?: string;
   deferIndicator?: boolean;
 }) {
-  const lane = onLanePage();
+  const hosted = hostedBoot();
   return (
     <div
       className={cn(
         "app-loader min-h-screen flex flex-col items-center justify-center gap-5 bg-sol-bg text-sol-text-dim",
         className,
       )}
-      data-lane={lane ? "" : undefined}
+      data-hosted={hosted ? "" : undefined}
       role="status"
       aria-label={label ?? "Loading"}
     >
       <div className={cn("flex flex-col items-center gap-5", deferIndicator && "app-loader-indicator-delayed")}>
-        {lane ? (
-          <span className="lane-mark" aria-hidden />
+        {hosted ? (
+          <span className="hosted-orb" aria-hidden><LogoMark size={28} monochrome /></span>
         ) : (
-          <>
-            <LogoMark size={size} monochrome className="opacity-45" />
-            <div className="app-loader-bar" />
-          </>
+          <LogoMark size={size} monochrome className="opacity-45" />
         )}
+        <div className="app-loader-bar" />
       </div>
       {label && <div className="text-sm text-sol-text-dim">{label}</div>}
+    </div>
+  );
+}
+
+/** How long a boot may sit on the mark before it says so. */
+const SLOW_BOOT_MS = 8_000;
+
+/**
+ * Said under the boot loader once a cold load has run long (a slow device,
+ * a busy machine, a large cache): one calm line and a way out, so a loader
+ * that will not finish never reads as a dead site. Fixed below the mark, so
+ * the loader itself does not move.
+ */
+export function SlowBootNote() {
+  const [slow, setSlow] = useState(false);
+  useMountEffect(() => {
+    const t = window.setTimeout(() => setSlow(true), SLOW_BOOT_MS);
+    return () => window.clearTimeout(t);
+  });
+  if (!slow) return null;
+  return (
+    <div className="fixed inset-x-0 top-[calc(50%+56px)] flex flex-col items-center gap-2 text-center" data-slow-boot>
+      <p className="text-sm text-sol-text-dim">Still loading your conversations…</p>
+      <button type="button" onClick={() => window.location.reload()} className="text-sm text-sol-text-muted underline decoration-sol-border underline-offset-4 hover:text-sol-text">
+        Reload
+      </button>
     </div>
   );
 }

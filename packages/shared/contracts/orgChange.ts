@@ -520,7 +520,7 @@ function logOnlySentence(row: OrgLogRow): string {
       return `session ${row.subject.label} now reports to ${to}`;
     }
     case "lead": return row.after.owner_role_id ? `${nameOf(row, row.after.owner_role_id)} now leads the project ${row.subject.label}` : `the project ${row.subject.label} has no lead`;
-    case "initiative_cancel": return `cancel the goal ${row.subject.label}; it stays on the initiatives page as cancelled`;
+    case "initiative_cancel": return `cancel the goal ${row.subject.label}; it stays on the goals page as cancelled`;
     case "role_edit": { const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[]; return `change the ${andList(words) || "settings"} of ${at(handleOf(row))}`; }
     case "restore": return `bring back ${at(handleOf(row))}, with its area of work, its limits and its routines`;
     case "unseat": return `${at(handleOf(row))} gives up its standing session${row.before.standing_session ? ` ${row.before.standing_session.short_id}` : ""}; the session keeps running under its person`;

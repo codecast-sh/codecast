@@ -1,0 +1,26 @@
+{
+  "name": "guidance visual-compare",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:visual-compare"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:visual-compare",
+    "title": "guidance visual-compare"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/visual-compare.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "446cbd12-8568-4a59-a485-7dad8b5cbcf2",
+  "createdAt": "2026-10-06T21:49:24.469Z"
+}

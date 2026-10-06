@@ -921,9 +921,9 @@ describe("inboxSortTime — one stamp per class", () => {
     // came back from a settle outranks one grinding for an hour.
     { name: "working reads the previous turn's end", input: { work_state: "working", turnCompletedAt: EPOCH - MIN, statusStartedAt: EPOCH - 30 * MIN, activityAt: EPOCH }, at: EPOCH - MIN },
     { name: "working that never settled falls back to when it started working", input: { work_state: "working", statusStartedAt: EPOCH - 30 * MIN, activityAt: EPOCH }, at: EPOCH - 30 * MIN },
-    // dormant: the wake it parks on.
-    { name: "dormant reads the named wake", input: { work_state: "dormant", wakeAt: EPOCH + HOUR, statusStartedAt: EPOCH - MIN, activityAt: EPOCH - MIN }, at: EPOCH + HOUR },
-    { name: "dormant with no named wake reads when it parked", input: { work_state: "dormant", statusStartedAt: EPOCH - MIN, activityAt: EPOCH - 3 * HOUR }, at: EPOCH - MIN },
+    // dormant: when it parked.
+    { name: "dormant reads when it parked", input: { work_state: "dormant", statusStartedAt: EPOCH - MIN, activityAt: EPOCH - 3 * HOUR }, at: EPOCH - MIN },
+    { name: "dormant with no daemon falls back to activity", input: { work_state: "dormant", activityAt: EPOCH - 3 * HOUR }, at: EPOCH - 3 * HOUR },
     // idle: blank or retired — plain recency.
     { name: "idle reads plain recency", input: { work_state: "idle", activityAt: EPOCH - HOUR, statusStartedAt: EPOCH - MIN, turnCompletedAt: EPOCH - MIN }, at: EPOCH - HOUR },
   ];
@@ -942,14 +942,11 @@ describe("inboxSortTime — one stamp per class", () => {
     }
   });
 
-  test("dormant orders by the soonest wake, and an unnamed wake files after every named one", () => {
-    const soon = sort({ work_state: "dormant", wakeAt: EPOCH + MIN });
-    const later = sort({ work_state: "dormant", wakeAt: EPOCH + HOUR });
-    expect(soon.key).toBeLessThan(later.key);
-    const unnamedFresh = sort({ work_state: "dormant", statusStartedAt: EPOCH - MIN });
-    const unnamedStale = sort({ work_state: "dormant", statusStartedAt: EPOCH - HOUR });
-    expect(unnamedFresh.key).toBeLessThan(unnamedStale.key);
-    expect(later.key).toBeLessThan(unnamedFresh.key);
+  test("dormant orders oldest park first", () => {
+    const fresh = sort({ work_state: "dormant", statusStartedAt: EPOCH - MIN });
+    const stale = sort({ work_state: "dormant", statusStartedAt: EPOCH - HOUR });
+    expect(stale.key).toBeLessThan(fresh.key);
+    expect(stale.at).toBeLessThan(fresh.at);
   });
 
   // A session the user just started has none of the events above, so ambient
@@ -976,9 +973,9 @@ describe("inboxSortTime — one stamp per class", () => {
     expect(sort({ work_state: "needs_input", statusStartedAt: EPOCH - 3 * HOUR, createdAt }, EPOCH).at).toBe(EPOCH - 3 * HOUR);
   });
 
-  test("the grace never applies to a named wake: the future is a fact, not a floor", () => {
-    const parked = sort({ work_state: "dormant", wakeAt: EPOCH + HOUR, createdAt: EPOCH - MIN }, EPOCH);
-    expect(parked).toEqual({ at: EPOCH + HOUR, key: EPOCH + HOUR });
+  test("the grace never applies to dormant, a section read oldest first", () => {
+    const parked = sort({ work_state: "dormant", statusStartedAt: EPOCH - HOUR, createdAt: EPOCH - MIN }, EPOCH);
+    expect(parked).toEqual({ at: EPOCH - HOUR, key: EPOCH - HOUR });
   });
 
   // An Infinity off a corrupted row would pin the session to the top of its

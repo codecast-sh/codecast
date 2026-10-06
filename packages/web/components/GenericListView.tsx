@@ -1,5 +1,7 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { PageHeading } from "./PageHeading";
+import { useHostedMode, useSurface } from "../lib/surfaces";
 import { copyToClipboard } from "../lib/utils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter, usePathname } from "next/navigation";
@@ -33,6 +35,7 @@ import {
   BookmarkPlus,
   Forward,
 } from "lucide-react";
+import { KeyCap } from "./KeyCap";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
@@ -520,6 +523,10 @@ export interface GenericListViewProps<T> {
   emptyMessage?: string;
 
   onCreate: () => void;
+  /** An always-present add row at the head of the list: Enter adds what was
+   *  typed and keeps the field for the next, and "c" focuses it in place of
+   *  opening the create form. */
+  quickAdd?: { placeholder: string; onAdd: (title: string) => void };
 
   hasMore?: boolean;
   isLoadingMore?: boolean;
@@ -553,6 +560,9 @@ export interface GenericListViewProps<T> {
    *  view switch). Kept out of the always-visible toolbar to stay Linear-compact. */
   displayExtra?: ReactNode;
   listFooter?: ReactNode;
+  /** A full-width strip between the header and the list (an offer, a notice).
+   *  Outside the virtualized scroll, so it never shifts row positions. */
+  banner?: ReactNode;
   customContent?: (helpers: {
     openPaletteForItems: (items: T[], mode?: string) => void;
     openContextMenuForItems: (e: React.MouseEvent, items: T[]) => void;
@@ -609,6 +619,7 @@ export function GenericListView<T>({
   emptyIcon,
   emptyMessage,
   onCreate,
+  quickAdd,
   hasMore,
   isLoadingMore,
   onLoadMore,
@@ -624,6 +635,7 @@ export function GenericListView<T>({
   headerExtra,
   displayExtra,
   listFooter,
+  banner,
   customContent,
   contextMenuContent,
   dnd,
@@ -672,6 +684,7 @@ export function GenericListView<T>({
   const [savingView, setSavingView] = useState(false);
   const [saveViewName, setSaveViewName] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const quickAddRef = useRef<HTMLInputElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const chatOn = useTeamFeature("chat");
@@ -969,7 +982,12 @@ export function GenericListView<T>({
         return;
       }
       if (e.key === "/" && !e.metaKey && !e.ctrlKey && getSearchText) { stop(); setShowSearch(true); return; }
-      if (e.key === "c" && !e.metaKey && !e.ctrlKey) { stop(); onCreate(); return; }
+      if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
+        stop();
+        if (quickAddRef.current) quickAddRef.current.focus();
+        else onCreate();
+        return;
+      }
       if (e.key === "Home") { stop(); setFocusIndex(0); return; }
       if (e.key === "End") { stop(); setFocusIndex(Math.max(0, visibleItems.length - 1)); return; }
 
@@ -1145,6 +1163,8 @@ export function GenericListView<T>({
   // clearing a view's only filter is a change you must be able to save or undo,
   // and hiding the bar would take both actions away at exactly that moment.
   const filterBarShown = !!filters && (filters.defs.some(filterIsSet) || !!filters.dirtyView);
+  const hosted = useHostedMode();
+  const viewInternals = useSurface("lists.internals");
   const activeTabKey = activeTabOf(tabs, activeTab)?.key ?? null;
 
   return (
@@ -1155,7 +1175,9 @@ export function GenericListView<T>({
       <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
         <div ref={titlebarRef} className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
         <div className="flex items-center gap-2 min-w-0">
-          <h1 className="sr-only">{title}</h1>
+          {/* Hosted mode names the page the way Whisk does, with its count;
+              the developer header keeps the name for screen readers only. */}
+          {hosted ? <PageHeading title={title} count={tabs[0]?.count ?? undefined} /> : <h1 className="sr-only">{title}</h1>}
           {syncScope && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
@@ -1236,13 +1258,13 @@ export function GenericListView<T>({
             extra={displayExtra}
             onCopyLink={shareUrl ? copyViewLink : undefined}
           />
-          <button
+          {viewInternals && <button
             onClick={() => openPalette("root")}
             className="cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
             title={`Command palette (${formatShortcutLabel('palette.toggle')})`}
           >
             <Command className="w-3 h-3" />K
-          </button>
+          </button>}
           <button
             onClick={onCreate}
             className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
@@ -1281,7 +1303,7 @@ export function GenericListView<T>({
               when the bar is narrow, so save / link / clear stay on one row
               instead of each wrapping to its own line. */}
           <div className="ml-auto flex items-center gap-0.5">
-            {shareUrl && (
+            {viewInternals && shareUrl && (
               <button
                 onClick={copyViewLink}
                 title="Copy link to this view"
@@ -1291,7 +1313,7 @@ export function GenericListView<T>({
                 <span className="cq-header-collapse">Link</span>
               </button>
             )}
-            {shareUrl && chatOn && (
+            {viewInternals && shareUrl && chatOn && (
               <button
                 onClick={() => openForwardToChat({ url: shareUrl(), label: "view" })}
                 title="Send this view to chat"
@@ -1332,7 +1354,7 @@ export function GenericListView<T>({
                 </button>
               </>
             )}
-            {filters.onSaveView && !savingView && (
+            {viewInternals && filters.onSaveView && !savingView && (
               <button
                 onClick={() => { setSavingView(true); setSaveViewName(""); }}
                 title={filters.dirtyView ? "Save these filters as a new view" : "Save current view as a shortcut"}
@@ -1398,15 +1420,19 @@ export function GenericListView<T>({
         )}
       </div>
 
+      {banner}
+
       {/* Content area */}
       {customContent ? customContent({ openPaletteForItems, openContextMenuForItems }) : (
         <div className="flex-1 flex overflow-hidden">
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
+            {quickAdd && <QuickAddRow inputRef={quickAddRef} {...quickAdd} />}
             {rowModel.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 {emptyIcon}
                 <p className="text-sm mt-2">{searchQuery ? "No results" : (emptyMessage || "No items found")}</p>
-                {!searchQuery && (
+                {/* The add row above is the way to make one. */}
+                {!searchQuery && !quickAdd && (
                   <button onClick={onCreate} className="mt-3 text-sm text-sol-cyan hover:underline">
                     Create one
                   </button>
@@ -1463,5 +1489,39 @@ export function GenericListView<T>({
         <ContextMenu state={ctxMenu}>{(items) => contextMenuContent(items)}</ContextMenu>
       )}
     </div>
+  );
+}
+
+/** A list's add row: type, Enter, and it is on the list, the field kept for
+ *  the next. Esc leaves the field so the list's keys answer again. */
+function QuickAddRow({ placeholder, onAdd, inputRef }: { placeholder: string; onAdd: (title: string) => void; inputRef: React.RefObject<HTMLInputElement | null> }) {
+  const [text, setText] = useState("");
+  const [focused, setFocused] = useState(false);
+  return (
+    <form
+      data-cc-quick-add
+      className="flex items-center gap-2.5 border-b border-sol-border/30 px-4 py-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const title = text.trim();
+        if (!title) return;
+        onAdd(title);
+        setText("");
+      }}
+    >
+      <Plus aria-hidden className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
+      <input
+        ref={inputRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="min-w-0 flex-1 bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+      />
+      {!focused && <KeyCap size="xs">c</KeyCap>}
+    </form>
   );
 }

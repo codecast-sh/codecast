@@ -19,7 +19,12 @@ if [ $category = prompt ]; then
   # the last round's commits on it, so the run's own worktree goes to the
   # merge base for the check and comes back to the branch after.
   home="$(git rev-parse --abbrev-ref HEAD)"
-  base="$(git merge-base HEAD $default_branch 2>/dev/null)"
+  # The base is where the branch leaves the default branch as the remote has
+  # it: a checkout's local copy can lag the remote by many commits, and the
+  # project's prove command measures from the remote too.
+  upstream=$default_branch
+  git rev-parse --verify --quiet "origin/$default_branch" >/dev/null && upstream="origin/$default_branch"
+  base="$(git merge-base HEAD $upstream 2>/dev/null)"
   if [ -n "$base" ] && [ "$(git rev-parse HEAD)" != "$base" ]; then
     [ -z "$(git status --porcelain --untracked-files=no)" ] || { answer false "the worktree has uncommitted changes, so it cannot go to the base to show the miss"; exit 0; }
     trap 'git checkout -q "$home"' EXIT

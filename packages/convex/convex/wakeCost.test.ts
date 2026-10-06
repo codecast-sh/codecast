@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { rollUpUsage } from "./messages";
+import { makeFakeDb } from "./testDb";
 import { PROMPT_CACHE_LIFETIME_MS, contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext, wakeCost, wakeFieldsOf } from "./wakeCost";
 
 const NOW = 1_800_000_000_000;
@@ -8,7 +9,7 @@ describe("context size rides the usage roll up", () => {
   test("the latest call's context is recorded, and a refused turn does not erase it", async () => {
     const conv: any = { _id: "c1" };
     const patch1: Record<string, unknown> = {};
-    await rollUpUsage({ db: {} }, conv, [
+    await rollUpUsage({ db: makeFakeDb({}), scheduler: { runAfter: async () => {} } }, conv, [
       { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 1000, cache_creation_input_tokens: 90 }, api_message_id: "a", inserted: true },
       { usage: { input_tokens: 2, output_tokens: 5, cache_read_input_tokens: 1100, cache_creation_input_tokens: 400 }, api_message_id: "b", inserted: true },
     ], patch1, NOW);
@@ -16,7 +17,7 @@ describe("context size rides the usage roll up", () => {
     Object.assign(conv, patch1);
 
     const patch2: Record<string, unknown> = {};
-    await rollUpUsage({ db: {} }, conv, [
+    await rollUpUsage({ db: makeFakeDb({}), scheduler: { runAfter: async () => {} } }, conv, [
       { usage: { input_tokens: 0, output_tokens: 3 }, api_message_id: "refused", inserted: true },
     ], patch2, NOW + 1000);
     expect((patch2.usage_totals as any).context_tokens).toBe(1502);
