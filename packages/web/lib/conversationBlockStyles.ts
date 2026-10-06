@@ -1,15 +1,12 @@
 import { toolVisual, type ToolColorToken } from "@codecast/shared/render";
+import { AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 
+/** The name above an assistant turn: the registry's name for the client
+ *  (the hosted Codecast assistant included); an unknown agent_type reads as
+ *  Claude, as legacy rows always have. */
 export function assistantLabel(agentType?: string): string {
   if (!agentType) return "Assistant";
-  if (agentType === "codex") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  if (agentType === "opencode") return "OpenCode";
-  if (agentType === "pi") return "pi";
-  if (agentType === "grok") return "Grok";
-  if (agentType === "muse") return "Muse Spark";
-  return "Claude";
+  return AGENT_CLIENTS[fromConvexAgentType(agentType)].displayName;
 }
 
 const TOOL_COLOR_CLASS: Record<ToolColorToken, string> = {

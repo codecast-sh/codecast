@@ -1,0 +1,26 @@
+{
+  "name": "guidance check-later",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:check-later"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:check-later",
+    "title": "guidance check-later"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/check-later.json"
+  },
+  "judge": "the agent reaches for the codecast tool the guidance names for this request",
+  "notes": null,
+  "tags": [],
+  "id": "c05796bf-5ceb-448b-acf3-6743694d175d",
+  "createdAt": "2026-10-06T21:48:59.915Z"
+}

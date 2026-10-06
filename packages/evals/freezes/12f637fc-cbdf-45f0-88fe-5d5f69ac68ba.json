@@ -1,0 +1,26 @@
+{
+  "name": "guidance call-recall",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:call-recall"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:call-recall",
+    "title": "guidance call-recall"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/call-recall.json"
+  },
+  "judge": "the agent reaches for the codecast tool the guidance names for this request",
+  "notes": null,
+  "tags": [],
+  "id": "12f637fc-cbdf-45f0-88fe-5d5f69ac68ba",
+  "createdAt": "2026-10-06T21:48:58.798Z"
+}
