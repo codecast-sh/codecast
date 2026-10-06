@@ -84,6 +84,13 @@ describe("routeTmuxArgs", () => {
     expect(routeTmuxArgs(["list-sessions"], inPane, undefined)[0]).toEqual(["-L", "default", "list-sessions"]);
   });
 
+  // capture-pane's -S is the first line to read, not a socket.
+  test("a command's own -S flag does not stop routing", () => {
+    expect(routeTmuxArgs(["capture-pane", "-p", "-J", "-t", "cc-claude-own:0.0", "-S", "-200"], env, undefined)).toEqual([
+      ["-L", "cast-cc-claude-own", "capture-pane", "-p", "-J", "-t", "cc-claude-own:0.0", "-S", "-200"],
+    ]);
+  });
+
   test("a call that already names its socket is left alone", () => {
     expect(routeTmuxArgs(["-S", "/x/sock", "list-panes", "-a"], env, undefined)).toEqual([["-S", "/x/sock", "list-panes", "-a"]]);
   });
