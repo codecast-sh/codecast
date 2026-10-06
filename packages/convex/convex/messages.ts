@@ -25,6 +25,7 @@ import { redactSecrets } from "./redact";
 import { storeHostedReplay } from "./hostedReplay";
 import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
 import { queuedBy, scheduleUserSend } from "./lib/userSend";
+import { recordUsageDays, type UsageTurn } from "./lib/usageDaily";
 import { validateCommandId } from "./localFirstCommands";
 import {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -50,7 +51,7 @@ import {
   inlineDocSourceKey,
   shouldUseInlineDocSnapshotFallback,
 } from "./docExtraction";
-import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange, type FileChangeBody, type FileChangeRef } from "./fileChanges/extractor";
+import { extractFileChanges, extractCommitHashFromContent, extractCommitBranchFromContent, hasFileChangeToolCall, type FileChange, type FileChangeBody, type FileChangeRef } from "./fileChanges/extractor";
 import { activityLine } from "@codecast/shared/render";
 import type { SessionActivity } from "@codecast/shared/contracts";
 import { attachmentViews, extractSessionImages, ATTACHMENT_FILE_RE, type SessionImageEntry } from "./sessionImages";
@@ -710,7 +711,8 @@ export async function materializeFileChanges(
         )
         .first();
       if (row && row.change_type === "commit" && !row.commit_hash) {
-        await ctx.db.patch(row._id, { commit_hash: hash });
+        const branch = extractCommitBranchFromContent(tr.content ?? "");
+        await ctx.db.patch(row._id, { commit_hash: hash, ...(branch ? { commit_branch: branch } : {}) });
         // The reflog may have reported this commit before this line synced;
         // the commit row and its activity event learn the session now.
         await linkLocalCommitToConversation(ctx, conversationId, hash);
@@ -749,6 +751,7 @@ export async function materializeFileChanges(
       change_type: fc.changeType,
       commit_message: fc.commitMessage,
       commit_hash: fc.commitHash ?? existing?.commit_hash,
+      commit_branch: fc.commitBranch ?? existing?.commit_branch,
       timestamp: fc.timestamp,
     }, { oldContent: fc.oldContent, newContent: fc.newContent });
   }
@@ -1312,11 +1315,12 @@ function stampFirstPrompt(
 // this call INSERTED count; a resync that patches existing rows carries the
 // same usage and must not add it twice. A conversation that is a role's
 // standing session or one of its hands also bumps the role's daily token
-// counter, which is what the caps read.
+// counter, which is what the caps read, and every counted turn lands in its
+// owner's per-day usage counters (lib/usageDaily) on the turn's own day.
 type UsageIn = { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
-export type UsageRow = { usage: UsageIn; api_message_id?: string; inserted: boolean };
+export type UsageRow = { usage: UsageIn; api_message_id?: string; inserted: boolean; model?: string; timestamp?: number };
 export async function rollUpUsage(
-  ctx: { db: any },
+  ctx: { db: any; scheduler: any },
   conversation: any,
   rows: UsageRow[],
   convPatch: Record<string, unknown>,
@@ -1327,6 +1331,7 @@ export async function rollUpUsage(
   let input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
   let lastId: string | undefined = prev.last_api_message_id;
   let contextTokens: number | undefined = prev.context_tokens;
+  const turns: UsageTurn[] = [];
   for (const r of rows) {
     if (!r.inserted || !r.usage) continue;
     if (r.api_message_id) {
@@ -1338,6 +1343,7 @@ export async function rollUpUsage(
     output += r.usage.output_tokens || 0;
     cacheRead += r.usage.cache_read_input_tokens || 0;
     cacheWrite += r.usage.cache_creation_input_tokens || 0;
+    turns.push({ usage: r.usage, model: r.model, timestamp: r.timestamp ?? now });
     // A refused turn (a limit banner) carries an all-zero usage block; it did not
     // shrink the context, so it never overwrites the last real reading.
     const context = (r.usage.input_tokens || 0) + (r.usage.cache_read_input_tokens || 0) + (r.usage.cache_creation_input_tokens || 0);
@@ -1362,6 +1368,7 @@ export async function rollUpUsage(
     ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
     ...(lastId ? { last_api_message_id: lastId } : {}),
   };
+  await recordUsageDays(ctx, conversation, turns);
   const roleId = conversation.standing_role_id ?? conversation.org_role_id;
   if (roleId) {
     const role = await ctx.db.get(roleId);
@@ -1596,7 +1603,7 @@ export const addMessage = mutation({
       last_message_role: args.role,
     };
     stampFirstPrompt(conversation, [{ role: args.role, content: safeContent, tool_results: args.tool_results }], convPatch);
-    await rollUpUsage(ctx, conversation, [{ usage: args.usage, api_message_id: args.api_message_id, inserted: true }], convPatch, now);
+    await rollUpUsage(ctx, conversation, [{ usage: args.usage, api_message_id: args.api_message_id, inserted: true, model: args.model, timestamp: msgTimestamp }], convPatch, now);
     const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, content: contentToStore, timestamp: msgTimestamp }]);
     if (msgModel && msgModel !== conversation.model) {
       convPatch.model = msgModel;
@@ -2233,7 +2240,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
 
   // Each row's usage, and whether this batch is its first write (inserted, or
   // a hosted streamed row's final write): the one input both rollups below read.
-  const usageRows = args.messages.map((m: any, i: number) => ({ usage: m.usage, api_message_id: m.api_message_id, inserted: insertedIndexes.has(i) }));
+  const usageRows = args.messages.map((m: any, i: number) => ({ usage: m.usage, api_message_id: m.api_message_id, inserted: insertedIndexes.has(i), model: m.model, timestamp: m.timestamp }));
   if (insertedCount > 0) {
     const newMessageCount = conversation.message_count + insertedCount;
     const lastMsg = args.messages[args.messages.length - 1];

@@ -19,10 +19,15 @@ import { SessionQuerySuggestList } from "./SessionQuerySuggestList";
 import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions";
 import { SearchField, SearchGlyph } from "./search/SearchField";
 import { SearchResultRow } from "./search/SearchResultRow";
+import { useModeWords, useSurface } from "../lib/surfaces";
 
 export { parseSearchTerms, highlightMatch, getSnippet };
 
 export function GlobalSearch() {
+  const words = useModeWords();
+  // Hosted mode searches conversations, without the role and team filters.
+  const internals = useSurface("search.internals");
+  const noun = (n: number) => `${words.conversation.toLowerCase()}${n !== 1 ? "s" : ""}`;
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   // Narrow top bar: the field collapses to a lone icon button. The input is
@@ -148,6 +153,9 @@ export function GlobalSearch() {
 
   const totalMatches = searchData?.totalMatches || 0;
   const sessionCount = groupedResults.length;
+  // "Matched by name" is said only of the rows that did: the rest matched in
+  // a summary or a path.
+  const nameCount = groupedResults.filter((r: any) => r.titleMatch).length;
   // What the header line may claim. Content is the slow tier; until it answers
   // the count on screen is "what we can already see", never a total.
   const contentPending = debouncedQuery.length >= 2 && !searchData && !searchError;
@@ -257,14 +265,15 @@ export function GlobalSearch() {
             setIsOpen(true);
             setTimeout(() => inputRef.current?.focus(), 0);
           }}
-          aria-label="Search sessions"
-          title="Search sessions"
+          aria-label={words.search}
+          title={words.search}
         >
           <SearchGlyph />
         </TopbarButton>
       )}
       <SearchField
         value={query}
+        placeholder={words.search}
         expanded={isExpanded}
         compact={compact}
         hideCaps={hideCaps}
@@ -320,8 +329,12 @@ export function GlobalSearch() {
               <div className="max-h-[80vh] overflow-y-auto">
                 <div className="relative px-4 py-2 border-b border-sol-border text-xs text-sol-text-secondary">
                   {searchData
-                    ? <>{totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}</>
-                    : <>{sessionCount} session{sessionCount !== 1 ? "s" : ""} matched by name</>}
+                    ? <>{totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} {noun(sessionCount)}</>
+                    : nameCount === sessionCount
+                    ? <>{sessionCount} {noun(sessionCount)} matched by name</>
+                    : nameCount > 0
+                    ? <>{nameCount} by name, {sessionCount - nameCount} in summaries</>
+                    : <>{sessionCount} {noun(sessionCount)} matched in summaries</>}
                   {contentPending && <span className="text-sol-text-dim"> · searching message content…</span>}
                   {searchError && <span className="text-sol-text-dim"> · content search timed out</span>}
                   {/* The one thing a moving bar should say: the slower tier is
@@ -349,7 +362,7 @@ export function GlobalSearch() {
             )}
             <div className="px-3 py-2 bg-sol-bg-alt/80 border-t border-sol-border flex items-center justify-between text-[10px] text-sol-text-dim">
               <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 cursor-pointer select-none text-sol-text-secondary hover:text-sol-text transition-colors">
+                {internals && <label className="flex items-center gap-1.5 cursor-pointer select-none text-sol-text-secondary hover:text-sol-text transition-colors">
                   <input
                     type="checkbox"
                     checked={userOnly}
@@ -357,8 +370,8 @@ export function GlobalSearch() {
                     className="w-3 h-3 rounded border-sol-border bg-sol-bg text-amber-500 focus:ring-amber-500/50 focus:ring-offset-0 cursor-pointer"
                   />
                   user only
-                </label>
-                {userTeams && userTeams.length > 1 && (
+                </label>}
+                {internals && userTeams && userTeams.length > 1 && (
                   <>
                     <span className="text-sol-border">|</span>
                     <select
@@ -375,7 +388,7 @@ export function GlobalSearch() {
                     </select>
                   </>
                 )}
-                <span className="text-sol-border">|</span>
+                {internals && <span className="text-sol-border">|</span>}
                 <span className="flex items-center gap-1">
                   <KeyCap size="xs">↑</KeyCap>
                   <KeyCap size="xs">↓</KeyCap>

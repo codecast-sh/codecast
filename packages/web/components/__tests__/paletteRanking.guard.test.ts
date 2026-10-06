@@ -6,7 +6,7 @@ const palette = readFileSync(join(import.meta.dir, "../CommandPalette.tsx"), "ut
 
 test("named New note is a compose fallback after search results, not the default", () => {
   const named = palette.indexOf('key="vault-new-named"');
-  const search = palette.indexOf("Search Results (${searchRows.length})");
+  const search = palette.indexOf("Search results (${searchRows.length})");
   expect(named).toBeGreaterThan(0);
   expect(search).toBeGreaterThan(0);
   expect(named).toBeGreaterThan(search);
