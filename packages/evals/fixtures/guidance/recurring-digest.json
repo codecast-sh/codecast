@@ -1,0 +1,21 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "A standing recurring duty: a repeating trigger.",
+  "label": {
+    "want": [
+      "cast\\s+trigger\\s+add\\b[^\\n]*--every"
+    ],
+    "avoid": [
+      "^CronCreate:",
+      "^RemoteTrigger:",
+      "^ScheduleWakeup:",
+      "crontab",
+      "launchctl",
+      "^Skill: .*\\b(loop|schedule)\\b"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Every weekday morning, summarize the open pull requests on codecast-sh/codecast for me."
+  }
+}

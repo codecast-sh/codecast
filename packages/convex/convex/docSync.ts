@@ -9,6 +9,7 @@ import { requireAccessibleDoc } from "./lib/access";
 import { checkConversationAccess } from "./privacy";
 import { notFound } from "./lib/auth";
 import { afterRoleDocWrite } from "./orgRoles";
+import { canSendProductMessage } from "./pendingMessages";
 
 const MAX_DELTA_FETCH = 100;
 const MAX_SNAPSHOT_FETCH = 10;
@@ -532,6 +533,32 @@ const PRESENCE_COLORS = [
   "#56b6c2", "#be5046", "#d19a66",
 ];
 
+const vAnchor = v.object({ message_id: v.string(), offset: v.number() });
+const CLAIM_TTL_MS = 15_000;
+
+// The session a composer presence id names, or null for any other doc id.
+async function composeConversation(ctx: any, docId: string): Promise<any | null> {
+  const m = docId.match(/^compose:([^:]+)$/);
+  const convId = m ? ctx.db.normalizeId("conversations", m[1]) : null;
+  return convId ? await ctx.db.get(convId) : null;
+}
+
+async function myPresenceRow(ctx: any, userId: Id<"users">, docId: string) {
+  return await ctx.db
+    .query("doc_presence")
+    .withIndex("by_user_doc", (q: any) => q.eq("user_id", userId).eq("doc_id", docId))
+    .first();
+}
+
+function presenceIdentity(user: any) {
+  const name = user.name || user.email || "Anonymous";
+  return {
+    user_name: name,
+    user_color: PRESENCE_COLORS[name.charCodeAt(0) % PRESENCE_COLORS.length],
+    user_image: user.image || user.github_avatar_url || undefined,
+  };
+}
+
 export const updatePresence = mutation({
   args: {
     doc_id: v.string(),
@@ -540,40 +567,56 @@ export const updatePresence = mutation({
     // Composer co-presence only: the sender's live draft, capped so a long message
     // doesn't bloat the row. Omitted by the document editor.
     draft_text: v.optional(v.string()),
+    // Composer co-presence only: where the sender is reading the transcript.
+    anchor: v.optional(vAnchor),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
     await requireSyncableEntity(ctx, userId, args.doc_id);
     const user = await ctx.db.get(userId);
     if (!user) return;
-    const existing = await ctx.db
-      .query("doc_presence")
-      .withIndex("by_user_doc", (q: any) => q.eq("user_id", userId).eq("doc_id", args.doc_id))
-      .first();
-    const name = user.name || user.email || "Anonymous";
-    const color = PRESENCE_COLORS[name.charCodeAt(0) % PRESENCE_COLORS.length];
+    const existing = await myPresenceRow(ctx, userId, args.doc_id);
     const draft = args.draft_text === undefined ? undefined : args.draft_text.slice(0, 2000);
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        cursor_pos: args.cursor_pos,
-        anchor_pos: args.anchor_pos,
-        draft_text: draft,
-        user_name: name,
-        user_color: color,
-        updated_at: Date.now(),
-      });
-    } else {
-      await ctx.db.insert("doc_presence", {
-        doc_id: args.doc_id,
-        user_id: userId,
-        user_name: name,
-        user_color: color,
-        cursor_pos: args.cursor_pos,
-        anchor_pos: args.anchor_pos,
-        draft_text: draft,
-        updated_at: Date.now(),
-      });
-    }
+    const anchor = args.anchor ? { message_id: args.anchor.message_id.slice(0, 128), offset: Math.min(1, Math.max(0, args.anchor.offset)) } : undefined;
+    // Whether this person's words can go into the session themselves, by the
+    // same rule a send checks. Decided here so a reader never has to.
+    const conversation = await composeConversation(ctx, args.doc_id);
+    const canSend = conversation ? await canSendProductMessage(ctx, userId, conversation) : undefined;
+    const fields = {
+      cursor_pos: args.cursor_pos,
+      anchor_pos: args.anchor_pos,
+      draft_text: draft,
+      anchor,
+      can_send: canSend,
+      ...presenceIdentity(user),
+      updated_at: Date.now(),
+    };
+    if (existing) await ctx.db.patch(existing._id, fields);
+    else await ctx.db.insert("doc_presence", { doc_id: args.doc_id, user_id: userId, ...fields });
+  },
+});
+
+/**
+ * Record that I sent other people's drafts as parts of one joint turn. Each
+ * named author's composer reads the claim off my presence row and clears the
+ * words it names. Claims older than CLAIM_TTL_MS are dropped on read.
+ */
+export const claimDrafts = mutation({
+  args: {
+    doc_id: v.string(),
+    claims: v.array(v.object({ user_id: v.id("users"), text: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx);
+    await requireSyncableEntity(ctx, userId, args.doc_id);
+    const user = await ctx.db.get(userId);
+    if (!user) return;
+    const now = Date.now();
+    const existing = await myPresenceRow(ctx, userId, args.doc_id);
+    const kept = (existing?.claims ?? []).filter((c: any) => c.at > now - CLAIM_TTL_MS);
+    const claims = [...kept, ...args.claims.slice(0, 8).map((c) => ({ user_id: c.user_id, text: c.text.slice(0, 2000), at: now }))];
+    if (existing) await ctx.db.patch(existing._id, { claims, updated_at: now });
+    else await ctx.db.insert("doc_presence", { doc_id: args.doc_id, user_id: userId, ...presenceIdentity(user), claims, updated_at: now });
   },
 });
 
@@ -581,10 +624,7 @@ export const removePresence = mutation({
   args: { doc_id: v.string() },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
-    const existing = await ctx.db
-      .query("doc_presence")
-      .withIndex("by_user_doc", (q: any) => q.eq("user_id", userId).eq("doc_id", args.doc_id))
-      .first();
+    const existing = await myPresenceRow(ctx, userId, args.doc_id);
     if (existing) await ctx.db.delete(existing._id);
   },
 });
@@ -595,29 +635,42 @@ export const getPresence = query({
     user_id: v.id("users"),
     user_name: v.string(),
     user_color: v.string(),
+    user_image: v.optional(v.string()),
     cursor_pos: v.optional(v.number()),
     anchor_pos: v.optional(v.number()),
     draft_text: v.optional(v.string()),
+    can_send: v.optional(v.boolean()),
+    anchor: v.optional(vAnchor),
+    claims: v.optional(v.array(v.object({ user_id: v.id("users"), text: v.string(), at: v.number() }))),
     updated_at: v.number(),
   })),
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
     await requireSyncableEntity(ctx, userId, args.doc_id);
-    const staleThreshold = Date.now() - 30_000;
+    const now = Date.now();
+    const staleThreshold = now - 30_000;
     const presences = await ctx.db
       .query("doc_presence")
       .withIndex("by_doc", (q: any) => q.eq("doc_id", args.doc_id))
       .collect();
     return presences
       .filter((p: any) => p.user_id !== userId && p.updated_at > staleThreshold)
-      .map((p: any) => ({
-        user_id: p.user_id,
-        user_name: p.user_name,
-        user_color: p.user_color,
-        cursor_pos: p.cursor_pos,
-        anchor_pos: p.anchor_pos,
-        draft_text: p.draft_text,
-        updated_at: p.updated_at,
-      }));
+      .map((p: any) => {
+        const claims = (p.claims ?? []).filter((c: any) => c.at > now - CLAIM_TTL_MS);
+        return {
+          user_id: p.user_id,
+          user_name: p.user_name,
+          user_color: p.user_color,
+          user_image: p.user_image,
+          cursor_pos: p.cursor_pos,
+          anchor_pos: p.anchor_pos,
+          draft_text: p.draft_text,
+          can_send: p.can_send,
+          anchor: p.anchor,
+          claims: claims.length ? claims : undefined,
+          updated_at: p.updated_at,
+        };
+      });
   },
 });
+

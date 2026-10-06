@@ -111,7 +111,7 @@ async function verifyInitiatives() {
     ...realNav,
     useRouter: () => ({ replace: (u: string) => { calls.push(`replace:${u}`); env.search = u.split("?")[1] ?? ""; }, push: (u: string) => calls.push(`push:${u}`) }),
     useSearchParams: () => new URLSearchParams(env.search),
-    usePathname: () => "/initiatives",
+    usePathname: () => "/goals",
   }));
   // The feed is the scope page's own engine (its mount test proves it); here it says which scope it was asked for.
   mock.module("../org/scope/ScopeFeed", () => ({ ScopeFeed: (props: any) => React.createElement("div", { "data-scope-feed": JSON.stringify(props.scope), "data-scope-feed-fill": props.fill ? "1" : "0" }, "feed") }));
@@ -219,7 +219,7 @@ async function verifyInitiatives() {
   await type(q("[data-initiative-create] input"), "Ship the mobile app");
   await act(async () => { q<HTMLFormElement>("[data-initiative-create]")!.dispatchEvent(new (dom.window as any).Event("submit", { bubbles: true, cancelable: true })); });
   assert.ok(calls.includes("create:Ship the mobile app:team:user"), calls.join("\n"));
-  assert.ok(calls.some((c) => /^push:\/initiatives\/in_/.test(c)), "opens the new initiative by its key");
+  assert.ok(calls.some((c) => /^push:\/goals\/in_/.test(c)), "opens the new initiative by its key");
   assert.match(q("[data-initiative-group='proposed']")!.textContent!, /Ship the mobile app/);
 
   // ── a page whose owner is a role: its standing conversation, the initiative beside it ──
@@ -390,7 +390,7 @@ async function verifyInitiatives() {
 
   // An id that names nothing here says so.
   await mount(page("in-999"));
-  assert.match(q("[data-initiative-missing]")!.textContent!, /No initiative in-999 in this workspace/);
+  assert.match(q("[data-initiative-missing]")!.textContent!, /No goal in-999 in this workspace/);
 
   // ── the phone: the conversation leads, the initiative is a sheet one tap away ──
   env.phone = true; env.wide = false;

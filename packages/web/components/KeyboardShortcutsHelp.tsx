@@ -14,6 +14,12 @@ import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation"
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { KeyCap } from "./KeyCap";
+import { MODE_WORDS, actionLabel, actionShownIn, helpContextSurface, useHostedMode, useSurfaceMode } from "../lib/surfaces";
+
+/** The most keys a chord hint shows with in hosted mode. */
+const HOSTED_CHORD_MAX_KEYS = 2;
+
+const MODE_WORDS_HOSTED = MODE_WORDS.hosted;
 
 export { KeyCap };
 
@@ -50,18 +56,25 @@ export function KeyboardShortcutsPanel() {
     });
   }, [s.shortcutsPanelOpen]);
 
+  // The palette's own rule (lib/surfaceRules ACTION_SURFACES): an action
+  // hidden there is not listed here, and hosted mode names the rest in its
+  // words.
+  const mode = useSurfaceMode();
+  const hosted = mode.words === MODE_WORDS_HOSTED;
   const sections = useMemo(() => {
     const seen = new Set<string>();
     type Row = { key: string; description: string; parts: string[] };
     const result: { label: string; accent: string; rows: Row[] }[] = [];
     for (const { when, label, accent } of HELP_SECTIONS) {
+      const contextSurface = helpContextSurface(when);
+      if (contextSurface && !mode.shows(contextSurface)) continue;
       const defs = getShortcutsByContext(when).filter(d => {
         if (seen.has(d.action)) return false;
         seen.add(d.action);
-        return true;
+        return actionShownIn(mode, d.action);
       });
       if (defs.length > 0) {
-        result.push({ label, accent, rows: defs.map((d) => ({ key: d.action, description: d.description, parts: formatShortcutParts(d) })) });
+        result.push({ label, accent, rows: defs.map((d) => ({ key: d.action, description: actionLabel(d.action, d.description, hosted), parts: formatShortcutParts(d) })) });
       }
       // The composer's send chords live in their own table (they run from a
       // focused textarea, outside the registry); they read as the
@@ -75,7 +88,7 @@ export function KeyboardShortcutsPanel() {
       }
     }
     return result;
-  }, []);
+  }, [mode, hosted]);
 
   return (
     <div
@@ -101,7 +114,7 @@ export function KeyboardShortcutsPanel() {
             <section>
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-sol-magenta" />
-                <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">System-wide</h3>
+                <h3 data-cc-help-heading className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">System-wide</h3>
               </div>
               <div className="space-y-0.5">
                 {systemRows.map((row) => (
@@ -117,7 +130,7 @@ export function KeyboardShortcutsPanel() {
             <section key={label}>
               <div className="flex items-center gap-2 mb-2">
                 <div className={`w-1.5 h-1.5 rounded-full ${accent}`} />
-                <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">{label}</h3>
+                <h3 data-cc-help-heading className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">{label}</h3>
               </div>
               <div className="space-y-0.5">
                 {rows.map((row) => (
@@ -154,9 +167,10 @@ export function KeyboardShortcutsPanel() {
 
 function ShortcutRow({ description, parts }: { description: string; parts: string[] }) {
   return (
-    <div className="flex items-center justify-between py-1 group">
-      <span className="text-xs text-sol-text-muted group-hover:text-sol-text transition-colors">{description}</span>
-      <span className="ml-3 shrink-0 flex items-center gap-[3px]">
+    <div className="flex items-center justify-between gap-3 py-1 group">
+      {/* A long name wraps rather than pushing its keys out of the panel. */}
+      <span className="min-w-0 flex-1 text-xs text-sol-text-muted group-hover:text-sol-text transition-colors">{description}</span>
+      <span className="shrink-0 flex items-center gap-[3px]">
         {parts.map((part, i) => (
           <KeyCap key={i}>{part}</KeyCap>
         ))}
@@ -176,8 +190,12 @@ export function MenuKeyCaps({
   className?: string;
 }) {
   const defs = getShortcutsForAction(action);
+  const hosted = useHostedMode();
   if (defs.length === 0) return null;
   const parts = formatShortcutParts(defs[0]);
+  // Hosted mode teaches the short chords only: a three-key hand is a
+  // power user's, and there it reads as noise beside a row's name.
+  if (hosted && parts.length >= HOSTED_CHORD_MAX_KEYS + 1) return null;
   return (
     <span className={className}>
       {parts.map((part, i) => (

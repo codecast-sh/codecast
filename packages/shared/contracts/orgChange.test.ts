@@ -114,7 +114,7 @@ describe("the sentence is rendered from the row, by the proposal page's writers"
     const lead = row("lead", { subject: { type: "project", id: "p1", label: "Website" }, before: { owner_role_id: null }, after: { owner_role_id: "r1" } });
     expect(orgLogLine(lead)).toBe("@growth now leads the project Website");
     expect(orgLogLine(invertRow(lead))).toBe("The project Website has no lead");
-    expect(orgLogLine(row("initiative_cancel", { subject: { type: "initiative", id: "i1", short_id: "in-1", label: "Reach 1k teams" }, before: { status: "proposed" }, after: { status: "cancelled" } }))).toBe("Cancel the goal Reach 1k teams; it stays on the initiatives page as cancelled");
+    expect(orgLogLine(row("initiative_cancel", { subject: { type: "initiative", id: "i1", short_id: "in-1", label: "Reach 1k teams" }, before: { status: "proposed" }, after: { status: "cancelled" } }))).toBe("Cancel the goal Reach 1k teams; it stays on the goals page as cancelled");
     expect(orgLogLine(row("role_edit", { before: { name: "Growth", avatar: "a" }, after: { name: "Head of Growth", avatar: "b" } }))).toBe("Change the name and face of @growth");
   });
 
@@ -124,7 +124,7 @@ describe("the sentence is rendered from the row, by the proposal page's writers"
   test("goal rows read as the proposal's sentence both ways", () => {
     const set = row("initiative", { subject: { type: "initiative", id: "i1", short_id: "in-1", label: "Reach 1k teams" }, before: { status: null, owner: null, project_ids: null }, after: { status: "proposed", owner: { kind: "role", role_id: "r1" }, project_ids: ["p1"] }, labels: { r1: "@growth", p1: "Website" } });
     expect(orgLogLine(set)).toBe("Set a goal: Reach 1k teams, carried by Website, owned by @growth");
-    expect(orgLogLine(invertRow(set))).toBe("Cancel the goal Reach 1k teams; it stays on the initiatives page as cancelled");
+    expect(orgLogLine(invertRow(set))).toBe("Cancel the goal Reach 1k teams; it stays on the goals page as cancelled");
     const added = row("initiative_projects", { subject: { type: "initiative", id: "i1", short_id: "in-1", label: "Reach 1k teams" }, before: { project_ids: ["p1"] }, after: { project_ids: ["p1", "p2"] }, labels: { p1: "Website", p2: "Billing" } });
     expect(orgLogLine(added)).toBe("Add Billing to the goal Reach 1k teams");
     expect(orgLogLine(invertRow(added))).toBe("Remove Billing from the goal Reach 1k teams");
