@@ -44,6 +44,8 @@ import BlogPullRequests from "@/app/(marketing)/blog/the-pull-request-that-knows
 import BlogTeamSees from "@/app/(marketing)/blog/what-your-team-sees/page";
 import BlogWorktrees from "@/app/(marketing)/blog/one-repository-twenty-checkouts/page";
 import BlogJumps from "@/app/(marketing)/blog/fewer-bigger-jumps/page";
+import BlogFieldManual from "@/app/(marketing)/blog/field-manual/page";
+import BlogFieldManualChapter from "@/app/(marketing)/blog/field-manual/ChapterPage";
 import CompareIndex from "@/app/(marketing)/compare/page";
 import Compare from "@/app/(marketing)/compare/ComparePage";
 import FeatureDeepDive from "@/app/(marketing)/features/FeatureDeepDivePage";
@@ -103,6 +105,8 @@ export function render(path: string): string {
             <Route path="blog/what-your-team-sees" element={<BlogTeamSees />} />
             <Route path="blog/one-repository-twenty-checkouts" element={<BlogWorktrees />} />
             <Route path="blog/fewer-bigger-jumps" element={<BlogJumps />} />
+            <Route path="blog/field-manual" element={<BlogFieldManual />} />
+            <Route path="blog/field-manual/:chapter" element={<BlogFieldManualChapter />} />
             <Route path="compare" element={<CompareIndex />} />
             <Route path="compare/:slug" element={<Compare />} />
           </Route>

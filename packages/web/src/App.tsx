@@ -35,6 +35,8 @@ const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-requ
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
+const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
+const BlogFieldManualChapter = lazy(() => import("@/app/(marketing)/blog/field-manual/ChapterPage"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -63,7 +65,6 @@ const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
-const Timeline = lazy(() => import("@/app/timeline/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
 const Line = lazy(() => import("@/app/line/page"));
@@ -227,6 +228,8 @@ export function App() {
               <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
               <Route path="blog/one-repository-twenty-checkouts" element={<E name="BlogWorktrees"><BlogWorktrees /></E>} />
               <Route path="blog/fewer-bigger-jumps" element={<E name="BlogJumps"><BlogJumps /></E>} />
+              <Route path="blog/field-manual" element={<E name="BlogFieldManual"><BlogFieldManual /></E>} />
+              <Route path="blog/field-manual/:chapter" element={<E name="BlogFieldManualChapter"><BlogFieldManualChapter /></E>} />
               <Route path="compare" element={<E name="CompareIndex"><CompareIndex /></E>} />
               <Route path="compare/:slug" element={<E name="Compare"><Compare /></E>} />
             </Route>
@@ -334,7 +337,6 @@ export function App() {
                 pass page-specific props to DashboardLayout (windows' hideSidebar) or
                 aren't tab-routable. */}
             <Route path="explore" element={<E name="Explore"><Explore /></E>} />
-            <Route path="timeline" element={<E name="Timeline"><Timeline /></E>} />
             <Route path="windows" element={<E name="Windows"><Windows /></E>} />
             <Route path="orchestration" element={<E name="Orchestration"><Orchestration /></E>} />
             <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />

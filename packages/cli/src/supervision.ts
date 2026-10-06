@@ -236,6 +236,12 @@ export function watchdogKillVerdict(input: {
   return { action: "kill", rule: WATCHDOG_KILL_RULE_TWO_PASSES, reason: `tick unmoved since the pass ${Math.round((now - armed!.at) / 1000)}s ago and no recovery marker since` };
 }
 
+// ProcessType is Interactive because every agent runs under this job: tmux,
+// each pane, and every tool call inherit its scheduling class. Left unset,
+// launchd applies its throttled default and macOS keeps the whole fleet on the
+// efficiency cores; at load 124 on 2026-10-05 those 4 cores were pegged while
+// the 12 performance cores sat 55-75% idle, and a busy loop from an agent shell
+// got 1/20th of the CPU the same loop got as an Interactive job.
 export function buildDaemonPlistXml(opts: { scriptPath: string; configDir: string }): string {
   const { scriptPath, configDir } = opts;
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -255,6 +261,8 @@ export function buildDaemonPlistXml(opts: { scriptPath: string; configDir: strin
   <true/>
   <key>ThrottleInterval</key>
   <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
   <key>StandardOutPath</key>
   <string>${configDir}/launchd.out.log</string>
   <key>StandardErrorPath</key>
@@ -305,8 +313,16 @@ export function watchdogPlistNeedsUpgrade(content: string): boolean {
 // bun/node in dev) predates the stable /bin/sh launcher and must be replaced — it
 // is the form that re-triggers a macOS "can run in the background" notification on
 // every binary self-update (see DAEMON_LAUNCHER_FILENAME).
-export function daemonPlistNeedsUpgrade(content: string): boolean {
+export function daemonPlistRunsLegacyCommand(content: string): boolean {
   return !content.includes("<string>/bin/sh</string>");
+}
+
+// Any daemon plist that is not the current definition: the legacy command form,
+// or a launcher form written before ProcessType=Interactive (see
+// buildDaemonPlistXml). A launcher-form plist only needs the plist rewritten; its
+// ProgramArguments are /bin/sh + the launcher, never the daemon command.
+export function daemonPlistNeedsUpgrade(content: string): boolean {
+  return daemonPlistRunsLegacyCommand(content) || !/<key>ProcessType<\/key>\s*<string>Interactive<\/string>/.test(content);
 }
 
 // Pull the ProgramArguments strings out of an existing plist so the daemon's

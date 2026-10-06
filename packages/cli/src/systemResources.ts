@@ -1,6 +1,6 @@
 import os from "node:os";
 import { resourceProbe } from "./resourceProbe.js";
-import { envSessionLookup } from "./processEnv.js";
+import { envSessionLookup, type EnvSession } from "./processEnv.js";
 import fs from "node:fs/promises";
 import { execFileAsync } from "./proc.js";
 import type { ProcessInfo } from "./resourceMonitor.js";
@@ -18,7 +18,7 @@ export function resourceKind(command: string): ResourceKind {
 
 /** Each process goes to the session whose agent it descends from; one outside
  *  every tree goes to the session its inherited environment names, as detached. */
-export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, envSession?: (p: ProcessInfo) => string | undefined): ResourceProcess[] {
+export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, envSession?: (p: ProcessInfo) => EnvSession | undefined): ResourceProcess[] {
   const owners = new Map<number, string[]>();
   for (const [id, pid] of sessions) owners.set(pid, [...(owners.get(pid) ?? []), id].sort());
   return [...snapshot.values()].map(p => {
@@ -34,16 +34,28 @@ export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions:
       cursor = snapshot.get(cursor.ppid);
     }
     // An agent outside every tree is a session of its own, not the work of the session it was spawned from.
-    const detached = !ids && kind !== "agent" ? envSession?.(p) : undefined;
-    if (detached) ids = [detached];
+    const outside = !ids && kind !== "agent" ? envSession?.(p) : undefined;
+    if (outside) ids = [outside.sessionId];
     return {
       pid: p.pid, ppid: p.ppid, name: (p.command?.split("/").pop() || "Unknown process").slice(0, 120),
       cpu: p.cpu, rss: p.rss, kind,
       ...(p.startedAt === undefined ? {} : { startedAt: p.startedAt }),
       ...(ids?.length === 1 ? { sessionId: ids[0] } : ids?.length && ids.length <= 32 ? { sharedSessionIds: ids } : {}),
-      ...(detached ? { detached: true } : {}),
+      ...(outside ? { detached: outside.via } : {}),
     };
   });
+}
+
+/**
+ * What a session started outside its agent's tree that is still running: what
+ * a move stops beyond the agent itself. The session need not be live (its agent
+ * is stopped before the move), and a process another live agent's tree holds
+ * stays with that agent.
+ */
+export function processesStartedOutside(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, sessionId: string, read?: Parameters<typeof envSessionLookup>[2], self?: number): ResourceProcess[] {
+  // A live agent keeps its tree (that stops with the agent); a stopped one still names its outside work.
+  const withTarget = sessions.has(sessionId) ? sessions : new Map(sessions).set(sessionId, -1);
+  return attributeProcesses(snapshot, withTarget, envSessionLookup(snapshot, withTarget, read, self, Infinity)).filter(p => p.sessionId === sessionId && p.detached);
 }
 
 export function summarizeProcesses(rows: ResourceProcess[]) {
@@ -199,6 +211,6 @@ export async function collectMachineResources(deviceId: string, snapshot: Map<nu
     },
     ...summarizeProcesses(attributeProcesses(snapshot ?? new Map(), sessions, snapshot && envSessionLookup(snapshot, sessions))),
     collectionDurationMs: Date.now() - start,
-    limitations: [...(snapshot ? [] : ["Process capture failed or timed out; process totals and session attribution are unavailable."]), "Process RSS includes shared pages and is not reclaimable memory.", "Shared and detached services may remain after a session moves.", "Network totals cover physical Ethernet/Wi-Fi interfaces; loopback and tunnels are excluded.", "Disk rates cover block devices, including disk images on Mac; they are not per-session I/O.", "Thread counts are not collected by this adapter.", "Processes with more than 32 session owners are left unattributed.", "Work an agent starts inside a tmux pane inherits the tmux server's environment, not the agent's, and is left unattributed.", ...(process.platform === "linux" ? ["Process CPU is the ps lifetime average; machine CPU uses the interval between samples."] : [])],
+    limitations: [...(snapshot ? [] : ["Process capture failed or timed out; process totals and session attribution are unavailable."]), "Process RSS includes shared pages and is not reclaimable memory.", "Shared and detached services may remain after a session moves.", "Network totals cover physical Ethernet/Wi-Fi interfaces; loopback and tunnels are excluded.", "Disk rates cover block devices, including disk images on Mac; they are not per-session I/O.", "Thread counts are not collected by this adapter.", "Processes with more than 32 session owners are left unattributed.", ...(process.platform === "linux" ? ["Process CPU is the ps lifetime average; machine CPU uses the interval between samples."] : [])],
   };
 }

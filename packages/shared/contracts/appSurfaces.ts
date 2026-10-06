@@ -77,7 +77,6 @@ export const APP_SURFACES: AppSurface[] = [
   dash("evals/sim", "Multiplayer sim history: scenarios by mode, invariants, failing runs as swim lanes"),
   dash("repo", "repositories you can browse: history, source and every commit"),
   standalone("explore", "explore"),
-  standalone("timeline", "timeline"),
   standalone("windows", "windows"),
   standalone("orchestration", "orchestration"),
   standalone("roadmap", "roadmap"),

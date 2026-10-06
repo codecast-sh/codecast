@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  voiceRuns,
   callMsOf,
   callVideoNotice,
   callVideoRuns,
@@ -107,5 +108,29 @@ describe("call video", () => {
     expect(turnIndexAt(turns, 6_000, true)).toBe(0);
     expect(turnIndexAt(turns, 14_000)).toBe(1);
     expect(turnIndexAt(turns, 99_000, true)).toBe(1);
+  });
+});
+
+describe("voiceRuns", () => {
+  const seg = (speaker_id: string, t0: number, t1?: number) => ({ speaker_id, speaker_name: speaker_id, t0, t1 });
+  test("joins one speaker's lines across a short pause, splits at a change of speaker", () => {
+    expect(voiceRuns([seg("a", 0, 1000), seg("a", 2500, 4000), seg("b", 4200, 6000), seg("a", 9000, 9500)])).toEqual([
+      { speaker_id: "a", speaker_name: "a", from: 0, to: 4000 },
+      { speaker_id: "b", speaker_name: "b", from: 4200, to: 6000 },
+      { speaker_id: "a", speaker_name: "a", from: 9000, to: 9500 },
+    ]);
+  });
+  test("a murmur inside someone else's talk is folded into their run", () => {
+    expect(voiceRuns([seg("a", 0, 5000), seg("b", 5200, 5900), seg("a", 6000, 12_000), seg("b", 12_500, 20_000)]).map((r) => [r.speaker_id, r.from, r.to])).toEqual([
+      ["a", 0, 12_000],
+      ["b", 12_500, 20_000],
+    ]);
+  });
+  test("a line without an end runs to the next line, or a few seconds", () => {
+    expect(voiceRuns([seg("a", 0), seg("b", 1500), seg("b", 60_000)]).map((r) => [r.from, r.to])).toEqual([
+      [0, 1500],
+      [1500, 5500],
+      [60_000, 64_000],
+    ]);
   });
 });

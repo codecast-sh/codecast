@@ -370,6 +370,23 @@ describe("makeChangeTrackedDb — dual emission through the interceptor", () => 
 });
 
 describe("churn exemption (design D1)", () => {
+  test("status probe bookkeeping never rides cargo, while semantic changes still advance the head", async () => {
+    const { db, actions, head } = makeFakeDb();
+    const scope = userScopeKey("users:1");
+    const probe = { at: 100, due_at: 10100, has_assistant_message: true, has_tool_result_reply: false };
+    const id = await db.insert("conversations", { user_id: "users:1", title: "Before" });
+    const tracked = makeChangeTrackedDb(db, makeSyncAckCollector());
+    await tracked.patch(id, { agent_status_probe: probe });
+    expect(head(scope)).toBeNull();
+    expect(actions(scope)).toEqual([]);
+    expect((await db.get(id)).agent_status_probe).toEqual(probe);
+    await tracked.patch(id, { agent_status_probe: { ...probe, at: 200 }, title: "After" });
+    expect(head(scope).position).toBe(1);
+    expect(actions(scope)[0].patch).toMatchObject({ title: "After" });
+    expect(actions(scope)[0].patch).not.toHaveProperty("agent_status_probe");
+    expect(buildCargo("conversations", await db.get(id), { full: true }).patch).not.toHaveProperty("agent_status_probe");
+  });
+
   test("assistant usage rollups persist without reading or advancing the shared sync head", async () => {
     const { db, actions, head } = makeFakeDb();
     const scope = userScopeKey("users:1");
