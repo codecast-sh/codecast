@@ -330,7 +330,7 @@ export const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
 export const VISUAL_SNIPPET = `
 ## Visual Canvas
 
-When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a \`cast-canvas\` block of self-contained HTML/CSS/SVG the centerpiece of the reply, or of a \`cast decide\` context, where the human weighs options and a comparison they can see beats one they must assemble from prose; codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose.
+When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a \`cast-canvas\` block of self-contained HTML/CSS/SVG the centerpiece of the reply, or of a \`cast decide\` context, where the human weighs options and a comparison they can see beats one they must assemble from prose; codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose. The reader already sees the visual, so the prose around it adds only what the picture does not say.
 
 \`\`\`cast-canvas
 <div data-canvas-title="Shown in the header"> … </div>
@@ -353,7 +353,9 @@ Declarative interactivity:
 - Tooltip: \`data-tip="text"\` on any element
 - Chart: \`<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>\`
 
-**Charts take every Observable Plot mark and transform by name**, so fit the form to the data: \`dot\`, \`boxY\`, \`density\`, \`cell\` heatmaps, stacked \`areaY\`, \`arrow\`, \`vector\`, and on. Multi-series: \`fill\`/\`stroke\` as a field plus \`"color":{"legend":true}\`; facet with \`fx\`/\`fy\`; aggregate with transforms (\`"transform":{"kind":"binX","out":{"y":"count"}}\`, likewise \`groupX\`, \`hexbin\`, \`dodgeX\`, \`windowY\`) rather than pre-summing.
+**Charts take every Observable Plot mark and transform by name**, so fit the form to the data: \`dot\`, \`boxY\`, \`density\`, \`cell\` heatmaps, stacked \`areaY\`, \`arrow\`, \`vector\`, and on. Multi-series: \`fill\`/\`stroke\` as a field plus \`"color":{"legend":true}\`; facet with \`fx\`/\`fy\`; aggregate with transforms (\`"transform":{"kind":"binX","out":{"y":"count"}}\`, likewise \`groupX\`, \`hexbin\`, \`dodgeX\`, \`windowY\`) rather than pre-summing. \`"tip":true\` on a mark shows each value on hover.
+
+**When the reader should explore, publish a page instead.** A canvas runs no code, so zooming, drilling into a treemap, switching what a view measures, or hovering across thousands of points belong in a self-contained HTML page with its own script (a CDN library such as D3 is fine) and its data inline. Style it with the same \`--sol-*\` tokens: codecast injects them into every published page and keeps them on the reader's palette, light or dark. Use a fluid width and fixed pixel heights so the frame can fit the page. \`cast publish page.html\`, then put the URL alone on its line: it embeds live in the reply at the page's height. Look at it before you reply (\`cast browser open <url>\`, \`shot\`, \`errors\`) and republish until it is right. A published page is open to anyone holding the link, so gate sensitive data with \`--password\`.
 ${VISUAL_SNIPPET_END}
 `;
 
@@ -699,6 +701,7 @@ export const SIM_SNIPPET = `
 cast sim acquire                        # take a free simulator for this session and boot it; prints its UDID
 cast sim install path/To.app --launch   # install a simulator build and start it
 cast sim launch <bundle-id>             # (re)start an installed app; cast sim open <url> for a deep link
+cast sim uninstall <bundle-id>          # remove it and its data, to start again from the first screen
 cast sim shot                           # screenshot into the thread; --share prints a ![alt](url) for anywhere else
 cast sim ui                             # the accessibility tree, each element with its tap point (--find "text" narrows it)
 cast sim tap --label "Sign in"          # by label, value or id; or -x 120 -y 640. --shot captures the result
@@ -1034,12 +1037,14 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "mods",
     aliases: ["mod", "plugins", "extensions"],
     name: "Mods",
-    desc: "Extend the codecast app with panes, commands and blocks (cast mod)",
+    desc: "Agents build mods that extend the codecast app, live in the conversation (cast mod)",
     detail:
-      "Adds `cast mod` so agents can build mods: small sandboxed modules that add panes, palette " +
-      "commands and new kinds of fenced blocks to the codecast app, reading your sessions, tasks, plans " +
-      "and pull requests from the local store. A mod runs only in your app, can touch only what its " +
-      "manifest grants, and every version keeps its source.",
+      "Teaches agents to build mods: small sandboxed modules that add panes, palette commands, sidebar " +
+      "sections, fenced blocks and new kinds of tracked objects (bug-14) to the codecast app, reading your " +
+      "sessions, tasks, plans and pull requests from the local store. The agent pushes each change and the " +
+      "running pane redraws inline in the conversation, so you watch it take shape and say what to change. " +
+      "A mod touches only what its manifest grants; a local half that runs on your machine starts only " +
+      "after you approve it in your own terminal, and every version keeps its source.",
     writesTo: "CLAUDE.md — a ## Mods section with the build loop",
     shipped: "2026-10-05",
     enabledKey: "mods_enabled",
