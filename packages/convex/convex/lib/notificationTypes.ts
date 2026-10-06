@@ -22,7 +22,10 @@ export const ENTITY_TYPE = v.union(
   v.literal("code"),
   // A role, by short id: a goal stall notice to a person who reports to it
   // (org-roles-run-work.md R6). Direct recipients only.
-  v.literal("org_role")
+  v.literal("org_role"),
+  // A team, for a join request found by work email (teamDiscovery.ts).
+  // Direct recipients only.
+  v.literal("team")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -67,5 +70,8 @@ export const NOTIFICATION_TYPE = v.union(
   // recipient, a cause's change shipped, a watched cause reopened.
   v.literal("card_waiting"),
   v.literal("change_shipped"),
-  v.literal("cause_reopened")
+  v.literal("cause_reopened"),
+  // Finding a team by work email: a request to its admins, then the approval.
+  v.literal("team_join_request"),
+  v.literal("team_join_approved")
 );

@@ -15,6 +15,20 @@ export const lineFinderValidator = v.object({
   runs: v.optional(v.string()),
 });
 
+// The repo's own line (line-map.md LX5): its parsed stations and routes ride
+// as the runner's push shape, checked by the CLI's parser before a publish.
+const repoLineValidator = v.object({
+  file: v.string(),
+  graph_hash: v.string(),
+  name: v.string(),
+  goal: v.optional(v.string()),
+  stack: v.optional(v.string()),
+  source: v.string(),
+  nodes: v.array(v.any()),
+  edges: v.array(v.any()),
+  files: v.record(v.string(), v.object({ prompt: v.optional(v.string()), script: v.optional(v.string()) })),
+});
+
 const factFields = {
   team: nullableString,
   project: nullableString,
@@ -24,10 +38,12 @@ const factFields = {
   watch_days: v.number(),
   commands: v.object({ check: v.string(), prove: nullableString, eval: nullableString, ship: nullableString }),
   caps: v.object({ cards: v.number() }),
+  merge: v.optional(v.object({ auto: v.boolean(), method: v.union(v.literal("squash"), v.literal("merge"), v.literal("rebase")) })),
   sources: v.record(v.string(), v.union(v.literal("file"), v.literal("default"))),
   notes: v.array(v.string()),
   warnings: v.array(v.string()),
   file: nullableString,
+  line: v.optional(repoLineValidator),
 };
 
 /** What a publish sends besides its finder groups. */

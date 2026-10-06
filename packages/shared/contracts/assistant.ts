@@ -2,7 +2,10 @@
 // docs/architecture/hosted-assistant.md). Pure isomorphic data: the Convex
 // turn engine, the wallet, the web simple lane and the phone all read the same
 // names, and every plan number lives in the one PLANS catalog below so a
-// pricing change is one edit here.
+// pricing change is one edit here. The shape of a plan and the lookup are
+// @platform/assistant's (the storage-free half of the assistant, shared with
+// Averil); the values are codecast's product and stay here.
+import { planIn, type PlanCatalog, type PlanSpec as PlatformPlanSpec } from "@platform/assistant/plans";
 
 /** `conversations.agent_type` of a hosted conversation: a Convex action runs
  *  its turns, and no device ever claims it. The registry entry is
@@ -17,6 +20,49 @@ export type TurnStatus = (typeof TURN_STATUSES)[number];
 /** Why a turn stopped (`assistant_turns.reason`). */
 export const TURN_REASONS = ["done", "approval", "budget", "time", "error"] as const;
 export type TurnReason = (typeof TURN_REASONS)[number];
+
+/** Why a turn stopped short of an answer, as the transcript shows it. The
+ *  engine writes the line as an assistant row (so the model reads it back)
+ *  whose `subtype` names the kind, and the web draws a notice with one action
+ *  for it: `error` and `unavailable` offer Try again, `budget` opens Plan,
+ *  `time` offers Keep going. `unavailable` is a provider outage the engine
+ *  retries by itself. */
+export const NOTICE_KINDS = ["error", "unavailable", "budget", "time", "safety"] as const;
+export type NoticeKind = (typeof NOTICE_KINDS)[number];
+const NOTICE_SUBTYPE_PREFIX = "hosted_notice:";
+
+/** The `subtype` a stop notice's row carries. */
+export function noticeSubtype(kind: NoticeKind): string {
+  return `${NOTICE_SUBTYPE_PREFIX}${kind}`;
+}
+
+/** The notice kind a message row carries, or null for any other row. */
+export function noticeKindOf(subtype: string | null | undefined): NoticeKind | null {
+  if (!subtype?.startsWith(NOTICE_SUBTYPE_PREFIX)) return null;
+  const kind = subtype.slice(NOTICE_SUBTYPE_PREFIX.length) as NoticeKind;
+  return (NOTICE_KINDS as readonly string[]).includes(kind) ? kind : null;
+}
+
+/** A safety cap on a placeholder title taken from a first message. A title
+ *  is the whole first sentence; each surface truncates it to its own width
+ *  with CSS, so a wide header shows what a narrow row cuts. */
+export const PROMPT_TITLE_MAX_CHARS = 140;
+
+/** A conversation's placeholder title from the person's first message: its
+ *  first sentence, spaces collapsed, cut at a word only past
+ *  PROMPT_TITLE_MAX_CHARS and with no ellipsis of its own. The server stores
+ *  it at start so a conversation whose first turn fails is still named, and
+ *  the web shows it before the row syncs. The title pass replaces it like any
+ *  generated title. Empty for empty text. */
+export function promptTitle(text: string | null | undefined): string {
+  const line = (text ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  // The first sentence of an ask that has several, without a closing period.
+  const flat = (line.replace(/\s+/g, " ").match(/^.+?[.?!](?=\s|$)/)?.[0] ?? line.replace(/\s+/g, " ")).replace(/\.$/, "");
+  if (flat.length <= PROMPT_TITLE_MAX_CHARS) return flat;
+  const cut = flat.slice(0, PROMPT_TITLE_MAX_CHARS);
+  const space = cut.lastIndexOf(" ");
+  return (space > PROMPT_TITLE_MAX_CHARS / 2 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, "");
+}
 
 /** What woke a conversation (`assistant/entry.ts: wake`). `continue` is the
  *  engine waking itself because input arrived while a turn ran. */
@@ -56,29 +102,7 @@ export const HOSTED_IMAGE_REFUSAL = "The assistant can't read images yet. Descri
 export const PLAN_IDS = ["free", "plus", "pro"] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
-export interface PlanSpec {
-  id: PlanId;
-  label: string;
-  /** Monthly price in US dollars. */
-  price_usd: number;
-  /** Model usage the price includes each period, in US dollars at cost. */
-  included_usd: number;
-  /** The model a turn runs on unless the work calls for the strong one. */
-  default_model: string;
-  /** The model for hard work; the default model itself on plans without one. */
-  strong_model: string;
-  routines: {
-    /** How many routines may be armed at once; null is unlimited. */
-    max: number | null;
-    /** The shortest interval a routine may repeat at; null is no floor. */
-    min_interval_ms: number | null;
-  };
-  /** How many turns of one person may run at the same time. */
-  concurrent_turns: number;
-  /** The most one turn may reserve from the wallet, in US dollars at cost:
-   *  the ceiling a single run of the loop spends up to. */
-  turn_ceiling_usd: number;
-}
+export type PlanSpec = PlatformPlanSpec<PlanId>;
 
 const HAIKU = "claude-haiku-4-5-20251001";
 const SONNET = "claude-sonnet-5-5";
@@ -145,12 +169,49 @@ export function topupCredit(paidUsd: number): number {
   return Math.round(paidUsd * TOPUP.usage_usd_per_usd * 1e6) / 1e6;
 }
 
+/** The answers an approval card offers, in order: the first is the yes. The
+ *  turn engine writes them on the card and reads the pick back by label
+ *  (convex/assistant/turns.ts approvalOf); a transcript reads `decline` to
+ *  know the declined step already says the answer (lane.ts answerNote). */
+export const APPROVAL_ANSWERS = { approve: "Approve", always: "Always allow", decline: "Decline" } as const;
+
+/** What an approval's buttons say in hosted mode, where a card asks the way
+ *  a person would: Yes, or Not now. The stored labels stay APPROVAL_ANSWERS,
+ *  which the engine reads the answer by. */
+export const APPROVAL_BUTTONS: Record<string, string> = {
+  [APPROVAL_ANSWERS.approve]: "Yes",
+  [APPROVAL_ANSWERS.always]: "Always allow",
+  [APPROVAL_ANSWERS.decline]: "Not now",
+};
+
+/** Whether a reply leaves the next move to the person: a question anywhere
+ *  in its last paragraph ("Which one appeals to you? I'll look into it
+ *  next."), not only as its last character. The engine settles such a turn
+ *  as the person's to answer, and the composer then reads "Reply…". */
+export function replyAsksPerson(text: string | null | undefined): boolean {
+  const parts = (text ?? "").trim().split(/\n\s*\n/);
+  return (parts[parts.length - 1] ?? "").includes("?");
+}
+
+/** An approval option's label as hosted mode shows it; any other label as is. */
+export function approvalButtonLabel(label: string): string {
+  return APPROVAL_BUTTONS[label] ?? label;
+}
+
+/** What one everyday request costs the assistant, in US dollars: the median
+ *  cost of a hosted turn on the Free plan's model, read from prod's
+ *  assistant_turns on 2026-10-06 (13 turns, $0.0029 to $0.0066). The plan
+ *  screen sizes the Free month with it ("Room for about 600 everyday
+ *  requests"); remeasure as real usage grows. */
+export const TYPICAL_REQUEST_USD = 0.0032;
+
 /** Where Stripe sends a person back after checkout or the portal, and what
  *  `?<param>=` says happened. The server builds the URLs (convex/billing.ts)
- *  and the plan screen reads them (the web lane's plan path and its return
- *  note), so both sides name the page and the outcomes from here. */
+ *  and Settings > Plan reads them (its return note), so both sides name the
+ *  page and the outcomes from here. The address opens the settings modal on
+ *  Plan with the query carried over (SettingsRedirect). */
 export const BILLING_RETURN = {
-  path: "/simple/plan",
+  path: "/settings/plan",
   param: "billing",
   outcomes: ["done", "topup", "canceled"],
 } as const;
@@ -161,9 +222,12 @@ export function billingReturnOutcome(raw: string | null | undefined): BillingRet
   return raw && (BILLING_RETURN.outcomes as readonly string[]).includes(raw) ? (raw as BillingReturnOutcome) : null;
 }
 
+/** Codecast's plans as the wallet reads them (@platform/assistant walletRules). */
+export const PLAN_CATALOG: PlanCatalog<PlanId> = { plans: PLANS, free: "free" };
+
 /** The plan for a stored id; anything unknown or absent is the free plan. */
 export function planOf(id: string | null | undefined): PlanSpec {
-  return id && (PLAN_IDS as readonly string[]).includes(id) ? PLANS[id as PlanId] : PLANS.free;
+  return planIn(PLAN_CATALOG, id);
 }
 
 /** The routine fields a plan limits. */

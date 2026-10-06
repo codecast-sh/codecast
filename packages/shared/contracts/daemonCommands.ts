@@ -72,6 +72,13 @@ export const DAEMON_COMMANDS = [
   // "Unknown command" and do nothing — falling into their resume_session path
   // would reconstitute from a mid-copy export and truncate the fork's history.
   "fork_session",
+  // An isolated subagent finished done: bring its worktree's changes into its
+  // parent's checkout, content based and all or nothing (cli/src/mergeBack.ts),
+  // and report the outcome with subagentFleet.reportMergeBack. Targeted at the
+  // device holding the worktree. args: { conversation_id, worktree_path,
+  // target_path }. Old daemons: "Unknown command" (the chip stays "merging
+  // back"; the worktree keeps the work).
+  "merge_back",
   // Swap the machine's active Claude Code account to a saved profile, tear down
   // the listed blocked sessions (parked on a limit, auth, or dropped-connection
   // banner), and enqueue "continue" to each so the delivery rail resumes them

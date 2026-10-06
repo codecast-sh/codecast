@@ -17,13 +17,15 @@ import path from "path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { readLocalGitContext } from "./prCommand.js";
-import { buildReviewBatchPrompt, reviewNoteLocation } from "@codecast/shared/comments";
+import { buildReviewBatchPrompt, placementLabel, reviewNoteLocation, type AnchorPlacement, type CodeAnchorText } from "@codecast/shared/comments";
+import { captureLocalAnchor, placeComments, readFileLines } from "./codeAnchorLocal.js";
 
 export type ReviewNoteRow = {
   _id: string;
   file_path?: string;
   line_number?: number;
   line_end?: number;
+  anchor_lines?: CodeAnchorText;
   content: string;
   diff_identity?: string;
   sent_at?: number;
@@ -84,19 +86,34 @@ export function resolveNoteRef(notes: ReviewNoteRow[], ref: string): ReviewNoteR
   throw new Error(`No review note matches ${ref}`);
 }
 
-/** The listing: one line of place per note, the note's own lines under it. */
-export function formatReviewList(notes: ReviewNoteRow[], staleIds: ReadonlySet<string> = new Set()): string {
+/**
+ * The listing: one line of place per note, the note's own lines under it. A
+ * note whose code moved is listed where the code is now; one whose code is
+ * gone quotes the line it was written on.
+ */
+export function formatReviewList(
+  notes: ReviewNoteRow[],
+  staleIds: ReadonlySet<string> = new Set(),
+  placements: ReadonlyMap<ReviewNoteRow, AnchorPlacement> = new Map(),
+): string {
   if (notes.length === 0) return "No review notes in this worktree.";
   const out: string[] = [];
   notes.forEach((note, i) => {
+    const placement = placements.get(note);
     const flags = [
-      staleIds.has(note._id) ? "stale" : "",
+      placementLabel(placement ?? null),
+      // A moved or outdated note already says how the file changed under it.
+      staleIds.has(note._id) && !placement ? "stale" : "",
       note.sent_at ? "sent" : "",
     ].filter(Boolean);
+    const shown = placement?.state === "moved" ? { ...note, line_number: placement.line, line_end: placement.lineEnd } : note;
     out.push(
-      `${String(i + 1).padStart(2)}. ${note.file_path ?? "?"} · ${reviewNoteLocation({ ...note, file_path: note.file_path ?? "" })}` +
+      `${String(i + 1).padStart(2)}. ${note.file_path ?? "?"} · ${reviewNoteLocation({ ...shown, file_path: note.file_path ?? "" })}` +
         (flags.length ? `  [${flags.join(", ")}]` : ""),
     );
+    if (placement?.state === "outdated") {
+      for (const line of note.anchor_lines?.lines ?? []) out.push(`    was: ${line}`);
+    }
     for (const line of note.content.split("\n")) out.push(`    ${line}`);
   });
   return out.join("\n");
@@ -205,12 +222,14 @@ and editing one puts it back in the batch.
         line_end: parsed.lineEnd,
         content: note,
       };
+      const anchorLines = captureLocalAnchor(repoRoot, filePath, parsed.lineNumber, parsed.lineEnd);
       const gitContext = readLocalGitContext(repoRoot);
       const result = await apiPost(deps, "/cli/review/add", {
         git_root: repoRoot,
         repository: gitContext.repository ?? undefined,
         ref: git(["rev-parse", "HEAD"], repoRoot) ?? undefined,
         ...noteRow,
+        anchor_lines: anchorLines,
         diff_identity: fileDiffIdentity(repoRoot, filePath),
       });
       if (options.json) {
@@ -229,11 +248,12 @@ and editing one puts it back in the batch.
       const repoRoot = requireRepoRoot(realCwd());
       const notes = await loadBatch(deps, repoRoot, !!options.all);
       const stale = staleIdsOf(repoRoot, notes);
+      const placements = placeComments(notes, (file) => readFileLines(repoRoot, file));
       if (options.json) {
-        console.log(JSON.stringify(notes.map((n) => ({ ...n, stale: stale.has(n._id) })), null, 2));
+        console.log(JSON.stringify(notes.map((n) => ({ ...n, stale: stale.has(n._id), placement: placements.get(n) ?? null })), null, 2));
         return;
       }
-      console.log(formatReviewList(notes, stale));
+      console.log(formatReviewList(notes, stale, placements));
     });
 
   review

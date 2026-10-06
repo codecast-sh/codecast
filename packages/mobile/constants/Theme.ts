@@ -173,8 +173,8 @@ export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme:
   return schemedStyles((scheme) => build(Palettes[scheme]));
 }
 
-// The same live sheet for a surface with a palette of its own (the assistant
-// lane draws from @platform/design): the factory gets the scheme's name.
+// The same live sheet, built from the scheme's name rather than its palette,
+// for a surface that names its colours per scheme.
 export function schemedStyles<T extends StyleSheet.NamedStyles<T>>(build: (scheme: ColorScheme) => T): T {
   const sheets: Partial<Record<ColorScheme, T>> = {};
   const sheetFor = (scheme: ColorScheme): T => (sheets[scheme] ??= build(scheme));

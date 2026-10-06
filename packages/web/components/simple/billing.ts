@@ -13,7 +13,7 @@ import type { PlanId } from "@codecast/shared/contracts/assistant";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 
 /** A plan to subscribe to, or a top-up in one of `TOPUP.amounts_usd`. Where
- *  Stripe sends the person back is BILLING_RETURN, this lane's plan page. */
+ *  Stripe sends the person back is BILLING_RETURN, Settings > Plan. */
 export type CheckoutRequest = { plan: PlanId } | { topup_usd: number };
 
 const DIDNT_OPEN = "Stripe didn't open. Try again in a moment.";
@@ -24,6 +24,13 @@ const NOTHING_OFFERED: BillingStatus = { available: false, plans: [], topup: fal
 export type OpenBillingPage = (url: string) => void;
 
 const leaveForPage: OpenBillingPage = (url) => window.location.assign(url);
+
+/** Whether a paid plan can be bought now. Every pitch for one reads this, so
+ *  the pitch comes back on its own once billing opens. */
+export function useUpgradesOpen(): boolean {
+  const data = useQueryNoThrow(api.billing.billingAvailable, {}).data;
+  return !!data?.available && data.plans.length > 0;
+}
 
 export function useBilling(open: OpenBillingPage = leaveForPage): BillingStatus & {
   /** The first answer (or an error) has landed. */

@@ -11,6 +11,12 @@
 //   remove         the same keys, back to their default
 //   set_finder     add or update a [[line.finders]] block by id
 //   remove_finder  drop a [[line.finders]] block by id
+//   set_station    a station's prompt, script or timeout in the repo's own line
+//   reset_station  a station back to the shipped line's (line-map.md LX5)
+//
+// The station ops write `.codecast/line/` rather than the profile; they ride
+// the same command so one edit path carries the whole definition, and
+// repoLine.ts plans them (written out from the shipped line on the first one).
 //
 // editLineProfile applies edits (or a whole replacement text), validates the
 // result with the profile loader, and returns the text with the resolved
@@ -26,7 +32,7 @@ import {
   resolveLineProfile,
   type ResolvedLineProfile,
 } from "./lineProfile.js";
-import { hasLineControlChars, LINE_VALUE_KINDS, splitFinderKind, type LineFinderInput, type LineProfileEdit, type LineValue } from "@codecast/shared/contracts/lineProfile";
+import { hasLineControlChars, isLineStationEdit, LINE_VALUE_KINDS, REPO_LINE_REL_PATH, splitFinderKind, type LineFinderInput, type LineProfileEdit, type LineValue } from "@codecast/shared/contracts/lineProfile";
 
 export type { LineValue, LineFinderInput, LineProfileEdit };
 
@@ -402,6 +408,8 @@ export interface LineProfileEditReply {
   notes: string[];
   warnings: string[];
   published: PublishOutcome | null;
+  /** The repo's own line, when the edits changed a station (LX5). */
+  line?: { file: string; changed: boolean; materialized: boolean; stations: string[]; graph_hash: string };
 }
 
 /**
@@ -429,9 +437,26 @@ export async function runLineProfileEdit(
   if (typeof args.content === "string" && typeof args.base === "string" && args.base !== current) {
     throw new LineProfileError("the file changed since it was read; reload it and edit again", file);
   }
-  const result = editLineProfile({ root, current, edits: args.edits, content: args.content });
+  // Station edits change the repo's line, the rest the profile. Both are
+  // planned and checked before either is written, so a refusal writes nothing.
+  const stationEdits = (args.edits ?? []).filter(isLineStationEdit);
+  const profileEdits = args.edits?.filter((e) => !isLineStationEdit(e));
+  const result = editLineProfile({ root, current, edits: profileEdits, content: args.content });
+  const line = stationEdits.length ? (await import("./repoLine.js")).planStationEdits(root, stationEdits) : null;
+  const lineWrites: Array<{ file: string; content: string }> = [];
+  for (const w of line?.writes ?? []) {
+    const target = await deps.admit(path.join(root, w.rel));
+    if (!target) throw new LineProfileError(`${path.join(root, w.rel)} is not a line file in a project this machine tracks`);
+    lineWrites.push({ file: target, content: w.content });
+  }
   if (result.changed) deps.write(file, result.content);
-  const published = result.changed && deps.publish ? await deps.publish(root) : null;
+  // line.cast comes last in the plan, so a run never reads it naming a file not yet written.
+  for (const w of lineWrites) deps.write(w.file, w.content);
+  const changed = result.changed || !!line?.changed;
+  const published = changed && deps.publish ? await deps.publish(root) : null;
   const r = result.resolved;
-  return { file, content: result.content, changed: result.changed, profile: r.profile, sources: r.sources, notes: r.notes, warnings: r.warnings, published };
+  return {
+    file, content: result.content, changed, profile: r.profile, sources: r.sources, notes: r.notes, warnings: r.warnings, published,
+    ...(line ? { line: { file: path.join(root, REPO_LINE_REL_PATH), changed: line.changed, materialized: line.materialized && line.changed, stations: line.stations, graph_hash: line.graph_hash } } : {}),
+  };
 }

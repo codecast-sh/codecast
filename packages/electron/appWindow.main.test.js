@@ -244,3 +244,21 @@ test("a plain breakout asking for a chat path gets the Chat window instead of sh
   assert.ok(chat.options.webPreferences.additionalArguments.includes("--app-window=chat"));
   assert.deepEqual(chat.last("loadURL"), ["https://codecast.sh/chat/ch1"]);
 });
+
+test("closing the main window hides it and the dock brings the same window back; a quit closes it for real", async () => {
+  const rig = harness.loadShell();
+  const main = rig.mainWindow;
+  main.show();
+  main.close();
+  assert.equal(main.destroyed, false);
+  assert.equal(main.isVisible(), false);
+
+  const count = rig.windows.length;
+  rig.listeners.get("activate")();
+  assert.equal(rig.windows.length, count);
+  assert.equal(main.isVisible(), true);
+
+  rig.listeners.get("before-quit")();
+  main.close();
+  assert.equal(main.destroyed, true);
+});
