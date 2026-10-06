@@ -108,6 +108,7 @@ type Route = {
   added_by?: Id<"users">;
   hold_until?: number;
   briefed_chunks?: number;
+  context_at?: number;
 };
 
 // Why deliverRoutes is running. A flush is the scribe's lull; the other three
@@ -123,6 +124,12 @@ type DeliverReason = "flush" | "settle" | "hold_expired" | "route_added";
 // A catch up delivery counts the room as quiet after this long without a
 // closed utterance: the scribe's own lull (scribeEngine GAP_MS).
 export const CATCH_UP_QUIET_MS = 2_500;
+// The shortest gap between two context deliveries to one session. A line
+// that names the agent still goes at once and carries everything unsent with
+// it; the rest of the room's talk waits and arrives as one catch up. Each
+// delivery costs the agent a whole turn over its context, and most unnamed
+// chunks end in a pass (agent comms study, 2026-10-06).
+export const CONTEXT_MIN_GAP_MS = 3 * 60_000;
 // deliverRoutes reschedules itself at most this many times per run: a failed
 // final delivery backs off from DELIVER_RETRY_MS, a catch up that found the
 // room talking waits one more quiet window.
@@ -501,6 +508,7 @@ export const setRoutes = mutation({
         added_by: prior?.added_by ?? userId,
         ...(prior?.hold_until ? { hold_until: prior.hold_until } : {}),
         ...(prior?.briefed_chunks !== undefined ? { briefed_chunks: prior.briefed_chunks } : {}),
+        ...(prior?.context_at ? { context_at: prior.context_at } : {}),
       };
     });
     await ctx.db.patch(t._id, { routes });
@@ -2524,6 +2532,8 @@ export const markRouteSent = internalMutation({
     sent_seq: v.number(),
     // A session chunk went out: whether it carried the full framing.
     full_brief: v.optional(v.boolean()),
+    // A context lane chunk went out at this time (CONTEXT_MIN_GAP_MS).
+    context_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
@@ -2534,6 +2544,7 @@ export const markRouteSent = internalMutation({
           ? {
               ...r,
               sent_seq: Math.max(r.sent_seq, args.sent_seq),
+              ...(args.context_at ? { context_at: args.context_at } : {}),
               ...(args.full_brief === undefined
                 ? {}
                 : { briefed_chunks: args.full_brief ? 1 : (r.briefed_chunks ?? 0) + 1 }),
@@ -2608,7 +2619,8 @@ export const slackTokenForChannel = internalQuery({
 });
 
 /** Whether a session route's unsent words go now, and in which lane. Pure,
- *  so the pacing rule is one readable function with tests.
+ *  so the pacing rule is one readable function with tests. Context also
+ *  waits out CONTEXT_MIN_GAP_MS after the last context chunk.
  *
  *  A line that names the agent goes at once, mid-turn if need be: the ask
  *  lane. Everything else is context, and context waits while the agent is
@@ -2619,10 +2631,10 @@ export const slackTokenForChannel = internalQuery({
 export function sessionDeliveryVerdict(opts: {
   reason: DeliverReason;
   now: number;
-  route: { hold_until?: number };
+  route: { hold_until?: number; context_at?: number };
   pacing: { names: string[]; busy: boolean } | null;
   unsent: Array<{ text: string; ended_at: number; speaker_id?: string }>;
-}): { deliver: false; wait?: "quiet" } | { deliver: true; lane: "ask" | "context"; held: boolean } {
+}): { deliver: false; wait?: "quiet" | "gap"; at?: number } | { deliver: true; lane: "ask" | "context"; held: boolean } {
   const { reason, now, route, pacing, unsent } = opts;
   // Only the team opens the ask lane. A guest naming the agent is talking
   // about it or to it, and their words still arrive as context, but they
@@ -2634,6 +2646,11 @@ export function sessionDeliveryVerdict(opts: {
   if (addressed) return { deliver: true, lane: "ask", held: false };
   const holding = (route.hold_until ?? 0) > now;
   if (pacing?.busy || holding) return { deliver: false };
+  // Only a lull's flush waits out the gap: a hold's catch up, a new route's
+  // backlog and the gap's own closing run deliver.
+  if (reason === "flush" && route.context_at && route.context_at + CONTEXT_MIN_GAP_MS > now) {
+    return { deliver: false, wait: "gap", at: route.context_at + CONTEXT_MIN_GAP_MS };
+  }
   const clockDriven = reason === "settle" || reason === "hold_expired";
   if (clockDriven) {
     const lastEnd = Math.max(...unsent.map((s) => s.ended_at));
@@ -2666,6 +2683,7 @@ export const deliverRoutes = internalAction({
     const attempt = args.attempt ?? 0;
     let failed = false;
     let waitQuiet = false;
+    let contextSent = false;
     for (const route of transcript.routes) {
       if (route.mode === "after" && !args.include_after_routes) continue;
       if (route.kind === "session" && dead.includes(route.target)) {
@@ -2686,6 +2704,7 @@ export const deliverRoutes = internalAction({
       // added_by existed fall back to the scribe.
       const asUser = route.added_by ?? transcript.started_by;
       let fullBrief: boolean | undefined;
+      let contextLane = false;
       try {
         if (route.kind === "session") {
           const target = pacing[route.target] ?? null;
@@ -2700,6 +2719,7 @@ export const deliverRoutes = internalAction({
             if (verdict.wait === "quiet") waitQuiet = true;
             continue;
           }
+          contextLane = verdict.lane === "context";
           // A session hearing its OWN room is being spoken to, not sent a
           // report about a meeting elsewhere, and the two want different
           // words in front of the same chunk.
@@ -2751,7 +2771,9 @@ export const deliverRoutes = internalAction({
           target: route.target,
           sent_seq: maxSeq,
           full_brief: fullBrief,
+          ...(contextLane ? { context_at: now } : {}),
         });
+        if (contextLane) contextSent = true;
       } catch (err) {
         // A failing route never blocks the others; the watermark stays put so
         // the next flush retries this chunk.
@@ -2763,6 +2785,16 @@ export const deliverRoutes = internalAction({
     // The end of the call has no later flush to retry a failed final
     // delivery, so it comes back with backoff; a catch up that found the
     // room still talking comes back once the quiet window has passed.
+    // A context chunk opens a gap; one run at its end delivers whatever the
+    // gap held back, so a room that falls silent does not keep it until the
+    // call is over. Scheduled once per delivery, never per held flush.
+    if (contextSent && !args.include_after_routes) {
+      await ctx.scheduler.runAfter(CONTEXT_MIN_GAP_MS, internal.transcripts.deliverRoutes, {
+        transcript_id: args.transcript_id,
+        include_after_routes: false,
+        reason: "settle",
+      });
+    }
     if (attempt >= DELIVER_RETRY_MAX) return;
     const retry = args.include_after_routes && failed
       ? { delay: DELIVER_RETRY_MS * 2 ** attempt, reason: args.reason }

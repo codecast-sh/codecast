@@ -13,14 +13,18 @@ import { useWatchEffect } from "./useWatchEffect";
 import { useOpenSession } from "./useOpenSession";
 import { isCallPanelWindow } from "../lib/desktop";
 import { viewedConversationId } from "./usePresenceReporter";
-import { followersSig, planFollowApply, samePath, shouldEndFollow } from "../lib/follow";
+import { applyFollowView, followersSig, followViewSig, planFollowApply, planViewApply, samePath, shouldEndFollow, subscribeFollowSurfaces, type FollowView } from "../lib/follow";
+import { useLeaderView } from "./useFollowSurface";
 
 // Follow mode, both sides, mounted once in the dashboard.
 //
 // Follower: while `followLeaderId` is set, hold the lease (renewed every
 // FOLLOW_RENEW_MS, dropped on stop), subscribe to the leader's view, and apply
 // each report as the person would have moved: a route push, the app's one
-// session path, a scroll to the leader's message. An apply lands as a
+// session path, a scroll to the leader's message, and then the place inside
+// the page (the open panel, the diff file and line, a region's scroll), which
+// the page's own surfaces take (lib/follow.ts, hooks/useFollowSurface.ts),
+// waiting for them while the page mounts. An apply lands as a
 // gesture navigation of this window's own, so the hook remembers the exact
 // target it asked for: a gesture that lands anywhere else, a route the person
 // took themselves, or any wheel, touch or paging key (a programmatic scroll
@@ -28,9 +32,14 @@ import { followersSig, planFollowApply, samePath, shouldEndFollow } from "../lib
 // follow, as in Figma.
 //
 // Leader: while anyone holds a lease, report the view about four times a
-// second at most: the real pathname, the conversation on screen (the same
-// rule the presence reporter uses), and the transcript anchor the
-// conversation view writes only while followed.
+// second at most and only when it changed: the real pathname, the
+// conversation on screen (the same rule the presence reporter uses), the
+// transcript anchor the conversation view writes only while followed, and the
+// in-page view the mounted surfaces compose (useLeaderView).
+
+const REPORT_MS = 250;
+/** How long in-page parts wait for their surface to mount after a move. */
+const PENDING_VIEW_MS = 10_000;
 
 const PAGING_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown", " "]);
 
@@ -76,7 +85,11 @@ export function useFollowMode(): void {
   // window's own is one that lands somewhere else.
   const expectedConvRef = useRef<string | null>(null);
   const expectedPathRef = useRef<string | null>(null);
-  const viewSig = view ? `${view.updated_at}|${view.withheld}|${view.path}|${view.conversation_id ?? ""}|${view.anchor?.message_id ?? ""}` : "";
+  // The in-page parts last handed to the surfaces on this page, and those no
+  // surface has taken yet (the page is still mounting).
+  const appliedViewRef = useRef<FollowView | null>(null);
+  const pendingViewRef = useRef<{ view: FollowView; until: number; ready: () => boolean } | null>(null);
+  const viewSig = view ? `${view.updated_at}|${view.withheld}|${view.path}|${view.conversation_id ?? ""}|${view.anchor?.message_id ?? ""}|${followViewSig(view.view)}` : "";
   useWatchEffect(() => {
     if (!leaderId || !view) return;
     const st = useInboxStore.getState();
@@ -85,23 +98,71 @@ export function useFollowMode(): void {
       pathname: here,
       conversationId: viewedConversationId(st as any, pathname),
       anchorMessageId: appliedRef.current.startsWith("session:") ? appliedRef.current.split(":")[2] || null : null,
+      appliedView: appliedViewRef.current,
     });
     st.setFollowBlocked(plan.kind === "blocked");
-    if (plan.kind === "blocked" || plan.kind === "stay") return;
-    const sig = plan.kind === "route" ? `route:${plan.path}` : `session:${plan.conversationId}:${plan.scrollTo ?? ""}`;
-    if (sig === appliedRef.current) return;
-    appliedRef.current = sig;
-    if (plan.kind === "route") {
-      expectedConvRef.current = null;
-      expectedPathRef.current = plan.path;
-      router.push(plan.path);
+    if (plan.kind === "blocked") return;
+    const sig = plan.kind === "route" ? `route:${plan.path}` : plan.kind === "session" ? `session:${plan.conversationId}:${plan.scrollTo ?? ""}` : appliedRef.current;
+    let parts = plan.view;
+    // After a move, the old page's surfaces are still mounted for a moment:
+    // the parts wait until this window is on the page they belong to.
+    let ready: () => boolean = () => true;
+    // A move already made (a route whose query this pathname cannot show)
+    // is the same page: only what changed in it applies.
+    if (sig === appliedRef.current && plan.kind !== "stay") parts = planViewApply(view.view, appliedViewRef.current);
+    else if (sig !== appliedRef.current) {
+      const samePage = plan.kind === "session" && appliedRef.current.startsWith(`session:${plan.conversationId}:`);
+      appliedRef.current = sig;
+      if (!samePage) appliedViewRef.current = null;
+      if (plan.kind === "route") {
+        expectedConvRef.current = null;
+        expectedPathRef.current = plan.path;
+        router.push(plan.path);
+        const target = plan.path.split(/[?#]/)[0] ?? plan.path;
+        ready = () => samePath(window.location.pathname, target);
+      } else if (plan.kind === "session") {
+        expectedConvRef.current = plan.conversationId;
+        expectedPathRef.current = null;
+        openSession(plan.conversationId);
+        if (plan.scrollTo) st.requestNavigate(plan.conversationId, { scrollToMessageId: plan.scrollTo, source: "follow" });
+        const conversationId = plan.conversationId;
+        if (!samePage) ready = () => viewedConversationId(useInboxStore.getState() as any, window.location.pathname) === conversationId;
+      }
+    }
+    if (!parts) return;
+    appliedViewRef.current = { ...appliedViewRef.current, ...parts };
+    pendingViewRef.current = { view: parts, until: Date.now() + PENDING_VIEW_MS, ready };
+    flushPendingView();
+  }, [leaderId, viewSig]);
+
+  // Parts no surface took yet go to each surface as it mounts, or on a short
+  // poll for a page that reuses its surfaces across ids (one doc to the next).
+  function flushPendingView() {
+    const pending = pendingViewRef.current;
+    if (!pending) return;
+    if (Date.now() > pending.until) {
+      pendingViewRef.current = null;
       return;
     }
-    expectedConvRef.current = plan.conversationId;
-    expectedPathRef.current = null;
-    openSession(plan.conversationId);
-    if (plan.scrollTo) st.requestNavigate(plan.conversationId, { scrollToMessageId: plan.scrollTo, source: "follow" });
-  }, [leaderId, viewSig]);
+    if (!pending.ready()) return;
+    // Cleared before applying: an apply that scrolls notifies again.
+    pendingViewRef.current = null;
+    const left = applyFollowView(pending.view);
+    if (left) pendingViewRef.current = { ...pending, view: left };
+  }
+  useWatchEffect(() => {
+    if (!leaderId) {
+      appliedViewRef.current = null;
+      pendingViewRef.current = null;
+      return;
+    }
+    const unsub = subscribeFollowSurfaces(flushPendingView);
+    const iv = setInterval(flushPendingView, 200);
+    return () => {
+      unsub();
+      clearInterval(iv);
+    };
+  }, [leaderId]);
 
   // ── follower: the person's own move ends it ──
   useWatchEffect(() => {
@@ -155,16 +216,38 @@ export function useFollowMode(): void {
   const viewedId = useInboxStore((s) => (followed ? viewedConversationId(s as any, pathname) : null));
   const anchor = useInboxStore((s) => (followed ? s.viewAnchor : null));
   const anchorKey = anchor ? `${anchor.conversationId}|${anchor.messageId}|${anchor.offset}` : "";
+  const leaderView = useLeaderView(followed);
+  // Trailing throttle: a leader scrolling steadily streams a report every
+  // REPORT_MS rather than one when they stop, and the report carries the
+  // latest values when it fires. Nothing goes out when nothing changed.
+  const latestRef = useRef<() => Parameters<typeof reportMut>[0]>(() => ({ path: "/" }));
+  latestRef.current = () => ({
+    path: typeof window !== "undefined" ? window.location.pathname + window.location.search : pathname ?? "/",
+    conversation_id: (viewedId as Id<"conversations"> | null) ?? undefined,
+    anchor: anchor && viewedId && anchor.conversationId === viewedId ? { message_id: anchor.messageId, offset: anchor.offset } : undefined,
+    view: leaderView.view,
+  });
+  const reportRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; at: number; sent: string }>({ timer: null, at: 0, sent: "" });
   useWatchEffect(() => {
-    if (!followed) return;
-    const t = setTimeout(() => {
-      const path = typeof window !== "undefined" ? window.location.pathname + window.location.search : pathname ?? "/";
-      reportMut({
-        path,
-        conversation_id: (viewedId as Id<"conversations"> | null) ?? undefined,
-        anchor: anchor && viewedId && anchor.conversationId === viewedId ? { message_id: anchor.messageId, offset: anchor.offset } : undefined,
-      }).catch(() => {});
-    }, 250);
-    return () => clearTimeout(t);
-  }, [followed, pathname, viewedId, anchorKey, reportMut]);
+    const r = reportRef.current;
+    if (!followed) {
+      if (r.timer) clearTimeout(r.timer);
+      reportRef.current = { timer: null, at: 0, sent: "" };
+      return;
+    }
+    if (r.timer) return;
+    r.timer = setTimeout(() => {
+      r.timer = null;
+      const args = latestRef.current();
+      const sig = JSON.stringify(args);
+      if (sig === r.sent) return;
+      r.sent = sig;
+      r.at = Date.now();
+      reportMut(args).catch(() => {});
+    }, Math.max(0, REPORT_MS - (Date.now() - r.at)));
+  }, [followed, pathname, viewedId, anchorKey, leaderView.sig, reportMut]);
+  useWatchEffect(() => () => {
+    const r = reportRef.current;
+    if (r.timer) clearTimeout(r.timer);
+  }, []);
 }

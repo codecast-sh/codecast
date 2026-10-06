@@ -32,6 +32,10 @@ ship  = "bun outreach/backend/scripts/line.ts ship --task $task_id --branch $bra
 [line.caps]
 cards = 5
 
+[line.merge]
+auto = false
+method = "squash"
+
 [[line.finders]]
 id = "invariants"
 source = "union.invariant"
@@ -79,6 +83,7 @@ describe("line profile (LP2)", () => {
       watch_days: 7,
       commands: { check: "cast ws check", prove: null, eval: null, ship: null },
       caps: { cards: 5 },
+      merge: { auto: false, method: "squash" },
       finders: [],
     });
     expect(Object.values(r.sources).every((s) => s === "default")).toBe(true);
@@ -94,9 +99,18 @@ describe("line profile (LP2)", () => {
     expect(r.sources.project).toBe("file");
   });
 
+  test("[line.merge] takes auto as a boolean and a known method", () => {
+    const r = resolveLineProfile(parseLineProfileText(`[line.merge]\nauto = true\n`).values);
+    expect(r.profile.merge).toEqual({ auto: true, method: "squash" });
+    expect(r.sources["merge.auto"]).toBe("file");
+    const err = (t: string) => { try { parseLineProfileText(t); } catch (e) { return (e as Error).message; } return null; };
+    expect(err(`[line.merge]\nauto = "yes"`)).toContain("true or false");
+    expect(err(`[line.merge]\nmethod = "octopus"`)).toContain("squash, merge, rebase");
+  });
+
   test("unknown keys are refused with where they are", () => {
     const err = (t: string) => { try { parseLineProfileText(t, ".codecast/line.toml"); } catch (e) { return e as Error; } return null; };
-    expect(err(`[line]\nprojet = "X"`)?.message).toBe('.codecast/line.toml: [line] has unknown key "projet" (known: team, project, principles, prompting, size_budget, watch_days, commands, caps, finders)');
+    expect(err(`[line]\nprojet = "X"`)?.message).toBe('.codecast/line.toml: [line] has unknown key "projet" (known: team, project, principles, prompting, size_budget, watch_days, commands, caps, merge, finders)');
     expect(err(`[line.commands]\nverify = "x"`)?.message).toContain('[line.commands] has unknown key "verify"');
     expect(err(`[line.caps]\nhands = 3`)?.message).toContain('[line.caps] has unknown key "hands"');
     expect(err(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\nowner = "x"`)?.message).toContain('[[line.finders]] #1 has unknown key "owner"');

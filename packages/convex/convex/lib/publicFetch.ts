@@ -4,6 +4,7 @@
 // literal IP hosts, no credentials in the URL, none of our own pages), and the
 // body is read only up to a byte cap, so a hostile URL can neither reach
 // inside the network nor hand back an unbounded body.
+import type { PublicPage } from "@platform/assistant/web";
 import { parseLinkPreviewUrl } from "@codecast/shared/entities";
 
 export interface PublicFetchOptions {
@@ -19,14 +20,8 @@ export interface PublicFetchOptions {
   fetch?: typeof fetch;
 }
 
-export interface PublicPage {
-  text: string;
-  /** The final URL, after redirects. */
-  url: string;
-  contentType: string;
-  /** True when the byte cap cut the body short. */
-  truncated: boolean;
-}
+/** A page as text; the shape @platform/assistant's fetch_page reads. */
+export type { PublicPage };
 
 /** The page at `start` as text, or null when the URL is not a public web
  *  page, the server refuses, or the content type is not one `accept` takes. */
