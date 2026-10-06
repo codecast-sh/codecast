@@ -16,6 +16,8 @@ Each talks raw CDP over a WebSocket to a page on a Chrome started with `--remote
 
 ## Other harnesses
 
+- `frozen-dev.sh`: a private Vite dev server with HMR, the file watcher and the reload plugins off, and its own deps cache (`frozen-dev.config.ts`), on port 3216 plus `AGENT_RESOURCE_INDEX`. For design rounds and screenshots when the shared server on :3200 keeps reloading under other sessions' edits. `start`, `restart` (picks up edits, which it never sees on its own), `stop`, `status`, `url`, `log`.
+
 - `bundle-graph.mjs`: walks the Vite build manifest from one entry and reports the gzip size of its static import graph (`<manifest.json> <entry-key>`).
 - `rig/`: two signed in headless Chromes driven over raw CDP. `rig/stack.mjs` decides which deployment a rig may reach: the local dev deployment by default, prod only under `RIG_DEPLOYMENT=prod`.
   - The face row rig (walkie, ring, reconnect, dead seat): `rig/run.mjs` runs the legs, `rig/shots.mjs` captures every row state, `rig/eval.mjs` evaluates on a browser left up by `--keep`. Its fixtures are the App Review accounts on prod and calls need prod's LiveKit, so it runs only with `RIG_DEPLOYMENT=prod`, the dev server on localhost:3200 and `CONVEX_SELF_HOSTED_ADMIN_KEY`.

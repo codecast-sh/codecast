@@ -15,6 +15,7 @@ import type { GithubInstallUser } from "../../lib/githubAppInstall";
 import { githubAppInstallTeam } from "../../lib/githubAppInstall";
 import { formatRelative } from "../../lib/utils";
 import { ConfirmButton, LedgerLine, QuietButton, StatusDot, type DotTone } from "./parts";
+import { useHostedMode } from "../../lib/surfaces";
 import { GithubInstallDetail } from "./GithubInstallDetail";
 import { IssueSyncSources } from "./IssueSyncSources";
 import { SlackMirrorsSummary } from "./SlackMirrorsSummary";
@@ -58,6 +59,7 @@ export function IntegrationCard({
   showSources?: boolean;
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
+  const hosted = useHostedMode();
   const { connect, connectToken, disconnect, busy, error } = useAppConnection(descriptor, connection, scope);
   // A token app connects through an inline form instead of a popup; the
   // Connect button opens it, and so does Replace token once connected.
@@ -118,7 +120,7 @@ export function IntegrationCard({
         />
       )}
 
-      <p className="mt-1.5 text-xs leading-relaxed text-sol-text-muted">{descriptor.tagline}</p>
+      <p className="mt-1.5 text-xs leading-relaxed text-sol-text-muted">{(hosted && descriptor.hostedTagline) || descriptor.tagline}</p>
 
       <ul className="mt-1.5 space-y-0.5">
         {descriptor.bullets.map((b) => (

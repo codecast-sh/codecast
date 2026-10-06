@@ -19,7 +19,9 @@ import type { DraftImageRow } from "../lib/draftImages";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { isConvexId } from "../lib/entityLinks";
 
-export type ComposeContext = { projectPath?: string; gitRoot?: string };
+/** `agentType` starts the composer on that agent rather than the default
+ *  (the empty inbox's "Ask the assistant" start). */
+export type ComposeContext = { projectPath?: string; gitRoot?: string; agentType?: string };
 export type ComposeInstance = {
   id: number;
   mode: "modal" | "dock";

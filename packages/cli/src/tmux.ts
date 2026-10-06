@@ -1,5 +1,11 @@
 import { execSync, execFileSync, spawnSync, execFileAsync, TOOL_PATH, installCommandFor, installHintFor } from "./proc.js";
 import { snapshotProcessTable, snapshotProcessTableAsync, tmuxServerRows, type ProcRow } from "./processTable.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { defaultConfigDir } from "./config/configDir.js";
+import { startLaunchdJob, stopLaunchdJob } from "./launchdJob.js";
+import { tmuxSessionEnvUpdates } from "./processEnv.js";
+import { joinListings, ownServerSession, routeTmuxArgs, runRouted, runRoutedSync, sessionSocketName, tmuxSocketDir } from "./tmuxRoute.js";
 
 const ENRICHED_PATH = TOOL_PATH;
 
@@ -90,6 +96,194 @@ export async function startTmuxGuarded<T>(
   }
 }
 
+// ── Every tmux call: its own server for an agent session, routed otherwise ─────
+// tmuxRoute.ts says why each agent session has a server of its own. These two
+// drivers are the one place a tmux call is turned into argv: an agent session's
+// `new-session` starts that session's server as a launchd job, a call naming a
+// session reaches the server it lives on, a fleet listing asks every server,
+// and anything that may start a server still goes through the -N guard.
+// `exec` throws with `.stderr` on failure; `join` merges a fleet listing's
+// answers (and is handed nothing for a server start, which prints nothing).
+type TmuxEnv = Record<string, string | undefined>;
+
+export function runTmuxSync<T>(args: string[], env: TmuxEnv, exec: (argv: string[]) => T, join: (results: T[]) => T): T {
+  const own = ownServerSession(args, env);
+  if (own) {
+    startSessionServerSync(own, args, env, exec);
+    return join([]);
+  }
+  const run = (argv: string[]) => (startsTmuxServer(withoutGlobals(argv)) ? startTmuxGuardedSync(argv, exec) : exec(argv));
+  return runRoutedSync(routeTmuxArgs(args, env), run, join, env);
+}
+
+export async function runTmux<T>(args: string[], env: TmuxEnv, exec: (argv: string[]) => Promise<T>, join: (results: T[]) => T): Promise<T> {
+  const own = ownServerSession(args, env);
+  if (own) {
+    await startSessionServer(own, args, env, exec);
+    return join([]);
+  }
+  const run = (argv: string[]) => (startsTmuxServer(withoutGlobals(argv)) ? startTmuxGuarded(argv, exec) : exec(argv));
+  return runRouted(routeTmuxArgs(args, env), run, join, env);
+}
+
+function withoutGlobals(argv: string[]): string[] {
+  let i = 0;
+  while (i < argv.length && argv[i].startsWith("-")) i += argv[i] === "-L" || argv[i] === "-S" || argv[i] === "-f" ? 2 : 1;
+  return argv.slice(i);
+}
+
+const stdoutText = (r: unknown): string =>
+  typeof r === "string" ? r : Buffer.isBuffer(r) ? r.toString("utf-8") : typeof (r as { stdout?: unknown } | null)?.stdout === "string" ? (r as { stdout: string }).stdout : "";
+
+/** join for drivers whose result is the stdout text. */
+export const joinText = (results: unknown[]): string => joinListings(results.map(stdoutText));
+
+/** The tmux binary by absolute path: a launchd job's argv[0] is not looked up on PATH. */
+function tmuxBinary(env: TmuxEnv): string {
+  for (const dir of (env.PATH ?? ENRICHED_PATH).split(":")) {
+    const candidate = path.join(dir, "tmux");
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  return "tmux";
+}
+
+const SESSION_SERVER_START_MS = 20_000;
+
+type SessionServerPlan = { socket: string; socketPath: string; label: string; plistPath: string; logPath: string; argv: string[]; env: Record<string, string | undefined> };
+
+function sessionServerPlan(session: string, args: string[], env: TmuxEnv): SessionServerPlan {
+  const socket = sessionSocketName(session);
+  const dir = path.join(defaultConfigDir(), "tmux-servers");
+  fs.mkdirSync(dir, { recursive: true });
+  const jobEnv = { ...env };
+  delete jobEnv.TMUX;
+  delete jobEnv.TMUX_PANE;
+  return {
+    socket,
+    socketPath: path.join(tmuxSocketDir(env), socket),
+    label: `sh.codecast.tmux.${session}`,
+    plistPath: path.join(dir, `${session}.plist`),
+    logPath: path.join(dir, `${session}.log`),
+    argv: [tmuxBinary(env), "-L", socket, ...withoutGlobals(args)],
+    env: jobEnv,
+  };
+}
+
+/** Why a session could not be created in the server already on its socket: none is behind it ("stale"), it is too busy to accept, or the command itself failed. */
+function existingServerFailure(err: unknown, socket: string, procs: () => ProcRow[]): "stale" | Error {
+  const failure = tmuxNoStartFailure(stderrOf(err));
+  if (failure === "other") return err as Error;
+  if (failure === "refused" && procs().some((p) => p.ppid === 1 && p.command.includes(` -L ${socket} `))) return new TmuxServerBusyError();
+  return "stale";
+}
+
+function startFailure(plan: SessionServerPlan): Error | null {
+  let text = "";
+  try { text = fs.readFileSync(plan.logPath, "utf-8").trim(); } catch {}
+  if (!text) return null;
+  return Object.assign(new Error(`tmux server for ${plan.socket} did not start: ${text}`), { stderr: text });
+}
+
+function finishSessionServer(plan: SessionServerPlan, ok: boolean): void {
+  stopLaunchdJob(plan.label);
+  fs.rmSync(plan.plistPath, { force: true });
+  if (ok) fs.rmSync(plan.logPath, { force: true });
+}
+
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** Start `session`'s own server as a launchd job running `args` (its new-session), and wait until the session answers. */
+export function startSessionServerSync(session: string, args: string[], env: TmuxEnv, exec: (argv: string[]) => unknown): void {
+  const plan = sessionServerPlan(session, args, env);
+  const L = ["-L", plan.socket];
+  if (fs.existsSync(plan.socketPath)) {
+    try {
+      exec([...L, "-N", ...withoutGlobals(args)]);
+      return;
+    } catch (err) {
+      const verdict = existingServerFailure(err, plan.socket, () => snapshotProcessTable());
+      if (verdict !== "stale") throw verdict;
+      fs.rmSync(plan.socketPath, { force: true });
+    }
+  }
+  fs.rmSync(plan.logPath, { force: true });
+  if (!startLaunchdJob({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env })) {
+    exec([...L, ...withoutGlobals(args)]);
+    carrySessionIdsSync(L, exec);
+    return;
+  }
+  const deadline = Date.now() + SESSION_SERVER_START_MS;
+  for (;;) {
+    try {
+      exec([...L, "has-session", "-t", `=${session}`]);
+      break;
+    } catch {}
+    const failure = startFailure(plan);
+    if (failure || Date.now() > deadline) {
+      finishSessionServer(plan, false);
+      throw failure ?? new Error(`tmux server for ${plan.socket} did not start within ${SESSION_SERVER_START_MS / 1000}s`);
+    }
+    sleepSync(100);
+  }
+  finishSessionServer(plan, true);
+  carrySessionIdsSync(L, exec);
+}
+
+export async function startSessionServer(session: string, args: string[], env: TmuxEnv, exec: (argv: string[]) => Promise<unknown>): Promise<void> {
+  const plan = sessionServerPlan(session, args, env);
+  const L = ["-L", plan.socket];
+  if (fs.existsSync(plan.socketPath)) {
+    try {
+      await exec([...L, "-N", ...withoutGlobals(args)]);
+      return;
+    } catch (err) {
+      const procs = await snapshotProcessTableAsync();
+      const verdict = existingServerFailure(err, plan.socket, () => procs);
+      if (verdict !== "stale") throw verdict;
+      fs.rmSync(plan.socketPath, { force: true });
+    }
+  }
+  fs.rmSync(plan.logPath, { force: true });
+  if (!startLaunchdJob({ label: plan.label, argv: plan.argv, plistPath: plan.plistPath, logPath: plan.logPath, env: plan.env })) {
+    await exec([...L, ...withoutGlobals(args)]);
+    await carrySessionIds(L, exec);
+    return;
+  }
+  const deadline = Date.now() + SESSION_SERVER_START_MS;
+  for (;;) {
+    try {
+      await exec([...L, "has-session", "-t", `=${session}`]);
+      break;
+    } catch {}
+    const failure = startFailure(plan);
+    if (failure || Date.now() > deadline) {
+      finishSessionServer(plan, false);
+      throw failure ?? new Error(`tmux server for ${plan.socket} did not start within ${SESSION_SERVER_START_MS / 1000}s`);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  finishSessionServer(plan, true);
+  await carrySessionIds(L, exec);
+}
+
+// A session an agent creates from its pane lands on the agent's own server, so
+// that server copies the session ids from the creating client just as the
+// shared one does (ensureTmuxCarriesSessionIds in daemon.ts).
+function carrySessionIdsSync(L: string[], exec: (argv: string[]) => unknown): void {
+  try {
+    for (const update of tmuxSessionEnvUpdates(stdoutText(exec([...L, "show-options", "-gv", "update-environment"])))) exec([...L, ...update]);
+  } catch {}
+}
+
+async function carrySessionIds(L: string[], exec: (argv: string[]) => Promise<unknown>): Promise<void> {
+  try {
+    for (const update of tmuxSessionEnvUpdates(stdoutText(await exec([...L, "show-options", "-gv", "update-environment"])))) await exec([...L, ...update]);
+  } catch {}
+}
+
 // A tmux client whose server dies mid-protocol wedges in a 100% CPU loop and
 // ignores SIGTERM, so a Node `execSync` without a timeout leaves a zombie that
 // outlives the parent process (and a default-SIGTERM timeout never reaps it).
@@ -104,10 +298,8 @@ export function tmuxExecSync(args: string[], opts?: { timeout?: number; encoding
     stdio: io as any,
     env: { ...process.env, PATH: ENRICHED_PATH },
   });
-  // The guard reads the refusal off stderr, so a starter always pipes it.
-  const result = startsTmuxServer(args)
-    ? startTmuxGuardedSync(args, (argv) => exec(argv, ["ignore", "pipe", "pipe"]))
-    : exec(args, stdio);
+  // The guard and the server start read the refusal off stderr, so a starter always pipes it.
+  const result = runTmuxSync(args, process.env, (argv) => exec(argv, startsTmuxServer(withoutGlobals(argv)) || ownServerSession(args) ? ["ignore", "pipe", "pipe"] : stdio), joinText);
   return typeof result === "string" ? result : "";
 }
 
@@ -133,13 +325,15 @@ export function tmuxRun(args: string[], opts?: { timeout?: number; env?: Record<
       stderr: typeof r.stderr === "string" ? r.stderr : "",
     };
   };
-  if (!startsTmuxServer(args)) return run(args);
   try {
-    return startTmuxGuardedSync(args, (argv) => throwOnFailure(run(argv)));
+    return runTmuxSync(args, { ...process.env, ...opts?.env }, (argv) => throwOnFailure(run(argv)), joinRuns);
   } catch (err) {
     return failedRunResult(err);
   }
 }
+
+const joinRuns = <R extends { status: number | null; stdout: string; stderr: string }>(results: R[]): R =>
+  ({ status: 0, stdout: joinText(results), stderr: "" }) as R;
 
 // The guard speaks the throwing dialect; tmuxRun and tmuxRunAsync never throw.
 // A failed result is thrown as itself and handed back unchanged.
@@ -168,9 +362,8 @@ export function isTmuxSessionMissingError(error: unknown): boolean {
 // null on a timeout kill. Node hands a non zero exit back as an error whose
 // `code` is the exit status; a kill carries a signal and no numeric code.
 export async function tmuxRunAsync(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): Promise<TmuxRunResult> {
-  if (!startsTmuxServer(args)) return tmuxRunAsyncRaw(args, opts);
   try {
-    return await startTmuxGuarded(args, async (argv) => throwOnFailure(await tmuxRunAsyncRaw(argv, opts)));
+    return await runTmux(args, { ...process.env, ...opts?.env }, async (argv) => throwOnFailure(await tmuxRunAsyncRaw(argv, opts)), joinRuns);
   } catch (err) {
     return failedRunResult(err);
   }
