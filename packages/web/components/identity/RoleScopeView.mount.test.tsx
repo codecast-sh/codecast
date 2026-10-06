@@ -173,7 +173,7 @@ async function verifyRoleScopeView() {
   assert.ok(statusGlyph().classList.contains(PROJECT_STATUS.paused.color));
   assert.equal(q('[data-scope-project-status="paused"]')!.textContent, "Paused", "the word as the project page writes it");
   assert.ok(q('[data-scope-project-status="paused"]')!.classList.contains(PROJECT_STATUS.paused.color));
-  assert.equal(qa("[data-scope-label]")[0].textContent, "Initiatives");
+  assert.equal(qa("[data-scope-label]")[0].textContent, "Goals");
   const goalRow = q('a[data-scope-initiative="in-7"]')!;
   assert.equal(goalRow.querySelector("[data-initiative-health]")!.getAttribute("data-initiative-health"), "at_risk");
   assert.match(goalRow.querySelector("[data-initiative-health]")!.textContent!, /^At risk.*Sep 16/, "the label as every goal surface writes it, and when it was said");

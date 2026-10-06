@@ -1,34 +1,14 @@
 
 ## Workflows
 
-Workflows are DOT execution graphs with loops, conditions and human approval gates, bound to a task or plan. Nodes are agent sessions (`backend=claude`), shell commands, approval gates or conditionals; the dashboard shows progress and gate buttons.
+Workflows are DOT execution graphs with loops, conditions and human approval gates, bound to a task or plan. Nodes are agent sessions, shell commands, approval gates or conditionals; the dashboard shows progress and gate buttons.
 
 ```bash
 cast workflow run flow.cast --task ct-N     # or --plan pl-N
-cast workflow list                          # available templates
-cast workflow push                          # push a workflow to the web UI
-cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate
-cast role line @handle [--set <slug>]       # read or set the workflow a role's tasks run on (default: line)
-cast line profile                           # this repo's line: commands, finders, limits, where each value comes from
-cast line set <key> <value> | unset <key>   # edit .codecast/line.toml in place: checked, then published to the app
-cast line finder set <id> --source … | rm <id>   # the sources that file signals into the line
+cast workflow list | runs | push
 ```
 
-```dot
-digraph my_flow {
-  graph [goal="$task_title"]
-  start [shape=Mdiamond]
-  implement [label="Implement", backend=claude, prompt="..."]
-  verify [label="Verify", shape=parallelogram, script="npx tsc --noEmit"]
-  review [label="Review", shape=hexagon]
-  exit [shape=Msquare]
-  start -> implement -> verify
-  verify -> review [condition="outcome = success"]
-  verify -> implement [condition="outcome = failure"]
-  review -> exit [label="[A] Approve"]
-  review -> implement [label="[R] Revise"]
-}
-```
+`cast guide workflows` shows the graph syntax and the line commands.
 <!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->
 

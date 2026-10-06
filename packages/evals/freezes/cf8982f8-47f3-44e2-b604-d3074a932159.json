@@ -1,0 +1,26 @@
+{
+  "name": "guidance team-chat",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:team-chat"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:team-chat",
+    "title": "guidance team-chat"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/team-chat.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "cf8982f8-47f3-44e2-b604-d3074a932159",
+  "createdAt": "2026-10-06T21:49:18.729Z"
+}

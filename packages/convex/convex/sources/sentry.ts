@@ -49,7 +49,7 @@ import { isTokenRefusal, markConnectionLost } from "../lib/sourceHealth";
 import { claimWebhookDelivery, groupByRef, mirrorGroups, patchSourceStats, type MirroredGroup } from "../ingest";
 import { takeFromWindow } from "../ipRateLimit";
 import { linkReplayToGroup } from "../replays";
-import { importVendorRecording, type ImportOutcome, type VendorRecording } from "./vendorReplay";
+import { importVendorRecording, VendorCallError, type ImportOutcome, type VendorRecording } from "./vendorReplay";
 import type { RrwebEvent } from "@codecast/shared/replay";
 import { HOUR_MS, hourStart, type Bucket } from "../lib/ingestGroups";
 import { auditOutsideCall, grantUrlFor, type OutsideCall } from "./app";
@@ -403,7 +403,7 @@ export function trimEvent(event: any) {
  * Sentry calls
  * ========================================================================== */
 
-type Answer = { ok: true; json: any; link: string | null; bytes?: number } | { ok: false; status: number; error: string; over?: boolean };
+type Answer = { ok: true; json: any; link: string | null; bytes?: number } | { ok: false; status: number; error: string; over?: boolean; retry_after_ms?: number };
 
 /**
  * One authenticated call through lib/tokenHttp (redirects refused, answer
@@ -423,7 +423,7 @@ export async function sentryCall(fetchImpl: FetchLike, token: string, url: strin
   if (res.failure) return { ok: false, status: res.status, error: res.error!, ...(res.failure === "over" ? { over: true } : {}) };
   if (isTokenRefusal(res.status)) return { ok: false, status: res.status, error: `Sentry refused the token (${res.status}); reconnect Sentry` };
   if (res.status === 404) return { ok: false, status: 404, error: `Sentry has nothing at ${url}` };
-  if (!res.ok) return { ok: false, status: res.status, error: `Sentry answered ${res.status} at ${url}` };
+  if (!res.ok) return { ok: false, status: res.status, error: `Sentry answered ${res.status} at ${url}`, ...(res.retry_after_ms !== undefined ? { retry_after_ms: res.retry_after_ms } : {}) };
   const json = jsonOf(res.text);
   if (json === undefined) return { ok: false, status: res.status, error: `${url} did not answer JSON` };
   return { ok: true, json, link: res.link, bytes: res.bytes };
@@ -499,6 +499,33 @@ export function segmentsUrl(t: SentryTarget, project: string, replayId: string, 
   return `${t.host}/api/0/projects/${encodeURIComponent(t.org)}/${encodeURIComponent(project)}/replays/${encodeURIComponent(replayId)}/recording-segments/?${q}`;
 }
 
+/** How far back Sentry keeps replays: the start of an import of "all". */
+export const SENTRY_REPLAY_RETENTION_MS = 90 * 24 * HOUR_MS;
+
+/**
+ * One page of the org's replays inside [since, until], newest first, for the
+ * bulk import (replayBackfill.ts). Only ids are asked for: each replay's own
+ * detail is read when it is imported.
+ */
+export function replaysListUrl(t: SentryTarget, projectIds: string[], window: { since?: number; until: number }, perPage: number, cursor?: string): string {
+  const q = new URLSearchParams();
+  for (const id of projectIds.length ? projectIds : ["-1"]) q.append("project", id);
+  for (const env of t.environments) q.append("environment", env);
+  q.set("start", new Date(window.since ?? window.until - SENTRY_REPLAY_RETENTION_MS).toISOString());
+  q.set("end", new Date(window.until).toISOString());
+  q.set("sort", "-started_at");
+  q.set("field", "id");
+  q.set("per_page", String(perPage));
+  if (cursor) q.set("cursor", cursor);
+  return `${orgPath(t)}/replays/?${q}`;
+}
+
+/** The replay ids in a replays list answer (`{ data: [{ id }] }`); anything that is not a Sentry replay id is dropped. */
+export function replayListIds(body: unknown): string[] {
+  const rows = (body as any)?.data;
+  return (Array.isArray(rows) ? rows : []).map((r: any) => (typeof r?.id === "string" ? r.id : "")).filter((id: string) => SENTRY_REPLAY_ID.test(id));
+}
+
 /** The rrweb events in a downloaded segments page: a list of segments, each a list of events. Anything else is skipped. */
 export function segmentEvents(body: unknown): RrwebEvent[] {
   const out: RrwebEvent[] = [];
@@ -517,7 +544,7 @@ export function segmentEvents(body: unknown): RrwebEvent[] {
  */
 export async function readSentryReplay(fetchImpl: FetchLike, token: string, t: SentryTarget, replayId: string): Promise<VendorRecording> {
   const meta = await sentryCall(fetchImpl, token, replayUrl(t, replayId));
-  if (!meta.ok) throw new Error(meta.error);
+  if (!meta.ok) throw new VendorCallError(meta);
   const data = meta.json?.data ?? meta.json;
   const project = str(data?.project_id ?? data?.project, 64);
   if (!project || !SENTRY_SLUG.test(project)) throw new Error(`Sentry names no project for replay ${replayId}`);
@@ -530,7 +557,7 @@ export async function readSentryReplay(fetchImpl: FetchLike, token: string, t: S
     if (!answer.ok) {
       // Over the budget keeps what was read; any other failure fails the import.
       if (answer.over) break;
-      throw new Error(answer.error);
+      throw new VendorCallError(answer);
     }
     budget -= answer.bytes ?? 0;
     events.push(...segmentEvents(answer.json));
@@ -868,19 +895,22 @@ export const linkIssueReplay = internalMutation({
  */
 export const importReplay = internalAction({
   args: { source_id: v.id("event_sources"), external_id: v.string() },
-  handler: async (ctx, args): Promise<ImportOutcome> => {
-    if (!SENTRY_REPLAY_ID.test(args.external_id)) throw new Error("That is not a Sentry replay id");
-    const inputs: any = await ctx.runQuery(internal.sources.sentry.pollInputs, { source_id: args.source_id });
-    if (!inputs) throw new Error("The replay's Sentry source was removed");
-    const target = sentryTarget(inputs.connection_config, inputs.config);
-    if (!target.ok) throw new Error(target.error);
-    return importVendorRecording(ctx, { source_id: args.source_id, provider: "sentry", external_id: args.external_id }, async () => {
-      const cred = await credential(ctx, inputs.connection_id);
-      if (!cred.ok) throw new Error(cred.error);
-      return readSentryReplay(fetch, cred.token, target.target, args.external_id);
-    });
-  },
+  handler: async (ctx, args): Promise<ImportOutcome> => importSentryReplay(ctx, args.source_id, args.external_id),
 });
+
+/** One Sentry replay of a source imported (or found), as the source: importReplay and the bulk import (replayBackfill.ts). */
+export async function importSentryReplay(ctx: any, sourceId: Id<"event_sources">, externalId: string): Promise<ImportOutcome> {
+  if (!SENTRY_REPLAY_ID.test(externalId)) throw new Error("That is not a Sentry replay id");
+  const inputs: any = await ctx.runQuery(internal.sources.sentry.pollInputs, { source_id: sourceId, without_open: true });
+  if (!inputs) throw new Error("The replay's Sentry source was removed");
+  const target = sentryTarget(inputs.connection_config, inputs.config);
+  if (!target.ok) throw new VendorCallError({ error: target.error, lost: true });
+  return importVendorRecording(ctx, { source_id: sourceId, provider: "sentry", external_id: externalId }, async () => {
+    const cred = await credential(ctx, inputs.connection_id);
+    if (!cred.ok) throw new VendorCallError({ error: cred.error, lost: true });
+    return readSentryReplay(fetch, cred.token, target.target, externalId);
+  });
+}
 
 /**
  * The issue behind a group, its latest event with the stack trimmed, and the

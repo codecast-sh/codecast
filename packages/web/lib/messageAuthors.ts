@@ -1,4 +1,4 @@
-import { AGENT_CLIENTS, fromConvexAgentType, toConvexAgentType, parseAgentSwitchNotice } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, fromConvexAgentType, isHostedAgentType, toConvexAgentType, parseAgentSwitchNotice } from "@codecast/shared/contracts";
 
 type Message = {
   _id: string;
@@ -41,7 +41,9 @@ export function messageAgentTypes(messages: readonly Message[], currentAgent?: s
   for (const message of ordered) {
     const change = switches.get(message._id);
     if (change) agent = change.to;
-    const multiProvider = agent === "cursor" || agent === "opencode" || agent === "pi";
+    // Clients that run other providers' models: the model names the vendor,
+    // never the author. The hosted Codecast assistant is one of them.
+    const multiProvider = agent === "cursor" || agent === "opencode" || agent === "pi" || isHostedAgentType(agent);
     const author = switches.size > 0 || multiProvider
       ? agent ?? agentFromModel(message.model)
       : agentFromModel(message.model) ?? agent;

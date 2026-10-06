@@ -4,6 +4,7 @@ import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, p
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
 import { stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
+import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
 import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/richMarkdown";
@@ -329,6 +330,10 @@ export function classifyUserMessage(
   // A spawned schedule run's opening prompt (plain-text wire format from
   // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
+  // A joint turn (send together, or merged queue rows): one bubble naming
+  // every author; UserPrompt draws each part under its own name.
+  const joint = parseJointMessage(t);
+  if (joint) return { kind: 'direct_user', from: jointAuthors(joint), body: t };
   const directUser = parseUserMessage(t);
   if (directUser) return { kind: 'direct_user', from: directUser.from, body: directUser.body };
   // A message from the staffing pane into a proposal's thread (S18): the
