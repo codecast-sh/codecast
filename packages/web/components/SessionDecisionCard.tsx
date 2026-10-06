@@ -26,6 +26,8 @@ import "./decisions/decisions.css";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 import { RoleFace } from "./org/RoleFace";
+import { useIsHostedConversation } from "../hooks/useConversationAgentType";
+import { LANE_COPY } from "./simple/lane";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). It has two sizes:
@@ -74,6 +76,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   } = useDecisionAnswer(item);
   const answerDecision = useInboxStore((s) => s.answerDecision);
   const openSessionRoute = useOpenSession();
+  // A hosted conversation waits on this answer and has no agent to speak of:
+  // no dismiss (setting it aside would leave the assistant stuck) and no
+  // agent in the wording.
+  const hosted = useIsHostedConversation(item.conversationId);
 
   const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
   const full = size === "full";
@@ -233,7 +239,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         case "answer": { const opt = options[action.option]; if (opt) answer(opt.index); break; }
         case "open-session": if (stepper) openSession(); break;
         case "skip": onSkip?.(); break;
-        case "dismiss": dismiss(); break;
+        case "dismiss": if (!hosted) dismiss(); break;
         case "open-free-text": if (!isPermissionCard && !isInfraDialog && !richControls) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
         case "peek": shrink(); break;
         case "full": grow(); break;
@@ -247,7 +253,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted]);
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
@@ -358,7 +364,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           </button>
         </>
       )}
-      <button
+      {!hosted && <button
         onClick={dismiss}
         className="flex items-center gap-1.5 hover:text-sol-red transition-colors"
         title={item.source === "decide"
@@ -366,7 +372,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           : "Set this aside — it leaves your questions until the agent speaks again; the session keeps waiting"}
       >
         <KeyCap size="xs">x</KeyCap><span>dismiss</span>
-      </button>
+      </button>}
       {stepper?.onExit && (
         <button onClick={stepper.onExit} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
           <KeyCap size="xs">esc</KeyCap><span>leave the queue</span>
@@ -383,7 +389,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       ? <span className="whitespace-pre-line">{poll.question.detail}</span>
       : null;
 
-  const showRecent = !item.contextMd && !!recentText;
+  // A hosted approval's card already carries the call (context_md); the
+  // assistant's latest words sit right above it in the conversation.
+  const showRecent = !item.contextMd && !!recentText && !hosted;
   const showThreadState = !item.contextMd && !recentText && !!session?.thread_state;
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
   const contextBlock = (card || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
@@ -467,7 +475,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
             value={otherText}
             onChange={(e) => setOtherText(e.target.value)}
             rows={3}
-            placeholder="Answer in your own words — this goes to the agent as a message."
+            placeholder={hosted ? LANE_COPY.approval.typeAnswer : "Answer in your own words; this goes to the agent as a message."}
             className="w-full bg-sol-card border border-sol-border rounded px-2 py-1.5 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue/50"
           />
           <div className="flex items-center gap-2 mt-1 text-[11px] text-sol-text-dim">

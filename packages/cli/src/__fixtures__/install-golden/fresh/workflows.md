@@ -9,6 +9,9 @@ cast workflow list                          # available templates
 cast workflow push                          # push a workflow to the web UI
 cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate
 cast role line @handle [--set <slug>]       # read or set the workflow a role's tasks run on (default: line)
+cast line profile                           # this repo's line: commands, finders, limits, where each value comes from
+cast line set <key> <value> | unset <key>   # edit .codecast/line.toml in place: checked, then published to the app
+cast line finder set <id> --source … | rm <id>   # the sources that file signals into the line
 ```
 
 ```dot

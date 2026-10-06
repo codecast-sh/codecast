@@ -125,8 +125,10 @@ export function moveNotice(opts: {
   oldCwd: string;
   /** Pre-rendered: each direction proves a different thing (see describeBackSync). */
   verification: string | undefined;
+  stoppedOnSource?: Array<{ name: string; via?: string }>;
 }): string | null {
   return reorientationNotice({
+    stoppedOnSource: opts.stoppedOnSource,
     destination: opts.destination,
     newCwd: opts.newCwd,
     oldCwd: opts.oldCwd,

@@ -7,9 +7,8 @@
 // PURE isomorphic data — no Node or DOM APIs.
 
 import {
-  AGENT_CLIENTS,
+  agentDisplayName,
   findModelOption,
-  fromConvexAgentType,
   modelOptionKey,
 } from "./agentClients";
 
@@ -25,11 +24,6 @@ export type AgentSwitchNotice = {
   /** Caption after "was", when the previous agent/model is known. */
   fromLabel?: string;
 };
-
-export function agentDisplayName(agentType: string | undefined | null): string {
-  if (!agentType) return "the agent";
-  return AGENT_CLIENTS[fromConvexAgentType(agentType)].displayName;
-}
 
 export function modelDisplayLabel(
   agentType: string | undefined | null,

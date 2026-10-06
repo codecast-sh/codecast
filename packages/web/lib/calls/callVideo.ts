@@ -239,6 +239,42 @@ export function turnIndexAt(
   return segmentAt(spans, callMs, { holdMs: holdLast ? Infinity : 0 })?.index ?? null;
 }
 
+/** Who was talking when, for the seek bar: each line's span, a line with
+ *  no end running to the next line (or a few seconds), and one speaker's
+ *  lines a short pause apart joined into one run. A brief interjection
+ *  inside someone else's talk (a "mhm", a "yeah") is left out, so the bar
+ *  shows who held the floor rather than a sliver for every murmur. Call ms. */
+export type VoiceRun = { speaker_id: string; speaker_name: string; from: number; to: number };
+export function voiceRuns(
+  segments: ReadonlyArray<{ speaker_id: string; speaker_name: string; t0: number; t1?: number }>,
+  { joinMs = 3_000, murmurMs = 1_500 }: { joinMs?: number; murmurMs?: number } = {},
+): VoiceRun[] {
+  const sorted = [...segments].sort((a, b) => a.t0 - b.t0);
+  const join = (runs: VoiceRun[]) => {
+    const out: VoiceRun[] = [];
+    for (const r of runs) {
+      const last = out[out.length - 1];
+      if (last && last.speaker_id === r.speaker_id && r.from - last.to <= joinMs) last.to = Math.max(last.to, r.to);
+      else out.push({ ...r });
+    }
+    return out;
+  };
+  const lines = join(
+    sorted.map((s, i) => {
+      const next = sorted[i + 1]?.t0;
+      return { speaker_id: s.speaker_id, speaker_name: s.speaker_name, from: s.t0, to: Math.max(s.t0, s.t1 ?? Math.min(next ?? Infinity, s.t0 + 4_000)) };
+    }),
+  );
+  // A murmur sits between two runs of one other speaker: drop it, and the
+  // join closes the floor over it.
+  const held = lines.filter((r, i) => {
+    const before = lines[i - 1];
+    const after = lines[i + 1];
+    return !(r.to - r.from < murmurMs && before && after && before.speaker_id === after.speaker_id && before.speaker_id !== r.speaker_id);
+  });
+  return join(held);
+}
+
 /** The line of a turn being said at a moment: the last whose start has
  *  passed (a pause between two lines still belongs to the one just said),
  *  else the turn's first. A turn can hold minutes of one speaker, so the lit

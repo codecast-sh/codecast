@@ -249,16 +249,14 @@ function GuestChipButton({
       : null;
   const out = open || !!waitingLine;
   return (
-    // Faint beside the huddle button until its group is hovered or focused
-    // (HuddleWithGuest): a link can be sent before anyone starts the huddle,
-    // and a chip that is not there at all is one a first-time inviter never
-    // finds. Under `md`, where a header has no width to spare, it folds to
-    // nothing at rest. The grid column eases the width.
+    // Folded to nothing until its group is hovered or focused
+    // (HuddleWithGuest), so a header at rest shows only the huddle icon. The
+    // grid column eases the width.
     <span
       className={`grid transition-[grid-template-columns,opacity] duration-150 ease-out motion-reduce:transition-none ${
         out
           ? "grid-cols-[1fr] opacity-100"
-          : "grid-cols-[0fr] opacity-0 md:grid-cols-[1fr] md:opacity-40 group-hover/huddle:grid-cols-[1fr] group-hover/huddle:opacity-100 group-focus-within/huddle:grid-cols-[1fr] group-focus-within/huddle:opacity-100"
+          : "grid-cols-[0fr] opacity-0 group-hover/huddle:grid-cols-[1fr] group-hover/huddle:opacity-100 group-focus-within/huddle:grid-cols-[1fr] group-focus-within/huddle:opacity-100"
       }`}
     >
     <span className="flex min-w-0 overflow-hidden py-0.5">

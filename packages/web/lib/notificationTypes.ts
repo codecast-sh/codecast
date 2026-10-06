@@ -6,6 +6,7 @@
 //
 // The server's list lives in convex/notificationRouter.ts; a convex test asserts
 // the schema, the router and the preference map agree. This is the client half.
+import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
 
 export const sessionTypes = new Set([
   "session_idle",
@@ -154,6 +155,27 @@ export const agentNames: Record<string, string> = {
   grok: "grok",
   muse: "muse",
 };
+
+/** How a conversation with the hosted assistant words the events a machine
+ *  session calls "ready" and "needs permission": it replied, or it waits on
+ *  the person's OK. */
+const hostedTypeLabels: Record<string, string> = {
+  session_idle: "replied",
+  permission_request: "needs your OK",
+};
+
+/** The small event word on a notification row, for the agent its
+ *  conversation runs on. An unlisted type reads as its own name in words. */
+export function notificationTypeLabel(type: string, agentType?: string | null): string {
+  return (isHostedAgentType(agentType) && hostedTypeLabels[type]) || typeLabels[type] || type.replace(/_/g, " ");
+}
+
+/** Who a session notification is from: the short agent name, and for an
+ *  agent that has none (the hosted assistant) its display name, never the
+ *  raw agent type. */
+export function notificationAgentName(agentType: string): string {
+  return agentNames[agentType] ?? agentDisplayName(agentType);
+}
 
 /** Display label for the session a notification belongs to: title, else project basename. */
 export function sessionLabel(

@@ -19,6 +19,11 @@ curl -fsSL https://codecast.sh/install | sh
 cast login
 ```
 
+```figure
+OneHistoryFigure
+Local tools read the disk in front of you; the daemon on each machine syncs into one history that every machine searches.
+```
+
 Search then runs from the terminal:
 
 ```bash
@@ -29,9 +34,16 @@ cast search migration -u                 # only what a person typed, not the age
 cast ask "how did we fix the flaky deploy?"   # a question answered across that history
 ```
 
-Quoted phrases match exactly and unquoted words match anywhere. Each result names its session, which `cast read <id>` opens. The same history is searchable in the web app at `codecast.sh/search`.
+Quoted phrases match exactly and unquoted words match anywhere. Each result names its session, which `cast read <id>` opens. The same history is searchable in the web app at `codecast.sh/search` and from its command palette.
 
-Two things differ from the local tools. The search is not only yours: by default it covers every session your team can see for the current directory, and `--mine` narrows it to you. And it covers Codex, Cursor and Gemini sessions alongside Claude Code, because the daemon records those too. Your agents can run the same commands, which is what [Agent memory](/documentation/memory) describes in depth.
+![The command palette searching "webhook retry": three sessions with a matching line each, and a task](/documentation/shots/command-palette.webp "The same search in the web app's command palette, over sessions from every machine.")
+
+Two things differ from the local tools. The search is not only yours: by default it covers every session your team can see for the current directory, and `--mine` narrows it to you. And it covers Codex, Cursor and Gemini sessions alongside Claude Code, because the daemon records those too (and pi and Grok). Your agents can run the same commands, which is what [Agent memory](/documentation/memory) describes in depth.
+
+```figure
+SearchScopeFigure
+The rings choose whose sessions a search covers; the flags narrow any of them.
+```
 
 The limits are the other side of the design. It only covers machines where the daemon runs, it needs an account, and the history lives in codecast rather than only on your disk. Which directories are shared with a team, and which stay private to you, is set per directory; see [See your whole team's Claude Code sessions in one place](/documentation/team-sessions).
 

@@ -199,6 +199,16 @@ crons.interval(
 );
 
 crons.interval(
+  // A deferred review finding past its due date and still open files one
+  // signal (fingerprint promise:<id>), so the line reopens or files the work
+  // through its normal path. Stamped once per finding; never fires twice.
+  "overdue promises",
+  { hours: 1 },
+  internal.reviewNotes.sweepOverduePromises,
+  {}
+);
+
+crons.interval(
   // pending_api_error flags older than the 48h revive window stop meaning
   // "current incident" — clear them so the blocked-sessions banner, badges,
   // and mass-revive selection never count weeks-dead casualties.

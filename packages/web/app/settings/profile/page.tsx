@@ -11,8 +11,10 @@ import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { LaneSettingRow } from "../../../components/simple/LaneSwitch";
+import { useHostedMode } from "../../../lib/surfaces";
+import { isHostedUi } from "../../../components/simple/lanePaths";
 import { SelectBox } from "../../../components/ui/select-box";
-import { useInboxStore, resolveSimpleView, resolveInboxCompact, type ClientUI } from "../../../store/inboxStore";
+import { useInboxStore, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, type ClientUI } from "../../../store/inboxStore";
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
 import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
 import {
@@ -114,6 +116,9 @@ function ProfileSection({ user }: { user: any }) {
 
 function AppearanceSection() {
   const { theme, toggleTheme, visualStyle, setVisualStyle } = useTheme();
+  // Assistant mode is always Minimal (resolveVisualStyle); the stored pick
+  // comes back when it is turned off.
+  const hosted = useHostedMode();
   const options = ([
     { value: "classic", label: "Classic", description: <StyleOptionPreview variant="classic" caption="Solarized, compact, information-dense" /> },
     { value: "minimal", label: "Minimal", description: <StyleOptionPreview variant="minimal" caption="Neutral, spacious, reading-first" /> },
@@ -125,11 +130,12 @@ function AppearanceSection() {
       </SettingsRow>
       <SettingsField
         label="Interface style"
-        hint="Minimal is quieter and more spacious, with neutral surfaces and a focused reading column."
+        hint={hosted ? "Always Minimal in assistant mode." : "Minimal is quieter and more spacious, with neutral surfaces and a focused reading column."}
       >
         <SettingsOptionGroup
           value={visualStyle}
           onChange={(value) => setVisualStyle(value as VisualStyle)}
+          disabled={hosted}
           label="Interface style"
           options={options}
           className="visual-style-options w-full"
@@ -211,6 +217,9 @@ function StyleOptionPreview({ variant, caption }: { variant: VisualStyle; captio
   );
 }
 
+/** Why a row is locked on while hosted mode decides it. */
+const HOSTED_LOCK = "Always on in assistant mode";
+
 const INTERFACE_TOGGLES: Array<{
   prefKey: keyof ClientUI;
   label: string;
@@ -224,8 +233,8 @@ const INTERFACE_TOGGLES: Array<{
    *  on the style). Overrides `defaultOn`. */
   resolve?: (ui: ClientUI | undefined) => boolean;
 }> = [
-  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, lockedOn: (ui) => (ui?.visual_style === "minimal" && resolveSimpleView(ui) ? "Always on in the Minimal style" : undefined) },
-  { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact },
+  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, lockedOn: (ui) => (isHostedUi(ui) ? HOSTED_LOCK : resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? "Always on in the Minimal style" : undefined) },
+  { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact, lockedOn: (ui) => (isHostedUi(ui) ? HOSTED_LOCK : undefined) },
   { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images" },
   { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", defaultOn: true },
   { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false },

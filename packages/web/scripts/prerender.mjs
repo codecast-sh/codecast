@@ -56,6 +56,7 @@ function jsonLd(entry, siteUrl) {
       headline: entry.title,
       description: entry.description,
       url,
+      ...(entry.published ? { datePublished: entry.published } : {}),
       publisher: { "@type": "Organization", name: "codecast", url: siteUrl },
     };
   } else {
@@ -77,6 +78,7 @@ function buildHead(entry, siteUrl, card) {
     `<meta property="og:site_name" content="codecast" />`,
     `<meta property="og:type" content="${entry.path.startsWith("/blog/") ? "article" : "website"}" />`,
     `<meta property="og:url" content="${esc(url)}" />`,
+    ...(entry.published ? [`<meta property="article:published_time" content="${esc(entry.published)}" />`] : []),
     `<meta property="og:image" content="${esc(image)}" />`,
     ...(card
       ? [

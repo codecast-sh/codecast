@@ -14,6 +14,7 @@ import { Check, ChevronDown, Plus, User, UserPlus } from "lucide-react";
 import { useState, lazy, Suspense, forwardRef, type ButtonHTMLAttributes } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamCrest } from "./team/TeamCrest";
+import { useSurface } from "../lib/surfaces";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
@@ -56,6 +57,7 @@ export function TeamSwitcher({
   const switchWorkspace = useSwitchWorkspace();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const [inviteOpen, setInviteOpen] = useState(false);
+  const createShown = useSurface("topbar.createTeam");
 
   if (!user) {
     return null;
@@ -73,6 +75,7 @@ export function TeamSwitcher({
   };
 
   if (!teams || teams.length === 0) {
+    if (!createShown) return null;
     return (
       <button
         onClick={() => router.push("/settings/team/create")}

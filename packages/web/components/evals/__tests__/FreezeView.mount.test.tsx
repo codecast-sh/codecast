@@ -35,15 +35,15 @@ const { MemoryRouter } = await import("react-router");
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { freezeFixture } = await import("../__fixtures__/freeze");
-const { FreezeView, FreezeRepStrip } = await import("../FreezeView");
-const { defaultFreezePair, batchColumns, shownRep, promptFilePairs, attributionEnds, pairStory, tickLabel } = await import("../freezeModel");
-const { FreezePage } = await import("../pages/FreezePage");
-const { ComparePanel } = await import("../ComparePanel");
-const { EpochDiffSheet } = await import("../EpochDiffSheet");
-const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
+const { FreezeView, FreezeRepStrip } = await import("@platform/evals/react");
+const { defaultFreezePair, batchColumns, shownRep, promptFilePairs, attributionEnds, pairStory, tickLabel } = await import("@platform/evals/client");
+const { FreezePage } = await import("@platform/evals/react");
+const { ComparePanel } = await import("@platform/evals/react");
+const { EpochDiffSheet } = await import("@platform/evals/react");
+const { codecastEvalsHost, CodecastEvalsProvider } = await import("../host");
 const { surfaceFixture } = await import("../__fixtures__/surface");
-type FreezePair = import("../FreezeView").FreezePair;
-type EvalsHost = import("../host").EvalsHost;
+type FreezePair = import("@platform/evals/react").FreezePair;
+type EvalsHost = import("@platform/evals/react").EvalsHost;
 
 // A loaded machine renders a DiffView in seconds, not milliseconds.
 setDefaultTimeout(60_000);
@@ -60,10 +60,10 @@ async function mount(node: React.ReactNode) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(<MemoryRouter initialEntries={["/evals"]}>{node}</MemoryRouter>));
+  await act(async () => root.render(<MemoryRouter initialEntries={["/evals"]}><CodecastEvalsProvider>{node}</CodecastEvalsProvider></MemoryRouter>));
   return {
     container,
-    rerender: (next: React.ReactNode) => act(async () => root.render(<MemoryRouter initialEntries={["/evals"]}>{next}</MemoryRouter>)),
+    rerender: (next: React.ReactNode) => act(async () => root.render(<MemoryRouter initialEntries={["/evals"]}><CodecastEvalsProvider>{next}</CodecastEvalsProvider></MemoryRouter>)),
     unmount: () => act(async () => root.unmount()),
   };
 }
@@ -359,9 +359,9 @@ describe("another host", () => {
 
   it("draws the freeze page's tooltip and pairing toggle from the host, and the toggle still sets the cards", async () => {
     const { container, unmount } = await mount(
-      <EvalsHostProvider host={host}>
+      <CodecastEvalsProvider host={host}>
         <FreezeView freeze={fx.freeze} cells={fx.cells} footing={fx.footing} pinnedBatch={null} pair={fx.pick} pick={fx.pick} runA={fx.runs[fx.pick.a!]} runB={fx.runs[fx.pick.b!]} onPair={() => {}} />
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     await act(async () => void container.querySelector(`[data-ev-rep="${fx.pick.a}"]`)!.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true })));
     expect(container.querySelector("[data-other-tip]")?.textContent).toContain("click to set");
@@ -373,9 +373,9 @@ describe("another host", () => {
 
   it("draws the compare drawer's key and flip pairs, and the epoch sheet, from the host", async () => {
     const drawer = await mount(
-      <EvalsHostProvider host={host}>
+      <CodecastEvalsProvider host={host}>
         <ComparePanel surface="settle" route={settle.data.surface.route} a={stats(settle.pair[0])} b={stats(settle.pair[1])} res={settle.batches} loading={false} error={null} onClose={() => {}} />
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     expect(drawer.container.querySelector("[data-ev-attribute] [data-other-key]")?.textContent).toBe("b");
     expect([...drawer.container.querySelectorAll("[data-other-pair]")].map((e) => e.getAttribute("data-other-pair"))).toEqual(settle.batches.examples.map((e) => e.freeze));
@@ -383,9 +383,9 @@ describe("another host", () => {
     await drawer.unmount();
     const n = settle.epoch.epoch.n;
     const sheet = await mount(
-      <EvalsHostProvider host={host}>
+      <CodecastEvalsProvider host={host}>
         <EpochDiffSheet surface="settle" n={n} res={settle.epoch} loading={false} error={null} freezeNames={{}} onClose={() => {}} />
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     const open = sheet.container.querySelector(`[data-other-sheet] [data-ev-epoch-sheet="${n}"]`)!;
     expect(open).not.toBeNull();

@@ -39,16 +39,13 @@ const { ConvexProvider } = await import("convex/react");
 // Session pills resolve through Convex; the marketing stub answers every query with nothing.
 const { heroConvexStub } = await import("../../../app/(marketing)/heroFly/convexStub");
 const { useEvalsStore } = await import("../../../store/evalsStore");
+const { CodecastEvalsProvider } = await import("../host");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { surfaceFixture } = await import("../__fixtures__/surface");
-const { SurfaceView } = await import("../SurfaceView");
-const { DEFAULT_SURFACE_FILTERS, nextPins, orderedPair } = await import("../surfaceModel");
-const { surfaceColumns } = await import("../seismographModel");
-const { ledgerOrder } = await import("../surfaceModel");
-const { niceCeil, axisUsd } = await import("../charts/scale");
-const { separationTitle } = await import("../verdictModel");
-const { SurfacePage } = await import("../pages/SurfacePage");
-type SurfaceViewProps = import("../SurfaceView").SurfaceViewProps;
+const { SurfaceView } = await import("@platform/evals/react");
+const { DEFAULT_SURFACE_FILTERS, nextPins, orderedPair, surfaceColumns, ledgerOrder, niceCeil, axisUsd, separationTitle } = await import("@platform/evals/client");
+const { SurfacePage } = await import("@platform/evals/react");
+type SurfaceViewProps = import("@platform/evals/react").SurfaceViewProps;
 
 // A loaded machine renders a DiffView in seconds, not milliseconds.
 setDefaultTimeout(60_000);
@@ -66,7 +63,7 @@ async function mount(node: React.ReactNode) {
   const root = createRoot(container);
   const wrap = (n: React.ReactNode) => (
     <ConvexProvider client={heroConvexStub}>
-      <MemoryRouter initialEntries={["/evals/s/settle"]}>{n}</MemoryRouter>
+      <MemoryRouter initialEntries={["/evals/s/settle"]}><CodecastEvalsProvider>{n}</CodecastEvalsProvider></MemoryRouter>
     </ConvexProvider>
   );
   await act(async () => root.render(wrap(node)));

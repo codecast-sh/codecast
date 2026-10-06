@@ -23,6 +23,8 @@ cast search "don't|do not|never|stop|wrong|not like that|instead|revert" -s <win
 cast search "why did you|I said|again" -s <window> -n 30
 ```
 
+The first line's words are `REDIRECT_WORDS` in `packages/shared/contracts/projectMemory.ts`, the same words the session insight keeps when it samples a long session; `cast memory list` lists what those insights have already consolidated for the project, so read it before harvesting by hand.
+
 When mining one project, keep the search to its sessions (add
 `repo:<name>` to the query). For each hit, `cast read <id> <line>` with a few messages of context to see
 what the agent did and what the human wanted instead. Keep the ones where a

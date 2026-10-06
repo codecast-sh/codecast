@@ -345,6 +345,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   const scan: OrgScan = await collectOrgSessions(ctx, userId, teamId, now);
   const roles: any[] = scan.roles;
   const roleById = new Map<string, any>(roles.map((r) => [String(r._id), r]));
+  const fixLoop = await readFixLoopCounts(ctx, userId, teamId, now, roles.map((r) => r._id));
   // The decision ladder and inbox, in their own budget when the fanned action
   // supplies them; computed in-process otherwise (the web query, tests).
   const dec = opts?.decisions ?? await readHealthDecisions(ctx, teamId, scan.memberIds, roles.map((r) => String(r._id)), now);
@@ -513,7 +514,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       active_plans: items.plans.filter((p) => p.status === "active").length,
     };
     const handoffs = { done: 0, blocked: 0, needs_context: 0 };
-    let done7 = 0, stalls = 0, changed7 = 0, stuckHands = 0;
+    let done7 = 0, stalls = 0, changed7 = 0, stuckHands = 0, concerns7 = 0;
     const doneByDay: Record<string, number> = {};
     for (const t of items.tasks) {
       if (t.status === "in_review" && now - (t.updated_at ?? 0) > stallMs) stalls++;
@@ -525,6 +526,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       if ((t.updated_at ?? 0) < cut7) continue;
       changed7++;
       if (t.status === "done") { done7++; const day = utcDay(t.updated_at); doneByDay[day] = (doneByDay[day] ?? 0) + 1; }
+      if (t.execution_status === "done_with_concerns") concerns7++;
       if (t.execution_status === "done" || t.execution_status === "done_with_concerns") handoffs.done++;
       else if (t.execution_status === "blocked") handoffs.blocked++;
       else if (t.execution_status === "needs_context") handoffs.needs_context++;
@@ -626,6 +628,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       review_stalls: stalls,
       sends_7d: { to: toRows, from: fromRows },
       mentions_7d: mentions.get(rid) ?? 0,
+      ...fixLoopCounts(fixLoop, rid, concerns7),
     };
     const history: any[] = await ctx.db.query("org_role_history").withIndex("by_role", (q: any) => q.eq("role_id", role._id)).order("desc").take(HEALTH_CAPS.history_per_role);
     const lastMoveAt: number | null = history[0]?.created_at ?? null;
@@ -873,3 +876,38 @@ export const healthReport = action({
     return ctx.runQuery((api as any).orgHealth.healthCorePart, { ...args, now, decisions, work });
   },
 });
+
+// ── The fix loop per role (docs/architecture/the-line-end-to-end.md) ──
+//
+// bugs_introduced_30d: signals the fix-loop finder filed (fingerprint
+// szz:<sha>) against a run of this role. promises_open / promises_overdue:
+// deferred review findings this role owns. done_with_concerns_7d: hands that
+// finished with a concern, counted on their own instead of folded into done.
+
+export type FixLoopInputs = { bugsByRole: Map<string, number>; promisesByRole: Map<string, { open: number; overdue: number }> };
+
+export async function readFixLoopCounts(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, roleIds: Id<"org_roles">[]): Promise<FixLoopInputs> {
+  const workspace = teamId ? `team:${teamId}` : `user:${userId}`;
+  const cut30 = now - 30 * 86_400_000;
+  const signals: any[] = await ctx.db.query("signals").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace).gte("created_at", cut30)).collect();
+  const bugsByRole = new Map<string, number>();
+  for (const sg of signals) {
+    if (!sg.role_id || !String(sg.fingerprint).startsWith("szz:")) continue;
+    const rid = String(sg.role_id);
+    bugsByRole.set(rid, (bugsByRole.get(rid) ?? 0) + 1);
+  }
+  const promisesByRole = new Map<string, { open: number; overdue: number }>();
+  for (const roleId of roleIds) promisesByRole.set(String(roleId), await readRolePromises(ctx, roleId, now));
+  return { bugsByRole, promisesByRole };
+}
+
+export async function readRolePromises(ctx: Ctx, roleId: Id<"org_roles">, now: number): Promise<{ open: number; overdue: number }> {
+  const rows: any[] = await ctx.db.query("review_comments").withIndex("by_owner_role", (q: any) => q.eq("owner_role_id", roleId).eq("resolved", false)).collect();
+  const open = rows.filter((r) => r.disposition === "deferred");
+  return { open: open.length, overdue: open.filter((r) => (r.due_at ?? Infinity) < now).length };
+}
+
+export function fixLoopCounts(inputs: FixLoopInputs, rid: string, concerns7: number) {
+  const p = inputs.promisesByRole.get(rid) ?? { open: 0, overdue: 0 };
+  return { bugs_introduced_30d: inputs.bugsByRole.get(rid) ?? 0, promises_open: p.open, promises_overdue: p.overdue, done_with_concerns_7d: concerns7 };
+}

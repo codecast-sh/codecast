@@ -2,6 +2,7 @@ import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { Id } from "./_generated/dataModel";
 import { resolveEffectiveTeam } from "./data";
 
@@ -148,6 +149,12 @@ export const updatePermissionStatus = mutation({
       status: args.status,
       resolved_at: Date.now(),
       resolved_by: userId,
+    });
+    await recordAuthorityEvent(ctx, {
+      kind: "permission_answered",
+      actor_user_id: userId,
+      conversation,
+      detail: { before: { status: "pending", tool_name: permission.tool_name }, after: { status: args.status, permission_id: args.permission_id } },
     });
 
     return args.permission_id;
