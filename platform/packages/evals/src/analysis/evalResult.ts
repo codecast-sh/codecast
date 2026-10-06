@@ -10,6 +10,7 @@ import type {
 } from '../contract/evalResult';
 
 import { median, separate } from './stats';
+import { flipDirection, passesByMajority } from './verdict';
 
 // reps.json to eval-result.json (line-profile.md LP4): the one place the eval
 // station's verdict is decided, for every project. A project's eval command
@@ -18,7 +19,7 @@ import { median, separate } from './stats';
 // processes.
 //
 // Per surface: the branch's scores against the base's by the one separation
-// rule (stats.ts), each proven freeze's majority verdict on both sides (it
+// rule (stats.ts), each proven freeze's majority verdict (verdict.ts) on both sides (it
 // must fail on the base and pass on the branch), the freezes whose verdict
 // flipped with a reply from each side and the judge's note, and the gates
 // that failed. The station passes only when every surface does and no suite
@@ -41,7 +42,7 @@ export const repScore = (r: EvalRep): number => r.score ?? (r.passed ? 1 : 0);
 export function majorityOf(reps: EvalRep[] | undefined): boolean | undefined {
   const s = scored(reps ?? []);
   if (!s.length) return undefined;
-  return s.filter((r) => r.passed).length * 2 > s.length;
+  return passesByMajority(s.map((r) => !!r.passed));
 }
 
 function runSet(sides: Array<EvalRepsFreeze['base']>): EvalRunSet | null {
@@ -93,7 +94,9 @@ export function unscoredSurfaces(reps: EvalRepsFile): string[] {
 export function flipOf(f: EvalRepsFreeze): EvalFlip | null {
   const before = majorityOf(f.base?.reps);
   const after = majorityOf(f.branch?.reps);
-  if (before === undefined || after === undefined || before === after) return null;
+  if (before === undefined || after === undefined) return null;
+  const direction = flipDirection(before, after);
+  if (!direction) return null;
   const pick = (reps: EvalRep[], pass: boolean) => scored(reps).find((r) => r.passed === pass) ?? reps[0];
   const b = pick(f.base!.reps, before);
   const a = pick(f.branch!.reps, after);
@@ -102,7 +105,7 @@ export function flipOf(f: EvalRepsFreeze): EvalFlip | null {
   return {
     freeze: f.freeze,
     name: f.name,
-    direction: after ? 'fixed' : 'broke',
+    direction,
     input: clip(f.input ? `${f.name}: ${f.input}` : f.name, 400),
     before: reply(b),
     after: reply(a),

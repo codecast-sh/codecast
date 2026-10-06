@@ -40,19 +40,17 @@ const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { runFixture } = await import("../__fixtures__/run");
 const { fixtureWorldNow, evalsFixtureWorld } = await import("../__fixtures__/world");
-const { RunView } = await import("../RunView");
-const { tabOfHash, epochOfBatch, previousEpochRun, seedNeighbours, runCommands, compareCandidates, replyReading } = await import("../runModel");
-const { CompareView } = await import("../CompareView");
-const { diffWords, compareFooting } = await import("../runModel");
-const { orderGates, gateEvidenceWords } = await import("../runModel");
+const { RunView } = await import("@platform/evals/react");
+const { tabOfHash, epochOfBatch, previousEpochRun, seedNeighbours, runCommands, compareCandidates, replyReading, diffWords, compareFooting, orderGates, gateEvidenceWords } = await import("@platform/evals/client");
+const { CompareView } = await import("@platform/evals/react");
 const { anatomyTabs } = await import("../runPanels");
 const { guardCounts } = await import("../GuardLog");
 const { fileTree } = await import("../RunFiles");
-const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
-const { RunPage } = await import("../pages/RunPage");
-const { ComparePage } = await import("../pages/ComparePage");
+const { codecastEvalsHost, CodecastEvalsProvider } = await import("../host");
+const { RunPage } = await import("@platform/evals/react");
+const { ComparePage } = await import("@platform/evals/react");
 const { formatShortcutParts, getShortcutsForAction } = await import("../../../shortcuts");
-type RunViewProps = import("../RunView").RunViewProps;
+type RunViewProps = import("@platform/evals/react").RunViewProps;
 type RunFixtureCase = import("../__fixtures__/run").RunFixtureCase;
 
 // A loaded machine renders a DiffView in seconds, not milliseconds.
@@ -63,14 +61,16 @@ afterAll(() => {
   restoreGlobals();
 });
 
-const fx = runFixture();
+const fx = await runFixture();
+// The fixture transport builds its world at the default clock, and run ids carry their stamps.
+const live = await runFixture(fixtureWorldNow());
 
 async function mount(node: React.ReactNode, at = "/evals") {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(<MemoryRouter initialEntries={[at]}>{node}</MemoryRouter>));
-  return { container, rerender: (n: React.ReactNode) => act(async () => root.render(<MemoryRouter initialEntries={[at]}>{n}</MemoryRouter>)), unmount: () => act(async () => root.unmount()) };
+  await act(async () => root.render(<MemoryRouter initialEntries={[at]}><CodecastEvalsProvider>{node}</CodecastEvalsProvider></MemoryRouter>));
+  return { container, rerender: (n: React.ReactNode) => act(async () => root.render(<MemoryRouter initialEntries={[at]}><CodecastEvalsProvider>{n}</CodecastEvalsProvider></MemoryRouter>)), unmount: () => act(async () => root.unmount()) };
 }
 
 const noop = () => {};
@@ -180,11 +180,11 @@ describe("what the run page decides", () => {
     expect(tree.find((g) => g.dir === "agent1")!.files.map((f) => f.path)).toContain("agent1/then2.md");
   });
 
-  it("the fixture's file tree states each file's size as the open file does", () => {
+  it("the fixture's file tree states each file's size as the open file does", async () => {
     const world = evalsFixtureWorld({ now: Date.parse("2026-10-03T12:00:00.000Z") });
     for (const c of [fx.call, fx.agent, fx.crash]) {
       for (const f of c.run.files.filter((x) => x.kind === "file")) {
-        const opened = world.answer("GET /run/:id/file", { id: c.run.row.id }, { path: f.path }) as { size: number };
+        const opened = await world.answer("GET /run/:id/file", { id: c.run.row.id }, { path: f.path });
         expect({ path: f.path, size: opened.size }).toEqual({ path: f.path, size: f.size });
       }
     }
@@ -208,7 +208,7 @@ describe("RunView", () => {
     expect(chips).toContain(row.model!);
     expect(chips).toContain(row.judgeModel!);
     expect(text(q(container, "[data-ev-run-chips] [title^='Prompt epoch']"))).toMatch(/^e\d+$/);
-    expect(q(container, "[data-ev-lock]")).not.toBeNull();
+    expect(q(container, "[data-ev-lock]")?.getAttribute("title")).toMatch(/EVALS_HOME|packages\/evals/);
     expect(qa(container, "[data-ev-seed]").length).toBe(fx.call.run.siblings.length + 1);
     expect(q(container, "[data-ev-self]")).not.toBeNull();
     // The hints read the registry, so they show what the bindings are (the registry writes letters as capitals).
@@ -280,7 +280,7 @@ describe("RunView", () => {
   it("Files: the tree, the open file read-only, and the open file kept while the reader visits another tab", async () => {
     // The panel reads the open file itself (GET /run/:id/file), so it needs the transport's world.
     useEvalsStore.setState({ connection: "connected", transport: await fixtureTransport("on", { latencyMs: 0 }), resources: {} });
-    const c = runFixture(fixtureWorldNow()).call;
+    const c = live.call;
     const { container, rerender, unmount } = await mount(<RunView {...props(c, { tab: "files" })} />);
     expect(qa(container, "[data-ev-file]").length).toBe(c.run.files.filter((f) => f.kind === "file").length);
     expect(q(container, "[data-ev-tab=files] .ev-tab-count")!.textContent).toBe(String(c.run.files.filter((f) => f.kind === "file").length));
@@ -294,7 +294,7 @@ describe("RunView", () => {
     await rerender(<RunView {...props(c, { tab: "files" })} />);
     expect(q(container, "[data-ev-file-view]")!.getAttribute("data-ev-file-view")).toBe("run.json");
     // Another run opens with no file.
-    await rerender(<RunView {...props(runFixture(fixtureWorldNow()).gate, { tab: "files" })} />);
+    await rerender(<RunView {...props(live.gate, { tab: "files" })} />);
     expect(q(container, "[data-ev-file-view]")!.getAttribute("data-ev-file-view")).toBe("");
     await unmount();
   });
@@ -312,9 +312,9 @@ describe("RunView", () => {
       },
     };
     const { container, rerender, unmount } = await mount(
-      <EvalsHostProvider host={host}>
+      <CodecastEvalsProvider host={host}>
         <RunView {...props(fx.call, { tab: "funnel" })} />
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     expect(qa(container, "[data-ev-tab]").map((t) => t.getAttribute("data-ev-tab"))).toEqual(["verdict", "moment", "funnel", "story"]);
     expect(q(container, "[data-other-panel]")).not.toBeNull();
@@ -324,9 +324,9 @@ describe("RunView", () => {
     expect(seen).toEqual({ run: fx.call.run.row.id, previous: previousEpochRun(fx.call.run.row, fx.call.freeze.runs, fx.call.freeze.epochs).id });
     const { useRunPanels: _, ...bare } = host;
     await rerender(
-      <EvalsHostProvider host={bare}>
+      <CodecastEvalsProvider host={bare}>
         <RunView {...props(fx.call, { tab: "calls" })} />
-      </EvalsHostProvider>,
+      </CodecastEvalsProvider>,
     );
     expect(qa(container, "[data-ev-tab]").map((t) => t.getAttribute("data-ev-tab"))).toEqual(["verdict", "moment"]);
     expect(q(container, "[role=tabpanel]")!.getAttribute("data-ev-panel")).toBe("verdict");
@@ -396,8 +396,6 @@ describe("CompareView", () => {
 });
 
 describe("the connected pages", () => {
-  // The fixture transport builds its world at the default clock, and run ids carry their stamps.
-  const live = runFixture(fixtureWorldNow());
   function Where({ onAt }: { onAt: (s: string) => void }) {
     const l = useLocation();
     onAt(`${l.pathname}${l.hash}`);

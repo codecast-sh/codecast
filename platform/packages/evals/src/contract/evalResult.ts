@@ -72,7 +72,7 @@ export interface EvalResult {
 // What a project's eval command writes: per surface, per freeze, per side
 // (base, branch), the reps as they scored, and the suite gates that failed.
 // It does no statistics; `cast line eval-result` turns it into the EvalResult
-// above with the one separation rule (packages/evals/src/stats.ts), and
+// above with the one separation rule (`separate` in analysis/stats.ts), and
 // codecast's own `./evals line` writes it and calls the same builder.
 
 /** One rep. A rep with `error` crashed: it is no verdict either way and counts as a crash. */
