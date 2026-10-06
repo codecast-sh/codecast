@@ -1,0 +1,26 @@
+{
+  "name": "guidance delegate-audits",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delegate-audits"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:delegate-audits",
+    "title": "guidance delegate-audits"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/delegate-audits.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "fcd2c2c9-9a8b-4dd6-84f3-d08133ad011f",
+  "createdAt": "2026-10-06T21:49:01.323Z"
+}
