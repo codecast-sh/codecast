@@ -55,3 +55,17 @@ export function useWorkspaceArgs(): WorkspaceArgs {
     ...(activeProjectPath ? { project_path: activeProjectPath } : {}),
   };
 }
+
+/**
+ * A feeder's workspace, as the `team_id` its query takes: the named key when a
+ * surface reads a record's own workspace (a project opened from another team),
+ * else the active one. `key` is a stored access key ("team:<id>" | "user:<id>");
+ * a personal key queries with no team. "skip" until the active workspace is known.
+ */
+export function useFeederWorkspace(key?: string | null): { args: { team_id?: Id<"teams"> } | "skip"; key: string | null } {
+  const ws = useWorkspaceArgs();
+  const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  if (key) return { args: key.startsWith("team:") ? { team_id: key.slice(5) as Id<"teams"> } : {}, key };
+  if (ws === "skip") return { args: "skip", key: null };
+  return ws.workspace === "team" ? { args: { team_id: ws.team_id }, key: `team:${ws.team_id}` } : { args: {}, key: viewerId ? `user:${viewerId}` : null };
+}

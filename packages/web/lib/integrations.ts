@@ -11,6 +11,7 @@
 // type, never a third-party logo asset.
 
 import { isDesktopShell, openExternalUrl } from "./desktop";
+import { describeConnectorError } from "./connectorReturn";
 import { useState, type ComponentType, type CSSProperties } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -70,14 +71,69 @@ export type AppConnectionActions = {
   disconnect: () => Promise<void>;
   busy: boolean;
   /**
-   * The last refusal, in the words the server used. A connect action that
-   * answers `{ok:false,error}` is usually the server saying an env var pair is
-   * missing — shown as-is, because "not configured" without naming the
-   * variable sends the reader looking in the wrong place.
+   * The last refusal, in plain words: a reason code goes through the
+   * connectors' one table (shared/contracts/connectorReasons.ts), and
+   * a sentence passes through. A connect action that answers `{ok:false,error}`
+   * is usually the server saying an env var pair is missing, kept as-is because
+   * "not configured" without naming the variable sends the reader looking in
+   * the wrong place.
    */
   error: string | null;
   setError: (message: string | null) => void;
 };
+
+/** Open a connect URL the server minted. On the web `sameTab` opens it in
+ *  place: a tab opened once the URL arrives is outside the tap's user
+ *  activation, and phone browsers block it silently. The desktop app always
+ *  hands it to the system browser. */
+export function openConnectUrl(url: string, sameTab = false): void {
+  if (sameTab && !isDesktopShell()) window.location.assign(url);
+  else openExternalUrl(url);
+}
+
+/**
+ * The machinery every connect gesture shares: a busy flag, the last refusal
+ * in plain words (describeConnectorError), `attempt` to run a step holding
+ * both, and `openMinted` to open the authorize URL a server minted or report
+ * why it minted none. useAppConnection and the simple lane's mail connect
+ * (components/simple/useLaneMail.ts) both build on it.
+ */
+export function useConnectGesture() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /** Run `fn`, holding the busy flag and reporting whatever it throws. */
+  const attempt = async (fn: () => Promise<void>, fallback: string) => {
+    setError(null);
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e: any) {
+      setError(e?.message ?? fallback);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Report a `{ ok: false, error }` answer; true when the step succeeded. */
+  const settle = (res: { ok?: boolean; error?: string } | null | undefined, fallback: string) => {
+    if (res?.ok) return true;
+    setError(res?.error ?? fallback);
+    return false;
+  };
+
+  /** Open an authorize URL the server minted, or report why it minted none. */
+  const openMinted = async (
+    mint: () => Promise<{ ok?: boolean; url?: string; error?: string } | null>,
+    fallback: string,
+    { sameTab = false }: { sameTab?: boolean } = {},
+  ) => {
+    const res = await mint();
+    if (settle(res && { ...res, ok: !!(res.ok && res.url) }, fallback)) openConnectUrl(res!.url!, sameTab);
+  };
+
+  return { busy, error: error && describeConnectorError(error), setError, attempt, settle, openMinted };
+}
 
 /**
  * The connect and disconnect gestures for one app at one scope. Every branch
@@ -105,34 +161,9 @@ export function useAppConnection(
   const disconnectConnector = useAction(api.oauthConnectors.disconnect);
   const deleteGithubInstallation = useMutation(api.githubApp.deleteInstallation);
   const getGithubInstallUrl = useAction(api.githubApp.getInstallUrl);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, setError, attempt, openMinted } = useConnectGesture();
 
   const connected = connection?.status === "connected" ? connection : null;
-
-  /** Run `fn`, holding the busy flag and reporting whatever it refuses with. */
-  const attempt = async (fn: () => Promise<void>, fallback: string) => {
-    setError(null);
-    setBusy(true);
-    try {
-      await fn();
-    } catch (e: any) {
-      setError(e?.message ?? fallback);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /** Open an authorize URL the server minted, or report why it minted none. */
-  const openMinted = async (
-    mint: () => Promise<{ ok?: boolean; url?: string; error?: string } | null>,
-    fallback: string,
-    open: (url: string) => void = openExternalUrl,
-  ) => {
-    const res = await mint();
-    if (res?.ok && res.url) open(res.url);
-    else setError(res?.error ?? fallback);
-  };
 
   const connect = async () => {
     if (descriptor.connectKind === "github-app-install") {
@@ -157,10 +188,7 @@ export function useAppConnection(
             ...(google.returnTo ? { return_to: google.returnTo } : {}),
           }),
           "Couldn't start the Google connection",
-          // In place on the web: a tab opened once the URL arrives is outside
-          // the tap's user activation, and phone browsers block it silently.
-          // The desktop app still hands off to the system browser.
-          google.sameTab && !isDesktopShell() ? (url) => window.location.assign(url) : openExternalUrl,
+          { sameTab: google.sameTab },
         );
       } else if (descriptor.id === "linear" || descriptor.id === "notion") {
         // The generic connector: one flow, provider and scope in the signed state.

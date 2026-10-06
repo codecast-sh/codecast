@@ -40,6 +40,7 @@ const ALLOWED = new Map<string, string>([
   ["lib/recentVisits.ts", "id LOOKUP to render a title for an already-visited row"],
   ["components/CommandPalette.tsx", "id LOOKUP + parent picker scoped to the target's own workspace"],
   ["app/tasks/[id]/page.tsx", "id LOOKUP + subtree of one already-authorized task"],
+  ["app/projects/[id]/page.tsx", "short id LOOKUP of the one project the address names (pj-…)"],
 ]);
 
 const walk = (dir: string) => walkSources(dir);
