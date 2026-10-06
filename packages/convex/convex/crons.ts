@@ -3,6 +3,8 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
+crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any).syncOutbox.recover, {});
+
 crons.interval(
   "fill short titles for tasks and plans",
   { minutes: 2 },

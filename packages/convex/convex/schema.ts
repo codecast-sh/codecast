@@ -1,4 +1,5 @@
 import { resourceOffloadIntent } from "./resourceOffloadSchema";
+import { syncOutboxTables } from "./syncOutboxSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
@@ -1824,7 +1825,15 @@ export default defineSchema({
       manifest: v.any(), // this release's validated manifest; an instance reads its pinned one
       published_at: v.number(),
       published_by: v.id("users"),
+      // What it changes against the release before it (orgTemplateRelease.classifyRelease),
+      // written at publish; older rows have none and get it computed on read.
+      class: v.optional(v.union(v.literal("content"), v.literal("structure"), v.literal("authority"))),
+      changes: v.optional(v.any()),
+      // Withdrawn by its publisher: never offered to a hire or an update; instances on it are offered the fallback.
+      yanked: v.optional(v.object({ reason: v.string(), at: v.number(), by: v.id("users") })),
     })),
+    // Hidden from every catalog by its publisher; its instances keep running.
+    retired: v.optional(v.object({ at: v.number(), by: v.id("users"), reason: v.optional(v.string()) })),
     // The latest release's validated manifest (orgTemplateManifest.OrgTemplate),
     // so the hire form renders inputs, authority and setup without the folder.
     manifest: v.any(),
@@ -2639,6 +2648,10 @@ export default defineSchema({
     // terminalize only a row that carries this stamp (a pre-paste mark acked by
     // an unrelated working report lost a cast send on 2026-09-08).
     paste_verified_at: v.optional(v.number()),
+    // When the stuck-message healer re-pended this row for a session with no
+    // live process, so the daemon would resume it. Set once: a row is revived
+    // that way at most one time (see planDeadSessionRevive).
+    dead_session_revived_at: v.optional(v.number()),
     // Present only after a conversation crosses the fenced-execution gate.
     // Legacy columns remain as a UI/backward-compatible projection, but legacy
     // daemon endpoints reject these rows. Convex assigns all four values in the
@@ -7392,6 +7405,7 @@ export default defineSchema({
   // One row per scope: the head position (highest allocated) and the floor
   // (highest position retired by retention; a client whose cursor is below the
   // floor must resync via full backfill). Heads are never deleted.
+  ...syncOutboxTables,
   sync_heads: defineTable({
     scope_key: v.string(),
     position: v.number(),

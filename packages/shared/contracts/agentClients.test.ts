@@ -8,6 +8,10 @@ import {
   localAgentClient,
   pinnedAgentIds,
   pinnedLaunchOptions,
+  pinnedPickerOptions,
+  AGENT_PICKER_OPTIONS,
+  agentDisplayName,
+  isPinnableAgentId,
   launchRailOptions,
   agentSupportsExecutionTransport,
   agentSupportsFork,
@@ -511,12 +515,64 @@ describe("pinned agents", () => {
     expect(pinnedLaunchOptions(["claude"], "gemini").map((o) => o.id)).toEqual(["claude", "gemini"]);
     expect(pinnedLaunchOptions(undefined, null).map((o) => o.id)).toEqual(pinnedAgentIds(undefined));
   });
+
+  it("the hosted assistant is pinnable but unpinned by default", () => {
+    expect(pinnedAgentIds(undefined)).not.toContain("codecast");
+    expect(pinnedAgentIds(["codecast", "claude"])).toEqual(["claude", "codecast"]);
+    expect(isPinnableAgentId("codecast")).toBe(true);
+    expect(isPinnableAgentId("claude")).toBe(true);
+    expect(isPinnableAgentId("claude_code")).toBe(false);
+    expect(isPinnableAgentId("toString")).toBe(false);
+  });
+});
+
+// Two agent lists on purpose: AGENT_LAUNCH_OPTIONS is what a machine launches
+// (local only, the daemon's side), AGENT_PICKER_OPTIONS is what a person can
+// start a conversation with (every client, the hosted assistant included).
+describe("picker options vs launch options", () => {
+  it("launch options stay local-only", () => {
+    expect(AGENT_LAUNCH_OPTIONS.map((o) => o.id)).toEqual(Object.keys(LOCAL_AGENT_CLIENTS) as Array<keyof typeof LOCAL_AGENT_CLIENTS>);
+    expect(AGENT_LAUNCH_OPTIONS.some((o) => isHostedAgentType(o.convexType))).toBe(false);
+  });
+
+  it("picker options are every client, local then hosted, flagged", () => {
+    expect(AGENT_PICKER_OPTIONS.map((o) => o.id)).toEqual(Object.keys(AGENT_CLIENTS) as Array<keyof typeof AGENT_CLIENTS>);
+    expect(AGENT_PICKER_OPTIONS.filter((o) => !o.hosted).map((o) => o.id)).toEqual(AGENT_LAUNCH_OPTIONS.map((o) => o.id));
+    const hosted = AGENT_PICKER_OPTIONS.filter((o) => o.hosted);
+    expect(hosted).toEqual([{ id: "codecast", convexType: "codecast", label: "Codecast assistant", hosted: true }]);
+    for (const o of AGENT_PICKER_OPTIONS) {
+      expect(o.convexType).toBe(AGENT_CLIENTS[o.id].convexId);
+      expect(o.label).toBe(AGENT_CLIENTS[o.id].displayName);
+    }
+  });
+
+  it("a picker shows the hosted assistant when kept or pinned", () => {
+    expect(pinnedPickerOptions(["claude"], null).map((o) => o.id)).toEqual(["claude"]);
+    expect(pinnedPickerOptions(["claude"], "codecast").map((o) => o.id)).toEqual(["claude", "codecast"]);
+    expect(pinnedPickerOptions(["codecast", "codex"]).map((o) => o.id)).toEqual(["codex", "codecast"]);
+  });
+});
+
+describe("agentDisplayName", () => {
+  it("names every client in either spelling", () => {
+    expect(agentDisplayName("claude_code")).toBe("Claude");
+    expect(agentDisplayName("claude")).toBe("Claude");
+    expect(agentDisplayName(undefined)).toBe("Claude");
+    expect(agentDisplayName("codex_cli")).toBe("Codex");
+    expect(agentDisplayName("muse")).toBe("Muse Spark");
+    expect(agentDisplayName("codecast")).toBe("Codecast assistant");
+  });
+
+  it("passes through a value the registry does not know", () => {
+    expect(agentDisplayName("cowork")).toBe("cowork");
+    expect(agentDisplayName("someday")).toBe("someday");
+  });
 });
 
 // The hosted assistant (plan pl-840) is a registry client with no machine
-// behind it: it names itself and translates like any client, but no picker
-// offers it, no execution boundary accepts it, and every local-run lookup
-// refuses it rather than inventing a binary or a pane.
+// behind it: it names itself and translates like any client, the new-
+// conversation pickers offer it, but no launch list, execution boundary or
+// local-run lookup accepts it rather than inventing a binary or a pane.
 describe("the hosted codecast client", () => {
   it("translates both ways and is the only hosted client", () => {
     expect(fromConvexAgentType("codecast")).toBe("codecast");
@@ -530,7 +586,7 @@ describe("the hosted codecast client", () => {
   it("stays out of every local path: pickers, pins, execution and local lookups", () => {
     expect("codecast" in LOCAL_AGENT_CLIENTS).toBe(false);
     expect(AGENT_LAUNCH_OPTIONS.some((o) => o.id === ("codecast" as string))).toBe(false);
-    expect(pinnedAgentIds(["codecast", "claude"])).toEqual(["claude"]);
+    expect(pinnedLaunchOptions(["codecast", "claude"], "codecast").map((o) => o.id)).toEqual(["claude"]);
     expect(() => parseExecutionAgentClientId("codecast")).toThrow(InvalidExecutionAgentTypeError);
     expect(() => localAgentClient("codecast")).toThrow(HostedAgentClientError);
     expect(localAgentClient("codex")).toBe(LOCAL_AGENT_CLIENTS.codex);

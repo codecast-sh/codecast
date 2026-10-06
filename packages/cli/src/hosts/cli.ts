@@ -30,6 +30,7 @@ import {
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
+import { normalizeReachFolder, reachHostRefusal, reachLine, readReachStatus, type ReachFolder, type ReachStatus } from "../cloud/reach.js";
 import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, githubRepo, grantAccountKey, grantDeployKey, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
 import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
 import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
@@ -342,6 +343,8 @@ export interface HostReport {
   toolsNote?: string;
   /** The declared setup the host last applied (~/.codecast/host-setup.json) against what this repo declares now. */
   setup?: { applied: { hash: string; at: string } | null; want: string; declared: boolean };
+  /** One line per laptop folder reached on this host, with the daemon's last word on it. */
+  reach: string[];
 }
 
 /** One line for the host's declared setup: applied and current, pending, or nothing declared. */
@@ -641,6 +644,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     ...(toolsNote ? { toolsNote } : {}),
     ...(setup ? { setup } : {}),
     git: hostGitReport(host),
+    reach: hostReachLines(host),
     cost: {
       ...cost,
       instanceType: facts.value?.instanceType ?? null,
@@ -741,7 +745,27 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
     const line = hostSetupStatusLine(r.setup);
     console.log(`  setup      ${r.setup.applied?.hash === r.setup.want ? line : fmt.warning(line)}`);
   }
+  for (const [i, line] of r.reach.entries()) console.log(`  ${i ? "          " : "reach     "} ${line}`);
   console.log(`  cost       ${r.cost.line}`);
+}
+
+/** The reach lines for a host: what is approved, with the daemon's last report (cloud/reach.ts). */
+export function hostReachLines(host: CloudHost, status: ReachStatus | null = readReachStatus(), now = Date.now()): string[] {
+  const age = status ? now - status.updatedAt : null;
+  return (host.reach ?? []).map((f) => reachLine(f, status?.hosts[host.id]?.[f.path], age));
+}
+
+const REACH_SETTLED = new Set(["mounted", "refused", "missing", "unreachable"]);
+
+/** Wait for the daemon's first settled report on a folder approved at `since`; null on timeout. */
+async function awaitReachSettled(hostId: string, folder: string, since: number, timeoutMs: number): Promise<{ state: string; detail?: string } | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const e = readReachStatus()?.hosts[hostId]?.[folder];
+    if (e && e.since >= since && REACH_SETTLED.has(e.state)) return e;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return null;
 }
 
 // --------------------------------------------------------------------------
@@ -1194,6 +1218,62 @@ export function buildHostsCommand(parent: Command): Command {
       patchHost(h.id, { forwardAgent: true });
       console.log(`${OK} agent bridge to ${h.id} is on — the daemon opens it within a minute while the host is awake`);
       console.log(fmt.warning(`  ${AGENT_BRIDGE_SECURITY_NOTE}`));
+    });
+
+  hosts
+    .command("reach [idOrFolder] [folder]")
+    .description("Mount a folder from this laptop on a host at the same path; the host reads and edits the files here in place (no copy)")
+    .option("--read-only", "The host can read the folder but not change it")
+    .option("--off", "Stop reaching the folder; the daemon unmounts it")
+    .option("--no-wait", "Return without waiting for the daemon to mount it")
+    .addHelpText("after", [
+      "",
+      "  cast hosts reach                      every reached folder and its state",
+      "  cast hosts reach ~/notes              reach a folder on the default host",
+      "  cast hosts reach <id> ~/notes --off   stop reaching it",
+      "",
+      "The folder is served from this laptop by a sandboxed sftp-server that can touch nothing outside it,",
+      "over one ssh connection the daemon holds while the host is awake. It is there only while this laptop is.",
+    ].join("\n"))
+    .action(async (a: string | undefined, b: string | undefined, o: { readOnly?: boolean; off?: boolean; wait?: boolean }) => {
+      const rows = readHosts();
+      const named = a && rows.some((r) => r.id === a);
+      const id = named ? a : undefined;
+      const folder = named ? b : a;
+      if (!named && b) die(`no host ${a}`, "cast hosts ls lists them");
+      if (!folder) {
+        const shown = rows.filter((h) => (!id || h.id === id) && h.reach?.length);
+        if (!shown.length) { console.log(fmt.muted("no folders reached — cast hosts reach <folder>")); return; }
+        for (const h of shown) {
+          console.log(fmt.highlight(h.id));
+          for (const line of hostReachLines(h)) console.log(`  ${line}`);
+        }
+        return;
+      }
+      const h = pick(id, "no host registered");
+      let p: string;
+      try { p = normalizeReachFolder(folder); } catch (err) { die((err as Error).message); }
+      if (o.off) {
+        const left = (h.reach ?? []).filter((f) => f.path !== p);
+        if (left.length === (h.reach ?? []).length) die(`${p} is not reached on ${h.id}`, `cast hosts reach ${h.id} lists what is`);
+        patchHost(h.id, { reach: left });
+        console.log(`${OK} ${p} is no longer reached on ${h.id} — the daemon unmounts it within seconds`);
+        return;
+      }
+      if (process.platform !== "darwin") die("reaching a folder needs macOS on this machine", "its sandbox is what confines the host to the folder");
+      const refusal = reachHostRefusal(h);
+      if (refusal) die(`cannot reach a folder on ${h.id}`, refusal);
+      const entry: ReachFolder = { path: p, ...(o.readOnly ? { readOnly: true } : {}), addedAt: Date.now() };
+      patchHost(h.id, { reach: [...(h.reach ?? []).filter((f) => f.path !== p), entry] });
+      const ro = o.readOnly ? " read-only" : "";
+      console.log(`${OK} ${p} is reached${ro} on ${h.id}, at the same path there`);
+      console.log(fmt.muted(`  the host reads${o.readOnly ? "" : " and writes"} these files on this laptop in place; nothing outside the folder is reachable. Stop: cast hosts reach ${h.id} ${p} --off`));
+      if (o.wait === false) return;
+      const settled = await awaitReachSettled(h.id, p, entry.addedAt, 60_000);
+      if (!settled) { console.log(fmt.warning(`  not mounted yet — the daemon picks it up within a minute; cast hosts reach shows its state`)); return; }
+      const line = reachLine(entry, { state: settled.state as never, ...(settled.detail ? { detail: settled.detail } : {}), since: Date.now() }, 0);
+      console.log(settled.state === "mounted" ? `  ${line}` : fmt.warning(`  ${line}`));
+      if (settled.state === "refused") process.exitCode = 1;
     });
 
   hosts

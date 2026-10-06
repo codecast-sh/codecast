@@ -3,6 +3,7 @@
 // DOM and the dialog only renders what it returns.
 import { inputTokens, substitute, templateRoleFields, type OrgTemplate, type TemplateInput } from "@codecast/shared/contracts/orgTemplateManifest";
 import type { OrgAuthorityGrant, OrgChange } from "@codecast/shared/contracts/orgProposal";
+import { updateCard, type UpdateSource } from "./templateUpdate";
 
 export type HireDraft = {
   template: { template_id: string; name: string; description: string; latest: { version: string; digest: string }; manifest: OrgTemplate } | null;
@@ -87,15 +88,23 @@ export function grantsToAsk(m: OrgTemplate, config: Record<string, string>): Org
   return out;
 }
 
-/** The update line's proposal (org-hire.md H9): one upgrade change the person decides; the host step then performs it. */
-export function buildUpgradeSpec(i: { instance: string; template_id: string; version: string; update_available: string; update_digest: string; template?: { name?: string; changelog?: string | null } | null }): HireSpec {
+/** The update card's proposal (org-hire.md H9): one upgrade change the person decides, carrying the card's class, changes and changelogs so the decision reads like the card; the host step then performs it. A rollback is the same change to the older release. */
+export function buildUpgradeSpec(i: UpdateSource & { instance: string; template_id: string; version: string; update_available: string; update_digest: string; template?: { name?: string; changelog?: string | null } | null }): HireSpec {
   const name = i.template?.name ?? i.template_id;
-  const title = `Update ${i.instance} to ${name} ${i.update_available}`;
+  const card = updateCard(i)!;
+  const back = card.kind === "rollback";
+  const title = `${back ? "Roll back" : "Update"} ${i.instance} to ${name} ${i.update_available}`;
   return {
     title, mode: "request",
-    summary_md: [`${i.instance} runs ${name} ${i.version}; ${i.update_available} is the newest stable release.`, i.template?.changelog ? `\nWhat changed:\n\n${i.template.changelog}` : "", `\nAfter you accept, its machine moves it on the next host step (the role page's button, or cast org template bind ${i.instance}). The role's identity, caps and secrets are untouched; an update never widens what it may do.`].filter(Boolean).join("\n"),
+    summary_md: [
+      back ? `${i.instance} runs ${name} ${i.version}. ${card.heading}. ${i.update_available} is the newest release still offered.` : `${i.instance} runs ${name} ${i.version}; ${i.update_available} is the newest stable release.${card.heading ? ` ${card.heading}.` : ""}`,
+      card.changes.length ? `\n${card.changes.map((l) => `- ${l}`).join("\n")}` : "",
+      card.note ? `\n${card.note}` : "",
+      card.changelogs.length ? `\n${back ? "What it undoes" : "What changed"}:\n\n${card.changelogs.map((c) => `### ${c.version}\n${c.text}`).join("\n\n")}` : "",
+      `\nAfter you accept, its machine moves it on the next host step (the role page's button, or cast org template bind ${i.instance}). The role's identity, caps and secrets are untouched; an update never widens what it may do.`,
+    ].filter(Boolean).join("\n"),
     changes: [{ kind: "upgrade", instance: i.instance, template: i.template_id, to: i.update_available, digest: i.update_digest }],
-    asks: [{ title, why: `${name} ${i.update_available} carries the publisher's latest lessons.`, effect: `${i.instance} runs ${i.update_available} after its next host step`, seqs: [1] }],
+    asks: [{ title, why: back ? `${name} ${i.version} was withdrawn: ${i.update_rollback?.reason}.` : `${name} ${i.update_available} carries the publisher's latest lessons.`, effect: `${i.instance} runs ${i.update_available} after its next host step`, seqs: [1] }],
   };
 }
 

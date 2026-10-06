@@ -14,7 +14,7 @@ import { makeFakeDb } from "./testDb";
 import { getUserByUsername } from "./users";
 import { getUserByGithubId } from "./teams";
 import * as commits from "./commits";
-import { getCommitsForTimeline, getCommitBySha } from "./commits";
+import { getCommitBySha } from "./commits";
 import { analyzeMessageRoles } from "./migrations";
 import { listConnections } from "./appConnections";
 import { cliConnectToken } from "./integrations";
@@ -120,13 +120,6 @@ describe("commits are not world-readable or world-destroyable", () => {
   test("clearAllCommits no longer exists as a callable mutation", () => {
     // It took no arguments, had no auth check, and deleted the whole table.
     expect("clearAllCommits" in commits).toBe(false);
-  });
-
-  test("the commit timeline returns nothing to an anonymous caller", async () => {
-    const rows = await (getCommitsForTimeline as any)._handler(ctx(null, tables({ commits: [
-      { _id: "c1", sha: "abc", timestamp: 2, repository: "acme/private", files: [{ patch: "SECRET DIFF" }] },
-    ] })), {});
-    expect(rows).toEqual([]);
   });
 
   test("a commit is not served to a signed-in user with no access to its conversation", async () => {

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
+  agentStatusOnDisk,
   askUserQuestionStillPending,
   clearSessionTrackingForKill,
   conversationForbidsResurrection,
@@ -765,5 +769,28 @@ describe("reaping panes whose agent exited", () => {
     expect(deadPaneReapBlock(facts(), { ...quiet, children: null })).toBe("children-unknown");
     expect(deadPaneReapBlock(facts(), { ...quiet, deliveryActive: true })).toBe("delivery-active");
     expect(deadPaneReapBlock(facts({ activityMs: now - DEAD_PANE_QUIET_MS + 1000 }), quiet)).toBe("dead-recent");
+  });
+});
+
+// 2026-10-05: fdf643a3 waited five hours on a workflow, the daemon restarted at
+// 14:03:02Z, and the reaper killed it at 14:05:46Z. The in-memory status that
+// would have refused the reap was empty after the restart; the status file on
+// disk still said "waiting", and the reaper now reads it as the fallback.
+describe("agentStatusOnDisk", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-status-"));
+  test("reads the status the hook last wrote", () => {
+    fs.writeFileSync(path.join(dir, "fdf643a3-48e8.json"), JSON.stringify({ status: "waiting", ts: 1 }));
+    expect(agentStatusOnDisk("fdf643a3-48e8", dir)).toBe("waiting");
+    expect(reapPaneEligibility("resume", null, {
+      agentStatus: agentStatusOnDisk("fdf643a3-48e8", dir),
+      openBackgroundWork: false, pendingMessages: false, deliveryActive: false,
+      subagentsLive: false, targetLocked: false, resumedAgoMs: Infinity,
+    }).reason).toBe("open-background-work");
+  });
+  test("missing, corrupt or unsafe ids read as unknown", () => {
+    expect(agentStatusOnDisk("nope", dir)).toBeUndefined();
+    fs.writeFileSync(path.join(dir, "bad.json"), "{");
+    expect(agentStatusOnDisk("bad", dir)).toBeUndefined();
+    expect(agentStatusOnDisk("../etc", dir)).toBeUndefined();
   });
 });

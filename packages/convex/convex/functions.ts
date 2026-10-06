@@ -21,6 +21,7 @@ import {
 import { makeChangeTrackedDb } from "./changeLog";
 import { makePrincipalViewTrackedDb } from "./principalViewRevisions";
 import { makeSyncAckCollector, type SyncAckPosition } from "./syncLog";
+import { attachSyncOutbox } from "./syncOutboxWriter";
 
 const SYNC_ACK = Symbol.for("codecast.syncAckCollector");
 
@@ -33,6 +34,7 @@ function withChangeLog(ctx: any): any {
   // dispatch returns them to an opting-in client as its write acknowledgement
   // (syncAckPositions below).
   const collector = makeSyncAckCollector();
+  attachSyncOutbox(ctx, collector);
   const wrapped: any = { ...ctx, db: makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector)) };
   wrapped[SYNC_ACK] = collector;
   return wrapped;
@@ -42,6 +44,10 @@ function withChangeLog(ctx: any): any {
 // for a ctx that did not come through the wrapped builders (e.g. raw tests).
 export function syncAckPositions(ctx: any): SyncAckPosition[] {
   return ctx?.[SYNC_ACK]?.positions ?? [];
+}
+
+export function syncAckReceipts(ctx: any) {
+  return ctx?.[SYNC_ACK]?.receipts ?? [];
 }
 
 function wrapDefinition(def: any): any {

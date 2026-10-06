@@ -115,11 +115,45 @@ describe("staleTmuxServerKillPlan", () => {
     expect(plan.selfHosted.map((s) => s.pid)).toEqual([90449, 90449]);
   });
 
+  // 2026-10-06: a `tmux new-session` against an overloaded server replaced the
+  // socket, and the sweep killed the unreachable side with 87 working agents.
+  test("a stale server holding more agents than the live one is restored, never killed", () => {
+    const fleet = parseProcessTable(`
+ 45451     1   501 tmux new-session -d -s cc-resume-newcomer
+ 45452 45451   501 claude --resume one
+ 90449     1   501 tmux new-session -d -s cc-resume-fleet
+ 90450 90449   501 claude --resume a
+ 90451 90449   501 claude --resume b
+ 70000     1   501 tmux new-session -d -s cc-resume-leftover
+`);
+    const plan = staleTmuxServerKillPlan(fleet, 45451, 501);
+    expect(plan.restore.map((s) => s.pid)).toEqual([90449]);
+    expect(plan.kill).toEqual([]);
+    // Once the fleet holds the socket again, the newcomer and the leftover go.
+    const after = staleTmuxServerKillPlan(fleet, 90449, 501);
+    expect(after.restore).toEqual([]);
+    expect(after.kill.map((s) => s.pid)).toEqual([45451, 70000]);
+  });
+
+  test("a stale server with no more agents than the live one is still killed", () => {
+    const even = parseProcessTable(`
+ 45451     1   501 tmux new-session -d -s cc-resume-live
+ 45452 45451   501 claude --resume one
+ 90449     1   501 tmux new-session -d -s cc-resume-old
+ 90450 90449   501 claude --resume a
+`);
+    const plan = staleTmuxServerKillPlan(even, 45451, 501);
+    expect(plan.restore).toEqual([]);
+    expect(plan.kill.map((s) => s.pid)).toEqual([90449]);
+  });
+
   test("another user's stale server is not in the plan", () => {
     // 91500 is a server on the default socket, is not the live one, and holds
     // an agent — everything the detector looks for except the owner.
     expect(staleTmuxServerKillPlan(ownedTable, 45451, 501).kill.map((s) => s.pid)).not.toContain(91500);
-    expect(staleTmuxServerKillPlan(ownedTable, 45451, 502).kill.map((s) => s.pid)).toEqual([91500]);
+    // Theirs alone under their own uid (it out-holds the live server, so it is restored).
+    const theirs = staleTmuxServerKillPlan(ownedTable, 45451, 502);
+    expect([...theirs.kill, ...theirs.restore].map((s) => s.pid)).toEqual([91500]);
   });
 });
 
@@ -217,7 +251,7 @@ describe.skipIf(!hasTmux())("liveTmuxServerPid", () => {
 
 test("stale server plan refuses missing or invalid current UID", () => {
   for (const uid of [undefined, NaN, -1]) {
-    expect(staleTmuxServerKillPlan(ownedTable, 45451, uid)).toEqual({ kill: [], selfHosted: [], refused: "owner-unknown" });
+    expect(staleTmuxServerKillPlan(ownedTable, 45451, uid)).toEqual({ kill: [], restore: [], selfHosted: [], refused: "owner-unknown" });
   }
 });
 

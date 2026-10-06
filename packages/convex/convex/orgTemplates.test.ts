@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performCatalog, performFileLesson, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
+import { performAcceptUpgrade, performCatalog, performFileLesson, performRetire, performYank, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
 import { applyOrgChange } from "./orgInit";
 
 // Roles hired from a template (org-hire.md W8): the server side of publish,
@@ -357,5 +357,104 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
     expect((await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any })).ask).toMatchObject({ id: "search-console" });
     // A list of every instance leaves the guides out.
     expect((await performListInstances(ctx(db), MATE, { team_id: ACME }))[0].setup_text).toBeUndefined();
+  });
+  // Release classes, the release note, yank and retire (As built 2026-10-06).
+  const v = (version: string, fn: (m: any) => void = () => {}) => { const m = hired(); m.version = version; fn(m); return m; };
+  const D = (n: number) => n.toString(16).padStart(64, "0");
+  test("publish classifies each release against the one before it and refuses a bump smaller than its class", async () => {
+    const { db } = seated();
+    const first = await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.0"), digest: D(1), status: "stable" });
+    expect(first).toMatchObject({ action: "created", class: "structure" });
+    expect(first.releases[0]).toMatchObject({ class: "structure", changes: { routines_added: ["seo", "ads"] } });
+    const social = (m: any) => { m.routines.push({ id: "social", title: "Social post", every: "1d", prompt: "org/social.md" }); };
+    await expect(performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.1", social), digest: D(2) })).rejects.toThrow("growth@2.0.1 is a structure release (routine social added), so it needs a minor version bump over 2.0.0; 2.0.1 is a patch bump. Publish it as 2.1.0 or later.");
+    await expect(performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.1.0", (m) => { m.role.caps.tokens_per_day = 1; }), digest: D(2) })).rejects.toThrow(/an authority release \(Daily token limit: 200,000 to 1\)/);
+    // A dry run answers the same and writes nothing.
+    const dry = await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.1.0", social), digest: D(2), dry_run: true });
+    expect(dry).toMatchObject({ dry_run: true, action: "released", class: "structure", previous: "2.0.0", changes: { routines_added: ["social"] } });
+    expect((await db.query("org_templates").collect())[0].releases).toHaveLength(1);
+    expect(await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.1"), digest: D(3), status: "stable" })).toMatchObject({ action: "released", class: "content" });
+    // A release stored before classification gets its class on read.
+    const row = (await db.query("org_templates").collect())[0];
+    await db.patch(row._id, { releases: row.releases.map(({ class: _c, changes: _ch, ...r }: any) => r) });
+    expect((await performCatalog(ctx(db), MATE, { team_id: ACME }))[0].releases.map((r: any) => [r.version, r.class])).toEqual([["2.0.0", "structure"], ["2.0.1", "content"]]);
+  });
+  test("a bind that moves the instance tells its role the versions, the class, the changelog and what a person must do, once", async () => {
+    const { db, pending } = seated();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.0"), digest: D1, status: "stable", changelog: "## 2.0.0\n- first" });
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }));
+    expect(pending).toHaveLength(1);
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.1.0", (m) => { m.routines.push({ id: "social", title: "Social post", every: "1d", prompt: "org/social.md" }); }), digest: D2, status: "stable", changelog: "## 2.1.0\n- Adds the social post.\n\n## 2.0.0\n- first" });
+    // The role running the bind itself still hears it: its memory is of 2.0.0.
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }, { version: "2.1.0", digest: D2, from_session: "standing-uuid" }));
+    expect(pending).toHaveLength(2);
+    const lines = said(pending[1]);
+    expect(lines.slice(0, 6)).toEqual([
+      "acme-growth now runs CMO 2.1.0, up from 2.0.0. This is a structure change. Read your charter and routine instructions again before acting on what you remember of 2.0.0.",
+      "What moved: new routines Social post (1d).",
+      "Changelog:",
+      "### 2.1.0",
+      "- Adds the social post.",
+      "A person must:",
+    ]);
+    expect(lines).toContain("- Activate Social post (1d) from the role page: it arrived paused.");
+    expect(lines).toContain("Routines:");
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }, { version: "2.1.0", digest: D2 }));
+    expect(pending).toHaveLength(2);
+  });
+  test("the role page's update: class, merged changes, changelogs newest first, names, releases behind", async () => {
+    const { db } = seated();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.0"), digest: D(1), status: "stable" });
+    await performUpsertInstance(ctx(db), ME, bound({}, { digest: D(1), update_policy: "stable" }));
+    let page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
+    expect(page).toMatchObject({ update_available: null, update_class: null, update_changes: null, update_changelogs: [], update_rollback: null, update_names: null, releases_behind: 0, release: { version: "2.0.0", class: "structure" } });
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.1"), digest: D(2), status: "stable", changelog: "## 2.0.1\n- wording" });
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.1.0", (m) => { m.routines[0].every = "3d"; m.setup.push({ id: "x", title: "Check X", who: "human" }); }), digest: D(3), status: "stable", changelog: "## 2.1.0\n- cadence\n\n## 2.0.1\n- wording, better" });
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.2.0", (m) => { m.routines[0].every = "1d"; m.setup.push({ id: "x", title: "Check X", who: "human" }); }), digest: D(4), status: "canary" });
+    page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
+    expect(page).toMatchObject({
+      update_available: "2.1.0", update_digest: D(3), update_class: "structure", update_rollback: null, releases_behind: 3,
+      update_changes: { routines_recadenced: [{ id: "seo", from: "7d", to: "3d" }], setup_added: ["x"], authority_changed: [] },
+      update_changelogs: [{ version: "2.1.0", text: "- cadence" }, { version: "2.0.1", text: "- wording, better" }],
+    });
+    expect(page.update_names.setup.x).toBe("Check X");
+    expect(page.update_names.routines.seo).toEqual({ title: "SEO weekly", every: "3d" });
+  });
+  test("yank: publisher only, never offered, latest falls back, an instance on it is offered the fallback as a rollback under any policy", async () => {
+    const { db } = seated();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.0"), digest: D(1), status: "stable" });
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.1"), digest: D(2), status: "stable", changelog: "## 2.0.1\n- posts twice" });
+    await performUpsertInstance(ctx(db), ME, bound({}, { version: "2.0.1", digest: D(2), update_policy: "canary" }));
+    await expect(performYank(ctx(db), MATE, { as_codecast: true, template_id: "growth", version: "2.0.1", reason: "posts every message twice" })).rejects.toThrow();
+    await expect(performYank(ctx(db), ME, { as_codecast: true, template_id: "growth", version: "2.0.1", reason: "bad" })).rejects.toThrow(/Say why/);
+    const yanked = await performYank(ctx(db), ME, { as_codecast: true, template_id: "growth", version: "2.0.1", reason: "posts every message twice" });
+    expect(yanked).toMatchObject({ latest: { version: "2.0.0", digest: D(1) }, fallback: "2.0.0", instances_on_it: 1 });
+    const entry = (await performCatalog(ctx(db), MATE, { team_id: ACME }))[0];
+    expect(entry.latest.version).toBe("2.0.0"); expect(entry.releases.map((r: any) => r.version)).toEqual(["2.0.0"]);
+    const page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
+    expect(page).toMatchObject({ update_available: "2.0.0", update_digest: D(1), update_rollback: { reason: "posts every message twice" }, update_changelogs: [{ version: "2.0.1", text: "- posts twice" }], release: { version: "2.0.1", yanked: "posts every message twice" } });
+    // No hire, upgrade or republish lands on it; the instance on it still binds where it is.
+    await expect(performAcceptUpgrade(ctx(db), ME, { access: WS, instance: "acme-growth", template_id: "growth", to: "2.0.1", digest: D(2) })).rejects.toThrow(/yanked/);
+    await expect(performUpsertInstance(ctx(db), ME, { ...hire, instance_key: "key-2", instance: "other", version: "2.0.1", digest: D(2) })).rejects.toThrow(/yanked/);
+    await expect(performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.1"), digest: D(2), status: "stable" })).rejects.toThrow(/yanked/);
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 9 }, { version: "2.0.1", digest: D(2) }));
+  });
+  test("retire hides a template from every catalog and keeps its instances; a workspace that retires its own copy hires Codecast's again", async () => {
+    const { db } = seated();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: v("2.0.1"), digest: D(1), status: "stable" });
+    await performPublish(ctx(db), ME, { team_id: ACME, manifest: v("2.0.0"), digest: D(2), status: "draft" });
+    expect((await performCatalog(ctx(db), MATE, { team_id: ACME })).map((t) => [t.workspace, t.latest.version])).toEqual([[WS, "2.0.0"], ["codecast", "2.0.1"]]);
+    await performUpsertInstance(ctx(db), ME, bound({}, { version: "2.0.0", digest: D(2) }));
+    await expect(performRetire(ctx(db), OUT, { team_id: ACME, template_id: "growth" })).rejects.toThrow();
+    await performRetire(ctx(db), MATE, { team_id: ACME, template_id: "growth", reason: "stale draft" });
+    expect((await performCatalog(ctx(db), MATE, { team_id: ACME })).map((t) => [t.workspace, t.latest.version])).toEqual([["codecast", "2.0.1"]]);
+    // The instance hired from the retired copy still reads its pinned release.
+    expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "key-1" })).release).toMatchObject({ version: "2.0.0" });
+    // A new hire of growth resolves to Codecast's.
+    await expect(performUpsertInstance(ctx(db), ME, { ...hire, instance_key: "key-2", instance: "second", version: "2.0.0", digest: D(2) })).rejects.toThrow(/retired/);
+    expect(await performUpsertInstance(ctx(db), ME, { ...hire, instance_key: "key-3", instance: "third", version: "2.0.1", digest: D(1) })).toMatchObject({ version: "2.0.1" });
+    await expect(performPublish(ctx(db), ME, { team_id: ACME, manifest: v("2.1.0"), digest: D(3) })).rejects.toThrow(/retired/);
+    await performRetire(ctx(db), MATE, { team_id: ACME, template_id: "growth", undo: true });
+    expect((await performCatalog(ctx(db), MATE, { team_id: ACME }))).toHaveLength(2);
   });
 });

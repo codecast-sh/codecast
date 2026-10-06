@@ -133,15 +133,41 @@ export function InsightTurns({ turns }: { turns: readonly Turn[] }) {
   );
 }
 
-/** One session behind a story: its pill, the insight headline it was summed up by, and what it was asked and did. */
+/** The first sentences of a session's summary, as many as fit `max` characters. */
+function lead(text: string, max: number): string {
+  const parts = text.split(/(?<=[.!?])\s+/);
+  let out = "";
+  for (const p of parts) {
+    if ((out + " " + p).trim().length > max) break;
+    out = (out + " " + p).trim();
+  }
+  return out || clip(text, max);
+}
+
+/**
+ * One session behind a story, told in a line and a sentence or two: the
+ * outcome it was summed up by and what it did, with its step by step log
+ * folded away for whoever wants the detail.
+ */
 function SessionEvidence({ id, insight }: { id: string; insight: StorySessionRow | undefined }) {
+  const turns = (insight?.turns ?? []).filter((t) => t.ask.trim() || t.did.length);
+  const summary = insight?.summary ? lead(insight.summary, 240) : "";
   return (
-    <div className="min-w-0 space-y-1">
-      <div className="flex min-w-0 items-baseline gap-2 text-[11px]">
-        <EntityIdPill type="session" id={id} compact />
-        {insight?.headline && <span className="chg-ui min-w-0 truncate text-[12px] text-sol-text/75">"{insight.headline}"</span>}
+    <div className="min-w-0 rounded-md border border-sol-border/25 bg-sol-bg-alt/40 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="shrink-0 text-[11px]"><EntityIdPill type="session" id={id} compact /></span>
+        {insight?.headline && <span className="chg-ui min-w-0 truncate text-[12.5px] font-medium text-sol-text/85">{insight.headline}</span>}
       </div>
-      <InsightTurns turns={insight?.turns ?? []} />
+      {summary && <p className="chg-ui mt-1 text-[12px] leading-[1.55] text-sol-text/65 [overflow-wrap:anywhere]">{summary}</p>}
+      {turns.length > 0 && (
+        <details className="group/steps mt-1">
+          <summary className="flex cursor-pointer list-none items-center gap-1 font-mono text-[10px] text-sol-text/45 hover:text-sol-text/80">
+            <ChevronRight className="h-2.5 w-2.5 transition-transform group-open/steps:rotate-90" />
+            {plural(turns.length, "step")}
+          </summary>
+          <div className="mt-1.5"><InsightTurns turns={turns} /></div>
+        </details>
+      )}
     </div>
   );
 }
@@ -160,7 +186,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
       {story.body && (
         // The article's screenshots open full size in the lightbox, one gallery per story.
         <ImageGalleryProvider key={story.story_key}>
-          <MarkdownRenderer content={story.body} className="chg-article prose-p:my-2 prose-headings:mb-1 prose-headings:mt-4 prose-h3:text-[14px] max-w-[46rem] text-[13.5px] leading-[1.65]" />
+          <MarkdownRenderer content={story.body} className="chg-article max-w-[46rem] text-[13.5px] leading-[1.7] text-sol-text/80 prose-p:my-2 prose-p:text-sol-text/80 prose-li:my-0.5 prose-li:text-sol-text/80 prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-sol-text prose-h3:mb-2 prose-h3:mt-7 prose-h3:text-[17px] prose-h3:leading-snug prose-h4:mb-1 prose-h4:mt-4 prose-h4:text-[14.5px] [&>p:first-child]:mt-0 [&>p:first-child]:text-[14.5px] [&>p:first-child]:leading-[1.65] [&>p:first-child]:text-sol-text prose-code:rounded prose-code:bg-sol-bg-alt prose-code:px-1 prose-code:py-px prose-code:text-[12.5px] prose-code:font-medium prose-code:text-sol-text prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-3 prose-blockquote:rounded-r-md prose-blockquote:border-l-2 prose-blockquote:border-sol-border/60 prose-blockquote:bg-sol-bg-alt/60 prose-blockquote:py-1 prose-blockquote:pl-4 prose-blockquote:pr-3 prose-blockquote:font-normal prose-blockquote:not-italic prose-blockquote:text-sol-text/75 [&_blockquote_p:before]:content-none [&_blockquote_p:after]:content-none" />
         </ImageGalleryProvider>
       )}
       <RiskLine story={story} full />
@@ -169,11 +195,13 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
         <Provenance story={story} />
         <ReleaseTag story={story} />
       </div>
-      <section className="border-t border-dashed border-sol-border/40 pt-3">
-        <h4 className="mb-1.5 text-[12px] font-semibold text-sol-text/80">
-          Commits <span className="font-mono text-[10px] font-normal text-sol-text/45">{story.commit_shas.length}</span>
-        </h4>
-        <ul className="space-y-1">
+      <details className="group/commits border-t border-dashed border-sol-border/40 pt-3">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-semibold text-sol-text/80 hover:text-sol-text">
+          <ChevronRight className="h-3 w-3 transition-transform group-open/commits:rotate-90" />
+          {plural(story.commit_shas.length, "commit")}
+          <DiffStat additions={story.insertions} deletions={story.deletions} files={story.files_changed} themed />
+        </summary>
+        <ul className="mt-1.5 space-y-1">
           {commits.map((c) => {
             const [subject, ...rest] = String(c.message ?? "").split("\n");
             return (
@@ -204,11 +232,11 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
             </li>
           )}
         </ul>
-      </section>
+      </details>
 
       {(story.conversation_ids.length > 0 || story.pr_ids.length > 0 || story.private_session_count > 0) && (
         <section>
-          <h4 className="mb-1.5 text-[12px] font-semibold text-sol-text/80">Sessions and pull requests</h4>
+          <h4 className="mb-1.5 text-[12px] font-semibold text-sol-text/80">How it was made</h4>
           <div className="space-y-2.5">
             {story.conversation_ids.slice(0, MAX_SESSIONS).map((id) => <SessionEvidence key={String(id)} id={String(id)} insight={sessionById.get(String(id))} />)}
             <div className="flex flex-wrap items-center gap-1.5">

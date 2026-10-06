@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
 import { track } from "../lib/analytics";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { cliJustConnected } from "../lib/cliConnected";
 
 interface EmptyStateProps {
   title: string;
@@ -216,7 +217,8 @@ function SetupTokenCommand() {
 }
 
 function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean }) {
-  if (hasOtherSessions) {
+  const [connected] = useState(() => cliJustConnected());
+  if (hasOtherSessions && !connected) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center px-4">
         <div className="max-w-sm w-full">
@@ -246,16 +248,29 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
       <div className="absolute inset-0 flex items-start justify-center pt-16 sm:pt-24">
         <div className="relative max-w-lg w-full mx-4">
           <div className="rounded-2xl border border-sol-border/60 bg-sol-bg/90 dark:bg-sol-bg/95 backdrop-blur-xl shadow-2xl p-6 sm:p-8">
-            <div className="text-center mb-6">
-              <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
-                Start syncing your sessions
-              </h2>
-              <p className="text-sm text-sol-text-muted">
-                Install the CLI to automatically capture and sync your coding sessions.
-              </p>
-            </div>
+            {connected ? (
+              <div className="text-center">
+                <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
+                  Your terminal is connected
+                </h2>
+                <p className="text-sm text-sol-text-muted">
+                  Finish the setup questions in your terminal. Your sessions start appearing here the moment the daemon starts, past ones included.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="text-center mb-6">
+                  <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
+                    Start syncing your sessions
+                  </h2>
+                  <p className="text-sm text-sol-text-muted">
+                    Install the CLI to automatically capture and sync your coding sessions.
+                  </p>
+                </div>
 
-            <SetupTokenCommand />
+                <SetupTokenCommand />
+              </>
+            )}
 
             <p className="text-xs text-sol-text-dim text-center mt-4">
               Works with Claude Code, Codex, Cursor, and Gemini.{" "}

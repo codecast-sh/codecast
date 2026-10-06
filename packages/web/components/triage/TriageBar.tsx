@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { EyeOff, MoreHorizontal, PinOff, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { hasCollectionRows } from "../../lib/hasCollectionRows";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { startTour } from "../../tours/engine";
 import { isInboxSessionView } from "../../lib/inboxRouting";
@@ -89,7 +90,7 @@ export function TriageBar() {
     (st) => st.clientState.ui?.triage_bar_compact,
     (st) => st.clientState.ui?.inbox_shortcuts_hidden,
     (st) => st.clientState.ui?.zen_mode ?? false,
-    (st) => Object.keys(st.sessions).length > 0,
+    (st) => hasCollectionRows(st.sessions),
   ]);
   const onInboxView = isInboxSessionView(pathname, s.currentConversation?.source);
   const activeId = focusedActionSessionId(s, onInboxView) ?? null;
@@ -122,7 +123,7 @@ export function TriageBar() {
   // account with no sessions yet is on the CLI setup hero — a row of disabled
   // verbs under it would be noise, so the bar arrives with the first session.
   if (!onInboxView || (s.clientState.ui?.zen_mode ?? false)) return null;
-  if (Object.keys(s.sessions).length === 0) return null;
+  if (!hasCollectionRows(s.sessions)) return null;
   if (isTriageBarCompact(s.clientState.ui)) return null;
 
   const run = (verb: TriageVerb) => {
