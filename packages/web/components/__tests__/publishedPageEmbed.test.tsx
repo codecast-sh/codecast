@@ -123,15 +123,29 @@ describe("ClaudeArtifactEmbed publish suggestion", () => {
     return snapshot;
   }
 
+  const OFFER = '[aria-label="Not now: stop suggesting Publish"]';
+
   test("offered when no machine has Publish on; silent when one does, or before the roster loads", async () => {
     try {
       seed(null);
-      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeNull();
+      expect((await mount()).querySelector(OFFER)).toBeNull();
       seed({ memory: true });
-      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeTruthy();
+      expect((await mount()).querySelector(OFFER)).toBeTruthy();
       seed({ publish: true });
-      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeNull();
+      expect((await mount()).querySelector(OFFER)).toBeNull();
     } finally {
+      seed(null);
+    }
+  });
+
+  test("silent once declined", async () => {
+    const dismissed = useInboxStore.getState().clientState.dismissed;
+    try {
+      seed({ memory: true });
+      useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, dismissed: { ...dismissed, snippet_intro_publish: 1 } } }));
+      expect((await mount()).querySelector(OFFER)).toBeNull();
+    } finally {
+      useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, dismissed } }));
       seed(null);
     }
   });

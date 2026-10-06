@@ -1,11 +1,14 @@
-import { bridge, isElectron } from "./desktop";
+import { AGENT_DOCK_RELEASED, bridge, isElectron } from "./desktop";
+
+export { AGENT_DOCK_RELEASED };
 
 // ---------------------------------------------------------------------------
 // The agent dock (desktop shell: main.js "The agent dock", agentDock.js).
 //
 // A pill on the screen's edge with one dot per live agent, and beside it a
-// card for whichever one needs you. On by default and turned off PER MACHINE, kept in the shell's
-// settings.json: a dock is a fixture of one screen.
+// card for whichever one needs you. Unreleased (AGENT_DOCK_RELEASED); once
+// released it is off by default and turned on PER MACHINE, kept in the
+// shell's settings.json: a dock is a fixture of one screen.
 //
 // Everything rides the bridge's generic app channel (`call` / `subscribe`,
 // "app:agentDock.*" on the wire), so the web half needs no preload surface of

@@ -11,6 +11,7 @@ import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
 import { TimelineCharts, fmtDayLabel, fmtK, type PunchRow } from "../../../components/ActivityCharts";
 import { LogoMark } from "../../../components/Logo";
 import { ThemeToggle } from "../../../components/ThemeToggle";
+import { useLocalAuth } from "../../../lib/localAuth";
 
 // Local relative-time formatter, matching the convention used ad-hoc across the
 // app's pages (notifications, schedules) — no shared util exists to import.
@@ -293,6 +294,8 @@ function StatChip({ label, value }: { label: string; value: number }) {
 // Built on the adaptive --sol-* tokens so it follows the viewer's theme; the
 // charts read the same theme, keeping chrome and graphs in one palette.
 function ProfileShell({ children }: { children: React.ReactNode }) {
+  // A signed-in visitor is offered their app, not a sign in.
+  const signedIn = useLocalAuth();
   return (
     <main className="relative min-h-screen bg-sol-bg text-sol-text-secondary overflow-x-hidden">
       {/* atmospheric glow */}
@@ -311,13 +314,24 @@ function ProfileShell({ children }: { children: React.ReactNode }) {
         </Link>
         <div className="flex items-center gap-3 text-sm">
           <ThemeToggle />
-          <Link href="/login" className="text-sol-text-muted hover:text-sol-text transition-colors">Sign in</Link>
-          <Link
-            href="/signup"
-            className="rounded-lg bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 px-3 py-1.5 font-medium hover:bg-sol-cyan/25 transition-colors"
-          >
-            Get codecast
-          </Link>
+          {signedIn ? (
+            <Link
+              href="/inbox"
+              className="rounded-lg bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 px-3 py-1.5 font-medium hover:bg-sol-cyan/25 transition-colors"
+            >
+              Open app
+            </Link>
+          ) : (
+            <>
+              <Link href="/login" className="text-sol-text-muted hover:text-sol-text transition-colors">Sign in</Link>
+              <Link
+                href="/signup"
+                className="rounded-lg bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 px-3 py-1.5 font-medium hover:bg-sol-cyan/25 transition-colors"
+              >
+                Get codecast
+              </Link>
+            </>
+          )}
         </div>
       </nav>
       <div className="relative z-10">{children}</div>

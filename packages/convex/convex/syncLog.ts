@@ -135,7 +135,7 @@ export function payloadsDisabled(): boolean {
 export const PAYLOAD_DENYLIST: Record<string, ReadonlySet<string>> = {
   tasks: new Set([
     "drive", "steps", "files_changed", "acceptance_criteria",
-    "verification_evidence", "last_session_summary",
+    "verification_evidence", "last_session_summary", "change_guide",
   ]),
   docs: new Set(["content", "embedding", "entries", "team_id"]),
   plans: new Set([
