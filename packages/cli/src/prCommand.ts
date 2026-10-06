@@ -20,6 +20,8 @@ import type { Command } from "commander";
 import open from "open";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { readStdinBody, stdinText } from "./sendBody.js";
+import { readTaskPulseFor } from "./taskPulse.js";
+import { changeGuideMarkdown, type ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { fmt, c, icons } from "./colors.js";
 import {
   parsePrRef,
@@ -534,7 +536,7 @@ export function convexUrlFromSiteUrl(siteUrl: string): string {
   return siteUrl.replace(".site", ".cloud");
 }
 
-async function locate(
+export async function locate(
   deps: PublishDeps,
   ref: string | undefined,
   opts: { repo?: string } = {},
@@ -547,6 +549,14 @@ async function locate(
     repository: opts.repo ?? local.repository,
     branch: local.branch,
   });
+}
+
+/** The description as written, then the task's change guide as a walkthrough. */
+export function prBodyWithGuide(body: string, guide: ChangeGuide | null | undefined): string {
+  const text = body.trim();
+  if (!guide?.steps.length) return text;
+  const walkthrough = changeGuideMarkdown(guide, { heading: "## Walkthrough" });
+  return text ? `${text}\n\n${walkthrough}` : walkthrough;
 }
 
 function fail(message: string): never {
@@ -586,6 +596,42 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
       console.log(formatPrTable(rows));
       if (rows.length === 0 && local.repository) {
         console.log(fmt.muted(`\nThis checkout is ${local.repository}. \`cast pr ls --state all\` widens the search.`));
+      }
+    });
+
+  // ── create ──
+  // gh opens the pull request; codecast writes the description's tail. When
+  // the task carries the author's change guide (ct-57527), the body ends with
+  // it as a walkthrough, hunks included while they fit GitHub's limit.
+  pr.command("create")
+    .description("Open a pull request with gh; the task's change guide becomes a walkthrough in the description")
+    .requiredOption("-t, --title <text>", "Pull request title")
+    .option("-b, --body <text>", stdinText("Description: goal, what changed, how it was verified"))
+    .option("--task <id>", "Task whose change guide to include (default: the task this session is bound to)")
+    .option("--base <branch>", "Branch to merge into")
+    .option("--draft", "Open as a draft")
+    .option("--dry-run", "Print the gh command and the description, open nothing")
+    .action(async (options) => {
+      const taskId: string | undefined = options.task ?? readTaskPulseFor(deps.detectCurrentSessionId())?.task;
+      let guide: ChangeGuide | null = null;
+      if (taskId) {
+        const task = await apiPost(deps, "/cli/work/get", { short_id: taskId }, { read: true, exitOnError: false }).catch(() => null);
+        guide = task?.change_guide ?? task?.task?.change_guide ?? null;
+      }
+      const body = prBodyWithGuide(String(options.body ?? ""), guide);
+      const args = ["pr", "create", "--title", options.title, "--body-file", "-", ...(options.base ? ["--base", options.base] : []), ...(options.draft ? ["--draft"] : [])];
+      if (options.dryRun) {
+        console.log(fmt.muted(`gh ${args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`));
+        console.log(fmt.muted(taskId ? (guide ? `${taskId}: change guide, ${guide.steps.length} steps` : `${taskId}: no change guide`) : "no task bound; description as given"));
+        console.log("");
+        console.log(body);
+        return;
+      }
+      try {
+        const url = execFileSync("gh", args, { input: body, encoding: "utf-8", stdio: ["pipe", "pipe", "inherit"] }).trim();
+        console.log(url);
+      } catch {
+        fail("gh pr create failed (output above)");
       }
     });
 

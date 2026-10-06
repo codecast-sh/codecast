@@ -38,7 +38,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "11"
+      "work_version": "12"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -177,7 +177,7 @@
   "skills": {
     "config": {
       "skills_enabled": true,
-      "skills_version": "1"
+      "skills_version": "2"
     },
     "stdout": "* Skills — installed in ~/.claude/skills/cast-*/SKILL.md\n",
     "wroteClaudeMd": false,

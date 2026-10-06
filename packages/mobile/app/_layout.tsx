@@ -28,7 +28,6 @@ import * as Font from 'expo-font';
 import { Alert } from 'react-native';
 import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
-import { landAfterSignIn, useLaneLanding } from '@/components/simple/laneRoute';
 
 // A task write the server refuses (createTaskAndAdopt drops its stub) says so,
 // as web's toast does.
@@ -249,11 +248,8 @@ function RootLayoutNav() {
                     back button read "(tabs)" on every pushed screen. */}
                 <Stack screenOptions={{ headerBackButtonDisplayMode: 'minimal' }}>
                   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                  {/* The assistant lane (client_state.ui.lane): its own stack and look. */}
-                  <Stack.Screen name="(simple)" options={{ headerShown: false }} />
                   <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
                   <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
-                  <Stack.Screen name="open/[...to]" options={{ headerShown: false, animation: 'none' }} />
                   <Stack.Screen name="session/[id]" options={{ title: 'Conversation' }} />
                   <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
                   <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
@@ -318,7 +314,6 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   usePushNotifications();
   useLiveActivity();
-  useLaneLanding(isAuthenticated);
 
   // The PushKit token often arrives before sign-in on a cold start; publish
   // it once auth is up so invites route through APNs VoIP.
@@ -331,11 +326,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // web URL shapes onto screens), so by the time this gate runs, a link-opened
   // app is already ON its destination. All that is left to handle is auth:
   // when a signed-out launch lands on a deep screen, remember it, bounce
-  // through login, and restore it on top of the home of the person's lane
-  // afterwards (landAfterSignIn).
+  // through login, and restore it on top of the inbox afterwards.
   const pathname = usePathname();
   const pendingDeepLink = useRef<string | null>(null);
-  const restoring = useRef(false);
 
   useEffect(() => {
     if (isLoading) return;
@@ -345,18 +338,16 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     if (!isAuthenticated && !inAuthGroup) {
       if (pathname && pathname !== '/') pendingDeepLink.current = pathname;
       router.replace('/auth/login');
-    } else if (isAuthenticated && inAuthGroup && !restoring.current) {
+    } else if (isAuthenticated && inAuthGroup) {
       const target = pendingDeepLink.current;
       pendingDeepLink.current = null;
-      restoring.current = true;
-      void landAfterSignIn(target).finally(() => {
-        restoring.current = false;
-      });
+      router.replace('/');
+      if (target) router.push(target as never);
     }
   }, [isAuthenticated, isLoading, segments, pathname]);
 
-  // The store's server feeders, once for the whole app, so the tabs and the
-  // assistant lane (app/(simple)) read the same replica. They run from boot
+  // The store's server feeders, once for the whole app, so every screen
+  // reads the same replica. They run from boot
   // (a cached, still-verifying sign-in) and stop only once signed out.
   return (
     <>

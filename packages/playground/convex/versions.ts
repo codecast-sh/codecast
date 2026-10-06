@@ -1,0 +1,245 @@
+// Versions: immutable snapshots of an app's files, numbered 1..n per app.
+// Appending one is the only way the live version moves, and the only writer
+// is commitVersion, so numbering, counts and the live pointer cannot drift.
+import { v } from "convex/values";
+import { internalMutation, internalQuery, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import { fail } from "./lib/errors";
+import { byteLength, contentTypeFor, fileSetProblems, manifestHash, needsTranspile, normalizeFilePath, type FileDraft } from "./lib/files";
+import { sha256Hex } from "./lib/identity";
+import { TIMELINE_MAX } from "./lib/limits";
+import { transpile } from "./lib/transpile";
+import { cleanSummary, nextVersionNumber, type VersionKind } from "./lib/versions";
+import { appBySlug, requireApp } from "./model";
+import { publicVisitors, requireVisitor, type PublicVisitor } from "./visitors";
+import { versionKind, versionRef, visitorArgs } from "./validators";
+
+export type VersionMeta = {
+  kind: VersionKind;
+  summary: string;
+  author_id: Id<"visitors">;
+  /** The version this one was made from; defaults to the live version. A
+   *  build passes its base, which a restore may have moved past meanwhile. */
+  parent_number?: number;
+  request_message_id?: Id<"messages">;
+  source?: { app_id: Id<"apps">; version: number };
+};
+
+type FileRow = { path: string; hash: string; served_hash?: string };
+
+async function blobByHash(ctx: QueryCtx, hash: string): Promise<Doc<"blobs"> | null> {
+  return ctx.db.query("blobs").withIndex("by_hash", (q) => q.eq("hash", hash)).first();
+}
+
+/** Store text by content hash, once. */
+async function putBlob(ctx: MutationCtx, text: string): Promise<{ hash: string; size: number }> {
+  const hash = await sha256Hex(text);
+  const size = byteLength(text);
+  if (!(await blobByHash(ctx, hash))) await ctx.db.insert("blobs", { hash, size, text });
+  return { hash, size };
+}
+
+async function commitVersion(
+  ctx: MutationCtx,
+  app: Doc<"apps">,
+  meta: VersionMeta,
+  files: FileRow[],
+  stats: { bytes: number; files_hash: string },
+): Promise<{ version_id: Id<"versions">; number: number }> {
+  const number = nextVersionNumber(app.version_count);
+  const now = Date.now();
+  const firstByAuthor = !(await ctx.db
+    .query("versions")
+    .withIndex("by_app_author", (q) => q.eq("app_id", app._id).eq("author_id", meta.author_id))
+    .first());
+  const version_id = await ctx.db.insert("versions", {
+    app_id: app._id,
+    number,
+    ...(app.version_count > 0 ? { parent_number: meta.parent_number ?? app.live_version } : {}),
+    kind: meta.kind,
+    summary: cleanSummary(meta.summary),
+    author_id: meta.author_id,
+    ...(meta.request_message_id ? { request_message_id: meta.request_message_id } : {}),
+    ...(meta.source ? { source: meta.source } : {}),
+    file_count: files.length,
+    bytes: stats.bytes,
+    files_hash: stats.files_hash,
+    created_at: now,
+  });
+  for (const f of files) await ctx.db.insert("version_files", { version_id, ...f });
+  await ctx.db.patch(app._id, {
+    version_count: number,
+    live_version: number,
+    contributor_count: app.contributor_count + (firstByAuthor ? 1 : 0),
+    last_activity_at: now,
+  });
+  return { version_id, number };
+}
+
+/** Append a version from file texts and make it live. Paths are normalized,
+ *  the set must pass the file rules, and JSX/TS must transpile; otherwise
+ *  this throws `invalid` with every problem, and nothing is written. */
+export async function appendVersion(ctx: MutationCtx, app: Doc<"apps">, meta: VersionMeta, drafts: FileDraft[]) {
+  const files = drafts.map((f) => ({ path: normalizeFilePath(f.path) ?? f.path, text: f.text }));
+  const compiled = files.map((f) => (needsTranspile(f.path) ? transpile(f.path, f.text) : null));
+  const problems = [...fileSetProblems(files), ...compiled.flatMap((c) => (c && !c.ok ? [c.error] : []))];
+  if (problems.length) fail("invalid", problems.join("\n"));
+
+  const rows: FileRow[] = [];
+  let bytes = 0;
+  for (const [i, f] of files.entries()) {
+    const source = await putBlob(ctx, f.text);
+    const c = compiled[i];
+    const served = c?.ok ? await putBlob(ctx, c.code) : null;
+    bytes += source.size;
+    rows.push({ path: f.path, hash: source.hash, ...(served ? { served_hash: served.hash } : {}) });
+  }
+  return commitVersion(ctx, app, meta, rows, { bytes, files_hash: await manifestHash(rows) });
+}
+
+/** Append a version holding exactly the files of `from` (any app's), for
+ *  restore and fork. Blobs are shared, so this copies only path rows. */
+export async function appendCopiedVersion(ctx: MutationCtx, app: Doc<"apps">, meta: VersionMeta, from: Doc<"versions">) {
+  const rows = (await fileRows(ctx, from._id)).map(({ path, hash, served_hash }) => ({
+    path,
+    hash,
+    ...(served_hash ? { served_hash } : {}),
+  }));
+  return commitVersion(ctx, app, meta, rows, { bytes: from.bytes, files_hash: from.files_hash });
+}
+
+function fileRows(ctx: QueryCtx, versionId: Id<"versions">) {
+  return ctx.db.query("version_files").withIndex("by_version_path", (q) => q.eq("version_id", versionId)).collect();
+}
+
+export async function versionByNumber(ctx: QueryCtx, appId: Id<"apps">, number: number): Promise<Doc<"versions"> | null> {
+  return ctx.db
+    .query("versions")
+    .withIndex("by_app_number", (q) => q.eq("app_id", appId).eq("number", number))
+    .unique();
+}
+
+/** A version as the timeline shows it: no file contents. */
+export type TimelineEntry = {
+  number: number;
+  parent_number: number | null;
+  kind: VersionKind;
+  summary: string;
+  author: PublicVisitor | null;
+  request_message_id: Id<"messages"> | null;
+  source: { app_id: Id<"apps">; version: number } | null;
+  file_count: number;
+  created_at: number;
+};
+
+async function timelineEntries(ctx: QueryCtx, rows: Doc<"versions">[]): Promise<TimelineEntry[]> {
+  const people = await publicVisitors(ctx, rows.map((r) => r.author_id));
+  return rows.map((r) => ({
+    number: r.number,
+    parent_number: r.parent_number ?? null,
+    kind: r.kind,
+    summary: r.summary,
+    author: people.get(r.author_id) ?? null,
+    request_message_id: r.request_message_id ?? null,
+    source: r.source ?? null,
+    file_count: r.file_count,
+    created_at: r.created_at,
+  }));
+}
+
+/** The timeline, oldest first: the latest TIMELINE_MAX versions. */
+export const list = query({
+  args: { ...visitorArgs, app_id: v.id("apps") },
+  handler: async (ctx, args): Promise<TimelineEntry[]> => {
+    await requireVisitor(ctx, args);
+    await requireApp(ctx, args.app_id);
+    const rows = await ctx.db
+      .query("versions")
+      .withIndex("by_app_number", (q) => q.eq("app_id", args.app_id))
+      .order("desc")
+      .take(TIMELINE_MAX);
+    return timelineEntries(ctx, rows.reverse());
+  },
+});
+
+export const get = query({
+  args: { ...visitorArgs, app_id: v.id("apps"), number: v.number() },
+  handler: async (ctx, args): Promise<TimelineEntry | null> => {
+    await requireVisitor(ctx, args);
+    const row = await versionByNumber(ctx, args.app_id, args.number);
+    return row ? (await timelineEntries(ctx, [row]))[0] : null;
+  },
+});
+
+export type VersionFile = { path: string; hash: string; size: number; text: string | null; url: string | null };
+
+async function readFiles(ctx: QueryCtx, versionId: Id<"versions">): Promise<VersionFile[]> {
+  const rows = await fileRows(ctx, versionId);
+  return Promise.all(
+    rows.map(async (r) => {
+      const blob = await blobByHash(ctx, r.hash);
+      if (!blob) throw new Error(`missing blob ${r.hash} for ${r.path}`);
+      const url = blob.storage_id ? await ctx.storage.getUrl(blob.storage_id) : null;
+      return { path: r.path, hash: r.hash, size: blob.size, text: blob.text ?? null, url };
+    }),
+  );
+}
+
+/** The source files of one version, sorted by path. */
+export const files = query({
+  args: { ...visitorArgs, app_id: v.id("apps"), number: v.number() },
+  handler: async (ctx, args) => {
+    await requireVisitor(ctx, args);
+    const row = await versionByNumber(ctx, args.app_id, args.number);
+    if (!row) return null;
+    return { number: row.number, files_hash: row.files_hash, files: await readFiles(ctx, row._id) };
+  },
+});
+
+/** The builder's starting draft: a version's source files as text. */
+export const draft = internalQuery({
+  args: { app_id: v.id("apps"), number: v.number() },
+  handler: async (ctx, args): Promise<FileDraft[]> => {
+    const row = (await versionByNumber(ctx, args.app_id, args.number)) ?? fail("not_found", `v${args.number} does not exist`);
+    return (await readFiles(ctx, row._id)).map((f) => ({ path: f.path, text: f.text ?? "" }));
+  },
+});
+
+/** One file as the runtime serves it: transpiled when the source is JSX/TS. */
+export const served = internalQuery({
+  args: { slug: v.string(), number: v.number(), path: v.string() },
+  handler: async (ctx, args) => {
+    const app = await appBySlug(ctx, args.slug);
+    const row = app && (await versionByNumber(ctx, app._id, args.number));
+    if (!row) return null;
+    const file = await ctx.db
+      .query("version_files")
+      .withIndex("by_version_path", (q) => q.eq("version_id", row._id).eq("path", args.path))
+      .unique();
+    const blob = file && (await blobByHash(ctx, file.served_hash ?? file.hash));
+    if (!blob) return null;
+    return {
+      content_type: contentTypeFor(args.path),
+      hash: blob.hash,
+      text: blob.text ?? null,
+      storage_id: blob.storage_id ?? null,
+    };
+  },
+});
+
+/** The builder's commit: append a version from its finished draft. */
+export const append = internalMutation({
+  args: {
+    app_id: v.id("apps"),
+    files: v.array(v.object({ path: v.string(), text: v.string() })),
+    kind: versionKind,
+    summary: v.string(),
+    author_id: v.id("visitors"),
+    parent_number: v.optional(v.number()),
+    request_message_id: v.optional(v.id("messages")),
+    source: v.optional(versionRef),
+  },
+  handler: async (ctx, { app_id, files, ...meta }) => {
+    return appendVersion(ctx, await requireApp(ctx, app_id), meta, files);
+  },
+});

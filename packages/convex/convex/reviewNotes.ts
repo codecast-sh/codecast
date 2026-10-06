@@ -23,6 +23,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { normalizeRepository } from "./lib/gitRefs";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
 import { buildReviewBatchPrompt, type ReviewVerdict } from "@codecast/shared/comments";
+import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 
 /** The notes one author wrote in one worktree, oldest first. */
 async function batchRows(
@@ -64,6 +65,8 @@ export const add = mutation({
     // Absent or 0 means the note is about the whole file.
     line_number: v.optional(v.number()),
     line_end: v.optional(v.number()),
+    // The noted lines' text and context (shared/comments/codeAnchor.ts).
+    anchor_lines: v.optional(codeAnchorValidator),
     content: v.string(),
     diff_identity: v.optional(v.string()),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
@@ -98,6 +101,7 @@ export const add = mutation({
       file_path: args.file_path,
       line_number: args.line_number || undefined,
       line_end: args.line_end || undefined,
+      anchor_lines: args.line_number ? args.anchor_lines : undefined,
       author_user_id: userId,
       author_kind: args.author_kind ?? ("user" as const),
       content,
