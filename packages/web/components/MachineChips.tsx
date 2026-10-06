@@ -11,7 +11,7 @@
 import { ChevronDown, Users } from "lucide-react";
 import { deviceDisplayName } from "@codecast/shared/contracts";
 import { DeviceDot, DeviceIcon, deviceAccentClasses } from "./DeviceBadge";
-import { machineChipTitle, type SessionMachine } from "../lib/sessionMachines";
+import { machineChipNote, machineChipTitle, type SessionMachine } from "../lib/sessionMachines";
 
 export type MachineChipsProps = {
   machines: SessionMachine[];
@@ -26,8 +26,15 @@ export type MachineChipsProps = {
 /** A machine someone on your team opened to you, or an agent box. */
 const isTeamMachine = (d: SessionMachine) => d.bot_name !== undefined;
 
-function chipLabel(d: SessionMachine) {
-  return <>{deviceDisplayName(d)}{d.bot_name !== undefined && ` · ${d.runner_name || d.bot_name || "agent box"}`}</>;
+function chipLabel(d: SessionMachine, machines: SessionMachine[]) {
+  const note = machineChipNote(d, machines);
+  return (
+    <>
+      {deviceDisplayName(d)}
+      {d.bot_name !== undefined && ` · ${d.runner_name || d.bot_name || "agent box"}`}
+      {note && <span className={note === "gone" ? "text-sol-red/80" : "opacity-70"}>{` · ${note}`}</span>}
+    </>
+  );
 }
 
 export function MachineChips({ machines, selectedDeviceId, open, onOpen, onPick, onShare }: MachineChipsProps) {
@@ -40,7 +47,7 @@ export function MachineChips({ machines, selectedDeviceId, open, onOpen, onPick,
         <button
           key={d.device_id}
           onClick={() => onPick(d)}
-          title={machineChipTitle(d)}
+          title={machineChipTitle(d, machines)}
           className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
             selected
               ? `${deviceAccentClasses(d)} font-medium !border-current`
@@ -48,7 +55,7 @@ export function MachineChips({ machines, selectedDeviceId, open, onOpen, onPick,
           }`}
         >
           <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
-          <span className="truncate max-w-[14rem]">{chipLabel(d)}</span>
+          <span className="truncate max-w-[14rem]">{chipLabel(d, machines)}</span>
           <DeviceDot online={d.online} />
         </button>
       );
@@ -89,7 +96,7 @@ export function MachineChips({ machines, selectedDeviceId, open, onOpen, onPick,
       className="group/machine inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 hover:bg-sol-bg-alt/50 transition-all"
     >
       <DeviceIcon d={routedMachine} className="w-3 h-3 shrink-0" />
-      <span className="truncate max-w-[14rem]">{chipLabel(routedMachine)}</span>
+      <span className="truncate max-w-[14rem]">{chipLabel(routedMachine, machines)}</span>
       <DeviceDot online={routedMachine.online} />
       {teamCount > 0 && !isTeamMachine(routedMachine) && (
         <span className="inline-flex items-center gap-0.5 text-sol-cyan/80" title={`${teamCount} team machine${teamCount === 1 ? "" : "s"} you can run on`}>

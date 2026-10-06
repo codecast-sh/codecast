@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cloudPlacementFor, deviceWakesOnUse, pathUnderRoot, platformCanOpenPath } from "./cloudPlacement";
+import { cloudHostRetired, cloudPlacementFor, deviceWakesOnUse, pathUnderRoot, platformCanOpenPath } from "./cloudPlacement";
 
 const host = { platform: "linux", local_project_roots: ["/home/ubuntu/work/codecast"] };
 const mac = { platform: "darwin", local_project_roots: ["/Users/me/src/app"] };
@@ -76,5 +76,39 @@ describe("path helpers", () => {
     expect(platformCanOpenPath(undefined, "/Users/me")).toBe(true);
     expect(platformCanOpenPath("win32", "C:\\x")).toBe(true);
     expect(platformCanOpenPath("win32", "/home/x")).toBe(false);
+  });
+});
+
+describe("cloudHostRetired — gone, not asleep", () => {
+  const H = 60 * 60 * 1000;
+  const host = (at: number | null, extra: Record<string, unknown> = {}) => ({
+    is_remote: true, platform: "linux", online: false,
+    ...(at === null ? {} : { cloud_host: { managed_by: "laptop", state: "stopped", at } }),
+    ...extra,
+  });
+
+  test("a host its laptop still reports on is asleep", () => {
+    const a = host(10 * H), b = host(10 * H);
+    expect(cloudHostRetired(a, [a, b])).toBe(false);
+  });
+
+  test("a host the laptop stopped reporting while reporting on another is gone", () => {
+    const dead = host(1 * H), live = host(10 * H);
+    expect(cloudHostRetired(dead, [dead, live])).toBe(true);
+    expect(cloudHostRetired(live, [dead, live])).toBe(false);
+  });
+
+  test("another laptop's reports say nothing about this host", () => {
+    const mine = host(1 * H), theirs = host(10 * H, { cloud_host: { managed_by: "other", state: "running", at: 10 * H } });
+    expect(cloudHostRetired(mine, [mine, theirs])).toBe(false);
+  });
+
+  test("missing is gone; online never is; a lone unreported host is asleep", () => {
+    const missing = host(10 * H, { cloud_host: { managed_by: "laptop", state: "missing", at: 10 * H } });
+    expect(cloudHostRetired(missing, [missing])).toBe(true);
+    const unreported = host(null), live = host(10 * H);
+    expect(cloudHostRetired(unreported, [unreported, live])).toBe(true);
+    expect(cloudHostRetired(unreported, [unreported])).toBe(false);
+    expect(cloudHostRetired({ ...unreported, online: true }, [unreported, live])).toBe(false);
   });
 });

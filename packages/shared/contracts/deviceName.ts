@@ -76,9 +76,18 @@ export function deviceDisplayName(d: DeviceNameSource | undefined | null): strin
 
 /**
  * Machine chip order for every picker: the machines you sit at first, then
- * remotes (flagged or cloud-named), each group by display name. Never by
- * last_seen, which heartbeats would reshuffle under the user's thumb.
+ * remotes (flagged or cloud-named), each group by display name. Machines
+ * sharing a name (three "Cloud Linux") put the online one first, then the
+ * offline ones most recently seen first, so a long-dead row sinks to the end.
+ * last_seen only orders offline rows, whose value no heartbeat moves: an
+ * online row's would reshuffle the chips under the user's thumb.
  */
-export function compareMachineChips(a: DeviceNameSource, b: DeviceNameSource): number {
-  return Number(isRemoteHost(a)) - Number(isRemoteHost(b)) || deviceDisplayName(a).localeCompare(deviceDisplayName(b));
+export function compareMachineChips(
+  a: DeviceNameSource & { online?: boolean; last_seen?: number },
+  b: DeviceNameSource & { online?: boolean; last_seen?: number },
+): number {
+  return Number(isRemoteHost(a)) - Number(isRemoteHost(b))
+    || deviceDisplayName(a).localeCompare(deviceDisplayName(b))
+    || Number(!a.online) - Number(!b.online)
+    || (!a.online && !b.online ? (b.last_seen ?? 0) - (a.last_seen ?? 0) : 0);
 }
