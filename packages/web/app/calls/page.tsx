@@ -15,7 +15,7 @@
 
 import { isCallLive } from "../../lib/calls/callStatus";
 import { useTeamFeature } from "../../lib/teamFeatures";
-import { useMemo, useRef, useState } from "react";
+import { useContext, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -35,6 +35,7 @@ import { isConvexId, useInboxStore, useMyUserId } from "../../store/inboxStore";
 import { Facepile } from "../../components/calls/OccupancyChip";
 import { LiveRoomAction, LiveRoomLabel } from "../../components/calls/LiveNow";
 import { useLiveRooms } from "../../hooks/useLiveRooms";
+import { RevealInBandCtx } from "../../lib/revealHost";
 import { RoomThread } from "../../components/calls/RoomThread";
 import type { ClickedLine } from "../../components/calls/TranscriptTurns";
 import type { CallMoment } from "../../components/calls/RoomThreadRows";
@@ -93,6 +94,8 @@ import {
   PhoneCall,
   Radio,
   Mic,
+  PanelLeft,
+  PanelLeftClose,
   Send,
   Sparkles,
   Users,
@@ -307,16 +310,19 @@ function RecordingScopePicker({ call }: { call: any }) {
  *  thread's shape under it, so the page does not open on a word and then
  *  jump. Only the header is drawn from the row; nothing else is guessed (no
  *  video box, since the list cannot say whether the call was filmed). */
-function CallDetailSkeleton({ preview }: { preview?: any }) {
+function CallDetailSkeleton({ preview, lead }: { preview?: any; lead?: React.ReactNode }) {
   const bar = "rounded bg-sol-text-muted/10 animate-pulse motion-reduce:animate-none";
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" aria-busy="true">
       <div className="shrink-0 border-b border-sol-border/20 px-6 py-4">
-        {preview?.title ? (
-          <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">{preview.title}</h1>
-        ) : (
-          <div className={`${bar} h-[22px] w-72 max-w-full`} />
-        )}
+        <div className="flex items-center gap-2.5">
+          {lead}
+          {preview?.title ? (
+            <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">{preview.title}</h1>
+          ) : (
+            <div className={`${bar} h-[22px] w-72 max-w-full`} />
+          )}
+        </div>
         <div className="mt-2 flex items-center gap-3 text-[12px] text-sol-text-dim">
           {preview?.started_at ? (
             <>
@@ -343,7 +349,7 @@ function CallDetailSkeleton({ preview }: { preview?: any }) {
   );
 }
 
-function CallDetail({ id, preview }: { id: string; preview?: any }) {
+function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: React.ReactNode }) {
   // A live call's transcript streams into this subscription in real time
   // (segments appear as people speak), and every push lands in the store, so
   // a call opened before paints from cache on the next visit instead of a
@@ -555,7 +561,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
   const title = useInboxStore((s) => (call ? callTitle({ ...call, place: places[String(call._id)] }, s as any) : ""));
   // Touch screens select lines by press and hold (onTurnHold below).
   const coarse = useCoarsePointer();
-  if (call === undefined) return <CallDetailSkeleton preview={preview} />;
+  if (call === undefined) return <CallDetailSkeleton preview={preview} lead={lead} />;
   if (call === null) {
     return <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>;
   }
@@ -657,6 +663,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
       {/* Header: what this call was, who spoke, the ways in. */}
       <div className="shrink-0 border-b border-sol-border/20 px-6 py-4">
         <div className="flex items-center gap-2.5">
+          {lead}
           {recording && <Mic className="h-4 w-4 shrink-0 text-sol-text-dim" />}
           <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">
             {title}
@@ -1151,6 +1158,25 @@ export default function CallsPage() {
   const [videoOnly, setVideoOnly] = useState(false);
   const anyFilmed = pastCalls.some((r) => r.filmed);
   const shownPast = videoOnly && anyFilmed ? pastCalls.filter((r) => r.filmed) : pastCalls;
+  // A call is its own page: with one open, the history folds away (a
+  // per-device choice, reopened from the call's header), and a call shown
+  // inside a reveal band has no history at all, since the band already
+  // frames exactly one object.
+  const inBand = useContext(RevealInBandCtx);
+  const listPref = useInboxStore((s) => s.clientState?.ui?.calls_list_open === true);
+  const showList = !selectedId || (!inBand && listPref);
+  const setListOpen = (open: boolean) => useInboxStore.getState().updateClientUI({ calls_list_open: open });
+  const listToggle = selectedId && !inBand && !listPref ? (
+    <button
+      type="button"
+      onClick={() => setListOpen(true)}
+      title="Show all calls"
+      aria-label="Show all calls"
+      className="hidden shrink-0 rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text md:inline-flex"
+    >
+      <PanelLeft className="h-4 w-4" />
+    </button>
+  ) : undefined;
 
   return (
     <AuthGuard>
@@ -1160,9 +1186,22 @@ export default function CallsPage() {
             is picked, then the call alone with a way back, so a frame link
             opened on a phone lands on a page the width of the phone. */}
         <div className="flex h-full min-h-0">
-          <div className={`${selectedId ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r border-sol-border/20 md:w-72`}>
+          <div className={`${!showList ? "hidden" : selectedId ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r border-sol-border/20 md:w-72`}>
             <div className="shrink-0 border-b border-sol-border/20 px-4 py-3">
-              <h2 className="text-sm font-medium text-sol-text">Calls</h2>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-medium text-sol-text">Calls</h2>
+                {selectedId && (
+                  <button
+                    type="button"
+                    onClick={() => setListOpen(false)}
+                    title="Hide the list"
+                    aria-label="Hide the list"
+                    className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text"
+                  >
+                    <PanelLeftClose className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
               <p className="mt-0.5 text-[11px] text-sol-text-dim">
                 Huddles with their transcripts and video, and voice
                 notes, also via <code className="text-sol-cyan">cast calls</code>
@@ -1236,7 +1275,7 @@ export default function CallsPage() {
             </div>
           </div>
           <div className={`${selectedId ? "flex" : "hidden md:flex"} relative min-w-0 flex-1 flex-col`}>
-            {selectedId && (
+            {selectedId && !inBand && (
               // Back to the list, without the moment or the anchor: the
               // list has no place in a call to keep.
               <Link
@@ -1248,9 +1287,9 @@ export default function CallsPage() {
             )}
             <div className="relative min-h-0 flex-1">
               {callId ? (
-                <CallDetail id={callId} preview={calls.find((r) => String(r._id) === callId)} />
+                <CallDetail id={callId} preview={calls.find((r) => String(r._id) === callId)} lead={listToggle} />
               ) : callId === undefined ? (
-                <CallDetailSkeleton />
+                <CallDetailSkeleton lead={listToggle} />
               ) : selectedId ? (
                 <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>
               ) : (

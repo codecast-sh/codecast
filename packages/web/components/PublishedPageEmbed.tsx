@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 import { useMutation } from "convex/react";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link as LinkIcon, Link2, ArrowUpRight, ChevronsUpDown, Columns2, MessageSquarePlus } from "lucide-react";
+import { Link as LinkIcon, Link2, ArrowUpRight, Check, Columns2, Maximize2, MessageSquarePlus, Minimize2 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { linkPreviewStale } from "@codecast/convex/convex/lib/linkPreviewMeta";
@@ -20,6 +20,8 @@ import { snippetEnabledOn } from "../lib/newSnippets";
 import { ClaudeIcon } from "./BrandIcons";
 import { useDevices } from "./DeviceBadge";
 import { HeightGrip, savedGripHeight } from "./HeightGrip";
+import { KeyCap } from "./KeyCap";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 const api = _api as any;
 
@@ -171,46 +173,148 @@ function usePageMeta(slug: string) {
     | undefined;
 }
 
-/** A published page card's header verbs: comment on the page (where the
- *  viewer can reply in this thread), copy the share link, expand the frame,
- *  open it in a pane. */
+// ---------------------------------------------------------------------------
+// The frameless shell
+//
+// A page an agent made is part of its reply, so it sits straight on the
+// thread: no border, no header strip, no bar inside it. Its edge shows only
+// as a hairline while the pointer is over it, and its verbs float in as one
+// glass toolbar in the top corner. Pinning notes keeps the toolbar up and
+// turns the hairline yellow, so the mode is never invisible. The bottom edge
+// is a resize grip that appears with the toolbar; a double click on it hands
+// the height back to the page.
+// ---------------------------------------------------------------------------
+
+const TOOL =
+  "page-embed__tool relative inline-flex h-[26px] min-w-[26px] items-center justify-center gap-1 rounded-full px-1.5 " +
+  "text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text focus-visible:outline-none " +
+  "focus-visible:ring-1 focus-visible:ring-sol-blue/60";
+
+/** One toolbar verb with its tooltip. */
+function Tool({ label, onClick, pressed, className = "", children }: {
+  label: ReactNode;
+  onClick: () => void;
+  pressed?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClick();
+          }}
+          aria-pressed={pressed}
+          aria-label={typeof label === "string" ? label : undefined}
+          className={`${TOOL} ${className}`}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={8} className="flex items-center gap-1.5 border border-sol-border/60 bg-sol-bg-alt px-2 py-1 text-[11px] text-sol-text shadow-md">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** A page's verbs: comment on it (where the viewer can reply in this thread),
+ *  copy its share link, expand it, open it beside your work, open it in a tab. */
 export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: {
   slug: string;
   expanded: boolean;
   onToggleExpand: () => void;
   notes?: ReturnType<typeof usePageNotes>;
 }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(t);
+  }, [copied]);
   return (
     <>
       {notes && (
-        <button
-          type="button"
+        <Tool
+          label={notes.pinMode ? <>Stop pinning <KeyCap size="xs">Esc</KeyCap></> : "Pin a note, or select text on the page"}
           onClick={() => notes.setPinMode(!notes.pinMode)}
-          className={`${HEADER_ACTION} rounded px-1 ${notes.pinMode ? "bg-sol-yellow/15 !text-sol-yellow" : ""}`}
-          title={notes.pinMode ? "Stop pinning notes (Esc)" : "Pin notes on the page for the agent, or select text on it"}
-          aria-pressed={notes.pinMode}
+          pressed={notes.pinMode}
+          className={notes.pinMode ? "!bg-sol-yellow/20 !text-sol-yellow" : ""}
         >
-          <MessageSquarePlus className="h-3 w-3" />
-          {notes.count > 0
-            ? <span className="font-mono tabular-nums text-sol-yellow">{notes.count} {notes.count === 1 ? "note" : "notes"}</span>
-            : "Comment"}
-        </button>
+          <MessageSquarePlus className="h-3.5 w-3.5" />
+          {notes.count > 0 && <span className="font-mono text-[11px] tabular-nums text-sol-yellow">{notes.count}</span>}
+        </Tool>
       )}
-      {/* Copy the public share URL, not the serving origin the iframe uses. */}
-      <CopyLinkButton url={pageShareUrl(slug)} title="Copy link to published page" className={HEADER_ACTION} />
-      <button
-        type="button"
-        onClick={onToggleExpand}
-        className={HEADER_ACTION}
-        title={expanded ? "Collapse" : "Expand"}
+      {/* The public share URL, not the serving origin the frame uses. */}
+      <Tool
+        label={copied ? "Copied" : "Copy link"}
+        onClick={() => void copyToClipboard(pageShareUrl(slug)).then(() => setCopied(true), () => toast.error("Couldn't copy link"))}
       >
-        <ChevronsUpDown className="h-3 w-3" />
-      </button>
-      {/* The pane frames the SERVING origin, the same source the iframe
-          uses, so the page arrives under its own sandbox CSP and the share
-          page's chrome does not wrap it a second time. */}
-      <OpenInPaneButton url={pageFrameSrc(slug)} className={HEADER_ACTION} />
+        {copied ? <Check className="h-3.5 w-3.5 text-sol-green" /> : <Link2 className="h-3.5 w-3.5" />}
+      </Tool>
+      <Tool label={expanded ? "Fit to the page" : "Expand"} onClick={onToggleExpand} pressed={expanded}>
+        {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+      </Tool>
+      {/* The pane frames the SERVING origin, so the page arrives under its own
+          sandbox CSP and the share page's chrome does not wrap it twice. */}
+      <Tool label="Open beside your work" onClick={() => openBrowserPane({ kind: "url", url: pageFrameSrc(slug) })}>
+        <Columns2 className="h-3.5 w-3.5" />
+      </Tool>
+      <Tool label="Open in a new tab" onClick={() => window.open(pageShareUrl(slug), "_blank", "noopener,noreferrer")}>
+        <ArrowUpRight className="h-3.5 w-3.5" />
+      </Tool>
     </>
+  );
+}
+
+/** The frameless page: the body on the thread's own surface, the toolbar
+ *  floating over its top corner, the resize edge under it, the caption
+ *  below. All spans, so it stays valid wherever markdown puts it. */
+export function FramelessPage({ title, href, actions, caption, height, stageRef, loaded, pinning, grip, children }: {
+  title: string;
+  href: string;
+  actions: ReactNode;
+  caption?: string;
+  height: number | string;
+  stageRef?: RefObject<HTMLSpanElement | null>;
+  /** The body has painted; until then a quiet shimmer holds its place. */
+  loaded: boolean;
+  pinning?: boolean;
+  grip?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <span className="page-embed not-prose mb-5 block" data-loaded={loaded ? "" : undefined} data-pinning={pinning ? "" : undefined}>
+      <span className="relative block">
+        <span className="page-embed__edge" aria-hidden />
+        <span ref={stageRef} className="page-embed__stage relative block overflow-hidden rounded-[10px]" style={{ height }}>
+          {children}
+          {!loaded && <span className="page-embed__shimmer" aria-hidden />}
+        </span>
+        <TooltipProvider delayDuration={350} skipDelayDuration={150}>
+          <span className="page-embed__bar" role="toolbar" aria-label={`${title} actions`}>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-full py-0.5 pl-1 pr-2 text-[11px] font-medium text-sol-text-secondary no-underline transition-colors hover:text-sol-text"
+              title={href}
+            >
+              <PageFavicon className="h-4 w-4" />
+              <span className="truncate">{title}</span>
+            </a>
+            <span className="mx-0.5 h-3.5 w-px flex-shrink-0 bg-sol-border/50" aria-hidden />
+            {actions}
+          </span>
+        </TooltipProvider>
+        {grip}
+      </span>
+      {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
+    </span>
   );
 }
 
@@ -243,9 +347,9 @@ function useReportedHeight(frameRef: RefObject<HTMLIFrameElement | null>): numbe
 }
 
 /**
- * Block-level inline embed of a published page: a titled card framing the
- * live page. Rendered for a publish URL standing alone on its own line in
- * message markdown, and for decision-queue report attachments.
+ * Block-level inline embed of a published page, frameless in the thread.
+ * Rendered for a publish URL standing alone on its own line in message
+ * markdown, and for decision-queue report attachments.
  */
 export function PublishedPageEmbed({ slug, caption, height }: {
   slug: string;
@@ -264,6 +368,7 @@ export function PublishedPageEmbed({ slug, caption, height }: {
     setExpanded(false);
   }, []);
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const stageRef = useRef<HTMLSpanElement>(null);
   // Then the page's own content height, kept within a given height (a slice
   // inside a decision card); then that given height, then the reader's saved one.
   const reported = useReportedHeight(frameRef);
@@ -271,16 +376,21 @@ export function PublishedPageEmbed({ slug, caption, height }: {
   const frameHeight = expanded
     ? EMBED_HEIGHT_EXPANDED
     : dragged ?? (reported !== null ? Math.min(reported, height ?? EMBED_FIT_MAX) : fallback);
-  const { theme, onLoad: onThemeLoad } = useFrameTheme(frameRef);
+  const { theme, onLoad: onThemeLoad } = useFrameTheme(frameRef, { blend: true });
   const notes = usePageNotes(frameRef, slug, meta?.title || "Published page");
+  // The page paints the server's default palette until the theme message
+  // lands, so it fades in a beat after load rather than flashing.
+  const [loaded, setLoaded] = useState(false);
   const onLoad = useCallback(() => {
     onThemeLoad();
     notes?.onLoad();
+    setTimeout(() => setLoaded(true), 90);
   }, [onThemeLoad, notes?.onLoad]); // eslint-disable-line react-hooks/exhaustive-deps
   // The theme at mount rides the address so the first paint already matches;
   // later changes arrive as messages, because a new src would reload the page.
+  // embed=1 tells the page this window carries its chrome.
   const [mountTheme] = useState(theme);
-  const src = `${pageFrameSrc(slug)}?theme=${mountTheme}`;
+  const src = `${pageFrameSrc(slug)}?theme=${mountTheme}&embed=1`;
 
   // Deleted or never existed: a full-height frame of a 404 reads as breakage.
   // Degrade to a compact note carrying the link.
@@ -302,30 +412,30 @@ export function PublishedPageEmbed({ slug, caption, height }: {
 
   const title = meta?.title || "Published page";
   return (
-    <PageCard
-      icon={<PageFavicon className="h-4 w-4" />}
+    <FramelessPage
       title={title}
       href={pageShareUrl(slug)}
       caption={caption}
+      height={frameHeight}
+      stageRef={stageRef}
+      loaded={loaded}
+      pinning={notes?.pinMode}
       actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={() => setExpanded((v) => !v)} notes={notes} />}
+      grip={
+        <span className="page-embed__grip" onDoubleClick={() => { setDragged(null); setExpanded(false); }} title="Drag to resize, double-click to fit">
+          <HeightGrip target={stageRef} storageKey={EMBED_HEIGHT_KEY} min={EMBED_MIN_HEIGHT} onResized={onResized} />
+        </span>
+      }
     >
       <iframe
         ref={frameRef}
         src={src}
         onLoad={onLoad}
-        className="w-full bg-sol-card"
-        style={{ height: frameHeight }}
+        className="page-embed__frame block h-full w-full"
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         title={title}
       />
-      <HeightGrip
-        target={frameRef}
-        storageKey={EMBED_HEIGHT_KEY}
-        min={EMBED_MIN_HEIGHT}
-        onResized={onResized}
-        className="border-t border-sol-border bg-sol-bg-alt"
-      />
-    </PageCard>
+    </FramelessPage>
   );
 }
 

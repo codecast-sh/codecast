@@ -1,7 +1,7 @@
-// Whisk as the hosted assistant's Mailbox (mail.ts) and Calendar
-// (calendar.ts), plan pl-840. Every verb is a call to the same Whisk Convex
+// Whisk as an assistant's Mailbox (mail.ts) and Calendar
+// (calendar.ts). Every verb is a call to the same Whisk Convex
 // function the `whisk` CLI makes (~/src/mail/packages/cli), through a
-// WhiskCall bound to the person's app token (lib/whisk.ts, convex/whisk.ts):
+// WhiskCall bound to the person's app token (whisk.ts, made by the app):
 // reads from Whisk's synced copy of the mailbox and calendar, writes through
 // its one write rail (dispatch:dispatch), which queues them for Gmail and
 // Google Calendar. Whisk shapes stop here; the tools and their rules live in
@@ -11,8 +11,8 @@
 // archived and labelled in the mailbox that holds it (its account_id); new
 // mail and new events go from the person's main mailbox, the one Whisk lists
 // first.
-import { htmlToText } from "../../lib/linkPreviewMeta";
-import { whiskThreadLink, type WhiskCall } from "../../lib/whisk";
+import { htmlToText } from "./text";
+import { whiskThreadLink, type WhiskCall } from "./whisk";
 import { bareAddress, recipient, replyEnvelopeFor, SEARCH_MAX_THREADS, type Mailbox, type MailMessage } from "./mail";
 import type { Calendar, CalendarEvent } from "./calendar";
 

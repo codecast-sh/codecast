@@ -8,9 +8,15 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { AppLoader } from "../../../components/AppLoader";
 import { buildDesktopDeepLink } from "../../../lib/desktop";
 import { oauthProviderButton } from "@platform/auth/web";
+import { useLocalAuth } from "../../../lib/localAuth";
 
 function CliAuthContent() {
   const { isAuthenticated, isLoading } = useConvexAuth();
+  // /login sends a visitor holding a stored token straight back here, so
+  // leaving for /login while that token is still being validated ping-pongs
+  // between the two pages. Wait instead: a rejected token is cleared from
+  // storage, which flips this to false and the redirect below runs once.
+  const localAuthed = useLocalAuth();
   const currentUser = useQuery(
     api.users.getCurrentUser,
     isAuthenticated ? {} : "skip"
@@ -147,6 +153,9 @@ function CliAuthContent() {
       if (oauthStarted.current) {
         return; // OAuth redirect in flight
       }
+      if (localAuthed) {
+        return;
+      }
       // Most people running `cast auth` already have an account — send them to
       // sign-in (which links to sign-up), not the other way around. /login
       // preserves return_to and bounces back here once the session exists.
@@ -167,7 +176,7 @@ function CliAuthContent() {
     // Both modes wait for the explicit Authorize click below — an emailed
     // link must not be able to connect a stranger's device just by being
     // opened in a signed-in browser.
-  }, [isAuthenticated, isLoading, currentUser, nonce, port, device, provider, router, signIn]);
+  }, [isAuthenticated, isLoading, localAuthed, currentUser, nonce, port, device, provider, router, signIn]);
 
   if (isLoading || !isAuthenticated) {
     return (

@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { runTool, type Tool } from "@platform/agent";
 import { calendarTools, freeRanges, instant, isBusy, localMidnight, type CalendarEvent } from "./calendar";
 import { callKey } from "./mail";
-import { mirroredSpan, whiskCalendar } from "./whisk";
+import { mirroredSpan, whiskCalendar } from "./whiskEngine";
 import { fakeWhisk } from "./whisk.testkit";
 
 const tool = (w: ReturnType<typeof fakeWhisk>, name: string): Tool => calendarTools(whiskCalendar(w.call)).find((t) => t.name === name)!;
