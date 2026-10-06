@@ -7,6 +7,7 @@ import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import { tabTitle, tabSessionId, chatTabTitle, initiativeTabTitle, recordTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
+import { isHostedMode } from "../lib/surfaces";
 import { detachTab } from "../lib/openIntent";
 import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
 import { PageIcon } from "./RecentVisitRow";
@@ -29,7 +30,7 @@ export function TabBar() {
     // the whole collection re-rendered the bar on every ~1s liveness heartbeat
     // of any session. A joined signature only changes when a referenced
     // session's title or computed dot state changes.
-    (s) => s.tabs.map((t) => { const id = tabSessionId(t); return id ? s.sessions[id]?.title ?? "" : ""; }).join("\x1f"),
+    (s) => s.tabs.map((t) => { const id = tabSessionId(t); return id ? `${s.sessions[id]?.title ?? ""}\x1e${s.sessions[id]?.last_user_message ?? ""}` : ""; }).join("\x1f"),
     (s) => s.tabs.map((t) => { const id = tabSessionId(t); const row = id ? s.sessions[id] : null; return row ? sessionLivenessState(row) : ""; }).join("\x1f"),
     // Same rule for a channel tab's name: a signature over the referenced
     // channels only, never the whole collection. The full derivation IS the
@@ -39,6 +40,8 @@ export function TabBar() {
     (s) => s.tabs.map((t) => initiativeTabTitle(t.path, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id)) ?? "").join("\x1f"),
     // And for a task, project or run tab: its record's name, by key.
     (s) => s.tabs.map((t) => recordTabTitle(t.path, s) ?? "").join("\x1f"),
+    // And for a page named by a mode word (the triggers page): the mode.
+    isHostedMode,
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -49,7 +52,10 @@ export function TabBar() {
   // Bootstrap: create initial tab if none exist
   useEffect(() => {
     if (detached) return;
-    if (tabs.length === 0) {
+    // The live count, not this render's: StrictMode runs the effect twice
+    // on the first mount in development, and both runs saw zero tabs and
+    // opened one, so a new account started with two tabs named "Inbox".
+    if (useInboxStore.getState().tabs.length === 0) {
       const path = window.location.pathname;
       s.openTab({ path, title: pathLabel(path) });
     }

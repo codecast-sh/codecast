@@ -1,9 +1,14 @@
 import { createContext, useContext, useState, ReactNode, useCallback } from "react";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, resolveVisualStyle } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
 import { lockedAtBoot } from "../lib/themeBootLock";
+import { isHostedMode } from "../lib/surfaces";
+import { HOSTED_BOOT_ATTR } from "./simple/laneBoot";
+// The family's faces and token sheet, for hosted mode's look. The faces are
+// fetched only once a rule uses them.
+import "./simple/laneLook";
 
 export type Theme = "dark" | "light";
 export type VisualStyle = "classic" | "minimal";
@@ -54,7 +59,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => setLock((cur) => (cur === locked ? null : cur));
   }, []);
   const shownTheme = lock ?? theme;
-  const shownStyle: VisualStyle = lock ? "classic" : visualStyle;
+  // Hosted mode keeps its own pick and starts Minimal (resolveVisualStyle);
+  // the developer pick is left alone, so leaving hosted mode restores it.
+  // Hosted mode as the shell reads it: the preference, or until it is known
+  // the device's last known mode (lib/surfaces isHostedMode).
+  const hosted = useInboxStore(isHostedMode);
+  const lane = hosted ? "simple" : "full";
+  const hostedStyle = useInboxStore((s) => s.clientState.ui?.hosted_visual_style);
+  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle, hosted_visual_style: hostedStyle, lane });
 
   // One custom property on the root; the stylesheet mixes the fill from it.
   useWatchEffect(() => {
@@ -63,6 +75,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [bubbleHue, lock]);
 
   useMountEffect(() => { setMounted(true); });
+  // The style and hosted classes read the hosted-mode preference, which is
+  // unknown until the client state hydrates from the cache. Until then the
+  // boot script's classes (index.html, from the codecast-hosted-look flag)
+  // stay as they are: correcting them from a half-read state undid the
+  // family's paper for the seconds hydration took and wrote the flag back
+  // as "0". A lock (the marketing pages) never reads the preference.
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const styleReady = mounted && (hydrated || lock !== null);
 
   useWatchEffect(() => {
     if (mounted) localStorage.setItem("codecast-theme", theme);
@@ -94,10 +114,35 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [visualStyle, mounted]);
 
   useWatchEffect(() => {
-    if (!mounted) return;
+    if (!styleReady) return;
     document.documentElement.classList.remove("codex-style");
     document.documentElement.classList.toggle("minimal-style", shownStyle === "minimal");
-  }, [shownStyle, mounted]);
+  }, [shownStyle, styleReady]);
+
+  // Hosted mode wears the family's paper, ink and type (@platform/design,
+  // the same tokens Whisk and /welcome use) over the Minimal style: one class
+  // on the root, so portaled surfaces (settings, menus) take it too. The
+  // mapping is globals.css's html.hosted-mode block. A lock (the marketing
+  // pages) shows Classic, so the class comes off with it.
+  const hostedLook = hosted && !lock;
+  useWatchEffect(() => {
+    if (!styleReady) return;
+    document.documentElement.classList.toggle("hosted-mode", hostedLook);
+  }, [hostedLook, styleReady]);
+  // index.html's boot script reads this, so a cold load paints the family's
+  // paper from its first frame. A lock (the marketing pages) leaves it alone.
+  // Written only once someone is signed in: a client state that hydrated with
+  // nobody (a lapsed token, an empty cache) says nothing about their mode and
+  // must not clear the flag for the next cold load.
+  const hostedMinimal = hosted && resolveVisualStyle({ visual_style: visualStyle, hosted_visual_style: hostedStyle, lane }) === "minimal";
+  const signedIn = useInboxStore((s) => !!s.currentUser);
+  useWatchEffect(() => {
+    if (!styleReady || !signedIn || lock) return;
+    localStorage.setItem("codecast-hosted-look", hostedMinimal ? "1" : "0");
+    // The boot's guess (laneBoot.ts markLanePage) has served its purpose:
+    // from here the hosted-mode class says the mode.
+    document.documentElement.removeAttribute(HOSTED_BOOT_ATTR);
+  }, [hostedMinimal, styleReady, signedIn, lock]);
 
   const toggleTheme = useCallback(() => {
     const current = useInboxStore.getState().clientState.ui?.theme ?? initialTheme;
@@ -105,9 +150,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [initialTheme, updateClientUI]);
 
   const setVisualStyle = useCallback((style: VisualStyle) => {
+    if (hosted) {
+      updateClientUI({ hosted_visual_style: style });
+      return;
+    }
     setVisualStyleState(style);
     updateClientUI({ visual_style: style });
-  }, [updateClientUI]);
+  }, [updateClientUI, hosted]);
 
   if (!mounted) return null;
 

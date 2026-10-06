@@ -55,15 +55,19 @@ const config: Config = {
   				base1: '#93a1a1',
   				base2: '#eee8d5',
   				base3: '#fdf6e3',
-  				yellow: '#b58900',
-  				orange: '#cb4b16',
-  				amber: '#b66f20',
-  				red: '#dc322f',
-  				magenta: '#d33682',
-  				violet: '#6c71c4',
-  				blue: '#268bd2',
-  				cyan: 'rgb(42 161 152 / <alpha-value>)',
-  				green: '#859900',
+  				// The accents read class-only variables (--sol-class-*, globals.css)
+  				// that default to these Solarized hex values in every theme, so
+  				// developer mode paints exactly as before; hosted mode remaps them
+  				// to the family's accent, ok and danger.
+  				yellow: themed('--sol-class-yellow'),
+  				orange: themed('--sol-class-orange'),
+  				amber: themed('--sol-class-amber'),
+  				red: themed('--sol-class-red'),
+  				magenta: themed('--sol-class-magenta'),
+  				violet: themed('--sol-class-violet'),
+  				blue: themed('--sol-class-blue'),
+  				cyan: themed('--sol-class-cyan'),
+  				green: themed('--sol-class-green'),
   				bg: themed('--sol-bg'),
   				'bg-alt': themed('--sol-bg-alt'),
   				'bg-inset': themed('--sol-bg-inset'),

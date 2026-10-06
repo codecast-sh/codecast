@@ -49,6 +49,7 @@ export type ShortcutAction =
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
   | 'ui.openTours'
+  | 'ui.toggleLane'
   | 'ui.openSettings'
   | 'ui.undo'
   | 'ui.redo'
@@ -107,6 +108,7 @@ export type ShortcutAction =
   | 'diff.nextChange'
   | 'diff.toggleFileTree'
   | 'diff.markViewed'
+  | 'diff.toggleSeen'
   | 'pr.nextThread'
   | 'pr.prevThread'
   | 'pr.review'
@@ -421,6 +423,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // The pull request page's own keys. Handled on the page, listed here so the
   // help panel names them.
   { key: 'm', action: 'diff.markViewed', when: 'diff', description: 'Mark the file viewed and move on' },
+  // Delta's binding. Marks the file in hand viewed (a viewed file folds) or
+  // clears the mark; the mark lapses by itself when the file changes again.
+  { key: 'ctrl+alt+y', mac: 'meta+alt+y', action: 'diff.toggleSeen', when: 'diff', description: 'Mark the file viewed, or clear the mark' },
   { key: 'n', action: 'pr.nextThread', when: 'diff', description: 'Next open thread' },
   { key: 'p', action: 'pr.prevThread', when: 'diff', description: 'Previous open thread' },
   { key: 'r', action: 'pr.review', when: 'diff', description: 'Open your review' },
@@ -482,7 +487,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 't', action: 'doc.type', when: 'docs', description: 'Set doc type' },
   { key: 'l', action: 'doc.labels', when: 'docs', description: 'Edit labels' },
   { key: 'ctrl+e', mac: 'meta+e', action: 'doc.toggleEdit', when: 'docs', description: 'Toggle edit mode (doc page)' },
-  // One eval run in full (components/evals/RunView, evals-ui.md 4.4). The page
+  // One eval run in full (@platform/evals/react RunView, evals-ui.md 4.4). The page
   // activates the context while it is the active pane.
   { key: 'j', action: 'evalsRun.nextSeed', when: 'evalsRun', description: 'Next seed of this freeze in the batch' },
   { key: 'k', action: 'evalsRun.prevSeed', when: 'evalsRun', description: 'Previous seed of this freeze in the batch' },

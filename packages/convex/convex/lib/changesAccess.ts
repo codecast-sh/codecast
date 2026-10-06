@@ -174,11 +174,16 @@ const MEDIA_ARTIFACTS_PER_SESSION = 3;
 const MEDIA_CONTEXT_CHARS = 220;
 /**
  * How far from a story's commits a session's media still belongs to it. A
- * screenshot checking the work is taken close to it, either side. A page, a
- * canvas or an edit to instructions comes first (a design, a proposal, the
- * prompt change) and rarely long after. Measured on 14 days of Codecast:
- * placed screenshots sat within 3h of the commits; most skipped ones did not.
+ * screenshot shows the work it was taken during: everything the session did
+ * since its own previous commit went into this one, so its screenshots from
+ * then on belong to the story, however long it worked before committing, and
+ * a session that commits often keeps a tight window. A session with no
+ * earlier commit reaches back SHOT_LOOKBACK_MS. Screenshots checking the
+ * result come up to SHOT_REACH_MS after. A page, a canvas or an edit to
+ * instructions comes first (a design, a proposal, the prompt change) and
+ * rarely long after.
  */
+const SHOT_LOOKBACK_MS = 12 * 60 * 60 * 1000;
 const SHOT_REACH_MS = 3 * 60 * 60 * 1000;
 const MADE_BEFORE_MS = 6 * 60 * 60 * 1000;
 const MADE_AFTER_MS = 60 * 60 * 1000;
@@ -231,6 +236,14 @@ async function toolCallInput(ctx: DbCtx, conversationId: Id<"conversations">, to
   return "";
 }
 
+/** Where a session's work toward a commit at `firstAt` began: its own previous commit, at most SHOT_LOOKBACK_MS back. */
+async function sinceOwnCommit(ctx: DbCtx, conversationId: Id<"conversations">, firstAt: number): Promise<number> {
+  const floor = firstAt - SHOT_LOOKBACK_MS;
+  const commits: Doc<"commits">[] = await ctx.db.query("commits").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId)).take(200);
+  const before = commits.map((c) => c.timestamp).filter((t) => t < firstAt && t > floor);
+  return before.length ? Math.max(...before) : floor;
+}
+
 /**
  * The media a story may draw on, per conversation, read only for sessions the
  * team sees in full: the same mode that lets their turns into prose. A
@@ -241,11 +254,11 @@ export async function teamVisibleMedia(
   inputs: ReadonlyArray<Pick<TeamVisibleInput, "conversation_id" | "mode">>,
   work: { first_at: number; last_at: number },
 ): Promise<Map<string, ChangesMedia>> {
-  const shots = { since: work.first_at - SHOT_REACH_MS, until: work.last_at + SHOT_REACH_MS };
   const made = { since: work.first_at - MADE_BEFORE_MS, until: work.last_at + MADE_AFTER_MS };
   const out = new Map<string, ChangesMedia>();
   for (const input of inputs) {
     if (input.mode !== "full") continue;
+    const shots = { since: await sinceOwnCommit(ctx, input.conversation_id, work.first_at), until: work.last_at + SHOT_REACH_MS };
     const found = await sessionImages(ctx, input.conversation_id, { ...shots, max: MEDIA_IMAGES_PER_SESSION });
     const images = [];
     for (const img of found) {
