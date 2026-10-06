@@ -14,6 +14,12 @@
 .cc-review-tray-jump:hover:not(:disabled) .cc-review-tray-quote {
   color: var(--sol-cyan);
 }
+.cc-review-tray[data-applies] .cc-review-tray-jump:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sol-violet) 8%, transparent);
+}
+.cc-review-tray[data-applies] .cc-review-tray-jump:hover:not(:disabled) .cc-review-tray-quote {
+  color: var(--sol-violet);
+}
 .cc-review-tray-jump:focus-visible,
 .cc-review-edge:focus-visible {
   outline: 2px solid var(--sol-cyan);

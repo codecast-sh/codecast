@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "A team-visible note: cast chat.",
+  "label": {
+    "want": [
+      "cast\\s+chat\\b"
+    ],
+    "avoid": [
+      "^SendMessage:",
+      "slack",
+      "cast\\s+send\\b"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Let the team know in the engineering channel that today's deploy is done."
+  }
+}

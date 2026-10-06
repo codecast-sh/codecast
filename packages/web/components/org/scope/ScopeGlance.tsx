@@ -35,7 +35,7 @@ export function ScopeGlance({ role, summary, onOpen }: { role: OrgRole; summary:
       {goal ? (
         <div className="flex items-center gap-2 min-w-0" data-scope-glance-goal={goal.ref}>
           <Target className="w-3.5 h-3.5 shrink-0" style={{ color: INITIATIVE_ACCENT }} aria-hidden />
-          <Link href={`/initiatives/${goal.ref}`} onClick={(e) => e.stopPropagation()} className="min-w-0 truncate font-semibold text-sol-text no-underline hover:underline underline-offset-2">{goal.title}</Link>
+          <Link href={`/goals/${goal.ref}`} onClick={(e) => e.stopPropagation()} className="min-w-0 truncate font-semibold text-sol-text no-underline hover:underline underline-offset-2">{goal.title}</Link>
           {goal.health !== "none" && <HealthChip health={goal.health} at={goal.health_at} now={now} className="shrink-0" />}
           <span className="shrink-0" style={{ color: goal.owned ? "var(--sol-violet)" : "var(--sol-text-dim)" }}>{initiativeRelation(goal)}</span>
           {goals.length > 1 && <span className="shrink-0" style={{ color: "var(--sol-text-dim)" }}>+{goals.length - 1} more</span>}

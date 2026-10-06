@@ -1,6 +1,7 @@
 import { parseWorkflowSource } from "./parser.js";
 import { resolveWorkflowSource } from "./templates.js";
 import type { WorkflowGraph } from "./types.js";
+import { repoLineForRun } from "../repoLine.js";
 
 // The graph `cast workflow run-daemon` executes for a run (the-line.md L9).
 //
@@ -15,10 +16,18 @@ import type { WorkflowGraph } from "./types.js";
 // comes from the row when it carries one, else from the stored DOT source,
 // so a daemon run creates the same stack a local run does.
 export function graphForDaemonRun(
-  run: { workflow_name?: string | null; goal_override?: string | null; project_path?: string | null },
-  wf: { name?: string; goal?: string; model_stylesheet?: string; nodes?: any[]; edges?: any[]; stack?: string; source?: string } | null | undefined,
+  run: { workflow_name?: string | null; goal_override?: string | null; project_path?: string | null; task_short_id?: string | null },
+  wf: { name?: string; slug?: string; goal?: string; model_stylesheet?: string; nodes?: any[]; edges?: any[]; stack?: string; source?: string } | null | undefined,
   cwd: string = run.project_path || process.cwd(),
 ): WorkflowGraph | null {
+  // A task-bound run of a line in a checkout with its own line runs that,
+  // ahead of the role's pushed line and the shipped one (line-map.md LX5).
+  const repo = repoLineForRun(run, wf, cwd);
+  if (repo) {
+    const graph = parseWorkflowSource(repo.source, repo.dir);
+    if (run.goal_override) graph.goal = run.goal_override;
+    return graph;
+  }
   if (wf?.nodes?.length) {
     const nodes = new Map<string, any>();
     for (const n of wf.nodes) nodes.set(n.id, n);

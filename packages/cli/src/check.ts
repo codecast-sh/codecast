@@ -170,8 +170,8 @@ export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" 
   const last = Math.max(state.askedAt ?? 0, state.finishedAt ?? 0, state.startedAt);
   return now - last > IDLE_EXIT_MS;
 }
-/** A big program needs more heap than node's default; the same figure the projects' own CI uses. */
-export const TSC_NODE_OPTIONS = "--max-old-space-size=4096";
+/** A big program needs more heap than node's default; the largest figure the projects' own CI uses (union landing's typecheck.sh). */
+export const TSC_NODE_OPTIONS = "--max-old-space-size=6144";
 /** After a request, how long a change may take to reach tsc's watcher before we trust the last pass. */
 export const SETTLE_MS = 750;
 
@@ -387,11 +387,17 @@ export async function runWatcher(root: string, project: string, tsconfig: string
     env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || TSC_NODE_OPTIONS },
   });
   let rest = "";
+  // The last lines tsc printed, so a tsc that dies (out of heap, killed) says why in watch.log.
+  const tail: string[] = [];
   const onData = (chunk: Buffer | string): void => {
     rest += String(chunk);
     const lines = rest.split("\n");
     rest = lines.pop() ?? "";
-    for (const line of lines) reduce(line);
+    for (const line of lines) {
+      reduce(line);
+      tail.push(line);
+      if (tail.length > 20) tail.shift();
+    }
   };
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
@@ -411,7 +417,12 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   };
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
-  await new Promise<void>((resolve) => child.on("exit", () => resolve()));
+  await new Promise<void>((resolve) =>
+    child.on("exit", (code, signal) => {
+      console.log(`tsc exited (${signal ?? `code ${code}`}); its last lines:\n${[...tail, rest].filter(Boolean).join("\n")}`);
+      resolve();
+    }),
+  );
   clearInterval(idle);
   try {
     fs.rmSync(statePath(dir), { force: true });

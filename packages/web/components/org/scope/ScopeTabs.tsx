@@ -24,7 +24,7 @@ import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { DocumentDetailLayout } from "../../DocumentDetailLayout";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
-import { DocRow, InlineEdit } from "../OrgScopePanel";
+import { DocRow, InlineEdit } from "./ScopeEditors";
 import { StateBar, StateTally } from "../OrgNodeCards";
 import { SessionIdentityLine, SessionMark } from "../../identity";
 import { ORG_STATE_META } from "../orgMeta";

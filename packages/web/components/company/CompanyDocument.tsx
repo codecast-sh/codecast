@@ -224,7 +224,7 @@ export function CompanyDocumentView({ doc, now, proposals, ledgers = NO_LEDGERS 
 
           <Section id="goals" title="Goals" count={doc.tally.goals} delay={1}>
             {doc.goals.length === 0 ? (
-              <Quiet>No goals yet. Set the first one on the <Link href="/initiatives" className={LINK} style={{ color: "var(--sol-text-secondary)" }}>initiatives page</Link>.</Quiet>
+              <Quiet>No goals yet. Set the first one on the <Link href="/goals" className={LINK} style={{ color: "var(--sol-text-secondary)" }}>goals page</Link>.</Quiet>
             ) : doc.goals.map((g) => <Goal key={g.id} goal={g} now={now} narrow={narrow} ledgers={ledgers} />)}
           </Section>
 

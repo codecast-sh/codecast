@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "The request says 'subagent': delegated investigation that reports back still goes to a codecast worker.",
+  "label": {
+    "want": [
+      "cast\\s+spawn\\b[^|;&\\n]*--subagent"
+    ],
+    "avoid": [
+      "^Agent:",
+      "^Workflow:",
+      "cast\\s+(spawn|fork)\\b(?![^|;&\\n]*--subagent)"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Spin up a subagent to dig into why the tests in ~/src/codecast/packages/evals/src/surfaces/guidance fail on a fresh checkout, and have it report back to you; then tell me what it found."
+  }
+}

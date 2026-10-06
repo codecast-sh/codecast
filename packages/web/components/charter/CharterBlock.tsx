@@ -10,7 +10,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Compass, Flag, ListChecks, Ban, AlertTriangle, Coins, Plus, X, Sparkles, UserRoundPlus } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { InlineEdit } from "../org/OrgScopePanel";
+import { InlineEdit } from "../org/scope/ScopeEditors";
 import { OwnerRoleChip, PriorityPill } from "./CharterChips";
 import {
   headOfPeopleOf,

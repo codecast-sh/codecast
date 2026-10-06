@@ -3,7 +3,7 @@
 // groupView, replays.ts replayView, metrics.ts watchView, sources/app.ts).
 // Types only: the server is the shape's owner.
 import type { GroupKind, GroupStatus, SourceProvider, SourceStatus, Transition, WatchDirection, WatchKind } from "@codecast/shared/contracts/ingest";
-import type { ReplayProvider } from "@codecast/shared/contracts/replay";
+import type { ReplayBackfill, ReplayProvider } from "@codecast/shared/contracts/replay";
 
 export type OpsSource = {
   _id: string;
@@ -28,6 +28,8 @@ export type OpsSource = {
   /** Analytics events counted per name and hour (eventNameRows reads them). */
   event_names?: { name: string; buckets: { hour: number; count: number }[] }[];
   groups_open?: number;
+  /** A PostHog or Sentry source's bulk import of its recordings (convex sources/replayBackfill.ts). */
+  replay_backfill?: ReplayBackfill;
   created_at: number;
   updated_at: number;
 };

@@ -41,7 +41,7 @@ export function buildOrgAnalyzerPrompt(opts: PromptFacts): string {
 export function coverageLine(c: OrgInitSummary["coverage"]): string {
   if (!c) return "";
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  const initiatives = c.initiatives_active ? `${plural(c.initiatives_active, "active initiative")}${c.initiatives_without_owner ? `, ${c.initiatives_without_owner} with no owner` : ""}` : "no active initiatives";
+  const initiatives = c.initiatives_active ? `${plural(c.initiatives_active, "active goal")}${c.initiatives_without_owner ? `, ${c.initiatives_without_owner} with no owner` : ""}` : "no active goals";
   const outside = [c.outside_plans ? plural(c.outside_plans, "plan") : "", c.outside_areas ? `${plural(c.outside_areas, "area")} of commits and sessions in ${c.outside_repositories} ${c.outside_repositories === 1 ? "repository" : "repositories"}` : ""].filter(Boolean).join(" and ");
   const paused = c.with_lead_paused ? ` (${c.with_lead_paused} more ${c.with_lead_paused === 1 ? "has" : "have"} a paused one)` : "";
   return `${initiatives}; ${c.with_lead} of ${plural(c.with_work, "project")} with work ${c.with_lead === 1 ? "has" : "have"} a lead${paused}${outside ? `; outside any project: ${outside}` : ""}`;
@@ -157,7 +157,7 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
   for (const i of inputs.coverage?.initiatives ?? []) {
     const chain = i.chain?.length ? ` · under ${i.chain.map((c: any) => c.short_id).join(", under ")}` : "";
     const numbers = (i.metrics ?? []).map((m: any) => metricLine(m)).join(" · ");
-    console.log(`  ${fmt.muted("initiative")} ${i.short_id} ${i.title} ${fmt.muted(`· ${i.status} · ${String(i.health).replace(/_/g, " ")} · ${i.owner ? (i.owner.handle ?? i.owner.name) : "no owner"}${chain}${i.projects_without_lead ? ` · ${i.projects_without_lead} of its projects with no lead` : ""}`)}`);
+    console.log(`  ${fmt.muted("goal")} ${i.short_id} ${i.title} ${fmt.muted(`· ${i.status} · ${String(i.health).replace(/_/g, " ")} · ${i.owner ? (i.owner.handle ?? i.owner.name) : "no owner"}${chain}${i.projects_without_lead ? ` · ${i.projects_without_lead} of its projects with no lead` : ""}`)}`);
     if (numbers) console.log(`    ${fmt.muted(numbers)}`);
   }
   if (s.coverage) console.log(`  ${fmt.muted("coverage:")} ${coverageLine(s.coverage)}`);

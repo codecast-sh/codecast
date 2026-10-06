@@ -33,6 +33,7 @@ import { formatSearchTimestamp } from "../../lib/searchTimestamp";
 import { parseSessionQuery, sessionQuerySearches, SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { useSessionQueryAutocomplete } from "../../hooks/useSessionQuerySuggestions";
 import { SessionQuerySuggestList } from "../../components/SessionQuerySuggestList";
+import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 
 // Right-click payloads: a session header row or one message match inside it.
 type SearchCtxPayload =
@@ -384,6 +385,11 @@ export default function SearchPage() {
               />
             </div>
           </div>
+
+          <FeatureUpsell
+            slug="memory"
+            reason="Your agents can run this same search themselves, so they start a task from what earlier sessions already decided."
+          />
 
           {searchActive && searchData && (
             <div className="flex items-baseline justify-between text-sm">
