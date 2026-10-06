@@ -335,6 +335,26 @@ export function remarkEntityIds() {
         },
       ],
       [
+        // Local file/directory mentions → the Files surface, scanned ahead
+        // of object ids so an id inside a path (a worktree named line-ct-42)
+        // stays part of one path link instead of splitting it around a pill.
+        // The href carries
+        // the path as written (`?path=`), which is a real in-app URL: it works
+        // on surfaces that render links plainly, and EntityAwareLink upgrades
+        // it with the session's working directory when it has one.
+        FILE_PATH_SCAN_RE,
+        (full: string, rawPath: string, line?: string) => {
+          const mention = mentionFromMatch(full, rawPath, line);
+          if (!mention) return false;
+          const link = {
+            type: "link" as const,
+            url: filesHref({ localPath: mention.path, line: mention.line }),
+            children: [{ type: "text" as const, value: mention.text }],
+          };
+          return mention.rest ? [link, { type: "text" as const, value: mention.rest }] : link;
+        },
+      ],
+      [
         ENTITY_ID_RE,
         (match: string) => {
           // The bare-32-char alternative matched case-insensitively, but real
@@ -371,23 +391,6 @@ export function remarkEntityIds() {
                   children: [{ type: "text" as const, value: contextualPrRefPayload(token.number, token.label, token.bare) }],
                 },
           );
-        },
-      ],
-      [
-        // Local file/directory mentions → the Files surface. The href carries
-        // the path as written (`?path=`), which is a real in-app URL: it works
-        // on surfaces that render links plainly, and EntityAwareLink upgrades
-        // it with the session's working directory when it has one.
-        FILE_PATH_SCAN_RE,
-        (full: string, rawPath: string, line?: string) => {
-          const mention = mentionFromMatch(full, rawPath, line);
-          if (!mention) return false;
-          const link = {
-            type: "link" as const,
-            url: filesHref({ localPath: mention.path, line: mention.line }),
-            children: [{ type: "text" as const, value: mention.text }],
-          };
-          return mention.rest ? [link, { type: "text" as const, value: mention.rest }] : link;
         },
       ],
     ], { ignore: ['link', 'inlineCode'] });

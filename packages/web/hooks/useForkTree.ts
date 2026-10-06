@@ -89,7 +89,7 @@ type RawRec = Partial<ForkNode> & { id: string; parentId?: string | null };
 function cleanPrompt(s: string): string {
   return s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
-function firstUserPromptOf(msgs: Message[]): string | undefined {
+export function firstUserPromptOf(msgs: Message[]): string | undefined {
   for (const m of msgs) {
     if (m.role === "user" && typeof m.content === "string") {
       const c = cleanPrompt(m.content);

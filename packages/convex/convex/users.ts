@@ -13,11 +13,12 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots, ownDevice } from "./devices";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
-import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
+import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, isPinnableAgentId, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
 import { normalizeTimezone } from "./lib/teamDay";
 import { startedBefore } from "./pathStats";
+import { isStaff } from "./lib/staff";
 import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
@@ -25,6 +26,7 @@ import { DAEMON_COMMAND_TTL_MS, repositoryKeyOfRemote } from "@codecast/shared/c
 import { canAccessTask, canAccessDoc, patchConversationVisibility } from "./lib/access";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
 import { stripMessageTags, isUserMessageNoise, fetchUserSendDays } from "./lib/userSend";
+import { fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows, type ActivityInterval } from "./lib/activityPunchcard";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -918,7 +920,7 @@ export const sendDaemonCommand = mutation({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.role !== "admin") {
+    if (!currentUser || !isStaff(currentUser)) {
       throw new Error("Not authorized");
     }
 
@@ -1006,7 +1008,7 @@ export const sendDaemonCommandToAll = mutation({
     const authUserId = await getUserOrToken(ctx, args.api_token);
     if (!authUserId) throw new Error("Not authenticated");
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.role !== "admin") throw new Error("Not authorized");
+    if (!currentUser || !isStaff(currentUser)) throw new Error("Not authorized");
 
     const allUsers = await ctx.db.query("users").collect();
     const now = Date.now();
@@ -1130,7 +1132,7 @@ export const getDaemonStatus = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.role !== "admin") {
+    if (!currentUser || !isStaff(currentUser)) {
       return { users: [], isAdmin: false };
     }
 
@@ -1170,7 +1172,7 @@ export const getPendingCommands = query({
     }
 
     const currentUser = await ctx.db.get(authUserId);
-    if (!currentUser || currentUser.role !== "admin") {
+    if (!currentUser || !isStaff(currentUser)) {
       return [];
     }
 
@@ -1489,6 +1491,9 @@ const RESERVED_USERNAMES = new Set([
   "admin", "config", "memory", "dashboard", "explore", "timeline", "windows", "orchestration",
   "roadmap", "cli", "share", "commit", "pr", "review", "palette", "people", "call-panel", "settings",
   "pricing", "blog", "a", "simple", "welcome",
+  // Hosted mode's page names, which redirect to their pages (web
+  // lib/laneRedirect.ts PAGE_ALIASES), and the pages they name.
+  "approvals", "plan", "mail", "integrations", "questions", "triggers", "assistant",
   // Product nouns / safety
   "u", "api", "teams", "codecast", "help", "status", "me", "you", "new", "null", "undefined",
 ]);
@@ -2034,11 +2039,12 @@ export const getUserActivityPunchcard = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
 
-    const [intervals, sendDays] = await Promise.all([
+    const [intervals, sendDays, usageDays] = await Promise.all([
       collectUserActivityIntervals(ctx, userId, args, { preferCompleted: true }),
       fetchUserSendDays(ctx, args.user_id, args.team_id, args.days ?? 365),
+      fetchUserUsageDays(ctx, args.user_id, args.team_id, args.days ?? 365),
     ]);
-    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0, sendDays);
+    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0, sendDays, usageDays);
   },
 });
 
@@ -4318,13 +4324,14 @@ export const getAgentPermissionModes = query({
 });
 
 /** The agents the viewer's pickers show. Every supported client stays
- *  launchable; this only decides which ones sit in the pickers. */
+ *  launchable; this only decides which ones sit in the pickers. The hosted
+ *  assistant is pinnable like any client. */
 export const setPinnedAgents = mutation({
   args: { agents: v.array(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const unknown = args.agents.filter((id) => !(id in LOCAL_AGENT_CLIENTS));
+    const unknown = args.agents.filter((id) => !isPinnableAgentId(id));
     if (unknown.length) throw new Error(`Unknown agent client: ${unknown.join(", ")}`);
     await ctx.db.patch(userId, { pinned_agents: [...new Set(args.agents)] });
   },

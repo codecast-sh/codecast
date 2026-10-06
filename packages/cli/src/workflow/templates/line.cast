@@ -81,7 +81,9 @@ digraph line {
   dissolve [label="Dissolve", shape=parallelogram,
     script="cast task done $task_id -m \"Dissolved: the miss did not reproduce. The evidence is in the prove comment.\""]
 
-  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=5400, prompt="@line/implement.md"]
+  // The builder runs the project's check and its failing check, which for a
+  // prompt is the proof's replays: the same hours as prove.
+  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement.md"]
 
   verify [label="Verify", shape=parallelogram,
     timeout=3600,

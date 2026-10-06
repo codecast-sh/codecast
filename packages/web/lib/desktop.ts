@@ -36,6 +36,12 @@ declare global {
       // launches that helper — so it is its own call, not part of the map
       // above. Absent on older builds; readiness is then "unknown".
       getComputerPermissions?: () => Promise<Record<string, string>>;
+      // The CLI and daemon on this machine, set up from the app (the shell's
+      // daemonSetup.js): whether they are here, and the installer run with a
+      // setup token this page minted. Absent on older builds; the page then
+      // offers the terminal command.
+      getDaemonSetup?: () => Promise<DaemonSetupState>;
+      runDaemonSetup?: (token: string) => Promise<{ ok: boolean; error?: string; detail?: string }>;
       // Multi-window notification routing (see main.js). Absent on older
       // builds — gate on them; without them this window behaves as the only one.
       reportWindowState?: (state: DesktopWindowState) => void;
@@ -221,6 +227,8 @@ declare global {
 // shell (electron shareCursors.js), which knows what the capture covers.
 // Rides the generic app IPC, so a shell without the handler just rejects:
 // the first rejection turns the forwarder off for this renderer.
+
+export type DaemonSetupState = { supported: boolean; installed: boolean; linked: boolean; running: boolean };
 
 export type ShareCursor = { id: string; name: string; nx: number; ny: number };
 
@@ -1044,12 +1052,21 @@ export function navigateMainWindow(path: string): boolean {
 // settings page and the keyboard shortcuts help panel.
 // ---------------------------------------------------------------------------
 
+/**
+ * The agent dock (lib/desktopAgentDock.ts) is unreleased. While this is false
+ * nothing offers it, and a shell that opens the dock window anyway (1.1.169 to
+ * 1.1.172 turned it on by default) is told to turn it off.
+ */
+export const AGENT_DOCK_RELEASED = false;
+
 export const DESKTOP_SHORTCUTS: { key: string; label: string; description: string }[] = [
   { key: "newSession", label: "New Session", description: "Open the new-session compose popup from any app" },
   { key: "toggleWindow", label: "Toggle Main Window", description: "Show or hide the main Codecast window" },
   { key: "togglePalette", label: "Quick Command Palette", description: "Open the floating command palette from anywhere" },
   { key: "toggleEnv", label: "Switch Local / Prod", description: "Switch between local dev and production" },
-  { key: "toggleAgentDock", label: "Agent Dock", description: "Open the agent dock's card from any app (only while the dock is on)" },
+  ...(AGENT_DOCK_RELEASED
+    ? [{ key: "toggleAgentDock", label: "Agent Dock", description: "Open the agent dock's card from any app (only while the dock is on)" }]
+    : []),
 ];
 
 export type DesktopShortcutConfig = {
