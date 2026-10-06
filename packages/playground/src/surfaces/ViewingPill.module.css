@@ -1,0 +1,21 @@
+.pill {
+  position: absolute; z-index: var(--z-dock); top: var(--s4); left: 50%; translate: -50% 0;
+  display: flex; align-items: center; gap: var(--s3); max-width: calc(100% - 24px);
+  background: var(--bubble); border: var(--line); border-radius: var(--r-pill); box-shadow: var(--pop-sm);
+  padding: 5px 5px 5px 16px; font: 800 15px/1.2 var(--ui); white-space: nowrap;
+  animation: arrive var(--t-arrive) var(--squish);
+}
+.text { overflow: hidden; text-overflow: ellipsis; }
+.v { font: 400 17px var(--display); }
+.back { border-radius: var(--r-pill) !important; }
+.banner {
+  position: absolute; z-index: var(--z-picking); top: 0; left: 0; right: 0; height: 36px;
+  display: flex; align-items: center; justify-content: center; gap: var(--s3);
+  background: var(--butter); border-bottom: var(--line); font: 800 13px var(--ui);
+  animation: drop var(--t-arrive) var(--squish);
+}
+.cancel { font: 600 12px var(--ui); color: var(--ink-soft); }
+@keyframes drop { from { transform: translateY(-100%); } }
+@media (max-width: 767px) {
+  .pill { font-size: 13px; padding-left: 12px; }
+}

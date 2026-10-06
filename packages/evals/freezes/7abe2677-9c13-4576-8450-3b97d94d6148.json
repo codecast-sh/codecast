@@ -1,0 +1,26 @@
+{
+  "name": "guidance publish-report",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:publish-report"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:publish-report",
+    "title": "guidance publish-report"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/publish-report.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "7abe2677-9c13-4576-8450-3b97d94d6148",
+  "createdAt": "2026-10-06T21:49:13.120Z"
+}

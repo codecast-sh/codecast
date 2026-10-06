@@ -5,11 +5,12 @@
 // explains each new feature with the same prose the CLI wizard prints and
 // offers a one-click "Turn on" (applied to every online machine). Dismissing
 // or enabling stamps the slug in the cross-device dismissed bag, so the
-// banner never returns for that feature — the Settings page stays the place
+// banner never returns for that feature — the Agent features page stays the place
 // to adjust later, and both paths link there.
 
 import { useMemo, useRef, useState } from "react";
 import { useMutation } from "convex/react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowRight, Check, Sparkles, X } from "lucide-react";
 import type { SnippetDescriptor } from "@codecast/shared/contracts";
@@ -17,6 +18,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useDevices } from "./DeviceBadge";
+import { turnOnFeature } from "./agentFeatures/useFeatureOffer";
 import { newSnippetsFor, snippetEnabledOn, snippetIntroKey } from "../lib/newSnippets";
 import {
   Dialog,
@@ -32,7 +34,7 @@ export function NewSnippetsBanner() {
   const dismissed = useInboxStore((s) => s.clientState.dismissed);
   const teams = useInboxStore((s) => s.teams);
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
-  const openSettingsModal = useInboxStore((s) => s.openSettingsModal);
+  const router = useRouter();
   const setSnippet = useMutation(api.devices.setDeviceSnippet);
 
   const [open, setOpen] = useState(false);
@@ -69,13 +71,7 @@ export function NewSnippetsBanner() {
   const turnOn = async (s: SnippetDescriptor) => {
     setBusy((p) => new Set(p).add(s.slug));
     try {
-      await Promise.all(
-        onlineDevices.map((d) =>
-          // Send the pre-rename slug when one exists — same rule as Settings:
-          // old daemons only match their exact slug, new ones resolve aliases.
-          setSnippet({ device_id: d.device_id, snippet: s.wireSlug ?? s.slug, enabled: true }),
-        ),
-      );
+      await turnOnFeature(setSnippet, onlineDevices, s);
       setEnabledNow((p) => new Set(p).add(s.slug));
       updateDismissed(snippetIntroKey(s.slug), Date.now());
     } catch (e) {
@@ -133,8 +129,8 @@ export function NewSnippetsBanner() {
             <DialogDescription className="text-sol-base1">
               These shipped since you set up codecast. Each one installs a small section into a
               machine&apos;s CLAUDE.md that teaches agents the capability — nothing runs until an
-              agent uses it. You can turn any of them on or off later in Settings → Agent
-              Features.
+              agent uses it. You can turn any of them on or off later on the Agent features
+              page.
             </DialogDescription>
           </DialogHeader>
 
@@ -179,7 +175,7 @@ export function NewSnippetsBanner() {
           <div className="flex items-center justify-between gap-3 pt-1">
             <span className="text-[11px] text-sol-text-dim">
               {onlineDevices.length === 0
-                ? "No machines online — turn on from Settings later"
+                ? "No machines online: turn on from Agent features later"
                 : onlineDevices.length === 1
                   ? "Turn on applies to your online machine"
                   : `Turn on applies to ${onlineDevices.length} online machines`}
@@ -188,11 +184,11 @@ export function NewSnippetsBanner() {
               <button
                 onClick={() => {
                   setOpen(false);
-                  openSettingsModal("agent-features");
+                  router.push("/agent-features");
                 }}
                 className="px-3 py-1 text-xs rounded border border-sol-border text-sol-base1 hover:text-sol-text hover:border-sol-base1 transition-colors inline-flex items-center gap-1 whitespace-nowrap"
               >
-                Open Settings
+                All agent features
                 <ArrowRight className="w-3 h-3" />
               </button>
               <button

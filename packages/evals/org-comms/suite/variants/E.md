@@ -1,0 +1,1 @@
+Any session or role may reach any other when it helps the work move. Ask whoever knows, tell whoever is affected, and coordinate directly with peers rather than through leads. Use judgement about interruptions; there is no required path.

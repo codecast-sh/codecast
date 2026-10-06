@@ -72,10 +72,13 @@ export type OrgLayoutView = {
   /** People and roles only, no session stacks: the health map draws how work
    *  moves between seats, and a column of sessions under each would bury it. */
   structureOnly?: boolean;
+  /** False keeps the tree layout but draws no session stack under a card: its
+   *  sessions are its counts and state dots (the map, org-staffing.md S40). */
+  sessionCards?: boolean;
 };
 
 export const ORG_SIZES = {
-  person: { w: 232, h: 96 },
+  person: { w: 232, h: 84 },
   role: { w: 232, h: 108 },
   /** A role on the health map (OrgNodeCards.HealthRoleCard): name, the week's two numbers, its signals. */
   healthRole: { w: 232, h: 122 },
@@ -308,10 +311,11 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       id, kind: "role", w: ORG_SIZES.role.w, h: mid + (close ? roleCloseExtra(r, ghosts?.chips[id]?.length ?? 0, !!ghosts?.stubs[id]) : 0), role: r,
       ...(tenure ? { tenure } : {}),
       children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed || view.structureOnly ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
+      stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
-    b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? r.total : 0;
+    // No stack drawn (collapsed, or the map): every session is "not drawn", and the card's tally carries them all.
+    b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed || view.sessionCards === false ? r.total : 0;
     visiting.delete(r._id);
     if (collapsed) b.hidden = kids.length + r.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0);
     return b;
@@ -323,10 +327,10 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const b: Branch = {
       id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id) + (close ? personCloseExtra(p, ghosts?.chips[id]?.length ?? 0) : 0), person: p,
       children: collapsed ? [] : kids.map(roleBranch),
-      stack: collapsed || view.structureOnly ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
+      stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
-    b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? p.total : 0;
+    b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed || view.sessionCards === false ? p.total : 0;
     if (collapsed) b.hidden = kids.length + p.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0);
     return b;
   };
@@ -486,7 +490,7 @@ function decorate(nodes: OrgLayoutNode[], edges: OrgLayoutEdge[], ghosts: OrgGho
  * `seq` makes a repeat click on the same row pan again after the person
  * dragged away.
  */
-export type OrgFocusTarget = { kind: "change" | "node"; id: string; seq: number };
+export type OrgFocusTarget = { kind: "change" | "node"; id: string; seq: number; /** Pan only when the node is not already on screen (a hover from the conversation). */ ifHidden?: boolean };
 
 /** The layout node a focus target lands on; null when it has no place. */
 export function focusTargetNodeId(ghosts: OrgGhostPlan | null | undefined, target: OrgFocusTarget | null | undefined): string | null {

@@ -26,6 +26,7 @@ import { purgeChatMembership } from "./chat";
 import { decommissionAnchorRow } from "./anchors";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { bumpWindow } from "./ipRateLimit";
+import { emailProven, workDomain } from "./lib/workDomain";
 import { TEAM_RECORDINGS_PURGE_GRACE_MS } from "./lib/r2";
 import { stopTeamRecordings } from "./lib/callRecordingRuns";
 import {
@@ -231,6 +232,10 @@ export const createTeam = mutation({
     icon: v.optional(v.string()),
     icon_color: v.optional(v.string()),
     client_key: v.optional(v.string()),
+    // Let people with a proven address at the creator's work domain find the
+    // team and ask to join (teamDiscovery.ts). Ignored when the creator has no
+    // proven work domain.
+    discoverable: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -263,12 +268,16 @@ export const createTeam = mutation({
     const inviteCode = generateInviteCode();
     const now = Date.now();
     const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
+    const creator = args.discoverable ? await ctx.db.get(authUserId) : null;
+    const domain = creator ? workDomain(creator.email) : null;
+    const discoverable_domain = creator && domain && (await emailProven(ctx, creator)) ? domain : undefined;
     const teamId = await ctx.db.insert("teams", {
       ...identity,
       created_at: now,
       invite_code: inviteCode,
       invite_code_expires_at: now + sevenDaysInMs,
       client_key: args.client_key,
+      ...(discoverable_domain ? { discoverable_domain } : {}),
     });
     await recordAuthorityEvent(ctx, {
       kind: "team_member_added", actor_user_id: authUserId, team_id: teamId, target_user_id: authUserId,
@@ -294,7 +303,7 @@ export const createTeam = mutation({
  * rides the change log), their first team pointer if they have none, and the
  * team activity line. Idempotent.
  */
-async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string, actor: Id<"users"> = userId): Promise<void> {
+export async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string, actor: Id<"users"> = userId): Promise<void> {
   const existingMembership = await ctx.db
     .query("team_memberships")
     .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", team._id))

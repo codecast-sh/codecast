@@ -7,7 +7,7 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
 import { needsVendorImport } from "@codecast/shared/contracts/replay";
-import { decodeChunk, readReplayEvents, reproBaseUrl, type ReplayDetail } from "./replayCommand.js";
+import { decodeChunk, followReplayImport, formatReplayImport, readReplayEvents, reproBaseUrl, type ReplayDetail } from "./replayCommand.js";
 
 const EVENTS = [
   { type: "nav", t: 0, url: "https://app.test/checkout", title: "Checkout" },
@@ -99,5 +99,36 @@ describe("cast replay on the wire", () => {
     await h.run("ls", "--source", "ph");
     await h.run("ls");
     expect(h.calls.map((c) => c.path)).toEqual(["/cli/sources/get", "/cli/replays/recordings", "/cli/replays/list"]);
+  });
+});
+
+describe("cast replay import", () => {
+  const state = (over: Record<string, unknown>) => ({ status: "running", window: "30d", since: 0, until: 1, listed: 0, imported: 0, skipped: 0, failed: 0, started_at: 1, updated_at: 1_000, ...over }) as any;
+
+  test("--status names a source with no import and how to start one", () => {
+    expect(formatReplayImport({ name: "posthog" })).toContain("cast replay import --source posthog");
+  });
+
+  test("following prints each change once and stops when the import is no longer running", async () => {
+    const answers = [
+      { name: "ph", replay_backfill: state({ listed: 10, imported: 10 }) },
+      { name: "ph", replay_backfill: state({ listed: 10, imported: 10 }) },
+      { name: "ph", replay_backfill: state({ listed: 20, imported: 18, skipped: 2 }) },
+      { name: "ph", replay_backfill: state({ status: "done", listed: 25, imported: 23, skipped: 2 }) },
+    ];
+    const printed: string[] = [];
+    const end = await followReplayImport(async () => answers.shift()!, (l) => printed.push(l), { sleep: async () => {}, now: () => 2_000 });
+    expect(end?.status).toBe("done");
+    expect(printed).toEqual([
+      "ph: importing the last 30d: 10 listed, 10 imported",
+      "ph: importing the last 30d: 20 listed, 18 imported, 2 already here",
+      "ph: imported the last 30d: 25 listed, 23 imported, 2 already here",
+    ]);
+  });
+
+  test("a paused import prints its reason and stops following", async () => {
+    const printed: string[] = [];
+    await followReplayImport(async () => ({ name: "ph", replay_backfill: state({ status: "paused", last_error: "PostHog refused the token (401)" }) }), (l) => printed.push(l), { sleep: async () => {} });
+    expect(printed).toEqual(["ph: paused the last 30d: 0 listed, 0 imported: PostHog refused the token (401)"]);
   });
 });

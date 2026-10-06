@@ -1,9 +1,10 @@
 export const dynamic = "force-dynamic";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
 import { AuthGuard } from "../../../components/AuthGuard";
 import Link from "next/link";
 
@@ -209,72 +210,91 @@ function CommandPanel({
   );
 }
 
+const PRESENCE_MS = 10 * 60 * 1000;
+const STALE_MS = 24 * 60 * 60 * 1000;
+
+type AdminUser = NonNullable<FunctionReturnType<typeof api.daemonLogs.adminGetUsers>[number]>;
+
+function lastSeenOf(user: { last_heartbeat?: number; lastLog?: number }): number {
+  return Math.max(user.last_heartbeat ?? 0, user.lastLog ?? 0);
+}
+
+function isOnline(user: { last_heartbeat?: number; lastLog?: number }): boolean {
+  return Date.now() - lastSeenOf(user) < PRESENCE_MS;
+}
+
+function labelOf(user: { email?: string; name?: string } | null | undefined): string {
+  return user?.email || user?.name || "Unknown";
+}
+
+// Hold the last answer while a query re-runs on new args, so a filter change
+// keeps the page (and its scroll) instead of blanking it.
+function useHeld<T>(value: T | undefined): T | undefined {
+  const held = useRef(value);
+  if (value !== undefined) held.current = value;
+  return held.current;
+}
+
+// An email whose local part truncates while the domain stays readable.
+function EmailLabel({ text, className = "" }: { text: string; className?: string }) {
+  const at = text.lastIndexOf("@");
+  if (at <= 0) return <span className={`truncate ${className}`} title={text}>{text}</span>;
+  return (
+    <span className={`flex min-w-0 ${className}`} title={text}>
+      <span className="truncate">{text.slice(0, at)}</span>
+      <span className="shrink-0 opacity-60">{text.slice(at)}</span>
+    </span>
+  );
+}
+
+function CountBadge({ n, tone }: { n: number; tone: "error" | "warn" }) {
+  if (n <= 0) return null;
+  const cls = tone === "error"
+    ? "bg-red-950/50 text-red-400 border-red-900/30"
+    : "bg-amber-950/50 text-amber-400 border-amber-900/30";
+  return <span className={`px-1.5 rounded text-[10px] leading-4 font-mono border tabular-nums ${cls}`}>{n}</span>;
+}
+
 function UserListItem({
   user,
   isSelected,
   onClick,
 }: {
-  user: any;
+  user: AdminUser;
   isSelected: boolean;
   onClick: () => void;
 }) {
-  const lastSeen = user.last_heartbeat ?? user.lastLog;
-  const isOnline = Date.now() - lastSeen < 10 * 60 * 1000;
-  const isStale = !isOnline && Date.now() - lastSeen > 24 * 60 * 60 * 1000;
+  const lastSeen = lastSeenOf(user);
+  const online = isOnline(user);
+  const stale = !online && Date.now() - lastSeen > STALE_MS;
 
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left px-3 py-2.5 rounded-md text-sm transition-all ${
+      className={`w-full text-left px-2.5 py-2 rounded-md transition-colors border ${
         isSelected
-          ? "bg-sky-950/50 border border-sky-800/40 text-white"
-          : "text-zinc-300 hover:bg-zinc-800/60 border border-transparent"
+          ? "bg-sky-950/50 border-sky-800/40 text-white"
+          : "text-zinc-300 hover:bg-zinc-800/60 border-transparent"
       }`}
     >
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2 text-[13px]">
         <span
-          className={`w-2 h-2 rounded-full shrink-0 ${
-            isOnline ? "bg-emerald-500" : isStale ? "bg-zinc-700" : "bg-zinc-600"
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+            online ? "bg-emerald-500" : stale ? "bg-zinc-700" : "bg-zinc-500"
           }`}
         />
-        <span className="truncate flex-1 min-w-0">
-          {user.email || user.name || "Unknown"}
-        </span>
-        <div className="flex gap-1 shrink-0">
-          {user.errorCount > 0 && (
-            <span className="px-1.5 py-0.5 bg-red-950/50 text-red-400 rounded text-[11px] font-mono border border-red-900/30">
-              {user.errorCount}
-            </span>
-          )}
-          {user.warnCount > 0 && (
-            <span className="px-1.5 py-0.5 bg-amber-950/50 text-amber-400 rounded text-[11px] font-mono border border-amber-900/30">
-              {user.warnCount}
-            </span>
-          )}
-        </div>
+        <EmailLabel text={labelOf(user)} className="flex-1" />
       </div>
-      <div className="ml-[18px] mt-1 flex items-center gap-2">
-        <span
-          className={`text-[11px] ${
-            isStale ? "text-red-400/70" : isOnline ? "text-zinc-500" : "text-amber-500/70"
-          }`}
-        >
-          {formatRelativeTime(lastSeen)}
+      <div className="ml-3.5 mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-600">
+        <span className={`tabular-nums ${online ? "text-zinc-500" : stale ? "text-zinc-600" : "text-amber-500/70"}`}>
+          {lastSeen ? formatRelativeTime(lastSeen) : "never"}
         </span>
-        {user.cli_version && (
-          <>
-            <span className="text-zinc-700 text-[11px]">|</span>
-            <span className="text-[11px] text-zinc-600">
-              v{user.cli_version}
-            </span>
-          </>
-        )}
-        {user.cli_platform && (
-          <>
-            <span className="text-zinc-700 text-[11px]">|</span>
-            <span className="text-[11px] text-zinc-600">{user.cli_platform}</span>
-          </>
-        )}
+        {user.cli_version && <span>· v{user.cli_version}</span>}
+        {user.cli_platform && <span>· {user.cli_platform}</span>}
+        <span className="ml-auto flex gap-1">
+          <CountBadge n={user.errorCount} tone="error" />
+          <CountBadge n={user.warnCount} tone="warn" />
+        </span>
       </div>
     </button>
   );
@@ -412,40 +432,118 @@ function MetricsChart({ logs }: { logs: { message: string; timestamp: number }[]
   );
 }
 
+type LogRow = FunctionReturnType<typeof api.daemonLogs.adminList>["logs"][number];
+type LogGroup = { log: LogRow; count: number; oldest: number };
+
+// Daemons repeat themselves (reconciliation, health lines). Fold a run of the
+// same user saying the same thing into one row with a count.
+function foldRepeats(logs: LogRow[]): LogGroup[] {
+  const groups: LogGroup[] = [];
+  for (const log of logs) {
+    const last = groups[groups.length - 1];
+    if (last && last.log.user_id === log.user_id && last.log.level === log.level && last.log.message === log.message) {
+      last.count++;
+      last.oldest = log.timestamp;
+    } else {
+      groups.push({ log, count: 1, oldest: log.timestamp });
+    }
+  }
+  return groups;
+}
+
+const TIME_WINDOWS = { "1h": 60 * 60 * 1000, "24h": 24 * 60 * 60 * 1000, "7d": 7 * 24 * 60 * 60 * 1000 } as const;
+type TimeFilter = keyof typeof TIME_WINDOWS | "all";
+
+const LEVEL_BUTTONS = [
+  { value: "all", label: "All" },
+  { value: "error", label: "Err" },
+  { value: "warn", label: "Warn" },
+  { value: "info", label: "Info" },
+  { value: "debug", label: "Debug" },
+] as const;
+
+const TIME_BUTTONS: { value: TimeFilter; label: string }[] = [
+  { value: "1h", label: "1h" },
+  { value: "24h", label: "24h" },
+  { value: "7d", label: "7d" },
+  { value: "all", label: "all" },
+];
+
+// Past this many pixels from the top the list stops taking new rows, so what
+// you are reading never moves under you.
+const PAUSE_SCROLL_PX = 24;
+
+function SegmentedButtons<T extends string>({
+  options,
+  value,
+  onChange,
+  activeClass,
+}: {
+  options: readonly { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  activeClass?: (v: T) => string | undefined;
+}) {
+  return (
+    <div className="flex rounded-md border border-zinc-800/60 overflow-hidden shrink-0">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`px-2.5 py-1.5 text-[11px] font-mono transition-colors ${
+            value === o.value
+              ? activeClass?.(o.value) ?? "bg-zinc-800 text-zinc-200"
+              : "bg-zinc-900/40 text-zinc-500 hover:text-zinc-300"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-2.5 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-zinc-600">{children}</div>
+  );
+}
+
 function AdminDaemonLogs() {
   const [selectedUserId, setSelectedUserId] = useState<Id<"users"> | undefined>();
   const [levelFilter, setLevelFilter] = useState<LogLevel | "all">("all");
-  const [timeFilter, setTimeFilter] = useState<"1h" | "24h" | "7d" | "all">("24h");
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>("24h");
   const [searchQuery, setSearchQuery] = useState("");
+  const [userQuery, setUserQuery] = useState("");
   const [showCommands, setShowCommands] = useState(true);
+  const [pausedAt, setPausedAt] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const sinceTimestamp = useMemo(() => {
-    const now = Date.now();
-    switch (timeFilter) {
-      case "1h":
-        return now - 60 * 60 * 1000;
-      case "24h":
-        return now - 24 * 60 * 60 * 1000;
-      case "7d":
-        return now - 7 * 24 * 60 * 60 * 1000;
-      default:
-        return undefined;
-    }
-  }, [timeFilter]);
+  const sinceTimestamp = useMemo(
+    () => (timeFilter === "all" ? undefined : Date.now() - TIME_WINDOWS[timeFilter]),
+    [timeFilter],
+  );
 
-  const users = useQuery(api.daemonLogs.adminGetUsers);
-  const logsResult = useQuery(api.daemonLogs.adminList, {
+  const users = useHeld(useQuery(api.daemonLogs.adminGetUsers));
+  const logsResult = useHeld(useQuery(api.daemonLogs.adminList, {
     limit: 500,
     level: levelFilter === "all" ? undefined : levelFilter,
     userId: selectedUserId,
     since: sinceTimestamp,
-  });
-  const stats = useQuery(api.daemonLogs.adminGetStats);
+  }));
+  const stats = useHeld(useQuery(api.daemonLogs.adminGetStats));
+
+  // A new view of the logs starts at the newest line.
+  const toTop = useCallback(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+    setPausedAt(null);
+  }, []);
+  const selectUser = (id: Id<"users"> | undefined) => { setSelectedUserId(id); toTop(); };
 
   const filteredLogs = useMemo(() => {
     if (!logsResult?.logs) return [];
-    if (!searchQuery.trim()) return logsResult.logs;
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return logsResult.logs;
     return logsResult.logs.filter(
       (log) =>
         log.message.toLowerCase().includes(q) ||
@@ -454,37 +552,51 @@ function AdminDaemonLogs() {
     );
   }, [logsResult?.logs, searchQuery]);
 
+  const visibleLogs = useMemo(
+    () => (pausedAt === null ? filteredLogs : filteredLogs.filter((l) => l._creationTime <= pausedAt)),
+    [filteredLogs, pausedAt],
+  );
+  const groups = useMemo(() => foldRepeats(visibleLogs), [visibleLogs]);
+  const newCount = filteredLogs.length - visibleLogs.length;
+
+  const onLogScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const away = el.scrollTop > PAUSE_SCROLL_PX;
+    if (away && pausedAt === null) {
+      setPausedAt(visibleLogs.reduce((m, l) => Math.max(m, l._creationTime), 0));
+    } else if (!away && pausedAt !== null) {
+      setPausedAt(null);
+    }
+  };
+
   const userMap = useMemo(() => {
     const map = new Map<string, { email?: string; name?: string }>();
-    if (logsResult?.users) {
-      for (const u of logsResult.users) {
-        if (u) map.set(u._id, { email: u.email, name: u.name });
-      }
-    }
+    for (const u of logsResult?.users ?? []) if (u) map.set(u._id, u);
     return map;
   }, [logsResult?.users]);
 
-  const selectedUser = useMemo(() => {
-    if (!selectedUserId || !users) return null;
-    return users.find((u) => u?._id === selectedUserId) ?? null;
-  }, [selectedUserId, users]);
+  const selectedUser = useMemo(
+    () => (selectedUserId ? users?.find((u) => u?._id === selectedUserId) ?? null : null),
+    [selectedUserId, users],
+  );
 
-  const userStatus = useMemo(() => {
-    if (!users) return { online: 0, total: 0 };
-    const now = Date.now();
-    const staleThreshold = 10 * 60 * 1000;
-    let online = 0;
-    for (const user of users) {
-      if (!user) continue;
-      const lastSeen = user.last_heartbeat ?? user.lastLog;
-      if (now - lastSeen < staleThreshold) online++;
-    }
-    return { online, total: users.filter(Boolean).length };
-  }, [users]);
+  // Online people alphabetically, everyone else by when they were last seen.
+  // Neither order moves on a heartbeat, so the list holds still under you.
+  const { online, offline } = useMemo(() => {
+    const q = userQuery.trim().toLowerCase();
+    const all = (users ?? []).filter((u): u is AdminUser => !!u && (!q || labelOf(u).toLowerCase().includes(q)));
+    return {
+      online: all.filter(isOnline).sort((a, b) => labelOf(a).localeCompare(labelOf(b))),
+      offline: all.filter((u) => !isOnline(u)).sort((a, b) => lastSeenOf(b) - lastSeenOf(a)),
+    };
+  }, [users, userQuery]);
+  const totalUsers = (users ?? []).filter(Boolean).length;
+  const onlineTotal = (users ?? []).filter((u) => u && isOnline(u)).length;
 
   if (logsResult === undefined) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+      <div className="h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
         <div className="text-zinc-500 font-mono text-sm">loading...</div>
       </div>
     );
@@ -492,296 +604,257 @@ function AdminDaemonLogs() {
 
   if (!logsResult.isAdmin) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+      <div className="h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
         <div className="text-center">
           <h1 className="text-xl font-medium text-red-400 mb-2">Access Denied</h1>
-          <p className="text-zinc-500 text-sm">You do not have permission to view this page.</p>
+          <p className="text-zinc-500 text-sm">This page is for Codecast staff.</p>
         </div>
       </div>
     );
   }
 
-  const timeButtons = [
-    { value: "1h", label: "1h" },
-    { value: "24h", label: "24h" },
-    { value: "7d", label: "7d" },
-    { value: "all", label: "all" },
-  ] as const;
-
-  const levelButtons = [
-    { value: "all", label: "All" },
-    { value: "error", label: "Err" },
-    { value: "warn", label: "Warn" },
-    { value: "info", label: "Info" },
-    { value: "debug", label: "Debug" },
-  ] as const;
-
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="max-w-[1600px] mx-auto px-6 py-6">
+    <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden">
+      <div className="w-full max-w-[1600px] mx-auto px-6 pt-5 pb-4 shrink-0">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
-            <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-              </svg>
-            </Link>
-            <h1 className="text-lg font-medium tracking-tight">Daemon Admin</h1>
-            <div className="flex items-center gap-3 text-xs text-zinc-500">
-              <span>
-                <span className="text-emerald-500">{userStatus.online}</span>/{userStatus.total}{" "}
-                online
-              </span>
-              <span className="text-zinc-700">|</span>
-              <span>{filteredLogs.length} logs</span>
-            </div>
+        <div className="flex items-center gap-4 mb-4">
+          <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+          </Link>
+          <h1 className="text-lg font-medium tracking-tight">Daemon Admin</h1>
+          <div className="flex items-center gap-3 text-xs text-zinc-500 tabular-nums">
+            <span>
+              <span className="text-emerald-500">{onlineTotal}</span>/{totalUsers} online
+            </span>
+            <span className="text-zinc-700">|</span>
+            <span>{filteredLogs.length} logs</span>
           </div>
         </div>
 
-        {/* Stats row */}
+        {/* Stats row: a window card applies that window */}
         {stats && (
-          <div className="grid grid-cols-4 gap-3 mb-6">
-            {[
+          <div className="grid grid-cols-[1fr_1fr_1fr_1.6fr] gap-3">
+            {([
               { label: "1h", data: stats.lastHour },
               { label: "24h", data: stats.lastDay },
               { label: "7d", data: stats.lastWeek },
-            ].map(({ label, data }) => (
-              <div
-                key={label}
-                className="bg-zinc-900/60 rounded-lg px-4 py-3 border border-zinc-800/60"
-              >
-                <div className="flex items-baseline justify-between">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">
-                    {label}
-                  </span>
-                  <span className="text-[11px] text-zinc-600">{data.uniqueUsers} users</span>
-                </div>
-                <div className="text-2xl font-light text-zinc-200 mt-1 tabular-nums">
-                  {data.total.toLocaleString()}
-                </div>
-                <div className="flex gap-3 mt-1.5 text-[11px]">
-                  {data.error > 0 && <span className="text-red-400">{data.error} err</span>}
-                  {data.warn > 0 && <span className="text-amber-400">{data.warn} warn</span>}
-                  {data.error === 0 && data.warn === 0 && (
-                    <span className="text-zinc-600">clean</span>
-                  )}
-                </div>
-              </div>
-            ))}
-            <div className="bg-zinc-900/60 rounded-lg px-4 py-3 border border-zinc-800/60">
-              <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">
-                Top Errors
-              </span>
+            ] as const).map(({ label, data }) => {
+              const floor = stats.sampledSince !== null && Date.now() - TIME_WINDOWS[label] < stats.sampledSince;
+              return (
+                <button
+                  key={label}
+                  onClick={() => { setTimeFilter(label); toTop(); }}
+                  className={`text-left rounded-lg px-4 py-3 border transition-colors ${
+                    timeFilter === label
+                      ? "bg-zinc-900 border-zinc-700"
+                      : "bg-zinc-900/60 border-zinc-800/60 hover:border-zinc-700/80"
+                  }`}
+                >
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">{label}</span>
+                    <span className="text-[11px] text-zinc-600">{data.uniqueUsers} users</span>
+                  </div>
+                  <div
+                    className="text-2xl font-light text-zinc-200 mt-1 tabular-nums"
+                    title={floor ? `At least this many: the count reads the newest ${data.total.toLocaleString()} rows` : undefined}
+                  >
+                    {data.total.toLocaleString()}{floor && <span className="text-zinc-600">+</span>}
+                  </div>
+                  <div className="flex gap-3 mt-1 text-[11px] tabular-nums">
+                    {data.error > 0 && <span className="text-red-400">{data.error.toLocaleString()} err</span>}
+                    {data.warn > 0 && <span className="text-amber-400">{data.warn.toLocaleString()} warn</span>}
+                    {data.error === 0 && data.warn === 0 && <span className="text-zinc-600">clean</span>}
+                  </div>
+                </button>
+              );
+            })}
+            <div className="bg-zinc-900/60 rounded-lg px-4 py-3 border border-zinc-800/60 min-w-0">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">Top Errors</span>
               {stats.topErrors.length === 0 ? (
                 <div className="text-[11px] text-zinc-600 mt-2">No errors</div>
               ) : (
-                <div className="space-y-1.5 mt-2">
-                  {stats.topErrors.slice(0, 3).map((err, i) => (
-                    <div
-                      key={i}
-                      className="text-[11px] text-zinc-500 truncate"
+                <div className="mt-1.5">
+                  {stats.topErrors.slice(0, 3).map((err) => (
+                    <button
+                      key={err.message}
+                      onClick={() => { setSearchQuery(err.message.split(/<path>|<id>|\bN\b/)[0].trim()); toTop(); }}
+                      className="w-full flex gap-1.5 text-left text-[11px] text-zinc-500 hover:text-zinc-300 py-0.5"
                       title={err.message}
                     >
-                      <span className="text-red-400/80 font-mono mr-1.5">{err.count}x</span>
-                      {err.message.slice(0, 50)}
-                    </div>
+                      <span className="text-red-400/80 font-mono tabular-nums shrink-0">{err.count}x</span>
+                      <span className="truncate">{err.message}</span>
+                    </button>
                   ))}
                 </div>
               )}
             </div>
           </div>
         )}
+      </div>
 
-        {/* Main grid */}
-        <div className="grid grid-cols-[260px_1fr] gap-4">
-          {/* Sidebar */}
-          <div className="space-y-3">
-            {/* User list */}
-            <div className="bg-zinc-900/60 rounded-lg border border-zinc-800/60 overflow-hidden">
-              <div className="px-3 py-2.5 border-b border-zinc-800/60">
-                <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">
-                  Users
-                </span>
-              </div>
-              <div className="p-1.5 space-y-0.5 max-h-[calc(100vh-380px)] overflow-y-auto">
-                <button
-                  onClick={() => setSelectedUserId(undefined)}
-                  className={`w-full text-left px-3 py-2 rounded-md text-sm transition-all ${
-                    !selectedUserId
-                      ? "bg-sky-950/50 border border-sky-800/40 text-white"
-                      : "text-zinc-400 hover:bg-zinc-800/60 border border-transparent"
-                  }`}
-                >
-                  All Users
-                </button>
-                {users?.map((user) =>
-                  user ? (
-                    <UserListItem
-                      key={user._id}
-                      user={user}
-                      isSelected={selectedUserId === user._id}
-                      onClick={() => setSelectedUserId(user._id as Id<"users">)}
-                    />
-                  ) : null
-                )}
-              </div>
+      {/* Main grid: each column scrolls on its own inside the viewport */}
+      <div className="flex-1 min-h-0 w-full max-w-[1600px] mx-auto px-6 pb-6 grid grid-cols-[320px_minmax(0,1fr)] gap-4">
+        {/* Users */}
+        <div className="flex flex-col min-h-0 bg-zinc-900/60 rounded-lg border border-zinc-800/60 overflow-hidden">
+          <div className="px-2 py-2 border-b border-zinc-800/60 shrink-0">
+            <input
+              type="text"
+              placeholder={`Filter ${totalUsers} users...`}
+              value={userQuery}
+              onChange={(e) => setUserQuery(e.target.value)}
+              className="w-full px-2.5 py-1.5 bg-zinc-950/60 border border-zinc-800/60 rounded text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 font-mono"
+            />
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto p-1.5 [overflow-anchor:none]">
+            <button
+              onClick={() => selectUser(undefined)}
+              className={`w-full text-left px-2.5 py-2 rounded-md text-[13px] transition-colors border ${
+                !selectedUserId
+                  ? "bg-sky-950/50 border-sky-800/40 text-white"
+                  : "text-zinc-400 hover:bg-zinc-800/60 border-transparent"
+              }`}
+            >
+              All users
+            </button>
+            {online.length > 0 && <SectionLabel>Online · {online.length}</SectionLabel>}
+            {online.map((user) => (
+              <UserListItem key={user._id} user={user} isSelected={selectedUserId === user._id} onClick={() => selectUser(user._id as Id<"users">)} />
+            ))}
+            {offline.length > 0 && <SectionLabel>Offline · {offline.length}</SectionLabel>}
+            {offline.map((user) => (
+              <UserListItem key={user._id} user={user} isSelected={selectedUserId === user._id} onClick={() => selectUser(user._id as Id<"users">)} />
+            ))}
+            {online.length + offline.length === 0 && (
+              <div className="px-3 py-6 text-center text-[12px] text-zinc-600">No users match</div>
+            )}
+          </div>
+        </div>
+
+        {/* Logs */}
+        <div className="flex flex-col min-h-0 gap-3">
+          {selectedUser && (
+            <div className={`grid gap-3 shrink-0 ${showCommands ? "grid-cols-2" : "grid-cols-1"}`}>
+              {showCommands && (
+                <CommandPanel
+                  userId={selectedUserId!}
+                  userName={labelOf(selectedUser)}
+                  isOnline={isOnline(selectedUser)}
+                />
+              )}
+              <MetricsChart logs={filteredLogs} />
             </div>
+          )}
+
+          <div className="flex items-center gap-2 shrink-0">
+            <input
+              type="text"
+              placeholder="Search logs..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setSearchQuery(""); }}
+              className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-900/60 border border-zinc-800/60 rounded-md text-[13px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 font-mono"
+            />
+            <SegmentedButtons
+              options={LEVEL_BUTTONS}
+              value={levelFilter}
+              onChange={(v) => { setLevelFilter(v); toTop(); }}
+              activeClass={(v) => v === "error" ? "bg-red-950/50 text-red-400" : v === "warn" ? "bg-amber-950/50 text-amber-400" : undefined}
+            />
+            <SegmentedButtons options={TIME_BUTTONS} value={timeFilter} onChange={(v) => { setTimeFilter(v); toTop(); }} />
+            {selectedUserId && (
+              <button
+                onClick={() => setShowCommands(!showCommands)}
+                className={`px-2.5 py-1.5 text-[11px] font-mono rounded-md border transition-colors shrink-0 ${
+                  showCommands
+                    ? "bg-sky-950/40 text-sky-400 border-sky-800/40"
+                    : "bg-zinc-900/40 text-zinc-500 border-zinc-800/60 hover:text-zinc-300"
+                }`}
+                title="Toggle remote commands panel"
+              >
+                RPC
+              </button>
+            )}
           </div>
 
-          {/* Main content */}
-          <div className="space-y-4">
-            {/* Command panel - shown when a specific user is selected */}
-            {selectedUser && showCommands && (
-              <CommandPanel
-                userId={selectedUserId!}
-                userName={selectedUser.email || selectedUser.name || "Unknown"}
-                isOnline={
-                  Date.now() - ((selectedUser as any).last_heartbeat ?? 0) < 10 * 60 * 1000
-                }
-              />
+          <div className="relative flex-1 min-h-0 bg-zinc-900/40 rounded-lg border border-zinc-800/60 overflow-hidden">
+            {newCount > 0 && (
+              <button
+                onClick={toTop}
+                className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-mono shadow-lg shadow-black/40 transition-colors"
+              >
+                {newCount} new · jump to latest
+              </button>
             )}
+            <div
+              ref={scrollRef}
+              onScroll={onLogScroll}
+              className="h-full overflow-y-auto divide-y divide-zinc-800/40 [overflow-anchor:none]"
+            >
+              {groups.length === 0 ? (
+                <div className="p-12 text-center text-zinc-600 text-sm">No logs matching filters</div>
+              ) : (
+                groups.map(({ log, count, oldest }) => {
+                  const user = userMap.get(log.user_id);
+                  const style = LEVEL_STYLES[log.level as LogLevel] || LEVEL_STYLES.debug;
+                  const isToday = new Date(log.timestamp).toDateString() === new Date().toDateString();
+                  const when = (ts: number) => `${isToday ? "" : `${formatDate(ts)} `}${formatTimestamp(ts)}`;
 
-            {/* Metrics chart - shown when a specific user is selected */}
-            {selectedUser && (
-              <MetricsChart logs={filteredLogs} />
-            )}
-
-            {/* Filters + Toggle */}
-            <div className="flex items-center gap-3">
-              {/* Search */}
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  placeholder="Search logs..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full px-3 py-2 bg-zinc-900/60 border border-zinc-800/60 rounded-md text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 font-mono"
-                />
-              </div>
-
-              {/* Level filter */}
-              <div className="flex rounded-md border border-zinc-800/60 overflow-hidden">
-                {levelButtons.map(({ value, label }) => (
-                  <button
-                    key={value}
-                    onClick={() => setLevelFilter(value)}
-                    className={`px-2.5 py-2 text-[11px] font-mono transition-colors ${
-                      levelFilter === value
-                        ? value === "error"
-                          ? "bg-red-950/50 text-red-400"
-                          : value === "warn"
-                            ? "bg-amber-950/50 text-amber-400"
-                            : "bg-zinc-800 text-zinc-200"
-                        : "bg-zinc-900/40 text-zinc-500 hover:text-zinc-300"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Time filter */}
-              <div className="flex rounded-md border border-zinc-800/60 overflow-hidden">
-                {timeButtons.map(({ value, label }) => (
-                  <button
-                    key={value}
-                    onClick={() => setTimeFilter(value)}
-                    className={`px-2.5 py-2 text-[11px] font-mono transition-colors ${
-                      timeFilter === value
-                        ? "bg-zinc-800 text-zinc-200"
-                        : "bg-zinc-900/40 text-zinc-500 hover:text-zinc-300"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Toggle commands panel */}
-              {selectedUserId && (
-                <button
-                  onClick={() => setShowCommands(!showCommands)}
-                  className={`px-2.5 py-2 text-[11px] font-mono rounded-md border transition-colors ${
-                    showCommands
-                      ? "bg-sky-950/40 text-sky-400 border-sky-800/40"
-                      : "bg-zinc-900/40 text-zinc-500 border-zinc-800/60 hover:text-zinc-300"
-                  }`}
-                  title="Toggle remote commands panel"
-                >
-                  RPC
-                </button>
-              )}
-            </div>
-
-            {/* Logs */}
-            <div className="bg-zinc-900/40 rounded-lg border border-zinc-800/60 overflow-hidden">
-              <div className="max-h-[calc(100vh-420px)] overflow-y-auto divide-y divide-zinc-800/40">
-                {filteredLogs.length === 0 ? (
-                  <div className="p-12 text-center text-zinc-600 text-sm">
-                    No logs matching filters
-                  </div>
-                ) : (
-                  filteredLogs.map((log) => {
-                    const user = userMap.get(log.user_id);
-                    const style = LEVEL_STYLES[log.level as LogLevel] || LEVEL_STYLES.debug;
-                    const isToday =
-                      new Date(log.timestamp).toDateString() === new Date().toDateString();
-
-                    return (
-                      <div
-                        key={log._id}
-                        className={`px-4 py-2.5 hover:bg-zinc-800/30 transition-colors ${
-                          log.level === "error" ? "bg-red-950/10" : ""
-                        }`}
-                      >
-                        <div className="flex items-start gap-2.5">
-                          <LogLevelDot level={log.level as LogLevel} />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 text-[11px] text-zinc-500 mb-0.5">
-                              <span className="text-zinc-400 font-medium">
-                                {user?.email?.split("@")[0] || "?"}
-                              </span>
-                              <span className="text-zinc-700">
-                                {!isToday && `${formatDate(log.timestamp)} `}
-                                {formatTimestamp(log.timestamp)}
-                              </span>
-                              {log.daemon_version && (
-                                <span className="text-zinc-700">v{log.daemon_version}</span>
-                              )}
-                            </div>
-                            <pre className="text-[13px] text-zinc-300 whitespace-pre-wrap break-words font-mono leading-relaxed">
-                              {log.message}
-                            </pre>
-                            {log.metadata?.error_code && (
-                              <span
-                                className={`inline-block mt-1 text-[11px] font-mono px-1.5 py-0.5 rounded ${style.bg} ${style.text}`}
+                  return (
+                    <div
+                      key={log._id}
+                      className={`px-4 py-2.5 hover:bg-zinc-800/30 transition-colors ${log.level === "error" ? "bg-red-950/10" : ""}`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <LogLevelDot level={log.level as LogLevel} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 text-[11px] text-zinc-500 mb-0.5 min-w-0">
+                            {!selectedUserId && (
+                              <button
+                                onClick={() => selectUser(log.user_id)}
+                                className="text-zinc-400 font-medium hover:text-sky-300 min-w-0 max-w-[45%]"
                               >
-                                {log.metadata.error_code}
-                              </span>
+                                <EmailLabel text={labelOf(user)} />
+                              </button>
                             )}
-                            {log.metadata?.session_id && (
-                              <div className="mt-0.5 text-[11px] text-zinc-600 font-mono">
-                                session: {log.metadata.session_id.slice(0, 12)}...
-                              </div>
-                            )}
-                            {log.metadata?.stack && (
-                              <details className="mt-1.5">
-                                <summary className="text-[11px] text-zinc-600 cursor-pointer hover:text-zinc-400 font-mono">
-                                  stack trace
-                                </summary>
-                                <pre className="mt-1.5 p-2.5 bg-zinc-950 rounded text-[11px] text-zinc-500 overflow-x-auto font-mono leading-relaxed">
-                                  {log.metadata.stack}
-                                </pre>
-                              </details>
+                            <span className="text-zinc-600 tabular-nums shrink-0">
+                              {count > 1 ? `${when(oldest)} – ${formatTimestamp(log.timestamp)}` : when(log.timestamp)}
+                            </span>
+                            {log.daemon_version && <span className="text-zinc-700 shrink-0">v{log.daemon_version}</span>}
+                            {count > 1 && (
+                              <span className="px-1.5 rounded bg-zinc-800 text-zinc-400 font-mono tabular-nums shrink-0">×{count}</span>
                             )}
                           </div>
+                          <pre className="text-[13px] text-zinc-300 whitespace-pre-wrap break-words font-mono leading-relaxed">
+                            {log.message}
+                          </pre>
+                          {log.metadata?.error_code && (
+                            <span className={`inline-block mt-1 text-[11px] font-mono px-1.5 py-0.5 rounded ${style.bg} ${style.text}`}>
+                              {log.metadata.error_code}
+                            </span>
+                          )}
+                          {log.metadata?.session_id && (
+                            <div className="mt-0.5 text-[11px] text-zinc-600 font-mono">
+                              session: {log.metadata.session_id.slice(0, 12)}...
+                            </div>
+                          )}
+                          {log.metadata?.stack && (
+                            <details className="mt-1.5">
+                              <summary className="text-[11px] text-zinc-600 cursor-pointer hover:text-zinc-400 font-mono">
+                                stack trace
+                              </summary>
+                              <pre className="mt-1.5 p-2.5 bg-zinc-950 rounded text-[11px] text-zinc-500 overflow-x-auto font-mono leading-relaxed">
+                                {log.metadata.stack}
+                              </pre>
+                            </details>
+                          )}
                         </div>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>

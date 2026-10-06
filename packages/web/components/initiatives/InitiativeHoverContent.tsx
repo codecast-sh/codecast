@@ -22,7 +22,7 @@ export function InitiativeHoverContent({ initiative }: { initiative: InitiativeR
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{initiative.title}</div>
           <span className="text-[10px] font-medium text-sol-text-dim">
-            Initiative · {INITIATIVE_STATUS_LABEL[initiative.status]}{initiative.short_id ? ` · ${initiative.short_id}` : ""}
+            Goal · {INITIATIVE_STATUS_LABEL[initiative.status]}{initiative.short_id ? ` · ${initiative.short_id}` : ""}
           </span>
         </div>
       </div>

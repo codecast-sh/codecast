@@ -6,6 +6,7 @@
 // batch writer the daemons use, so the transcript, previews, usage rollup and
 // pending echo settle behave as for any session.
 import { MESSAGE_ROW_FIELDS, type MessageRow } from "@platform/agent";
+import { noticeSubtype, type NoticeKind } from "@codecast/shared/contracts/assistant";
 import type { MutationCtx, QueryCtx } from "../functions";
 import type { Id } from "../_generated/dataModel";
 import { withHostedReplay } from "../hostedReplay";
@@ -81,7 +82,10 @@ export async function loadHistory(ctx: QueryCtx, conversationId: Id<"conversatio
     .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conversationId))
     .order("desc")
     .take(HISTORY_MAX_ROWS);
-  const replayed = await withHostedReplay(ctx, newest.reverse());
+  // A stop notice is for the person: the model works from what was said and
+  // done, so a retry or a "try again" starts from the person's words.
+  const said = newest.reverse().filter((doc) => !isNoticeUuid(doc.message_uuid));
+  const replayed = await withHostedReplay(ctx, said);
   const rows = replayed.map((doc) => toMessageRow(doc as unknown as Record<string, unknown>));
   const start = rows.findIndex(isPersonRow);
   return start < 0 ? [] : rows.slice(start);
@@ -100,10 +104,22 @@ export async function writeRows(ctx: MutationCtx, conversationId: Id<"conversati
   return true;
 }
 
+const NOTICE_UUID_PREFIX = "notice:";
+
+/** The message_uuid of a turn's stop notice. */
+export function noticeUuid(turnKey: string): string {
+  return `${NOTICE_UUID_PREFIX}${turnKey}`;
+}
+
+function isNoticeUuid(uuid: string | undefined): boolean {
+  return !!uuid?.startsWith(NOTICE_UUID_PREFIX);
+}
+
 /** One plain line from the assistant: a notice the person reads (why a turn
- *  stopped), keyed so a repeated write lands on the same row. */
-export async function writeNotice(ctx: MutationCtx, conversationId: Id<"conversations">, key: string, text: string): Promise<boolean> {
-  return await writeRows(ctx, conversationId, [{ role: "assistant", message_uuid: `notice:${key}`, content: text, timestamp: Date.now() }]);
+ *  stopped), keyed by the turn so a repeated write lands on the same row, and
+ *  typed (`subtype`, NOTICE_KINDS) so the web draws it with its one action. */
+export async function writeNotice(ctx: MutationCtx, conversationId: Id<"conversations">, key: string, text: string, kind: NoticeKind): Promise<boolean> {
+  return await writeRows(ctx, conversationId, [{ role: "assistant", message_uuid: noticeUuid(key), content: text, subtype: noticeSubtype(kind), timestamp: Date.now() }]);
 }
 
 export interface CallRef {

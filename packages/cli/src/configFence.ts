@@ -8,8 +8,9 @@
 //   1. this user's ~/.claude and ~/.codex subtrees;
 //   2. a small set of agent config basenames inside a project root this daemon
 //      tracks (config_list advertises project CLAUDE.md/.mcp.json for editing);
-//   3. a project's line profile, `.codecast/line.toml`, inside a tracked root,
-//      for line_profile_edit and reading only;
+//   3. a project's line profile, `.codecast/line.toml`, and its own line, the
+//      plain files in `.codecast/line/` (line-map.md LX5), inside a tracked
+//      root, for line_profile_edit and reading only;
 //   4. for config_create and config_delete, only the per-file directories
 //      (agents, commands, skills, prompts) under ~/.claude and ~/.codex;
 //   5. nothing else.
@@ -18,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { LINE_PROFILE_REL_PATH } from "./lineProfile.js";
+import { REPO_LINE_FILE_RE, REPO_LINE_REL_DIR } from "@codecast/shared/contracts/lineProfile";
 
 export const AGENT_CONFIG_BASENAMES: ReadonlySet<string> = new Set([
   "CLAUDE.md", "AGENTS.md", ".mcp.json", "settings.json", "settings.local.json", "config.toml",
@@ -64,11 +66,15 @@ function canonicalRoots(roots: readonly string[]): string[] {
   return roots.map((r) => { try { return fs.realpathSync(r); } catch { return path.resolve(r); } });
 }
 
-/** True when `realTarget` is a `.codecast/line.toml` inside one of the tracked roots. */
+/** True when `realTarget` is a `.codecast/line.toml`, or a file of the repo's line in `.codecast/line/`, inside one of the tracked roots. */
 export function isTrackedLineProfile(realTarget: string, roots: readonly string[]): boolean {
-  if (!realTarget.endsWith(path.sep + LINE_PROFILE_REL_PATH.split("/").join(path.sep))) return false;
+  if (!isLineProfilePath(realTarget)) return false;
   return canonicalRoots(roots).some((root) => under(realTarget, root));
 }
+
+/** A file of the repo's own line: a plain name directly in `.codecast/line/`. */
+const isRepoLinePath = (resolved: string) =>
+  REPO_LINE_FILE_RE.test(path.basename(resolved)) && path.dirname(resolved).endsWith(path.sep + REPO_LINE_REL_DIR.split("/").join(path.sep));
 
 /**
  * What the caller does with the path:
@@ -81,7 +87,10 @@ export function isTrackedLineProfile(realTarget: string, roots: readonly string[
 export type FenceKind = "config" | "line_profile" | "read";
 
 /** Whether `p` names a line profile by its path, so the fence judges it by the file it resolves to. */
-export const isLineProfilePath = (p: string) => path.resolve(p).endsWith(path.sep + LINE_PROFILE_REL_PATH.split("/").join(path.sep));
+export const isLineProfilePath = (p: string) => {
+  const resolved = path.resolve(p);
+  return resolved.endsWith(path.sep + LINE_PROFILE_REL_PATH.split("/").join(path.sep)) || isRepoLinePath(resolved);
+};
 
 /**
  * The canonical path the fence judges for `p`. A line profile is judged by the
