@@ -553,7 +553,13 @@ export const learnStatus = (deps: OrgInitDeps, template: string) => request(deps
 export const learnDue = (deps: OrgInitDeps) => request(deps, "/cli/org/template/learn/due", {});
 export const learnRollout = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/rollout", { template_id: template });
 
-export type PublishOptions = { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string };
+export type PublishOptions = { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string; dryRun?: boolean };
+/** Who publishes: Codecast, else the workspace the options name. Publish, yank and retire send the same. */
+async function publisherArgs(deps: OrgInitDeps, options: { team?: string; personal?: boolean; codecast?: boolean }): Promise<Record<string, unknown>> {
+  if (options.codecast) return { as_codecast: true };
+  const workspace = (await currentWorkspace(deps, options)).workspace;
+  return workspace?.kind === "team" ? { team_id: workspace.id } : {};
+}
 /** The release snapshot, uploaded so a host can install from the record (H1); the storage id the publish row keeps. */
 async function uploadSnapshot(deps: OrgInitDeps, artifact: TemplateArtifact): Promise<string> {
   const uploadUrl = await request(deps, "/cli/images/upload-url", {});
@@ -571,32 +577,45 @@ async function uploadSnapshot(deps: OrgInitDeps, artifact: TemplateArtifact): Pr
  */
 export async function publishTemplate(deps: OrgInitDeps, source: string, options: PublishOptions): Promise<unknown> {
   const artifact = readArtifact(source);
-  const workspace = options.codecast ? undefined : (await currentWorkspace(deps, options)).workspace;
+  const publisher = await publisherArgs(deps, options);
   const changelogFile = path.join(artifact.root, "CHANGELOG.md");
   const changelog = options.changelog ?? (fs.existsSync(changelogFile) ? fs.readFileSync(changelogFile, "utf8").trim() : undefined);
-  const storage_id = await uploadSnapshot(deps, artifact);
+  // A dry run asks the server what publish would do (its class, a refused bump) and uploads nothing.
+  const storage_id = options.dryRun ? undefined : await uploadSnapshot(deps, artifact);
   return request(deps, "/cli/org/template/publish", {
     manifest: artifact.manifest, digest: artifact.hash, status: options.status, changelog: changelog || undefined, review_project_id: options.reviewProject, storage_id,
-    ...(options.codecast ? { as_codecast: true } : workspace?.kind === "team" ? { team_id: workspace.id } : {}),
+    ...(options.dryRun ? { dry_run: true } : {}), ...publisher,
   });
 }
+/** One published folder as the publish command prints it: what landed and the class the server gave it. */
+export type PublishRow = { folder: string; template_id?: string; version?: string; action?: string; class?: string; changes?: unknown; dry_run?: boolean; error?: string };
 /**
  * Publish several release folders in one run (the default gallery is every
  * release folder under one directory). Each folder is published on its own;
  * a folder that fails is reported beside the ones that landed, so one bad
  * manifest never hides the rest.
  */
-export async function publishTemplates(deps: OrgInitDeps, sources: string[], options: PublishOptions): Promise<Array<{ folder: string; template_id?: string; version?: string; action?: string; error?: string }>> {
-  const out: Array<{ folder: string; template_id?: string; version?: string; action?: string; error?: string }> = [];
+export async function publishTemplates(deps: OrgInitDeps, sources: string[], options: PublishOptions): Promise<PublishRow[]> {
+  const out: PublishRow[] = [];
   for (const folder of sources) {
     try {
       const row = (await publishTemplate(deps, folder, options)) as any;
-      out.push({ folder, template_id: row.template_id, version: row.latest?.version ?? row.version, action: row.action });
+      // The folder's own version: a release below latest (a backport) must not print latest's.
+      out.push({ folder, template_id: row.template_id, version: readArtifact(folder).manifest.version, action: row.action, class: row.class, changes: row.changes, ...(row.dry_run ? { dry_run: true } : {}) });
     } catch (error) {
       out.push({ folder, error: error instanceof Error ? error.message : String(error) });
     }
   }
   return out;
+}
+/** Withdraw one release (its publisher's act): no hire or update offers it, and instances on it are offered the fallback. */
+export async function yankRelease(deps: OrgInitDeps, template: string, version: string, options: { team?: string; personal?: boolean; codecast?: boolean; reason?: string }): Promise<unknown> {
+  if (!options.reason?.trim()) throw new Error("Say why with --reason: the instances on this release read it");
+  return request(deps, "/cli/org/template/yank", { template_id: template, version, reason: options.reason, ...(await publisherArgs(deps, options)) });
+}
+/** Hide a template from every catalog, or bring it back with `undo`; its instances keep running. */
+export async function retireTemplate(deps: OrgInitDeps, template: string, options: { team?: string; personal?: boolean; codecast?: boolean; reason?: string; undo?: boolean }): Promise<unknown> {
+  return request(deps, "/cli/org/template/retire", { template_id: template, ...(options.reason ? { reason: options.reason } : {}), ...(options.undo ? { undo: true } : {}), ...(await publisherArgs(deps, options)) });
 }
 export async function catalogTemplates(deps: OrgInitDeps, options: { team?: string; personal?: boolean }): Promise<unknown> {
   return request(deps, "/cli/org/template/catalog", boundary(await currentWorkspace(deps, options)));

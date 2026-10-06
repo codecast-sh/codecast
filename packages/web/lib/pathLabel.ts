@@ -67,6 +67,7 @@ export function pathLabel(path: string): string {
   // return to day mode, else a day ("Changes, Fri 2 Oct"). With neither in
   // the query it is today's, and the bare name says so.
   if (clean === "/mods") return "Mods";
+  if (clean === "/agent-features") return "Agent features";
   if (clean.startsWith("/m/")) return modTabLabel(clean);
   if (clean.startsWith("/objects/") || clean.startsWith("/o/")) return objectTabLabel(clean);
   if (clean === "/changes") {

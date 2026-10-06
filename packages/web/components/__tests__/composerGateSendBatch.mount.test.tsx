@@ -47,7 +47,7 @@ beforeEach(() => {
   useInboxStore.setState({ sessions: {}, conversations: {}, pendingMessages: {}, drafts: {}, reviewComments: {}, currentSessionId: null, currentUser: { _id: "user_gate_test", name: "Tester" } as any } as any);
 });
 
-async function submitGated(): Promise<string[]> {
+async function submitGated(gateImageRefusal?: string): Promise<string[]> {
   const sent: string[] = [];
   const { MessageInput } = await import("../MessageInput");
   const container = w.document.createElement("div");
@@ -56,7 +56,7 @@ async function submitGated(): Promise<string[]> {
   await act(async () => {
     root.render(
       <ConvexProvider client={fakeConvex()}>
-        <MessageInput conversationId={CONV_ID} status="active" onGateSend={(content) => { sent.push(content); }} />
+        <MessageInput conversationId={CONV_ID} status="active" onGateSend={(content) => { sent.push(content); }} gateImageRefusal={gateImageRefusal} />
       </ConvexProvider>,
     );
   });
@@ -78,4 +78,21 @@ test("a bare submit over a waiting quote sends the quote through the gate and cl
 
 test("a bare submit with nothing waiting sends nothing", async () => {
   expect(await submitGated()).toEqual([]);
+});
+
+// A gate whose receiver cannot read images (the hosted assistant) refuses an
+// image send before the composer clears: the person keeps the image and can
+// describe it instead. Before this, an image-only send emptied the composer
+// and the image was gone with nothing sent.
+test("a gate that refuses images sends nothing and keeps the draft's image", async () => {
+  const image = { storageId: "st_img_1", name: "shot.png", type: "image/png", previewUrl: "blob:x" };
+  useInboxStore.setState({ drafts: { [CONV_ID]: { draft_image_storage_ids: [image] } } } as any);
+  expect(await submitGated("no images here")).toEqual([]);
+  expect((useInboxStore.getState().drafts[CONV_ID] as any)?.draft_image_storage_ids?.[0]?.storageId).toBe("st_img_1");
+});
+
+test("without a refusal the same image rides the gate send", async () => {
+  const image = { storageId: "st_img_2", name: "shot.png", type: "image/png", previewUrl: "blob:y" };
+  useInboxStore.setState({ drafts: { [CONV_ID]: { draft_image_storage_ids: [image] } } } as any);
+  expect(await submitGated()).toEqual([""]);
 });

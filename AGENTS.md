@@ -10,7 +10,7 @@ Work directly in the main checkout. Other sessions may have uncommitted work in 
 
 ## Typechecking
 
-Typecheck with `cast check`; never run `tsc --noEmit` yourself. This tree's programs are listed in `.codecast/check.toml`: `cli`, `web` and `convex`. `cast check` runs all three, and `cast check web` runs one. A fresh `tsc` for each session builds the same program again every time: thirty of them across two repos on 2026-09-17 put this machine into swap and stalled everything on it, Chrome's extension included. Run test files directly (`bun test <file>`), and keep whole suite runs rare, because they are the other load the machine cannot absorb in parallel. `cast install check` adds the full command reference to your global instructions.
+Typecheck with `cast check`; never run `tsc --noEmit` yourself. This tree's programs are listed in `.codecast/check.toml`: `cli`, `web`, `convex`, `mobile`, `sim`, `evals` and `playground`. `cast check` runs all seven, and `cast check web` runs one. A fresh `tsc` for each session builds the same program again every time: thirty of them across two repos on 2026-09-17 put this machine into swap and stalled everything on it, Chrome's extension included. Run test files directly (`bun test <file>`), and keep whole suite runs rare, because they are the other load the machine cannot absorb in parallel. `cast install check` adds the full command reference to your global instructions.
 
 ## Git history
 
@@ -20,7 +20,7 @@ Keep history flat — rebase, never merge. Pull with `git pull --rebase` (never 
 
 Convex deploys push whole-tree snapshots: a tree behind origin/main doesn't just lack new code — it DELETES newer functions and routes from prod on push (three separate prod outages on 2026-07-15).
 
-- Deploy ONLY via `packages/convex/deploy.sh`. It fetches origin, hard-fails if the tree is behind origin/main (naming the missing commits), moves the repo-root `.env.local` aside for the deploy (its `CONVEX_DEPLOYMENT=anonymous` pointer hijacks the CLI away from prod) and restores it after. **Raw `npx convex deploy` is banned.**
+- Deploy ONLY via `packages/convex/deploy.sh`. It fetches origin, hard-fails if the tree is behind origin/main (naming the missing commits), moves the repo-root `.env.local` aside for the deploy (its `CONVEX_DEPLOYMENT=anonymous` pointer hijacks the CLI away from prod) and restores it after, and holds a lock (`.git/convex-deploy.lock`) so overlapping runs wait instead of pushing out of order. **Raw `npx convex deploy` is banned.**
 - The dev watcher pushes to prod the same way. It is `packages/convex/scripts/gated-push.ts` (behind `bun run dev`), never a raw `convex dev`: a push waits for 3s of quiet in `convex/`, refuses a tree behind origin/main, runs the whole-program typecheck, pushes once, and pushes again if files moved under it. A raw `convex dev` bundles the tree and typechecks the disk afterwards, so two saves seconds apart shipped a `ReferenceError` to prod on 2026-09-21. `dev.sh` refuses to start the pusher from a stale tree and prints the pull instruction (web keeps running; it starts automatically after the pull). Don't start it by hand from `packages/convex`.
 - A clean `git status` is NOT a freshness check — deploy only from a tree that is a superset of origin/main. If you're testing unpushed functions, push them early: any other superset deploy reverts whatever isn't on origin/main.
 
@@ -36,7 +36,7 @@ Web carries a second layer of defence. A query that merely ENRICHES a surface go
 
 ## Prompt dry runs
 
-A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers reads from a captured world: the legacy org files, and any argv saved under `reads/` by its key, refusing a read that the dir's `frozen` list names and that was not captured; `calls.log` marks each call SERVED, UNSERVED, LIVE, HELP, UNKNOWN (a command the CLI does not have, answered by the guard and run nowhere) or REFUSED). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--serve <dir>] [--guard <dir>]`. `--model` is required, because an unpinned run takes the account default and two runs on different accounts cannot be compared; without it the harness exits 2. `--call` grades one model call instead of an agent: the prompt file is the whole user message, `--system <file>` is the system prompt, and there are no tools and one turn, so an eval of a prod prompt carries no Claude Code context the prod call lacks. `--max-output-tokens N` caps the reply the way prod's `max_tokens` does. The run leaves `args.json` (the knobs it used), `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. To grade a prod prompt against real moments, use `./evals` (below and `docs/architecture/evals.md`), which drives this harness. Never edit a harness script while a run is alive: bash reads a script as it executes it.
+A prompt dry run (a headless `claude -p` that grades a prompt: the org analyzer, a role's standing text, a wake frame) goes through `packages/cli/scripts/prompt-dry-run.ts` and nothing else. The daemon syncs every transcript under `~/.claude/projects` as a session, hooks or no hooks, so a bare `claude -p` with hooks off, detached and its transcript deleted afterwards still sits in the founder's inbox for as long as it runs; four sessions leaked runs that way on four days before the cause was found (2026-09-19). The harness gives each run a private `CLAUDE_CONFIG_DIR` under its run directory (the transcript never enters the watched tree), reads the login from the keychain and hands it to the child through its environment only, points `CODECAST_DIR` at an empty directory so a real `cast` the agent finds cannot post, and puts a guard `cast` on PATH (`packages/cli/scripts/prompt-dry-run-bin/cast`: reads pass through, writes are refused and logged, `--serve <dir>` answers reads from a captured world: the legacy org files, and any argv saved under `reads/` by its key, refusing a read that the dir's `frozen` list names and that was not captured; `calls.log` marks each call SERVED, UNSERVED, LIVE, HELP, UNKNOWN (a command the CLI does not have, answered by the guard and run nowhere) or REFUSED). `bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--serve <dir>] [--guard <dir>]`. `--model` is required, because an unpinned run takes the account default and two runs on different accounts cannot be compared; without it the harness exits 2. `--call` grades one model call instead of an agent: the prompt file is the whole user message, `--system <file>` is the system prompt, and there are no tools and one turn, so an eval of a prod prompt carries no Claude Code context the prod call lacks. `--max-output-tokens N` caps the reply the way prod's `max_tokens` does. The run leaves `args.json` (the knobs it used), `out.json`, `reply.txt`, `exit.txt`, `took.txt` and `calls.log` in its directory. To grade a prod prompt against real moments, use `./evals` (below and `docs/architecture/evals.md`), which drives this harness. Never edit a harness script while a run is alive: bash reads a script as it executes it.
 
 ## CLI releases
 
@@ -124,7 +124,7 @@ Never use raw `set()` to modify `sessions`, `conversations`, `clientState`, `tas
 
 ### Sync
 
-All incoming data goes through `syncTable(field, data, opts?)`. Don't create per-table sync functions — register the table's config in `SYNC_REGISTRY` instead.
+All incoming data goes through `syncTable(field, data, opts?)`. Don't create per-table sync functions: register the table in `CLIENT_SYNC_REGISTRY` (`store/clientSyncRegistry.ts`, above). inboxStore's `SYNC_REGISTRY` spreads those defaults and only adds store-internal opts (transforms, merge functions, normalize) per key.
 
 - `kind: "collection"` — keyed by `_id`, runs pending filter
 - `kind: "singleton"` — single object with merge strategies
@@ -165,11 +165,11 @@ Convex queries return records enriched with **derived/joined** fields: `task.ass
 - `computePlanProgress(tasks)` — progress counts from a live task list.
 - `mergeLiveTasks(snapshotTasks, storeTasks, teamMembers, currentUser)` — overlay live store tasks onto a server snapshot (e.g. `plan.tasks`), preserving server-only fields and re-deriving `assignee_info`. Memo-stable (returns the same row ref when nothing diverged).
 
-Why not store the derived value optimistically: field-protection reconciles by `===`, so an optimistic **object** never matches the server's re-enriched object and freezes forever. Why not auto-derive in `syncTable`: a `config.transform` bypasses the no-change early-return and re-pushes the whole collection on every no-op sync (jank). String-valued derived fields (e.g. `display_title`) are the exception — they reconcile cleanly, so deriving them on the optimistic write (see `updateDoc`) is fine.
+Why not store the derived value optimistically: field-protection reconciles by `===`, so an optimistic **object** never matches the server's re-enriched object and freezes forever. Why not auto-derive in `syncTable`: a `config.transform` bypasses the no-change early-return and re-pushes the whole collection on every no-op sync (jank). String-valued derived fields (e.g. `display_title`) are the exception — they reconcile cleanly, so deriving them on an optimistic write is fine.
 
 ### Dev console access
 
-Every build, dev and prod, exposes the store as `window.__inboxStore` (end of `store/inboxStore.ts`). Use it from the browser console (or javascript_tool when verifying in Chrome) to inspect state or drive flows that have no URL of their own — e.g. fire an in-app deep-link to a message:
+Every build, dev and prod, exposes the store as `window.__inboxStore` (end of `store/inboxStore.ts`). Use it from the browser console (or `cast browser eval` when verifying) to inspect state or drive flows that have no URL of their own — e.g. fire an in-app deep-link to a message:
 
 ```js
 __inboxStore.getState().sessions            // inspect
@@ -186,7 +186,7 @@ moments and grades the replies. Reads never change anything, and every read
 takes `--json`. The design is `docs/architecture/evals.md`.
 
 A surface is one prod prompt (title, settle, insight, call-summary, ask,
-handoff, suggest, org-review, role-wake, anchor-brief). A conversation is a
+handoff, suggest, ground, card-write, org-review, role-wake, anchor-brief). A conversation is a
 codecast session: `convo inbox` lists your sessions and `convo show
 <session>` reads one. A ref names its surface, `<surface>@<ref>`:
 `title@jx7c6zk:142` (a session and line), `call-summary@<callId>`,

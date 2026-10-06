@@ -17,7 +17,7 @@ import { isPrivateHost } from "../contracts/browserPaneOffer";
 import { callAnchorHref, callFrameHref, parseCallMomentParam } from "../contracts/callLinks";
 import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/callRecordings";
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -60,6 +60,9 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   pr: "/pr",
   commit: "/commit",
   call: "/calls",
+  // A product source is addressed by query: the Ops timeline narrowed to it
+  // (`/ops?source=src-N`), since `/ops/<tab>` is a view, never a source.
+  source: "/ops",
 };
 
 /**
@@ -77,15 +80,17 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   op: "proposal",
   sd: "decision",
   cl: "call",
+  src: "source",
 };
 
 /**
- * A prefix that is also an English word takes digits only: `in-7` is an
- * initiative, `op-3` a proposal and `sd-289` a decision, while "in-app",
- * "in-house", "op-ed" and "sd-card" are prose. Every matcher below derives
+ * A prefix that is also an English word or a common path segment takes digits
+ * only: `in-7` is an initiative, `op-3` a proposal, `sd-289` a decision and
+ * `src-13` a source, while "in-app", "in-house", "op-ed", "sd-card" and
+ * "src-tauri" are prose. Every matcher below derives
  * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -116,6 +121,7 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   decision: "decision",
   calls: "call",
   call: "call",
+  ops: "source",
 };
 
 /**
@@ -126,10 +132,10 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
  * `?task=<id>`, and those links are still live in old messages — so new
  * trigger links always use the path route (`/triggers/<id>`).
  */
-const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", proposal: "proposal" };
+const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", proposal: "proposal", source: "source" };
 /** Types whose page is the query form alone: a path under their route is
  *  another object's page (`/org/<or-N>` is a role), never one of theirs. */
-const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal"]);
+const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal", "source"]);
 /** Path segments under a type's route that are other pages, never an id of
  *  that type: `/decisions/stacks/<ds-N>` is a decision stack. */
 const NOT_AN_ID: Partial<Record<EntityType, ReadonlySet<string>>> = { decision: new Set(["stacks"]) };

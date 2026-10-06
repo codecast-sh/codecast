@@ -36,7 +36,6 @@ const SECTIONS: Record<SettingsSectionId, true> = {
   integrations: true,
   agents: true,
   "agent-library": true,
-  "agent-features": true,
   harness: true,
   daemon: true,
   "provider-keys": true,

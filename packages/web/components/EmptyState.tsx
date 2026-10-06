@@ -4,6 +4,9 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
 import { track } from "../lib/analytics";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { cliJustConnected, markCliConnected } from "../lib/cliConnected";
+import { bridge, type DaemonSetupState } from "../lib/desktop";
+import { useMountEffect } from "../hooks/useMountEffect";
 
 interface EmptyStateProps {
   title: string;
@@ -215,15 +218,77 @@ function SetupTokenCommand() {
   );
 }
 
+const SETUP_ERRORS = ["invalid_token", "unsupported_platform", "installer_failed"] as const;
+const setupError = (e?: string) => SETUP_ERRORS.find((k) => k === e) ?? "threw";
+
+// In the desktop app there is no terminal step: one click mints a setup token
+// and the shell runs the installer with it. A browser tab, an older shell or a
+// failed run falls back to the command to paste.
+function SetupThisMachine({ onConnected }: { onConnected: () => void }) {
+  const createSetupToken = useMutation(api.apiTokens.createSetupToken);
+  const [machine, setMachine] = useState<DaemonSetupState | null>(null);
+  const [phase, setPhase] = useState<"idle" | "running" | "failed">("idle");
+  useMountEffect(() => {
+    bridge("getDaemonSetup")?.().then(setMachine).catch(() => {});
+  });
+  const run = bridge("runDaemonSetup");
+
+  if (!run || !machine?.supported || phase === "failed") {
+    return (
+      <>
+        {phase === "failed" && (
+          <p className="text-sm text-sol-text-muted text-center mb-3">
+            Setup did not finish from here. Paste this in a terminal instead:
+          </p>
+        )}
+        <SetupTokenCommand />
+      </>
+    );
+  }
+
+  const start = async () => {
+    setPhase("running");
+    track("desktop_setup_started", { location: "onboarding_empty_state" });
+    try {
+      const { token } = await createSetupToken({});
+      const result = await run(token);
+      track("desktop_setup_finished", result.ok ? { ok: true } : { ok: false, error: setupError(result.error) });
+      if (!result.ok) return setPhase("failed");
+      markCliConnected();
+      onConnected();
+    } catch {
+      track("desktop_setup_finished", { ok: false, error: "threw" });
+      setPhase("failed");
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={start}
+        disabled={phase === "running"}
+        className="w-full px-4 py-3 bg-sol-yellow/20 hover:bg-sol-yellow/30 text-sol-yellow text-sm font-medium rounded-xl border border-sol-yellow/30 transition-colors disabled:opacity-60"
+      >
+        {phase === "running" ? "Setting up this machine…" : "Set up this machine"}
+      </button>
+      <p className="text-xs text-sol-text-dim text-center">
+        Installs the cast CLI and a background daemon, and syncs your agent sessions to your private workspace.
+      </p>
+    </div>
+  );
+}
+
 function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean }) {
-  if (hasOtherSessions) {
+  const [connected, setConnected] = useState(() => cliJustConnected());
+  const onConnected = () => setConnected(true);
+  if (hasOtherSessions && !connected) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center px-4">
         <div className="max-w-sm w-full">
           <p className="text-sm text-sol-text-muted mb-4">
             No personal sessions yet. Install the CLI to start syncing your own sessions.
           </p>
-          <SetupTokenCommand />
+          <SetupThisMachine onConnected={onConnected} />
           <p className="text-xs text-sol-text-dim mt-3">
             Works with Claude Code, Codex, Cursor, and Gemini.{" "}
             <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
@@ -246,16 +311,29 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
       <div className="absolute inset-0 flex items-start justify-center pt-16 sm:pt-24">
         <div className="relative max-w-lg w-full mx-4">
           <div className="rounded-2xl border border-sol-border/60 bg-sol-bg/90 dark:bg-sol-bg/95 backdrop-blur-xl shadow-2xl p-6 sm:p-8">
-            <div className="text-center mb-6">
-              <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
-                Start syncing your sessions
-              </h2>
-              <p className="text-sm text-sol-text-muted">
-                Install the CLI to automatically capture and sync your coding sessions.
-              </p>
-            </div>
+            {connected ? (
+              <div className="text-center">
+                <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
+                  This machine is connected
+                </h2>
+                <p className="text-sm text-sol-text-muted">
+                  Your sessions start appearing here the moment the daemon starts, past ones included. If your terminal is asking setup questions, finish them first.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="text-center mb-6">
+                  <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
+                    Start syncing your sessions
+                  </h2>
+                  <p className="text-sm text-sol-text-muted">
+                    Install the CLI to automatically capture and sync your coding sessions.
+                  </p>
+                </div>
 
-            <SetupTokenCommand />
+                <SetupThisMachine onConnected={onConnected} />
+              </>
+            )}
 
             <p className="text-xs text-sol-text-dim text-center mt-4">
               Works with Claude Code, Codex, Cursor, and Gemini.{" "}

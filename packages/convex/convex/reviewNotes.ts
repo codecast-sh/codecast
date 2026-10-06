@@ -13,7 +13,8 @@
 // delete, the web reads — is the shared code in codeComments.ts.
 
 import { v } from "convex/values";
-import { mutation, query } from "./functions";
+import { internalMutation, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { canAccessComment } from "./codeComments";
@@ -57,11 +58,19 @@ export const add = mutation({
     diff_identity: v.optional(v.string()),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
     team_id: v.optional(v.id("teams")),
+    // A line reviewer's finding (cast task verdict --note): the task it was
+    // found on, its severity, and the disposition the reviewer accepted.
+    task_id: v.optional(v.id("tasks")),
+    conversation_id: v.optional(v.id("conversations")),
+    author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
+    severity: v.optional(v.string()),
+    ...dispositionArgs,
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
     const content = args.content.trim();
     if (!content) throw new Error("A review note needs a body");
+    const promise = await resolvePromise(ctx, args);
 
     // The workspace chokepoint decides the key; review_comments is not one of
     // its scoped tables, so the row is stamped here from what it resolved.
@@ -80,7 +89,7 @@ export const add = mutation({
       line_number: args.line_number || undefined,
       line_end: args.line_end || undefined,
       author_user_id: userId,
-      author_kind: "user" as const,
+      author_kind: args.author_kind ?? ("user" as const),
       content,
       resolved: false,
       created_at: now,
@@ -89,8 +98,125 @@ export const add = mutation({
       workspace: data.workspaceKey,
       git_root: args.git_root,
       diff_identity: args.diff_identity,
+      task_id: args.task_id,
+      conversation_id: args.conversation_id,
+      severity: args.severity,
+      ...promise,
     });
     return { id, workspace: data.workspaceKey };
+  },
+});
+
+// ── Findings as promises ──
+//
+// A finding's disposition is fixed, deferred or rejected. Deferred is a
+// promise, and a promise with nobody to keep it or no day to keep it by is
+// refused here, the one write path, so no caller can file a vague one.
+
+const dispositionArgs = {
+  disposition: v.optional(v.union(v.literal("fixed"), v.literal("deferred"), v.literal("rejected"))),
+  owner_user_id: v.optional(v.id("users")),
+  owner_role_id: v.optional(v.id("org_roles")),
+  // A role handle (@growth) or a user's name/handle/email, resolved here.
+  owner: v.optional(v.string()),
+  due_at: v.optional(v.number()),
+  promise_task_id: v.optional(v.id("tasks")),
+};
+
+type DispositionFields = {
+  disposition?: "fixed" | "deferred" | "rejected";
+  owner_user_id?: Id<"users">;
+  owner_role_id?: Id<"org_roles">;
+  owner?: string;
+  due_at?: number;
+  promise_task_id?: Id<"tasks">;
+};
+
+export const DEFERRAL_NEEDS_OWNER = "A deferred finding is a promise: name who keeps it (--owner <@role or user>) and when (--due <date>)";
+
+/** The fields to store for a disposition, or a thrown refusal. Pure on its inputs. */
+export function promiseFields(fields: DispositionFields, owner: { user_id?: Id<"users">; role_id?: Id<"org_roles"> }) {
+  if (!fields.disposition) return {};
+  const out: Record<string, unknown> = { disposition: fields.disposition };
+  if (fields.disposition === "deferred") {
+    if ((!owner.user_id && !owner.role_id) || !fields.due_at) throw new Error(DEFERRAL_NEEDS_OWNER);
+    if (fields.due_at < Date.now() - 86_400_000) throw new Error("A promise's due date is in the future, not the past");
+    Object.assign(out, { owner_user_id: owner.user_id, owner_role_id: owner.role_id, due_at: fields.due_at, promise_task_id: fields.promise_task_id });
+  }
+  return out;
+}
+
+async function resolvePromise(ctx: any, fields: DispositionFields) {
+  let user_id = fields.owner_user_id;
+  let role_id = fields.owner_role_id;
+  const name = fields.owner?.trim();
+  if (name && !user_id && !role_id) {
+    const handle = name.replace(/^@/, "").toLowerCase();
+    const role = (await ctx.db.query("org_roles").collect()).find((r: any) => (r.handle ?? "").toLowerCase() === handle);
+    if (role) role_id = role._id;
+    else {
+      const user = (await ctx.db.query("users").collect()).find((u: any) => [u.github_username, u.email, u.name].some((x: string | undefined) => x && x.toLowerCase() === handle));
+      if (user) user_id = user._id;
+      else throw new Error(`No role or user named ${name}`);
+    }
+  }
+  return promiseFields(fields, { user_id, role_id });
+}
+
+export const setDisposition = mutation({
+  args: { api_token: v.optional(v.string()), comment_id: v.id("review_comments"), ...dispositionArgs },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await ctx.db.get(args.comment_id);
+    if (!row || !(await canAccessComment(ctx, userId, row))) throw new Error("Finding not found");
+    const fields = await resolvePromise(ctx, args);
+    const now = Date.now();
+    await ctx.db.patch(args.comment_id, { ...fields, updated_at: now, ...(args.disposition === "fixed" || args.disposition === "rejected" ? { resolved: true, resolved_at: now, resolved_by: userId } : {}) });
+    return { id: args.comment_id, ...fields };
+  },
+});
+
+const PROMISE_SWEEP_BATCH = 50;
+
+/** Deferred findings past due and still open, not yet signalled: one signal each. Returns what it filed. */
+export async function overduePromises(db: any, now: number): Promise<Doc<"review_comments">[]> {
+  const due: Doc<"review_comments">[] = await db
+    .query("review_comments")
+    .withIndex("by_disposition_due", (q: any) => q.eq("disposition", "deferred").lt("due_at", now))
+    .take(PROMISE_SWEEP_BATCH * 4);
+  return due.filter((r) => !r.resolved && !r.promise_signaled_at).slice(0, PROMISE_SWEEP_BATCH);
+}
+
+/** The cron's pass over promises (crons.ts, beside close quiet watches). */
+export const sweepOverduePromises = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const due = await overduePromises(ctx.db, now);
+    for (const row of due) {
+      // Stamped before the signal is scheduled, so a retry of this pass sees
+      // the row as done and the finding never fires twice.
+      await ctx.db.patch(row._id, { promise_signaled_at: now });
+      const filer = row.owner_user_id ?? row.author_user_id;
+      if (!filer) continue;
+      const where = `${row.file_path ?? "?"}${row.line_number ? `:${row.line_number}` : ""}`;
+      await ctx.scheduler.runAfter(0, internal.signals.ingestAs, {
+        user_id: filer,
+        source: "promise",
+        kind: "bug",
+        fingerprint: `promise:${row._id}`,
+        title: `Deferred finding past due: ${where}`,
+        detail_md: `${row.content}
+
+Deferred on ${new Date(row.updated_at ?? row.created_at).toISOString().slice(0, 10)}, due ${new Date(row.due_at ?? now).toISOString().slice(0, 10)}, still open.`,
+        subject: row.file_path,
+        project_path: row.git_root,
+        role_id: row.owner_role_id,
+        observed_at: now,
+      });
+    }
+    if (due.length === PROMISE_SWEEP_BATCH) await ctx.scheduler.runAfter(0, internal.reviewNotes.sweepOverduePromises, {});
+    return { filed: due.length };
   },
 });
 

@@ -2,7 +2,7 @@ import { AppLoader } from "../AppLoader";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
+import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isHostedAgentType, isSessionActivityFresh } from "@codecast/shared/contracts";
 import { LimitParkCard } from "../LimitParkCard";
 import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -642,16 +642,20 @@ export function ConversationMetadata({
           <AgentTypeIcon agentType={resolvedAgent} />
         </div>
       )}
-      <HeaderModelControl
-        conversationId={conversationId}
-        agentType={resolvedAgent}
-        model={resolvedModel}
-        effort={live ? (live.effort ?? undefined) : effort}
-        messageCount={messageCount}
-        canEdit={!!canEditModel}
-        open={controlOpen}
-        onOpenChange={onControlOpenChange}
-      />
+      {/* The hosted assistant's plan picks its model, and it has no machine
+          to move or local agent to switch to: nothing for this control. */}
+      {!isHostedAgentType(resolvedAgent) && (
+        <HeaderModelControl
+          conversationId={conversationId}
+          agentType={resolvedAgent}
+          model={resolvedModel}
+          effort={live ? (live.effort ?? undefined) : effort}
+          messageCount={messageCount}
+          canEdit={!!canEditModel}
+          open={controlOpen}
+          onOpenChange={onControlOpenChange}
+        />
+      )}
     </div>
   );
 }

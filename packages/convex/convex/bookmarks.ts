@@ -6,6 +6,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireUser } from "./lib/auth";
 import { generateShareToken } from "./conversations";
+import { claimShareToken } from "./publicShare";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import {
   BOOKMARKS_GRANT_KEY,
@@ -178,7 +179,7 @@ export const createFromCLI = mutation({
     let shareToken = conversation.share_token;
     if (!shareToken) {
       shareToken = generateShareToken();
-      await ctx.db.patch(conversation._id, { share_token: shareToken });
+      await claimShareToken(ctx, "conversations", conversation, shareToken, userId);
     }
     const bookmarkUrl = `https://codecast.sh/share/${shareToken}#msg-${args.message_index}`;
 

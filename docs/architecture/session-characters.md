@@ -209,5 +209,5 @@ phone has no character picker yet, so choosing a face is done on the web.
 The phone's guard rails: `components/identity/identity.test.tsx` renders every
 key and fails any import in that folder outside React Native, the app and the
 shared packages; `metro.config.test.cjs` proves every module on the face path
-resolves the app's one pinned `react-native-svg`; `scripts/audit-export.mjs`
+resolves the app's one pinned `react-native-svg`; `packages/mobile/scripts/audit-export.mjs`
 checks an exported bundle for one copy of each native library and all 24 files.

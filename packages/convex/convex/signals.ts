@@ -62,6 +62,8 @@ const signalArgs = {
   subject: v.optional(v.string()),
   goal_hint: v.optional(v.string()),
   observed_at: v.optional(v.number()),
+  // The role whose run introduced the defect (the fix-loop finder, szz:<sha>).
+  role_id: v.optional(v.id("org_roles")),
 };
 
 // Where the signal is filed: the workspace the caller named, else the calling
@@ -87,6 +89,7 @@ type SignalInput = {
   subject?: string;
   goal_hint?: string;
   observed_at?: number;
+  role_id?: Id<"org_roles">;
 };
 
 export type CauseCandidate = {
@@ -122,6 +125,7 @@ export function normalizeSignal(input: SignalInput): SignalInput {
     subject: clip(input.subject, SHORT_MAX),
     goal_hint: clip(input.goal_hint, SHORT_MAX),
     observed_at: input.observed_at,
+    role_id: input.role_id,
   };
   for (const key of Object.keys(out) as (keyof SignalInput)[]) if (out[key] === undefined) delete out[key];
   return out;
@@ -383,6 +387,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     project_id: projectId ?? task?.project_id,
     attach,
     reopened: reopened || undefined,
+    role_id: signal.role_id,
   });
   return { signal_id: signalId, short_id: shortId, task_id: taskId, task_short_id: taskShortId, attach, reopened, signal_count: signalCount };
 }

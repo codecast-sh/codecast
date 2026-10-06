@@ -12,9 +12,13 @@ import { formatShortcutParts, getShortcutsForAction } from "../shortcuts";
 import { isElectron, bridge } from "../lib/desktop";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
-import { AGENT_LAUNCH_OPTIONS } from "@codecast/shared/contracts";
+import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
+import { HOSTED_IMAGE_REFUSAL } from "@codecast/shared/contracts/assistant";
+import { newConversationAgentType } from "../lib/defaultAgent";
 import { composeDraftContent, findKeptComposeDraft, type ComposeInstance } from "../store/composeSlice";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
+import { settleHostedStart } from "../lib/startHostedConversation";
+import { useOnlyHostedAgent } from "../hooks/usePinnedAgents";
 import { awaitUpload } from "../lib/pendingUploads";
 import { ComposeRolePicker } from "./ComposeRolePicker";
 import { sendRequestToRole, type GateImage, type RoleRecipient } from "../lib/roleRecipients";
@@ -72,6 +76,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   const materializeRef = useRef<(() => Promise<string>) | null>(null);
   const stubIdRef = useRef<string | null>(null);
   const sentRef = useRef(false);
+  // The hosted assistant's first message: its create carries it, so the
+  // server queues it in the same transaction (createSessionFromStub).
+  const hostedFirstRef = useRef<{ content: string; clientId: string } | null>(null);
 
   // A ComposeView instance owns ONE deferred stub and ends one of three ways:
   //   • committed — the first send fires materialize() and sets sentRef.
@@ -107,6 +114,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   // path the stub is never materialized: the gate clears its draft, so the
   // unmount abandon prunes it like any un-sent blank.
   const [recipient, setRecipient] = useState<RoleRecipient | null>(null);
+  // A role is an org seat, a developer idea: where only the assistant can
+  // answer, the "To a role" chip goes with the agent row (NewSessionView).
+  const onlyHosted = useOnlyHostedAgent();
   const recipientRef = useRef(recipient);
   useWatchEffect(() => { recipientRef.current = recipient; }, [recipient]);
 
@@ -131,7 +141,10 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       recentProjects: store.recentProjects,
       machineRoster: store.machineRoster,
     });
-    const agentType = (resumed?.agent_type || ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    // A resumed draft keeps its agent; otherwise the conversation on screen's
+    // agent carries over, and the default (lib/defaultAgent: the hosted
+    // assistant in hosted mode or with no machine) fills in.
+    const agentType = resumed?.agent_type || newConversationAgentType(store, ctx.agentType);
 
     // Shared optimistic-create path — see store.beginOptimisticSession.
     // deferCreate: opening the popup seeds ONLY a local stub (so the null-state
@@ -148,7 +161,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // closure's mount-time `path`/`agentType`: the user may have switched
       // either in the null-state pickers before sending, and that switch (written
       // to the stub row) must be what we create with.
-      create: (stubId) => store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined }),
+      // A hosted stub's first message rides the create (hostedFirstRef, set
+      // by the hosted gate below a tick before materialize fires).
+      create: (stubId) => store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }),
     });
     materializeRef.current = materialize;
     stubIdRef.current = sid;
@@ -277,6 +292,24 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     if (!r) return;
     const into = await sendRequestToRole(() => useInboxStore.getState(), r, text, images ?? [], awaitUpload);
     if (!into) toast.error(`${r.name} has no standing session yet`);
+  }, []);
+
+  // The agent the stub holds now (the agent row may switch it before the
+  // first send). A hosted agent's send goes through the gate below rather
+  // than MessageInput's create-then-send.
+  const liveAgentType = useInboxStore((s) => (sessionId ? (s.sessions[s.resolveLiveSessionId(sessionId)]?.agent_type as string | undefined) : undefined)) ?? skillCtx.agentType;
+  const hosted = isHostedAgentType(liveAgentType);
+
+  // The hosted path of a send. MessageInput's gate hands over the text once it
+  // has emptied the composer; the optimistic bubble goes on the stub and its
+  // client id rides the create, which handleSubmit's materialize fires next.
+  // A send carrying an image never reaches it: MessageInput refuses it with
+  // HOSTED_IMAGE_REFUSAL and keeps the composer whole (gateImageRefusal).
+  const startHosted = useCallback((text: string) => {
+    const sid = stubIdRef.current;
+    if (!sid) return;
+    const clientId = useInboxStore.getState().addOptimisticMessage(sid, text);
+    hostedFirstRef.current = { content: text, clientId };
   }, []);
 
   // Expanding a dock, restoring a collapsed one, or minimizing the modal all
@@ -430,13 +463,24 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     // awaits awaitConvexId(sessionId), so the in-flight create is already tracked
     // when the send resolves the stub→real id. Idempotent (once-guarded in store).
     sentRef.current = true;
-    materializeRef.current?.();
+    const ready = materializeRef.current?.();
+    // A hosted create carries the first message, so a refused one marks it.
+    const first = hostedFirstRef.current;
+    if (first && ready) settleHostedStart(ready, sessionId, first.clientId, (m) => toast.error(m));
     navIntentRef.current = navigate;
     const store = useInboxStore.getState();
     const resolveConvexId = async () => {
       if (isConvexId(sessionId)) return sessionId;
       return store.getConvexId(sessionId) ?? (await store.awaitConvexId(sessionId).catch(() => undefined));
     };
+    // A hosted first message rides the create, so MessageInput's onDidSend
+    // never fires for it: hand the main window the same bubble here, under
+    // the same gate, once the real id exists.
+    if (first && navigate) {
+      void resolveConvexId().then((id) => {
+        if (id) broadcastComposeOptimistic({ conversationId: id, content: first.content, clientId: first.clientId });
+      });
+    }
     // In-app overlay: dismiss now (the session create + first send finish durably
     // in the background). "Send & open" then routes onto the new conversation once
     // its real id resolves; plain Enter leaves the user where they were.
@@ -547,7 +591,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
       <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : "flex-1 min-h-0 pt-6"}`}>
-        {conversation && (
+        {conversation && !onlyHosted && (
           <div className={`w-full shrink-0 ${docked ? "mb-2" : "mb-3 pr-16"}`}>
             <ComposeRolePicker picked={recipient} onPick={setRecipient} onDone={refocusComposer} />
           </div>
@@ -568,10 +612,11 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           embedded
           autoFocusInput
           skills={skills}
-          agentType={skillCtx.agentType}
+          agentType={liveAgentType}
           onDropFiles={dropFilesRef}
-          onGateSend={recipient ? wakeRole : undefined}
-          composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : undefined}
+          onGateSend={recipient ? wakeRole : hosted ? startHosted : undefined}
+          gateImageRefusal={!recipient && hosted ? HOSTED_IMAGE_REFUSAL : undefined}
+          composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? "What can the assistant take off your plate?" : undefined}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
           escapeOwnedRef={escapeOwnedRef}
@@ -670,7 +715,7 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
       text: content?.text ?? "",
       images: content?.images ?? [],
       projectName: (row?.project_path || row?.git_root)?.split("/").filter(Boolean).pop(),
-      agentLabel: AGENT_LAUNCH_OPTIONS.find((a) => a.convexType === row?.agent_type)?.label,
+      agentLabel: row?.agent_type ? agentDisplayName(row.agent_type) : undefined,
     };
   }, [stubId]);
 

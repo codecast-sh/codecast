@@ -40,6 +40,14 @@ import {
   webCallPlaces,
   endTranscript,
   HUDDLE_GRACE_MS,
+  deliverRoutes,
+  deliverToSession,
+  deliveryClientId,
+  dropDeadRoute,
+  readUnsent,
+  CATCH_UP_QUIET_MS,
+  DELIVER_RETRY_MAX,
+  DELIVER_RETRY_MS,
 } from "./transcripts";
 import { LIVE_TRANSCRIBE_MODEL, lineSaidAt } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
@@ -1297,7 +1305,7 @@ describe("pacing the words to a fed agent", () => {
     expect(quiet).toEqual({ deliver: true, lane: "context", held: true });
     // Somebody is mid-sentence: the scribe's next lull delivers instead.
     const talking = sessionDeliveryVerdict({ reason: "settle", now: 10_000, route: {}, pacing: ember, unsent: [seg("and then we", 9_000)] });
-    expect(talking).toEqual({ deliver: false });
+    expect(talking).toEqual({ deliver: false, wait: "quiet" });
     const expired = sessionDeliveryVerdict({ reason: "hold_expired", now: 10_000, route: {}, pacing: ember, unsent: [seg("chatter", 7_000)] });
     expect(expired).toEqual({ deliver: true, lane: "context", held: true });
   });

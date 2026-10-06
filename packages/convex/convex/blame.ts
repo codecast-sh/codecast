@@ -110,12 +110,23 @@ async function sessionRefFor(
     users.set(userKey, { name: user?.name ?? undefined, image: user?.image ?? undefined });
   }
   const user = users.get(userKey)!;
+  // The line run and role the session worked under (fix loop: an introducing
+  // commit is traced to a run and a role through its session).
+  let role_id: Id<"org_roles"> | undefined = conv.org_role_id ?? undefined;
+  if (!role_id && conv.workflow_run_id) {
+    const run = await ctx.db.get(conv.workflow_run_id);
+    role_id = run?.org_role_id ?? run?.role_id ?? undefined;
+  }
+  const role = role_id ? await ctx.db.get(role_id) : null;
   return {
     conversation_id: conv._id,
     short_id: conv.short_id ?? undefined,
     title: conv.title || "Untitled",
     author_name: user.name,
     author_image: user.image,
+    run_id: conv.workflow_run_id ?? undefined,
+    role_id,
+    role_handle: role?.handle ?? undefined,
   };
 }
 

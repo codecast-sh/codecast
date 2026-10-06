@@ -297,6 +297,37 @@ and editing one puts it back in the batch.
     });
 
   review
+    .command("disposition")
+    .description("Set a finding's disposition: fixed, rejected, or deferred as a promise with an owner and a due date")
+    .argument("<ref>", "the number from cast review ls, or the review comment id")
+    .argument("<disposition>", "fixed | deferred | rejected")
+    .option("--owner <who>", "who keeps a deferred promise: @role handle or a user (name, handle or email)")
+    .option("--due <when>", "when a deferred promise is due: an ISO day, or 7d / 2w from now")
+    .option("--task <ct-N>", "the task that will carry the promise")
+    .option("--json", "as JSON")
+    .action(async (ref: string, disposition: string, options: { owner?: string; due?: string; task?: string; json?: boolean }) => {
+      if (!["fixed", "deferred", "rejected"].includes(disposition)) {
+        console.error("disposition is fixed, deferred or rejected");
+        process.exit(1);
+      }
+      const { parseDue } = await import("./reviewFindings.js");
+      const due_at = options.due ? parseDue(options.due) : undefined;
+      if (options.due && due_at === undefined) {
+        console.error(`cannot read a date from ${options.due}: use an ISO day or 7d / 2w`);
+        process.exit(1);
+      }
+      if (disposition === "deferred" && (!options.owner || !due_at)) {
+        console.error("A deferred finding is a promise: name who keeps it (--owner <@role or user>) and when (--due <date>)");
+        process.exit(1);
+      }
+      const isId = /^[a-z0-9]{20,}$/.test(ref);
+      const target = isId ? { _id: ref } : resolveNoteRef(await loadBatch(deps, requireRepoRoot(realCwd()), true), ref);
+      const result = await apiPost(deps, "/cli/review/disposition", { comment_id: target._id, disposition, owner: options.owner, due_at });
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`ok finding ${disposition}${disposition === "deferred" ? ` · ${options.owner} by ${new Date(due_at!).toISOString().slice(0, 10)}` : ""}`);
+    });
+
+  review
     .command("rm")
     .description("Drop notes from the batch")
     .argument("<refs...>", "numbers from cast review ls, or note ids")

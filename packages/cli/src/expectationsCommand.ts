@@ -117,8 +117,9 @@ Markdown form (JSON is the same fields: {summary, since?, until?, ops: [{op, ...
 
 Source kinds: call, chat, session, task, decision, commit, file, doc, desk, call_grade, signal, other.
 A proposal that only adds lines applies on its own when each line quotes, with its date, a person's own words
-the record holds: a chat line they typed, a decision they answered, or what they said on a call.
-Anything else waits for the project's person: a card in their queue when a session proposes it.
+the record holds (a chat line they typed, a decision they answered, or what they said on a call) and says what
+that quote says, in words the two share. Anything else waits for the project's person: a card in their queue
+when a session proposes it.
 since/until record the window of team context read; the newest until is the next read's start.`)
     .action(async (file: string, options: { project?: string; team?: string; hold?: boolean; json?: boolean }) => {
       let proposal;

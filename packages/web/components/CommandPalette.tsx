@@ -28,8 +28,8 @@ import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
 import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, listedModels, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
-import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
-import { useDevices, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
+import { useOnlyHostedAgent, usePinnedAgentIds } from "../hooks/usePinnedAgents";
+import { useDevices, deviceDisplayName, deviceWakesOnUse, rosterDeviceOf, type Device } from "./DeviceBadge";
 import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
@@ -44,7 +44,7 @@ import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
 import { collapseSameTitle } from "../lib/mentionRanking";
-import { sessionMatchesQuery, sessionSearchHaystack, mergeSearchRows } from "../lib/instantSessionSearch";
+import { sessionSearchHaystack, mergeSearchRows, rankSessions, sessionStanding, type SessionStanding } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -74,6 +74,8 @@ import {
 } from "lucide-react";
 import { popOutPeople } from "./people/popOutPeople";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
+import { startHostedConversation } from "../lib/startHostedConversation";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { settleComposerAttachments } from "../lib/draftImages";
 import type { ChatAttachment } from "../store/chatSlice";
@@ -266,6 +268,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Ops", path: "/ops", icon: "radar", keywords: "ops errors issues sentry posthog incidents checks jobs replays metrics alerts deploys production monitoring" },
   { label: "Ops: issues", path: "/ops/issues", icon: "radar", keywords: "errors issues groups exceptions stack sentry", secondary: true },
   { label: "Ops: replays", path: "/ops/replays", icon: "radar", keywords: "session replays recordings repro", secondary: true },
+  { label: "Agent features", path: "/agent-features", icon: "grid", keywords: "agent features snippets cast install memory messaging tasks triggers browser computer skills stable context teach" },
   { label: "Capabilities", path: "/capabilities", icon: "grid", keywords: "skills mcp plugins drift machines library apps connect" },
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
   { label: "Mods", path: "/mods", icon: "grid", keywords: "mods plugins extensions customize panes commands blocks", secondary: true },
@@ -1480,6 +1483,15 @@ export function ActionSubmenu({
 // beyond the scan is covered by the async server search ("Search Results") below.
 const RECENT_SEARCH_CAP = 750;
 const RECENT_RENDER_CAP = 25;
+const RECENT_IDLE_CAP = 8;
+const EMPTY_ROSTER: Device[] = [];
+
+/** A typed query as a row quotes it: trimmed, and cut short with an ellipsis
+ *  so the closing quote survives the row's own truncation. */
+function previewQuery(query: string): string {
+  const q = query.trim();
+  return q.length > 40 ? `${q.slice(0, 40)}\u2026` : q;
+}
 
 // Stable empty index handed to the mention-index selector while the palette is
 // closed, so a closed palette doesn't re-render on task/doc/plan sync churn.
@@ -1601,8 +1613,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // Scope the local cache like the inbox panel (and the chip counts above):
     // the store caches sessions across scopes, so an unfiltered merge would
     // resurface rows from a previously viewed scope as recents.
+    // Workers stay in: the ranking sinks them below the sessions they serve
+    // rather than hiding a session someone may be reaching for by name.
     for (const s of Object.values(filterInboxScopeFromState(useInboxStore.getState()))) {
-      if ((s as any).is_subagent) continue;
       byId.set(s._id, { ...byId.get(s._id), ...(s as any) });
     }
     setRecentSessions(Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)));
@@ -1699,23 +1712,40 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (picking && pickAllows("role")) for (const r of orgRoles) if (r.standing?.conversation_id) skip.add(r.standing.conversation_id);
     return skip.size ? recentSessions.filter((c: any) => !skip.has(String(c._id))) : recentSessions;
   }, [recentSessions, pick, picking, pickAllows, orgRoles]);
-  const recentMatches = useMemo(() => {
-    const recentSessions = recentPool;
-    if (!query.trim()) return recentSessions.slice(0, 8);
-    const q = query.toLowerCase();
-    const scan = recentSessions.length > RECENT_SEARCH_CAP
-      ? recentSessions.slice(0, RECENT_SEARCH_CAP)
-      : recentSessions;
-    const out: any[] = [];
-    for (let i = 0; i < scan.length && out.length < RECENT_RENDER_CAP; i++) {
-      const conv = scan[i];
-      // One haystack for every session search (lib/instantSessionSearch):
-      // summaries count, so a session is findable by what it did rather than
-      // only by what it is titled.
-      if (sessionMatchesQuery(conv, q)) out.push(conv);
+  // Where each recent stands (who acts next, set aside, a worker, whose),
+  // read once per frozen pool: the inbox's own placement when it holds the
+  // row, else the row's per-row placement, else its triage stamps.
+  const standingOf = useMemo(() => {
+    const state = useInboxStore.getState() as any;
+    const meId = state.currentUser?._id ? String(state.currentUser._id) : null;
+    const placements = recentPool.length ? placeInboxRows(state).placements : null;
+    const byId = new Map<string, SessionStanding>();
+    for (const c of recentPool) {
+      const id = String(c._id);
+      byId.set(id, sessionStanding(c, meId, placements?.get(id) ?? state.sessions[id] ?? null));
     }
-    return out;
-  }, [recentPool, query]);
+    return (c: any) => byId.get(String(c._id)) ?? sessionStanding(c, meId, null);
+  }, [recentPool]);
+  const recentMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const scan = recentPool.length > RECENT_SEARCH_CAP ? recentPool.slice(0, RECENT_SEARCH_CAP) : recentPool;
+    // One ranking for every session search (lib/instantSessionSearch): how
+    // directly the words name it, then where it stands and how recent it is.
+    return rankSessions(scan, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
+  }, [recentPool, query, standingOf]);
+  // The machine most recents run on goes unsaid; a row names its machine only
+  // when it runs somewhere else (a cloud host, the other laptop).
+  const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
+  const hostedFirst = useOnlyHostedAgent();
+  const deviceOfRecent = useMemo(() => {
+    if (machineRoster.length < 2) return () => undefined;
+    const counts = new Map<string, number>();
+    for (const c of recentPool) if (c.owner_device_id) counts.set(c.owner_device_id, (counts.get(c.owner_device_id) ?? 0) + 1);
+    let usual: string | null = null;
+    for (const [id, n] of counts) if (!usual || n > counts.get(usual)!) usual = id;
+    return (c: any): Device | undefined =>
+      c.owner_device_id && c.owner_device_id !== usual ? rosterDeviceOf(machineRoster, c.owner_device_id) : undefined;
+  }, [machineRoster, recentPool]);
 
   // Search tasks / docs / plans over the mention index. Only when there's a
   // query — the empty palette stays session-focused. Plan-type docs are excluded
@@ -2494,6 +2524,20 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     );
   };
 
+  // The hosted assistant, asked straight from the palette: the query is the
+  // first message (lib/startHostedConversation). The standalone palette window
+  // has no stage to open it on.
+  const askHostedRow = !standalone && (
+    <CommandPrimitive.Item
+      value="__compose__ ask the codecast assistant hosted"
+      onSelect={() => navigateToSession({ _id: startHostedConversation(query.trim()) })}
+      className={itemClass}
+    >
+      <AgentTypeIcon agentType={HOSTED_AGENT_TYPE} className="w-4 h-4" />
+      <span className="truncate">Ask the assistant: &ldquo;{previewQuery(query)}&rdquo;</span>
+    </CommandPrimitive.Item>
+  );
+
   // Root mode: navigation + context actions
   const paletteContent = (
     <CommandPrimitive
@@ -2835,7 +2879,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {recentMatches.length > 0 && pickAllows("session") && (
           <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
             {recentMatches.map((conv: any) => (
-              <PaletteSessionRow key={`recent-${conv._id}`} conv={conv} bucket={labelForConv(conv._id)} onSelect={() => chooseSession(conv)} />
+              <PaletteSessionRow key={`recent-${conv._id}`} conv={conv} bucket={labelForConv(conv._id)} standing={standingOf(conv)} device={deviceOfRecent(conv)} onSelect={() => chooseSession(conv)} />
             ))}
           </CommandPrimitive.Group>
         )}
@@ -3357,7 +3401,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             >
               <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
               <span className="truncate flex-1">
-                Open full search for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                Open full search for &ldquo;{previewQuery(query)}&rdquo;
               </span>
               <span className="flex items-center gap-[2px]">
                 <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
@@ -3376,7 +3420,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 <span className="truncate flex-1">
-                  Search note content for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                  Search note content for &ldquo;{previewQuery(query)}&rdquo;
                 </span>
               </CommandPrimitive.Item>
             )}
@@ -3394,7 +3438,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 <span className="truncate flex-1">
-                  Search chat for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                  Search chat for &ldquo;{previewQuery(query)}&rdquo;
                 </span>
               </CommandPrimitive.Item>
             )}
@@ -3403,6 +3447,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
         {!picking && query.trim() && !searchAwaiting && (
           <CommandPrimitive.Group className={groupClass}>
+            {/* Where only the hosted assistant can answer (hosted mode, no
+                machine) its row leads; otherwise New session does. */}
+            {hostedFirst && askHostedRow}
             <CommandPrimitive.Item
               value="__compose__"
               onSelect={() => startCompose(query.trim())}
@@ -3413,8 +3460,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
                 </svg>
               </span>
-              <span className="truncate">New session: &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;</span>
+              <span className="truncate">New session: &ldquo;{previewQuery(query)}&rdquo;</span>
             </CommandPrimitive.Item>
+            {!hostedFirst && askHostedRow}
             {vaultReady && (
               <CommandPrimitive.Item
                 key="vault-new-named"
@@ -3435,7 +3483,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <FilePlus2 className="w-4 h-4 text-sol-cyan flex-shrink-0" />
                 <span className="truncate flex-1">
-                  Files: New note &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
+                  Files: New note &ldquo;{previewQuery(query)}&rdquo;
                 </span>
               </CommandPrimitive.Item>
             )}

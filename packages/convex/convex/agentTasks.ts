@@ -25,7 +25,7 @@ import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/co
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
 import { roleServedInitiatives } from "./lib/roleInitiatives";
 import { metricLine } from "@codecast/shared/contracts/initiative";
-import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
+import { listOnlineDevices, parkedAccountResetAt, recoveryModeOf } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
@@ -389,8 +389,21 @@ async function parkRunAtLimit(
   runConv: Doc<"conversations">,
   now: number,
 ): Promise<void> {
-  const { primary } = await listOnlineDevices(ctx, task.user_id, now);
-  const resetAt = earliestUsageResetAt(primary?.cc_accounts?.profiles ?? [], now);
+  const { online, primary } = await listOnlineDevices(ctx, task.user_id, now);
+  // The account the run used: the row's pin, else the fleet account of the
+  // device that ran it (the primary when the owner is not online). Its own
+  // pegged window names the wait, and a booked recovery check is a floor:
+  // the earliest reset across every account woke runs on a rolled 5h session
+  // inside a still-spent week.
+  const owner = (runConv.owner_device_id && online.find((d) => d.device_id === runConv.owner_device_id)) || primary;
+  const resetAt = parkedAccountResetAt(
+    owner && {
+      cc_accounts: owner.cc_accounts,
+      cc_auto_switch_state: recoveryModeOf(owner) === "off" ? undefined : owner.cc_auto_switch_state,
+    },
+    runConv,
+    now,
+  );
   const runAt = (resetAt ?? now + LIMIT_PARK_FALLBACK_MS) + LIMIT_PARK_GRACE_MS;
   const when = new Date(runAt).toISOString();
   await patchTask(ctx, task, {

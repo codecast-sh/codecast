@@ -54,6 +54,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   pr: "Pull request",
   commit: "Commit",
   call: "Call",
+  source: "Source",
 };
 
 
@@ -252,7 +253,10 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     api.transcripts.webGetCallRef,
     live && callRef ? { ref: callRef.call, ...(callRef.turns ?? {}), ...(callRef.at_ms != null ? { at_ms: callRef.at_ms } : {}) } : "skip",
   );
-  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : undefined;
+  // A product source (`src-N`) seeds from the Ops sources in the store; the
+  // query keeps it live and covers a source the viewer never opened Ops for.
+  const { data: source } = useQueryNoThrow(api.ingest.webGetSource, live && type === "source" ? { ref: rawId } : "skip");
+  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -309,9 +313,10 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // the raw id was a Convex id. The commit page matches the sha exactly, so
   // the route carries the full one.
   // An initiative's page is addressed by its `in-N`, a proposal's by its
-  // `op-N` and a decision's by its `sd-N`: the form a person reads. One change
+  // `op-N`, a decision's by its `sd-N` and a source's by its `src-N`: the
+  // form a person reads. One change
   // of a proposal keeps its number, so the page opens with it in focus.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : ((type === "initiative" || type === "proposal" || type === "decision") && entity?.short_id) || (entity?._id ?? rawId);
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : ((type === "initiative" || type === "proposal" || type === "decision" || type === "source") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
   return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href, changeSeq: changeRef?.seq };
