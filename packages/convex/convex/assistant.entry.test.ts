@@ -24,6 +24,7 @@ setDefaultTimeout(60_000);
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./assistant/entry.ts": () => import("./assistant/entry"),
   "./agentTasks.ts": () => import("./agentTasks"),
   "./managedSessions.ts": () => import("./managedSessions"),

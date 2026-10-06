@@ -14,6 +14,7 @@ const HOUR = 3_600_000;
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./tasks.ts": () => import("./tasks"),
   "./sessionOwnership.ts": () => import("./sessionOwnership"),
   "./notificationRouter.ts": () => import("./notificationRouter"),

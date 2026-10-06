@@ -79,7 +79,10 @@ describe("writeObjectShareLink", () => {
 // and somebody who was never in the room must not put its words, guests'
 // included, on the open web (lib/callRecordingRuns.mayPublishCall).
 describe("a call's public link", () => {
-  const modules = { "./_generated/server.ts": () => import("./_generated/server") };
+  const modules = {
+    "./_generated/server.ts": () => import("./_generated/server"),
+    "./syncOutbox.ts": () => import("./syncOutbox"),
+  };
   async function channelCall() {
     const t = convexTest(schema, modules);
     const now = Date.now();

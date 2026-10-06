@@ -141,7 +141,8 @@ describe("settle request golden", () => {
   test("generateIdleSummary posts the recorded body for each fixture", async () => {
     const actual: GoldenCase[] = [];
     for (const fx of settleFixtures) {
-      const t = convexTest(schema, { "./_generated/server.ts": () => import("./_generated/server"), "./idleSummary.ts": () => import("./idleSummary") });
+      const t = convexTest(schema, { "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"), "./idleSummary.ts": () => import("./idleSummary") });
       const conversation_id = await t.run(async (ctx) => {
         const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);
         const id = await ctx.db.insert("conversations", {

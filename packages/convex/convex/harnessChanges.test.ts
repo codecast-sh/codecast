@@ -6,6 +6,7 @@ import schema from "./schema";
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./harnessChanges.ts": () => import("./harnessChanges"),
   "./devices.ts": () => import("./devices"),
 };

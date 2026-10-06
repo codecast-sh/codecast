@@ -7,7 +7,13 @@ import schema from "../schema";
 import { teamVisibleMedia } from "./changesAccess";
 import { sessionArtifacts } from "./sessionMedia";
 
-const modules = { "../_generated/server.ts": () => import("../_generated/server") };
+const modules = {
+
+  "../_generated/server.ts": () => import("../_generated/server"),
+
+  "../syncOutbox.ts": () => import("../syncOutbox"),
+
+};
 const T = 10_000_000;
 
 async function seed() {

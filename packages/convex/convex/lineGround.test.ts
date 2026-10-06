@@ -48,6 +48,7 @@ const ground = (fields: Record<string, string>) => JSON.stringify({ category: "c
 async function setup() {
   const t = convexTest(schema, {
     "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
     "./signals.ts": () => import("./signals"),
     "./lineGround.ts": () => import("./lineGround"),
   });

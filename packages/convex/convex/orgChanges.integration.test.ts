@@ -6,6 +6,7 @@ import { orgLogEntryLine } from "@codecast/shared/contracts/orgChange";
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./orgChanges.ts": () => import("./orgChanges"),
   "./orgRoles.ts": () => import("./orgRoles"),
 };

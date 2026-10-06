@@ -9,6 +9,7 @@ setDefaultTimeout(60_000);
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./users.ts": () => import("./users"),
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),

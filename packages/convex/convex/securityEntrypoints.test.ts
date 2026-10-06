@@ -10,6 +10,7 @@ import schema from "./schema";
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./users.ts": () => import("./users"),
   "./systemConfig.ts": () => import("./systemConfig"),
   "./githubApi.ts": () => import("./githubApi"),

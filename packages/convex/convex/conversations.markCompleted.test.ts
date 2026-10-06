@@ -6,7 +6,10 @@ import schema from "./schema";
 setDefaultTimeout(60_000);
 
 const markCompleted = makeFunctionReference<"mutation">("conversations:markSessionCompleted");
-const modules = { "./conversations.ts": () => import("./conversations"), "./_generated/server.ts": () => import("./_generated/server") };
+const modules = {
+  "./conversations.ts": () => import("./conversations"), "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
+};
 
 test("an agent stopped by its own move in flight is not ended; once the fence is off, an exit ends it", async () => {
   const t = convexTest(schema, modules);

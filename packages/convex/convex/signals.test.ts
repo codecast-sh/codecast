@@ -41,6 +41,7 @@ function judgeStub() {
 async function setup() {
   const t = convexTest(schema, {
     "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
     "./signals.ts": () => import("./signals"),
     "./notificationRouter.ts": () => import("./notificationRouter"),
   });

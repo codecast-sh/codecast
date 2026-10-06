@@ -12,6 +12,7 @@ const api = anyApi as any;
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./dispatch.ts": () => import("./dispatch"),
   "./ingest.ts": () => import("./ingest"),
   "./sources/app.ts": () => import("./sources/app"),

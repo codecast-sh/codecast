@@ -7,7 +7,13 @@ import { hashToken } from "./apiTokens";
 import { storeResourceSnapshot } from "./machineResources";
 import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
 
-const modules = { "./_generated/server.ts": () => import("./_generated/server"), "./machineResources.ts": () => import("./machineResources") };
+const modules = {
+
+  "./_generated/server.ts": () => import("./_generated/server"),
+
+  "./syncOutbox.ts": () => import("./syncOutbox"), "./machineResources.ts": () => import("./machineResources"),
+
+};
 const sample = (at: number): MachineResourceSnapshot => ({
   version: 1, deviceId: "mac", platform: "darwin", collectionDurationMs: 4, limitations: [], processes: [], groups: [], omittedProcessCount: 0,
   sample: { at, memoryTotal: 1000, memoryAvailable: 500, memoryAvailableIsEstimate: true, load1: 2, logicalCpus: 8, processCount: 20, pressure: "normal" },

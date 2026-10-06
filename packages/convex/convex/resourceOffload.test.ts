@@ -8,7 +8,10 @@ import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
 setDefaultTimeout(60_000);
 
 const start = makeFunctionReference<"mutation">("resourceOffload:start");
-const modules = { "./dispatch.ts": () => import("./dispatch"), "./_generated/server.ts": () => import("./_generated/server"), "./resourceOffload.ts": () => import("./resourceOffload"), "./sessionMigrations.ts": () => import("./sessionMigrations") };
+const modules = {
+  "./dispatch.ts": () => import("./dispatch"), "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"), "./resourceOffload.ts": () => import("./resourceOffload"), "./sessionMigrations.ts": () => import("./sessionMigrations"),
+};
 async function setup() {
   const t = convexTest(schema, modules);
   const now = Date.now();

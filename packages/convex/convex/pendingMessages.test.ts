@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getFunctionName } from "convex/server";
 import {
   canDaemonSeePendingMessage,
   claimPendingMessageForDaemon,
@@ -723,7 +724,7 @@ describe("cancelQueuedMessagesOnKill", () => {
     expect(await (continueKillCancellation as any)._handler(ctx, args)).toEqual({ cancelled: 50 });
     expect(db._tables.conversations[0].pending_kill_generation).toBe(1);
     expect(db._tables.pending_messages.every((r: any) => r.status === "cancelled")).toBe(true);
-    expect(scheduled).toHaveLength(0);
+    expect(scheduled.map(([fn]) => getFunctionName(fn))).toEqual(["syncOutbox:drain"]);
   });
 
   // A delivery already landing in the pane is the one thing kill may not

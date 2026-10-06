@@ -25,6 +25,7 @@ router.route({ path: STRIPE_WEBHOOK_PATH, method: "POST", handler: stripeWebhook
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./billing.ts": () => import("./billing"),
   "./wallet.ts": () => import("./wallet"),
   "./http.ts": async () => ({ default: router }),

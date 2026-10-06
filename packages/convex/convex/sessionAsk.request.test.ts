@@ -78,6 +78,7 @@ describe("ask request golden", () => {
     for (const fx of askFixtures) {
       const t = convexTest(schema, {
         "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
         "./sessionAsk.ts": () => import("./sessionAsk"),
         "./ipRateLimit.ts": () => import("./ipRateLimit"),
       });

@@ -17,6 +17,7 @@ const T0 = 1_790_000_000_000;
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./workflow_runs.ts": () => import("./workflow_runs"),
   "./tasks.ts": () => import("./tasks"),
   "./notificationRouter.ts": () => import("./notificationRouter"),

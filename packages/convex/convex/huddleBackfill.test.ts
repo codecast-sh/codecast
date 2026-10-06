@@ -6,6 +6,7 @@ import schema from "./schema";
 const internal = anyApi as any;
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./huddleBackfill.ts": () => import("./huddleBackfill"),
   "./transcripts.ts": () => import("./transcripts"),
 };

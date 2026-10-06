@@ -11,6 +11,7 @@ import schema from "./schema";
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./conversations.ts": () => import("./conversations"),
 };
 const token = "s".repeat(64);

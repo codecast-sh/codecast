@@ -72,6 +72,7 @@ describe("handoff request golden", () => {
     for (const fx of handoffFixtures) {
       const t = convexTest(schema, {
         "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
         "./handoff.ts": () => import("./handoff"),
       });
       const conversation_id = await t.run(async (ctx) => {

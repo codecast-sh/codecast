@@ -154,6 +154,7 @@ describe("readConversationRange", () => {
 describe("the read steps against the real queries", () => {
   const modules = {
     "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
     "./conversations.ts": () => import("./conversations"),
   };
   const token = "r".repeat(64);

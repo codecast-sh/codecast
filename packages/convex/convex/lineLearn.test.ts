@@ -18,6 +18,7 @@ const DAY = 86_400_000;
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./signals.ts": () => import("./signals"),
   "./tasks.ts": () => import("./tasks"),
   "./notificationRouter.ts": () => import("./notificationRouter"),

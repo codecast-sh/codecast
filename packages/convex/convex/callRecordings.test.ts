@@ -31,6 +31,7 @@ const GUEST_SECRET = "s".repeat(32);
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
   "./callRecordings.ts": () => import("./callRecordings"),
   "./calls.ts": () => import("./calls"),
   "./callGuests.ts": () => import("./callGuests"),

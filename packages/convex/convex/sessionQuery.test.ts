@@ -70,6 +70,7 @@ describe("sessionQueryCore", () => {
 describe("operator search end to end", () => {
   const modules = {
     "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
     "./conversations.ts": () => import("./conversations"),
   };
   const token = "q".repeat(64);
@@ -208,6 +209,7 @@ describe("operator search end to end", () => {
 describe("operator search at volume", () => {
   const modules = {
     "./_generated/server.ts": () => import("./_generated/server"),
+  "./syncOutbox.ts": () => import("./syncOutbox"),
     "./conversations.ts": () => import("./conversations"),
   };
   const token = "v".repeat(64);
