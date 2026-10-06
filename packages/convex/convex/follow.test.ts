@@ -92,6 +92,21 @@ describe("leader view", () => {
     expect(rows.view_states[0].anchor).toEqual({ message_id: "m9", offset: 1 });
   });
 
+  test("the in-page view is clamped on write, read back by a follower, and withheld with a private conversation", async () => {
+    const rows = tables();
+    await h(follow)(ctxFor(rows, BOB), { leader_id: ANN });
+    await h(reportView)(ctxFor(rows, ANN), {
+      path: "/docs/d1",
+      view: { panel: " diff ", diff: { file: "src/a.ts", line: 12.6 }, scroll: { key: "doc", offset: 1.4 } },
+    });
+    expect(rows.view_states[0].view).toEqual({ panel: "diff", diff: { file: "src/a.ts", line: 12 }, scroll: { key: "doc", offset: 1 } });
+    expect(await h(viewOf)(ctxFor(rows, BOB), { leader_id: ANN })).toMatchObject({ view: { scroll: { key: "doc", offset: 1 } } });
+    await h(reportView)(ctxFor(rows, ANN), { path: `/conversation/${PRIVATE}`, conversation_id: PRIVATE, view: { diff: { file: "secret.ts" } } });
+    expect(await h(viewOf)(ctxFor(rows, BOB), { leader_id: ANN })).toEqual({ path: "", updated_at: rows.view_states[0].updated_at, withheld: true });
+    await h(reportView)(ctxFor(rows, ANN), { path: "/inbox", view: { scroll: { key: "", offset: 0.5 } } });
+    expect(rows.view_states[0].view).toBeUndefined();
+  });
+
   test("viewOf reaches only a live follower of that leader", async () => {
     const rows = tables();
     rows.view_states.push({ _id: "s1", user_id: ANN, path: "/inbox", updated_at: 5 });

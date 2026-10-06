@@ -6,6 +6,7 @@
 //
 // The server's list lives in convex/notificationRouter.ts; a convex test asserts
 // the schema, the router and the preference map agree. This is the client half.
+import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
 
 export const sessionTypes = new Set([
   "session_idle",
@@ -36,6 +37,8 @@ export const socialTypes = new Set([
   "comment_reply",
   "conversation_comment",
   "team_invite",
+  "team_join_request",
+  "team_join_approved",
   "artifact_commented",
   "chat_mention",
   "chat_reply",
@@ -93,6 +96,8 @@ export const typeLabels: Record<string, string> = {
   card_waiting: "card waiting on you",
   change_shipped: "change shipped",
   cause_reopened: "cause reopened",
+  team_join_request: "asked to join your team",
+  team_join_approved: "let you into a team",
 };
 
 export const typeColors: Record<string, string> = {
@@ -127,6 +132,8 @@ export const typeColors: Record<string, string> = {
   card_waiting: "text-sol-orange",
   change_shipped: "text-sol-green",
   cause_reopened: "text-red-400",
+  team_join_request: "text-sol-violet",
+  team_join_approved: "text-sol-violet",
 };
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous
@@ -154,6 +161,27 @@ export const agentNames: Record<string, string> = {
   grok: "grok",
   muse: "muse",
 };
+
+/** How a conversation with the hosted assistant words the events a machine
+ *  session calls "ready" and "needs permission": it replied, or it waits on
+ *  the person's OK. */
+const hostedTypeLabels: Record<string, string> = {
+  session_idle: "replied",
+  permission_request: "needs your OK",
+};
+
+/** The small event word on a notification row, for the agent its
+ *  conversation runs on. An unlisted type reads as its own name in words. */
+export function notificationTypeLabel(type: string, agentType?: string | null): string {
+  return (isHostedAgentType(agentType) && hostedTypeLabels[type]) || typeLabels[type] || type.replace(/_/g, " ");
+}
+
+/** Who a session notification is from: the short agent name, and for an
+ *  agent that has none (the hosted assistant) its display name, never the
+ *  raw agent type. */
+export function notificationAgentName(agentType: string): string {
+  return agentNames[agentType] ?? agentDisplayName(agentType);
+}
 
 /** Display label for the session a notification belongs to: title, else project basename. */
 export function sessionLabel(
@@ -191,6 +219,8 @@ export function notificationRoute(
   // A device has no page of its own; the roster with its health is the place a
   // reader can act on the alert.
   if (entityType === "device") return "/settings/devices";
+  // A team: its settings, where join requests wait for an admin.
+  if (entityType === "team") return "/settings/team";
   // A role's page opens on its Scope tab, where a person who reports to it
   // reads their goals with what moved and what stalled.
   if (entityType === "org_role") return `/org/${entityId}`;

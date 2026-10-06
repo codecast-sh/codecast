@@ -1,4 +1,5 @@
 "use client";
+import { useModeWords } from "../../lib/surfaces";
 import { useState, useCallback, useMemo } from "react";
 import { sharePageUrl } from "../../lib/utils";
 import { ShortId } from "../../components/ShortId";
@@ -573,6 +574,7 @@ export type TaskListScope = { projectIds: string[]; planIds: string[] };
 const RUNS_FEED_ARGS = { limit: 200 };
 
 export function TaskListContent({ projectId, scope }: { projectId?: string; scope?: TaskListScope } = {}) {
+  const modeWords = useModeWords();
   const router = useRouter();
   const params = useParams();
   const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
@@ -1190,7 +1192,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
           getComposeRef={(t) => t.short_id}
-          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
+          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : modeWords.tasksPage}
           tabs={[
             // The three answers worth a click: everything, the open work, the
             // finished work. Anything finer is the Status filter in the bar

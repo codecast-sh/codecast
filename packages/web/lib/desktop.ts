@@ -36,6 +36,12 @@ declare global {
       // launches that helper — so it is its own call, not part of the map
       // above. Absent on older builds; readiness is then "unknown".
       getComputerPermissions?: () => Promise<Record<string, string>>;
+      // The CLI and daemon on this machine, set up from the app (the shell's
+      // daemonSetup.js): whether they are here, and the installer run with a
+      // setup token this page minted. Absent on older builds; the page then
+      // offers the terminal command.
+      getDaemonSetup?: () => Promise<DaemonSetupState>;
+      runDaemonSetup?: (token: string) => Promise<{ ok: boolean; error?: string; detail?: string }>;
       // Multi-window notification routing (see main.js). Absent on older
       // builds — gate on them; without them this window behaves as the only one.
       reportWindowState?: (state: DesktopWindowState) => void;
@@ -221,6 +227,8 @@ declare global {
 // shell (electron shareCursors.js), which knows what the capture covers.
 // Rides the generic app IPC, so a shell without the handler just rejects:
 // the first rejection turns the forwarder off for this renderer.
+
+export type DaemonSetupState = { supported: boolean; installed: boolean; linked: boolean; running: boolean };
 
 export type ShareCursor = { id: string; name: string; nx: number; ny: number };
 

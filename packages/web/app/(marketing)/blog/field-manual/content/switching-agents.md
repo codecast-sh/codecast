@@ -1,238 +1,124 @@
-Every coding agent keeps its own transcript in its own format: Claude Code writes JSONL under `~/.claude/projects`, Codex writes rollout files, Grok keeps a `chat_history.jsonl`, OpenCode keeps a SQLite store, pi keeps a session JSONL with a parent chain. Normally that means a conversation is stuck with the agent that started it. If Claude has spent two hours on a bug and you want Codex to take a look, you copy and paste.
+Every coding agent keeps its own transcript in its own format. Claude Code writes one kind of log, Codex another, Grok and pi and OpenCode each something else. Normally that means a conversation is stuck with the agent that started it: if Claude has spent two hours on a bug and you want Codex to look at it, you copy and paste.
 
-Codecast doesn't have that problem, because the conversation already lives on its server. The server holds one neutral copy of every message: user turns, assistant turns, tool calls and tool results. Each agent's native transcript is just one rendering of that copy. To move a conversation to another agent, codecast writes the history out in the target agent's own format and starts that agent on it.
+Codecast doesn't have that problem, because the conversation already lives on its server. The server holds one neutral copy of every message: your turns, the agent's turns, every tool call and every tool result. Each agent's own transcript is just one rendering of that copy. To move a conversation to another agent, codecast writes the history out in that agent's format and starts it there. Everything in this chapter (switching agents, forking onto another one, moving to another account or another machine) is that one trick applied in different places.
 
-On top of that one mechanism sit seven ways to move work: an in-place switch, a fork onto another agent, a handoff with a brief, a worker on another backend, a one-shot `exec`, an automatic hop to another account when one hits a usage limit, and a migration to another machine.
+![A conversation drawn as a tree: a fork that carries the history, Codex and Gemini workers that report back, then the trunk changes color in place with a 'now using Codex' marker and Codex continues](/blog/field-manual/switch-treehero.webp "One conversation as a tree. Forks carry the history (solid lines). Workers on Codex and Gemini start fresh and report back (dashed lines). At the bottom the trunk changes color in place: same thread, new agent.")
 
-![A conversation drawn as a tree: a fork that carries the history, Codex and Gemini workers spawned with cast spawn --subagent that report back, then cast switch --agent codex recolors the trunk with a 'now using Codex' marker and Codex continues](/blog/field-manual/switch-treehero.webp "The /features/agents hero draws one conversation as a tree. Forks carry the history (solid lines). Workers on Codex and Gemini start fresh and report back (dashed lines). At the bottom, `cast switch --agent codex` changes the trunk's color in place: same thread, new agent.")
+## The session control
 
-## Which backends exist
+Every conversation header shows the agent's icon and, next to it, the model it is running ("Fable", "gpt-5.5-codex") with an effort glyph. If the session is yours, that label is a button. Click it and a panel opens.
 
-The registry in `packages/shared/contracts/agentClients.ts` lists eight local agents: **Claude** (Claude Code), **Codex**, **Cursor**, **OpenCode**, **pi**, **Grok** (Grok Build), **Muse Spark** and **Gemini**. For every agent the registry records what codecast can actually do with it. One flag decides whether a conversation that already has history can move into that agent: `capabilities.reconstitute`, meaning "codecast knows how to write this client's transcript from the server copy". Six of the eight have it. Cursor and Muse don't. For those two, the web picker labels the row "can't rebuild history", and the server refuses before it touches the row:
+The top of the panel says where you are: the agent, the model, and one line of state. "Live session · picks apply in place" means a model or effort change reaches the running agent right now. "Blank session · picks apply at launch" means nothing has been said yet, so whatever you pick is simply what starts. Under that sit the model and effort pickers, and then a section called **Move this session** with three rows:
 
-```terminal
-Cursor cannot take over an existing session's history; start a new Cursor session instead
-```
+- **Switch agent**: same session, another agent.
+- **Fork as**: a copy of this session on another agent.
+- **Hand off to**: a fresh session, seeded with a brief.
 
-The refusal comes first so that the row's `agent_type` never names an agent the daemon then fails to launch. A blank session (no messages yet) is just relaunched, so it can become any agent.
+Each row slides to a list of agents written out in full: your pinned agents plus the one you are on, which is ringed so the list says where you are. Codecast supports eight local agents (Claude Code, Codex, Cursor, OpenCode, pi, Grok, Muse Spark and Gemini), and the list only shows the ones you pinned. The same three verbs, plus "Change model & effort…", are in the command palette when a conversation is open, so you can do all of this without the mouse.
 
-## 1. `cast switch`: same conversation, another agent or model
+Teammates looking at your session see the model as plain text. The control belongs to the session's owners.
 
-```terminal
-$ cast switch --help
-Usage: cast switch [options]
+## Switch agent: same thread, new agent
 
-Change the agent or model on this session without forking
+Pick **Switch agent → Codex** and the conversation keeps its id. The inbox card, the links, the bound task and the share URL stay exactly where they were. What changes is who answers.
 
-Stays on the same conversation. A divider lands in the thread
-("now using Codex"). A provider switch replaces this process.
+What happens next depends on what you changed:
 
-Examples:
-  cast switch --agent codex
-  cast switch --model opus
-  cast switch --agent claude --model sonnet
-  cast switch --agent codex --fork     # optional: a new session instead
+- **A different model on the same agent** (Fable to Sonnet, or a new effort level) usually needs no restart. Codecast sends the running agent the same `/model` command you would have typed, and the agent carries on with the next turn.
+- **A different agent** replaces the process. Codecast stops the old agent, interrupting its turn if it is mid-answer, rebuilds the conversation in the new agent's format on the machine that runs the session, and starts the new agent on it. A message you had queued for the old agent is delivered to the new one.
+- **A blank session** has nothing to rebuild, so it just launches as the new agent.
 
-Options:
-  --agent <name>      Agent to continue as (claude, codex, cursor, opencode,
-                      pi, grok, muse, gemini)
-  --model <name>      Model option key (opus, sonnet, gpt-5.4, …)
-  --effort <level>    Effort level (low, medium, high, max, …)
-  -s, --session <id>  Session to switch (default: the current one)
-  --fork              Create a new session instead of continuing here
-  --json              Machine-readable output
-```
+Where the agent changed, a divider lands in the thread: a thin rule that reads "now using Codex", with the previous agent and model beside it. The divider is a real message, so it is also in the history the new agent reads. The new agent knows a switch happened and that the history above is the same thread.
 
-The conversation id doesn't change. The inbox card, the links, the bound task and the share URL all stay where they were. Under the hood, the server mutation `switchSessionAgent` takes one of three paths:
+![A conversation: the user asks 'Reply with only the word PONG', Claude answers PONG, a divider reads 'now using OpenCode was Claude · Fable', another session asks 'What word did you reply with earlier?', and OpenCode answers PONG](/blog/field-manual/switch-live-divider-thread.webp "A switch, as the app draws it. Claude answers PONG. The divider marks the move to OpenCode. Asked later what it said, OpenCode answers PONG from the rebuilt history, even though it never saw the first turn.")
 
-- **Same provider, new model or effort, live session.** No restart. The server updates the row and queues `/model sonnet` or `/effort high` as messages to the running agent, the same way you would type them. The echo of that slash command is drawn as the divider.
-- **Different provider (or a model change the agent can't apply mid-session).** The server inserts a divider message into the thread, `[codecast] Now using Codex (was Claude · Fable).`, and then queues a kill-and-resume for the daemon on the machine that owns the session. A provider switch replaces the agent process.
-- **Blank session.** Nothing to rebuild, so it is simply relaunched as the new agent.
+### How the transcript is rebuilt
 
-The interesting part happens on the daemon. For a cross-agent switch it:
+The new agent never sees a summary. It gets the conversation itself, written the way that agent would have written it: your messages, the previous agent's replies, and each tool call paired with its result, translated into the new agent's own shape for tool calls. To Codex, two hours of Claude's work look like two hours of its own session.
 
-1. Tears down the old backend *with a turn interrupt*. Dropping the bookkeeping alone wasn't enough: a Codex app-server thread kept running, and its output kept landing on the conversation.
-2. Pages the whole conversation down from the server's `/cli/export` endpoint, 500 messages at a time.
-3. Writes it out in the target's native format, with a generator for each agent in `jsonlGenerator.ts`:  **Claude**: a Claude Code JSONL with a proper `parentUuid` chain, where each tool result is matched to the `tool_use` that asked for it. **Codex**: a rollout with `session_meta`, `function_call` and `function_call_output` items, imported through the Codex app-server's `thread/fork` so Codex mints a real thread id. **Grok**: `chat_history.jsonl` plus `summary.json`, which `grok --resume` loads. **pi**: its session JSONL with header and parent chain, for `pi --session`. **OpenCode**: no import endpoint exists, so the daemon creates a session through the `opencode serve` sidecar and appends the whole history as one `noReply` user message. **Gemini**: goes through the Claude JSONL writer and `gemini --resume latest`. The registry calls this "a sanctioned oddity".
-4. Rebinds the conversation to the new native session id and resumes it. It also clears delivery state, so a message that was queued for the old agent is delivered again to the new one.
+What does not carry over is anything that lived only inside the old agent: its hidden reasoning and its prompt cache. That is usually what you want from a second opinion. The new model reads the same evidence and reaches its own conclusions.
 
-Long histories get trimmed to fit the target's context window. Above an estimated 180k tokens, a Claude rebuild keeps the tail of the conversation (about 160k tokens' worth) plus *every earlier human instruction*. It also adds a hidden note at the top that says how many messages were left out and gives the exact `cast read` range to fetch them. Codex imports cap at 4,096 items or 240 KB. Past that, oversized items are clipped in the middle with a pointer back to the transcript. Nothing is lost for good: the server copy stays whole, and the agent is told how to read it.
+Very long conversations are trimmed to fit the new agent's context window. The trim keeps the recent part of the thread and every instruction you gave earlier, and adds a note at the top saying how many older messages were left out and how to read them. Nothing is lost for good: the server copy stays whole, and the agent is told where to find the rest.
 
-![A conversation: the user asks 'Reply with only the word PONG', Claude answers PONG, a divider reads 'now using OpenCode was Claude · Fable', another session asks 'What word did you reply with earlier?', and OpenCode answers PONG](/blog/field-manual/switch-live-divider-thread.webp "A switch, as the app draws it. Claude answers PONG. The divider marks the move to OpenCode. When another session asks what it said earlier, OpenCode answers PONG from the imported history, even though it never saw the first turn.")
+> **Why it matters.** The usual reason to switch is a second pair of eyes from a different model on the same evidence. Because the history is rebuilt rather than summarized, "Codex, look at what Claude did" costs one click and nothing gets paraphrased away.
 
-The divider is an ordinary message stored with `subtype: "agent_switch"`. The web and mobile timelines draw it as a rule that reads "now using OpenCode · was Claude · Fable". It also stays in the history the next agent is given, so the new agent knows a switch happened. The body ends: "This session continues here. History above is the same thread."
+### Agents that can't take over a history
 
-![The /features/agents switch section: a terminal listing cast switch commands next to a mock thread where Claude reports, the user asks for a second pair of eyes, cast switch --agent codex runs, a 'now using Codex' divider appears and Codex adds jitter](/blog/field-manual/switch-section-mock.webp "The feature page's switch section. The usual reason to switch is a second opinion from a different model on the same evidence.")
-![The /features/agents chooser with 'Keep going on another agent or model' selected: cast switch --agent codex; starts with the same conversation, the id does not change; shows up in the same thread with a 'now using Codex' divider; hears back: you, exactly as before](/blog/field-manual/switch-chooser.webp "The page's chooser, with &quot;Keep going on another agent or model&quot; selected. Each way of starting or moving an agent is described by what it starts with, where it shows up, and who hears back.")
+Six of the eight agents can be rebuilt from the server copy. Cursor and Muse can't, so in the Switch and Fork lists their rows are greyed out with "can't rebuild history". The server enforces the same rule, so nothing ends up half-switched. A blank session is the exception: with no history to carry, it can become anything. For Cursor and Muse, use a handoff or a worker instead; both start from a prompt rather than a transcript.
 
-> **Why it matters.** The switch carries the *conversation*, not the first agent's internal state. Tool calls and their results are carried over as data, translated into the target's own tool-call shape. Hidden reasoning and the old agent's prompt cache are not. In practice this is what you want for a second opinion: the new model reads the same evidence and reaches its own conclusions.
+## Fork as: try another agent without giving this one up
 
-## In the app: the session control
+**Fork as → Codex** makes a new conversation with a copy of this one and leaves the original running. You are taken to the fork straight away; it shows up as a row marked "copying" while the messages are copied, then starts on the new agent with the rebuilt history. The two sessions are linked in each other's lineage, and you can steer them independently.
 
-The same moves are available in the conversation header. The model label next to the agent icon opens a panel. It shows the current agent and model with a line of state ("Live session · picks apply in place", or "Blank session · picks apply at launch"), the model and effort pickers, and a section called **Move this session** with three rows:
+Forking from the latest message on the same agent can use that agent's own fork when it has one, which is faster and keeps its prompt cache warm. A fork from the middle of a conversation always goes through the rebuild.
 
-- **Switch agent**: "Same session, another agent"
-- **Fork as**: "A copy of this session on another agent"
-- **Hand off to**: "A fresh session, seeded with a brief"
+## Hand off to: keep the conclusions, drop the noise
 
-Each row opens a list of agents. Agents that can't take over history are labeled "can't rebuild history", using the same `canSessionBecomeAgent` check the server enforces. The command palette offers the same verbs: "Switch agent…", "Fork session as…", "Hand off to…" and "Change model & effort…". Picks render optimistically: a fork shows up as a stub row marked "copying" before the server answers.
+A switch keeps every message. Sometimes that is the problem: the thread is three hundred turns of dead ends, and what the next agent needs is the conclusions.
 
-## 2. Fork onto another agent: `cast switch --agent codex --fork`
+**Hand off to** asks for an agent, then shows a second step: the model and effort for the new session, and a box labeled "What should the next session do first?". Press the button (it reads "Hand off on" plus the model) and codecast writes a brief of the source session: the goal, the decisions, what is verified, open questions, and ordered next steps, naming exact files and ids. The brief becomes the first prompt of a new session in the same directory. The new session is a normal card in your inbox, bound to the same task or plan, and the old one is marked as handed off. A toast says "Handed off to" with the new session's id.
 
-A fork creates a new conversation and keeps the original running. `cast fork` itself branches on the same agent. Its help documents `--at`, `--tip`, `--all-branches` and `--cloud`, but no `--agent`. A fork onto a different agent is `cast switch --agent <x> --fork`, which posts to `/cli/fork` with a target agent type. It is also the "Fork as" row in the app.
+The two stay linked. The header's overflow menu has a Lineage section with "Handed off from" on the new session and "Continued in" on the old one, so you can walk back to the full transcript whenever the brief isn't enough. The brief itself ends with pointers into the source transcript for the same reason.
 
-The server copies the messages into the new conversation in batches (up to 500 documents or 8 MB each) and only then tells the daemon to start it. The daemon builds the target's transcript the same way an in-place switch does. Agents that have a native fork take a cheaper path at the tip of the conversation. Grok, for example, uses `--resume <parent> --fork-session`, a byte-exact copy that keeps the prompt cache warm. A fork from the middle of a conversation always goes through the rebuild, because a native copy can't be cut at an earlier message.
+Because the new agent starts from a prompt rather than a rebuilt history, a handoff can target any agent, Cursor and Muse included.
 
-## 3. `cast handoff --to codex`: keep the conclusions, drop the noise
+![A handoff brief with Goal, Decisions, Verified, Open questions and Next steps, a footer showing the source marked done and a new Codex session linked to the same task](/blog/field-manual/switch-handoff-mock.webp "A handoff brief. The footer is the whole contract: the source session is marked done, and the new Codex session is linked and bound to the same task.")
 
-```terminal
-$ cast handoff --help
-Usage: cast handoff [options]
+## Workers on other agents
 
-Hand this session's work to a new session on another agent or model, or
-generate a context transfer document
+Sometimes you don't want to move the conversation at all. You want a different agent to do one piece of it. Ask your session for that in plain words ("have Codex review the diff", "split the dashboard out to a Cursor worker") and it starts a worker on that agent. The agent does this with one command; your agents already know how, because the instructions codecast installs tell them.
 
-With --to (or --model), the server writes a brief of the source session
-(goal, decisions, what is verified, open questions, ordered next steps),
-composes the new session's first prompt from it, starts the session in the
-same directory as a first-class inbox card, links both rows, binds it to
-the source's task or plan, and pins the source's state as done. The source
-agent ends its turn after this command.
-  ...
-  --to <agent>          Agent for the new session: claude, codex, cursor,
-                        opencode, pi, grok, muse, gemini, or same (the source's
-                        own)
-  --model <model>       Model for the new session (e.g. opus, sonnet); --model
-                        alone keeps the source's agent
-  --account <name>      Claude account profile the new session runs on
-  --device <name>       Machine to start the new session on (label or device id)
-  -m, --message <text>  Direction for the new session, appended to the composed
-                        prompt; '-' reads it from stdin (heredoc-friendly)
-  --dry-run             Compose and print the new session's prompt without
-                        starting anything
-```
+A worker is a full session, but it is yours to manage, not a new card competing for your attention. It nests under the session that started it in the inbox. The start shows up in your thread as a small card naming the worker, and the worker's own header links back to its lead. When the worker finishes, gets blocked, or stops at a permission prompt, the lead session is woken and reads the result, so you hear about it once, from the session you were already talking to.
 
-A switch keeps every message. A handoff keeps only the conclusions. One server action (`convex/handoff.ts`) does it all. It reads the source session's facts, its pinned state, and the first 8 plus last 40 readable turns. It asks a small model for a brief of under 500 words that names exact files, commands and ids. It composes the first prompt and creates the new session already linked, bound to the same task or plan, with the source pinned as "Handed off to <id> on <agent>". If the model call fails, a fallback brief is built from the pinned state and the last assistant message, and the response reports it with `brief_source`. Because the new agent starts from a prompt, not a rebuilt transcript, a handoff can target any agent, including Cursor and Muse.
+Workers start with no shared history, only the brief the lead wrote. That is why any agent works here, including the ones that can't take over a conversation.
 
-Here is a dry run on the session that wrote this section. It starts nothing:
+![Two worker sessions side by side under one lead: 'Dashboard retry UI' running on Cursor composer-2 and 'Webhook API half' running on Codex gpt-5.5-codex, both working on parts of a webhook retry feature](/blog/field-manual/switch-fanout.webp "One lead split webhook-retry work into a Cursor worker for the dashboard and a Codex worker for the API. Each is a full session on its own agent and model, nested under the lead.")
 
-```terminal
-$ cast handoff --to codex --dry-run -m "finish the comparison table"
-# Handed off from jx731jg: Switching agents midstream
+If you only need one answer from another model and no session at all, an agent can ask for that too: the reply comes straight back into its turn and nothing lands in your inbox.
 
-Ran on Claude (claude-opus-5-5).
+## Usage limits: same agent, another account
 
-This session continues that work. Read the brief below, then pick up at the
-first next step. The transcript is one command away when the brief is not enough.
+A usage limit is the most common reason a session stops, and codecast treats it as one more kind of switch: same agent, same conversation, different account.
 
-## Brief
+When an agent hits a limit, the thread shows a **Usage limit** card in place of the error. It says which window closed and when it opens again, and one line saying what will happen next, read from that machine's setting rather than generic advice: "Auto-switch is on: moving this session to an account with room, nothing to do", or "Resumes on its own when the window resets", or "Waiting for you to approve an account switch". When you have another saved account with room, the card offers a button to continue on it, and once a recovery starts the same card follows it through: restarting on the new account, picking up the turn, resumed. A minute of restart reads as progress, never as a stuck error.
 
-## Goal
-Write `sections/03-switch.html` (slug `switch`) covering all ways to move
-conversations between agent types and models without losing context, ...
+What codecast does on a limit is a per-machine choice under Settings → Claude accounts, "When a session hits a usage limit":
 
-## Decisions
-- Use `cast handoff --dry-run` on the current session to generate a real
-  composed prompt for the article ...
+- **Ask before switching**: recommend the saved account with the most headroom and wait for your approval. Sessions still resume on their own when the window resets.
+- **Switch automatically**: move the machine to the saved account with the most headroom and continue the parked sessions without asking. If the window has already reset, it just continues; if every account is out, it waits for the earliest reset.
+- **Resume at reset only**: never change accounts, continue when this account's window reopens.
+- **Do nothing**: parked sessions wait for you.
 
-## Verified
-- Fanout shot from the film (hero-t 18, Cursor and Codex workers under one
-  lead) exists and has been copied.
-  ...
+The top bar carries a usage chip with each account's 5-hour and weekly windows, so you can see a limit coming.
 
-## Next steps
-1. Grep packages/cli/src for all agent/backend definitions ...
-  ...
+On a laptop, every session codecast runs reads its Claude login from one shared store. A switch rewrites that store, and every running session picks up the new account within about 30 seconds, mid-turn, without a restart. Machines set up this way also switch ahead: they leave an account at 95% of its 5-hour window (97% of the weekly one) before anything gets parked. Workers follow their lead, since a Claude worker runs inside its lead's process.
 
-## Read more
+Codex accounts can be saved, but switching between them isn't supported yet. A Codex session recovers by continuing after its window resets.
 
-The source transcript has 106 messages. Read it in windows, not whole:
+## Another machine: moving to a cloud host
 
-cast read jx731jg 1:20   # the opening: goal and first decisions
-cast read jx731jg 87:106   # the tail: latest work
-cast diff jx731jg   # files changed, commits, tools used
+The same rebuild moves a session between your laptop and a cloud host. Right-click a session card and choose **Move to machine**, or open the palette on one or several selected sessions and pick "Move to machine…". The list shows your laptops first, then your cloud hosts, and a toast confirms "Moving 3 sessions to" the machine you chose, noting any it skipped and why.
 
-## Direction
+A session in the middle of a turn finishes that turn first (after ten minutes it is interrupted). A message you send while it is moving is held and delivered on the destination. A session stopped at a permission prompt moves at once and asks again on the other side. Settings → Migration shows each batch in flight.
 
-finish the comparison table
-dry run: nothing started; brief model-written
-```
+On the destination, the conversation is rebuilt from the server copy exactly as in a switch, because that machine never ran it. A divider in the thread reads "now running on" the host, and the agent is told it moved: running processes, open ports and files outside the working tree stayed behind. The [cloud hosts](/blog/field-manual/cloud-hosts) chapter covers the hosts themselves.
 
-![The /features/agents handoff section: a brief with Goal, Decisions, Verified, Open questions and Next steps, a footer showing source done arrow codex new session linked same task, and a terminal with cast handoff examples](/blog/field-manual/switch-handoff-mock.webp "The feature page's handoff mock. The footer is the whole contract: the source session is marked done, the new Codex session is linked and bound to the same task.")
+## Which one to pick
 
-## 4. Workers on another backend: `cast spawn --subagent --agent codex`
-
-Sometimes you don't want to move the conversation at all. You want a different agent to do one piece of it. `cast spawn --subagent --agent codex "review the diff"` starts a fresh Codex session nested under yours. It is out of the inbox, and your session is woken when it finishes, blocks or waits on a permission. `--agent` on spawn accepts claude, codex, cursor, gemini, opencode, pi and grok. Workers start with no shared history, only the brief you write. So Cursor, which can't take over a history, works fine here.
-
-![Two worker sessions side by side under one lead: 'Dashboard retry UI' running on Cursor composer-2 and 'Webhook API half' running on Codex gpt-5.5-codex, both working on parts of a webhook retry feature](/blog/field-manual/switch-fanout.webp "The homepage film's fan-out chapter (`?hero-t=18`). One lead split the webhook-retry work into a Cursor worker for the dashboard and a Codex worker for the API. Both are full sessions in the same inbox, each on its own backend and model.")
-
-## 5. One answer from another model: `cast exec --agent grok`
-
-`cast exec` is print mode for every harness: run a prompt, print the result, exit. There is no inbox card, and the exit code is the agent's own. It maps one set of flags onto each client's own headless form, which `--dry-run` shows:
-
-```terminal
-$ cast exec --dry-run --agent codex "review the diff"
-codex exec --dangerously-bypass-approvals-and-sandbox 'review the diff'
-
-$ cast exec --dry-run --agent grok --model grok-4.6 "review the diff"
-grok --permission-mode bypassPermissions -m grok-4.6 -p 'review the diff'
-
-$ git diff | cast exec --agent claude --model sonnet "write a commit message"
-```
-
-It is the cheapest way to ask another model something without moving anything. `--resume <id>` continues an earlier run, `-j` runs prompts in parallel, and `--chain` pipes one step's output into the next.
-
-## 6. Switching accounts midstream: usage limits
-
-A usage limit is the most common reason a session stops, and codecast treats it as a switch too: same agent, same conversation, different account. `cast accounts save <name>` snapshots each Claude Code login once. After that, what happens on a limit is a policy (ask, auto, resume or off) that the server applies:
-
-```terminal
-$ cast usage
-work  as of 1m ago
-  Session (5h)   57%  resets in 4h 5m
-  Week (7d)      34%  resets in 7d
-  Fable (7d)     11%  resets in 7d
-On a limit: auto-switch hops to the freshest of 10 saved account(s) with headroom (best: personal at 25%) and continues parked sessions.
-```
-
-- **Resume at reset** (on by default): a session parked on a limit gets a "continue" on the same account once its window rolls over.
-- **Auto-switch** (opt-in): the server picks the cheapest fix. It continues on the same account if the window has already reset, otherwise moves to the saved profile with the most headroom, otherwise waits for the earliest reset.
-- **The fleet store.** On a laptop, every session codecast launches reads its login from one credential store that the daemon owns, and Claude Code re-reads that store about every 30 seconds. A switch rewrites it, and every running session moves to the new account within half a minute, *mid-turn and with no restart*. Machines using the fleet store also **switch ahead**: they leave an account at 95% of its 5-hour window or 97% of its weekly window, before anything gets parked.
-- **Workers follow their parent.** A Claude subagent runs inside its parent's process, so when a worker gets parked, the parent receives the "continue".
-
-Codex has saved profiles, but switching Codex accounts doesn't exist yet. A Codex session recovers only by continuing after its window resets, or by spending a reset credit if the device allows it.
-
-## 7. Switching machines midstream: `cast migrate`
-
-`cast migrate start --to linux --label rollout` moves a batch of sessions between a laptop and a cloud host, in either direction. A mid-turn session is first fenced, and the move waits for its turn to finish (`--wait`, default 10 minutes, after which the turn is interrupted). Messages sent during the move are held as pending. Ownership changes, the session resumes on the destination and the fence lifts in a single transaction, so the held messages belong to the destination the moment it owns the row. The agent is then told where it is, with a notice that begins:
-
-```terminal
-[codecast] This session just moved to a different machine. It now runs on
-<dest> in <cwd> (previously <old>). ... Processes, ports, and any files
-outside the working tree from the previous machine are not here.
-```
-
-On the destination the conversation is rebuilt from the server copy, just as in a switch, because the destination never ran it. A session stopped at a permission prompt moves immediately, and the prompt is asked again on the other side.
-
-## Which one to use
-
-| Method | Keeps conversation id? | New process? | History the new agent gets | When to use |
-|---|---|---|---|---|
-| `cast switch --model sonnet` (same provider) | Yes | No: `/model` is sent to the live agent | All of it, untouched | Cheaper or stronger model for the next step |
-| `cast switch --agent codex` | Yes | Yes: old agent killed, new one resumed on a rebuilt transcript | Full thread, trimmed only to fit the context window | Second opinion, or a backend that is better at the next step |
-| `cast switch --agent codex --fork` / "Fork as" | No: new conversation, original keeps running | Yes, a second one | Copy up to the fork point | Try another agent without giving up the original |
-| `cast fork "a" "b"` | This thread takes the first direction; branches are new | Yes, one per branch | Copy up to just before your request | Same agent, several directions in parallel |
-| `cast handoff --to codex` | No: linked new session, source pinned done | Yes | A brief (goal, decisions, verified, questions, next steps) | The thread is long and noisy; keep the conclusions |
-| `cast spawn --subagent --agent codex` | No: nested worker | Yes | None, only your brief | Delegate one piece and get the result back |
-| `cast exec --agent grok` | No conversation; the process is the session | Yes, short-lived | None, only the prompt (or `--resume`) | One answer inside a script |
-| Auto-switch / fleet store | Yes | No, on fleet-store machines; otherwise a "continue" restarts parked sessions | All of it | Never stop on a usage limit |
-| `cast migrate` | Yes | Yes, on another machine | Full thread, rebuilt there | Move work between laptop and cloud host |
+| What you want | What to pick in the app | What happens |
+|---|---|---|
+| A cheaper or stronger model for the next step | Session control → Model, or Effort | The running agent switches on its next turn. Nothing restarts, no history moves. |
+| A second opinion, or an agent better at what comes next | Session control → Switch agent | Same thread and id. A "now using …" divider, and the new agent continues on the full rebuilt history. |
+| To try another agent and keep the original going | Session control → Fork as | A new linked session with a copy of the history, on the new agent. The original keeps running. |
+| A clean start: the thread is long and noisy | Session control → Hand off to, plus a direction | A new session that starts from a brief. The old one is marked handed off; both are linked. Any agent works. |
+| Another agent to do one piece and report back | Ask your session for a worker on that agent | A nested worker starts from a brief. Your session is woken when it finishes. |
+| Not to stop on a usage limit | Settings → Claude accounts → Switch automatically | Parked sessions continue on the account with the most room, or at reset. |
+| The session running somewhere else | Card menu or palette → Move to machine | It finishes its turn, moves, and continues on the full history there. |
 
 ## Edge cases worth knowing
 
-- **A provider switch replaces the process.** If an agent runs `cast switch --agent codex` on its own session, that agent is about to be killed. The help text says so, and the agent should stop talking as the old one.
-- **Cursor and Muse can't take over history.** Switching or forking into them is refused up front. Use a handoff or a worker instead.
-- **The switch needs the checkout.** The rebuild happens on the machine that owns the session. If the project directory isn't there, the daemon refuses with "No local checkout for agent switch" rather than starting the agent in the wrong place.
-- **Switches don't join an in-flight resume.** If the old agent is in the middle of restarting, the switch doesn't attach to that restart (that would quietly bring back the old agent). It interrupts it and rebuilds.
-- **Some agents can't change model mid-session.** pi's model is chosen at launch (its own Ctrl+P menu isn't something codecast can drive), so a model change there goes through a restart.
-- **Server-only messages are filtered out.** Internal rows such as workflow-run anchors are skipped when a transcript is written. Otherwise the new agent would see raw JSON and sync it back as if it had said it.
+- **Switching agents replaces the process.** Anything the old agent had running in its own process (a background job it started, a local server it was watching) ends with it.
+- **The switch happens where the session runs.** The rebuild needs the project checkout on that machine. If the directory is gone, the switch is refused rather than starting the agent somewhere else.
+- **Some agents pick their model at launch.** pi, for one, can't change models mid-session, so a model change there goes through a quick restart instead of applying in place.
+- **Cloud agents and hosted assistants have fewer moves.** A session running on a cloud provider's machines can be forked or handed off but not switched in place, and a hosted assistant conversation offers no move verbs at all, since it doesn't run on a machine of yours.
+- **Internal rows stay out of the rebuild.** Bookkeeping messages the server keeps for itself are skipped when a transcript is written, so the new agent never reads raw data and mistakes it for something it said.

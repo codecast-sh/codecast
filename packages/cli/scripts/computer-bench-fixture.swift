@@ -65,6 +65,10 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
     /// Every time the app took the front, and what had just happened.
     var activations: [String] = []
     var lastEvent = "launch"
+    /// Ticks (20 ms apart) in which the helper's agent cursor was on screen
+    /// while the form window was covered by another app, and was not.
+    var cursorWhileCovered = 0
+    var cursorWhileVisible = 0
     /// Presses that reached a control while the sheet covered it.
     var blockedPresses = 0
 
@@ -79,7 +83,12 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
             windows.append(makeTableWindow())
         }
         windows.append(makeCanvasWindow())
-        for window in windows { window.orderBack(nil) }
+        if !barren { windows.append(makeFloatWindow()) }
+        for window in windows where window.level == .normal { window.orderBack(nil) }
+        for window in windows where window.level == .floating { window.orderFrontRegardless() }
+        Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.watchCursor() }
+        }
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             activations.append(lastEvent)
@@ -195,6 +204,19 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
         return window
     }
 
+    /// Above every normal window, so the agent cursor has somewhere it should
+    /// show. Floating, so it never takes the front or the keyboard.
+    private func makeFloatWindow() -> NSWindow {
+        let window = makeWindow(title: "Bench Float", size: NSSize(width: 220, height: 80), slot: 6)
+        window.level = .floating
+        let button = NSButton(title: "Float press", target: self, action: #selector(launchProbe))
+        button.frame = NSRect(x: 40, y: 20, width: 140, height: 32)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        content.addSubview(button)
+        window.contentView = content
+        return window
+    }
+
     func numberOfRows(in tableView: NSTableView) -> Int { 2000 }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -256,6 +278,33 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
         }
     }
 
+    /// Where the agent cursor's tip is while it shows, and whether the app
+    /// under it there is this one: a cursor drawn over another app's window
+    /// points at something the agent is not touching.
+    private func watchCursor() {
+        guard let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
+              let panel = infos.first(where: {
+                  ($0[kCGWindowOwnerName as String] as? String ?? "").lowercased().contains("codecast computer") &&
+                      ($0[kCGWindowAlpha as String] as? CGFloat ?? 0) > 0.01
+              }),
+              let panelBounds = (panel[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) })
+        else { return }
+        // The tip sits 6 points in from the panel's left and top.
+        let tip = CGPoint(x: panelBounds.minX + 6, y: panelBounds.minY + 6)
+        let under = infos.first {
+            guard ($0[kCGWindowOwnerPID as String] as? pid_t) != (panel[kCGWindowOwnerPID as String] as? pid_t),
+                  let dictionary = $0[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: dictionary) else { return false }
+            return bounds.contains(tip) && (($0[kCGWindowLayer as String] as? Int ?? 1) == 0 || ($0[kCGWindowOwnerPID as String] as? pid_t) == ProcessInfo.processInfo.processIdentifier)
+        }
+        if (under?[kCGWindowOwnerPID as String] as? pid_t) == ProcessInfo.processInfo.processIdentifier {
+            cursorWhileVisible += 1
+        } else {
+            cursorWhileCovered += 1
+        }
+        writeStatus()
+    }
+
     private func writeStatus() {
         guard let statusFile else { return }
         lastEvent = "after submissions=\(submissions) launches=\(probeLaunches) sheet=\(sheetOpen) subscribe=\(subscribe.state == .on)"
@@ -271,6 +320,8 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTableViewDataSource, NST
             "probeLaunches": probeLaunches,
             "active": NSApp.isActive,
             "activations": activations,
+            "cursorWhileCovered": cursorWhileCovered,
+            "cursorWhileVisible": cursorWhileVisible,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) else { return }
         try? data.write(to: URL(fileURLWithPath: statusFile), options: .atomic)
