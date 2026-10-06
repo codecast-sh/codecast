@@ -1,0 +1,76 @@
+/* The plain host's primitives (defaults.tsx): what a host without its own
+   key cap, tooltip, sheet, toggle, pair, empty state or diff draws. Drawn in
+   the area's tokens, so they read as the same bench as the views. A sheet and
+   a tooltip are portaled to the body, outside .ev-area, and set their own
+   colour and type. */
+
+/* ── Key cap ───────────────────────────────────────────────────────────── */
+.ev-kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 5px;
+  font: 10px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ev-text-dim); background: var(--ev-bg-alt);
+  border: 1px solid color-mix(in srgb, var(--ev-border) 50%, transparent); border-radius: 4px;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.12), inset 0 1px 0 rgb(255 255 255 / 0.04);
+}
+.ev-kbd--xs { min-width: 16px; height: 16px; padding: 0 4px; font-size: 9px; }
+.ev-kbd + .ev-kbd { margin-left: 2px; }
+
+/* ── Tooltip ───────────────────────────────────────────────────────────── */
+.ev-tip {
+  position: fixed; z-index: 50; transform: translate(-50%, -100%);
+  padding: 4px 8px; border-radius: 4px; pointer-events: none; white-space: nowrap;
+  font: 10px var(--ev-font-ui); color: var(--ev-bg); background: var(--ev-text);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+}
+
+/* ── Sheet ─────────────────────────────────────────────────────────────── */
+.ev-sheet-layer { position: fixed; inset: 0; z-index: 60; }
+.ev-sheet-scrim { position: absolute; inset: 0; background: rgb(0 0 0 / 0.35); animation: ev-fade-in 160ms ease-out both; }
+.ev-sheet {
+  position: absolute; display: flex; flex-direction: column; gap: 8px; overflow: auto;
+  padding: 20px 22px; color: var(--ev-text); background: var(--ev-bg); font-family: var(--ev-font-ui);
+  border: 1px solid var(--ev-rule); box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
+}
+.ev-sheet--right { top: 0; right: 0; bottom: 0; width: min(720px, 92vw); border-width: 0 0 0 1px; }
+.ev-sheet--left { top: 0; left: 0; bottom: 0; width: min(720px, 92vw); border-width: 0 1px 0 0; }
+.ev-sheet--top { top: 0; left: 0; right: 0; max-height: 80vh; border-width: 0 0 1px; }
+.ev-sheet--bottom { left: 0; right: 0; bottom: 0; max-height: 80vh; border-width: 1px 0 0; }
+.ev-sheet-title { margin: 0; font-size: 15px; font-weight: 600; }
+.ev-sheet-sub { margin: 0; font-size: 12px; color: var(--ev-text-dim); }
+.ev-sheet-close { position: absolute; top: 12px; right: 14px; width: 26px; height: 26px; font-size: 18px; line-height: 1; color: var(--ev-text-dim); background: none; border: 0; border-radius: 5px; cursor: pointer; }
+.ev-sheet-close:hover { color: var(--ev-text); background: var(--ev-bg-highlight); }
+
+/* ── Segmented toggle ──────────────────────────────────────────────────── */
+.ev-seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--ev-bg-alt); border: 1px solid var(--ev-rule); border-radius: 6px; }
+.ev-seg-item { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; font: 11.5px var(--ev-font-ui); color: var(--ev-text-dim); background: none; border: 0; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.ev-seg-item:hover { color: var(--ev-text); }
+.ev-seg-item[aria-checked="true"] { color: var(--ev-text); background: var(--ev-card); box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
+.ev-seg-count { font-size: 10px; color: var(--ev-text-dim); font-variant-numeric: tabular-nums; }
+
+/* ── Before and after pair ─────────────────────────────────────────────── */
+.ev-pair-box { container-type: inline-size; container-name: ev-pair; }
+.ev-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@container ev-pair (max-width: 640px) { .ev-pair { grid-template-columns: 1fr; } }
+.ev-pair-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--ev-rule); border-radius: 6px; background: var(--ev-bg-inset); }
+.ev-pair-label { font-size: 10.5px; font-weight: 600; color: var(--ev-text-dim); }
+.ev-pair-input { font: 11px var(--ev-font-mono); color: var(--ev-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-pair-text { font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.ev-pair-note { margin: 6px 0 0; font: italic 11.5px/1.5 var(--ev-font-mono); color: var(--ev-text-muted); }
+
+/* ── Empty state and an unreachable area ───────────────────────────────── */
+.ev-empty, .ev-unreachable { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 64px 24px; text-align: center; }
+.ev-unreachable { height: 100%; justify-content: center; }
+.ev-empty-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--ev-text); }
+.ev-empty-text { margin: 0 0 6px; max-width: 28rem; font-size: 12.5px; line-height: 1.5; color: var(--ev-text-muted); }
+.ev-empty-action { font-size: 12.5px; color: var(--ev-blue); }
+
+/* ── Diff ──────────────────────────────────────────────────────────────── */
+.ev-diff { font: 11.5px/1.55 var(--ev-font-mono); font-variant-ligatures: none; overflow-x: auto; }
+.ev-diff-line { display: flex; white-space: pre; }
+.ev-diff-line--add { background: color-mix(in srgb, var(--ev-green) 13%, transparent); }
+.ev-diff-line--del { background: color-mix(in srgb, var(--ev-red) 11%, transparent); }
+.ev-diff-num { flex: none; width: 3.2em; padding-right: 0.6em; text-align: right; color: var(--ev-text-dim); user-select: none; }
+.ev-diff-sign { flex: none; width: 1.4em; text-align: center; color: var(--ev-text-dim); user-select: none; }
+.ev-diff-text { flex: 1; padding-right: 12px; }
+.ev-diff-gap { padding: 2px 12px; font-size: 10.5px; color: var(--ev-text-dim); background: var(--ev-bg-alt); }

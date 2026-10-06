@@ -1,0 +1,296 @@
+/* The bisect pages (docs/architecture/evals-ui.md 4.5): the free answer as a
+   fixed-order checklist, the priced plan, and the commit ruler whose brackets
+   close in as wells fill. Colour and type only through the area's --ev-*
+   tokens (tokens.css): cyan is good and fixed, magenta is bad and broke, and
+   every state also has a shape. --ev-b-w, --ev-b-cw and --ev-b-gap are the
+   ruler's geometry, which BisectRuler sets inline. styles.css composes this
+   file with the other groups'. */
+
+.ev-b-page { padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 18px; }
+.ev-b-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ev-b-head .ev-b-sub { font-size: 12px; color: var(--ev-text-dim); }
+.ev-b-link { color: var(--ev-text-muted); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--ev-text-dim) 40%, transparent); text-underline-offset: 2px; }
+.ev-b-link:hover { color: var(--ev-text); }
+.ev-b-section { display: flex; flex-direction: column; gap: 10px; }
+.ev-b-note { font-size: 12px; line-height: 1.55; color: var(--ev-text-muted); }
+.ev-b-quiet { color: var(--ev-text-dim); }
+.ev-b-fine { font-size: 11.5px; }
+.ev-b-start { align-self: flex-start; }
+.ev-b-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.ev-b-grid > aside { position: sticky; top: 12px; }
+/* The live page: the rail beside the ruler, and right under it in one column. */
+.ev-b-live-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-areas: "ruler rail" "rest rail"; gap: 18px; align-items: start; }
+.ev-b-area-ruler { grid-area: ruler; min-width: 0; }
+.ev-b-area-rail { grid-area: rail; position: sticky; top: 12px; }
+.ev-b-area-rest { grid-area: rest; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+@container evals (max-width: 980px) {
+  .ev-b-grid { grid-template-columns: minmax(0, 1fr); }
+  .ev-b-grid > aside { position: static; }
+  .ev-b-live-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "ruler" "rail" "rest"; }
+  .ev-b-area-rail { position: static; }
+}
+
+/* Buttons are the area's one .ev-btn (shell.css). */
+
+
+/* ── Endpoints ───────────────────────────────────────────────────────────── */
+
+.ev-b-ends { display: grid; grid-template-columns: 170px minmax(0, 1fr) 54px minmax(0, 1fr) auto; gap: 10px; align-items: stretch; padding: 12px; }
+@container evals (max-width: 900px) { .ev-b-ends { grid-template-columns: 1fr; } .ev-b-ends-arrow { display: none; } }
+.ev-b-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ev-b-field > label { font-size: 11px; color: var(--ev-text-dim); }
+.ev-b-input {
+  height: 30px; padding: 0 9px; width: 100%;
+  font: 12px var(--ev-font-mono); font-variant-ligatures: none; color: var(--ev-text);
+  background: var(--ev-bg); border: 1px solid var(--ev-rule); border-radius: 6px; outline: none;
+}
+.ev-b-input:focus { border-color: var(--ev-cyan); }
+select.ev-b-input { font-family: var(--ev-font-ui); }
+.ev-b-end { position: relative; padding-left: 12px; }
+.ev-b-end::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; border-radius: 2px; }
+.ev-b-end--good::before { background: var(--ev-cyan); }
+.ev-b-end--bad::before { background: var(--ev-magenta); }
+.ev-b-ends-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; color: var(--ev-text-dim); gap: 2px; }
+.ev-b-ends-arrow svg { width: 40px; height: 10px; }
+.ev-b-ends-go { display: flex; align-items: flex-end; }
+
+/* ── The checklist ───────────────────────────────────────────────────────── */
+
+.ev-b-attribution { display: flex; flex-direction: column; gap: 16px; }
+.ev-b-checklist { list-style: none; margin: 0; padding: 4px 0; position: relative; }
+.ev-b-check { display: grid; grid-template-columns: 28px 92px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 9px 14px 9px 12px; position: relative; }
+.ev-b-check + .ev-b-check { border-top: 1px solid var(--ev-rule); }
+.ev-b-check-lamp { position: relative; top: 2px; display: flex; justify-content: center; }
+.ev-b-check-name { font-size: 12.5px; font-weight: 600; color: var(--ev-text); }
+.ev-b-check-detail { font-size: 12.5px; line-height: 1.5; color: var(--ev-text-muted); }
+.ev-b-check-n { font-size: 10.5px; color: var(--ev-text-dim); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.ev-b-check[data-state="same"] .ev-b-check-name { color: var(--ev-text-muted); font-weight: 500; }
+.ev-b-check[data-state="after"] { opacity: 0.45; }
+.ev-b-check[data-state="answer"] { background: color-mix(in srgb, var(--ev-text) 5%, transparent); }
+.ev-b-check[data-state="answer"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--ev-text); }
+.ev-b-check[data-state="answer"] .ev-b-check-detail { color: var(--ev-text); }
+.ev-b-check-also { margin-left: 6px; }
+
+/* ── The answer ──────────────────────────────────────────────────────────── */
+
+.ev-b-answer { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.ev-b-answer-line { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.ev-b-answer-num { font-size: 32px; line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--ev-text); }
+.ev-b-answer-say { font-size: 14px; line-height: 1.45; color: var(--ev-text); max-width: 70ch; }
+.ev-b-arrow { display: inline-flex; align-items: center; gap: 6px; }
+/* The flips a freeze or rubric answer leaves unexplained, each a link to attribute it alone. */
+.ev-b-unexplained { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+/* One prompt epoch inside the window, its diffs opening under it. */
+.ev-b-epoch { display: flex; flex-direction: column; gap: 8px; }
+.ev-b-epoch-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+
+/* Confidence as a read-only gauge: the reached word and a three-bar meter, nothing that looks pressable. */
+.ev-b-confidence { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--ev-text); cursor: help; }
+.ev-b-confidence rect { fill: color-mix(in srgb, var(--ev-text-dim) 30%, transparent); }
+.ev-b-confidence rect[data-on] { fill: var(--ev-text); }
+.ev-b-confidence[data-evb-confidence="unattributable"] { color: var(--ev-magenta); }
+
+.ev-b-reason { font-size: 12.5px; line-height: 1.5; color: var(--ev-text); padding: 8px 12px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--ev-magenta) 45%, transparent); background: color-mix(in srgb, var(--ev-magenta) 6%, transparent); }
+/* An empty source answer: no candidate left, and the one way to widen it. */
+.ev-b-empty { display: flex; flex-direction: column; gap: 12px; }
+.ev-b-widen { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; line-height: 1.5; color: var(--ev-text-muted); padding: 9px 12px; border-radius: 6px; border: 1px solid var(--ev-rule); background: color-mix(in srgb, var(--ev-blue) 5%, transparent); }
+.ev-b-widen > span:first-child { flex: 1 1 32ch; }
+/* Bisects already over this range: one row each, the culprit in the failure colour. */
+.ev-b-prior { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.ev-b-prior h2 { display: flex; align-items: center; gap: 7px; margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--ev-text); }
+.ev-b-prior-row { display: grid; grid-template-columns: minmax(0, 15ch) minmax(0, 18ch) minmax(0, 1fr) auto; gap: 12px; align-items: baseline; padding: 6px 8px; margin: 0 -8px; border-radius: 5px; font-size: 12px; color: var(--ev-text); text-decoration: none; }
+.ev-b-prior-row:hover { background: var(--ev-bg-highlight); }
+.ev-b-prior-row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-b-prior-word { font-weight: 500; }
+.ev-b-prior-word--culprit { color: var(--ev-magenta); }
+.ev-b-prior-ends, .ev-b-prior-when { color: var(--ev-text-dim); }
+.ev-b-prior-row[data-evb-live] .ev-b-prior-word::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ev-blue); vertical-align: 1px; }
+@container evals (max-width: 720px) { .ev-b-prior-row { grid-template-columns: minmax(0, 1fr) auto; } .ev-b-prior-ends { display: none; } }
+/* The one-bisect lock, named above Start. */
+.ev-b-lock { display: flex; flex-wrap: wrap; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.5; color: var(--ev-text); padding: 9px 10px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--ev-blue) 55%, transparent); background: color-mix(in srgb, var(--ev-blue) 6%, transparent); }
+.ev-b-lock-cmds { display: flex; flex-direction: column; gap: 4px; flex-basis: 100%; padding-left: 17px; }
+.ev-b-lock-dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--ev-blue); }
+
+/* ── Candidate rows ──────────────────────────────────────────────────────── */
+
+.ev-b-cands { display: flex; flex-direction: column; }
+.ev-b-cand { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 7px 0; font-size: 12.5px; }
+.ev-b-cand-wrap + .ev-b-cand-wrap { border-top: 1px solid var(--ev-rule); }
+.ev-b-cand[role="button"] { cursor: pointer; border-radius: 4px; }
+.ev-b-cand[role="button"]:hover { background: color-mix(in srgb, var(--ev-text) 4%, transparent); }
+.ev-b-cand[role="button"]:focus-visible { outline: 2px solid var(--ev-cyan); outline-offset: 1px; }
+.ev-b-cand-sha { font: 12px var(--ev-font-mono); font-variant-ligatures: none; color: var(--ev-text); display: inline-flex; align-items: center; gap: 3px; }
+.ev-b-cand-chev { width: 12px; height: 12px; color: var(--ev-text-dim); transition: transform 120ms ease; flex-shrink: 0; }
+.ev-b-cand-wrap--open .ev-b-cand-chev { transform: rotate(90deg); }
+.ev-b-cand-main { min-width: 0; }
+.ev-b-cand-body { padding: 4px 0 12px; }
+.ev-b-cand-subject { display: block; color: var(--ev-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-b-cand-meta { font-size: 11px; color: var(--ev-text-dim); }
+.ev-b-cand-side { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.ev-b-cand--patch .ev-b-cand-sha { padding: 1px 5px 1px 0; border-radius: 3px; background-image: repeating-linear-gradient(135deg, var(--ev-hatch) 0 3px, transparent 3px 6px); }
+
+/* ── Plan panel ──────────────────────────────────────────────────────────── */
+
+.ev-b-plan { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.ev-b-plan h2, .ev-b-rail h2, .ev-b-section h2 { font-size: 13px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; color: var(--ev-text); }
+.ev-b-plan-row { display: flex; flex-direction: column; gap: 6px; }
+.ev-b-plan-row > .ev-b-label { font-size: 11px; color: var(--ev-text-dim); }
+.ev-b-freeze { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; cursor: pointer; }
+.ev-b-freeze input { accent-color: var(--ev-text); }
+.ev-b-freeze-role { font-size: 10.5px; color: var(--ev-text-dim); margin-left: auto; }
+.ev-b-freeze-role[data-role="flipped"] { color: var(--ev-magenta); }
+.ev-b-cost { font-size: 13px; line-height: 1.5; color: var(--ev-text); padding: 10px 12px; border-radius: 6px; background: var(--ev-bg-alt); border: 1px solid var(--ev-rule); }
+.ev-b-cost-figs { display: grid; grid-template-columns: repeat(4, auto); gap: 2px 14px; margin-top: 8px; font-size: 11px; color: var(--ev-text-dim); }
+.ev-b-cost-figs b { display: block; font-size: 15px; font-weight: 500; color: var(--ev-text); font-variant-numeric: tabular-nums; }
+.ev-b-over { font-size: 12px; color: var(--ev-magenta); }
+.ev-b-confirm { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.45; color: var(--ev-text); padding: 9px 10px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--ev-orange) 45%, transparent); background: color-mix(in srgb, var(--ev-orange) 7%, transparent); cursor: pointer; }
+.ev-b-confirm input { margin-top: 2px; accent-color: var(--ev-orange); }
+.ev-b-classes { display: flex; flex-wrap: wrap; gap: 4px; }
+.ev-b-pending { font-size: 12px; color: var(--ev-text-dim); display: flex; align-items: center; gap: 8px; }
+.ev-b-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ev-b-start-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* ── The ruler ───────────────────────────────────────────────────────────── */
+
+.ev-b-ruler-wrap { border: 1px solid var(--ev-rule); border-radius: 8px; overflow-x: auto; overflow-y: hidden; }
+.ev-b-ruler { position: relative; padding: 30px 16px 18px; min-width: max-content; }
+.ev-b-ruler-empty { padding: 12px 4px 0; }
+.ev-b-ruler-row { display: flex; gap: var(--ev-b-gap); align-items: flex-start; position: relative; }
+.ev-b-col { width: var(--ev-b-w); flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; transition: opacity 300ms ease, filter 300ms ease; }
+.ev-b-col--control { width: var(--ev-b-cw); }
+.ev-b-col[data-outside] { opacity: 0.36; filter: saturate(0.4); }
+
+.ev-b-tile {
+  position: relative; height: 92px; padding: 8px 9px 7px; border-radius: 7px;
+  background: var(--ev-card); border: 1px solid var(--ev-rule);
+  display: flex; flex-direction: column; gap: 3px;
+  transition: transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 400ms ease, border-color 200ms ease;
+}
+.ev-b-tile-sha { font: 11.5px var(--ev-font-mono); font-variant-ligatures: none; color: var(--ev-text); display: flex; align-items: center; gap: 5px; }
+.ev-b-tile-subject { font-size: 11.5px; line-height: 1.3; color: var(--ev-text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ev-b-tile-foot { margin-top: auto; display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; font-size: 10.5px; color: var(--ev-text-dim); }
+.ev-b-tile-foot > * { flex-shrink: 0; }
+/* The session pill takes what the tags leave and ellipsizes its own label, never cut mid-word. */
+.ev-b-tile-foot > .ev-b-tile-session { flex: 0 1 auto; min-width: 2.2em; display: flex; overflow: hidden; }
+.ev-b-tile-session * { min-width: 0; max-width: 100%; }
+.ev-b-tile-session .ev-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-b-tile[data-verdict="good"] { border-color: color-mix(in srgb, var(--ev-cyan) 55%, transparent); }
+.ev-b-tile[data-verdict="bad"] { border-color: color-mix(in srgb, var(--ev-magenta) 55%, transparent); }
+.ev-b-tile[data-verdict="pending"] { border-style: dashed; border-color: var(--ev-text-dim); }
+.ev-b-tile[data-verdict="skip"] { border-style: dotted; }
+.ev-b-tile--patch { background-image: repeating-linear-gradient(135deg, var(--ev-hatch) 0 4px, transparent 4px 9px); }
+.ev-b-tile--control { height: 92px; justify-content: center; align-items: center; text-align: center; background: transparent; border-style: dashed; font-size: 11px; color: var(--ev-text-muted); }
+.ev-b-tile--culprit {
+  transform: translateY(-6px);
+  border-color: var(--ev-magenta);
+  box-shadow: 0 10px 24px -8px color-mix(in srgb, var(--ev-magenta) 45%, transparent), 0 0 0 1px var(--ev-magenta);
+}
+.ev-b-tag { font-size: 10px; padding: 0 5px; height: 15px; display: inline-flex; align-items: center; border-radius: 3px; border: 1px solid var(--ev-rule); color: var(--ev-text-dim); white-space: nowrap; }
+.ev-b-tag--culprit { color: var(--ev-bg); background: var(--ev-magenta); border-color: var(--ev-magenta); }
+.ev-b-tile-verdict { position: absolute; top: 7px; right: 7px; }
+
+/* Render classes: a bracket under tiles that render alike. */
+.ev-b-spans { height: 18px; }
+.ev-b-col-spacer { height: 14px; flex-shrink: 0; }
+.ev-b-span { position: absolute; top: 3px; height: 8px; border: 1px solid var(--ev-text-dim); border-top: 0; border-radius: 0 0 3px 3px; }
+.ev-b-span-label { position: absolute; top: 9px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--ev-text-dim); white-space: nowrap; background: var(--ev-bg); padding: 0 4px; }
+.ev-b-span[data-skip] { border-style: dotted; }
+
+/* The good and bad brackets slide in as probes resolve. */
+.ev-b-bracket {
+  position: absolute; top: -8px; height: 108px; width: 9px; pointer-events: none;
+  border: 2.5px solid currentColor; transition: transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ev-b-bracket--good { color: var(--ev-cyan); border-right: 0; border-radius: 3px 0 0 3px; }
+.ev-b-bracket--bad { color: var(--ev-magenta); border-left: 0; border-radius: 0 3px 3px 0; }
+.ev-b-bracket-label { position: absolute; top: -19px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.ev-b-bracket--good .ev-b-bracket-label { left: -2px; }
+.ev-b-bracket--bad .ev-b-bracket-label { right: -2px; }
+
+/* Wells: one per rep per freeze, popping in as reps land. */
+.ev-b-wells { display: flex; flex-direction: column; gap: 3px; padding: 6px 7px; border-radius: 6px; background: color-mix(in srgb, var(--ev-card) 80%, transparent); border: 1px solid var(--ev-rule); }
+.ev-b-wells-label { font-size: 9.5px; color: var(--ev-text-dim); margin-bottom: 1px; display: flex; flex-direction: column; gap: 0; line-height: 1.35; }
+/* The counts wrap between themselves, never inside one, so a long tally stays inside the control column. */
+.ev-b-wells-tally { display: flex; flex-wrap: wrap; column-gap: 0.6ch; }
+.ev-b-wells-tally > span { white-space: nowrap; }
+.ev-b-wells-row { display: flex; gap: 2px; align-items: center; }
+.ev-b-wells-role { width: 8px; flex: none; font: 8.5px var(--ev-font-mono); color: var(--ev-text-dim); text-align: left; }
+.ev-b-wells-row[data-role="control"] > :not(.ev-b-wells-role) { opacity: 0.62; }
+/* A crashed rep has no score to ink a well with: the crash cross in the well's place, in plain ink. */
+.ev-b-well-crash { display: inline-flex; width: 11px; height: 11px; align-items: center; justify-content: center; }
+.ev-b-well-crash svg { color: var(--ev-text-muted); }
+.ev-b-wells-crashed { color: var(--ev-text); }
+
+/* ── The rail ────────────────────────────────────────────────────────────── */
+
+.ev-b-rail { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.ev-b-spend { display: flex; flex-direction: column; gap: 6px; }
+.ev-b-spend-figs { display: flex; align-items: baseline; gap: 6px; }
+.ev-b-spend-track { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--ev-text) 9%, transparent); overflow: hidden; }
+.ev-b-spend-fill { height: 100%; background: var(--ev-text); border-radius: 3px; transition: width 400ms ease-out; }
+.ev-b-facts { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 12px; }
+.ev-b-facts dt { color: var(--ev-text-dim); }
+.ev-b-facts dd { margin: 0; color: var(--ev-text); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ev-b-stall {
+  display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ev-text);
+  padding: 7px 10px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--ev-yellow) 70%, transparent);
+  background: color-mix(in srgb, var(--ev-yellow) 12%, transparent);
+}
+.ev-b-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ev-b-step { display: grid; grid-template-columns: 64px 64px minmax(0, 1fr); gap: 10px; padding: 5px 0; font-size: 12px; align-items: baseline; }
+.ev-b-step + .ev-b-step { border-top: 1px solid var(--ev-rule); }
+.ev-b-step-at { font-size: 11px; color: var(--ev-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ev-b-step-kind { font-size: 11px; color: var(--ev-text-dim); }
+.ev-b-step[data-kind="answer"] .ev-b-step-kind, .ev-b-step[data-kind="answer"] .ev-b-step-text { color: var(--ev-text); font-weight: 600; }
+.ev-b-step[data-kind="error"] .ev-b-step-kind { color: var(--ev-red); }
+
+/* ── The result ──────────────────────────────────────────────────────────── */
+
+.ev-b-result { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+.ev-b-result-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+/* Under the result's head: how the confirmation read, the crashed reps, a records-only answer's tier. */
+.ev-b-confirmation { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+.ev-b-runs { display: flex; flex-wrap: wrap; gap: 8px; }
+.ev-b-result-attribution { display: flex; flex-direction: column; gap: 12px; }
+.ev-b-drift {
+  display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 8px;
+  border: 1px solid var(--ev-violet); background: color-mix(in srgb, var(--ev-violet) 8%, transparent);
+}
+.ev-b-drift strong { font-size: 14px; font-weight: 600; color: var(--ev-text); display: block; margin-bottom: 4px; }
+.ev-b-examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; }
+.ev-b-examples .ev-pair { background: var(--ev-card); border: 1px solid var(--ev-rule); border-radius: 8px; padding: 10px 12px; }
+.ev-b-example-name { font-size: 11.5px; color: var(--ev-text-dim); margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+
+/* ── Commit panel ────────────────────────────────────────────────────────── */
+
+.ev-b-commit { overflow: hidden; }
+.ev-b-commit-wait { padding: 16px; }
+.ev-b-commit-body { white-space: pre-wrap; }
+.ev-b-commit-head { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--ev-rule); }
+.ev-b-commit-subject { font-size: 14px; font-weight: 600; color: var(--ev-text); line-height: 1.35; }
+.ev-b-commit-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--ev-text-dim); }
+.ev-b-commit-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--ev-rule); }
+.ev-b-files { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 11.5px var(--ev-font-mono); font-variant-ligatures: none; padding: 8px 14px; border-bottom: 1px solid var(--ev-rule); }
+.ev-b-file-add { color: var(--ev-cyan); }
+.ev-b-file-del { color: var(--ev-magenta); }
+.ev-b-commit-file { border-bottom: 1px solid var(--ev-rule); }
+.ev-b-commit-file-name { font: 11.5px var(--ev-font-mono); font-variant-ligatures: none; padding: 6px 14px; color: var(--ev-text-muted); background: var(--ev-bg-alt); }
+
+/* ── List ────────────────────────────────────────────────────────────────── */
+
+.ev-b-table-card { overflow-x: auto; }
+.ev-b-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ev-b-table th { text-align: left; font-size: 11px; font-weight: 500; color: var(--ev-text-dim); padding: 8px 10px; border-bottom: 1px solid var(--ev-rule); white-space: nowrap; }
+.ev-b-table td { padding: 9px 10px; border-bottom: 1px solid var(--ev-rule); vertical-align: middle; white-space: nowrap; }
+.ev-b-table tbody tr { cursor: pointer; transition: background 120ms ease; }
+.ev-b-table tbody tr:hover { background: var(--ev-bg-highlight); }
+.ev-b-table td.ev-b-num { font-variant-numeric: tabular-nums; text-align: right; }
+.ev-b-table th.ev-b-num { text-align: right; }
+.ev-b-live { display: inline-flex; align-items: center; gap: 6px; }
+.ev-b-live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ev-text); }
+
+/* The controls line every result leads with, and the classes no probe could load. */
+.ev-b-controls { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.45; color: var(--ev-text); }
+.ev-b-controls > svg { flex: none; }
+.ev-b-unloaded { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--ev-text-muted); }
+.ev-b-unloaded li::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 1px; background: repeating-linear-gradient(135deg, var(--ev-text-dim) 0 1px, transparent 1px 3px); vertical-align: 1px; }

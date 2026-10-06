@@ -1,9 +1,9 @@
-A long session is expensive to re-enter. The transcript holds everything the agent did, in order, which is exactly the wrong shape for the question you actually have when you open it: where does this stand right now? Threads that several sessions have been talking in are worse — half the messages are addressed to somebody else.
+A long session is expensive to re-enter. The transcript holds everything the agent did, in order, which is exactly the wrong shape for the question you actually have when you open it: where does this stand right now? Threads that several sessions have been talking in are worse: half the messages are addressed to somebody else.
 
 The pinned thread state answers that question in one place. The agent writes a short standing line about the situation, revises it as the work moves, and clears it when it stops being true. You see it above the composer the moment you open the session, and truncated on the inbox card before you open anything.
 
 ```bash
-cast state "Waiting on CI for the auth fix — nothing to decide yet"
+cast state "Waiting on CI for the auth fix. Nothing to decide yet"
 cast state - <<'EOF'                 # multi-line, exact newlines preserved
 Status: sync layer rewritten, tests green
 Blocked: needs a prod key before the last check
@@ -20,7 +20,12 @@ The snippet ([how snippets work](/documentation/agent-snippets)) tells the agent
 
 `Goal:`, `Status:`, `Next:` and `Blocked:` render as bold labels, the same convention session summaries use, so a state written with them reads as a structured card rather than a paragraph.
 
-The instruction the agent gets is not "write a state" but "keep one true". It rewrites the line whenever the answer changes — a new phase, a new blocker, a decision it needs from you — and clears it when the work is done. A state that says the agent is waiting on something that already arrived is worse than no state at all.
+```figure
+PinnedStateFigure
+One write, two surfaces: the panel shows all of it under the first line, and the inbox card keeps only the Status line.
+```
+
+The instruction the agent gets is not "write a state" but "keep one true". It rewrites the line whenever the answer changes (a new phase, a new blocker, a decision it needs from you) and clears it when the work is done. A state that says the agent is waiting on something that already arrived is worse than no state at all.
 
 ## Declaring who acts next
 
@@ -44,26 +49,38 @@ A finished turn that declares nothing files under Needs Input. That is the hones
 
 `blocked` is the one status that claims your attention. It returns a stashed session to the inbox, so the snippet tells the agent to declare it only when it is true. A question that can wait goes to the [decision queue](/documentation/decisions) first, and then the session goes dormant.
 
-A message from you takes the declaration down, because you have answered it. A message from another session or a trigger wake leaves it standing.
+A message from you takes the pinned state down, text and status together, because you have answered it. The agent pins a new one when it ends that turn. A message from another session or a trigger wake leaves it standing.
+
+```figure
+WhoActsNextFigure
+The declaration files the session when the turn ends. Saying nothing files it under Needs Input.
+```
 
 ## Staleness is visible, not assumed
 
 Nothing forces an agent to keep the line current, so the interface never claims it is. Every write stamps the message count of the thread at that moment, and every surface shows the gap since: "4m ago · 12 messages since".
 
-As that gap grows the panel walks through three treatments — a cyan accent while the state is fresh, yellow once the thread has run well past it, orange when it has run far past. The card in the inbox dims its line the same way. A neglected state therefore reads as neglected instead of reading as current, which is the only thing that makes a pinned line trustworthy at all.
+As that gap grows the state goes through three stages. It is fresh, with a cyan pin, for its first 60 messages. From 60 messages it is aging: the pin and the counter turn yellow. At 200 messages it is stale, and every surface hides it, because a line the thread has run far past is worse than no line. A neglected state therefore never reads as current, which is the only thing that makes a pinned line trustworthy at all. When a state carries a `--status`, the status color owns the panel's bar, and the counter still tells you its age.
 
-Time is the weaker signal and treated as such: a session parked overnight on a CI run has not changed, so the clock only takes over after the thread has been quiet for a long stretch.
+Time is the weaker signal and treated as such: a session parked overnight on a CI run has not changed, so the clock ages a state only after 12 hours and hides it after 48. Before the line gets anywhere near aging, the agent's own hook reminds it after 20 messages to rewrite it, and a rewrite starts both counters again.
+
+```figure
+FreshnessFigure
+Fresh, aging, then hidden, by messages or by hours, whichever comes first.
+```
 
 ## Where it shows
 
 | Surface | What you see |
 |---------|--------------|
 | Conversation, above the composer | The full state, its age, and the message gap. Collapse it to the headline; clear it with the × |
-| Inbox card | The first line, marked with a pin, in place of the generated session summary |
-| `cast sessions` | The same first line, marked, above the generated summary it replaces |
+| Inbox card | The `Status:` or `Blocked:` line, or the first line when there is neither, marked with a pin, in place of the generated session summary |
+| `cast sessions` | The first line, marked, above the generated summary it replaces |
 
-Clearing from the panel is a local-first write: the panel disappears immediately and a toast offers Undo. The agent can pin a new state at any time — the human clearing it is a statement about this line, not a lock.
+![The inbox with pinned states on the cards](/documentation/shots/inbox.webp "The inbox files sessions by who acts next. Fix flaky checkout e2e and Upgrade Stripe SDK to v14 show their pinned lines beside a Needs input or Complete chip.")
+
+Clearing from the panel is a local-first write: the panel disappears immediately and a toast offers Undo. The agent can pin a new state at any time; the human clearing it is a statement about this line, not a lock.
 
 ## Access
 
-`cast state` writes to the session it is run from — the CLI resolves the current session the same way `cast stash` and `cast label` do. Pass `--for <session>` to write to another session, and `cast state show <session>` to read one. Both are restricted to sessions you run or own, the same rule that governs renaming and stashing.
+`cast state` writes to the session it is run from. The CLI resolves the current session the same way `cast stash` and `cast label` do. Pass `--for <session>` to write to another session, and `cast state show <session>` to read one. Both are restricted to sessions you run or own, the same rule that governs renaming and stashing.

@@ -19,7 +19,7 @@ import { decisionAnswerClientId } from "@codecast/shared/contracts";
 import { ensureWallet, LEAK_GRACE_MS, reserve } from "../lib/wallet";
 import { allModules as modules, loadPiAi } from "../testModules.testkit";
 import { toolsFor } from "./tools";
-import { ALWAYS_ALLOW, APPROVE, DECLINE, allowScope, approvalContext, leaseTurn, systemPrompt, turnDeps, withRules } from "./turns";
+import { ALWAYS_ALLOW, APPROVE, DECLINE, allowScope, alwaysCovers, approvalContext, leaseTurn, systemPrompt, turnDeps, withRules } from "./turns";
 import { strandedCalls } from "./history";
 import { hostedInputWaits } from "./input";
 
@@ -246,7 +246,7 @@ describe("approvals", () => {
       pending_call: { tool_call_id: "call_send", tool: "send_mail", args: draft },
     });
     expect(s.decisions).toHaveLength(1);
-    expect(s.decisions[0]).toMatchObject({ question: "Send an email?", blocking: true, status: "pending", asked_user_ids: [user] });
+    expect(s.decisions[0]).toMatchObject({ question: "Send an email to Dana?", blocking: true, status: "pending", asked_user_ids: [user] });
     expect(s.decisions[0].options.map((o) => o.label)).toEqual([APPROVE, ALWAYS_ALLOW, DECLINE]);
     expect(s.decisions[0].context_md).toContain("dana@example.com");
     expect(s.decisions[0].context_md).toContain("Thursday at noon works for me.");
@@ -689,34 +689,88 @@ describe("limits", () => {
 });
 
 describe("more limits", () => {
-  test("past the plan's running turns, a turn queues and starts when a slot frees", async () => {
+  test("past the plan's running turns, a turn queues, says it is waiting, and starts when a slot frees", async () => {
     const { t, user, conversationId, start } = await setup();
-    const other = await start();
+    const second = await start();
+    const third = await start();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
-    let entered = false;
-    faux.setResponses([
-      async () => {
-        entered = true;
-        await gate;
-        return reply("First.");
-      },
-      reply("Second."),
-    ]);
+    let entered = 0;
+    const held = (text: string) => async () => {
+      entered++;
+      await gate;
+      return reply(text);
+    };
+    faux.setResponses([held("First."), held("Second."), reply("Third.")]);
     await say(t, conversationId, user, "One thing");
     const running = (async () => settle(t))();
-    while (!entered) await pause(10);
-    // The free plan runs one turn at a time across the person's conversations.
-    await say(t, other, user, "Another thing");
-    let s = await state(t, other, user);
-    expect(s.turns.map((turn) => turn.status)).toEqual(["running", "queued"]);
-    expect(s.turns[1].conversation_id).toBe(other);
+    while (entered < 1) await pause(10);
+    // The free plan runs one turn at a time, but a conversation's first ask
+    // takes one slot past it, so a newcomer's first request never waits.
+    await say(t, second, user, "Another thing");
+    while (entered < 2) await pause(10);
+    await say(t, third, user, "A third thing");
+    let s = await state(t, third, user);
+    expect(s.turns.map((turn) => turn.status)).toEqual(["running", "running", "queued"]);
+    expect(s.turns[2].conversation_id).toBe(third);
+    // The waiting conversation says so instead of looking stuck.
+    expect(s.managed?.agent_status).toBe("waiting");
     release();
     await running;
     await settle(t);
-    s = await expectBalanced(t, other, user);
-    expect(s.turns.map((turn) => [turn.status, turn.reason])).toEqual([["done", "done"], ["done", "done"]]);
-    expect(s.messages.map((m) => m.content)).toEqual(["Another thing", "Second."]);
+    s = await expectBalanced(t, third, user);
+    expect(s.turns.map((turn) => [turn.status, turn.reason])).toEqual([["done", "done"], ["done", "done"], ["done", "done"]]);
+    expect(s.messages.map((m) => m.content)).toEqual(["A third thing", "Third."]);
+  });
+
+  test("a provider that cannot serve fails the turn at once, charges nothing, alerts once and retries by itself", async () => {
+    const { t, user, conversationId } = await setup();
+    turnDeps.fallbackModel = () => undefined;
+    turnDeps.retryDelaysMs = [50, 50];
+    const broke = () => {
+      throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}');
+    };
+    faux.setResponses([broke, broke, broke]);
+    await say(t, conversationId, user, "Help me write a kind note");
+    await settle(t);
+    let s = await expectBalanced(t, conversationId, user);
+    // Two retries, then it stops trying and says so.
+    expect(s.turns.map((turn) => [turn.status, turn.reason, turn.cost_usd])).toEqual(Array(3).fill(["failed", "error", 0]));
+    const notices = s.messages.filter((m) => m.subtype?.startsWith("hosted_notice:"));
+    expect(notices.map((m) => m.subtype)).toEqual(["hosted_notice:unavailable", "hosted_notice:unavailable", "hosted_notice:error"]);
+    expect(notices[0].content).toContain("try again by myself");
+    expect(notices[2].content).toContain("stopped trying");
+    expect(s.ledger.filter((row) => row.kind === "charge").every((row) => row.amount_usd === 0)).toBe(true);
+    const incidents = await t.run((ctx) => ctx.db.query("assistant_incidents").collect());
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({ provider: "anthropic", fault: "billing", count: 3 });
+
+    // The provider is back: the person asks again, it answers from their
+    // words (the notices are not in the model's history), and the incident closes.
+    faux.setResponses([reply("Here is a kind note.")]);
+    await say(t, conversationId, user, "Try again please");
+    await settle(t);
+    s = await state(t, conversationId, user);
+    expect(s.messages[s.messages.length - 1].content).toBe("Here is a kind note.");
+    expect((await t.run((ctx) => ctx.db.query("assistant_incidents").collect()))[0].closed_at).toBeNumber();
+  });
+
+  test("a provider failure moves the turn to the fallback tier, and the operator still hears about the first", async () => {
+    const { t, user, conversationId } = await setup();
+    turnDeps.fallbackModel = (model) => (model === "claude-sonnet-5-5" ? undefined : "claude-sonnet-5-5");
+    faux.setResponses([
+      () => {
+        throw new Error('401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}');
+      },
+      reply("Done, from the fallback."),
+    ]);
+    await say(t, conversationId, user, "Hi");
+    await settle(t);
+    const s = await expectBalanced(t, conversationId, user);
+    expect(s.turns[0]).toMatchObject({ status: "done", reason: "done", model: "claude-sonnet-5-5" });
+    expect(s.messages[s.messages.length - 1].content).toBe("Done, from the fallback.");
+    const incidents = await t.run((ctx) => ctx.db.query("assistant_incidents").collect());
+    expect(incidents.map((row) => [row.fault, row.model])).toEqual([["auth", "claude-haiku-4-5-20251001"]]);
   });
 
   test("a run that died is ended by its lease, charged what it recorded, and the next message runs", async () => {
@@ -999,6 +1053,14 @@ describe("pieces", () => {
       covers: "Add events with dana@example.com, lee@example.com as the guests, without emailing them",
     });
     expect(allowScope({ name: "create_event", input: {} })).toMatchObject({ kind: "match", match: "no one" });
+  });
+
+  test("a whole-tool Always allow names the tool, not this call", () => {
+    const covers = (name: string, input: Record<string, unknown>) => alwaysCovers({ name }, allowScope({ name, input }));
+    // Each rule lets every later call of the tool run, for any note or anyone.
+    expect(covers("write_doc", { title: "Packing list", content: "x" })).toBe("Write a note");
+    expect(covers("create_draft", { to: ["dana@example.com"], body: "x" })).toBe("Draft a reply");
+    expect(covers("create_event", { attendees: ["dana@example.com"] })).toBe("Add events with dana@example.com as the guests, without emailing them");
   });
 
   test("the card shows every field literally, long text whole", () => {

@@ -48,15 +48,32 @@ The daemon classifies the banner text. A usage limit is kind `limit`. A rate lim
 | `resume` | Resume at reset only | Never changes accounts. Continues the sessions when the window resets. |
 | `off` | Do nothing | Sessions stay parked until a person continues them. |
 
+```figure
+RecoveryFigure
+The daemon reads the banner, the server parks the row, and the machine's recovery mode decides how the session gets its continue.
+```
+
 The candidates for a switch are the saved profiles that are not the account in use, have no window at 100%, and can carry a session: a login that still works, or a stored token. They rank by the highest percent across their windows, lowest first. An account that was already tried since the newest park is left out. An account at its plan limit with usage credits on stays eligible, but ranks last.
+
+```figure
+CandidatesFigure
+Rule out what cannot carry a session, then rank the rest by their fullest window. The top of the list is the account a switch moves to.
+```
 
 When every saved account is spent, the check records that and runs again 2 minutes after the earliest reset. A trigger run that parks on a limit follows the same rule: it resumes its own session after the reset and spends none of its retries ([triggers](/documentation/triggers)).
 
 Resumes are paced. The first request of a resumed session carries its whole context, so many resumes inside a minute trip the provider's rate limit. That answer looks like a usage limit, and on 2026-09-17 one machine moved its login five times in nineteen minutes because of it. One pass now resumes at most 3 sessions, 20 seconds apart, and leaves the rest for the next pass.
 
+```figure
+PacedResumeFigure
+Nine resumes in one burst look like a usage limit to the provider. Three a pass, 20 seconds apart, do not.
+```
+
 ## The card on a parked session
 
 A session parked on a limit shows a card in the conversation. The card names the window that closed, the account, and the time to the reset. A second line says what happens next, from the owner machine's mode, for example "Resumes on its own when the window resets" or a proposed switch with the target account and its percent used. The card has a Continue button once the reset has passed, a button that approves a switch for this one conversation, and a link to the accounts page. After the session continues, the card reads "Usage limit · resolved".
+
+![Two usage limit cards: a live one naming the window, the account and the reset, and a resolved one](/documentation/usage-limits/limit-card.webp "The real card over fixture data. Live: the session window closed on the work account, the machine resumes at the reset, and the button would continue on personal now. Below, the same card once the session moved on.")
 
 ## Codex accounts
 

@@ -12,6 +12,8 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { DecisionRecordedAnswer } from "./decisions/DecisionAnswerControls";
 import { chosenOptions, decisionHref } from "../lib/decisionLinks";
+import { useIsHostedConversation } from "../hooks/useConversationAgentType";
+import { LANE_COPY } from "./simple/lane";
 
 // The strip under a decision answer bubble: which question this answered, a
 // way back to the `cast decide` call, and (unfolded) the options with the
@@ -23,6 +25,11 @@ import { chosenOptions, decisionHref } from "../lib/decisionLinks";
 // row is resolved by conversation + label — eagerly, because the closed
 // strip's question line depends on it. Both lookups are enrichment: a
 // missing row degrades to the text on the wire rather than an error.
+//
+// A hosted conversation's answers are approvals, and the receipt after them
+// already says what came of each ("Didn't update a note (you said no)"), so
+// there the strip is just the question in plain words and a way back to it:
+// no kicker, no options, no decision page.
 export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { decision: DecisionAnswerMessage; conversationId?: string; timestamp?: number }) {
   const [open, setOpen] = useState(false);
   const storeRow = useInboxStore((s) => {
@@ -57,6 +64,9 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
   const chosenSet = new Set(chosenList);
   const isRank = row?.kind === "rank";
   const isForm = row?.kind === "form";
+  const hosted = useIsHostedConversation(conversationId);
+
+  if (hosted) return <HostedAnswerStrip question={question} onJump={() => void jump()} />;
 
   return (
     <div className="ml-8 mt-2 rounded-md border border-sol-border/70 bg-sol-bg-alt/40 text-[12px] max-w-[42rem]">
@@ -129,6 +139,25 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The strip under an answer in a hosted conversation: the question it
+ *  answered, in plain words, and a way back to where it was asked. */
+export function HostedAnswerStrip({ question, onJump }: { question: string; onJump: () => void }) {
+  return (
+    <div className="ml-8 mt-2 flex max-w-[42rem] items-center gap-3 px-1 text-[12px] text-sol-text-muted min-w-0">
+      {question ? <span className="truncate">{question}</span> : null}
+      <button
+        type="button"
+        onClick={onJump}
+        title={LANE_COPY.approval.showQuestionTip}
+        className="flex shrink-0 items-center gap-1 text-[11px] text-sol-text-dim transition-colors hover:text-sol-text hover:underline"
+      >
+        <CornerUpLeft className="h-3 w-3" />
+        {LANE_COPY.approval.showQuestion}
+      </button>
     </div>
   );
 }

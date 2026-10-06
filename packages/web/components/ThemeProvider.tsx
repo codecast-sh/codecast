@@ -1,9 +1,13 @@
 import { createContext, useContext, useState, ReactNode, useCallback } from "react";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, resolveVisualStyle } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
 import { lockedAtBoot } from "../lib/themeBootLock";
+import { isHostedUi } from "./simple/lanePaths";
+// The family's faces and token sheet, for hosted mode's look. The faces are
+// fetched only once a rule uses them.
+import "./simple/laneLook";
 
 export type Theme = "dark" | "light";
 export type VisualStyle = "classic" | "minimal";
@@ -54,7 +58,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => setLock((cur) => (cur === locked ? null : cur));
   }, []);
   const shownTheme = lock ?? theme;
-  const shownStyle: VisualStyle = lock ? "classic" : visualStyle;
+  // Hosted mode keeps its own pick and starts Minimal (resolveVisualStyle);
+  // the developer pick is left alone, so leaving hosted mode restores it.
+  const lane = useInboxStore((s) => s.clientState.ui?.lane);
+  const hostedStyle = useInboxStore((s) => s.clientState.ui?.hosted_visual_style);
+  const hosted = isHostedUi({ lane });
+  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle, hosted_visual_style: hostedStyle, lane });
 
   // One custom property on the root; the stylesheet mixes the fill from it.
   useWatchEffect(() => {
@@ -99,15 +108,36 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle("minimal-style", shownStyle === "minimal");
   }, [shownStyle, mounted]);
 
+  // Hosted mode wears the family's paper, ink and type (@platform/design,
+  // the same tokens Whisk and /welcome use) over the Minimal style: one class
+  // on the root, so portaled surfaces (settings, menus) take it too. The
+  // mapping is globals.css's html.hosted-mode block. A lock (the marketing
+  // pages) shows Classic, so the class comes off with it.
+  const hostedLook = hosted && !lock;
+  useWatchEffect(() => {
+    if (!mounted) return;
+    document.documentElement.classList.toggle("hosted-mode", hostedLook);
+  }, [hostedLook, mounted]);
+  // index.html's boot script reads this, so a cold load paints the family's
+  // paper from its first frame. A lock (the marketing pages) leaves it alone.
+  const hostedMinimal = hosted && resolveVisualStyle({ visual_style: visualStyle, hosted_visual_style: hostedStyle, lane }) === "minimal";
+  useWatchEffect(() => {
+    if (mounted && !lock) localStorage.setItem("codecast-hosted-look", hostedMinimal ? "1" : "0");
+  }, [hostedMinimal, mounted, lock]);
+
   const toggleTheme = useCallback(() => {
     const current = useInboxStore.getState().clientState.ui?.theme ?? initialTheme;
     updateClientUI({ theme: current === "dark" ? "light" : "dark" });
   }, [initialTheme, updateClientUI]);
 
   const setVisualStyle = useCallback((style: VisualStyle) => {
+    if (hosted) {
+      updateClientUI({ hosted_visual_style: style });
+      return;
+    }
     setVisualStyleState(style);
     updateClientUI({ visual_style: style });
-  }, [updateClientUI]);
+  }, [updateClientUI, hosted]);
 
   if (!mounted) return null;
 

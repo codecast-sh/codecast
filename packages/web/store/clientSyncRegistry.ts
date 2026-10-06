@@ -815,8 +815,8 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   // The hosted assistant's wallet (wallet.mine, lib/wallet.ts WalletSummary):
   // plan, this period's cap, usage, holds and what is left, the top-up
-  // balance, and recent cost per conversation. The simple lane's plan screen
-  // and meter paint it from the cache; a stale cache never clobbers a live one.
+  // balance, and recent cost per conversation. Settings > Plan and the shell's
+  // usage meter paint it from the cache; a stale cache never clobbers a live one.
   wallet: {
     persistence: { kind: "meta", key: "wallet" },
     hydration: { phase: "deferred", merge: "fill" },
@@ -888,7 +888,7 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     // changesQueries.storyEvidence: a Changes story's commits, so its evidence
     // drawer paints from the same rows the /commit page reads.
-    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet", "changesQueries.storyEvidence"],
+    feeds: ["commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet", "changesQueries.storyEvidence"],
   },
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.

@@ -22,6 +22,7 @@ import { ChangeCardHeadline, ChangeCardView, SepRow, cardAnswerIndexes } from ".
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
 import { stripMarkdown } from "../../lib/notificationText";
+import { useSurface } from "../../lib/surfaces";
 import "./decisions.css";
 
 // The compact card: the queue's row, the task page's row. Question, who is
@@ -65,9 +66,12 @@ export function DecisionCompactCard({
   const now = useCoarseNow(30_000);
   const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
   const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);
+  // Hosted mode's approvals carry no ids and no key hints.
+  const internals = useSurface("questions.internals");
 
   return (
     <DecisionCompactCardView
+      hideIds={!internals}
       decision={decision}
       session={session}
       task={task}
@@ -76,7 +80,7 @@ export function DecisionCompactCard({
       onAnswer={onAnswer}
       onDismiss={onDismiss}
       onJumpToAsk={jumpToAsk}
-      keys={keys}
+      keys={keys && internals}
       selected={selected}
       onToggleSelect={onToggleSelect}
       showTask={showTask}
@@ -107,8 +111,11 @@ export function DecisionCompactCardView({
   cta = false,
   line = false,
   folded = false,
+  hideIds = false,
 }: {
   decision: SessionDecisionItem;
+  /** Leave the decision's short id off its open link (hosted mode). */
+  hideIds?: boolean;
   session?: AskingSessionRow;
   task?: { short_id?: string };
   stack?: { _id: string; short_id?: string; title: string };
@@ -160,7 +167,7 @@ export function DecisionCompactCardView({
     <Link href={decisionHref(decision)} className="flex items-center gap-1 font-mono text-[11px] text-sol-text-dim hover:text-sol-text" title={decision.card ? `Open ${decision.short_id ?? "the decision"}` : undefined} aria-label={decision.card ? "Open the decision" : undefined}>
       {/* A card's change is its link and its task chip names it, so its own
           id stays on hover. */}
-      {!decision.card && (decision.short_id ?? "open")}<ArrowUpRight className="w-3 h-3" />
+      {!decision.card && !hideIds && (decision.short_id ?? "open")}<ArrowUpRight className="w-3 h-3" />
     </Link>
   );
 

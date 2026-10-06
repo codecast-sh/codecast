@@ -40,13 +40,14 @@ import { ORG_STATE_META } from "./org/orgMeta";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { useInboxStore, classifySession, isSessionHidden, getProjectName, type InboxSession } from "../store/inboxStore";
 import { threadStateView } from "../lib/threadState";
-import { cleanTitle } from "../lib/conversationProcessor";
+import { sessionCardTitle } from "../lib/sessionCard";
 import { getLabelColor } from "../lib/labelColors";
 import { copyToClipboard } from "../lib/utils";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { taskDisplayTitle, taskGist, lastRunHeadline, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, type TriggerRun } from "./TriggerRunHistory";
 import { isTriggerEditable } from "../lib/triggerEditable";
+import { useModeWords, useSurface } from "../lib/surfaces";
 
 const SCHED_ACCENT: Record<SchedAccent, string> = {
   running: "border-l-sol-green",
@@ -229,6 +230,8 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   const ago = task.last_run_at !== undefined ? `${fmtDuration(Math.max(0, now - task.last_run_at))} ago` : undefined;
   const headline = lastRunHeadline(task);
   const skipped = task.last_precheck_skip_at !== undefined && task.last_precheck_skip_at > (task.last_run_at ?? 0);
+  const words = useModeWords();
+  const internals = useSurface("triggers.internals");
   const retrying = (task.retry_count ?? 0) > 0 && (
     <ShortcutTooltip label="The last run errored; the daemon is retrying">
       <span className="shrink-0 text-sol-red/80 font-medium">retrying ×{task.retry_count}</span>
@@ -259,8 +262,8 @@ export const TriggerRowItem = memo(function TriggerRowItem({
       ) : skipped ? (
         <>
           <span className="w-[7px] h-[7px] mx-px rounded-full border border-sol-text-dim/70 shrink-0" />
-          <span className="shrink-0 text-sol-text-dim">skipped {fmtDuration(Math.max(0, now - task.last_precheck_skip_at!))} ago</span>
-          {task.last_precheck_skip_reason && (<>{sep}<span className="truncate min-w-0 text-sol-text-muted">{task.last_precheck_skip_reason}</span></>)}
+          <span className="shrink-0 text-sol-text-dim">{words.skippedRun} {fmtDuration(Math.max(0, now - task.last_precheck_skip_at!))} ago</span>
+          {internals && task.last_precheck_skip_reason && (<>{sep}<span className="truncate min-w-0 text-sol-text-muted">{task.last_precheck_skip_reason}</span></>)}
         </>
       ) : (
         <>
@@ -514,8 +517,11 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
   size?: "sm" | "md";
 }) {
   const count = group.rows.length;
+  const words = useModeWords();
+  const internals = useSurface("triggers.internals");
+  const projectShown = useSurface("gitChips");
   const projectPath = home?.project_path ?? home?.git_root ?? group.projectPath ?? group.rows[0].task.project_path;
-  const project = showProject && projectPath ? getProjectName(undefined, projectPath) : undefined;
+  const project = showProject && projectShown && projectPath ? getProjectName(undefined, projectPath) : undefined;
   const projectChip = project ? (
     <ShortcutTooltip label={projectPath!}>
       <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(project).bg} ${getLabelColor(project).text} ${getLabelColor(project).border}`}>
@@ -527,7 +533,7 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
   // header would be the roster's most repeated words.
   const countEl = (
     <span className="ml-auto shrink-0 text-[10px] tabular-nums text-sol-text-dim">
-      {count > 1 ? `${count} ${group.rows.every((r) => r.kind === "loop") ? "loops" : "triggers"}` : ""}
+      {count > 1 ? `${count} ${group.rows.every((r) => r.kind === "loop") ? "loops" : words.triggersPlural}` : ""}
     </span>
   );
   const pad = size === "md" ? "px-4 py-1.5" : "px-3 py-1";
@@ -537,10 +543,10 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
   if (!group.homeId) {
     return (
       <button onClick={onOpen} className={shell}>
-        <ShortcutTooltip label="Every run starts a fresh session (--spawn)" hint="opens the newest run">
+        <ShortcutTooltip label={words.freshPerRunTip} hint="opens the newest run">
           <span aria-hidden className="w-2 h-2 shrink-0 rounded-full border border-dashed border-sol-amber/70" />
         </ShortcutTooltip>
-        <span className="text-[11px] font-medium text-sol-text-muted truncate min-w-0">Fresh session per run</span>
+        <span className="text-[11px] font-medium text-sol-text-muted truncate min-w-0">{words.freshPerRun}</span>
         {projectChip}
         {countEl}
       </button>
@@ -551,12 +557,12 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
   const meta = ORG_STATE_META[ws];
   const hidden = !!home && isSessionHidden(home);
   const title = home
-    ? cleanTitle(home.title || "New Session")
+    ? sessionCardTitle(home)
     : group.rows[0].task.originating_conversation_title || "Session";
   const stateLine = home ? threadStateView(home, home.message_count, now)?.cardLine : undefined;
-  const stateWord = home ? `${meta.label}${hidden ? " · stashed" : ""}` : "not loaded";
+  const stateWord = home ? `${meta.label}${hidden && internals ? " · stashed" : ""}` : "not loaded";
   return (
-    <ShortcutTooltip label={stateLine ?? title} hint={stateLine ? `${meta.label} · open session` : "open session"} side="top">
+    <ShortcutTooltip label={stateLine ?? title} hint={stateLine ? `${meta.label} · ${words.openConversation}` : words.openConversation} side="top">
       <button onClick={onOpen} className={shell} data-trigger-home={group.homeId}>
         <StatusDot color={meta.color} ping={ws === "working"} />
         <span className={`text-[11px] font-medium truncate min-w-0 ${hidden ? "text-sol-text-muted" : "text-sol-text"}`}>{title}</span>

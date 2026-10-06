@@ -87,6 +87,21 @@ export function registerOrgRoleOpsCommands(program: Command, deps: RoleOpsDeps):
   // The merge step (L12), run by the shipped line's merge node.
   const line = program.command("line").description("The line a role's tasks run on (docs/architecture/the-line.md)");
   line
+    .command("fixloop")
+    .description("Trace each fix commit to the commit, session, line run and role that introduced the lines it changed (SZZ: parent-revision blame)")
+    .option("--since <window>", "How far back to look for fix commits (git --since)", "7d")
+    .option("--cwd <path>", "The repository checkout (default: the current directory)")
+    .option("--json", "Machine-readable output")
+    .action(async (options: any) => {
+      const { traceFixes, formatFixloop, rollupByRole } = await import("./lineFixloop.js");
+      const { readAuthConfig } = await import("./config/readAuthConfig.js");
+      const { defaultConfigDir } = await import("./config/configDir.js");
+      const since = /^\d+d$/.test(options.since) ? `${options.since.slice(0, -1)} days ago` : options.since;
+      const traces = await traceFixes({ cwd: options.cwd || process.cwd(), since, config: (readAuthConfig(defaultConfigDir()) ?? {}) as any });
+      if (options.json) console.log(JSON.stringify({ since: options.since, traces, by_role: rollupByRole(traces) }, null, 2));
+      else console.log(formatFixloop(traces));
+    });
+  line
     .command("merge")
     .description("Merge an approved run's branch into the default branch when the role's line allows it (the shipped line's merge node)")
     .requiredOption("--run <id>", "The workflow run")

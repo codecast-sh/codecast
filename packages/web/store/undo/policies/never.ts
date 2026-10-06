@@ -93,6 +93,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   // Local echoes of sends (sync creators a component calls)
   addOptimisticMessage: LOCAL_ECHO,
   markOptimisticAsFailed: LOCAL_ECHO,
+  markOptimisticAsRetrying: LOCAL_ECHO,
   removeOptimisticMessage: LOCAL_ECHO,
   resolvePendingUploads: LOCAL_ECHO,
   stampPendingDispatchContent: LOCAL_ECHO,

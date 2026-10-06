@@ -1,4 +1,7 @@
 import { captureException } from "@sentry/react";
+import { HostedStatusLine } from "./conversation/HostedStatusLine";
+import { useIsHostedConversation } from "../hooks/useConversationAgentType";
+import { MODE_WORDS, useSurface } from "../lib/surfaces";
 import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, lazy, Suspense } from "react";
 import { RevealInBandCtx } from "../lib/revealHost";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -46,7 +49,7 @@ import { MentionMenu } from "./editor/MentionMenu";
 import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
 import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, mentionItemMatches, channelMentionItems } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
 import { parseChatDraftKey } from "../lib/chatDraftKey";
 import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -244,7 +247,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // box, a workflow gate and a chat room have nobody to hand to.
   const [handoffOpen, setHandoffOpen] = useState(false);
   const owners = useOwnersFromStore(conversationId);
-  const canHandoff = !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
+  const handoffShown = useSurface("composer.handoff");
+  const canHandoff = handoffShown && !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
   // Narrowed: MessageInput only needs the session's team_id (for mention scope), which
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
@@ -301,7 +305,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // A hosted conversation has no machine to resume or restart: its turn
   // engine owns delivery, so the stuck banner and the resumes it drives never
   // apply to it.
-  const hostedConversation = isHostedAgentType(agentType);
+  // The stub of a conversation being started already carries its agent
+  // (beginOptimisticSession), so hosted wording applies from the first frame.
+  const storeHosted = useIsHostedConversation(conversationId);
+  const hostedConversation = isHostedAgentType(agentType) || storeHosted;
   const [stuckBannerRaised, setShowStuckBanner] = useState(false);
   const showStuckBanner = stuckBannerRaised && !hostedConversation;
   const [isResuming, setIsResuming] = useState(false);
@@ -364,7 +371,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acRef = useRef<HTMLDivElement>(null);
   // Chat mode anchors the popup at the @ itself. The zero-height div right
   // above the form is the positioning context; this is the popup's left within
-  // it, measured from the @'s pixel position inside the textarea.
+  // it, measured from the @'s pixel position inside the textarea. A composer
+  // narrower than the popup (a reply thread) caps it at the composer's width.
   const acAnchorRef = useRef<HTMLDivElement>(null);
   const [acCaretLeft, setAcCaretLeft] = useState(0);
   useLayoutEffect(() => {
@@ -386,7 +394,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Fall back to the team-scoped mention query (mentionScope above) so people,
   // tasks, docs, and plans resolve there too — people stay bounded to the team.
   const localMentionItemsRef = useRef<MentionItem[]>([]);
-  const [localMentionTick, setLocalMentionTick] = useState(0);
+  const [, setLocalMentionTick] = useState(0);
   const effectiveMentionItemsRef = mentionItemsRef ?? localMentionItemsRef;
   const queryMentions = useCallback((q: string) => {
     if (mentionItemsRef) { onMentionQuery?.(q); return; }
@@ -424,6 +432,25 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return mentionContextFor(st, conversationId, st.currentUser?._id ? String(st.currentUser._id) : undefined);
   }, [acTriggerKey, conversationId]);
 
+  const mentionState = useInboxStore.getState();
+  const localMentionItems = effectiveMentionItemsRef.current;
+  const mentionRoles = chatMentionMode ? mentionState.orgTree?.roles : undefined;
+  const recentMentionVisits = mentionState.recentVisits;
+  const lastMentionViews = mentionState._lastViewedAt;
+  const acCandidates = useMemo(() => {
+    if (acTrigger?.type !== "@") return [];
+    const roleItems: MentionItem[] = (mentionRoles ?? [])
+      .filter((r: any) => r.status !== "retired")
+      .map((r: any) => ({
+        id: String(r._id), type: "role", label: r.name, sublabel: `@${r.handle}`,
+        handle: r.handle, shortId: r.short_id, updatedAt: r.updated_at,
+      }));
+    return mergeMentionSuggestions(
+      [...roleItems, ...(localMentionItems ?? [])], acServerItems,
+      mentionViewTimes({ recentVisits: recentMentionVisits, _lastViewedAt: lastMentionViews }), Infinity, "", false, acContext,
+    );
+  }, [acTrigger?.type, mentionRoles, localMentionItems, acServerItems, recentMentionVisits, lastMentionViews, acContext]);
+
   const acItems: AcItem[] = useMemo(() => {
     if (!acTrigger) return [];
     if (acTrigger.type === "#") {
@@ -438,35 +465,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (acTrigger.type === "@") {
       // Chat mode's own vocabulary (docs/architecture/agent-channels.md C2):
       // the org roles of the active workspace answer to @handle, and a
-      // session answers to its 7-char short id — offered once the query
-      // starts "jx", from the 20 most recent in the store, so a room's people
-      // and roles are never buried under every session the cache holds.
-      const chatState = chatMentionMode ? useInboxStore.getState() : null;
-      const roleItems: MentionItem[] = (chatState?.orgTree?.roles ?? [])
-        .filter((r: any) => r.status !== "retired")
-        .map((r: any) => ({
-          id: String(r._id), type: "role", label: r.name, sublabel: `@${r.handle}`,
-          handle: r.handle, shortId: r.short_id, updatedAt: r.updated_at,
-        }));
-      const recentSessionIds = chatState
-        ? new Set(
-            Object.values(chatState.sessions)
-              .filter((sess: any) => !sess.is_subagent)
-              .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
-              .slice(0, 20)
-              .map((sess: any) => String(sess._id)),
-          )
-        : null;
-      const candidates = mergeMentionSuggestions(
-        [...roleItems, ...(effectiveMentionItemsRef.current ?? [])], acServerItems,
-        mentionViewTimes(useInboxStore.getState()), Infinity, "", false, acContext,
-      ).filter((m) => {
-        if (chatMentionMode && (m.type === "label" || (m.type === "person" && !m.handle))) return false;
-        // A session the thread already cites is offered outright; any other
-        // waits for its short id.
-        if (chatMentionMode && m.type === "session" && !m.contextAt && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
-        return mentionItemMatches(m, acQuery);
-      });
+      // session is inserted as its short id (chatMentionOffers decides which
+      // ones the room is offered).
+      const candidates = filterMentionItems(acCandidates, acQuery, chatMentionMode);
       const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 10 : 6, acQuery, personifyAllNow());
 
       const fileMatches = (filePathsRef.current || [])
@@ -481,8 +482,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return orderMentionItems(items);
     }
     return [];
-    // localMentionTick re-runs this when the fallback query resolves into the ref.
-  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode, acContext, mentionScope]);
+  }, [acTrigger, acQuery, skills, acCandidates, chatMentionMode, acContext, mentionScope]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -1145,7 +1145,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [selectedMessageContent, selectedMessageUuid]);
 
-  const isInactive = status && status !== "active" && !pendingMessageId;
+  // "Message to resume" speaks of a process; a hosted conversation has none.
+  const isInactive = status && status !== "active" && !pendingMessageId && !hostedConversation;
   // Queued messages live in the inbox store (persisted to IDB like drafts) so
   // they survive navigating away and reloads — a queued user message must never
   // be lost. Read reactively here; write through the store. The wrapper keeps the
@@ -1514,6 +1515,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // dismisses its host on send (the compose popup) can tell a committed send
   // from a refused one without waiting for delivery.
   const submitRefusedRef = useRef(false);
+  // The hosted assistant reads no images. Intake already refuses a new one,
+  // but a restored draft can still carry some: a send holding any is refused
+  // whole and the composer keeps everything, so nothing is dropped silently.
+  const refuseHostedImages = (count: number): boolean => {
+    if (!hostedConversation || count === 0) return false;
+    toast.error(HOSTED_IMAGE_REFUSAL, { id: "hosted-image-refusal" });
+    submitRefusedRef.current = true;
+    return true;
+  };
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     submitRefusedRef.current = false;
@@ -1543,6 +1553,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         uploading: !!img.uploading,
       }));
       if (!text && gateImages.length === 0) return;
+      if (refuseHostedImages(gateImages.length)) return;
       sendingRef.current = true;
       cancelPendingDraft();
       setMessage("");
@@ -1586,6 +1597,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       row => row.storageId && !memoryImages.some(img => img.storageId === row.storageId)
     ) as typeof memoryImages;
     const submitImages = [...memoryImages, ...draftOnlyImages];
+    if (refuseHostedImages(submitImages.length)) return false;
     // Auto-attach any pending review quotes/comments so a plain send carries them —
     // no separate "add to message" step. They prepend the typed reply and the batch
     // is cleared. (The gate path above takes it the same way; workflow does not.) Images
@@ -2299,7 +2311,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             <LiveCompactionCard conversationId={conversationId} expanded={isExpanded} />
           )}
       </>}
-      meta={((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
+      meta={hostedConversation ? (
+                  <HostedStatusLine
+                    conversationId={conversationId}
+                    agentStatus={agentStatus}
+                    startedAt={workingSinceTs}
+                    phrase={workingPhrase}
+                    asking={workingPhrase}
+                    sending={!!(pendingMessageId || existingPending || hasPendingSend)}
+                  />
+                ) : ((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Starting session...
@@ -2437,7 +2458,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ) : hasPendingSend ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
-                    Resuming session...
+                    {hostedConversation ? "Sending..." : "Resuming session..."}
                   </span>
                 ) : isInactive ? "Session idle — message to resume" : "\u00A0"}
       metaEnd={permissionMode && (
@@ -2526,7 +2547,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 className={chatMentionMode
                   ? "absolute bottom-0 mb-1.5 z-30"
                   : `mx-auto mb-1.5 ${colClass}`}
-                style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH, maxWidth: "calc(100vw - 24px)" } : undefined}
+                style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH, maxWidth: "min(100%, calc(100vw - 24px))" } : undefined}
               >
                 <MentionMenu
                   items={acItems}
@@ -2721,7 +2742,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (hasReviewAnswers ? "Send your answers as they are, or add a reply first..." : `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...`) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (hasReviewAnswers ? "Send your answers as they are, or add a reply first..." : `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...`) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : hostedConversation ? MODE_WORDS.hosted.composerPlaceholder : MODE_WORDS.developer.composerPlaceholder)}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (

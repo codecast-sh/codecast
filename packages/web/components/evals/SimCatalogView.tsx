@@ -9,12 +9,10 @@ import { GitBranch, Waves } from "lucide-react";
 import type { SimCatalogResponse, SimGridCell, SimSessionSummary } from "@codecast/shared/contracts/evalsApi";
 import { MiniTrace } from "../resources/HealthStrip";
 import { evalsHref } from "./evalsPaths";
-import { EvalsLink, LogTail, StallChip, VerdictGlyph } from "./parts";
+import { EvalsLink, LogTail, StallChip, useEvalsHost, VerdictGlyph } from "@platform/evals/react";
 import "./sim.css";
-import type { JobState } from "./simJobState";
-import { shortSha } from "./format";
-import { isJobStalled } from "./bisectModel";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { isJobStalled, type JobState } from "./simJobState";
+import { shortSha } from "@platform/evals/client";
 import { type GridRow, gridRows, markersFor, cellFailure, rowTouches, ago, simExitedBad, simOutcome, simSessionOpen, SIM_OPEN_WORDS } from "./simModel";
 
 export type SweepState = JobState;
@@ -333,7 +331,7 @@ function SweepBar({ scenarios, sweep, onSweep }: { scenarios: string[]; sweep: S
   const busy = sweep.state === "starting" || sweep.state === "running";
   const job = sweep.state === "running" || sweep.state === "done" ? sweep.job : null;
   const pct = job?.progress.total ? Math.min(100, Math.round((job.progress.done / job.progress.total) * 100)) : null;
-  const now = useCoarseNow(30_000);
+  const now = useEvalsHost().useNow(30_000);
   const stalled = sweep.state === "running" && !!job && isJobStalled(job, now);
   return (
     <section className="ev-card evs-sweep" data-evs-sweep={sweep.state}>

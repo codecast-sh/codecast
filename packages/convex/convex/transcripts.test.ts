@@ -40,6 +40,14 @@ import {
   webCallPlaces,
   endTranscript,
   HUDDLE_GRACE_MS,
+  deliverRoutes,
+  deliverToSession,
+  deliveryClientId,
+  dropDeadRoute,
+  readUnsent,
+  CATCH_UP_QUIET_MS,
+  DELIVER_RETRY_MAX,
+  DELIVER_RETRY_MS,
 } from "./transcripts";
 import { LIVE_TRANSCRIBE_MODEL, lineSaidAt } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
@@ -1297,7 +1305,7 @@ describe("pacing the words to a fed agent", () => {
     expect(quiet).toEqual({ deliver: true, lane: "context", held: true });
     // Somebody is mid-sentence: the scribe's next lull delivers instead.
     const talking = sessionDeliveryVerdict({ reason: "settle", now: 10_000, route: {}, pacing: ember, unsent: [seg("and then we", 9_000)] });
-    expect(talking).toEqual({ deliver: false });
+    expect(talking).toEqual({ deliver: false, wait: "quiet" });
     const expired = sessionDeliveryVerdict({ reason: "hold_expired", now: 10_000, route: {}, pacing: ember, unsent: [seg("chatter", 7_000)] });
     expect(expired).toEqual({ deliver: true, lane: "context", held: true });
   });
@@ -1408,6 +1416,142 @@ describe("pacing the words to a fed agent", () => {
     const out = await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 60_000 });
     expect(out).toEqual({ held: false, reason: "not_in_huddle", short_id: "conv1" });
     expect(c._scheduled).toHaveLength(0);
+  });
+
+  test("one agent's hold or release leaves every other agent's hold alone", async () => {
+    const other = { kind: "session", target: "conv2", mode: "live", sent_seq: 2, added_by: "ub", hold_until: 9_999_999_999_999 };
+    const c = await holdCtx({
+      conversations: [convo(), convo({ _id: "conv2", short_id: "conv2" })],
+      transcripts: [{ ...liveHuddle(), routes: [...liveHuddle().routes, other] }],
+      call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "channel:chan1", added_by: "ub" }],
+    });
+    const held = await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 60_000 });
+    let t = await c.db.get("t1" as any);
+    expect(t.routes[0].hold_until).toBe(held.held_until);
+    expect(t.routes[2]).toEqual(other);
+    await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 0 });
+    t = await c.db.get("t1" as any);
+    expect(t.routes[0].hold_until).toBeUndefined();
+    expect(t.routes[2]).toEqual(other);
+  });
+});
+
+// deliverRoutes end to end over the fake db: the action's query and
+// mutations run for real, only the send into the session is recorded.
+describe("delivering the words to the routes", () => {
+  const segRows = () => [
+    { _id: "s3", transcript_id: "t1", seq: 3, speaker_id: "u1", speaker_name: "Ada", text: "the build is red", t0: 1_000, t1: 2_000 },
+    { _id: "s4", transcript_id: "t1", seq: 4, speaker_id: "u1", speaker_name: "Ada", text: "and the deploy waits", t0: 3_000, t1: 4_000 },
+  ];
+  const huddle = (routes: any[], over: Record<string, unknown> = {}) => ({
+    _id: "t1",
+    room_key: "channel:chan1",
+    team_id: "team1",
+    started_by: "ub",
+    status: "live",
+    // Long ago: the room is quiet by any clock.
+    started_at: 1_000,
+    routes,
+    last_seq: 4,
+    ...over,
+  });
+  const route = (over: Record<string, unknown> = {}) => ({ kind: "session", target: "conv1", mode: "live", sent_seq: 2, added_by: "ub", ...over });
+  const actionCtx = (rows: Record<string, any[]>, opts: { sendFails?: number } = {}) => {
+    const db = makeFakeDb({
+      users: [{ _id: "ua", name: "Ada" }, { _id: "ub", name: "Bo" }],
+      conversations: [{ _id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code", user_id: "ua" }],
+      transcript_segments: segRows(),
+      call_agent_feeds: [],
+      managed_sessions: [],
+      ...rows,
+    });
+    const sends: any[] = [];
+    const scheduled: { delay: number; name: string; args: any }[] = [];
+    let failuresLeft = opts.sendFails ?? 0;
+    const scheduler = { async runAfter(delay: number, ref: unknown, args: any) { scheduled.push({ delay, name: getFunctionName(ref as any), args }); } };
+    const inner = { db, scheduler };
+    const handlers: Record<string, (args: any) => Promise<any>> = {
+      "transcripts:readUnsent": (args) => (readUnsent as any)._handler(inner, args),
+      "transcripts:markRouteSent": (args) => (markRouteSent as any)._handler(inner, args),
+      "transcripts:dropDeadRoute": (args) => (dropDeadRoute as any)._handler(inner, args),
+      "transcripts:deliverToSession": async (args) => {
+        if (failuresLeft-- > 0) throw new Error("session send failed");
+        sends.push(args);
+      },
+    };
+    const run = (ref: any, args: any) => handlers[getFunctionName(ref)]!(args);
+    return { db, scheduler, runQuery: run, runMutation: run, sends, scheduled };
+  };
+
+  test("a chunk to a session carries a deterministic client_id, so a repeat delivery dedupes at the insert", async () => {
+    const c = actionCtx({ transcripts: [huddle([route()])] });
+    await (deliverRoutes as any)._handler(c, { transcript_id: "t1", include_after_routes: false, reason: "flush" });
+    expect(c.sends).toHaveLength(1);
+    expect(c.sends[0].client_id).toBe(deliveryClientId("t1", "conv1", 4));
+    expect(c.sends[0].client_id).toBe("t1:conv1:4");
+    expect((await c.db.get("t1" as any)).routes[0].sent_seq).toBe(4);
+    // The second run of the same words (a crash before markRouteSent, two
+    // overlapping triggers) names the same row; the pending insert returns it.
+    const again = actionCtx({ transcripts: [huddle([route()])] });
+    await (deliverRoutes as any)._handler(again, { transcript_id: "t1", include_after_routes: false, reason: "flush" });
+    expect(again.sends[0].client_id).toBe(c.sends[0].client_id);
+    expect(c.scheduled).toHaveLength(0);
+  });
+
+  test("the call's final delivery retries with backoff, a bounded number of times", async () => {
+    const c = actionCtx({ transcripts: [huddle([route()], { status: "ended" })] }, { sendFails: 1 });
+    await (deliverRoutes as any)._handler(c, { transcript_id: "t1", include_after_routes: true });
+    expect(c.sends).toHaveLength(0);
+    expect((await c.db.get("t1" as any)).routes[0].sent_seq).toBe(2);
+    expect(c.scheduled).toEqual([
+      { delay: DELIVER_RETRY_MS, name: "transcripts:deliverRoutes", args: { transcript_id: "t1", include_after_routes: true, reason: undefined, attempt: 1 } },
+    ]);
+    // The retry delivers and schedules nothing more.
+    await (deliverRoutes as any)._handler(c, c.scheduled[0].args);
+    expect(c.sends).toHaveLength(1);
+    expect(c.scheduled).toHaveLength(1);
+    // Past the bound a failure is logged and left.
+    const spent = actionCtx({ transcripts: [huddle([route()], { status: "ended" })] }, { sendFails: 9 });
+    await (deliverRoutes as any)._handler(spent, { transcript_id: "t1", include_after_routes: true, attempt: DELIVER_RETRY_MAX });
+    expect(spent.scheduled).toHaveLength(0);
+    // A live flush that fails waits for the next flush instead.
+    const live = actionCtx({ transcripts: [huddle([route()])] }, { sendFails: 1 });
+    await (deliverRoutes as any)._handler(live, { transcript_id: "t1", include_after_routes: false, reason: "flush" });
+    expect(live.scheduled).toHaveLength(0);
+  });
+
+  test("a catch up that finds the room talking comes back after the quiet window", async () => {
+    const spoken = Date.now() - 500;
+    const c = actionCtx({ transcripts: [huddle([route()], { started_at: spoken - 4_000 })] });
+    await (deliverRoutes as any)._handler(c, { transcript_id: "t1", include_after_routes: false, reason: "settle" });
+    expect(c.sends).toHaveLength(0);
+    expect(c.scheduled).toEqual([
+      { delay: CATCH_UP_QUIET_MS, name: "transcripts:deliverRoutes", args: { transcript_id: "t1", include_after_routes: false, reason: "settle", attempt: 1 } },
+    ]);
+    // Bounded: the last allowed attempt schedules no further run.
+    const last = actionCtx({ transcripts: [huddle([route()], { started_at: spoken - 4_000 })] });
+    await (deliverRoutes as any)._handler(last, { transcript_id: "t1", include_after_routes: false, reason: "settle", attempt: DELIVER_RETRY_MAX });
+    expect(last.scheduled).toHaveLength(0);
+    // A lull flush that declines (busy agent) is the scribe's to retry.
+    const busy = actionCtx({
+      transcripts: [huddle([route()])],
+      managed_sessions: [{ _id: "ms1", conversation_id: "conv1", last_heartbeat: Date.now(), agent_status: "working", agent_status_updated_at: Date.now() }],
+    });
+    await (deliverRoutes as any)._handler(busy, { transcript_id: "t1", include_after_routes: false, reason: "settle" });
+    expect(busy.scheduled).toHaveLength(0);
+  });
+
+  test("a killed or gone session loses its route instead of failing on every flush", async () => {
+    const c = actionCtx({
+      conversations: [
+        { _id: "conv1", short_id: "conv1", agent_type: "claude_code", user_id: "ua", inbox_killed_at: 5 },
+        { _id: "conv3", short_id: "conv3", agent_type: "claude_code", user_id: "ua" },
+      ],
+      transcripts: [huddle([route(), route({ target: "conv-gone" }), route({ target: "conv3" })])],
+    });
+    await (deliverRoutes as any)._handler(c, { transcript_id: "t1", include_after_routes: false, reason: "flush" });
+    expect(c.sends.map((s: any) => s.to)).toEqual(["conv3"]);
+    expect((await c.db.get("t1" as any)).routes.map((r: any) => r.target)).toEqual(["conv3"]);
   });
 });
 

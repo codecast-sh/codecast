@@ -226,7 +226,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
       <div className="ch-rail-head">
         <span className="ch-rail-title">Pinned</span>
       </div>
-      <div className="ch-rail-list">
+      <div className="ch-rail-list ch-rail-list-pinned">
         {pinned.map((c) => (
           <RailRow
             key={c.id}

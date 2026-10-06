@@ -21,6 +21,14 @@ import { performRehomeSessions, performReparentSession, personName, reportsToLin
 import { sessionsOwnedBy } from "./lib/orgOwnership";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
+
+// The agent session that asked for a trust, cap or authority change, for its
+// audit row; a reference that resolves to nothing records no actor session.
+async function actorConversationFor(ctx: any, fromSession: string): Promise<{ actor_conversation_id?: Id<"conversations"> }> {
+  const conv = await findConversationByAnyRefWhere(ctx, fromSession, () => true).catch(() => null);
+  return conv ? { actor_conversation_id: conv._id } : {};
+}
 import { checkConversationAccess } from "./privacy";
 import { canAccessPlan, canAccessProject, isTeamMember, workspaceForResource, workspaceKey } from "./lib/access";
 import { charterPatch } from "./lib/orgCharter";
@@ -1813,6 +1821,11 @@ async function performSetTrustCore(ctx: any, userId: Id<"users">, args: SetTrust
   const trust = trustForSwitch(on);
   const now = Date.now();
   await ctx.db.patch(role._id, { trust, updated_at: now });
+  await recordAuthorityEvent(ctx, {
+    kind: "org_role_trust_changed", actor_user_id: userId, team_id: role.team_id, role_id: role._id,
+    ...(args.from_session ? await actorConversationFor(ctx, args.from_session) : {}),
+    detail: { before: { trust: previous }, after: { trust } },
+  });
   if (role.charter_doc_id && previousOn !== on) {
     const charter = await ctx.db.get(role.charter_doc_id);
     if (charter) {
@@ -1846,6 +1859,11 @@ async function performSetCapsCore(ctx: any, userId: Id<"users">, args: { role_id
     ...(args.cards !== undefined || role.caps?.cards !== undefined ? { cards: pos(args.cards, "--cards") ?? role.caps?.cards } : {}),
   };
   await ctx.db.patch(role._id, { caps: next, updated_at: Date.now() });
+  await recordAuthorityEvent(ctx, {
+    kind: "org_role_caps_changed", actor_user_id: userId, team_id: role.team_id, role_id: role._id,
+    ...(args.from_session ? await actorConversationFor(ctx, args.from_session) : {}),
+    detail: { before: { caps }, after: { caps: next } },
+  });
   const capped = await ctx.db.get(role._id);
   await noteRoleChange(ctx, userId, "budget", role, capped);
   return { ...capped, caps: next };
@@ -1891,6 +1909,11 @@ async function performSetAuthorityCore(ctx: any, userId: Id<"users">, args: { ro
     }
   }
   const after = await ctx.db.get(role._id);
+  await recordAuthorityEvent(ctx, {
+    kind: "org_role_authority_changed", actor_user_id: userId, team_id: role.team_id, role_id: role._id,
+    ...(args.from_session ? await actorConversationFor(ctx, args.from_session) : {}),
+    detail: { before: { authority: role.authority ?? [] }, after: { authority: after?.authority ?? [] } },
+  });
   await noteRoleChange(ctx, userId, "authority", role, after);
   return { ...after, authority };
 }

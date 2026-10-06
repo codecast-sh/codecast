@@ -1,5 +1,6 @@
 "use client";
 
+import { useModeWords, useSurface } from "../../lib/surfaces";
 import { useCallback, useMemo, useState } from "react";
 import { ShortId } from "../ShortId";
 import Link from "next/link";
@@ -90,14 +91,18 @@ export function DecisionQueueList() {
   // fold only when nothing else is waiting), and inside it its first row, so
   // the KeyCaps show on the row the digits answer.
   const keysGroup = (groups.find((g) => g.kind !== "role") ?? groups[0])?.key;
+  // Hosted mode calls this page Approvals and leaves the queue's machinery
+  // (stacks, stepping, grouping) to developer mode.
+  const words = useModeWords();
+  const internals = useSurface("questions.internals");
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex items-center gap-3 flex-wrap mb-5">
-          <h1 className="text-lg text-sol-text">Questions</h1>
+          <h1 className="text-lg text-sol-text">{words.questionsPage}</h1>
           <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>
-          <div className="ml-auto flex items-center gap-2 text-[11px]">
+          {internals && <div className="ml-auto flex items-center gap-2 text-[11px]">
             <Link href="/decisions/stacks" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors" title="Every stack: open and done, progress, due">
               <Layers className="w-3.5 h-3.5" />stacks
             </Link>
@@ -111,7 +116,7 @@ export function DecisionQueueList() {
                 <Layers className="w-3.5 h-3.5" />{selecting ? "cancel" : "group into a stack"}
               </button>
             )}
-          </div>
+          </div>}
         </div>
 
         {selecting && (
@@ -134,7 +139,7 @@ export function DecisionQueueList() {
 
         <div className="space-y-7">
           {groups.map((g) => (
-            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={g.key === keysGroup} />
+            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={internals && g.key === keysGroup} />
           ))}
 
           {terminal.length > 0 && (

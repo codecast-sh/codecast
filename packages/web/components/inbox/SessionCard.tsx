@@ -22,6 +22,8 @@ import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration } from "../../lib/sessionCard";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
+import { useSurface } from "../../lib/surfaces";
+import { showsAgentIcon } from "../simple/lanePaths";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -32,7 +34,7 @@ import { useInboxSelection } from "../../lib/inboxSelection";
 /** The card-chrome toggles the row draws, as one string. */
 function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
-  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -161,12 +163,14 @@ export const SessionCard = memo(function SessionCard({
   const ownerDevice = rosterDeviceOf(st.machineRoster as any, deviceId);
   const runHost = ownerDevice && deviceWakesOnUse(ownerDevice) ? ownerDevice : null;
   const chromeSig = cardChromeSig(st.clientState);
+  const showGitChips = useSurface("gitChips");
   const chrome = useMemo<SessionCardChrome>(() => ({
     showModelBadge: chromeSig[0] === "1",
     showAgentIcon: chromeSig[1] === "1",
     personifyAll: chromeSig[3] === "1",
     showBranchPill: chromeSig[4] === "1",
-  }), [chromeSig]);
+    showGitChips,
+  }), [chromeSig, showGitChips]);
   // Cache-first bytes: a thumbnail seen once paints locally (and offline)
   // instead of re-fetching per scroll-through of the inbox.
   const thumbSrc = imageBytes.useSrc(chromeSig[2] === "1" ? session.image_preview_url : undefined);

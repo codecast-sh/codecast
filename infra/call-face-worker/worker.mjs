@@ -288,6 +288,10 @@ export default defineAgent({
     const identity = `agent:${meta.conversation_id}`;
     await ctx.connect(undefined, meta.realtime ? AutoSubscribe.SUBSCRIBE_ALL : AutoSubscribe.SUBSCRIBE_NONE);
     const room = ctx.room;
+    // One face per agent: a second job for the same session (two callers
+    // asked at once) would seat a second face under the same identity, and
+    // LiveKit would evict the first.
+    if (room.remoteParticipants.has(identity)) return ctx.shutdown("face already in the room");
     let tavusId = null;
     try {
       tavusId = await seatFace(ctx, meta, identity);
@@ -296,8 +300,11 @@ export default defineAgent({
       console.error(`[${room.name}] no face, speaking as a voice:`, e.message);
     }
     const face = tavusId ? identity : null;
-    if (meta.realtime) await runRealtime(ctx, meta, face);
-    else runFace(room, meta, identity, tavusId);
+    // A live model that cannot start (no brief, the model's API down) must
+    // not cost the room its face: it says the session's replies instead.
+    const live = meta.realtime && (await runRealtime(ctx, meta, face).then(() => true, (e) => (console.error(`[${room.name}] real-time failed:`, e.message), false)));
+    if (!live && !tavusId) return ctx.shutdown("no face and no voice");
+    if (!live) runFace(room, meta, identity, tavusId);
 
     const reason = await new Promise((resolve) => {
       if (face) setTimeout(() => !room.remoteParticipants.has(face) && resolve("face never arrived"), FACE_ARRIVE_MS);

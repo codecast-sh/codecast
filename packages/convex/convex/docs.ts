@@ -2627,7 +2627,7 @@ export const generateShareLink = mutation({
     // team-visible/editable, so a teammate can mint the share link too.
     const doc = await requireAccessibleDoc(ctx, userId, args.id);
     const share_token = doc.share_token ?? crypto.randomUUID();
-    await claimShareToken(ctx, "docs", doc, share_token);
+    await claimShareToken(ctx, "docs", doc, share_token, userId);
     return { share_token };
   },
 });
@@ -2639,7 +2639,7 @@ export const unshare = mutation({
       ? (await verifyApiToken(ctx, args.api_token))?.userId
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    await claimShareToken(ctx, "docs", await requireAccessibleDoc(ctx, userId, args.id), null);
+    await claimShareToken(ctx, "docs", await requireAccessibleDoc(ctx, userId, args.id), null, userId);
     return { success: true };
   },
 });

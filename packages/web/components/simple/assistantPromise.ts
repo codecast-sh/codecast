@@ -22,7 +22,9 @@ export function useConnectAvailable(): ConnectAvailability {
 
 /** The link that invites a visitor who does not write code. */
 export function assistantInvite(mail: boolean): string {
-  return mail ? "Get an assistant for your email and calendar" : "Get a personal assistant";
+  return mail
+    ? "Get an assistant for your errands, notes and routines, mail included"
+    : "Get an assistant for your errands, notes and routines";
 }
 
 /** The one line under the sign in heading, in the assistant's own voice and

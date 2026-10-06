@@ -197,7 +197,7 @@ export async function pauseAtGateCore(
       // A card waits on a person (LE16): the person holding the decision hears.
       const holder = (asked as { holder?: { kind: string; id: string } }).holder;
       if (task && holder?.kind === "user" && (args.card || args.node_id === CARD_GATE_NODE_ID)) {
-        await noticeCardWaiting(ctx, task, holder.id as Id<"users">, asked.short_id);
+        await noticeCardWaiting(ctx, task, holder.id as Id<"users">, asked.short_id, args.card?.headline);
       }
     }
   }

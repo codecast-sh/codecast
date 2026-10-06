@@ -220,15 +220,18 @@ export function presenceLine(member: any, now: number): string {
 
 // A teammate's local wall-clock, from their profile timezone. Empty when the
 // timezone is missing/invalid or matches the viewer's (no news there).
+const timezoneClocks = new Map<string, Intl.DateTimeFormat>();
+
 export function localTimeLine(timezone: string | undefined, now: number): string {
   if (!timezone) return "";
   try {
     if (timezone === Intl.DateTimeFormat().resolvedOptions().timeZone) return "";
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone: timezone,
-    }).format(now);
+    let clock = timezoneClocks.get(timezone);
+    if (!clock) {
+      clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: timezone });
+      timezoneClocks.set(timezone, clock);
+    }
+    return clock.format(now);
   } catch {
     return "";
   }
