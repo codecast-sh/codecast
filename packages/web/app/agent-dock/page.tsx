@@ -1,8 +1,12 @@
 "use client";
 
 // /agent-dock — the pill on the screen's edge and the card beside it, in the
-// shell's see-through dock window (main.js "The agent dock"). On by
-// default; turned off per machine from the dock, the menu bar or Settings.
+// shell's see-through dock window (main.js "The agent dock"). Off by
+// default; turned on per machine from Settings, once released.
+//
+// Unreleased (AGENT_DOCK_RELEASED), the page draws nothing and tells the
+// shell to turn the dock off: desktop 1.1.169 to 1.1.172 open this window on
+// their own, and only the web half reaches them.
 //
 // The pump list is the palette's: this window is never the app, so it is a
 // sync follower that keeps its own live inbox feed (useLiveInboxSessions) and
@@ -14,8 +18,21 @@ import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useLiveInboxSessions } from "../../hooks/useLiveInboxSessions";
 import { useSyncReplication } from "../../hooks/useSyncRole";
 import { AgentDock } from "../../components/agentDock/AgentDock";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { AGENT_DOCK_RELEASED, setAgentDock } from "../../lib/desktopAgentDock";
 
 export default function AgentDockPage() {
+  return AGENT_DOCK_RELEASED ? <ReleasedAgentDock /> : <UnreleasedAgentDock />;
+}
+
+function UnreleasedAgentDock() {
+  useMountEffect(() => {
+    void setAgentDock({ enabled: false });
+  });
+  return null;
+}
+
+function ReleasedAgentDock() {
   return (
     <AuthGuard blankSignedOut>
       <ErrorBoundary name="Agent dock sync" level="inline" fallback={null}>

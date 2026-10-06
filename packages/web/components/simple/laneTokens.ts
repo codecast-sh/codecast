@@ -1,10 +1,8 @@
 // The lane's colour names (plan pl-840), one per meaning, each defined once
 // over the family palette (@platform/design). simple.css declares them as
-// --sl-* custom properties and the phone lane (packages/mobile laneTheme.ts)
-// computes them as hex from this same table, so a colour tweak reaches both.
-// laneTokens.test.ts fails when simple.css's declarations and this table
-// disagree, or when a rule repeats a token's mix inline. The phone imports
-// this file, so it stays free of the router and the DOM.
+// --sl-* custom properties for the pages that keep the family's look
+// (/welcome). laneTokens.test.ts fails when simple.css's declarations and
+// this table disagree, or when a rule repeats a token's mix inline.
 import type { Palette } from "@platform/design";
 
 type Base = keyof Palette;
@@ -69,19 +67,4 @@ export function laneCssValue(token: LaneToken): string {
   if (typeof token === "string") return paletteCssVar(token);
   const [base, pct, other] = token;
   return `color-mix(in srgb, ${paletteCssVar(base)} ${pct}%, ${paletteCssVar(other)})`;
-}
-
-/** Every token as a colour for one palette, given a mixer that does what
- *  color-mix(in srgb, a pct%, b) does. */
-export function resolveLaneTokens(
-  p: Palette,
-  mix: (a: string, pct: number, b: string) => string,
-): Record<LaneTokenName, string> {
-  const pick = (base: Base | "transparent") => (base === "transparent" ? base : p[base]);
-  return Object.fromEntries(
-    Object.entries(LANE_TOKENS).map(([name, t]) => [
-      name,
-      typeof t === "string" ? p[t] : mix(p[t[0]], t[1], pick(t[2])),
-    ]),
-  ) as Record<LaneTokenName, string>;
 }

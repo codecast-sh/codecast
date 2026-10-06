@@ -99,6 +99,7 @@ export function parseAgentDefinitionFile(content: string, fallbackName?: string)
     modeRaw === "propose" || modeRaw === "safe" || modeRaw === "read-only" ? "propose" : modeRaw === "apply" ? "apply" : undefined;
   const isolation = str(fm.isolation);
   const isolated = bool(fm.isolated) ?? (isolation === "worktree" ? true : undefined);
+  const mergeBack = bool(fm.merge_back ?? fm.mergeBack);
   const def: AgentDefinitionSpec = {
     name: str(fm.name) ?? fallbackName ?? "",
     description: str(fm.description) ?? "",
@@ -113,6 +114,7 @@ export function parseAgentDefinitionFile(content: string, fallbackName?: string)
   if (promptMode === "append" || promptMode === "replace") def.prompt_mode = promptMode;
   if (mode) def.mode = mode;
   if (isolated !== undefined) def.isolated = isolated;
+  if (mergeBack !== undefined) def.merge_back = mergeBack;
   return def;
 }
 
@@ -130,6 +132,7 @@ export function serializeAgentDefinitionFile(def: AgentDefinitionSpec): string {
   if (def.prompt_mode && def.prompt_mode !== "append") lines.push(`prompt_mode: ${def.prompt_mode}`);
   if (def.mode && def.mode !== "apply") lines.push(`mode: ${def.mode}`);
   if (def.isolated) lines.push("isolated: true");
+  if (def.merge_back !== undefined) lines.push(`merge_back: ${def.merge_back}`);
   lines.push("---");
   const body = def.system_prompt?.trim();
   return `${lines.join("\n")}\n${body ? `\n${body}\n` : ""}`;

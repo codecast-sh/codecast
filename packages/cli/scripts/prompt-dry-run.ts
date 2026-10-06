@@ -5,7 +5,7 @@
 //
 //   bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id>
 //        [--max-turns 80] [--tools Bash,Read,Write,Edit] [--guard <dir>] [--serve <dir>] [--then <file>]
-//        [--account <profile>] [--max-output-tokens N]
+//        [--account <profile>] [--max-output-tokens N] [--claude-md <file>]
 //   bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> --call
 //        [--system <file>] [--max-output-tokens N]
 //
@@ -101,6 +101,12 @@
 // opening, since a dry run cannot hear a person, and how a standing session's
 // later wakes are replayed after its opening. A turn that fails ends the run.
 // The config dir is removed after the last turn.
+//
+// `--claude-md <file>` installs the file as the run's user-level CLAUDE.md
+// (in the private config dir, where ~/.claude/CLAUDE.md would be) and lets
+// the agent load user-scope sources, so an agent run carries the global
+// instructions under test the way a person's session does. The config dir
+// holds nothing else, so no other user setting reaches the run.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -186,7 +192,7 @@ function refuse(message: string): never {
   process.exit(2);
 }
 if (!arg("run") || !arg("prompt") || !fs.existsSync(promptFile)) {
-  refuse("usage: prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--call [--system <file>]] [--max-output-tokens N] [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <file>]...");
+  refuse("usage: prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--call [--system <file>]] [--max-output-tokens N] [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <file>]... [--claude-md <file>]");
 }
 const model = arg("model");
 if (!model || model.startsWith("--")) refuse("--model is required: an unpinned run takes the account default and cannot be compared");
@@ -204,6 +210,9 @@ const guardDir = path.resolve(arg("guard") ?? path.join(import.meta.dir, "prompt
 const serveDir = arg("serve") ? path.resolve(arg("serve")!) : undefined;
 const thenFiles = process.argv.flatMap((a, i) => (a === "--then" && process.argv[i + 1] ? [path.resolve(process.argv[i + 1])] : []));
 for (const f of thenFiles) if (!fs.existsSync(f)) refuse(`--then: no such file ${f}`);
+const claudeMdFile = arg("claude-md") ? path.resolve(arg("claude-md")!) : undefined;
+if (claudeMdFile && call) refuse("--claude-md does not apply to --call: a call carries no CLAUDE.md");
+if (claudeMdFile && !fs.existsSync(claudeMdFile)) refuse(`--claude-md: no such file ${claudeMdFile}`);
 
 /** A saved profile's setup token (`cast accounts token <name>`): a fixed sign-in
  *  in a 0600 env file, so a run can spend that account's window while the
@@ -246,6 +255,7 @@ const noCast = path.join(runDir, ".nocast");
 fs.rmSync(configDir, { recursive: true, force: true });
 fs.mkdirSync(configDir, { recursive: true });
 fs.mkdirSync(noCast, { recursive: true });
+if (claudeMdFile) fs.copyFileSync(claudeMdFile, path.join(configDir, "CLAUDE.md"));
 
 // A --call run has no tools, so nothing in it can write scratch or reach a
 // sign-in. An agent run without its sandbox could read the codecast sign-in
@@ -255,7 +265,7 @@ if (isolationGap) { fs.rmSync(pidFile, { force: true }); refuse(`an agent run ne
 const sandbox = call ? null : scratchSandbox(runDir, { guard: guardDir, serve: serveDir });
 const isolation = call ? null : "sandbox-exec";
 
-fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir, isolation }, null, 1) + "\n");
+fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir, isolation, claudeMd: claudeMdFile ?? null }, null, 1) + "\n");
 
 // CLAUDE_CODE_MAX_OUTPUT_TOKENS reaches the child only from --max-output-tokens,
 // never inherited, so args.json says every cap the run had.
@@ -397,7 +407,7 @@ function runTurn(name: string, promptText?: string, resume?: string): Promise<{ 
     const command = [...(sandbox?.prefix ?? []), "claude"];
     const child = spawn(command[0], [
       ...command.slice(1),
-      "--setting-sources", "project",
+      "--setting-sources", claudeMdFile ? "user,project" : "project",
       ...turn,
       "--max-turns", maxTurns,
       "--model", model!,
