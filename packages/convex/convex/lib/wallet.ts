@@ -12,105 +12,45 @@
 // moves no money the second time, whichever path calls it (the finish, a
 // failure, a crash recovery).
 //
-// Money is US dollars at cost, rounded to a millionth so sums of tenths
-// compare the way a person reads them.
+// The arithmetic (money, periods, room, charge splitting, proration, the
+// allowance a period grants, debt, the summary's rollover) is
+// @platform/assistant's wallet module, bound here to codecast's plan catalog.
+// This module keeps the reads and writes of the wallet rows and the ledger.
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { planOf, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
+import { PLAN_CATALOG, planOf, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
+import {
+  addMonths,
+  money,
+  periodAt,
+  proratedCap,
+  repayDebt,
+  splitCharge,
+  walletRoom,
+  walletRules,
+  type AllowanceFacts as PlatformAllowanceFacts,
+  type PeriodFigures,
+  type WalletSummaryFigures,
+} from "@platform/assistant/wallet";
+
+export { addMonths, money, periodAt, proratedCap, repayDebt, splitCharge, walletRoom };
 
 const EPSILON = 1e-9;
 
-/** Dollars rounded to a millionth. */
-export function money(usd: number): number {
-  return Math.round(usd * 1e6) / 1e6;
-}
-
-/** `at` moved by whole calendar months in UTC, the day clamped to the
- *  month's last (Jan 31 + 1 month is Feb 28 or 29). */
-export function addMonths(at: number, months: number): number {
-  const d = new Date(at);
-  const day = d.getUTCDate();
-  d.setUTCDate(1);
-  d.setUTCMonth(d.getUTCMonth() + months);
-  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-  d.setUTCDate(Math.min(day, last));
-  return d.getTime();
-}
-
-/** The monthly period holding `now`, counted from `anchor` (the wallet's
- *  creation). Each boundary is computed from the anchor, never from the
- *  previous boundary, so a wallet made on the 31st does not drift to the 28th. */
-export function periodAt(anchor: number, now: number): { start: number; end: number } {
-  const a = new Date(anchor);
-  const n = new Date(now);
-  let months = (n.getUTCFullYear() - a.getUTCFullYear()) * 12 + (n.getUTCMonth() - a.getUTCMonth());
-  if (months < 0) months = 0;
-  while (months > 0 && addMonths(anchor, months) > now) months--;
-  while (addMonths(anchor, months + 1) <= now) months++;
-  return { start: addMonths(anchor, months), end: addMonths(anchor, months + 1) };
-}
-
-type PeriodFigures = Pick<Doc<"wallets">, "period_start" | "period_end" | "period_cost_usd" | "period_cap_usd" | "topup_usd">;
+/** The wallet rules that read codecast's plans. */
+const rules = walletRules(PLAN_CATALOG);
+const { allowanceUsd, freshPeriod, nextPeriod } = rules;
 
 /** What decides a period's allowance: the plan, Stripe's status, and the end
  *  of the last period Stripe confirmed paid (absent when no live
  *  subscription bills the wallet). */
-export type AllowanceFacts = {
-  plan?: PlanId;
-  subscription_status?: string | null;
-  paid_through?: number | null;
-};
+export type AllowanceFacts = PlatformAllowanceFacts<PlanId>;
 
-/** The plan whose allowance a period ending at `periodEnd` grants. A paid
- *  plan keeps its name but grants the free allowance while its renewal is
- *  failing (Stripe's `past_due`), and for a period ending after
- *  `paid_through`: a period opens at its boundary before Stripe has charged
- *  for it, so it starts on the free allowance, and a renewal that is never
- *  paid (a lapsed card, events that stopped arriving) never grants the paid
- *  one. The paid allowance comes when the payment lands: billing moves the
- *  status on (`moveSubscription`) or confirms the period (`alignPeriod`). */
-export function allowancePlan(facts: AllowanceFacts, periodEnd: number): PlanId | undefined {
-  if (facts.subscription_status === "past_due") return "free";
-  if (facts.paid_through != null && periodEnd > facts.paid_through) return "free";
-  return facts.plan;
-}
-
-/** The allowance in dollars that `allowancePlan` grants. */
-function allowanceUsd(facts: AllowanceFacts, periodEnd: number): number {
-  return planOf(allowancePlan(facts, periodEnd)).included_usd;
-}
-
-/** A debt (a top-up balance below zero, left by a refund or dispute of
- *  credit already spent) paid from the allowance still left: the payment
- *  counts as usage and raises the balance by the same amount, so a debt is
- *  paid once and then gone. `repaid` is the amount moved. */
-export function repayDebt(
-  figures: Pick<Doc<"wallets">, "period_cap_usd" | "period_cost_usd" | "topup_usd">,
-): { period_cost_usd: number; topup_usd: number; repaid: number } {
-  const repaid = money(Math.min(Math.max(0, -figures.topup_usd), allowanceLeft(figures)));
-  return { period_cost_usd: money(figures.period_cost_usd + repaid), topup_usd: money(figures.topup_usd + repaid), repaid };
-}
-
-/** The figures of a fresh period from `start` to `end`: usage resets, the
- *  cap follows the plan (`allowancePlan`), and the new allowance pays any
- *  debt first (`repayDebt`). Reservations of turns still in flight and the
- *  top-up balance carry over. The one rule for opening a period, whether the
- *  wallet rolled over or billing put it on Stripe's. */
-function freshPeriod(facts: AllowanceFacts, start: number, end: number, topupUsd: number): PeriodFigures {
-  const fresh = { period_cap_usd: allowanceUsd(facts, end), period_cost_usd: 0, topup_usd: topupUsd };
-  const { period_cost_usd, topup_usd } = repayDebt(fresh);
-  return { period_start: start, period_end: end, period_cap_usd: fresh.period_cap_usd, period_cost_usd, topup_usd };
-}
-
-/** The figures of the period holding `now` once the period ending at
- *  `periodEnd` is over, or null while it runs. The one rollover rule, for
- *  the stored wallet (`rolledOver`) and for a summary a client already holds
- *  (`summaryAt`). */
-function nextPeriod(anchor: number, facts: AllowanceFacts, periodEnd: number, topupUsd: number, now: number): PeriodFigures | null {
-  if (now < periodEnd) return null;
-  const { start, end } = periodAt(anchor, now);
-  return freshPeriod(facts, start, end, topupUsd);
-}
+/** The plan whose allowance a period ending at `periodEnd` grants: the free
+ *  one while a renewal is failing or for a period past `paid_through`
+ *  (walletRules). Billing moves the status on (`moveSubscription`) or
+ *  confirms the period (`alignPeriod`) when the payment lands. */
+export const allowancePlan = rules.allowancePlan;
 
 /** The patch that moves a wallet into the period holding `now`, or null when
  *  it is already there. */
@@ -122,29 +62,6 @@ export function rolledOver(wallet: Doc<"wallets">, now: number): PeriodFigures |
  *  cycle once `alignPeriod` set one, the wallet's creation before that. */
 export function periodAnchor(wallet: Pick<Doc<"wallets">, "_creationTime" | "period_anchor">): number {
   return wallet.period_anchor ?? wallet._creationTime;
-}
-
-/** What is left of the period allowance, ignoring reservations. */
-function allowanceLeft(wallet: Pick<Doc<"wallets">, "period_cap_usd" | "period_cost_usd">): number {
-  return Math.max(0, wallet.period_cap_usd - wallet.period_cost_usd);
-}
-
-/** What a new reservation may still take: the allowance left, then the
- *  top-up balance, less what turns in flight already hold. */
-export function walletRoom(wallet: Pick<Doc<"wallets">, "period_cap_usd" | "period_cost_usd" | "period_reserved_usd" | "topup_usd">): number {
-  return money(Math.max(0, allowanceLeft(wallet) + wallet.topup_usd - wallet.period_reserved_usd));
-}
-
-/** How a charge splits: the period allowance first, then the top-up balance.
- *  Whatever neither covers (a turn that ran past its ceiling) still lands on
- *  the period's usage, so the meter shows the overrun honestly. */
-export function splitCharge(
-  wallet: Pick<Doc<"wallets">, "period_cap_usd" | "period_cost_usd" | "topup_usd">,
-  amount: number,
-): { periodUsd: number; topupUsd: number } {
-  const fromAllowance = Math.min(amount, allowanceLeft(wallet));
-  const topupUsd = Math.min(amount - fromAllowance, Math.max(0, wallet.topup_usd));
-  return { periodUsd: money(amount - topupUsd), topupUsd: money(topupUsd) };
 }
 
 /** The person's stored wallet row, as written (no rollover), or null. */
@@ -447,24 +364,6 @@ export async function setPlan(ctx: MutationCtx, userId: Id<"users">, plan: PlanI
   return { ...wallet, ...patch };
 }
 
-/** The cap after the allowance moves from `fromUsd` to `toUsd` with part of
- *  the period gone: the difference counts only for the share of the period
- *  still to run, the way Stripe prorates the price. The cap may fall below
- *  what the period already used (no room is left then), and is floored at
- *  zero only. Flooring it at the usage would let a downgrade take back less
- *  than the matching upgrade gave, so each round trip between plans, which
- *  Stripe nets to about nothing, would mint usage. */
-export function proratedCap(
-  wallet: Pick<Doc<"wallets">, "period_start" | "period_end" | "period_cap_usd" | "period_cost_usd">,
-  fromUsd: number,
-  toUsd: number,
-  now: number,
-): number {
-  const span = wallet.period_end - wallet.period_start;
-  const left = span > 0 ? Math.min(1, Math.max(0, (wallet.period_end - now) / span)) : 0;
-  return money(Math.max(0, wallet.period_cap_usd + (toUsd - fromUsd) * left));
-}
-
 /** Billing's plan move, from the subscription as Stripe has it now. The cap
  *  changes only when the allowance does (`allowancePlan`), so the same facts
  *  delivered twice move nothing. With `prorate` (a change to a subscription
@@ -568,29 +467,9 @@ export interface WalletAccountLine {
 }
 
 /** What the simple lane's plan screen renders (`wallet.mine`, store key
- *  `wallet`). Numbers are this period's, rollover applied. */
-export interface WalletSummary {
-  plan: PlanId;
-  cap_usd: number;
-  used_usd: number;
-  reserved_usd: number;
-  /** What a new turn may still reserve: allowance left plus top-up, less holds. */
-  remaining_usd: number;
-  /** The top-up balance. Below zero after a refund or dispute of credit
-   *  already spent, when the allowance left could not cover it: a debt each
-   *  new period's allowance pays first (`repayDebt`). */
-  topup_usd: number;
-  /** The moment every period boundary counts from (`periodAnchor`): the
-   *  wallet's creation, or the start of the paid billing cycle once billing
-   *  aligned it. Not a sign-up date. Null until the first turn makes the
-   *  wallet, like the period fields. */
-  period_anchor: number | null;
-  period_start: number | null;
-  period_end: number | null;
-  subscription_status: string | null;
-  /** The end of the last period Stripe confirmed paid while a subscription
-   *  bills the wallet, else null (`allowancePlan`). */
-  paid_through: number | null;
+ *  `wallet`). Numbers are this period's, rollover applied; the figures are
+ *  @platform/assistant's (WalletSummaryFigures), the lines codecast's. */
+export interface WalletSummary extends WalletSummaryFigures<PlanId> {
   /** Whether Stripe holds a customer for this person (any plan or top-up was
    *  bought), so the billing portal has something to show. */
   billing_account: boolean;
@@ -602,26 +481,12 @@ const SUMMARY_LEDGER_ROWS = 300;
 const SUMMARY_CONVERSATIONS = 20;
 const SUMMARY_ACCOUNT_LINES = 10;
 
-/** A summary as it reads at `now`: once its period has ended it shows the
- *  next one (usage reset, cap from the plan, any debt paid from it, holds and
- *  top-up carried), the
- *  same rule a write applies through `ensureWallet`. A live query re-runs only
- *  when the data it read changes, never because time passed, so the server
- *  applies this when it reads and the client applies it again on its clock
- *  (useWallet). Returns the same object while the period runs. */
+/** A summary as it reads at `now` (walletRules.summaryAt): once its period
+ *  has ended it shows the next one, the rule a write applies through
+ *  `ensureWallet`. The server applies it when it reads and the client again on
+ *  its clock (useWallet). Returns the same object while the period runs. */
 export function summaryAt(summary: WalletSummary, now: number): WalletSummary {
-  if (summary.period_anchor == null || summary.period_end == null) return summary;
-  const next = nextPeriod(summary.period_anchor, summary, summary.period_end, summary.topup_usd, now);
-  if (!next) return summary;
-  return {
-    ...summary,
-    cap_usd: next.period_cap_usd,
-    used_usd: next.period_cost_usd,
-    topup_usd: next.topup_usd,
-    remaining_usd: walletRoom({ ...next, period_reserved_usd: summary.reserved_usd }),
-    period_start: next.period_start,
-    period_end: next.period_end,
-  };
+  return rules.summaryAt(summary, now);
 }
 
 /** The plan screen's numbers for one person. */

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { PanelRight } from "lucide-react";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { getAgentDock, setAgentDock, type AgentDockConfig } from "../../lib/desktopAgentDock";
+import { AGENT_DOCK_RELEASED, getAgentDock, setAgentDock, type AgentDockConfig } from "../../lib/desktopAgentDock";
 import { SettingsOptionGroup, SettingsSection } from "./ui";
 
 export function AgentDockSection() {
@@ -14,8 +14,8 @@ export function AgentDockSection() {
     if (saved) setCfg((prev) => (prev ? { ...prev, ...saved } : prev));
   };
 
-  // Absent in a browser and on desktop builds older than the dock.
-  if (!cfg?.supported) return null;
+  // Absent while unreleased, in a browser, and on desktop builds older than the dock.
+  if (!AGENT_DOCK_RELEASED || !cfg?.supported) return null;
 
   return (
     <SettingsSection

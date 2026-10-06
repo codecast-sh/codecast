@@ -9,6 +9,8 @@
 
 import type { ConvexReactClient } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../../store/inboxStore";
+import { surfaceShown } from "../surfaces";
 
 export interface TerminalEndpoint {
   port: number;
@@ -202,15 +204,37 @@ async function probeWithPatience(ep: TerminalEndpoint): Promise<TerminalSessionI
   return second;
 }
 
+function requestEndpoints(convex: ConvexReactClient, deviceId?: string) {
+  return convex.mutation(api.users.requestTerminalEndpoints, { ...(deviceId ? { device_id: deviceId } : {}) });
+}
+
 // The last reply a targeted lookup got whose loopback probe missed: the
 // machine answered, it just is not this one. hostForwardedEndpoint may still
 // reach it through this machine's daemon.
 const missedReplies = new Map<string, TerminalEndpoint>();
 
+/** Whether asking the daemons is worth anything now: only for someone signed
+ *  in, and only where machines show at all (hosted mode has no terminals). A
+ *  boot asks before auth settles, and the server answers that with a throw. */
+function mayDiscover(): boolean {
+  const s = useInboxStore.getState();
+  return !!s.currentUser && surfaceShown(s, "machineChips");
+}
+
 async function discover(convex: ConvexReactClient, deviceId?: string): Promise<TerminalEndpoint | null> {
-  const { commands } = await convex.mutation(api.users.requestTerminalEndpoints, {
-    ...(deviceId ? { device_id: deviceId } : {}),
-  });
+  if (!mayDiscover()) {
+    lastFailure = "no-devices";
+    return null;
+  }
+  let commands: Awaited<ReturnType<typeof requestEndpoints>>["commands"];
+  try {
+    ({ commands } = await requestEndpoints(convex, deviceId));
+  } catch {
+    // Signed out mid-flight, or the relay refused: no machine to reach, and
+    // never an unhandled rejection for the global reporter.
+    lastFailure = "no-devices";
+    return null;
+  }
   if (!commands.length) {
     lastFailure = "no-devices";
     return null;

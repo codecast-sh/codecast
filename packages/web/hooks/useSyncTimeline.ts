@@ -8,10 +8,6 @@ import { useInboxStore } from "../store/inboxStore";
 
 const api = _api as any;
 
-export function useSyncCommits(args: { start_time?: number; end_time?: number; repository?: string; limit?: number } | "skip" = {}) {
-  return useSyncCollection("commits", api.commits.getCommitsForTimeline, args);
-}
-
 export function useSyncPullRequests(args: { repository?: string; limit?: number } | "skip" = {}) {
   return useSyncCollection("pullRequests", api.pull_requests.getPRsForTimeline, args);
 }

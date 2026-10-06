@@ -172,8 +172,9 @@ describe("help names only real flags", () => {
   });
 
   test("the External data snippet speaks the CLI's words: connector, --team personal, grants made on the web", async () => {
-    const { TASK_SNIPPET } = await import("@codecast/shared/contracts");
-    const section = TASK_SNIPPET.slice(TASK_SNIPPET.indexOf("### External data"));
+    const { guideText, snippetBySlug } = await import("@codecast/shared/contracts");
+    const guide = guideText(snippetBySlug("triggers")!);
+    const section = guide.slice(guide.indexOf("### External data"));
     expect(section).toContain("cast connector");
     expect(section).not.toMatch(/cast app\b/);
     expect(section).toContain("--team <name|personal>");

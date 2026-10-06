@@ -139,10 +139,8 @@ async function run(args: string[]): Promise<void> {
   const trees: Record<string, string> = {};
 
   const read = (params: Record<string, unknown>) => client.getAppState(params) as Promise<ComputerSnapshotResult>;
-  // The agent cursor waits for its glide to arrive, by design; it would be
-  // most of every click here, and none of it is the helper's work.
   const act = (method: ComputerActionMethod, params: Record<string, unknown>) =>
-    client.action(method, { ...params, cursor: false }) as Promise<ComputerActionResult>;
+    client.action(method, params) as Promise<ComputerActionResult>;
   const measure = async (name: string, body: (row: Row) => Promise<void>) => {
     const row: Row = { name };
     try {
@@ -283,6 +281,7 @@ async function run(args: string[]): Promise<void> {
 
     await measure("stale: press a control a sheet now covers", async (row) => {
       let refused = 0;
+      let named = 0;
       let pressed = 0;
       for (let i = 0; i < 5; i++) {
         await dismissSheet();
@@ -294,8 +293,9 @@ async function run(args: string[]): Promise<void> {
         const before = Number(status(fixture).blockedPresses ?? 0);
         try {
           await act("click", { ...form, elementIndex: submit });
-        } catch {
+        } catch (err) {
           refused++;
+          if (/opened after your last read/.test(String(err))) named++;
         }
         await sleep(150);
         if (Number(status(fixture).blockedPresses ?? 0) > before) pressed++;
@@ -303,9 +303,28 @@ async function run(args: string[]): Promise<void> {
       await dismissSheet();
       row.hits = refused;
       row.of = 5;
-      row.note = `refused ${refused}/5, pressed under the sheet ${pressed}/5`;
+      row.note = `refused ${refused}/5 (naming the sheet ${named}/5), pressed under the sheet ${pressed}/5`;
     });
 
+    await measure("cursor: never drawn over a window that covers the target", async (row) => {
+      const covered = Number(status(fixture).cursorWhileCovered ?? 0);
+      row.hits = Number(covered === 0);
+      row.of = 1;
+      row.note = `cursor ticks over another app ${covered}`;
+    });
+    await measure("cursor: shown on a target window that is in view", async (row) => {
+      const float = { app, windowId: fixture.windows["Bench Float"], noScreenshot: true };
+      const before = Number(status(fixture).cursorWhileVisible ?? 0);
+      for (let i = 0; i < 3; i++) {
+        const tree = (await read(float)).snapshot.treeText;
+        await act("click", { ...float, elementIndex: resolveElement(tree, "Float press") });
+        await sleep(400);
+      }
+      const seen = Number(status(fixture).cursorWhileVisible ?? 0) - before;
+      row.hits = Number(seen > 0);
+      row.of = 1;
+      row.note = `cursor ticks over the target ${seen}`;
+    });
     await measure("background: the fixture never became active", async (row) => {
       const took = [...((status(fixture).activations as string[]) ?? []), ...((status(barren).activations as string[]) ?? [])];
       row.hits = Number(!(status(fixture).activations as string[] | undefined)?.length) + Number(!(status(barren).activations as string[] | undefined)?.length);

@@ -375,10 +375,15 @@ export type PersonNodeData = CardData & { person: OrgPerson; collapsed: boolean;
  *  never name one state two ways. Nothing when everything is drawn. */
 export function OverflowTally({ overflow, counts }: { overflow: number; counts: StateCounts }) {
   if (overflow <= 0) return null;
-  const parts: { text: string; color?: string }[] = [{ text: `+${overflow}` }];
+  // "+N" counts what the stack under the card does not draw; when nothing is
+  // drawn under it (collapsed, the map) the meta line already says how many,
+  // so the tally is the two states a person acts on.
+  const total = ORG_STATE_ORDER.reduce((n, k) => n + (counts[k] ?? 0), 0);
+  const parts: { text: string; color?: string }[] = overflow < total ? [{ text: `+${overflow}` }] : [];
   for (const k of ["needs_input", "working"] as const) {
     if ((counts[k] ?? 0) > 0) parts.push({ text: `${counts[k]} ${ORG_STATE_META[k].label}`, color: ORG_STATE_META[k].color });
   }
+  if (parts.length === 0) return null;
   return (
     <span className="inline-flex items-center gap-1 text-[10.5px] tabular-nums whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }}>
       {parts.map((p, i) => (

@@ -1,3 +1,4 @@
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { useState } from "react";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { type NestedStepOutcome } from "@codecast/shared/render";
@@ -141,6 +142,7 @@ export function AssistantIcon({ agentType }: { agentType?: string }) {
   if (agentType === "pi") return <PiIcon />;
   if (agentType === "grok") return <GrokIcon />;
   if (agentType === "muse") return <AgentTypeIcon agentType="muse" className="w-6 h-6" />;
+  if (agentType && isHostedAgentType(agentType)) return <AgentTypeIcon agentType={agentType} className="w-6 h-6" />;
   return <ClaudeIcon />;
 }
 

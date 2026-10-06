@@ -1,0 +1,53 @@
+.capsule {
+  position: fixed; z-index: var(--z-capsule); display: flex; align-items: center; gap: 10px;
+  background: var(--butter); border: var(--line-thick); border-radius: 22px; box-shadow: var(--pop);
+  padding: 7px 7px 7px 6px; transition: transform var(--t-move) var(--squish);
+  animation: arrive var(--t-arrive) var(--squish); touch-action: none;
+}
+.dragging, .snapping { transition: none; }
+.dragging { box-shadow: var(--pop-lg); cursor: grabbing; }
+.grip { width: 14px; height: 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px 2px; cursor: grab; touch-action: none; }
+.grip i { width: 4px; height: 4px; border-radius: 50%; background: var(--ink); }
+.dragging .grip { cursor: grabbing; }
+.faces { display: inline-flex; padding: 2px; border-radius: var(--r-sm); }
+.tool {
+  position: relative; width: 36px; height: 36px; display: grid; place-items: center;
+  background: var(--paper); border: var(--line); border-radius: var(--r-sm); box-shadow: var(--pop-xs);
+  transition: transform var(--t-press), box-shadow var(--t-press);
+}
+.tool svg { width: 20px; height: 20px; }
+.tool:hover { transform: translate(-1px, -1px); box-shadow: var(--pop-sm); }
+.tool:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--ink); transition-duration: 0s; }
+.errorDot { position: absolute; top: -5px; right: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--tomato); border: var(--line-thin); }
+.change {
+  display: flex; align-items: center; gap: var(--s2); background: var(--ink); color: var(--butter);
+  border-radius: 15px; padding: 9px 12px 9px 14px; font: 800 15px var(--ui); white-space: nowrap;
+  transition: transform var(--t-press);
+}
+.change:hover { transform: translate(-1px, -1px); }
+.change:active { transform: translate(1px, 1px); transition-duration: 0s; }
+.change :global(.keys kbd) { border-color: var(--butter) !important; }
+
+.tab {
+  position: fixed; z-index: var(--z-capsule); display: flex; flex-direction: column; align-items: center; gap: 4px;
+  width: 36px; padding: 8px 0; background: var(--butter); border: var(--line-thick); box-shadow: var(--pop-sm);
+  animation: arrive var(--t-arrive) var(--squish);
+}
+.left { left: 0; border-left: 0; border-radius: 0 var(--r-md) var(--r-md) 0; }
+.right { right: 0; border-right: 0; border-radius: var(--r-md) 0 0 var(--r-md); box-shadow: -3px 3px 0 var(--ink); }
+.count { font: 800 13px var(--ui); }
+
+.hint {
+  position: absolute; z-index: var(--z-capsule); width: max-content; max-width: 240px; background: var(--paper); border: var(--line);
+  border-radius: var(--r-md); box-shadow: var(--pop-sm); padding: 10px 14px; font: 700 14px/1.35 var(--ui);
+  rotate: -1deg; animation: arrive var(--t-arrive) var(--squish); cursor: pointer;
+}
+.hint small { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; font: 500 13px var(--ui); color: var(--ink-soft); }
+@media (max-width: 767px) {
+  .tool, .faces { min-height: 44px; }
+  .change { min-height: 44px; }
+}
+[data-corner^="b"] > .hint { bottom: calc(100% + 14px); }
+[data-corner^="t"] > .hint { top: calc(100% + 14px); }
+[data-corner$="r"] > .hint { right: 0; }
+[data-corner$="l"] > .hint { left: 0; }

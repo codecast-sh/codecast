@@ -139,16 +139,15 @@ describe("placeSections rest sections", () => {
 
   // Each section keeps its own DIRECTION and reads the stamp its class is
   // ranked by (shared inboxSortTime, ct-49550): Done and Needs Input are
-  // queues the reader clears top-down, Dormant leads with the wake that lands
-  // soonest and files a park nothing can name a wake for after them.
-  it("orders done and needs input oldest-first by the class stamp, dormant by its wake", () => {
+  // queues the reader clears top-down, and so is Dormant, by when each parked.
+  it("orders done, needs input and dormant oldest-first by the class stamp", () => {
     const loop = (wakeupAt: number) => ({ status: "armed" as const, wakeup_at: wakeupAt, event_at: BASE });
     const { needsInput, done, dormant } = cat({
       d1: mk("d1", { agent_status: "done", agent_status_updated_at: BASE - 30, turn_completed_at: BASE - 30 }),
       d2: mk("d2", { agent_status: "done", agent_status_updated_at: BASE - 10, turn_completed_at: BASE - 10 }),
-      p1: mk("p1", { agent_status: "dormant", loop_state: loop(NOW + 3_600_000) }),
-      p2: mk("p2", { agent_status: "dormant", loop_state: loop(NOW + 600_000) }),
-      p3: mk("p3", { agent_status: "dormant" }),
+      p1: mk("p1", { agent_status: "dormant", agent_status_updated_at: BASE - 20, loop_state: loop(NOW + 600_000) }),
+      p2: mk("p2", { agent_status: "dormant", agent_status_updated_at: BASE - 30, loop_state: loop(NOW + 3_600_000) }),
+      p3: mk("p3", { agent_status: "dormant", agent_status_updated_at: BASE - 10 }),
       n1: mk("n1", { updated_at: BASE - 30 }),
       n2: mk("n2", { updated_at: BASE - 10 }),
     });
@@ -284,7 +283,7 @@ describe("orderSections with rest sections", () => {
       home: mk("home", { armed_trigger_kind: "standing", last_turn_allows_park: true, updated_at: BASE - 10 }),
       p: mk("p", { agent_status: "dormant" }),
     };
-    expect(ids(orderSections(sessions, new Set()))).toEqual(["n", "p", "home"]);
+    expect(ids(orderSections(sessions, new Set()))).toEqual(["n", "home", "p"]);
   });
 
   it("a collapsed dormant section is skipped", () => {
