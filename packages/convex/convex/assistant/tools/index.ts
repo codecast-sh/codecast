@@ -9,15 +9,22 @@
 // calendar go through Whisk with the owner's app token (convex/whisk.ts
 // whiskAccessFor), which lives inside the call closure and never appears in
 // arguments, results or logs. Codecast holds no Google token for them.
+//
+// The mail, calendar and web tools are @platform/assistant's, written over an
+// injected transport: Whisk through the person's WhiskCall, the web through
+// web.ts's binding. Codecast's own verbs (codecast.ts) are its own.
 import { gateByRisk, type Gate, type MessageRow, type Tool } from "@platform/agent";
+import { CALENDAR_SCOPES, calendarTools, MAIL_SCOPES, mailTools, whiskCalendar, whiskMailbox, type AllowScopes } from "@platform/assistant";
 import type { Id } from "../../_generated/dataModel";
 import { whiskAccessFor, type WhiskAccess } from "../../whisk";
-import type { WhiskCall } from "../../lib/whisk";
-import { mailTools } from "./mail";
-import { calendarTools } from "./calendar";
-import { whiskCalendar, whiskMailbox } from "./whisk";
-import { codecastTools, PERSON_APPROVED_TOOLS } from "./codecast";
-import { pageAllowedWithoutAsking, SEARCH_MAX_PER_TURN, searchesBefore, webTools } from "./web";
+import { whiskWebUrl, type WhiskCall } from "../../lib/whisk";
+import { CODECAST_SCOPES, codecastTools, PERSON_APPROVED_TOOLS } from "./codecast";
+import { pageAllowedWithoutAsking, SEARCH_MAX_PER_TURN, searchesBefore, WEB_SCOPES, webTools } from "./web";
+
+/** How an Always allow narrows for every tool the assistant may be offered
+ *  (@platform/assistant rules): the one table the approval card and the
+ *  turn's rules both read. A tool missing here is always asked. */
+export const ALLOW_SCOPES: AllowScopes = { ...MAIL_SCOPES, ...CALENDAR_SCOPES, ...WEB_SCOPES, ...CODECAST_SCOPES };
 
 export interface ToolsForOptions {
   /** Overrides for tests: the person's Whisk access (a fake Whisk behind a
@@ -51,10 +58,10 @@ export function connectionNote(access: WhiskAccess): string {
     return "Mail and calendar are not available on this server, so you cannot read or send the person's mail or see their calendar. Do not offer to connect them.";
   }
   if (access.state === "not_connected") {
-    return "The person has not connected their mail and calendar, so you cannot read or send their mail or see their calendar. If they ask for that, offer to connect mail and calendar from Connections; it goes through Whisk, their mail app.";
+    return "The person has not connected their mail and calendar, so you cannot read or send their mail or see their calendar. If they ask for that, offer to connect them: it takes one step in Settings, under Integrations, and goes through Whisk, their mail app. A Connect button shows under your reply.";
   }
   if (access.state === "reconnect") {
-    return "The person's mail and calendar connection has to be made again, so you cannot use their mail or calendar now. If they ask for that, offer to reconnect mail and calendar from Connections.";
+    return "The person's mail and calendar connection has to be made again, so you cannot use their mail or calendar now. If they ask for that, offer to reconnect them in Settings, under Integrations. A Connect button shows under your reply.";
   }
   const can = access.can;
   const missing = [
@@ -64,7 +71,7 @@ export function connectionNote(access: WhiskAccess): string {
     ...(!can.calendar ? ["see or change their calendar"] : []),
   ];
   return missing.length
-    ? `Mail and calendar are connected through Whisk, but you cannot ${missing.join(", or ")}. If they ask for that, offer to connect mail and calendar again from Connections.`
+    ? `Mail and calendar are connected through Whisk, but you cannot ${missing.join(", or ")}. If they ask for that, offer to connect them again in Settings, under Integrations.`
     : "";
 }
 
@@ -105,7 +112,7 @@ export async function toolsFor(
 ): Promise<ToolSet> {
   const access = options.whisk ?? (await whiskAccessFor(ctx, userId, options.fetch));
   const connected = access.state === "connected" ? access : null;
-  const mailbox = whiskMailbox(connected?.call ?? NO_WHISK);
+  const mailbox = whiskMailbox(connected?.call ?? NO_WHISK, whiskWebUrl());
   const calendar = whiskCalendar(connected?.call ?? NO_WHISK);
   const tools = [
     ...(connected ? mailTools(mailbox, connected.can) : []),

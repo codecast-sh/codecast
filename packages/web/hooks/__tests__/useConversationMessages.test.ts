@@ -76,6 +76,35 @@ describe("mergeUnconfirmedMessages", () => {
     expect(mergeUnconfirmedMessages(server, queue).map((m) => m._id)).toEqual(["a", "srv-b", "c"]);
   });
 
+  describe("an approval's answer in a hosted conversation", () => {
+    // The hosted turn consumes the answer and writes no transcript row, so
+    // the bubble never meets an echo.
+    const answer = (id: string, timestamp: number, sentBaselineTs: number) =>
+      pending(id, timestamp, { content: `Decision: Approve\n<cast-decision id="${id}" question="Send it?"/>`, _sentBaselineTs: sentBaselineTs });
+    const server = [confirmed("asked", 100), confirmed("result", 300), confirmed("done", 400)];
+
+    it("sits where the card was, not below what came after it", () => {
+      const merged = mergeUnconfirmedMessages(server, [answer("d1", 250, 200), pending("typed", 500)], true);
+      expect(merged.map((m) => m._id)).toEqual(["asked", "d1", "result", "done", "typed"]);
+    });
+
+    it("keeps two answers given together in the order they were given", () => {
+      const merged = mergeUnconfirmedMessages(server, [answer("d2", 260, 200), answer("d1", 250, 200)], true);
+      expect(merged.map((m) => m._id)).toEqual(["asked", "d1", "d2", "result", "done"]);
+    });
+
+    it("waits for the transcript once the server has taken it, rather than standing alone", () => {
+      const taken = { ...answer("d1", 250, 200), _isSettled: true, _isQueued: undefined };
+      expect(mergeUnconfirmedMessages([], [taken], true)).toEqual([]);
+      expect(mergeUnconfirmedMessages([], [answer("d2", 260, 200)], true).map((m) => m._id)).toEqual(["d2"]);
+    });
+
+    it("trails like any unread send in a conversation whose agent echoes it", () => {
+      const merged = mergeUnconfirmedMessages(server, [answer("d1", 250, 200)]);
+      expect(merged.map((m) => m._id)).toEqual(["asked", "result", "done", "d1"]);
+    });
+  });
+
   it("returns the same server ref when nothing is pending", () => {
     const server = [confirmed("a", 10)];
     expect(mergeUnconfirmedMessages(server, [])).toBe(server);

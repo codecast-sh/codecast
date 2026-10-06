@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
-import { useInboxStore, isConvexId } from "./inboxStore";
+import { useInboxStore, isConvexId, retryPendingSend } from "./inboxStore";
 import { DispatchNotWiredError, StaleDispatchBindingError } from "./mutativeMiddleware";
 
 // Regression coverage for ct-37441 — a "New Session" whose createSession was
@@ -867,3 +867,57 @@ describe("sendMessageWhenReady", () => {
   });
 });
 
+
+// The retry rule both the web's failed bubble and the phone call. A
+// conversation whose create never landed has no server row to retry, so the
+// rule re-creates it (or, for a hosted one, starts it again).
+describe("retryPendingSend on a conversation with no server row", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ sessions: {}, conversations: {}, pendingMessages: {}, pendingSessionCreates: {} } as any);
+  });
+
+  it("re-creates the stub and replays the failed message", async () => {
+    const stubId = "retrystubaaaaaaaaaaaaa";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    expect(await retryPendingSend(stubId, "client-1", "deliver me")).toBe("resent");
+    expect(calls.find((c) => c.action === "createSession")?.args[0].session_id).toBe(stubId);
+    const send = calls.find((c) => c.action === "sendMessage");
+    expect(send?.args[0]).toBe(REAL_ID);
+    expect(send?.args[3]).toBe("client-1");
+  });
+
+  it("reads as on its way from the tap, and as failed again when the create cannot land", async () => {
+    const stubId = "retrystubbbbbbbbbbbbbb";
+    seedStrandedStub(stubId);
+    // A stub with no folder is one the create refuses outright.
+    useInboxStore.setState((s: any) => ({
+      sessions: { [stubId]: { ...s.sessions[stubId], project_path: undefined, git_root: undefined } },
+      conversations: { [stubId]: { ...s.conversations[stubId], project_path: undefined } },
+    } as any));
+    const done = retryPendingSend(stubId, "client-1", "deliver me");
+    expect(useInboxStore.getState().pendingMessages[stubId][0]._isFailed).toBeUndefined();
+    expect(await done).toBe("unavailable");
+    expect(useInboxStore.getState().pendingMessages[stubId][0]._isFailed).toBe(true);
+  });
+
+  it("starts a hosted conversation again from its first words", async () => {
+    const stubId = "retrystubccccccccccccc";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      sessions: { [stubId]: { ...s.sessions[stubId], agent_type: "codecast", project_path: undefined, git_root: undefined } },
+      conversations: { [stubId]: { ...s.conversations[stubId], agent_type: "codecast", project_path: undefined } },
+    } as any));
+    expect(await retryPendingSend(stubId, "client-1", "deliver me")).toBe("restarted");
+    await new Promise((r) => setTimeout(r, 0));
+    const create = calls.find((c) => c.action === "createSession");
+    expect(create?.args[0].session_id).toBe(stubId);
+    expect(create?.args[0].agent_type).toBe("codecast");
+    // The failed bubble went; the new start put one bubble in its place.
+    const s = useInboxStore.getState();
+    const rows = [...(s.pendingMessages[stubId] ?? []), ...(s.pendingMessages[REAL_ID] ?? [])];
+    expect(rows.filter((m: any) => m.content === "deliver me")).toHaveLength(1);
+    expect(rows[0]._isFailed).toBeUndefined();
+  });
+});

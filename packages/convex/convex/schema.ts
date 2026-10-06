@@ -130,7 +130,13 @@ export default defineSchema({
     isAnonymous: v.optional(v.boolean()),
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
+    // Legacy mirror of the user's role in their first team (team creation
+    // writes "admin"). It grants nothing outside that team; platform-wide
+    // operator access is `staff`.
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
+    // Codecast operator: reads every user's daemon logs, sends daemon
+    // commands, sets system config. Granted only by migrations:setStaff.
+    staff: v.optional(v.boolean()),
     // Agent (non-human) account. Two flavors: a synthetic anchor identity (no
     // login; gives a standing agent member its own name/avatar in author chips
     // while a human host runs and bills the session — see anchors), or a full
@@ -424,6 +430,9 @@ export default defineSchema({
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
+    // People with a proven address at this domain can find the team and ask
+    // to join (teamDiscovery.ts). Set by an admin, from their own domain.
+    discoverable_domain: v.optional(v.string()),
     // Idempotency key from the client's optimistic stub. A retried create
     // (replayed dispatch, timeout after commit) finds the team it already
     // made instead of minting a duplicate.
@@ -444,7 +453,31 @@ export default defineSchema({
     }))),
   })
     .index("by_invite_code", ["invite_code"])
-    .index("by_client_key", ["client_key"]),
+    .index("by_client_key", ["client_key"])
+    .index("by_discoverable_domain", ["discoverable_domain"]),
+
+  // A person asking to join a team they found by their work email domain
+  // (teamDiscovery.ts). An admin approves or declines.
+  team_join_requests: defineTable({
+    team_id: v.id("teams"),
+    user_id: v.id("users"),
+    status: v.union(v.literal("pending"), v.literal("approved"), v.literal("declined")),
+    created_at: v.number(),
+    decided_at: v.optional(v.number()),
+    decided_by: v.optional(v.id("users")),
+  })
+    .index("by_user_team", ["user_id", "team_id"])
+    .index("by_team_status", ["team_id", "status"]),
+
+  // The one outstanding code proving a user holds their account email, for
+  // finding their team by domain (teamDiscovery.ts). Only a hash is stored.
+  work_email_codes: defineTable({
+    user_id: v.id("users"),
+    email: v.string(),
+    code_hash: v.string(),
+    expires_at: v.number(),
+    attempts: v.number(),
+  }).index("by_user", ["user_id"]),
 
   team_memberships: defineTable({
     user_id: v.id("users"),
@@ -4185,7 +4218,11 @@ export default defineSchema({
       // recipient, a cause's change shipped, a watched cause reopened.
       v.literal("card_waiting"),
       v.literal("change_shipped"),
-      v.literal("cause_reopened")
+      v.literal("cause_reopened"),
+      // Finding a team by work email (teamDiscovery.ts): someone asked to
+      // join (to its admins), and an admin let them in (to them).
+      v.literal("team_join_request"),
+      v.literal("team_join_approved")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -4207,7 +4244,9 @@ export default defineSchema({
       v.literal("code"),
       // A role (its short id): the goal stall notice opens the role's page,
       // where the person reads their goals with what moved and what stalled.
-      v.literal("org_role")
+      v.literal("org_role"),
+      // A team: a join request or approval opens its settings.
+      v.literal("team")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -6727,6 +6766,9 @@ export default defineSchema({
         // Session routes: chunks delivered since the last one that carried
         // the full huddle framing (needsFullBrief). Absent → none yet.
         briefed_chunks: v.optional(v.number()),
+        // Session routes: when the last context lane chunk went out; the next
+        // waits CONTEXT_MIN_GAP_MS unless a line names the agent.
+        context_at: v.optional(v.number()),
       }),
     ),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
@@ -7364,7 +7406,9 @@ export default defineSchema({
       // A role, by short id: a goal stall notice to a person who reports to
       // it. Direct recipients only, like a device — nothing subscribes to a
       // role. Present for the same reason: one shape.
-      v.literal("org_role")
+      v.literal("org_role"),
+      // A team, for join requests. Direct recipients only. Same reason.
+      v.literal("team")
     ),
     entity_id: v.string(),
     reason: v.union(
