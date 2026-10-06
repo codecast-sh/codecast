@@ -12,14 +12,15 @@ import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
 import {
   BrushRect,
-  METRIC_ITEMS,
   RangeControl,
   TimelineCharts,
   fillDays,
   fmtDayLabel,
   fmtK,
   fmtMetric,
+  fmtUsd,
   metricHours,
+  metricItemsFor,
   rangeLabel,
   sliceRange,
   timeAxisLabels,
@@ -87,15 +88,17 @@ function TeamChartsContent() {
   // Merge member punchcards cell-by-cell into the team-wide grid.
   const rows = useMemo(() => {
     if (!allLoaded || !members) return undefined;
-    const merged: Record<string, { hours: number[]; msgs: number[]; sends: number[]; words: number[]; sessions: number[]; day_sessions: number }> = {};
+    const merged: Record<string, { hours: number[]; msgs: number[]; sends: number[]; words: number[]; tokens: number[]; spend: number[]; sessions: number[]; day_sessions: number }> = {};
     for (const m of members) {
       for (const r of punchResults[String(m._id)] ?? []) {
-        const acc = (merged[r.date] ||= { hours: zeros24(), msgs: zeros24(), sends: zeros24(), words: zeros24(), sessions: zeros24(), day_sessions: 0 });
+        const acc = (merged[r.date] ||= { hours: zeros24(), msgs: zeros24(), sends: zeros24(), words: zeros24(), tokens: zeros24(), spend: zeros24(), sessions: zeros24(), day_sessions: 0 });
         for (let h = 0; h < 24; h++) {
           acc.hours[h] += r.hours[h];
           acc.msgs[h] += r.msgs[h];
           acc.sends[h] += r.sends?.[h] ?? 0;
           acc.words[h] += r.words?.[h] ?? 0;
+          acc.tokens[h] += r.tokens?.[h] ?? 0;
+          acc.spend[h] += r.spend?.[h] ?? 0;
           acc.sessions[h] += r.sessions[h];
         }
         acc.day_sessions += r.day_sessions;
@@ -108,6 +111,8 @@ function TeamChartsContent() {
         msgs: r.msgs,
         sends: r.sends,
         words: r.words,
+        tokens: r.tokens,
+        spend: r.spend,
         sessions: r.sessions,
         day_sessions: r.day_sessions,
       }))
@@ -222,6 +227,7 @@ function MemberBreakdown({
           month_msgs: recent.reduce((s, r) => s + sum(r.msgs), 0),
           month_sends: recent.reduce((s, r) => s + sum(r.sends ?? []), 0),
           month_words: recent.reduce((s, r) => s + sum(r.words ?? []), 0),
+          month_spend: recent.reduce((s, r) => s + sum(r.spend ?? []), 0),
           month_sessions: recent.reduce((s, r) => s + r.day_sessions, 0),
         };
       })
@@ -242,6 +248,9 @@ function MemberBreakdown({
     });
   }, [ranked, dayKeys, metric]);
 
+  const metricItems = useMemo(() => metricItemsFor(Object.values(punchResults).flatMap((rows) => rows ?? [])), [punchResults]);
+  const showSpend = metricItems.some((m) => m.key === "spend");
+
   if (members.length === 0) return null;
 
   return (
@@ -253,7 +262,7 @@ function MemberBreakdown({
           <SegmentedToggle
             value={metric}
             onChange={(k) => setMetric(k as TimelineMetric)}
-            items={METRIC_ITEMS}
+            items={metricItems}
           />
         </div>
       </div>
@@ -291,6 +300,7 @@ function MemberBreakdown({
             <span className="text-[10px] tabular-nums text-sol-cyan/50 w-16 text-right">{fmtK(m.month_msgs)} msgs</span>
             <span className="text-[10px] tabular-nums text-sol-blue/60 w-16 text-right">{fmtK(m.month_sends)} typed</span>
             <span className="text-[10px] tabular-nums text-sol-violet/60 w-20 text-right">{fmtK(m.month_words)} words</span>
+            {showSpend && <span className="text-[10px] tabular-nums text-sol-yellow/70 w-14 text-right">{fmtUsd(m.month_spend)}</span>}
             <span className="text-[10px] tabular-nums text-sol-base01/30 w-14 text-right">{m.month_sessions} sess</span>
           </Link>
         ))}

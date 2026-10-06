@@ -4,6 +4,8 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { Command } from "commander";
+import { captureAnchor } from "@codecast/shared/comments";
+import { placeComments } from "./codeAnchorLocal";
 import {
   fileDiffIdentity,
   formatReviewList,
@@ -75,6 +77,23 @@ describe("formatReviewList", () => {
         "    leaks",
         " 2. src/db.ts · Scope: file  [sent]",
         "    no test",
+      ].join("\n"),
+    );
+  });
+
+  test("lists a note where its code moved, and quotes one whose code is gone", () => {
+    const file = ["function main() {", "  const result = run(config);", "  return result;", "}"];
+    const moved = { _id: "a", file_path: "src/api.ts", line_number: 2, content: "leaks", created_at: 1, anchor_lines: captureAnchor(file, 2) };
+    const gone = { _id: "b", file_path: "src/api.ts", line_number: 3, content: "check", created_at: 2, anchor_lines: { before: [], lines: ["return nothing;"], after: [] } };
+    const notes = [moved, gone] as ReviewNoteRow[];
+    const placements = placeComments(notes, () => ["// header", "// more", ...file]);
+    expect(formatReviewList(notes, new Set(["a", "b"]), placements)).toBe(
+      [
+        " 1. src/api.ts · Line: 4  [moved from line 2]",
+        "    leaks",
+        " 2. src/api.ts · Line: 3  [outdated]",
+        "    was: return nothing;",
+        "    check",
       ].join("\n"),
     );
   });
@@ -225,7 +244,8 @@ describe("cast review lifecycle", () => {
     await run("add", "api.ts:2", "this leaks on the error path");
     expect(await run("ls")).not.toContain("[stale]");
 
-    fs.writeFileSync(path.join(dir, "api.ts"), "one\nTWO\nthree\n");
+    // The file changed below the note; its line did not move.
+    fs.writeFileSync(path.join(dir, "api.ts"), "one\ntwo\nthree\nfour\n");
     expect(await run("ls")).toContain("[stale]");
 
     const preview = await run("send", "--dry-run");
@@ -236,6 +256,20 @@ describe("cast review lifecycle", () => {
     await run("send", "jx7abcd");
     const sentBody = rows[0];
     expect(sentBody.sent_at).toBe(99);
+  });
+
+  test("ls follows the noted line by its text, and says when it is gone", async () => {
+    fs.writeFileSync(path.join(dir, "api.ts"), "import a\nconst result = run(config);\nreturn result;\n");
+    await run("add", "api.ts:2", "check the error path");
+    expect(rows[0].anchor_lines.lines).toEqual(["const result = run(config);"]);
+
+    fs.writeFileSync(path.join(dir, "api.ts"), "// header\nimport a\nimport b\nconst result = run(config);\nreturn result;\n");
+    expect(await run("ls")).toContain("api.ts · Line: 4  [moved from line 2]");
+
+    fs.writeFileSync(path.join(dir, "api.ts"), "import a\nreturn 0;\n");
+    const gone = await run("ls");
+    expect(gone).toContain("api.ts · Line: 2  [outdated]");
+    expect(gone).toContain("was: const result = run(config);");
   });
 
   test("committing the reviewed content does not fake a change", async () => {

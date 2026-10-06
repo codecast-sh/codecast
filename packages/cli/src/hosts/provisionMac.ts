@@ -8,6 +8,27 @@ import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { readHostDeviceId, readyHostHome, remoteRepoPath, waitForDeviceOnline } from "../cloud/prepare.js";
 import { convexClient } from "../remote/convexClient.js";
+import { SSHD_KEEPALIVE_SCRIPT } from "../cloud/reach.js";
+
+/**
+ * FUSE for reached folders (cloud/reach.ts): FUSE-T needs no kernel extension
+ * (it serves each mount over a local NFS server), and its sshfs build mounts
+ * the laptop's folder. Both are Apple-notarized installer packages, installed
+ * with sudo rather than Homebrew because a Mac host's Homebrew often belongs to
+ * another login (ec2-user) than the one sessions run as.
+ */
+const FUSE_T_PKG = "https://github.com/macos-fuse-t/fuse-t/releases/download/1.2.9/fuse-t-macos-installer-1.2.9.pkg";
+const FUSE_T_SSHFS_PKG = "https://github.com/macos-fuse-t/sshfs/releases/download/1.0.2/sshfs-macos-installer-1.0.2.pkg";
+
+export const MAC_REACH_SCRIPT = `if ! pkgutil --pkgs='org\\.fuse-t\\.core.*' >/dev/null || [ ! -x /usr/local/bin/sshfs ]; then
+  pkgdir=$(mktemp -d)
+  curl -fsSL -o "$pkgdir/fuse-t.pkg" ${FUSE_T_PKG}
+  curl -fsSL -o "$pkgdir/sshfs.pkg" ${FUSE_T_SSHFS_PKG}
+  sudo -n installer -pkg "$pkgdir/fuse-t.pkg" -target / >/dev/null
+  sudo -n installer -pkg "$pkgdir/sshfs.pkg" -target / >/dev/null
+  rm -rf "$pkgdir"
+fi
+${SSHD_KEEPALIVE_SCRIPT}`;
 
 export const MAC_HOST_PATH = 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"';
 
@@ -34,6 +55,7 @@ for agent in .codex .claude .gemini .grok; do
     exit 1
   fi
 done
+${MAC_REACH_SCRIPT}
 echo MAC-BASE-OK`;
 }
 

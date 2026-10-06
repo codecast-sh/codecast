@@ -8,7 +8,8 @@
 // spends the token in this session. Every page a connector may return to
 // mounts it: /settings/integrations for all of them, and the pages Google's
 // connector accepts as a return_to (googleOAuth.ts GOOGLE_RETURN_PATHS), and
-// the simple lane's pages for the mail connect through Whisk (ConnectNotice).
+// /welcome and the main shell for the mail connect through Whisk
+// (ConnectNotice, ConnectToast).
 
 import { useState } from "react";
 import { useAction } from "convex/react";
@@ -20,13 +21,23 @@ import { useWatchEffect } from "./useWatchEffect";
 
 const api = _api as any;
 
+/** One toast per return, so a remount on the same landing cannot stack two. */
+const CONNECT_TOAST_ID = "connector-return";
+
 /** The callback's outcome, once known: an error to show (in the connector's
  *  words, for describeConnectorError), or a success. Null when the page was
  *  opened without a callback, or while a confirmation is still in flight.
- *  `extra` names providers besides the apps (parseConnectorReturn); `quiet`
- *  skips the success toast, for a page that says it in place. */
+ *  `extra` names providers besides the apps (parseConnectorReturn), and
+ *  `names` their display names for the success toast. `quiet` skips the
+ *  success toast, for a page that says it in place; `toastErrors` toasts a
+ *  refusal too, for a page with no place to say it. */
 export function useConnectorReturn<X extends string = never>(
-  { extra = [], quiet = false }: { extra?: readonly X[]; quiet?: boolean } = {},
+  { extra = [], names = {}, quiet = false, toastErrors = false }: {
+    extra?: readonly X[];
+    names?: Partial<Record<X, string>>;
+    quiet?: boolean;
+    toastErrors?: boolean;
+  } = {},
 ): ConnectorReturn<AppId | X> | null {
   const confirmConnector = useAction(api.oauthConnectors.confirmConnection);
   const confirmGoogle = useAction(api.googleOAuth.confirmConnection);
@@ -44,9 +55,14 @@ export function useConnectorReturn<X extends string = never>(
     );
     if (hit.kind !== "confirm") {
       setNotice(hit);
-      const app = (APP_DESCRIPTORS as Partial<Record<string, { name: string }>>)[hit.kind === "success" ? hit.provider : ""];
-      if (hit.kind === "success" && !quiet && app) {
-        toast.success(hit.provider === "github" ? "GitHub App installed" : `${app.name} connected`);
+      if (hit.kind === "error") {
+        if (toastErrors) toast.error(hit.reason, { id: CONNECT_TOAST_ID });
+        return;
+      }
+      const name = (names as Partial<Record<string, string>>)[hit.provider]
+        ?? (APP_DESCRIPTORS as Partial<Record<string, { name: string }>>)[hit.provider]?.name;
+      if (!quiet && name) {
+        toast.success(hit.provider === "github" ? "GitHub App installed" : `${name} connected`, { id: CONNECT_TOAST_ID });
       }
       return;
     }
