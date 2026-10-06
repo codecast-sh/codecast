@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "A standalone deliverable with a link: cast publish.",
+  "label": {
+    "want": [
+      "cast\\s+publish\\b"
+    ],
+    "avoid": [
+      "http\\.server",
+      "ngrok",
+      "gh gist",
+      "surge|netlify|vercel"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Make a small HTML page summarizing what changed in the last 5 commits of ~/src/codecast and give me a link I can open on my phone."
+  }
+}

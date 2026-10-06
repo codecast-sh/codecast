@@ -1,0 +1,26 @@
+{
+  "name": "guidance simulator",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:simulator"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:simulator",
+    "title": "guidance simulator"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/simulator.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "f4b95f1f-691a-4a50-879a-81a01ad0c2b9",
+  "createdAt": "2026-10-06T21:49:17.934Z"
+}

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { computeDiff, placeDurableThreads, placeSidedThreads } from "./DiffView";
+import { computeDiff, placeRelocatedThreads, placeSidedThreads } from "./DiffView";
+import { captureAnchor } from "@codecast/shared/comments";
 
 describe("computeDiff", () => {
   test("identical content resolves to all-context without the LCS matrix", () => {
@@ -72,38 +73,43 @@ describe("computeDiff", () => {
 });
 
 
-describe("placeDurableThreads", () => {
-  const ctx = (oldNum: number, newNum: number) => ({ type: "context" as const, content: "x", oldNum, newNum });
-  const add = (newNum: number) => ({ type: "added" as const, content: "x", newNum });
-  const del = (oldNum: number) => ({ type: "removed" as const, content: "x", oldNum });
-  const sep = { type: "separator" as const };
+describe("placeRelocatedThreads", () => {
+  const ctx = (oldNum: number, newNum: number, content = "x") => ({ type: "context" as const, content, oldNum, newNum });
+  const add = (newNum: number, content = "x") => ({ type: "added" as const, content, newNum });
+  const del = (oldNum: number, content = "x") => ({ type: "removed" as const, content, oldNum });
+  const place = (items: any[], comment: any) =>
+    placeRelocatedThreads(items, items, [{ key: "t", comment }]);
 
-  test("a commented line lands on the row showing its NEW-side number", () => {
-    const items = [ctx(1, 1), del(2), add(2), ctx(3, 3)] as any[];
-    const rows = placeDurableThreads(items, new Set([2]));
-    // The added row (new line 2) wins over the removed row (old line 2).
-    expect(rows.get(2)).toBe(2);
-    expect(rows.size).toBe(1);
+  test("a sideless thread without text: new side first, then old", () => {
+    const items = [ctx(1, 1), del(2), add(2), ctx(3, 3)];
+    expect(place(items, { line_number: 2 }).get(2)?.[0].placement.side).toBe("RIGHT");
+    const old = [ctx(1, 1), del(3), ctx(4, 3)];
+    expect(place(old, { line_number: 4 }).get(2)?.[0].placement).toMatchObject({ side: "LEFT", state: "current" });
   });
 
-  test("a comment on a deleted line falls back to the old side", () => {
-    const items = [ctx(1, 1), del(2), ctx(3, 2)] as any[];
-    const rows = placeDurableThreads(items, new Set([3]));
-    // New side has no line 3; old line 3 (the context row) carries it.
-    expect(rows.get(2)).toBe(3);
-    expect(rows.size).toBe(1);
+  const body = ["function main() {", "  const config = load();", "  const result = run(config);", "  return result;", "}"];
+  const anchor = captureAnchor(body, 3);
+
+  test("follows the passage when lines were added above it", () => {
+    const items = [add(1, "// header"), add(2, "// more"), ...body.map((line, i) => ctx(i + 1, i + 3, line))];
+    const rows = place(items, { line_number: 3, anchor_lines: anchor });
+    expect(rows.get(4)?.[0].placement).toMatchObject({ state: "moved", line: 5, from: 3, side: "RIGHT" });
   });
 
-  test("separators are skipped and each line claims exactly one row", () => {
-    const items = [ctx(1, 1), sep, ctx(5, 5), ctx(6, 6)] as any[];
-    const rows = placeDurableThreads(items, new Set([5, 6, 99]));
-    expect(rows.get(2)).toBe(5);
-    expect(rows.get(3)).toBe(6);
-    // Line 99 isn't visible in this diff: no row, no crash.
-    expect(rows.size).toBe(2);
+  test("outdated at its old line when the passage is gone", () => {
+    const items = [ctx(1, 1, body[0]), ctx(2, 2, body[1]), del(3, body[2]), add(3, "  const out = go();"), ctx(4, 4, body[3])];
+    // The text sits on the removed row, so on the old side it is current.
+    expect(place(items, { line_number: 3, anchor_lines: anchor, side: "RIGHT" }).get(3)?.[0].placement)
+      .toMatchObject({ state: "outdated", side: "RIGHT" });
+    expect(place(items, { line_number: 3, anchor_lines: anchor }).get(2)?.[0].placement)
+      .toMatchObject({ state: "current", side: "LEFT" });
+  });
+
+  test("no row when neither the passage nor its old line is shown", () => {
+    const items = [ctx(40, 40, "a line far away"), ctx(41, 41, "another far line")];
+    expect(place(items, { line_number: 3, anchor_lines: anchor }).size).toBe(0);
   });
 });
-
 
 describe("placeSidedThreads", () => {
   const ctx = (oldNum: number, newNum: number) => ({ type: "context" as const, content: "x", oldNum, newNum });

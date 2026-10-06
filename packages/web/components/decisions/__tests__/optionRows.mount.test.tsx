@@ -82,7 +82,7 @@ test("the single answer controls render the rows and a typed answer line, not a 
   expect(rows.length).toBe(3);
   expect(rows[0].textContent).toContain("recommended");
   expect(rows[1].textContent).toContain("Proceeding with this");
-  expect(container.textContent).toContain("type an answer");
+  expect(container.textContent).toContain("answer in your own words");
   await act(() => { (rows[2] as HTMLElement).click(); });
   expect(answers).toEqual([{ index: 2 }]);
   unmount();

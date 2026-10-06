@@ -10,7 +10,7 @@ import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from '
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import * as Haptics from 'expo-haptics';
 const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
   'ExponentImagePicker',
@@ -20,7 +20,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { MobileIdentityFace, MobileSessionFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
-import { useInboxStore, isConvexId, type OptimisticImage } from '@codecast/web/store/inboxStore';
+import { useInboxStore, isConvexId, retryPendingSend, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { startUpload, forgetUpload } from '@/components/chat/chatUpload';
 import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
@@ -50,7 +50,6 @@ import { useManagedSessionFields } from '@codecast/web/hooks/useManagedSessionFi
 import { useWorkflowRun } from '@codecast/web/hooks/useSyncWorkflows';
 import { beginLocalFork } from '@codecast/web/store/beginLocalFork';
 import { useMissingSessionLookup } from '@codecast/web/hooks/useMissingSessionRow';
-import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { useAckActiveSession } from '@/hooks/useAckActiveSession';
 import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
@@ -61,14 +60,19 @@ import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
+import { ApprovalCard } from '@/components/hosted/ApprovalCard';
+import { HostedStep } from '@/components/hosted/Steps';
+import { LANE_COPY, answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
+import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
+import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
+import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
-import { MOBILE_AGENT_LABEL, MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
+import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
   toolSummary,
@@ -482,8 +486,7 @@ function formatModel(model?: string): string {
 }
 
 function formatAgentType(agentType?: string): string {
-  if (!agentType) return 'Unknown';
-  return MOBILE_AGENT_LABEL[agentType] ?? agentType.charAt(0).toUpperCase() + agentType.slice(1);
+  return agentType ? agentDisplayName(agentType) : 'Unknown';
 }
 
 function agentTypeColor(agentType?: string): string {
@@ -2411,7 +2414,7 @@ function SystemMessage({ message }: { message: Message }) {
 }
 
 function assistantLabel(agentType?: string): string {
-  return (agentType && MOBILE_AGENT_LABEL[agentType]) || 'Claude';
+  return agentDisplayName(agentType);
 }
 
 function formatTokenCount(n: number): string {
@@ -2672,6 +2675,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   }
 
   const isUser = message.role === 'user';
+  const hostedAgent = isHostedAgentType(agentType);
   const hasToolResults = message.tool_results && message.tool_results.length > 0;
 
   if (hasToolResults && !message.content) {
@@ -2744,7 +2748,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
             {isUser ? (userName || 'You') : assistantLabel(agentType)}
           </RNText>
-          {!isUser && model && showHeader && (
+          {!isUser && model && showHeader && !hostedAgent && (
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
           <Pressable onPress={() => { Clipboard.setString(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
@@ -2937,6 +2941,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               );
             }
 
+            // The hosted assistant's steps read as plain lines, in the words
+            // the web's receipt uses; the raw call stays a developer's view.
+            if (hostedAgent && conversationId) {
+              return <HostedStep key={tc.id} call={tc} result={result} conversationId={conversationId} />;
+            }
             // Default rendering for other tools
             return (
               <ToolCallItem
@@ -3009,8 +3018,22 @@ function seedComposerDraft(conversationId: string, draftProp?: string | null): s
   return persisted;
 }
 
-function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; isOwner: boolean; draft?: string | null; autoFocus?: boolean }) {
+function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hosted = false, waitsOnAnswer = false }: {
+  conversationId: Id<"conversations">;
+  isActive: boolean;
+  isOwner: boolean;
+  draft?: string | null;
+  autoFocus?: boolean;
+  /** The conversation runs on the hosted assistant: no machine status, no
+   *  slash commands, no image attach (its turns take words only), and the
+   *  reply box speaks in the assistant's words. */
+  hosted?: boolean;
+  /** An approval is open, so typing is the other way to answer it. */
+  waitsOnAnswer?: boolean;
+}) {
   const Theme = useTheme();
+  const hostedWorking = useConversationWorking(conversationId as string) && hosted && !waitsOnAnswer;
+  const words = useModeWords();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
   const [expanded, setExpanded] = useState(false);
@@ -3224,7 +3247,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: {
   const canSend = !!message.trim() || selectedImages.length > 0;
   const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
   const agentWorking = !!agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus);
-  const showStop = agentWorking && isOwner && !canSend;
+  // A hosted turn has no process to interrupt, so it never offers stop.
+  const showStop = agentWorking && isOwner && !canSend && !hosted;
 
   // The interrupt is the shared store action (web's Escape); the daemon judges
   // whether the agent is mid-turn and paints the interruption line.
@@ -3270,15 +3294,19 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: {
 
   // Status lives in the otherwise-empty middle of the button row: zero extra
   // height, and it can never overlap the conversation.
-  const statusMeta = managedSession?.managed
-    ? AGENT_STATUS_META[managedSession.agent_status ?? '']
-    : undefined;
+  const statusMeta = hostedWorking
+    ? { color: AGENT_STATUS_META.working.color, label: LANE_COPY.conversation.working }
+    : managedSession?.managed && !hosted
+      ? AGENT_STATUS_META[managedSession.agent_status ?? '']
+      : undefined;
 
   const actionsRowEl = (
     <RNView style={styles.composerActions}>
-      <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.7}>
-        <FontAwesome name="plus" size={18} color={Theme.textMuted} />
-      </TouchableOpacity>
+      {hosted ? null : (
+        <TouchableOpacity style={styles.imageButton} onPress={pickImage} activeOpacity={0.7}>
+          <FontAwesome name="plus" size={18} color={Theme.textMuted} />
+        </TouchableOpacity>
+      )}
       <RNView style={styles.composerSpacer}>
         {statusMeta && (
           <RNView style={styles.composerStatus}>
@@ -3304,7 +3332,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: {
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
-        accessibilityLabel={showStop ? 'Stop the agent' : 'Send'}
+        accessibilityLabel={showStop ? words.stopWorking : 'Send'}
       >
         {showStop
           ? <FontAwesome name="stop" size={11} color="#fff" />
@@ -3313,7 +3341,9 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: {
     </RNView>
   );
 
-  const placeholder = isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
+  const placeholder = hosted
+    ? (waitsOnAnswer ? LANE_COPY.conversation.change : LANE_COPY.conversation.reply)
+    : isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
 
   // Suggestion pills (off-by-default pref, same stamped key as web). Idle =
   // the agent is not actively producing; a pill tap sends its text directly
@@ -3334,7 +3364,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: {
           onEdit={(t) => { setMessage(t); inputRef.current?.focus(); }}
         />
       )}
-      <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />
+      {hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
       <RNView style={styles.composerCard}>
         <TextInput
           key={epoch}
@@ -3478,6 +3508,33 @@ const DESIGN_MOCK_CONVO: ConversationData = {
 // safe-area inset. The collapsing metadata strip is positioned just under it.
 const HEADER_BAR_HEIGHT = MOBILE_SESSION_HEADER_HEIGHT;
 
+/** The session screen's slim title bar: the safe-area inset, the back button
+ *  and whatever the state has to show beside it (nothing while the row is
+ *  unknown, a title for the skeleton, the face, title and actions once
+ *  loaded). It floats over the transcript; `inFlow` sets it above content
+ *  that has no transcript under it yet. A screen opened by a link has nothing
+ *  to go back to, so back lands on the inbox then. */
+function SessionHeaderBar({ children, inFlow = false }: { children?: ReactNode; inFlow?: boolean }) {
+  const Theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  return (
+    <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT }, inFlow && { position: 'relative' }]}>
+      <TouchableOpacity
+        onPress={() => (router.canGoBack() ? router.back() : router.replace('/(tabs)/inbox' as never))}
+        style={styles.headerIconBtn}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }}
+        activeOpacity={0.6}
+        accessibilityRole="button"
+        accessibilityLabel="Back"
+      >
+        <FontAwesome name="chevron-left" size={18} color={Theme.text} />
+      </TouchableOpacity>
+      {children}
+    </RNView>
+  );
+}
+
 // Android IME inset, driven straight from the keyboard events. KAV's Android
 // path can't be trusted for this: it never resets to 0 from a hide event —
 // it RE-DERIVES padding as (own frame height − getWindowVisibleDisplayFrame
@@ -3516,8 +3573,32 @@ function ForkFamilyRow({ node, router, currentId, onClose }: { node: FlatForkNod
 
 export default function SessionDetailScreen() {
   const { id, message, focus } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
+  const Theme = useTheme();
+  // A push tapped on a closed app lands here before the cache is read back.
+  // The session screen decides what it shows from the row (a conversation
+  // with the hosted assistant has no machine chrome and its own reply box),
+  // so until the row is known or the cache has been read it would open as a
+  // developer session and then change under the person's thumbs, losing
+  // anything typed meanwhile. Hold a bare header for that moment. Once the
+  // cache is read, an unknown row falls through: the session screen looks a
+  // session it does not hold up on the server.
+  const cold = useInboxStore((s) => {
+    if (s.clientStateInitialized) return false;
+    const liveId = s.resolveLiveSessionId(id);
+    return !(s.sessions[liveId] ?? s.conversations[liveId]);
+  });
+  if (cold) {
+    return (
+      <RNView style={{ flex: 1, backgroundColor: Theme.bg }}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <SessionHeaderBar inFlow />
+      </RNView>
+    );
+  }
   return <SessionScreen id={id} message={message} focus={focus} />;
 }
+
+const NO_APPROVALS: ReturnType<typeof useConversationApprovals> = [];
 
 /** The session screen for a conversation id, apart from the route that names
  *  it: a role's page (app/org/[id]) is this screen on the role's standing
@@ -3525,14 +3606,18 @@ export default function SessionDetailScreen() {
  *  role's standing session finds its own. */
 export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
   const Theme = useTheme();
-  // Wire the store's server dispatch (idempotent — just sets a ref). The inbox
-  // tab mounts useSyncInboxSessions and stays mounted under this pushed screen,
-  // so dispatch is usually already wired; but a cold deep-link can reach this
-  // screen before any tab mounts, and without this store.sendMessage would
-  // dispatch to a no-op. We wire ONLY dispatch here (not the inbox
-  // subscriptions/soundIdle that useSyncInboxSessions owns) to avoid duplicate
-  // subscriptions and double-firing idle sounds.
-  useEnsureDispatch();
+  // Hosted mode hides a local session's model and branch chips (lib/surfaces,
+  // the registry the web's header reads), and speaks in its words.
+  const modelPicker = useSurface('modelPicker');
+  const gitChips = useSurface('gitChips');
+  const words = useModeWords();
+  // The store's server dispatch is wired once, at the root (StoreSyncBridge
+  // mounts useSyncCore above every screen), and must not be wired again here:
+  // the binding is a single slot with an owner, so a screen that binds takes
+  // it from the root, rejects the writes in flight (a create fired a moment
+  // before this screen opened), and on closing clears it, leaving every later
+  // write parked until the app restarts. A write made before the root has
+  // armed waits in the outbox and drains when it binds.
 
   // Claim store.currentSessionId while this screen is focused (re-asserted on
   // stack pop-back). The liveness reconciler prunes a conversation's optimistic
@@ -3652,6 +3737,28 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const identityRow = useSessionIdentityRow(conversation?._id ? String(conversation._id) : null, conversation as any);
   const seatIdentity = identityRow ? sessionIdentity(identityRow) : null;
   const boardHref = boardHrefProp ?? (seatIdentity?.kind === 'role' ? `/org/${seatIdentity.role.short_id}/board` : null);
+  // A conversation with the hosted assistant runs on no machine: the header
+  // drops the model, device and context chips, the menu drops restart and
+  // resume, tool calls read as plain steps (HostedStep), and the approvals it
+  // waits on sit at the foot of the transcript with the actual draft.
+  const hosted = isHostedAgentType(conversation?.agent_type);
+  const approvals = useConversationApprovals(String(conversation?._id ?? id));
+  const hostedApprovals = hosted ? approvals : NO_APPROVALS;
+  // A failed send tries again through the store's one retry rule
+  // (retryPendingSend, which the web's failed bubble uses too, and which also
+  // covers a conversation whose create never landed). This screen only
+  // reports how it came out.
+  const retryFailedSend = useCallback((clientId: string, text: string) => {
+    void retryPendingSend(id, clientId, text).then(
+      (status) => {
+        if (status === 'uploading') showToast('Your attachment is still uploading');
+        else if (status === 'unavailable') showToast("Couldn't send. Check your connection and try again.");
+        else if (status === 'cancelled') showToast('This message was cancelled');
+      },
+      () => showToast("Couldn't send. Check your connection and try again."),
+    );
+  }, [id, showToast]);
+  const title = hosted ? conversationTitle(conversation) : conversation?.title || 'Conversation';
 
   // Gate every server query that takes a v.id("conversations") on isConvexId. A
   // freshly created session navigates here under a local stub id (see
@@ -4384,8 +4491,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [chipsExpanded, setChipsExpanded] = useState(false);
   const extraChipCount = [
     (conversation?.fork_count ?? 0) > 0,
-    !!conversation && isConvexId(conversation._id),
-    !!latestUsage,
+    !!conversation && isConvexId(conversation._id) && !hosted,
+    !!latestUsage && !hosted,
     !!conversation?.parent_conversation_id,
     !!conversation?.forked_from_details,
   ].filter(Boolean).length;
@@ -4447,18 +4554,23 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     items.push({ label: 'Rename', onPress: () => setRenameVisible(true) });
     if (moveVerbs.includes('switch')) items.push({ label: 'Switch Agent…', onPress: () => pickAgentFor('switch') });
     items.push({ label: conversation?.is_favorite ? 'Unfavorite' : 'Favorite', onPress: handleToggleFavorite });
-    if (conversation && isConvexId(conversation._id)) {
+    if (conversation && isConvexId(conversation._id) && !hosted) {
       items.push({ label: isRestarting ? 'Restarting…' : 'Restart Session', onPress: () => { if (!isRestarting) restartSession(); } });
     }
     const rare: SheetItem[] = [];
     if (hasForkFamily) rare.push({ label: 'Fork Tree', onPress: () => setTreeModalVisible(true) });
     if (moveVerbs.includes('fork') && conversation && isConvexId(conversation._id)) rare.push({ label: 'Fork as…', onPress: () => pickAgentFor('fork') });
-    rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
-    if (conversation?.session_id) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
-    items.push({ label: 'More…', onPress: () => showActionSheet(undefined, rare) });
-    items.push({ label: 'Dismiss', destructive: true, onPress: handleDismiss });
+    // Folding every message to a line is a way to skim a long agent run; a
+    // hosted conversation is short prose with nothing to fold.
+    if (!hosted) rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
+    if (conversation?.session_id && !hosted) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
+    if (rare.length > 0) items.push({ label: 'More…', onPress: () => showActionSheet(undefined, rare) });
+    // The inbox row's own action under the inbox row's own name. Setting a
+    // conversation aside is undone from the list, so in hosted words it is
+    // not drawn as a delete.
+    items.push(hosted ? { label: words.stash, onPress: handleDismiss } : { label: 'Dismiss', destructive: true, onPress: handleDismiss });
     showActionSheet(undefined, items);
-  }, [conversation, collapsed, diffExpanded, hasForkFamily, huddle, allSessionImages.length, boardHref, router, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
+  }, [conversation, collapsed, diffExpanded, hasForkFamily, huddle, allSessionImages.length, boardHref, router, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting, hosted, words]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -4701,12 +4813,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return (
       <RNView style={styles.container}>
         <Stack.Screen options={{ headerShown: false }} />
-        <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT, position: 'relative' }]}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
-            <FontAwesome name="chevron-left" size={18} color={Theme.text} />
-          </TouchableOpacity>
+        <SessionHeaderBar inFlow>
           <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>Conversation</RNText>
-        </RNView>
+        </SessionHeaderBar>
         <RNView style={styles.skeletonContainer}>
           <RNView style={styles.skeletonHeader}>
             <RNView style={[styles.skeletonBlock, { width: '60%', height: 18 }]} />
@@ -4756,10 +4865,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         {/* Compact custom title bar — back + title + actions in one slim band,
             replacing the tall native nav bar so the top is minimal. It stays
             pinned while the metadata strip below it collapses on scroll. */}
-        <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT }]}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
-            <FontAwesome name="chevron-left" size={18} color={Theme.text} />
-          </TouchableOpacity>
+        <SessionHeaderBar>
           <MobileIdentityFace
             row={identityRow}
             size={22}
@@ -4771,11 +4877,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             style={styles.headerTitlePress}
             onPress={() => setRenameVisible(true)}
             accessibilityRole="button"
-            accessibilityLabel="Rename session"
+            accessibilityLabel="Rename"
           >
             <MobileSessionIdentityLine
               row={identityRow}
-              title={conversation.title || 'Conversation'}
+              title={title}
               style={[styles.headerTitleText, styles.headerTitleInPress]}
               maxFontSizeMultiplier={CHROME_FONT_CAP}
             />
@@ -4789,7 +4895,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
             {huddle.enabled && huddle.inRoom > 0 && <RNView style={styles.moreLiveDot} />}
           </TouchableOpacity>
-        </RNView>
+        </SessionHeaderBar>
         <Animated.View
           style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }]}
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
@@ -4815,17 +4921,19 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 {isActive && (
                   <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
                 )}
-                <ModelSwitcherChip
-                  conversationId={conversation._id}
-                  sessionId={conversation.session_id}
-                  agentType={conversation.agent_type}
-                  model={conversation.model}
-                  effort={conversation.effort}
-                  messageCount={conversation.message_count}
-                  canEdit={!!conversation.is_own}
-                  showToast={showToast}
-                />
-                {conversation.git_branch && (
+                {modelPicker && !hosted ? (
+                  <ModelSwitcherChip
+                    conversationId={conversation._id}
+                    sessionId={conversation.session_id}
+                    agentType={conversation.agent_type}
+                    model={conversation.model}
+                    effort={conversation.effort}
+                    messageCount={conversation.message_count}
+                    canEdit={!!conversation.is_own}
+                    showToast={showToast}
+                  />
+                ) : null}
+                {gitChips && conversation.git_branch && (
                   <Pressable
                     onPress={() => {
                       if (conversation.git_remote_url) {
@@ -4849,12 +4957,14 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                         <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
                       </Pressable>
                     )}
-                    <AssignmentChip
-                      conversationId={isConvexId(conversation._id) ? conversation._id : null}
-                      ownerDeviceId={(conversation as any).owner_device_id}
-                      showToast={showToast}
-                    />
-                    {latestUsage && (
+                    {!hosted && (
+                      <AssignmentChip
+                        conversationId={isConvexId(conversation._id) ? conversation._id : null}
+                        ownerDeviceId={(conversation as any).owner_device_id}
+                        showToast={showToast}
+                      />
+                    )}
+                    {latestUsage && !hosted && (
                       <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
                         <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
                         <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>
@@ -4995,7 +5105,13 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           onContentSizeChange={(_w, h) => {
             lastContentHeightRef.current = h;
           }}
-          ListHeaderComponent={null}
+          // The list is inverted, so its header is the foot of the transcript:
+          // what a hosted conversation waits on the person for.
+          ListHeaderComponent={hostedApprovals.length > 0 ? (
+            <RNView style={{ gap: 12, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }}>
+              {hostedApprovals.map((d, n) => <ApprovalCard key={d._id} decision={d} index={n} />)}
+            </RNView>
+          ) : null}
           ListFooterComponent={
             <>
               {/* Header clearance grows by the sticky pill's height so the
@@ -5058,6 +5174,23 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             // Hide standalone tool result messages (they're shown inline with tool calls)
             if (isToolResultCarrier(item)) {
               return null;
+            }
+
+            // An approval's answer in a hosted conversation: a quiet note
+            // where the card was, not a message bubble, and nothing when the
+            // step already says it (lane.ts answerNote). A failed one stays
+            // a bubble below, which says it failed.
+            if (hosted && item.role === 'user' && !item._isFailed) {
+              const answer = parseDecisionAnswer(item.content)?.answer;
+              const note = answerNote(answer);
+              if (answer && !note) return null;
+              if (note) {
+                return (
+                  <RNView style={{ alignSelf: 'center', marginVertical: 6, paddingVertical: 4, paddingHorizontal: 12, borderRadius: 999, backgroundColor: Theme.bgHighlight }}>
+                    <RNText style={{ fontSize: 12, color: Theme.textMuted }}>{note}</RNText>
+                  </RNView>
+                );
+              }
             }
 
             // Detect plan content in user messages (like web)
@@ -5240,6 +5373,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     <RNText style={[styles.pendingStatusText, { color: Theme.red }]}>
                       Failed to send
                     </RNText>
+                    {item._clientId ? (
+                      <Pressable onPress={() => retryFailedSend(item._clientId!, item.content ?? '')} hitSlop={8} accessibilityRole="button">
+                        <RNText style={[styles.pendingStatusText, { color: Theme.cyan, fontWeight: '600' }]}>Try again</RNText>
+                      </Pressable>
+                    ) : null}
                   </RNView>
                 )}
               </RNView>
@@ -5264,7 +5402,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               <RNView style={styles.emptyState}>
                 <FontAwesome name="comments-o" size={32} color={Theme.textDim} />
                 <RNText style={styles.emptyStateText}>No messages yet</RNText>
-                <RNText style={styles.emptyStateSubtext}>Messages will appear here as the session progresses</RNText>
+                <RNText style={styles.emptyStateSubtext}>{words.noMessages}</RNText>
               </RNView>
             )
           }
@@ -5410,6 +5548,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             isOwner={!!conversation.is_own}
             draft={conversation?.draft_message}
             autoFocus={focusParam === '1'}
+            hosted={hosted}
+            waitsOnAnswer={hostedApprovals.length > 0}
           />
         </RNView>
       </KeyboardAvoidingView>

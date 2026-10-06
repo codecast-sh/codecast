@@ -313,6 +313,15 @@ export const CLIENT_SYNC_REGISTRY = {
   // for a task (pages by station, docs, images, files, PR, verdict), one row
   // per task viewed, keyed by the task's Convex id. Delta: each task page
   // feeds its own row and must not evict the others.
+  // One Ship control (docs/architecture/ship.md): per thing Ship can be
+  // pressed on, the plan a press runs now and the latest run. Keyed by the
+  // target ("task:<id>", "conversation:<id>", "pull_request:<id>").
+  shipTargets: {
+    persistence: { kind: "collection", key: "shipTargets" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["ship.forTarget"],
+  },
   taskEvidence: {
     persistence: { kind: "collection", key: "taskEvidence" },
     hydration: { phase: "deferred" },
@@ -815,8 +824,8 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   // The hosted assistant's wallet (wallet.mine, lib/wallet.ts WalletSummary):
   // plan, this period's cap, usage, holds and what is left, the top-up
-  // balance, and recent cost per conversation. The simple lane's plan screen
-  // and meter paint it from the cache; a stale cache never clobbers a live one.
+  // balance, and recent cost per conversation. Settings > Plan and the shell's
+  // usage meter paint it from the cache; a stale cache never clobbers a live one.
   wallet: {
     persistence: { kind: "meta", key: "wallet" },
     hydration: { phase: "deferred", merge: "fill" },
@@ -888,7 +897,7 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     // changesQueries.storyEvidence: a Changes story's commits, so its evidence
     // drawer paints from the same rows the /commit page reads.
-    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet", "changesQueries.storyEvidence"],
+    feeds: ["commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet", "changesQueries.storyEvidence"],
   },
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.
@@ -1618,6 +1627,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   handledDecisions: "shared",
   decisionDetails: "shared",
   taskEvidence: "shared",
+  shipTargets: "shared",
   savedViews: "shared",
   mods: "shared",
   modObjects: "shared",

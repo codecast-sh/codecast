@@ -48,6 +48,7 @@ import {
   type RevealTarget,
 } from "../lib/revealHost";
 import { revealWheelGoesToParent } from "../lib/revealWheel";
+import { parseMessageHash } from "../lib/messageHash";
 
 export type { RevealTarget } from "../lib/revealHost";
 
@@ -453,7 +454,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
     }
   }, [openLinkedSession, hostRouter]);
   const sessionId = paneSessionId(path);
-  const targetMessageId = path.includes("#msg-") ? path.slice(path.indexOf("#msg-") + 5) : undefined;
+  const targetMessageId = path.includes("#msg-") ? parseMessageHash(path.slice(path.indexOf("#msg-")))?.messageId : undefined;
   // A reference to a conversation this band is already inside (a session's
   // own id in its transcript, two sessions citing each other) shows a line,
   // not the conversation again.
