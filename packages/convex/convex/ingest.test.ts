@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { gzipSync, strToU8 } from "fflate";
 import schema from "./schema";
-import { makeFakeDb, schemaIndexes } from "./testDb";
+import { armedTriggerRows, makeFakeDb, schemaIndexes } from "./testDb";
 import { sha256Hex } from "./lib/hash";
 import { HOUR_MS, hourStart } from "./lib/ingestGroups";
 import { INGEST_LIMITS, isIngestKey } from "@codecast/shared/contracts/ingest";
@@ -57,6 +57,15 @@ function world() {
   const scheduler = { runAfter: async (_ms: number, fn: any, args: any) => void scheduled.push({ name: getFunctionName(fn), args }) };
   const as = (userId: string) => ({ auth: { getUserIdentity: async () => ({ subject: `${userId}|sess` }) }, db, scheduler }) as any;
   return { db: db as any, scheduled, as, internalCtx: { db, scheduler } as any };
+}
+
+/** A world with a trigger armed on every name an ingest transition fires. */
+async function armedWorld() {
+  const w = world();
+  for (const row of armedTriggerRows("error_new", "error_regressed", "error_spike", "check_failed", "check_recovered", "job_failed", "metric_alert", "metric_recovered", "deploy")) {
+    await w.db.insert("agent_tasks", row);
+  }
+  return w;
 }
 
 const TEAM = { workspace: "team" as const, team_id: "team_1" as any };
@@ -150,7 +159,7 @@ describe("sources", () => {
 
 describe("applyBatch", () => {
   test("a new error makes a group, a sample, one timeline row, a trigger firing and a promotion", async () => {
-    const w = world();
+    const w = await armedWorld();
     const { source } = await teamSource(w);
     const res = await batch(w, source._id, [err("Boom 1"), err("Boom 2")], { release: "1.0.0", environment: "prod" });
     expect(res).toEqual({ accepted: 2, dropped: 0, transitions: 1, folded: 0 });
@@ -201,7 +210,7 @@ describe("applyBatch", () => {
   });
 
   test("a check flips red then green; a transition the source does not promote only fires", async () => {
-    const w = world();
+    const w = await armedWorld();
     const { source } = await teamSource(w);
     await batch(w, source._id, [{ type: "check", id: "c1", ok: true, at: NOW - 2000 }]);
     expect(w.db._tables.external_events).toHaveLength(0);
@@ -242,7 +251,7 @@ describe("applyBatch", () => {
   });
 
   test("a regression after a second resolve announces even when the occurrence reuses an earlier regression's at", async () => {
-    const w = world();
+    const w = await armedWorld();
     const { source } = await teamSource(w);
     await batch(w, source._id, [err("Boom", { at: NOW - 10 })]);
     await h(setGroupStatus)(w.as("u1"), { group: "eg-1", status: "resolved" });
@@ -268,7 +277,7 @@ describe("applyBatch", () => {
   });
 
   test("a deploy is one marker however often it is reported", async () => {
-    const w = world();
+    const w = await armedWorld();
     const { source } = await teamSource(w);
     const deploy = { type: "deploy", version: "1.2.0", sha: "abc", at: NOW };
     await batch(w, source._id, [deploy], { environment: "prod" });
@@ -392,7 +401,7 @@ describe("promotion", () => {
 
 describe("what one source can cost (review fixes)", () => {
   test("a deploy reported again (a retried batch, an SDK reporting at boot) fires its triggers once", async () => {
-    const w = world();
+    const w = await armedWorld();
     const { source } = await teamSource(w);
     const deploy = { type: "deploy", version: "1.2.0", sha: "abc", at: NOW };
     expect((await batch(w, source._id, [deploy])).transitions).toBe(1);
@@ -417,7 +426,7 @@ describe("what one source can cost (review fixes)", () => {
   });
 
   test("promotions past the hourly cap stay on the timeline without filing a signal", async () => {
-    const w = world();
+    const w = await armedWorld();
     const { source } = await teamSource(w);
     for (let i = 0; i < SOURCE_CAPS.promotions_per_hour + 3; i++) await batch(w, source._id, [err(`E${i}`, { fingerprint: `p${i}` })]);
     expect(names(w).filter((n) => n === "ingest:promote")).toHaveLength(SOURCE_CAPS.promotions_per_hour);

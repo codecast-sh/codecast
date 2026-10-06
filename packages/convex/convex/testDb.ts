@@ -533,3 +533,24 @@ export function makeFakeDb(tables: Record<string, any[]>, opts: FakeDbOptions = 
   };
   return db;
 }
+
+/**
+ * Standing triggers armed on each event name, one row per name. A producer
+ * schedules a trigger match only when one is armed (lib/triggerMatch), so a
+ * test asserting that an event fires seeds these. Append them after any row a
+ * test reads by position.
+ */
+export function armedTriggerRows(...eventTypes: string[]): any[] {
+  return eventTypes.map((event_type) => ({
+    _id: `armed_${event_type}`,
+    user_id: "user_armed",
+    title: `Armed on ${event_type}`,
+    prompt: "",
+    status: "scheduled",
+    schedule_type: "event",
+    event_filter: { event_type },
+    retry_count: 0,
+    run_count: 0,
+    created_at: 0,
+  }));
+}
