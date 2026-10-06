@@ -14,6 +14,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
 import { linkedSessionsFor } from "./tasks";
 import { sessionImages, storageUrl, type SessionImage } from "./lib/sessionMedia";
+import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 
 
 type Ctx = { db: any; storage?: any };
@@ -125,6 +126,8 @@ export type TaskEvidence = {
   execution_status: string | null;
   pr_url: string | null;
   review_verdict: { verdict: string; at: number; note?: string; by_conversation_id?: string } | null;
+  /** The author's walkthrough from the handoff (ct-57527), hunks included. */
+  change_guide: ChangeGuide & { written_at: number } | null;
 };
 
 // The handoff writes the PR only into its review comment ("PR: <url>",
@@ -234,6 +237,7 @@ export async function computeTaskEvidence(ctx: Ctx, viewerId: Id<"users">, task:
     review_verdict: task.review_verdict
       ? { verdict: task.review_verdict.verdict, at: task.review_verdict.at, note: task.review_verdict.note, by_conversation_id: task.review_verdict.by_conversation_id ? String(task.review_verdict.by_conversation_id) : undefined }
       : null,
+    change_guide: task.change_guide ?? null,
   };
 }
 

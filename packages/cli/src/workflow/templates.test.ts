@@ -806,6 +806,25 @@ describe("line.cast offline run through the session path", () => {
     expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "implement", "implement"]);
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "in_review", execution_status: "blocked" });
     expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("retries exhausted");
-    expect(calls.find((c) => c.route === "/cli/decide")?.body.question).toContain("retries exhausted");
+    expect(calls.find((c) => c.route === "/cli/decide")?.body.question).toContain("after 3 Implement rounds");
+  }, 30000);
+
+  test("the exhausted card says which station sent the work back and shows its check as a list", async () => {
+    const graph = offlineLine(tmpDir);
+    graph.nodes.get("verify")!.script = [
+      `echo '{"ok":false,"steps":[{"name":"typecheck","ok":false,"detail":"exit 1"},{"name":"tripwires","ok":true,"detail":"passed"}],"logs":"/tmp/run/cast-line"}'`,
+      `echo 'check: typecheck' >&2`,
+      `echo 'x mobile: 6 errors' >&2`,
+      `exit 1`,
+    ].join("\n");
+    await runWorkflow(graph, opts({ spawnerSession: "owner-sess" }));
+    const decision = calls.find((c) => c.route === "/cli/decide")?.body;
+    expect(decision.question).toBe("Verify still says “checks failed” after 3 Implement rounds on “Add the thing”. What next?");
+    expect(decision.context_md).toContain("Verify sent the last round back");
+    expect(decision.context_md).toContain("- ✗ typecheck: exit 1\n- ✓ tripwires");
+    expect(decision.context_md).toContain("```text\ncheck: typecheck\nx mobile: 6 errors\n```");
+    expect(decision.context_md).toContain("Logs: /tmp/run/cast-line");
+    expect(decision.context_md).not.toContain('{"ok"');
+    expect(decision.options.every((o: any) => o.description)).toBe(true);
   }, 30000);
 });
