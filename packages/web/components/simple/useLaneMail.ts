@@ -20,9 +20,10 @@ export const WHISK_HOME = "https://whisk.email";
 export function useLaneMailAbilities() {
   const { data, error } = useSettingsData("whiskConnection");
   const reach = useConnectAvailable();
-  // A backend that cannot answer is treated as able, so Connect shows and any
-  // refusal is said where it happens rather than the screen waiting for good.
-  const available = reach.failed ? true : reach.available;
+  // Connect is offered only on a yes. A backend that cannot answer (the
+  // function missing, or no answer by the deadline) offers nothing, so no
+  // screen leads a newcomer to a connect that can only fail.
+  const available = reach.available === true ? true : reach.failed ? false : reach.available;
   const view = (data ?? null) as WhiskConnectionView | null;
   const linked = view?.connected ? view : null;
   const connected = !!linked;
@@ -36,7 +37,8 @@ export function useLaneMailAbilities() {
     /** Where Whisk itself opens. */
     whiskUrl: view?.whisk_url ?? WHISK_HOME,
     /** Whether this deployment can connect mail through Whisk at all;
-     *  undefined until it answers, true when the question failed. */
+     *  undefined until it answers, false when the question failed. Offer
+     *  Connect only on `available === true`. */
     available,
     canDisconnect: connected,
     /** False until the connection has answered and, for someone not
@@ -59,7 +61,7 @@ function useWhiskActions(returnTo: WhiskReturnPath) {
     busy,
     error,
     connect: () =>
-      attempt(() => openMinted(() => getConnectUrl({ return_to: returnTo }), "Couldn't start connecting your mail", { sameTab: true }), "Couldn't reach Whisk"),
+      attempt(() => openMinted(() => getConnectUrl({ return_to: returnTo, origin: window.location.origin }), "Couldn't start connecting your mail", { sameTab: true }), "Couldn't reach Whisk"),
     disconnect: () =>
       attempt(async () => {
         settle(await disconnectWhisk({}), "Couldn't disconnect your mail");

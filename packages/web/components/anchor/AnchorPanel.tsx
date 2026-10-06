@@ -9,6 +9,7 @@
 // first header pin: the person's global Executive Assistant by default, else the
 // active workspace's agent.
 
+import { useAssistantScope } from "../../lib/surfaces";
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { TopbarButton } from "../TopbarButton";
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
@@ -220,7 +221,10 @@ export function HeaderPins() {
   const root = useRootAgent();
   const orgOn = useWorkspaceFeature("org");
   const menu = useContextMenu<ResolvedPin | null>();
-  if (!orgOn) return null;
+  // In hosted mode's Assistant scope the assistant is the one face: a pinned
+  // agent beside it would read as a second assistant.
+  const assistantOnly = useAssistantScope().only;
+  if (!orgOn || assistantOnly) return null;
   return (
     <span className="inline-flex items-center gap-0.5" data-header-pins>
       {pins.length

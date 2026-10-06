@@ -20,6 +20,8 @@ import type { Command } from "commander";
 import open from "open";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { readStdinBody, stdinText } from "./sendBody.js";
+import { readTaskPulseFor } from "./taskPulse.js";
+import { changeGuideMarkdown, type ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { fmt, c, icons } from "./colors.js";
 import {
   parsePrRef,
@@ -28,6 +30,8 @@ import {
   checkLabel,
 } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
+import { placementLabel, type AnchorPlacement, type CodeAnchorText } from "@codecast/shared/comments";
+import { captureLocalAnchor, placeComments, readFileLines } from "./codeAnchorLocal.js";
 
 // ── locating a pull request ──────────────────────────────────────────────────
 
@@ -51,6 +55,19 @@ export interface LocalGitContext {
   repository: string | null;
   branch: string | null;
 }
+
+function gitSucceeds(args: string[], cwd: string): boolean {
+  try {
+    execFileSync("git", args, { cwd, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Repository names compare without case, the way GitHub resolves them. */
+const sameRepository = (a: string | null | undefined, b: string | null | undefined) =>
+  !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
 function gitLine(args: string[], cwd: string): string | null {
   try {
@@ -469,15 +486,39 @@ export interface PrThread {
   short_id: string;
   file_path?: string | null;
   line_number?: number | null;
+  line_end?: number | null;
+  anchor_lines?: CodeAnchorText | null;
   author?: string | null;
   resolved?: boolean;
   first_line?: string;
 }
 
-/** Where a thread sits in the diff, or nothing when it is on the conversation. */
-export function threadLocation(thread: PrThread): string {
+/**
+ * Where a thread sits in the diff, or nothing when it is on the conversation.
+ * A thread whose code moved names the line it is on now and where it was.
+ */
+export function threadLocation(thread: PrThread, placement?: AnchorPlacement): string {
   if (!thread.file_path) return "";
-  return thread.line_number ? `${thread.file_path}:${thread.line_number}` : thread.file_path;
+  const line = placement?.state === "moved" ? placement.line : thread.line_number;
+  const where = line ? `${thread.file_path}:${line}` : thread.file_path;
+  const note = placementLabel(placement ?? null);
+  return note ? `${where} (${note})` : where;
+}
+
+/**
+ * The file lines `cast pr threads` relocates against: the pull request's head
+ * when this checkout has that commit, else the working tree when it is on the
+ * head branch, else nothing (a guess against another branch would mislabel
+ * every thread).
+ */
+export function prHeadLines(
+  repoRoot: string,
+  pr: { head_sha?: string | null; head_ref?: string | null },
+  localBranch: string | null,
+): (filePath: string) => string[] | null {
+  if (pr.head_sha && gitSucceeds(["cat-file", "-e", `${pr.head_sha}^{commit}`], repoRoot)) return (file) => readFileLines(repoRoot, file, pr.head_sha);
+  if (pr.head_ref && localBranch === pr.head_ref) return (file) => readFileLines(repoRoot, file);
+  return () => null;
 }
 
 /**
@@ -485,18 +526,19 @@ export function threadLocation(thread: PrThread): string {
  * command takes, and a resolved thread is dimmed rather than hidden so that
  * `--all` reads as one list.
  */
-export function formatPrThreads(threads: PrThread[]): string {
+export function formatPrThreads(threads: PrThread[], placements: ReadonlyMap<PrThread, AnchorPlacement> = new Map()): string {
   if (threads.length === 0) return fmt.muted("No open review threads on this pull request.");
 
   const cells = threads.map((thread) => ({
     id: thread.short_id,
     mark: thread.resolved ? `${c.green}${icons.check}${c.reset}` : `${c.yellow}${icons.dot}${c.reset}`,
-    where: threadLocation(thread),
+    where: threadLocation(thread, placements.get(thread)),
     author: thread.author ?? "someone",
     text: (thread.first_line ?? "").slice(0, 60),
   }));
   const width = (key: "where" | "author") => Math.max(...cells.map((cell) => cell[key].length));
-  const whereWidth = Math.min(width("where"), 34);
+  // Room for a relocated thread's "(moved from line N)".
+  const whereWidth = Math.min(width("where"), 52);
   const authorWidth = width("author");
 
   return cells
@@ -534,7 +576,7 @@ export function convexUrlFromSiteUrl(siteUrl: string): string {
   return siteUrl.replace(".site", ".cloud");
 }
 
-async function locate(
+export async function locate(
   deps: PublishDeps,
   ref: string | undefined,
   opts: { repo?: string } = {},
@@ -547,6 +589,14 @@ async function locate(
     repository: opts.repo ?? local.repository,
     branch: local.branch,
   });
+}
+
+/** The description as written, then the task's change guide as a walkthrough. */
+export function prBodyWithGuide(body: string, guide: ChangeGuide | null | undefined): string {
+  const text = body.trim();
+  if (!guide?.steps.length) return text;
+  const walkthrough = changeGuideMarkdown(guide, { heading: "## Walkthrough" });
+  return text ? `${text}\n\n${walkthrough}` : walkthrough;
 }
 
 function fail(message: string): never {
@@ -586,6 +636,42 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
       console.log(formatPrTable(rows));
       if (rows.length === 0 && local.repository) {
         console.log(fmt.muted(`\nThis checkout is ${local.repository}. \`cast pr ls --state all\` widens the search.`));
+      }
+    });
+
+  // ── create ──
+  // gh opens the pull request; codecast writes the description's tail. When
+  // the task carries the author's change guide (ct-57527), the body ends with
+  // it as a walkthrough, hunks included while they fit GitHub's limit.
+  pr.command("create")
+    .description("Open a pull request with gh; the task's change guide becomes a walkthrough in the description")
+    .requiredOption("-t, --title <text>", "Pull request title")
+    .option("-b, --body <text>", stdinText("Description: goal, what changed, how it was verified"))
+    .option("--task <id>", "Task whose change guide to include (default: the task this session is bound to)")
+    .option("--base <branch>", "Branch to merge into")
+    .option("--draft", "Open as a draft")
+    .option("--dry-run", "Print the gh command and the description, open nothing")
+    .action(async (options) => {
+      const taskId: string | undefined = options.task ?? readTaskPulseFor(deps.detectCurrentSessionId())?.task;
+      let guide: ChangeGuide | null = null;
+      if (taskId) {
+        const task = await apiPost(deps, "/cli/work/get", { short_id: taskId }, { read: true, exitOnError: false }).catch(() => null);
+        guide = task?.change_guide ?? task?.task?.change_guide ?? null;
+      }
+      const body = prBodyWithGuide(String(options.body ?? ""), guide);
+      const args = ["pr", "create", "--title", options.title, "--body-file", "-", ...(options.base ? ["--base", options.base] : []), ...(options.draft ? ["--draft"] : [])];
+      if (options.dryRun) {
+        console.log(fmt.muted(`gh ${args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`));
+        console.log(fmt.muted(taskId ? (guide ? `${taskId}: change guide, ${guide.steps.length} steps` : `${taskId}: no change guide`) : "no task bound; description as given"));
+        console.log("");
+        console.log(body);
+        return;
+      }
+      try {
+        const url = execFileSync("gh", args, { input: body, encoding: "utf-8", stdio: ["pipe", "pipe", "inherit"] }).trim();
+        console.log(url);
+      } catch {
+        fail("gh pr create failed (output above)");
       }
     });
 
@@ -770,11 +856,19 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
       if (options.reply && (options.file || options.hold)) fail("--reply takes its place from the thread it answers; drop --file, --line and --hold.");
 
       const locator = await locate(deps, refArg, options).catch((error: Error) => fail(error.message));
+      // The commented line's text, read from this checkout when it is the
+      // pull request's repository, so the thread can follow the code later.
+      const repoRoot = gitLine(["rev-parse", "--show-toplevel"], process.cwd());
+      const sameRepo = !locator.repository || sameRepository(locator.repository, readLocalGitContext().repository);
+      const lineNumber = options.line ? Number(options.line) : undefined;
       const result = await apiPost(deps, "/cli/pr/comment", {
         ...locator,
         content: body,
         file_path: options.file,
-        line_number: options.line ? Number(options.line) : undefined,
+        line_number: lineNumber,
+        anchor_lines: repoRoot && sameRepo && options.file && !options.reply
+          ? captureLocalAnchor(repoRoot, options.file, lineNumber)
+          : undefined,
         session: deps.detectCurrentSessionId() ?? undefined,
         hold: !!options.hold,
         reply_to: options.reply,
@@ -847,7 +941,13 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
         return;
       }
       if (!result.pull_request) fail(noMatch(locator));
-      console.log(formatPrThreads(result.threads ?? []));
+      const threads: PrThread[] = result.threads ?? [];
+      const repoRoot = gitLine(["rev-parse", "--show-toplevel"], process.cwd());
+      const local = readLocalGitContext();
+      const placements = repoRoot && sameRepository(local.repository, result.pull_request.repository)
+        ? placeComments(threads, prHeadLines(repoRoot, result.pull_request, local.branch))
+        : new Map();
+      console.log(formatPrThreads(threads, placements));
       if (!options.all && result.resolved_count) {
         console.log(fmt.muted(`\n${result.resolved_count} resolved. \`--all\` shows them.`));
       }

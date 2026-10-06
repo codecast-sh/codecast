@@ -12,7 +12,7 @@
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
 const TASK_VERSION = "9"; // bumped: product events and --source, and the external data verbs (sources, events, replay, metrics, connector)
-const WORK_VERSION = "11"; // bumped: an assignee is who answers for a task, never who may work it (R7)
+const WORK_VERSION = "12"; // bumped: hand a code change off with a change guide (--guide)
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "2";
 const MESSAGING_VERSION = "10";
@@ -27,8 +27,8 @@ const LIMITS_VERSION = "2"; // 2: a subagent or workflow agent stopped on a limi
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const CHECK_VERSION = "1"; // first release: cast check, one shared tsc watcher per tree and project
 const SIM_VERSION = "1"; // first release: cast sim, the shared simulator pool on a laptop or a cloud Mac
-const SKILLS_VERSION = "1"; // first release: the cast-* skills as one snippet
-const PR_VERSION = "1"; // first release: cast pr, the review loop, reviews delivered to the owning session
+const SKILLS_VERSION = "2"; // bumped: cast-ship opens PRs with cast pr create (change guide walkthrough)
+const PR_VERSION = "2"; // bumped: cast pr create, the change guide as the walkthrough
 const MODS_VERSION = "1"; // first release: cast mod, panes, commands and fences in the app
 const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
 
