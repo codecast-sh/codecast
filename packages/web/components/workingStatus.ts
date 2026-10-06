@@ -9,6 +9,7 @@
 // visibly reads as progressing.
 
 import { activityLine, formatToolName } from "@codecast/shared/render";
+import { stepAsk, stepText } from "@platform/assistant/steps";
 
 // Below this much elapsed silence we show a plain "Working"; past it the live clock
 // appears. Keeps normal fast turns clean and only surfaces a ticking time for a
@@ -92,6 +93,16 @@ function deriveRunningToolCall(timeline: ReadonlyArray<TimelineItemLike>): { nam
 // name one tool two ways. Falls back to the tool's display name when the call
 // has no phrase (unparsed input). This is the composer's fallback for a row
 // whose server side activity stamp is absent or stale.
+/** A hosted conversation's step in flight, in the assistant's own words:
+ *  "Search the web for flights" while it runs, "Waiting for your go-ahead to
+ *  send an email to Dana" while it waits on the person. */
+export function deriveHostedRunningPhrase(timeline: ReadonlyArray<TimelineItemLike>, asking: boolean): string | undefined {
+  const tc = deriveRunningToolCall(timeline);
+  if (!tc) return undefined;
+  const call = { name: tc.name, input: tc.input };
+  return asking ? stepText(call, undefined, { asking: true }) : stepAsk(call) ?? undefined;
+}
+
 export function deriveRunningPhrase(timeline: ReadonlyArray<TimelineItemLike>): string | undefined {
   const tc = deriveRunningToolCall(timeline);
   if (!tc) return undefined;

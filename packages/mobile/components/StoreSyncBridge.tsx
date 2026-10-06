@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { useSyncCore } from '@codecast/web/hooks/useSyncCore';
+import { usePendingMessageCoverage } from '@codecast/web/hooks/usePendingMessageCoverage';
+import { useAdoptTimezone } from '@codecast/web/hooks/useAdoptTimezone';
 import { useSessionCommandResults } from '@codecast/web/hooks/useSessionCommands';
 import { useSyncDevices } from '@codecast/web/hooks/useSyncDevices';
 import { useRecentProjectsFeed } from '@codecast/web/hooks/useRecentProjectsFeed';
@@ -47,6 +49,16 @@ export function StoreSyncBridge() {
 
 function StoreSyncBridgeInner() {
   useSyncCore('mobile');
+  // Settles the sends the server holds and fails the ones it refused, every
+  // minute and on wake, as web's DashboardSyncEffects does for each window.
+  // A send the server consumes without a transcript row (an approval's answer
+  // in a hosted conversation) has no echo to retire its bubble, so without
+  // this pass its conversation would read as working for good.
+  usePendingMessageCoverage();
+  // A profile with no time zone takes this phone's, as web's DashboardLayout
+  // does for a browser: the assistant reads it to place "8am" on the
+  // person's clock, so a phone-only account must not be left on UTC.
+  useAdoptTimezone();
   // Settles the daemon commands this phone asked for (restart, device move),
   // as web's DashboardLayout does for each window.
   useSessionCommandResults();
