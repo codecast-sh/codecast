@@ -7,7 +7,7 @@ import type {
   EvalResult,
   EvalRunSet,
   EvalSurfaceResult,
-} from '@codecast/shared/contracts/evalResult';
+} from '../contract/evalResult';
 
 import { median, separate } from './stats';
 
@@ -25,6 +25,13 @@ import { median, separate } from './stats';
 // gate failed.
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+/** A note kept to its whole sentences under `n`, so a card never shows a judge's reasoning stopping mid-thought; one long sentence is clipped. */
+const clipSentences = (s: string, n: number): string => {
+  if (s.length <= n) return s;
+  const head = s.slice(0, n);
+  const end = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
+  return end > 0 ? head.slice(0, end + 1) : clip(s, n);
+};
 
 const scored = (reps: EvalRep[]): EvalRep[] => reps.filter((r) => !r.error);
 /** A rep's score; a verdict-only rep scores 1 when passed, else 0. */
@@ -99,7 +106,7 @@ export function flipOf(f: EvalRepsFreeze): EvalFlip | null {
     input: clip(f.input ? `${f.name}: ${f.input}` : f.name, 400),
     before: reply(b),
     after: reply(a),
-    note: clip(gates || a?.judge_note || (a?.score != null ? `score ${a.score.toFixed(2)}` : 'no verdict'), 400),
+    note: clipSentences(gates || a?.judge_note || (a?.score != null ? `score ${a.score.toFixed(2)}` : 'no verdict'), 400),
   };
 }
 

@@ -10,20 +10,14 @@
 
 import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flipCounts, type BatchStats, type BisectSummary, type OverviewResponse, type SimSessionSummary, type StalenessWord, type SurfaceOverview } from "@codecast/shared/contracts/evalsApi";
-import { useContainerWidth, HoverTip } from "../ActivityHeatmap";
-import { EmptyState } from "../EmptyState";
-import { SegmentedToggle } from "../SegmentedToggle";
-import { KeyHint } from "../changes/useChangesKeys";
-import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
-import { useShortcutAction, useShortcutContext } from "../../shortcuts";
 import { DAY_MS, dayStart, linear } from "./charts/scale";
 import { ScoreStrip } from "./charts/ScoreStrip";
 import { evalsHref } from "./evalsPaths";
 import { WhatMoved } from "./WhatMoved";
 import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled } from "./bisectModel";
 import { EVALS_STALL_MS } from "../../lib/evals/hooks";
-import { EvalsLink, SeparationMark, StallChip, VerdictGlyph } from "./parts";
-import "./wall.css";
+import { useEvalsHost } from "./host";
+import { EvalsLink, KeyHint, SeparationMark, StallChip, VerdictGlyph } from "./parts";
 import { pLabel, plural, shortModel, shortSha, usd } from "./format";
 import { baselineWords, noiseFlipWords, noiseFlipsShort, separationTitle } from "./verdictModel";
 import { WALL_CADENCES, isWorse, wallOrder, rowHref, attributeHref, wallWindowFrom, wallAxisTicks, wallSpend, wallWindowDays } from "./wallModel";
@@ -61,11 +55,12 @@ function Staleness({ word }: { word: StalenessWord }) {
   );
 }
 
-function stripTip(b: BatchStats): ReactNode {
+function StripTip({ b }: { b: BatchStats }) {
+  const { format } = useEvalsHost();
   return (
     <div className="ev-wall-tip">
       <div>
-        <b>{formatFullTimestamp(Date.parse(b.batchAt))}</b>
+        <b>{format.fullTimestamp(Date.parse(b.batchAt))}</b>
         <span className="ev-wall-tip-dim"> {b.cadence ?? "by hand"}</span>
       </div>
       <div className="ev-wall-tip-mono">{b.batch}</div>
@@ -83,6 +78,8 @@ function stripTip(b: BatchStats): ReactNode {
     </div>
   );
 }
+
+const stripTip = (b: BatchStats): ReactNode => <StripTip b={b} />;
 
 interface RowProps {
   s: SurfaceOverview;
@@ -207,6 +204,7 @@ function WallRow({ s, index, selected, from, to, stripWidth, cursor, onCursor, o
 // ── The foot: spend per day, open bisects, the latest Multiplayer sim ───────
 
 function SpendStrip({ days, from, to, width }: { days: OverviewResponse["spendByDay"]; from: number; to: number; width: number }) {
+  const { HoverTip } = useEvalsHost().ui;
   const [hover, setHover] = useState<{ x: number; y: number; d: OverviewResponse["spendByDay"][number] } | null>(null);
   const h = 34;
   const w = Math.max(width, 40);
@@ -251,6 +249,7 @@ function SpendStrip({ days, from, to, width }: { days: OverviewResponse["spendBy
 }
 
 function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
+  const { format } = useEvalsHost();
   const share = b.budgetUsd > 0 ? Math.min(1, b.spentUsd / b.budgetUsd) : 0;
   const stalled = isBisectStalled(b, now, EVALS_STALL_MS);
   return (
@@ -262,8 +261,8 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
         {stalled && (
           <StallChip since={b.updatedAt} data-ev-bisect-stalled />
         )}
-        <span className="flex-1" />
-        <span className="ev-quiet ev-tabular">{formatRelativeTime(Date.parse(b.startedAt), now).replace(" ago", "")}</span>
+        <span className="ev-grow" />
+        <span className="ev-quiet ev-tabular">{format.relativeTime(Date.parse(b.startedAt), now).replace(" ago", "")}</span>
       </span>
       <span className="ev-wall-ribbon-range ev-mono">
         {endpointLabel(b.good)} to {endpointLabel(b.bad)}
@@ -281,6 +280,7 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
 }
 
 function SimLine({ sim, now }: { sim: SimSessionSummary | null; now: number }) {
+  const { format } = useEvalsHost();
   if (!sim) return <div className="ev-wall-foot-empty">No Multiplayer sim session on this machine yet.</div>;
   const outcome = simOutcome(sim);
   return (
@@ -291,8 +291,8 @@ function SimLine({ sim, now }: { sim: SimSessionSummary | null; now: number }) {
         {", "}
         <span className={outcome.bad ? "ev-fail" : undefined}>{outcome.words}</span>
       </span>
-      <span className="flex-1" />
-      <span className="ev-quiet ev-tabular">{formatRelativeTime(Date.parse(sim.startedAt), now).replace(" ago", "")}</span>
+      <span className="ev-grow" />
+      <span className="ev-quiet ev-tabular">{format.relativeTime(Date.parse(sim.startedAt), now).replace(" ago", "")}</span>
       {sim.gitHead && <span className="ev-chip">{shortSha(sim.gitHead)}{sim.dirty ? ", dirty" : ""}</span>}
     </EvalsLink>
   );
@@ -312,10 +312,12 @@ export interface SurfaceWallViewProps {
 }
 
 export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active }: SurfaceWallViewProps) {
+  const host = useEvalsHost();
+  const { EmptyState, SegmentedToggle } = host.ui;
   const rows = useMemo(() => wallOrder(data.surfaces), [data.surfaces]);
   const [selected, setSelected] = useState<string | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
-  const { ref: axisRef, width: stripWidth } = useContainerWidth(560);
+  const { ref: axisRef, width: stripWidth } = host.useContainerWidth(560);
   const to = now;
   const from = useMemo(() => wallWindowFrom(data, now), [data, now]);
   const ticks = useMemo(() => wallAxisTicks(from, to, stripWidth), [from, to, stripWidth]);
@@ -338,25 +340,29 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
     },
     [rows, index],
   );
-  const here = useCallback((fn: () => boolean) => () => (active ? fn() : false), [active]);
-  useShortcutContext("list", active);
-  useShortcutContext("evals", active);
-  useShortcutAction("list.down", here(() => move(1)));
-  useShortcutAction("list.up", here(() => move(-1)));
-  useShortcutAction(
-    "list.open",
-    here(() => {
-      if (index < 0) return false;
-      onOpen(rowHref(rows[index]));
-      return true;
-    }),
-  );
-  useShortcutAction(
-    "evals.attribute",
-    here(() => {
-      onOpen(attributeHref(rows, selected));
-      return true;
-    }),
+  host.useShortcuts(
+    {
+      "list.down": { keys: "j", label: "Move down", run: () => move(1) },
+      "list.up": { keys: "k", label: "Move up", run: () => move(-1) },
+      "list.open": {
+        keys: "Enter",
+        label: "Open the surface",
+        run: () => {
+          if (index < 0) return false;
+          onOpen(rowHref(rows[index]));
+          return true;
+        },
+      },
+      "evals.attribute": {
+        keys: "b",
+        label: "Attribute the newest worse pair",
+        run: () => {
+          onOpen(attributeHref(rows, selected));
+          return true;
+        },
+      },
+    },
+    active,
   );
 
   return (
@@ -374,16 +380,16 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
               {landing > 0 && <>, {landing} landing</>}
               , {usd(spend.usd)} in {windowWords}
             </span>
-            <span className="flex-1" />
+            <span className="ev-grow" />
             <span className="ev-wall-keys" aria-label="Keys">
               <span>
-                <KeyHint action="list.down" /> <KeyHint action="list.up" /> move
+                <KeyHint action="list.down" keys="j" /> <KeyHint action="list.up" keys="k" /> move
               </span>
               <span>
-                <KeyHint action="list.open" /> open
+                <KeyHint action="list.open" keys="Enter" /> open
               </span>
               <span>
-                <KeyHint action="evals.attribute" /> attribute
+                <KeyHint action="evals.attribute" keys="b" /> attribute
               </span>
             </span>
             <SegmentedToggle value={cadence} onChange={onCadence} items={WALL_CADENCES.map((c) => ({ key: c.key, label: c.label, title: c.key === "named" ? "Batches run by hand, outside any cadence" : undefined }))} />
@@ -406,7 +412,7 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
                 </div>
                 <div role="columnheader" title="Reps passed in the newest batch">Latest batch</div>
                 <div role="columnheader">Against baseline</div>
-                <div role="columnheader" className="text-right">
+                <div role="columnheader" className="ev-wall-spend-head">
                   {windowWords}
                 </div>
               </div>

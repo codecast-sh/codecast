@@ -8,15 +8,13 @@
 import { useEffect, useState, type FormEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { ChevronRight } from "lucide-react";
 import { ATTRIBUTION_CLASSES, answerFreezeIds, type Attribution, type AttributionClass, type BatchStats, type Candidate, type Endpoint, type Epoch } from "@codecast/shared/contracts/evalsApi";
-import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useEvalsResource } from "../../lib/evals/hooks";
-import { ExamplePair } from "../decisions/ChangeCardView";
 import { CommitMarks, CommitPanel, PatchPanel } from "./CommitPanel";
 import { ChangedPrompts, EvalsLink, FlipRunLinks, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { candidateKey, endpointLabel, orderCandidates } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
-import "./bisect.css";
 import { plural, score2, shortSha } from "./format";
+import { useEvalsHost } from "./host";
 import { flipFreezeHref } from "./verdictModel";
 
 const CLASS_NAMES: Record<AttributionClass, string> = { footing: "Footing", freeze: "Freeze", "live-reads": "Live reads", source: "Source", noise: "Noise" };
@@ -60,10 +58,10 @@ export function EndpointsBar({ surfaces, batches, value, resolved, onSubmit }: {
   const ready = !!draft.surface;
   const changed = draft.surface !== value.surface || draft.good !== value.good || draft.bad !== value.bad;
   return (
-    <form className="ev-card evb-ends" onSubmit={submit} data-evb-ends>
-      <div className="evb-field">
-        <label htmlFor="evb-surface">Surface</label>
-        <select id="evb-surface" className="evb-input" value={draft.surface} onChange={(e) => setDraft({ ...draft, surface: e.target.value })}>
+    <form className="ev-card ev-b-ends" onSubmit={submit} data-evb-ends>
+      <div className="ev-b-field">
+        <label htmlFor="ev-b-surface">Surface</label>
+        <select id="ev-b-surface" className="ev-b-input" value={draft.surface} onChange={(e) => setDraft({ ...draft, surface: e.target.value })}>
           <option value="">Pick a surface</option>
           {surfaces.map((s) => (
             <option key={s} value={s}>
@@ -72,27 +70,27 @@ export function EndpointsBar({ surfaces, batches, value, resolved, onSubmit }: {
           ))}
         </select>
       </div>
-      <div className="evb-field evb-end evb-end--good">
-        <label htmlFor="evb-good">Good: a batch or a sha</label>
-        <input id="evb-good" className="evb-input" list="evb-batches" value={draft.good} spellCheck={false} placeholder="its baseline, from the records" onChange={(e) => setDraft({ ...draft, good: e.target.value })} />
+      <div className="ev-b-field ev-b-end ev-b-end--good">
+        <label htmlFor="ev-b-good">Good: a batch or a sha</label>
+        <input id="ev-b-good" className="ev-b-input" list="ev-b-batches" value={draft.good} spellCheck={false} placeholder="its baseline, from the records" onChange={(e) => setDraft({ ...draft, good: e.target.value })} />
         {resolved && !changed && <EndpointChips end={resolved.good} />}
       </div>
-      <div className="evb-ends-arrow" aria-hidden>
+      <div className="ev-b-ends-arrow" aria-hidden>
         <svg viewBox="0 0 40 10">
           <path d="M0,5 H36 M31,1 L36,5 L31,9" fill="none" stroke="currentColor" strokeWidth="1.2" />
         </svg>
       </div>
-      <div className="evb-field evb-end evb-end--bad">
-        <label htmlFor="evb-bad">Bad: a batch or a sha</label>
-        <input id="evb-bad" className="evb-input" list="evb-batches" value={draft.bad} spellCheck={false} placeholder="newest worse batch" onChange={(e) => setDraft({ ...draft, bad: e.target.value })} />
+      <div className="ev-b-field ev-b-end ev-b-end--bad">
+        <label htmlFor="ev-b-bad">Bad: a batch or a sha</label>
+        <input id="ev-b-bad" className="ev-b-input" list="ev-b-batches" value={draft.bad} spellCheck={false} placeholder="newest worse batch" onChange={(e) => setDraft({ ...draft, bad: e.target.value })} />
         {resolved && !changed && <EndpointChips end={resolved.bad} />}
       </div>
-      <div className="evb-ends-go">
+      <div className="ev-b-ends-go">
         <button type="submit" className="ev-btn ev-btn--lg" disabled={!ready || !changed}>
           Attribute
         </button>
       </div>
-      <datalist id="evb-batches">
+      <datalist id="ev-b-batches">
         {[...batches].reverse().map((b) => (
           <option key={b.batch} value={b.batch}>
             {`${endpointLabel(b.batch)}, median ${score2(b.median)}, ${b.passed} of ${b.reps} passed`}
@@ -110,13 +108,13 @@ function Lamp({ state }: { state: "same" | "answer" | "after" }) {
     <svg width={12} height={12} viewBox="-7 -7 14 14" aria-hidden>
       {state === "answer" ? (
         <>
-          <circle r={5.6} fill="var(--sol-text)" />
-          <circle r={2} fill="var(--sol-bg)" />
+          <circle r={5.6} fill="var(--ev-text)" />
+          <circle r={2} fill="var(--ev-bg)" />
         </>
       ) : state === "same" ? (
-        <path d="M-4,-1.6 H4 M-4,1.6 H4" stroke="var(--sol-text-dim)" strokeWidth={1.4} strokeLinecap="round" />
+        <path d="M-4,-1.6 H4 M-4,1.6 H4" stroke="var(--ev-text-dim)" strokeWidth={1.4} strokeLinecap="round" />
       ) : (
-        <circle r={4.6} fill="none" stroke="var(--sol-text-dim)" strokeWidth={1.1} strokeDasharray="1.4 1.6" />
+        <circle r={4.6} fill="none" stroke="var(--ev-text-dim)" strokeWidth={1.1} strokeDasharray="1.4 1.6" />
       )}
     </svg>
   );
@@ -126,22 +124,22 @@ function Lamp({ state }: { state: "same" | "answer" | "after" }) {
 export function AttributionChecklist({ attribution }: { attribution: Attribution }) {
   const answerAt = ATTRIBUTION_CLASSES.indexOf(attribution.answer.kind);
   return (
-    <ol className="ev-card evb-checklist" data-evb-checklist={attribution.answer.kind}>
+    <ol className="ev-card ev-b-checklist" data-evb-checklist={attribution.answer.kind}>
       {ATTRIBUTION_CLASSES.map((cls, i) => {
         const line = attribution.checklist.find((c) => c.class === cls);
         const state = i < answerAt ? "same" : i === answerAt ? "answer" : "after";
         return (
-          <li key={cls} className="evb-check" data-state={state} data-evb-class={cls} aria-current={state === "answer" ? "step" : undefined}>
-            <span className="evb-check-lamp">
+          <li key={cls} className="ev-b-check" data-state={state} data-evb-class={cls} aria-current={state === "answer" ? "step" : undefined}>
+            <span className="ev-b-check-lamp">
               <Lamp state={state} />
             </span>
-            <span className="evb-check-name">
-              <span className="evb-check-n">{i + 1}</span>
+            <span className="ev-b-check-name">
+              <span className="ev-b-check-n">{i + 1}</span>
               {CLASS_NAMES[cls]}
             </span>
-            <span className="evb-check-detail">
+            <span className="ev-b-check-detail">
               {line?.detail ?? (cls === "noise" ? "Reached only when nothing above differs." : "")}
-              {state === "after" && line?.differs && <span className="ev-chip evb-check-also">also differs</span>}
+              {state === "after" && line?.differs && <span className="ev-chip ev-b-check-also">also differs</span>}
             </span>
           </li>
         );
@@ -155,8 +153,9 @@ export function AttributionChecklist({ attribution }: { attribution: Attribution
 /** Candidate commits in ancestry order, oldest first, the uncommitted patch last. Each row opens its diff in place: what a bisect would be searching. */
 export function CandidateList({ candidates, surface, now = Date.now() }: { candidates: readonly Candidate[]; surface: string; now?: number }) {
   const [open, setOpen] = useState<string | null>(null);
+  const { timeAgo } = useEvalsHost().format;
   return (
-    <div className="evb-cands" data-evb-candidates={candidates.length}>
+    <div className="ev-b-cands" data-evb-candidates={candidates.length}>
       {orderCandidates(candidates).map((c) => {
         const key = candidateKey(c);
         const isOpen = open === key;
@@ -170,38 +169,38 @@ export function CandidateList({ candidates, surface, now = Date.now() }: { candi
           onKeyDown: (e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()),
         } as const;
         return (
-          <div key={key} className={`evb-cand-wrap ${isOpen ? "is-open" : ""}`}>
+          <div key={key} className={`ev-b-cand-wrap ${isOpen ? "ev-b-cand-wrap--open" : ""}`}>
             {c.kind === "commit" ? (
-              <div {...row} className="evb-cand" data-evb-candidate={c.commit.sha} title={isOpen ? "Hide the diff" : "Show the diff"}>
-                <span className="evb-cand-sha" title={c.commit.sha}>
-                  <ChevronRight className={`evb-cand-chev ${isOpen ? "rotate-90" : ""}`} aria-hidden />
+              <div {...row} className="ev-b-cand" data-evb-candidate={c.commit.sha} title={isOpen ? "Hide the diff" : "Show the diff"}>
+                <span className="ev-b-cand-sha" title={c.commit.sha}>
+                  <ChevronRight className="ev-b-cand-chev" aria-hidden />
                   {shortSha(c.commit.sha)}
                 </span>
-                <span className="min-w-0">
-                  <span className="evb-cand-subject block">{c.commit.subject}</span>
-                  <span className="evb-cand-meta">
-                    {c.commit.author}, {formatTimeAgo(Date.parse(c.commit.at), now)} ago
+                <span className="ev-b-cand-main">
+                  <span className="ev-b-cand-subject">{c.commit.subject}</span>
+                  <span className="ev-b-cand-meta">
+                    {c.commit.author}, {timeAgo(Date.parse(c.commit.at), now)} ago
                   </span>
                 </span>
-                <span className="evb-cand-side">
+                <span className="ev-b-cand-side">
                   {c.renderClass !== null && <span className="ev-chip" title="Render class: candidates whose dry renders match">class {c.renderClass}</span>}
                   <CommitMarks commit={c.commit} />
                 </span>
               </div>
             ) : (
-              <div {...row} className="evb-cand evb-cand--patch" data-evb-candidate="patch" title={isOpen ? "Hide the edits" : "Show the edits"}>
-                <span className="evb-cand-sha" title={`trees/${c.treePatch}.patch`}>
-                  <ChevronRight className={`evb-cand-chev ${isOpen ? "rotate-90" : ""}`} aria-hidden />
+              <div {...row} className="ev-b-cand ev-b-cand--patch" data-evb-candidate="patch" title={isOpen ? "Hide the edits" : "Show the edits"}>
+                <span className="ev-b-cand-sha" title={`trees/${c.treePatch}.patch`}>
+                  <ChevronRight className="ev-b-cand-chev" aria-hidden />
                   edits
                 </span>
-                <span className="min-w-0">
-                  <span className="evb-cand-subject block">Uncommitted edits on top of {shortSha(c.base)}</span>
-                  <span className="evb-cand-meta">kept as patch {shortSha(c.treePatch, 10)}, replayed with git apply</span>
+                <span className="ev-b-cand-main">
+                  <span className="ev-b-cand-subject">Uncommitted edits on top of {shortSha(c.base)}</span>
+                  <span className="ev-b-cand-meta">kept as patch {shortSha(c.treePatch, 10)}, replayed with git apply</span>
                 </span>
-                <span className="evb-cand-side">{c.renderClass !== null && <span className="ev-chip">class {c.renderClass}</span>}</span>
+                <span className="ev-b-cand-side">{c.renderClass !== null && <span className="ev-chip">class {c.renderClass}</span>}</span>
               </div>
             )}
-            {isOpen && <div className="evb-cand-body">{c.kind === "commit" ? <CommitPanel sha={c.commit.sha} surface={surface} /> : <PatchPanel sha={c.treePatch} base={c.base} />}</div>}
+            {isOpen && <div className="ev-b-cand-body">{c.kind === "commit" ? <CommitPanel sha={c.commit.sha} surface={surface} /> : <PatchPanel sha={c.treePatch} base={c.base} />}</div>}
           </div>
         );
       })}
@@ -221,7 +220,7 @@ const CONFIDENCE_WORDS: Record<(typeof CONFIDENCES)[number], string> = {
 function Confidence({ value }: { value: (typeof CONFIDENCES)[number] }) {
   const level = value === "pinned" ? 3 : value === "narrowed" ? 2 : 0;
   return (
-    <span className="evb-confidence" role="img" aria-label={`Confidence: ${value}`} title={CONFIDENCES.map((c) => `${c}: ${CONFIDENCE_WORDS[c]}`).join("\n")} data-evb-confidence={value}>
+    <span className="ev-b-confidence" role="img" aria-label={`Confidence: ${value}`} title={CONFIDENCES.map((c) => `${c}: ${CONFIDENCE_WORDS[c]}`).join("\n")} data-evb-confidence={value}>
       <svg width={14} height={11} viewBox="0 0 14 11" aria-hidden>
         {[0, 1, 2].map((i) => (
           <rect key={i} x={i * 5} y={7 - i * 3} width={3.5} height={4 + i * 3} rx={0.8} data-on={i < level || undefined} />
@@ -237,15 +236,15 @@ function EpochRow({ epoch }: { epoch: Epoch }) {
   const [open, setOpen] = useState(false);
   const res = useEvalsResource("GET /epoch", open ? { query: { surface: epoch.surface, n: epoch.n } } : null);
   return (
-    <div className="flex flex-col gap-2" data-evb-epoch={epoch.n}>
-      <div className="flex items-center gap-2 flex-wrap text-[12.5px]">
+    <div className="ev-b-epoch" data-evb-epoch={epoch.n}>
+      <div className="ev-b-epoch-head">
         <span className="ev-chip">e{epoch.n}</span>
         <span>
           began at batch {endpointLabel(epoch.firstBatch)}, {epoch.changedFreezes.length} {epoch.changedFreezes.length === 1 ? "freeze renders" : "freezes render"} differently
         </span>
         {epoch.gitHead && <span className="ev-chip">{shortSha(epoch.gitHead)}</span>}
         {epoch.scope === "analyzer-only" && <span className="ev-chip">analyzer prompt only</span>}
-        <button type="button" className="evb-link text-[12px]" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <button type="button" className="ev-b-link ev-small" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
           {open ? "Hide its prompt diffs" : "Show its prompt diffs"}
         </button>
       </div>
@@ -254,10 +253,10 @@ function EpochRow({ epoch }: { epoch: Epoch }) {
           res.data.diffs.length ? (
             res.data.diffs.map((d) => <PromptDiff key={`${d.freezeId}:${d.file}`} pair={d} />)
           ) : (
-            <span className="evb-note">No rendered prompt file changed at this boundary.</span>
+            <span className="ev-b-note">No rendered prompt file changed at this boundary.</span>
           )
         ) : (
-          <span className="evb-note">{res.error ? `Could not read the epoch: ${res.error}` : "Reading the epoch..."}</span>
+          <span className="ev-b-note">{res.error ? `Could not read the epoch: ${res.error}` : "Reading the epoch..."}</span>
         ))}
     </div>
   );
@@ -287,10 +286,10 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
   const unexplained = explained ? a.flipped.map((f) => f.freezeId).filter((id) => !explained.includes(id)) : [];
   const partly = explained && unexplained.length > 0 ? ` That explains ${explained.length} of ${a.flipped.length} flipped freezes; the checklist goes on for the rest.` : "";
   const unexplainedLinks = unexplained.length > 0 && (
-    <div className="flex flex-wrap items-center gap-2 text-[12px]" data-evb-unexplained={unexplained.length}>
+    <div className="ev-b-unexplained" data-evb-unexplained={unexplained.length}>
       <span className="ev-quiet">Not explained:</span>
       {unexplained.map((id) => (
-        <EvalsLink key={id} className="evb-link" href={evalsHref.bisectNew({ surface: a.surface, good: a.good.batch ?? a.good.sha, bad: a.bad.batch ?? a.bad.sha, freeze: id })}>
+        <EvalsLink key={id} className="ev-b-link" href={evalsHref.bisectNew({ surface: a.surface, good: a.good.batch ?? a.good.sha, bad: a.bad.batch ?? a.bad.sha, freeze: id })}>
           attribute {freezeName(a, id)} on its own
         </EvalsLink>
       ))}
@@ -306,12 +305,12 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
     </div>
   );
   return (
-    <section className="ev-card evb-answer" data-evb-answer={ans.kind}>
+    <section className="ev-card ev-b-answer" data-evb-answer={ans.kind}>
       {ans.kind === "footing" && ans.freezeIds?.length ? (
         <>
-          <div className="evb-answer-line">
-            <span className="evb-answer-num">Rubric</span>
-            <span className="evb-answer-say">
+          <div className="ev-b-answer-line">
+            <span className="ev-b-answer-num">Rubric</span>
+            <span className="ev-b-answer-say">
               The per-freeze rubric (a judge or label line in the freeze file) changed on {plural(ans.freezeIds.length, "freeze")} between the two ends; the frozen moment did not. Those reps were graded by a different ruler, so the search stops there.{partly}
             </span>
           </div>
@@ -320,22 +319,22 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
         </>
       ) : ans.kind === "footing" && (
         <>
-          <div className="evb-answer-line">
-            <span className="evb-answer-num">{ans.change === "model" ? "Model" : "Judge"}</span>
-            <span className="evb-answer-say">
+          <div className="ev-b-answer-line">
+            <span className="ev-b-answer-num">{ans.change === "model" ? "Model" : "Judge"}</span>
+            <span className="ev-b-answer-say">
               The {ans.change === "model" ? "model" : "judge's ruler"} changed between the two ends, from <code className="ev-mono">{ans.from ?? "none"}</code> to <code className="ev-mono">{ans.to ?? "none"}</code>. A replay cannot tell that from a prompt change, so the search stops here.
             </span>
           </div>
-          <EvalsLink className="evb-link text-[12px] self-start" href={evalsHref.surface(a.surface, { batch: a.bad.batch })}>
+          <EvalsLink className="ev-b-link ev-small ev-b-start" href={evalsHref.surface(a.surface, { batch: a.bad.batch })}>
             See the footing change on the {a.surface} chart
           </EvalsLink>
         </>
       )}
       {ans.kind === "freeze" && (
         <>
-          <div className="evb-answer-line">
-            <span className="evb-answer-num">{ans.freezeIds.length}</span>
-            <span className="evb-answer-say">
+          <div className="ev-b-answer-line">
+            <span className="ev-b-answer-num">{ans.freezeIds.length}</span>
+            <span className="ev-b-answer-say">
               {ans.freezeIds.length === 1 ? "freeze was" : "freezes were"} captured again between the two ends. The moment the surface answered changed, not the prompt.
               {partly}
             </span>
@@ -345,28 +344,28 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
         </>
       )}
       {ans.kind === "live-reads" && (
-        <div className="evb-answer-line">
-          <span className="evb-answer-num ev-live">{ans.reads}</span>
-          <span className="evb-answer-say">
+        <div className="ev-b-answer-line">
+          <span className="ev-b-answer-num ev-live">{ans.reads}</span>
+          <span className="ev-b-answer-say">
             live reads across {ans.reps} {ans.reps === 1 ? "rep" : "reps"} on the bad end. Those reps saw the workspace as it was that day, which no replay can see again: not reproducible.
           </span>
         </div>
       )}
       {ans.kind === "noise" && (
-        <div className="evb-answer-line">
-          <span className="evb-answer-num">Noise</span>
-          <span className="evb-answer-say">Nothing differs between the two ends: same footing, same freezes, no live reads, same sources and the same rendered prompt.</span>
+        <div className="ev-b-answer-line">
+          <span className="ev-b-answer-num">Noise</span>
+          <span className="ev-b-answer-say">Nothing differs between the two ends: same footing, same freezes, no live reads, same sources and the same rendered prompt.</span>
           <SeparationMark result={ans.separation} showWord size={14} />
-          <span className="ev-quiet text-[11.5px]" data-evb-weighed>
+          <span className="ev-quiet ev-b-fine" data-evb-weighed>
             {a.mode === "flip" ? `on the ${plural(a.flipped.length, "flipped freeze")} only` : "on the freezes that fell most only"}
           </span>
         </div>
       )}
       {ans.kind === "source" && ans.confidence === "empty" && (
-        <div className="evb-empty" data-evb-empty={ans.noDeclaredSourceMoved ? "no-declared-source" : "bracketed"}>
-          <div className="evb-answer-line">
-            <span className="evb-answer-num">{ans.noDeclaredSourceMoved ? ans.rangeCommits : 0}</span>
-            <span className="evb-answer-say">
+        <div className="ev-b-empty" data-evb-empty={ans.noDeclaredSourceMoved ? "no-declared-source" : "bracketed"}>
+          <div className="ev-b-answer-line">
+            <span className="ev-b-answer-num">{ans.noDeclaredSourceMoved ? ans.rangeCommits : 0}</span>
+            <span className="ev-b-answer-say">
               {ans.noDeclaredSourceMoved
                 ? `${ans.rangeCommits === 1 ? "commit sits" : "commits sit"} between these ends, and none of them touches a source ${a.surface} declares. No candidate is left to search yet.`
                 : allCommits?.on
@@ -375,7 +374,7 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
             </span>
           </div>
           {ans.rangeCommits > 0 && !allCommits?.on && (
-            <div className="evb-widen">
+            <div className="ev-b-widen">
               <span>A helper outside the declared sources may be the cause. Searching every commit in the range covers it, at the cost of more probes.</span>
               {allCommits?.onChange && (
                 <button type="button" className="ev-btn ev-btn--lg" onClick={() => allCommits.onChange!(true)} data-evb-widen>
@@ -388,9 +387,9 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
       )}
       {ans.kind === "source" && ans.confidence !== "empty" && (
         <>
-          <div className="evb-answer-line">
-            <span className="evb-answer-num">{ans.candidates.length}</span>
-            <span className="evb-answer-say">
+          <div className="ev-b-answer-line">
+            <span className="ev-b-answer-num">{ans.candidates.length}</span>
+            <span className="ev-b-answer-say">
               {ans.confidence === "pinned"
                 ? "candidate left: the records name the commit, with no spend."
                 : ans.confidence === "narrowed"
@@ -399,7 +398,7 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
             </span>
             <Confidence value={ans.confidence} />
           </div>
-          {ans.reason && <div className="evb-reason">{ans.reason}</div>}
+          {ans.reason && <div className="ev-b-reason">{ans.reason}</div>}
           {ans.confidence === "pinned" && ans.candidates[0]?.kind === "commit" ? (
             <CommitPanel sha={ans.candidates[0].commit.sha} surface={a.surface} />
           ) : (
@@ -410,19 +409,19 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
       {ans.kind === "source" && (
         <>
           {allCommits?.on && (
-            <div className="evb-widen" data-evb-widened>
+            <div className="ev-b-widen" data-evb-widened>
               <span>
                 Searching every commit in the range ({plural(ans.rangeCommits, "commit")}), not only the ones touching declared sources.
               </span>
               {allCommits.onChange && (
-                <button type="button" className="evb-link text-[12px]" onClick={() => allCommits.onChange!(false)}>
+                <button type="button" className="ev-b-link ev-small" onClick={() => allCommits.onChange!(false)}>
                   Only declared sources
                 </button>
               )}
             </div>
           )}
           {ans.narrowedBy.length > 0 && (
-            <div className="evb-section">
+            <div className="ev-b-section">
               <h2>Recorded batches read inside the window</h2>
               <div className="ev-chips">
                 {ans.narrowedBy.map((r) => (
@@ -435,7 +434,7 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
             </div>
           )}
           {ans.epochs.length > 0 && (
-            <div className="evb-section">
+            <div className="ev-b-section">
               <h2>Prompt epochs inside the window</h2>
               {ans.epochs.map((e) => (
                 <EpochRow key={e.n} epoch={e} />
@@ -450,26 +449,27 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
 
 /** The flips behind the regression as before and after pairs, and what the model saw at each end. */
 export function AttributionEvidence({ attribution: a }: { attribution: Attribution }) {
+  const { ExamplePair } = useEvalsHost().ui;
   return (
     <>
       {a.mode === "score" && a.flipped.length > 0 && (
-        <div className="evb-note">
+        <div className="ev-b-note">
           Nothing flipped by majority, so the freezes with the largest median drops stand in: {a.flipped.map((f) => f.name).join(", ")}.
         </div>
       )}
       {a.examples.length > 0 && (
-        <section className="evb-section" data-evb-examples={a.examples.length}>
+        <section className="ev-b-section" data-evb-examples={a.examples.length}>
           <h2>
             <VerdictGlyph state="fail" size={11} />
             What flipped
           </h2>
-          <div className="evb-examples">
+          <div className="ev-b-examples">
             {a.examples.map((ex) => {
               const f = a.flipped.find((x) => x.freezeId === ex.freeze);
               return (
                 <div key={ex.freeze} data-ev-flip={ex.direction}>
-                  <div className="evb-example-name">
-                    <EvalsLink className="evb-link" href={f ? flipFreezeHref(f) : evalsHref.freeze(ex.freeze)}>
+                  <div className="ev-b-example-name">
+                    <EvalsLink className="ev-b-link" href={f ? flipFreezeHref(f) : evalsHref.freeze(ex.freeze)}>
                       {ex.name}
                     </EvalsLink>
                     <span className={ex.direction === "broke" ? "ev-fail" : "ev-pass"}>{ex.direction}</span>
@@ -482,16 +482,16 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
           </div>
         </section>
       )}
-      <section className="evb-section" data-evb-prompt-diffs={a.promptDiffs.length}>
+      <section className="ev-b-section" data-evb-prompt-diffs={a.promptDiffs.length}>
         <h2>What the model saw at each end</h2>
         {a.promptDiffs.length ? (
           [...new Set(a.promptDiffs.map((d) => d.freezeId))].map((f) => {
             const pairs = a.promptDiffs.filter((d) => d.freezeId === f);
             return (
               <div key={f} data-evb-prompt-freeze={f}>
-                <div className="evb-note">
+                <div className="ev-b-note">
                   {/* The freeze opened on the two reps diffed here. */}
-                  <EvalsLink className="evb-link" href={evalsHref.freeze(f, { a: pairs[0].a.runId, b: pairs[0].b.runId })}>
+                  <EvalsLink className="ev-b-link" href={evalsHref.freeze(f, { a: pairs[0].a.runId, b: pairs[0].b.runId })}>
                     {a.flipped.find((x) => x.freezeId === f)?.name ?? `freeze ${shortSha(f)}`}
                   </EvalsLink>
                 </div>
@@ -500,7 +500,7 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
             );
           })
         ) : (
-          <div className="evb-note">The two ends share no rep on the same freeze, so there is no rendered prompt to compare.</div>
+          <div className="ev-b-note">The two ends share no rep on the same freeze, so there is no rendered prompt to compare.</div>
         )}
       </section>
     </>
@@ -510,8 +510,8 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
 /** The free answer: the checklist, the answer it lit, and the evidence. */
 export function AttributionView({ attribution, now = Date.now(), allCommits }: { attribution: Attribution; now?: number; allCommits?: AllCommitsToggle }) {
   return (
-    <div className="flex flex-col gap-4" data-evb-attribution={attribution.answer.kind}>
-      <section className="evb-section">
+    <div className="ev-b-attribution" data-evb-attribution={attribution.answer.kind}>
+      <section className="ev-b-section">
         <h2>
           <VerdictGlyph state={attribution.answer.kind === "noise" ? "pass" : "fail"} size={11} />
           The free answer, from records

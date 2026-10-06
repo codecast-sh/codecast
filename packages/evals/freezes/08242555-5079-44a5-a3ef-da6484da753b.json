@@ -1,0 +1,26 @@
+{
+  "name": "expectations callers-edit",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:callers-edit"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "expectations:callers-edit",
+    "title": "expectations callers-edit"
+  },
+  "asOf": "2026-10-06T09:00:00.000Z",
+  "trigger": {
+    "type": "expectations"
+  },
+  "meta": {
+    "surface": "expectations",
+    "visibility": "public",
+    "snapshot": "fixtures/expectations/callers-edit.json"
+  },
+  "judge": "the proposal edits ex-callers-call-2 (or retires and replaces it) so callbacks also go to anyone who missed two scheduled calls, quoting Mara on cl-153; it adds nothing from before the cursor and cites no agent's shipped note",
+  "notes": null,
+  "tags": [],
+  "id": "08242555-5079-44a5-a3ef-da6484da753b",
+  "createdAt": "2026-10-05T20:10:14.768Z"
+}

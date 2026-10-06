@@ -6,6 +6,7 @@ import type { EvalSources, Freeze } from '@platform/evals';
 import { fmt } from '@platform/cli-kit/colors';
 import { formatCost } from '@platform/cli-kit/format';
 import { stripAnsi } from '@platform/cli-kit/render';
+import { holdsAcross, type Separation } from '@platform/evals/analysis';
 
 import { acquireLock, releaseLock, type LockOptions } from '../../../cli/src/capabilities/lock';
 import { outcomeOf, prepareFreeze, repCount, replayModel, replayRep, treeFacts, type RepLedger } from '../adapters/replay';
@@ -16,7 +17,6 @@ import { loadSurface } from '../registry';
 import { homePaths } from '../paths';
 import { checkMinutes, DAILY_USD, patchSurfaceState, perRepPeakUsd, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget, type EvalsState } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
-import { holdsAcross, type Separation } from '../stats';
 import type { SurfaceMeta } from '../surface';
 import { publishSite } from './publish';
 import { pickSurfaces } from './stale';

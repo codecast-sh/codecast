@@ -11,7 +11,7 @@
 // instead (separateNights), and a check's regressions across surfaces under
 // Holm (holdsAcross).
 
-import { makeRng } from '@codecast/shared/random';
+import { makeRng } from './rng';
 
 export interface MannWhitney {
   /** U for the first sample: pairs where it is greater, ties counting a half. */

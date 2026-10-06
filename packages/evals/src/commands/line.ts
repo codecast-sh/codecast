@@ -7,6 +7,7 @@ import type { EvalSources, Freeze, RunSummary } from '@platform/evals';
 import { fmt } from '@platform/cli-kit/colors';
 import { formatCost } from '@platform/cli-kit/format';
 import type { EvalRep, EvalRepsFile, EvalRepsFreeze, EvalRepsSide, EvalRepsSurface } from '@codecast/shared/contracts/evalResult';
+import { buildEvalResult, evalResultLines } from '@platform/evals/analysis';
 
 import { describeFreeze, hasSnapshot } from '../adapters/resolver';
 import { repPassed } from '../adapters/replay';
@@ -15,7 +16,6 @@ import { homePaths, REPO_ROOT, treeRoot } from '../paths';
 import { REPLAY_INPUTS } from '../provenance';
 import { surfaces } from '../registry';
 import { changedSince, dirtySurfaces, gitHead, mergeBase } from '../state';
-import { buildEvalResult, evalResultLines } from '../evalResult';
 import type { SurfaceMeta } from '../surface';
 import { runCheck } from './check';
 import { positiveNumber, scoreOrZero } from './verdict';

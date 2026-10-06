@@ -11,12 +11,11 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronRight, Crosshair } from "lucide-react";
 import type { Epoch, FootingMarker, FreezeResponse, LedgerCell, MomentMessage, RunResponse, RunRow } from "@codecast/shared/contracts/evalsApi";
-import { HoverTip, useContainerWidth } from "../ActivityHeatmap";
-import { SegmentedToggle } from "../SegmentedToggle";
 import { FootingGlyph } from "./charts/ScoreStrip";
 import { PASS_MARK, jitter, scoreScale, stepPath } from "./charts/scale";
 import { EpochBands, RepHatch, RepMark, RepTip } from "./Seismograph";
 import { evalsHref } from "./evalsPaths";
+import { useEvalsHost } from "./host";
 import { CopyCommand, EvalsLink, LockBadge, PromptDiff, ReplyCard, ScoreBar, VerdictGlyph } from "./parts";
 import { shortSha, batchLabel, whenLabel } from "./format";
 import { verdictOfRow } from "./verdictModel";
@@ -33,32 +32,32 @@ export function LabelCard({ label, source }: { label: unknown; source: FreezeRes
   const verdictKey = obj ? LABEL_VERDICT_KEYS.find((k) => typeof obj[k] === "string" || typeof obj[k] === "boolean") : undefined;
   const rest = obj ? Object.entries(obj).filter(([k]) => k !== verdictKey) : [];
   return (
-    <section className="ev-card px-4 py-3 flex flex-col gap-2" data-ev-label={source ?? "none"}>
-      <header className="ev-title flex-wrap">
+    <section className="ev-card ev-fz-label" data-ev-label={source ?? "none"}>
+      <header className="ev-title ev-fz-wrap">
         <LabelGlyph />
         What a person said it should be
-        <span className="flex-1" />
-        <span className="text-[11px] font-normal ev-quiet whitespace-nowrap">{source === "labels" ? "EVALS_HOME/labels" : source === "inline" ? "the fixture's own label" : null}</span>
+        <span className="ev-grow" />
+        <span className="ev-fz-aside ev-fz-nowrap ev-quiet">{source === "labels" ? "EVALS_HOME/labels" : source === "inline" ? "the fixture's own label" : null}</span>
       </header>
       {label === null || label === undefined ? (
-        <p className="text-[12.5px] ev-quiet m-0">Nobody has labelled this freeze yet. The judge's criteria below are all it is held to.</p>
+        <p className="ev-fz-empty ev-quiet">Nobody has labelled this freeze yet. The judge's criteria below are all it is held to.</p>
       ) : obj ? (
         <>
           {verdictKey && (
-            <div className="flex items-baseline gap-2" data-ev-label-verdict>
-              <span className="text-[22px] leading-none font-medium ev-mono">{String(obj[verdictKey])}</span>
-              <span className="text-[11.5px] ev-quiet">{verdictKey}</span>
+            <div className="ev-fz-verdict" data-ev-label-verdict>
+              <span className="ev-fz-verdict-word ev-mono">{String(obj[verdictKey])}</span>
+              <span className="ev-fz-verdict-key ev-quiet">{verdictKey}</span>
             </div>
           )}
           {rest.map(([k, v]) => (
-            <div key={k} className="grid gap-x-3 text-[12.5px]" style={{ gridTemplateColumns: "64px 1fr" }}>
-              <span className="ev-quiet ev-mono text-[11px] pt-px">{k}</span>
-              <span className="whitespace-pre-wrap break-words">{typeof v === "string" ? v : JSON.stringify(v)}</span>
+            <div key={k} className="ev-fz-field">
+              <span className="ev-fz-field-key ev-quiet ev-mono">{k}</span>
+              <span className="ev-fz-prose">{typeof v === "string" ? v : JSON.stringify(v)}</span>
             </div>
           ))}
         </>
       ) : (
-        <pre className="ev-mono text-[12px] m-0 whitespace-pre-wrap">{typeof label === "string" ? label : JSON.stringify(label, null, 2)}</pre>
+        <pre className="ev-fz-pre ev-mono">{typeof label === "string" ? label : JSON.stringify(label, null, 2)}</pre>
       )}
     </section>
   );
@@ -78,9 +77,9 @@ export function ProductionCard({ production, surface }: { production: FreezeResp
   const verdict = production?.verdict ?? null;
   return (
     <section className="ev-card ev-reply" data-ev-production>
-      <header className="ev-reply-head flex-wrap">
+      <header className="ev-reply-head ev-fz-wrap">
         <VerdictGlyph state={verdict ? (verdict.pass ? "pass" : "fail") : "unscored"} size={14} />
-        <span className="ev-title whitespace-nowrap" title={`What the live ${surface} surface said when this moment happened`}>
+        <span className="ev-title ev-fz-nowrap" title={`What the live ${surface} surface said when this moment happened`}>
           Production's reply
         </span>
         {verdict && <ScoreBar score={verdict.score} width={80} />}
@@ -88,7 +87,7 @@ export function ProductionCard({ production, surface }: { production: FreezeResp
       {production && production.messages.length ? (
         <div className="ev-reply-text">{production.messages.map((m) => m.text).join("\n\n")}</div>
       ) : (
-        <div className="text-[12.5px] ev-quiet">Production's reply was not captured with this freeze.</div>
+        <div className="ev-fz-empty ev-quiet">Production's reply was not captured with this freeze.</div>
       )}
       {verdict?.reasoning && <div className="ev-judge">{verdict.reasoning}</div>}
     </section>
@@ -103,17 +102,17 @@ export function ProductionCard({ production, surface }: { production: FreezeResp
 export function MomentPane({ messages, cutAt, asOf }: { messages: MomentMessage[]; cutAt: number; asOf: string }) {
   const cut = Math.max(0, Math.min(messages.length, cutAt));
   return (
-    <section className="ev-card overflow-hidden" data-ev-moment>
-      <header className="ev-title px-4 py-2.5 border-b" style={{ borderColor: "var(--ev-rule)" }}>
+    <section className="ev-card ev-fz-moment" data-ev-moment>
+      <header className="ev-title ev-fz-moment-head">
         <MomentGlyph />
         The frozen moment
-        <span className="flex-1" />
-        <span className="text-[11px] font-normal ev-quiet ev-tabular">{messages.length} messages</span>
+        <span className="ev-grow" />
+        <span className="ev-fz-aside ev-quiet ev-tabular">{messages.length} messages</span>
       </header>
       {!messages.length ? (
-        <p className="px-4 py-4 text-[12.5px] ev-quiet m-0">The child could not render this moment.</p>
+        <p className="ev-fz-moment-none ev-quiet">The child could not render this moment.</p>
       ) : (
-        <ol className="m-0 p-0 list-none">
+        <ol className="ev-fz-moment-list">
           {messages.map((m, i) => (
             <li key={`${m.id}:${i}`}>
               {i === cut && <FrozenCut asOf={asOf} />}
@@ -136,31 +135,18 @@ function MomentGlyph() {
   );
 }
 
+/** A line of the moment. Who said it (data-direction) sets its colour and rule in freeze.css. */
 function MomentLine({ m, after }: { m: MomentMessage; after: boolean }) {
-  const human = m.direction === "in";
-  const system = m.direction === "system";
   return (
-    <div
-      className="grid gap-x-3 px-4 py-2 text-[12.5px] leading-[1.55]"
-      style={{ gridTemplateColumns: "26px 1fr", opacity: after ? 0.48 : 1 }}
-      data-ev-moment-line={after ? "after" : "before"}
-      data-direction={m.direction}
-    >
-      <span className="ev-mono text-[10.5px] ev-quiet ev-tabular pt-[3px] text-right">{m.n}</span>
-      <div className="min-w-0">
-        <div className="flex items-baseline gap-2 text-[11px]">
-          <span className="font-semibold" style={{ color: human ? "var(--sol-text)" : "var(--sol-text-muted)" }}>
-            {m.from}
-          </span>
+    <div className="ev-fz-line" data-ev-moment-line={after ? "after" : "before"} data-direction={m.direction}>
+      <span className="ev-fz-line-n ev-mono ev-quiet ev-tabular">{m.n}</span>
+      <div className="ev-fz-line-body">
+        <div className="ev-fz-line-meta">
+          <span className="ev-fz-line-from">{m.from}</span>
           {m.room && <span className="ev-quiet ev-mono">{m.room}</span>}
           <span className="ev-quiet ev-tabular">{whenLabel(m.at)}</span>
         </div>
-        <div
-          className={`whitespace-pre-wrap break-words ${system ? "ev-mono text-[11.5px]" : ""}`}
-          style={human ? undefined : { color: system ? "var(--sol-text-dim)" : "var(--sol-text-secondary)", borderLeft: system ? undefined : "2px solid var(--ev-rule)", paddingLeft: system ? undefined : 8 }}
-        >
-          {m.text}
-        </div>
+        <div className={m.direction === "system" ? "ev-fz-line-text ev-mono" : "ev-fz-line-text"}>{m.text}</div>
       </div>
     </div>
   );
@@ -169,16 +155,11 @@ function MomentLine({ m, after }: { m: MomentMessage; after: boolean }) {
 /** The cut: a perforated tear across the moment, where the freeze was taken. */
 function FrozenCut({ asOf }: { asOf: string }) {
   return (
-    <div className="flex items-center gap-2 px-4 py-1.5" data-ev-frozen-cut role="separator" aria-label={`Frozen here, ${whenLabel(asOf)}`}>
-      <span
-        className="flex-1 h-[6px]"
-        style={{ backgroundImage: "radial-gradient(circle, var(--sol-text-dim) 1.1px, transparent 1.4px)", backgroundSize: "7px 6px", backgroundRepeat: "repeat-x", backgroundPosition: "left center", opacity: 0.7 }}
-      />
-      <span className="text-[11px] font-semibold ev-mono" style={{ color: "var(--sol-text)" }}>
-        frozen here
-      </span>
-      <span className="text-[11px] ev-quiet ev-tabular">{whenLabel(asOf)}</span>
-      <span className="text-[11px] ev-quiet">what follows is for the judge</span>
+    <div className="ev-fz-cut" data-ev-frozen-cut role="separator" aria-label={`Frozen here, ${whenLabel(asOf)}`}>
+      <span className="ev-fz-cut-perf" />
+      <span className="ev-fz-cut-word ev-mono">frozen here</span>
+      <span className="ev-fz-aside ev-quiet ev-tabular">{whenLabel(asOf)}</span>
+      <span className="ev-fz-aside ev-quiet">what follows is for the judge</span>
     </div>
   );
 }
@@ -211,6 +192,7 @@ const PAD_R = 12;
  * this strip adds the flip notches from the ledger and the A and B rings.
  */
 export function FreezeRepStrip({ runs, epochs, footing, cells, pair, pinnedBatch, width, nextSlot = "a", onPick }: FreezeRepStripProps) {
+  const { HoverTip } = useEvalsHost().ui;
   const [tip, setTip] = useState<{ run: RunRow; x: number; y: number } | null>(null);
   const cols = useMemo(() => batchColumns(runs), [runs]);
   const w = Math.max(width, 240);
@@ -239,12 +221,12 @@ export function FreezeRepStrip({ runs, epochs, footing, cells, pair, pinnedBatch
   }, [cols, colW]);
 
   if (!cols.length) {
-    return <div className="ev-card ev-bench px-4 py-6 text-[12.5px] ev-quiet" data-ev-rep-strip="empty">No graded rep of this freeze yet.</div>;
+    return <div className="ev-card ev-bench ev-fz-strip-empty ev-quiet" data-ev-rep-strip="empty">No graded rep of this freeze yet.</div>;
   }
   const pinnedX = pinnedBatch ? colOf.get(pinnedBatch)?.x ?? null : null;
   return (
-    <div className="ev-card ev-bench ev-sf-seis overflow-hidden" data-ev-rep-strip>
-      <svg width={w} height={STRIP_H} viewBox={`0 0 ${w} ${STRIP_H}`} role="img" aria-label={`Every rep of this freeze across ${cols.length} batches`} className="block">
+    <div className="ev-card ev-bench ev-sf-seis ev-fz-strip" data-ev-rep-strip>
+      <svg width={w} height={STRIP_H} viewBox={`0 0 ${w} ${STRIP_H}`} role="img" aria-label={`Every rep of this freeze across ${cols.length} batches`} className="ev-fz-strip-svg">
         <defs>
           <RepHatch />
         </defs>
@@ -295,9 +277,9 @@ export function FreezeRepStrip({ runs, epochs, footing, cells, pair, pinnedBatch
           const cy = repY(rep, y);
           return (
             <g key={slot} data-ev-rep-selected={slot} data-ev-selected-rep={rep.id} pointerEvents="none">
-              <circle cx={cx} cy={cy} r={r + 3.2} fill="none" stroke="var(--sol-text)" strokeWidth={1.3} />
+              <circle cx={cx} cy={cy} r={r + 3.2} className="ev-fz-ring" />
               {/* Haloed like the pass mark's label, so the median step line and neighbouring dots never run through the letter. */}
-              <text x={cx} y={cy - r - 6} textAnchor="middle" className="ev-mono ev-sf-ylabel--halo" style={{ fontSize: 10, fontWeight: 700, fill: "var(--sol-text)" }}>
+              <text x={cx} y={cy - r - 6} textAnchor="middle" className="ev-mono ev-sf-ylabel--halo ev-fz-ring-letter">
                 {slot}
               </text>
             </g>
@@ -340,7 +322,7 @@ const PAIRINGS = [
 function RunCard({ slot, run, loading, heading }: { slot: "A" | "B"; run: RunResponse | null; loading: boolean; heading: ReactNode }) {
   if (!run)
     return (
-      <div className="ev-card px-4 py-5 text-[12.5px] ev-quiet" data-ev-card-slot={slot}>
+      <div className="ev-card ev-fz-card-wait ev-quiet" data-ev-card-slot={slot}>
         {loading ? `Reading rep ${slot}...` : `Pick rep ${slot}: click a dot on the strip.`}
       </div>
     );
@@ -353,10 +335,7 @@ function RunCard({ slot, run, loading, heading }: { slot: "A" | "B"; run: RunRes
 
 function SlotTag({ slot }: { slot: "A" | "B" | "prod" }) {
   return (
-    <span
-      className="inline-flex items-center justify-center h-[18px] min-w-[18px] px-1 rounded ev-mono text-[10.5px] font-bold"
-      style={{ color: "var(--sol-bg)", background: slot === "prod" ? "var(--sol-text-muted)" : "var(--sol-text)" }}
-    >
+    <span className="ev-fz-slot ev-mono" data-ev-slot={slot}>
       {slot}
     </span>
   );
@@ -375,13 +354,14 @@ function EpochCutGlyph() {
 
 /** Between the two cards: whether the model saw a different prompt, and the diff when it did. */
 function PromptChange({ a, b }: { a: RunResponse; b: RunResponse }) {
+  const { SegmentedToggle } = useEvalsHost().ui;
   const changed = a.row.promptSha !== b.row.promptSha;
   const pairs = useMemo(() => promptFilePairs(a, b).filter((p) => p.a.text !== p.b.text), [a, b]);
   const [file, setFile] = useState<string | null>(null);
   const [open, setOpen] = useState(true);
   if (!changed)
     return (
-      <div className="flex items-center gap-2 px-3 py-2 text-[12px] ev-quiet" data-ev-prompt-same>
+      <div className="ev-fz-prompt-same ev-quiet" data-ev-prompt-same>
         <span className="ev-mono">=</span>
         Same prompt on both reps (promptSha {shortSha(a.row.promptSha)}): the difference is the model's, not the prompt's.
       </div>
@@ -389,23 +369,21 @@ function PromptChange({ a, b }: { a: RunResponse; b: RunResponse }) {
   const shown = pairs.find((p) => p.file === file) ?? pairs[0] ?? null;
   return (
     // Neutral, like the surface page's epoch chips: a prompt change is a new epoch, not a verdict, so it borrows no pass or fail colour.
-    <section className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--sol-border)", background: "var(--sol-bg-alt)" }} data-ev-prompt-changed>
-      <button type="button" className="w-full flex items-center gap-2 px-3 py-2 text-left bg-transparent border-0 cursor-pointer" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        {open ? <ChevronDown className="w-3.5 h-3.5 ev-quiet" /> : <ChevronRight className="w-3.5 h-3.5 ev-quiet" />}
+    <section className="ev-fz-prompt" data-ev-prompt-changed>
+      <button type="button" className="ev-fz-prompt-toggle" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        {open ? <ChevronDown className="ev-icon ev-quiet" /> : <ChevronRight className="ev-icon ev-quiet" />}
         <EpochCutGlyph />
-        <span className="text-[13px] font-semibold" style={{ color: "var(--sol-text)" }}>
-          Prompt changed
-        </span>
-        <span className="text-[12px] ev-quiet">
+        <span className="ev-fz-prompt-title">Prompt changed</span>
+        <span className="ev-note">
           {pairs.length ? `${pairs.length} file${pairs.length === 1 ? " differs" : "s differ"}` : "the files read the same, so the change is in a request parameter"}
         </span>
-        <span className="flex-1" />
-        <span className="ev-mono text-[11px] ev-quiet">
+        <span className="ev-grow" />
+        <span className="ev-fz-aside ev-mono ev-quiet">
           {shortSha(a.row.promptSha)} → {shortSha(b.row.promptSha)}
         </span>
       </button>
       {open && shown && (
-        <div className="px-3 pb-3 flex flex-col gap-2">
+        <div className="ev-fz-prompt-body">
           {pairs.length > 1 && <SegmentedToggle value={shown.file} onChange={setFile} items={pairs.map((p) => ({ key: p.file, label: p.file }))} />}
           <PromptDiff pair={shown} />
         </div>
@@ -436,6 +414,7 @@ export interface FreezeViewProps {
 
 export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, runA, runB, loadingA = false, loadingB = false, onPair }: FreezeViewProps) {
   const f = freeze.freeze;
+  const { useContainerWidth, ui: { SegmentedToggle } } = useEvalsHost();
   const { ref: rootRef, width: rootWidth } = useContainerWidth(1200);
   const wide = rootWidth >= FREEZE_WIDE_PX;
   const { ref, width } = useContainerWidth(640);
@@ -457,7 +436,7 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
   };
 
   const left = (
-    <div className="flex flex-col gap-3 min-w-0" data-ev-freeze-left>
+    <div className="ev-fz-col" data-ev-freeze-left>
       <LabelCard label={freeze.label} source={freeze.labelSource} />
       <ProductionCard production={freeze.production} surface={f.surface} />
       <MomentPane messages={freeze.moment} cutAt={freeze.cutAt} asOf={f.asOf} />
@@ -475,9 +454,9 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
         run={run}
         loading={slot === "A" ? loadingA : loadingB}
         heading={
-          <span className="inline-flex items-center gap-2">
+          <span className="ev-fz-cardhead">
             <SlotTag slot={slot} />
-            <span className="font-normal ev-quiet text-[12px]">
+            <span className="ev-fz-cardhead-meta ev-quiet">
               {run?.row.batch ? batchLabel(run.row.batch, run.row.batchAt) : ""}
               {run ? `, seed ${run.row.seed}` : ""}
               {flipWord ? `, ${flipWord}` : ""}
@@ -490,20 +469,20 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
   const [first, second] = pairing === "ab" ? (["A", "B"] as const) : pairing === "prod-a" ? (["prod", "A"] as const) : (["prod", "B"] as const);
 
   const right = (
-    <div className="flex flex-col gap-3 min-w-0" data-ev-freeze-right>
-      <div ref={ref} className="min-w-0">
+    <div className="ev-fz-col" data-ev-freeze-right>
+      <div ref={ref} className="ev-fz-stripbox">
         <FreezeRepStrip runs={freeze.runs} epochs={freeze.epochs} footing={footing} cells={cells} pair={pair} pinnedBatch={pinnedBatch} width={width} nextSlot={nextSlot} onPick={pickRep} />
       </div>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] ev-quiet">
-        <span className="inline-flex items-center gap-1.5">
+      <div className="ev-fz-legend ev-quiet">
+        <span className="ev-fz-key">
           <VerdictGlyph state="pass" size={10} /> pass
         </span>
-        <span className="inline-flex items-center gap-1.5">
+        <span className="ev-fz-key">
           <VerdictGlyph state="fail" size={10} /> fail
         </span>
-        <span className="inline-flex items-center gap-1.5">
-          <svg width={10} height={10} viewBox="-5 -5 10 10" aria-hidden>
-            <path d="M-3.6,-3 L3.6,-3 L0,2.6 Z" fill="var(--sol-magenta)" />
+        <span className="ev-fz-key">
+          <svg width={10} height={10} viewBox="-5 -5 10 10" className="ev-fail" aria-hidden>
+            <path d="M-3.6,-3 L3.6,-3 L0,2.6 Z" fill="currentColor" />
           </svg>
           broke
         </span>
@@ -511,19 +490,19 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
           {passed} of {scored} graded reps passed
         </span>
         {hidden > 0 && <span className="ev-tabular">{hidden} dry or bisect reps hidden</span>}
-        <span className="flex-1" />
-        <span className="inline-flex items-center gap-1.5" data-ev-next-slot={nextSlot}>
-          <Crosshair className="w-3 h-3" />
+        <span className="ev-grow" />
+        <span className="ev-fz-key" data-ev-next-slot={nextSlot}>
+          <Crosshair className="ev-fz-icon-sm" />
           A click on a dot sets {nextSlot === "a" ? "A" : "B"}
         </span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 pt-1">
+      <div className="ev-fz-pairbar">
         <span className="ev-title" data-ev-pair-title={story.isDefault ? "default" : "picked"}>
           <VerdictGlyph state={story.glyph} size={12} title={story.glyph === "mixed" ? "One of A and B passed, the other did not" : story.glyph === "pass" ? "A and B both passed" : story.glyph === "fail" ? "A and B both failed" : undefined} />
           {story.title}
         </span>
-        <span className="text-[12px] ev-quiet" data-ev-pair-why>
+        <span className="ev-note" data-ev-pair-why>
           {story.why}
         </span>
         {!story.isDefault && pick.a && (
@@ -531,7 +510,7 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
             default pair
           </button>
         )}
-        <span className="flex-1" />
+        <span className="ev-grow" />
         <SegmentedToggle value={pairing} onChange={(k) => setPairing(k as CardPairing)} items={PAIRINGS} />
         <button
           type="button"
@@ -545,18 +524,18 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
         </button>
       </div>
 
-      <div className="flex flex-col gap-2" data-ev-cards={pairing}>
+      <div className="ev-fz-cards" data-ev-cards={pairing}>
         {cardFor(first)}
-        {pairing === "ab" && runA && runB ? <PromptChange a={runA} b={runB} /> : <div className="h-1" />}
+        {pairing === "ab" && runA && runB ? <PromptChange a={runA} b={runB} /> : <div className="ev-fz-gap" />}
         {cardFor(second)}
       </div>
     </div>
   );
 
   return (
-    <div ref={rootRef} className="ev-page flex flex-col gap-4" data-evals-freeze={f.id}>
-      <header className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+    <div ref={rootRef} className="ev-page ev-fz" data-evals-freeze={f.id}>
+      <header className="ev-fz-header">
+        <div className="ev-fz-titlerow">
           <VerdictGlyph state={newest ? verdictOfRow(newest) : "unscored"} size={16} title="The newest rep's verdict" />
           <h1 className="ev-page-title ev-mono">
             {f.name}
@@ -574,26 +553,25 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
             </span>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] ev-quiet">
+        <div className="ev-fz-meta ev-quiet">
           <span>
-            {f.subject.kind} <span style={{ color: "var(--sol-text-secondary)" }}>{f.subject.title}</span>
+            {f.subject.kind} <span className="ev-fz-subject">{f.subject.title}</span>
           </span>
           <span className="ev-tabular">frozen {whenLabel(f.asOf)}</span>
           <span className="ev-tabular">captured {dayLabel(f.createdAt)}</span>
           {f.judge && (
-            <button type="button" className="inline-flex items-center gap-1 bg-transparent border-0 p-0 text-[12px] ev-quiet cursor-pointer hover:underline" onClick={() => setCriteriaOpen((o) => !o)} aria-expanded={criteriaOpen}>
-              {criteriaOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <button type="button" className="ev-fz-criteria ev-quiet" onClick={() => setCriteriaOpen((o) => !o)} aria-expanded={criteriaOpen}>
+              {criteriaOpen ? <ChevronDown className="ev-fz-icon-sm" /> : <ChevronRight className="ev-fz-icon-sm" />}
               criteria
             </button>
           )}
         </div>
         {criteriaOpen && f.judge && <div className="ev-judge" data-ev-criteria>{f.judge}</div>}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
+        <div className="ev-fz-actions">
           <CopyCommand command={`./evals freeze replay ${f.id} --reps 3`} />
           <EvalsLink
             href={evalsHref.bisectNew({ surface: f.surface, good: ends.good, bad: ends.bad, freeze: f.id })}
-            className="ev-chip"
-            style={{ height: 28, padding: "0 10px", color: "var(--sol-text)" }}
+            className="ev-chip ev-fz-attribute"
             data-ev-attribute
             title="Attribute the change between A and B on this freeze alone, which keeps probe cost lowest"
           >
@@ -602,13 +580,9 @@ export function FreezeView({ freeze, cells, footing, pinnedBatch, pair, pick, ru
         </div>
       </header>
       {/* One tree for both layouts: swapping trees would remount the panes and strand the strip's width observer on a dead node. */}
-      <div className={wide ? "grid gap-5 items-start" : "flex flex-col gap-5"} style={wide ? { gridTemplateColumns: "minmax(0, 2fr) minmax(0, 3fr)" } : undefined} data-ev-layout={wide ? "wide" : "narrow"}>
-        <div className="min-w-0" style={{ order: wide ? 0 : 1 }}>
-          {left}
-        </div>
-        <div className="min-w-0" style={{ order: wide ? 1 : 0 }}>
-          {right}
-        </div>
+      <div className="ev-fz-layout" data-ev-layout={wide ? "wide" : "narrow"}>
+        <div className="ev-fz-pane ev-fz-pane--left">{left}</div>
+        <div className="ev-fz-pane">{right}</div>
       </div>
     </div>
   );

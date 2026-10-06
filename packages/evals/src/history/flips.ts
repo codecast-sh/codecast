@@ -1,16 +1,14 @@
-import type { EvalFlip, Footing, FlipsResult } from '@codecast/shared/contracts/evalsApi';
+import type { EvalFlip, FlipsResult } from '@codecast/shared/contracts/evalsApi';
+import { flipOf, flipsBetween as flipsWith } from '@platform/evals/analysis';
 
 import { codecastFreezeStore } from '../adapters/freezes';
 import { repsSurface } from '../commands/line';
-import { defaultRuler, gradedSet, footingChange, footingOf, verdictFlips, type RulerOf, type VerdictRun } from '../commands/verdict';
-import { flipOf } from '../evalResult';
+import { codecastVerdict, gradedSet, type RulerOf, type VerdictRun } from '../commands/verdict';
 import { surfaceMeta } from '../registry';
 
-// Which freezes flipped between two batches of one surface: each freeze's
-// majority verdict over one rep per seed (verdict.ts majority, onePerSeed),
-// on the freezes both batches graded. A flip across a model or a judge ruler
-// would read the model or the ruler as a prompt change, so the comparison
-// refuses then and says which moved.
+// Which freezes flipped between two batches of one surface
+// (@platform/evals/analysis flips.ts), on codecast's verdict, and the reply
+// text behind each flip.
 
 export { gradedSet };
 
@@ -19,21 +17,7 @@ export { gradedSet };
  * Refuses when either batch graded nothing, or when any freeze both graded
  * ran on another model or ruler on one side.
  */
-export function flipsBetween<R extends VerdictRun>(rows: R[], a: string, b: string, ruler: RulerOf<R> = defaultRuler): FlipsResult {
-  const before = gradedSet(rows, a);
-  const after = gradedSet(rows, b);
-  const none: Footing = { model: null, ruler: null };
-  const empty = !before.length ? a : !after.length ? b : null;
-  if (empty) return { ok: false, reason: `${empty} graded nothing (every rep was dry, crashed or unscored)`, a: before[0] ? footingOf(before[0], ruler) : none, b: after[0] ? footingOf(after[0], ruler) : none };
-  for (const r of after) {
-    const other = before.find((x) => x.freezeId === r.freezeId);
-    if (!other) continue;
-    const [fa, fb] = [footingOf(other, ruler), footingOf(r, ruler)];
-    const moved = footingChange(fa, fb);
-    if (moved) return { ok: false, reason: moved === 'model' ? `another model: ${fa.model ?? '?'} in ${a}, ${fb.model ?? '?'} in ${b}` : `another judge ruler: ${fa.ruler ?? 'none'} in ${a}, ${fb.ruler ?? 'none'} in ${b}`, a: fa, b: fb };
-  }
-  return { ok: true, flips: verdictFlips(after, before) };
-}
+export const flipsBetween = <R extends VerdictRun>(rows: R[], a: string, b: string, ruler?: RulerOf<R>): FlipsResult => flipsWith(codecastVerdict, rows, a, b, ruler);
 
 /**
  * The reply text behind flips, for the before and after cards: each freeze's

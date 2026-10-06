@@ -4,12 +4,11 @@
 // and the words for a status or an outcome. Pure, so the ruler, the list, the
 // fixtures and the tests read one model.
 
-import { EVALS_SHA_RE, type Attribution, type BisectAnswer, type BisectProbe, type BisectRep, type BisectState, type BisectStatus, type BisectStep, type BisectSummary, type Candidate, type ProbeVerdict, type RenderClass, type BisectPlan, type BisectResponse, type CommitRef, type SimJob } from "@codecast/shared/contracts/evalsApi";
+import { EVALS_SHA_RE, type Attribution, type BisectAnswer, type BisectProbe, type BisectRep, type BisectState, type BisectStatus, type BisectStep, type BisectSummary, type Candidate, type ProbeVerdict, type RenderClass, type BisectPlan, type BisectResponse, type SimJob } from "@codecast/shared/contracts/evalsApi";
 import { batchLabel, shortSha } from "./format";
 import type { BisectPlanPanelProps } from "./BisectPlanPanel";
 import { EVALS_STALL_MS } from "../../lib/evals/hooks";
 import type { VerdictState } from "./verdictModel";
-import { SESSION_TRAILER_KEY, extractSessionTrailer } from "@codecast/shared/blame";
 
 /** The sha a candidate replays at: a commit, or the head a patch sits on. */
 export const candidateSha = (c: Candidate) => (c.kind === "commit" ? c.commit.sha : c.base);
@@ -311,13 +310,4 @@ export const bisectOutcomeOf = (state: Pick<BisectState, "status" | "answer">) =
 /** Stalled: the server says so, or a live bisect has written no step for five minutes. */
 export function isStalled(data: Pick<BisectResponse, "state" | "stalled">, now: number): boolean {
   return isBisectStalled({ ...data.state, stalled: data.stalled }, now, EVALS_STALL_MS);
-}
-
-/**
- * The session a commit's Codecast-Session trailer names, read the way blame
- * reads it: the value is the session link as written (`git log` hands it over
- * raw), and anything but a full conversation id names nothing.
- */
-export function commitSessionId(commit: Pick<CommitRef, "session">): string | null {
-  return commit.session ? extractSessionTrailer(`${SESSION_TRAILER_KEY}: ${commit.session}`) : null;
 }

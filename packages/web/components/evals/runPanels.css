@@ -1,0 +1,72 @@
+/* Codecast's run anatomy (runPanels.tsx): the calls, the agent transcript,
+   the guard log and the run folder, under the shared run page's tabs. Colour
+   and type through the --ev-* tokens, like the page around it. */
+
+/* ── Calls ──────────────────────────────────────────────────────────────── */
+
+.ev-call { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+.ev-call-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ev-tokens { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--ev-text-dim); font-variant-numeric: tabular-nums; }
+.ev-tokens b { color: var(--ev-text); font-weight: 500; }
+
+/* ── Agent transcript ───────────────────────────────────────────────────── */
+
+.ev-turn { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 4px 12px; padding: 12px 16px; border-top: 1px solid var(--ev-rule); }
+.ev-turn:first-of-type { border-top: 0; }
+.ev-turn-n { font-size: 11px; color: var(--ev-text-dim); padding-top: 2px; font-variant-numeric: tabular-nums; }
+.ev-turn-items { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ev-turn-ask { font-size: 12.5px; color: var(--ev-text-muted); border-left: 2px solid var(--ev-blue); padding: 1px 0 1px 10px; white-space: pre-wrap; }
+.ev-item-text { font-size: 13px; line-height: 1.55; color: var(--ev-text); white-space: pre-wrap; word-break: break-word; }
+.ev-item-think { font-size: 12px; font-style: italic; color: var(--ev-text-dim); white-space: pre-wrap; }
+.ev-tool { border: 1px solid var(--ev-rule); border-radius: 6px; overflow: hidden; font: 11.5px var(--ev-font-mono); font-variant-ligatures: none; }
+.ev-tool-call { display: flex; gap: 8px; padding: 5px 9px; background: var(--ev-bg-alt); color: var(--ev-text); }
+.ev-tool-name { color: var(--ev-blue); flex-shrink: 0; }
+.ev-tool-out { margin: 0; padding: 6px 9px; color: var(--ev-text-muted); white-space: pre-wrap; max-height: 220px; overflow: auto; border-top: 1px solid var(--ev-rule); }
+.ev-tool--error .ev-tool-out { color: var(--ev-magenta); }
+.ev-args { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; padding: 12px 16px; font-size: 12px; }
+.ev-args dt { color: var(--ev-text-dim); }
+.ev-args dd { margin: 0; font-family: var(--ev-font-mono); color: var(--ev-text); font-variant-ligatures: none; }
+
+/* ── Guard ──────────────────────────────────────────────────────────────── */
+
+.ev-guard-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.ev-guard-count {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  padding: 8px 12px; min-width: 104px;
+  border: 1px solid var(--ev-rule); border-radius: 8px; background: var(--ev-card);
+  cursor: pointer; text-align: left;
+}
+.ev-guard-count[aria-pressed="true"] { border-color: currentColor; box-shadow: inset 0 -2px 0 currentColor; }
+.ev-guard-count[disabled] { opacity: 0.4; cursor: default; }
+.ev-guard-count .ev-num { font-size: 24px; color: var(--ev-text); }
+.ev-guard-count span:last-child { font-size: 11px; }
+.ev-gs { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font: 10.5px var(--ev-font-mono); border: 1px solid; }
+.ev-gs--SERVED { color: var(--ev-text-muted); border-color: var(--ev-rule); background: var(--ev-bg-alt); }
+.ev-gs--UNSERVED { color: var(--ev-yellow); border-color: color-mix(in srgb, var(--ev-yellow) 45%, transparent); background: color-mix(in srgb, var(--ev-yellow) 10%, transparent); }
+.ev-gs--LIVE { color: var(--ev-red); border-color: color-mix(in srgb, var(--ev-red) 50%, transparent); background: color-mix(in srgb, var(--ev-red) 12%, transparent); }
+.ev-gs--REFUSED { color: var(--ev-orange); border-color: color-mix(in srgb, var(--ev-orange) 50%, transparent); background: color-mix(in srgb, var(--ev-orange) 10%, transparent); }
+.ev-gs--UNKNOWN { color: var(--ev-violet); border-color: color-mix(in srgb, var(--ev-violet) 45%, transparent); background: color-mix(in srgb, var(--ev-violet) 10%, transparent); }
+.ev-gs--HELP { color: var(--ev-text-dim); border-color: var(--ev-rule); border-style: dashed; background: transparent; }
+.ev-gs--none { color: var(--ev-text-dim); border-color: var(--ev-rule); border-style: dotted; background: transparent; }
+/* A count tile takes its mark's colour only; the dashed HELP outline belongs to the chip. */
+.ev-guard-count.ev-gs--HELP { border-style: solid; }
+.ev-guard-turn td { background: var(--ev-bg-alt); color: var(--ev-text-dim) !important; font-size: 11px; padding: 3px 12px !important; }
+
+/* ── Files ──────────────────────────────────────────────────────────────── */
+
+.ev-files { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 12px; align-items: start; }
+@container evals (max-width: 860px) {
+  .ev-files { grid-template-columns: minmax(0, 1fr); }
+}
+.ev-tree { padding: 6px; display: flex; flex-direction: column; }
+.ev-tree-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border: 0; border-radius: 5px; background: none;
+  font: 12px var(--ev-font-mono); color: var(--ev-text); text-align: left; cursor: pointer;
+  font-variant-ligatures: none;
+}
+.ev-tree-item svg { width: 13px; height: 13px; color: var(--ev-text-dim); flex-shrink: 0; }
+.ev-tree-item[aria-current="true"] { background: var(--ev-bg-highlight); }
+.ev-tree-item:hover { background: var(--ev-bg-alt); }
+.ev-tree-dir { padding: 6px 8px 2px; font: 11px var(--ev-font-mono); color: var(--ev-text-dim); }
+.ev-tree-size { margin-left: auto; font-size: 10.5px; color: var(--ev-text-dim); font-variant-numeric: tabular-nums; }
