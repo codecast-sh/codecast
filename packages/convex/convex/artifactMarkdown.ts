@@ -120,10 +120,9 @@ export const MD_THEME_CSS = `
   letter-spacing: -.02em; text-wrap: balance; scroll-margin-top: 64px;
 }
 .md h1 { font-size: 1.95em; font-weight: 700; margin: 0 0 .9em; letter-spacing: -.035em; line-height: 1.15; }
-/* The Solarized accents as one short strip under the page title. */
-.md > h1:first-child::after { content: ""; display: block; width: 88px; height: 3px; margin-top: .55em; border-radius: 2px;
-  background: linear-gradient(90deg, #b58900 0 12.5%, #cb4b16 0 25%, #dc322f 0 37.5%, #d33682 0 50%,
-    #6c71c4 0 62.5%, #268bd2 0 75%, #2aa198 0 87.5%, #859900 0); }
+/* A short coral rule under the page title, echoing the heading anchors. */
+.md > h1:first-child::after { content: ""; display: block; width: 36px; height: 2px; margin-top: .6em; border-radius: 1px;
+  background: color-mix(in srgb, var(--md-coral) 70%, transparent); }
 .md h2 { font-size: 1.28em; margin: 2.1em 0 .6em; }
 .md h3 { font-size: 1.08em; margin: 1.8em 0 .5em; }
 .md h4 { font-size: .96em; margin: 1.6em 0 .45em; }

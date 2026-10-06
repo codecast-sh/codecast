@@ -6,8 +6,16 @@ import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { resolveContextRow, resolveContextProjectPath } from "../lib/contextProjectPath";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
-import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
-import { AGENT_LAUNCH_OPTIONS, fromConvexAgentType, type AgentClientId, type LocalAgentClientId } from "@codecast/shared/contracts";
+import { usePinnedPickerOptions } from "../hooks/usePinnedAgents";
+import { agentAccent } from "../lib/agentColors";
+import { newConversationAgentType } from "../lib/defaultAgent";
+import { startHostedConversation } from "../lib/startHostedConversation";
+import { fromConvexAgentType, isHostedAgentType, type AgentClientId } from "@codecast/shared/contracts";
+import { useHostedMode } from "../lib/surfaces";
+import { AskHeldLine, useHostedAskGate } from "./simple/useHostedAskGate";
+
+/** What hosted mode calls the object a composer is about. */
+const HOSTED_NOUN: Record<string, string> = { doc: "note", task: "to-do", trigger: "routine" };
 
 type AgentKey = AgentClientId;
 const escapeContext = (value: string) =>
@@ -16,19 +24,6 @@ const escapeContext = (value: string) =>
 // edit strings) while preventing body content from closing the envelope.
 const protectContextBody = (value: string) =>
   value.replace(/<\/context>/gi, "<\\/context>");
-const AGENT_ACTIVE_CLASS: Record<LocalAgentClientId, string> = {
-  claude: "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50",
-  codex: "bg-emerald-500/20 text-emerald-400 border-emerald-500/50",
-  cursor: "bg-purple-500/20 text-purple-400 border-purple-500/50",
-  gemini: "bg-blue-500/20 text-blue-400 border-blue-500/50",
-  opencode: "bg-orange-500/20 text-orange-400 border-orange-500/50",
-  pi: "bg-teal-500/20 text-teal-400 border-teal-500/50",
-  grok: "bg-sol-text/15 text-sol-text border-sol-text/40",
-  muse: "bg-emerald-500/15 text-emerald-400 border-emerald-500/40",
-};
-const AGENT_TYPES = AGENT_LAUNCH_OPTIONS.map((o) => ({
-  key: o.id, convex: o.convexType, label: o.label, active: AGENT_ACTIVE_CLASS[o.id],
-}));
 
 interface ContextChatInputProps {
   contextType: string;
@@ -52,7 +47,9 @@ export function ContextChatInput({
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const currentAgent = useInboxStore((s) => s.currentConversation.agentType || "claude_code");
+  // The conversation on screen's agent carries over; the default
+  // (lib/defaultAgent) fills in, the hosted assistant in hosted mode.
+  const currentAgent = useInboxStore((s) => newConversationAgentType(s, s.currentConversation.agentType));
   const [selectedAgent, setSelectedAgent] = useState<AgentKey | null>(null);
   // Same gesture as clicking a card in the object's "Sessions" list: the
   // conversation takes the stage (routed to /conversation → the inbox); a
@@ -62,8 +59,16 @@ export function ContextChatInput({
   // Registry chokepoint, never a hand-rolled ternary: a client missing from a
   // ternary silently collapses to the fallback branch.
   const agentKey: AgentKey = selectedAgent || fromConvexAgentType(currentAgent);
-  const pinnedAgents = usePinnedAgentIds();
+  const agentOptions = usePinnedPickerOptions(agentKey);
   const isExpanded = isFocused || message.length > 0;
+  // Hosted mode asks the assistant, about a note or a to-do, in its words,
+  // with no agent to pick.
+  const hostedMode = useHostedMode();
+  const noun = hostedMode ? HOSTED_NOUN[contextType] ?? contextType : contextType;
+  const askingHosted = isHostedAgentType(agentOptions.find((a) => a.id === agentKey)?.convexType ?? currentAgent);
+  // A held month or a thinking outage keeps the words and says why, rather
+  // than starting a conversation that can only stop.
+  const hold = useHostedAskGate(askingHosted);
 
   const resetHeight = useCallback(() => {
     const el = textareaRef.current;
@@ -76,11 +81,15 @@ export function ContextChatInput({
     const text = message.trim();
     if (!text) return;
 
+    const convexAgentType = agentOptions.find((a) => a.id === agentKey)?.convexType ?? currentAgent;
+    const hosted = isHostedAgentType(convexAgentType);
+    if (hosted && hold) return;
     const body = getContextBody();
     const idAttr = linkedObjectId ? ` id="${escapeContext(linkedObjectId)}"` : "";
     let contextBody = body || "";
-    // Prepend editing instructions for docs so the model knows how to modify them
-    if (contextType === "doc" && linkedObjectId && body) {
+    // Prepend editing instructions for docs so the model knows how to modify
+    // them. The hosted assistant has no `cast` to run, so it reads the body only.
+    if (contextType === "doc" && linkedObjectId && body && !hosted) {
       contextBody = `[Document ID: ${linkedObjectId}]\nTo edit this document use: cast doc edit ${linkedObjectId} --old "text to find" --new "replacement text"\nTo update title: cast doc edit ${linkedObjectId} --title "New Title"\nTo offer the writer choices instead of replacing their words: cast doc alt (versions they flip between), cast doc ghost (dim text that could go), cast doc overflow --stash (move text aside), cast doc lab (trims and marks). cast doc drafts ${linkedObjectId} lists what is already there.\nDo not use file Read/Write/Edit tools — this document lives in the database, not the filesystem.\n\n${body}`;
     }
     const contextBlock = contextBody
@@ -88,20 +97,37 @@ export function ContextChatInput({
       : `[Viewing ${contextType}: ${contextTitle}]\n\n`;
     const fullMessage = contextBlock + text;
 
+    // Every branch ends the same way: empty the composer and open the
+    // conversation the message went to.
+    const finish = (sid: string) => {
+      setMessage("");
+      setSelectedAgent(null);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+        // A grown textarea keeps its scroll offset after the reset; in a narrow
+        // column that shows the placeholder's wrapped tail instead of its start.
+        textareaRef.current.scrollTop = 0;
+      }
+      openLinkedSession({ _id: sid });
+    };
+
     const store = useInboxStore.getState();
     if (conversationId) {
       const clientId = store.addOptimisticMessage(conversationId, fullMessage);
       store.sendMessage(conversationId, fullMessage, undefined, clientId);
-      openLinkedSession({ _id: conversationId });
-      setMessage("");
-      setSelectedAgent(null);
-      if (textareaRef.current) textareaRef.current.style.height = "auto";
+      finish(conversationId);
       return;
     }
     const { projectPath, gitRoot } = store.currentConversation;
-    const convexAgentType = AGENT_TYPES.find(a => a.key === agentKey)?.convex || "claude_code";
 
     soundNewSession();
+
+    // The hosted assistant starts with its first message on the create and
+    // no folder or machine; the context block rides that first message.
+    if (hosted) {
+      finish(startHostedConversation(fullMessage));
+      return;
+    }
 
     // The linked object's OWN project wins over the viewer's
     // currentConversation, which may belong to an unrelated repo (~/src etc) —
@@ -153,24 +179,15 @@ export function ContextChatInput({
     }
     const clientId = store.addOptimisticMessage(sid, fullMessage);
 
-    setMessage("");
-    setSelectedAgent(null);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      // A grown textarea keeps its scroll offset after the reset; in a narrow
-      // column that shows the placeholder's wrapped tail instead of its start.
-      textareaRef.current.scrollTop = 0;
-    }
-
     // The stub row already exists (beginOptimisticSession wrote it), so this
     // paints the new session with its optimistic message before any server
     // round-trip; the /conversation/<stub> route resolves through
     // navigateToSession + the inbox's ?s= param, both of which follow the
     // stub→convex rekey.
-    openLinkedSession({ _id: sid });
+    finish(sid);
 
     store.sendMessageWhenReady(sid, fullMessage, undefined, clientId);
-  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp, conversationId, openLinkedSession]);
+  }, [message, contextType, contextTitle, getContextBody, agentKey, agentOptions, currentAgent, linkedObjectId, projectPathProp, conversationId, openLinkedSession, hold]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -182,7 +199,7 @@ export function ContextChatInput({
     [handleSubmit]
   );
 
-  const defaultPlaceholder = `Work on this ${contextType} with an agent...`;
+  const defaultPlaceholder = hostedMode ? `Ask the assistant about this ${noun}…` : `Work on this ${contextType} with an agent...`;
   const hasText = message.trim().length > 0;
 
   // At rest the composer is a small pill out of the reading line; a click
@@ -198,7 +215,7 @@ export function ContextChatInput({
           className="pointer-events-auto inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-sol-border/60 bg-sol-bg-alt text-[11px] text-sol-text-muted shadow-md transition-colors hover:text-sol-text hover:border-sol-border"
         >
           <Sparkles className="w-3 h-3 text-sol-cyan" />
-          Ask an agent
+          {hostedMode ? "Ask the assistant" : "Ask an agent"}
         </button>
       </div>
     );
@@ -211,25 +228,25 @@ export function ContextChatInput({
       <div className="mx-auto px-2 sm:px-4 conv-col">
         <div className="mx-auto px-4 mb-1 flex justify-between items-center conv-col">
           <div className="flex items-center gap-1">
-            {AGENT_TYPES.filter((agent) => pinnedAgents.includes(agent.key) || agent.key === agentKey).map((agent) => (
+            {!hostedMode && agentOptions.map((agent) => (
               <button
-                key={agent.key}
+                key={agent.id}
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setSelectedAgent(agent.key)}
+                onClick={() => setSelectedAgent(agent.id)}
                 className={`px-2 py-0.5 text-[11px] font-medium rounded-md border transition-colors flex items-center gap-1 ${
-                  agentKey === agent.key
-                    ? agent.active
+                  agentKey === agent.id
+                    ? agentAccent(agent.convexType).chip
                     : "bg-transparent text-sol-text-dim border-transparent hover:text-sol-text-muted"
                 }`}
               >
-                <AgentTypeIcon agentType={agent.convex} className="w-3 h-3" />
+                <AgentTypeIcon agentType={agent.convexType} className="w-3 h-3" />
                 {agent.label}
               </button>
             ))}
           </div>
           <span className="text-[10px] text-sol-text-dim/50">
-            {contextType}
+            {noun}
           </span>
         </div>
       <div className={`flex flex-col border shadow-lg px-4 py-2 rounded-2xl bg-sol-bg-alt ${isFocused ? "border-sol-border" : "border-sol-border/50"}`}>
@@ -256,7 +273,7 @@ export function ContextChatInput({
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={!hasText}
+              disabled={!hasText || (askingHosted && !!hold)}
               className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
                 !hasText
                   ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
@@ -267,6 +284,7 @@ export function ContextChatInput({
             </button>
           </div>
         </div>
+        {askingHosted && hold && <AskHeldLine hold={hold} className="pt-1 text-xs" />}
       </div>
     </div>
     </div>

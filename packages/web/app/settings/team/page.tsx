@@ -24,6 +24,7 @@ import { TEAM_ICONS, TEAM_COLORS, type TeamIconName, type TeamColorName } from "
 import { TeamIdentityPicker, type TeamIdentity } from "../../../components/team/TeamIdentityPicker";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
+import { TeamDomainAccess } from "../../../components/settings/TeamDomainAccess";
 import { Github, TriangleAlert, Users } from "lucide-react";
 import { SelectBox } from "../../../components/ui/select-box";
 import {
@@ -457,6 +458,8 @@ export default function TeamPage() {
           );
         })}
       </SettingsSection>
+
+      {isAdmin && effectiveTeamId && <TeamDomainAccess teamId={effectiveTeamId} />}
 
       {effectiveTeamId && <TeamMachines teamId={String(effectiveTeamId)} />}
 

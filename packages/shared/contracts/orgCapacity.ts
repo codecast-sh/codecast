@@ -185,8 +185,8 @@ export type StalePlanReason = "every task closed" | "no activity 21d" | "bound s
 export type StaleTaskReason = "in progress, no session 14d" | "in progress, sessions done 14d" | "commits landed, still open" | "open, untouched 45d";
 /** A commit on the main branch whose message names a record (convex/lib/orgActivity landingFor): its sha, when it landed, and the message's first line. */
 export type LandedCommit = { sha: string; at: number; line: string };
-export type StalePlan = { short_id: string; title: string; status: string; last_task_activity_at: number | null; sessions_live: number; reason: StalePlanReason; landing?: LandedCommit[] };
-export type StaleTask = { short_id: string; title: string; status: string; last_session_activity_at: number | null; reason: StaleTaskReason; landing?: LandedCommit[] };
+export type StalePlan = { short_id: string; title: string; status: string; /** The project the plan is filed under (pr-N), when it has one. */ project?: string; last_task_activity_at: number | null; sessions_live: number; reason: StalePlanReason; landing?: LandedCommit[] };
+export type StaleTask = { short_id: string; title: string; status: string; /** The plan (pl-N) and project (pr-N) the task sits under, when it has them: a record change carries them so the proposal groups by them. */ plan?: string; project?: string; last_session_activity_at: number | null; reason: StaleTaskReason; landing?: LandedCommit[] };
 /** An open task or plan a scanned session is bound to, with what landed for it on main. */
 export type BoundRecord = { short_id: string; title: string; status: string; sessions: number; sessions_live: number; updated_at: number; landing: LandedCommit[] };
 export type StaleProject = { id: string; title: string; reason: "no activity 30d" };

@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState, useRef } from "react";
-import { Activity, ChevronLeft, ChevronRight, Clock, LayoutGrid, MessageSquare, Send, Type, X } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, Clock, Coins, DollarSign, LayoutGrid, MessageSquare, Send, Type, X } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { HEAT_COLORS_LIGHT, HEAT_COLORS_DARK, heatColor, useContainerWidth, HoverTip } from "./ActivityHeatmap";
@@ -18,12 +18,19 @@ export { timeAxisLabels, useDayBrush };
 // `sends` (messages the person actually typed) and `words` (the words in
 // them) shipped later than the rest — older cached payloads may omit them, so
 // consumers treat them as optional zeros.
-export type PunchRow = { date: string; hours: number[]; msgs: number[]; sends?: number[]; words?: number[]; sessions: number[]; day_sessions: number };
-export type TimelineMetric = "hours" | "msgs" | "sends" | "words";
+export type PunchRow = { date: string; hours: number[]; msgs: number[]; sends?: number[]; words?: number[]; tokens?: number[]; spend?: number[]; sessions: number[]; day_sessions: number };
+export type TimelineMetric = "hours" | "msgs" | "sends" | "words" | "tokens" | "spend";
 
 export function fmtK(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1).replace(/\.0$/, "")}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
   return String(n);
+}
+
+export function fmtUsd(v: number): string {
+  if (v >= 1000) return `$${(v / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return v >= 10 || v === 0 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`;
 }
 
 export function fmtDayLabel(dateStr: string): string {
@@ -79,6 +86,24 @@ const METRIC_CFG = {
     fmtVal: (v: number) => `${fmtK(Math.round(v))} words`,
     fmtAxis: (v: number) => fmtK(Math.round(v)),
   },
+  tokens: {
+    label: "Tokens",
+    heading: "Tokens per day",
+    line: "#2aa198",
+    light: CYAN_COLORS_LIGHT,
+    dark: CYAN_COLORS_DARK,
+    fmtVal: (v: number) => `${fmtK(Math.round(v))} tokens`,
+    fmtAxis: (v: number) => fmtK(Math.round(v)),
+  },
+  spend: {
+    label: "Spend",
+    heading: "Spend per day, at API list price",
+    line: "#b58900",
+    light: ["#eee8d5", "#e8dcae", "#dcc679", "#c9a83d", "#b58900"] as string[],
+    dark: ["#073642", "#2b4a3a", "#4f5e2a", "#82721a", "#b58900"] as string[],
+    fmtVal: fmtUsd,
+    fmtAxis: fmtUsd,
+  },
 } as const;
 
 /** The metric switch every activity chart shows. */
@@ -87,7 +112,18 @@ export const METRIC_ITEMS = [
   { key: "msgs", icon: MessageSquare, label: "Messages", title: "All session messages" },
   { key: "sends", icon: Send, label: "Typed", title: "Messages the person typed" },
   { key: "words", icon: Type, label: "Words", title: "Words the person typed" },
+  { key: "tokens", icon: Coins, label: "Tokens", title: "Tokens billed, cache reads included" },
+  { key: "spend", icon: DollarSign, label: "Spend", title: "Claude spend at API list price" },
 ];
+
+const USAGE_METRICS = new Set(["tokens", "spend"]);
+
+/** The metrics a set of rows can show: token and spend counters only reach
+ *  viewers allowed to see them, so those tabs appear only when rows carry them. */
+export function metricItemsFor(rows: PunchRow[] | undefined) {
+  const hasUsage = !!rows?.some((r) => r.tokens?.some((v) => v > 0));
+  return hasUsage ? METRIC_ITEMS : METRIC_ITEMS.filter((m) => !USAGE_METRICS.has(m.key));
+}
 
 export const fmtMetric = (metric: TimelineMetric, v: number) => METRIC_CFG[metric].fmtVal(v);
 
@@ -95,7 +131,7 @@ export const fmtMetric = (metric: TimelineMetric, v: number) => METRIC_CFG[metri
 export function metricHours(r: PunchRow, metric: TimelineMetric): number[] {
   if (metric === "hours") return r.hours;
   if (metric === "msgs") return r.msgs;
-  return (metric === "sends" ? r.sends : r.words) ?? zeros24();
+  return r[metric] ?? zeros24();
 }
 
 export function dateKey(d: Date): string {
@@ -230,6 +266,7 @@ export function TimelineCharts({
   const range = controlledRange ?? localRange;
   const setRange = onRangeChange ?? setLocalRange;
   const [view, setView] = useState<"grid" | "chart">("grid");
+  const metricItems = useMemo(() => metricItemsFor(punchcard), [punchcard]);
 
   // Continuous day axis from first activity through today — both charts share it.
   const filled = useMemo(() => fillDays(punchcard), [punchcard]);
@@ -296,7 +333,7 @@ export function TimelineCharts({
           <SegmentedToggle
             value={metric}
             onChange={(k) => setMetric(k as TimelineMetric)}
-            items={METRIC_ITEMS}
+            items={metricItems}
           />
           {!controlledRange && <RangeControl value={range} onChange={setRange} days={filled} />}
         </div>

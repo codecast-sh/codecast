@@ -256,7 +256,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
   // list's order. A drop cannot move a task between initiatives: membership is
   // the project's, so the groups refuse drops.
   initiative: {
-    label: "Initiative",
+    label: "Goal",
     keyOf: (t, ctx) => initiativeOfTask(t, ctx)?._id ?? "",
     compare: (a, b, ctx) => {
       const ra = initiativeOfTask(a.sample, ctx);
@@ -279,7 +279,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
         ) : undefined,
       };
     },
-    noneLabel: "No initiative",
+    noneLabel: "No goal",
   },
 
   label: {
