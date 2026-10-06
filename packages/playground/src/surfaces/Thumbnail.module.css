@@ -1,0 +1,7 @@
+.thumb { position: absolute; inset: 0; overflow: hidden; background: var(--cream); }
+.placeholder { position: absolute; inset: 0; display: grid; place-items: center; background: var(--dot-grid), var(--cream); }
+.frame {
+  position: absolute; top: 0; left: 0; width: 400%; height: 400%; border: 0; transform: scale(.25); transform-origin: 0 0;
+  pointer-events: none; opacity: 0; transition: opacity 280ms var(--glide); background: var(--paper);
+}
+.loaded { opacity: 1; }

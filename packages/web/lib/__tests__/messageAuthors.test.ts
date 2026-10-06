@@ -32,6 +32,12 @@ describe("historical message authors", () => {
     expect(sameMessageAuthor(messages[0], messages[2], authors)).toBe(false);
   });
 
+  test("the hosted assistant authors every reply, whatever model ran it", () => {
+    const authors = messageAgentTypes([reply("a", 1, "claude-haiku-4-5-20251001"), reply("b", 2, "gpt-5.5")], "codecast");
+    expect(authors.get("a")).toBe("codecast");
+    expect(authors.get("b")).toBe("codecast");
+  });
+
   test("uses message model evidence when a paged window has no switch notice", () => {
     const authors = messageAgentTypes([reply("a", 1, "claude-fable-5"), reply("b", 2, "gpt-6-astra")], "codex");
     expect(authors.get("a")).toBe("claude_code");

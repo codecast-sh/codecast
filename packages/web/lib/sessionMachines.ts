@@ -1,10 +1,11 @@
 import type { Device } from "../components/DeviceBadge";
-import { cloudPlacementFor, deviceDisplayName, platformCanOpenPath, type CloudStartFrom } from "@codecast/shared/contracts";
+import { cloudHostRetired, cloudPlacementFor, deviceDisplayName, platformCanOpenPath, type CloudHostReport, type CloudStartFrom } from "@codecast/shared/contracts";
 import { defaultMachineId, deviceSeesPath, wakesOnUse, type MachineCandidate } from "./machinePicker";
+import { compactAge } from "./threadState";
 
 export type SessionMachine = Device & { bot_name?: string | null; runner_name?: string | null };
 
-type Candidate = MachineCandidate & { bot_name?: string | null };
+type Candidate = MachineCandidate & { bot_name?: string | null; cloud_host?: CloudHostReport | null };
 
 export function sessionMachineChoices(
   devices: Device[],
@@ -28,13 +29,22 @@ export function isCloudHost(d: { bot_name?: string | null; is_remote?: boolean; 
 }
 
 /**
- * The cloud host to offer, if the user has one — offline included, since a
- * stopped host is asleep, not gone. Only the first: one cloud box per account
- * is the shape the product has, and choosing among several belongs in the
- * machine row, which already lists them.
+ * A cloud host that can serve while offline: asleep, so it boots when the
+ * session starts. A host whose instance is gone (cloudHostRetired) never
+ * boots, so nothing may default to it or count it as asleep.
  */
-export function cloudHostOf<T extends { bot_name?: string | null; is_remote?: boolean; platform?: string }>(devices: T[]): T | null {
-  return devices.find(isCloudHost) ?? null;
+export function sleepingCloudHost(d: Candidate, roster: Candidate[]): boolean {
+  return isCloudHost(d) && !cloudHostRetired(d, roster);
+}
+
+/**
+ * The cloud host to offer, if the user has one — offline included, since a
+ * stopped host is asleep (but never one that is gone). Only the first: one
+ * cloud box per account is the shape the product has, and choosing among
+ * several belongs in the machine row, which already lists them.
+ */
+export function cloudHostOf<T extends Candidate>(devices: T[]): T | null {
+  return devices.find((d) => sleepingCloudHost(d, devices)) ?? null;
 }
 
 type SelectionOpts = Parameters<typeof defaultMachineId>[1];
@@ -57,11 +67,12 @@ type SelectionOpts = Parameters<typeof defaultMachineId>[1];
  */
 export function defaultSessionMachineId(devices: Candidate[], opts: SelectionOpts) {
   const own = devices.filter((d) => d.bot_name === undefined);
-  const wakeOk = (d: MachineCandidate) => isCloudHost(d as Candidate);
+  const asleep = (d: Candidate) => sleepingCloudHost(d, devices);
+  const wakeOk = (d: MachineCandidate) => asleep(d as Candidate);
   const intended = devices.find((d) => d.device_id === opts?.ownerDeviceId && (d.online || isCloudHost(d)))
     ?? own.find((d) => d.device_id === opts?.localDeviceId)
-    ?? devices.find((d) => d.device_id === opts?.lastPicked && (d.online || isCloudHost(d))
-      && (!opts.projectPath || isCloudHost(d) || deviceSeesPath(d, opts.projectPath) || platformCanOpenPath(d.platform, opts.projectPath)));
+    ?? devices.find((d) => d.device_id === opts?.lastPicked && (d.online || asleep(d))
+      && (!opts.projectPath || asleep(d) || deviceSeesPath(d, opts.projectPath) || platformCanOpenPath(d.platform, opts.projectPath)));
   return intended?.device_id ?? defaultMachineId(own.length ? own : devices, { ...opts, wakeOk });
 }
 
@@ -104,13 +115,30 @@ export function cloudToggleAvailable(devices: Candidate[], cloudMode: boolean): 
 /**
  * A machine chip's tooltip. A sleeping cloud host is not an offline laptop:
  * it boots when the session starts, so its chip must not promise a fallback
- * to another machine.
+ * to another machine. A gone one says so, and where to remove it.
  */
-export function machineChipTitle(d: SessionMachine): string {
+export function machineChipTitle(d: SessionMachine, roster: SessionMachine[]): string {
   const name = deviceDisplayName(d);
-  if (d.online) return `Run this session on ${name}`;
-  if (isCloudHost(d)) return `${name} is asleep — it boots when the session starts`;
-  return `${name} is offline — will fall back to an online machine with this repo`;
+  const where = d.cloud_host ? ` (${[d.cloud_host.instance_type, d.cloud_host.region, d.cloud_host.instance_id].filter(Boolean).join(", ")})` : "";
+  if (d.online) return `Run this session on ${name}${where}`;
+  const seen = `last seen ${compactAge(Date.now() - d.last_seen)} ago`;
+  if (cloudHostRetired(d, roster)) return `${name}${where} no longer exists: its laptop stopped reporting it, ${seen}. Remove it in Settings → Devices`;
+  if (isCloudHost(d)) return `${name}${where} is asleep, ${seen} — it boots when the session starts`;
+  return `${name} is offline, ${seen} — will fall back to an online machine with this repo`;
+}
+
+/**
+ * The short note after a chip's name. Always "gone" for a cloud host that no
+ * longer exists; otherwise only when another chip shares the name, so three
+ * "Cloud Linux" chips read apart: the offline ones by how long they have been
+ * off, the online one by where it runs.
+ */
+export function machineChipNote(d: SessionMachine, roster: SessionMachine[]): string | null {
+  if (cloudHostRetired(d, roster)) return "gone";
+  const name = deviceDisplayName(d);
+  if (!roster.some((o) => o !== d && o.bot_name === d.bot_name && deviceDisplayName(o) === name)) return null;
+  if (!d.online) return `${isCloudHost(d) ? "asleep" : "off"} ${compactAge(Date.now() - d.last_seen)}`;
+  return d.cloud_host?.region ?? d.cloud_host?.instance_type ?? d.device_id.slice(0, 6);
 }
 
 /**

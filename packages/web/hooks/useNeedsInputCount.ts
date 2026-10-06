@@ -9,6 +9,8 @@ import {
   type PlacedInbox,
 } from "../store/inboxStore";
 import { useCoarseNow } from "./useCoarseNow";
+import { assistantScopeOnly, bySessionAgent, withinScope } from "../lib/assistantScope";
+import { hostedStopsSig, splitHostedStops } from "../lib/hostedNotice";
 
 // The user's personal attention count: the inbox's QUESTIONS + NEEDS INPUT
 // buckets, mine-scoped, over the shared working-set selection. One source —
@@ -22,9 +24,25 @@ import { useCoarseNow } from "./useCoarseNow";
 // `enabled: false` skips the placement pass and returns 0 — for callers that
 // only need the count on some platforms (DesktopProvider in a plain browser
 // tab), where running it would double the sidebar badge's identical work.
+//
+// In hosted mode the count follows the panel's Assistant/Everything scope
+// (lib/assistantScope), and a hosted conversation that ended on a stop is
+// left out: the assistant failed there, the person owes no reply. The panel
+// files those under "Couldn't finish" by the same rule (splitHostedStops).
 export function useNeedsInputCount(enabled = true): number {
   const placed = useMinePlacement(enabled);
-  return placed ? placed.needsInput.length + placed.questions.length : 0;
+  const scope = useTrackedStore([
+    (s) => assistantScopeOnly(s.clientState.ui),
+    (s) => hostedStopsSig(s.sessions, s.messages),
+  ]);
+  const only = assistantScopeOnly(scope.clientState.ui);
+  const stops = hostedStopsSig(scope.sessions, scope.messages);
+  return useMemo(() => {
+    if (!placed) return 0;
+    const asks = splitHostedStops(placed.needsInput, (id) => scope.messages[id]).asks;
+    return withinScope(asks, only, bySessionAgent).length + withinScope(placed.questions, only, bySessionAgent).length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placed, only, stops]);
 }
 
 // The mine-scoped placement itself, for a surface that renders more than the

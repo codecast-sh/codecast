@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./agentTasks";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
+import { subagentEnded } from "./subagentFleet";
 import { nestParentIdOf } from "./ccAccountsShared";
 
 // ---------------------------------------------------------------------------
@@ -332,6 +333,7 @@ export async function applyHideTransition(
     // from another window), and deleting the row under it loses that message
     // and strands the client's copy of the session (2026-10-01).
     teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
+    await subagentEnded(ctx, doc, "killed");
   } else if (action === "kill") {
     // false = an unexecuted kill_session for this conversation is ALREADY on the
     // daemon's queue (enqueueKillSessionCommand's 1h dedupe). The desired state
@@ -349,6 +351,8 @@ export async function applyHideTransition(
     if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
     if (!doc?.persistent) killPatch.status = "completed";
     if (Object.keys(killPatch).length > 0) await ctx.db.patch(doc._id, killPatch);
+    // A killed worker frees its fleet slot and keeps its worktree.
+    if (!doc?.persistent) await subagentEnded(ctx, doc, "killed");
     // Dismiss retires the session — a standing schedule that injects
     // into it must die with it, or its next fire would silently
     // resurrect a session the user just retired. User gestures only:

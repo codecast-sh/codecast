@@ -5,6 +5,7 @@ import {
   cloudToggleAvailable,
   defaultSessionMachineId,
   isCloudHost,
+  machineChipNote,
   machineSelectionAfterCloudToggle,
   machineSelectionAfterPick,
   sessionMachineChoices,
@@ -18,6 +19,37 @@ const cloudAwake = { ...cloud, online: true };
 const remoteMac = { device_id: "remote-mac", label: "Remote", platform: "darwin", online: true, is_remote: true, last_seen: 1, local_project_roots: [] };
 const linuxLaptop = { device_id: "linux-laptop", label: "thinkpad", platform: "linux", online: true, is_remote: false, last_seen: 1, local_project_roots: [] };
 const linuxBox = { ...cloud, device_id: "linux-box", bot_name: "Boxy" };
+
+describe("a cloud host whose instance is gone", () => {
+  // The roster from the report: one live Cloud Linux the laptop reports on,
+  // and two whose EC2 instances were terminated, so the laptop stopped
+  // reporting them days ago. A standing pick of a dead one parked every new
+  // session on it, waiting for a host that would never boot.
+  const now = Date.now();
+  const report = (at: number, extra = {}) => ({ managed_by: "laptop", instance_id: "i", provider: "aws" as const, state: "stopped" as const, images: [], logins_held: [], at, ...extra });
+  const live = { ...cloud, device_id: "live", cloud_host: report(now) };
+  const deadA = { ...cloud, device_id: "dead-a", last_seen: now - 14 * 86_400_000, cloud_host: report(now - 14 * 86_400_000) };
+  const deadB = { ...cloud, device_id: "dead-b", last_seen: now - 20 * 86_400_000 };
+  const roster = [laptop, deadA, deadB, live];
+
+  test("a standing pick of a dead host falls through; a sleeping one holds", () => {
+    expect(defaultSessionMachineId(roster, { lastPicked: deadA.device_id })).toBe(laptop.device_id);
+    expect(defaultSessionMachineId(roster, { lastPicked: deadB.device_id })).toBe(laptop.device_id);
+    expect(defaultSessionMachineId(roster, { lastPicked: live.device_id })).toBe(live.device_id);
+  });
+
+  test("the cloud toggle points at the live host, and at nothing when every host is dead", () => {
+    expect(cloudHostOf(roster)).toBe(live);
+    expect(cloudHostOf([laptop, deadA, deadB, { ...live, cloud_host: report(now, { state: "missing" }) }])).toBeNull();
+  });
+
+  test("an online host is never gone, and a lone host without reports stays asleep", () => {
+    expect(machineChipNote({ ...deadA, online: true }, roster)).not.toBe("gone");
+    expect(cloudHostOf([laptop, deadB])).toBe(deadB);
+    expect(machineChipNote(deadA, roster)).toBe("gone");
+    expect(machineChipNote(laptop, roster)).toBeNull();
+  });
+});
 
 describe("new-session machines", () => {
   test("a remembered incompatible runtime cannot override the checkout holder", () => {

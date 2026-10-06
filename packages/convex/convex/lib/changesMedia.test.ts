@@ -26,8 +26,9 @@ async function seed() {
       const conv = await ctx.db.insert("conversations", { user_id: user, team_id: team, agent_type: "claude_code", session_id: name, started_at: T, updated_at: T, message_count: 1, status: "active" } as any);
       const message = await ctx.db.insert("messages", { conversation_id: conv, message_uuid: `m-${name}`, role: "assistant", content: `The new call card, ![x](https://convex.example/${name}.png) after the fix`, timestamp: T + 10 } as any);
       await ctx.db.insert("conversation_images", { conversation_id: conv, image_key: `https://convex.example/${name}.png`, src: `https://convex.example/${name}.png`, message_id: message, seq: 0, timestamp: T + 10 });
-      // A screenshot hours before the story's commits checked other work.
+      // A screenshot before the session's previous commit checked the work that commit shipped.
       await ctx.db.insert("conversation_images", { conversation_id: conv, image_key: `old-${name}`, src: `https://convex.example/old-${name}.png`, message_id: message, seq: 1, timestamp: T - 4 * 3_600_000 });
+      await ctx.db.insert("commits", { conversation_id: conv, sha: `prev-${name}`, message: "earlier work", timestamp: T - 3_600_000 } as any);
       await ctx.db.insert("file_changes", { conversation_id: conv, change_key: `k-${name}`, message_id: message, seq: 0, file_path: "packages/x/prompts/story.md", change_type: "edit", timestamp: T + 20 } as any);
       await ctx.db.insert("file_change_bodies", { conversation_id: conv, change_key: `k-${name}`, old_content: "Be brief.", new_content: "Write a short article." });
       made[name] = conv;
@@ -76,6 +77,37 @@ describe("teamVisibleMedia", () => {
 });
 
 describe("media windows", () => {
+  test("a session that worked for hours before committing lends its screenshots from then, and none from before its previous commit", async () => {
+    const t = convexTest(schema, modules);
+    const conv = await t.run(async (ctx) => {
+      const user = await ctx.db.insert("users", { name: "Ana" } as any);
+      const conv = await ctx.db.insert("conversations", { user_id: user, agent_type: "claude_code", session_id: "s", started_at: T, updated_at: T, message_count: 1, status: "active" } as any);
+      const message = await ctx.db.insert("messages", { conversation_id: conv, message_uuid: "m", role: "assistant", content: "The ranked needs list", timestamp: T } as any);
+      const shot = (key: string, at: number) => ctx.db.insert("conversation_images", { conversation_id: conv, image_key: key, src: `https://convex.example/${key}.png`, message_id: message, seq: 0, timestamp: at });
+      await shot("before-prev", T - 11 * 3_600_000);
+      await ctx.db.insert("commits", { conversation_id: conv, sha: "prev", message: "earlier work", timestamp: T - 10 * 3_600_000 } as any);
+      await shot("morning", T - 9 * 3_600_000);
+      return conv;
+    });
+    const media: Record<string, any> = await t.run(async (ctx) => Object.fromEntries(await teamVisibleMedia(ctx as any, [{ conversation_id: conv, mode: "full" }], { first_at: T, last_at: T + 1000 })));
+    expect(media[String(conv)].images.map((i: any) => i.url)).toEqual(["https://convex.example/morning.png"]);
+  });
+
+  test("a session with no earlier commit reaches back twelve hours", async () => {
+    const t = convexTest(schema, modules);
+    const conv = await t.run(async (ctx) => {
+      const user = await ctx.db.insert("users", { name: "Ana" } as any);
+      const conv = await ctx.db.insert("conversations", { user_id: user, agent_type: "claude_code", session_id: "s", started_at: T, updated_at: T, message_count: 1, status: "active" } as any);
+      const message = await ctx.db.insert("messages", { conversation_id: conv, message_uuid: "m", role: "assistant", content: "The ranked needs list", timestamp: T } as any);
+      for (const [key, hours] of [["day-before", 13], ["morning", 11]] as const) {
+        await ctx.db.insert("conversation_images", { conversation_id: conv, image_key: key, src: `https://convex.example/${key}.png`, message_id: message, seq: 0, timestamp: T - hours * 3_600_000 });
+      }
+      return conv;
+    });
+    const media: Record<string, any> = await t.run(async (ctx) => Object.fromEntries(await teamVisibleMedia(ctx as any, [{ conversation_id: conv, mode: "full" }], { first_at: T, last_at: T + 1000 })));
+    expect(media[String(conv)].images.map((i: any) => i.url)).toEqual(["https://convex.example/morning.png"]);
+  });
+
   test("a page made hours before the commits belongs to the story; one made long after does not", async () => {
     const t = convexTest(schema, modules);
     const conv = await t.run(async (ctx) => {

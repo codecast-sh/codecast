@@ -20,7 +20,7 @@ import { metricReadings, nextMilestone, type MetricReading } from "@codecast/sha
 import { editedOrgChange, ORG_GOAL_KINDS, type OrgChangeKind } from "@codecast/shared/contracts/orgProposal";
 import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { byListOrder } from "../../lib/initiatives";
-import type { OrgSession, OrgTree } from "./orgTypes";
+import { countStates, EMPTY_COUNTS, type OrgSession, type OrgTree, type StateCounts } from "./orgTypes";
 import type { ZoomLevel } from "./orgZoom";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import { ghostScopeNames, ORG_SIZES, personNodeId, quietChipLines, roleNodeId, wrappedLines, type OrgGhostChip, type OrgGhostMeta } from "./orgLayout";
@@ -43,10 +43,10 @@ export type GoalsInput = {
   projects: readonly GoalProject[];
   /** The open proposal's changes; absent, the lens draws what is. */
   changes?: readonly OrgProposalChange[];
-  /** The change in focus: its card keeps a row free beneath it for the action strip. */
-  focusChangeId?: string | null;
-  /** The focused change already has a pending answer: the strip says so in a line under it, and the row grows by that line. */
-  focusAnswered?: boolean;
+  /** The column on the right: who owns a goal or leads a project (the Goals
+   *  lens), every person and active role with their session counts (the
+   *  map's Everything), or no column at all (the outline alone). */
+  people?: "owners" | "everyone" | "none";
 };
 
 // ---------------------------------------------------------------- the plan
@@ -67,8 +67,9 @@ export type PlanGoal = {
   ghost?: GoalGhost;
   /** Deltas on the goal that are neither: its metrics, its owner. */
   chips: OrgGhostChip[];
-  /** A re-placed goal: where it sat before. */
+  /** A re-placed goal: where it sat before, and that goal's id (absent when it sat at the top). */
   was?: string;
+  wasId?: string;
   /** The owner edge is this change's. */
   ownerGhost?: GoalGhost;
   /** The owner before an owner change, for the faded edge. */
@@ -168,7 +169,7 @@ export function goalsPlan({ tree, initiatives, projects, changes = [] }: GoalsIn
         changeGoal[r.change_id] = g.id;
         if (ch.parent !== undefined) {
           g.parentId = r.parent?.id ?? null;
-          if (r.from) g.was = r.from.name;
+          if (r.from) { g.was = r.from.name; g.wasId = r.from.id; }
           g.ghost ??= metaOf(r, r.tag);
           g.order = seqOf(r);
         }
@@ -229,7 +230,7 @@ export const GOALS_SIZES = {
   projectClose: 16,
   ownerClose: 18,
   /** Where an edge meets a card, from its top: inside every level's card. */
-  anchor: { company: 28, goal: 24, project: 17, owner: 23 },
+  anchor: { company: 28, goal: 24, project: 17, owner: 23, loose: 20 },
   /** A card's indent under its parent, and the spine's own inset from the parent's left edge. */
   indent: 30,
   spineInset: 15,
@@ -243,10 +244,12 @@ export const GOALS_SIZES = {
   chipRow: ORG_SIZES.quietChipRow,
   wasRow: 16,
   refRow: 22,
-  /** The room a focused ghost keeps beneath it for its Approve, Reject, Reply, Edit strip. */
-  actionRow: 40,
-  /** The line under the strip that reads the pending answer ("Approved, on your next message"). */
-  answerRow: 26,
+  /** The kicker over a mission's title ("mission"), at every level. */
+  missionRow: 14,
+  /** The state bar and tally under a column card that carries session counts (the map's Everything). */
+  ownerStateRow: 18,
+  /** The quiet header over the projects no goal carries. */
+  loose: { w: 264, h: 40 },
   /** The empty band the owner edges cross. */
   ownerGap: 170,
   /** How far past the outline an owner edge runs straight before it curves. */
@@ -255,13 +258,16 @@ export const GOALS_SIZES = {
 } as const;
 
 export const COMPANY_NODE_ID = "company";
+/** The header the projects no goal carries sit under (the map's Everything and Goals). */
+export const LOOSE_NODE_ID = "loose";
 export const goalNodeId = (id: string) => `goal:${id}`;
 export const projectNodeId = (goalId: string, projectId: string) => `project:${goalId}:${projectId}`;
 export const ownerNodeId = (o: GoalOwner) => (o.kind === "person" ? personNodeId(o.id) : o.kind === "role" ? roleNodeId(o.id) : `owner:${o.id}`);
 
 type Box = { id: string; x: number; y: number; w: number; h: number };
 export type GoalsNode =
-  | (Box & { kind: "company"; name: string; goals: number; projects: number })
+  | (Box & { kind: "company"; name: string; goals: number; projects: number; /** A top level goal that other goals feed: the company has a mission. */ mission: boolean })
+  | (Box & { kind: "loose"; /** How many projects no goal carries. */ projects: number })
   | (Box & {
       kind: "goal";
       goal: PlanGoal;
@@ -273,16 +279,27 @@ export type GoalsNode =
       refs: { project: PlanProject; under: string }[];
       /** Sessions working now under a role whose area holds one of the goal's projects, for the close card. */
       running: OrgSession[];
+      /** A top level goal that other goals feed: the mission (the word a person reads for it). */
+      mission: boolean;
     })
-  | (Box & { kind: "project"; project: PlanProject })
-  | (Box & { kind: "owner"; owner: GoalOwner; owns: number; /** A role's standing line, for the close card. */ line?: string });
+  | (Box & { kind: "project"; project: PlanProject; /** Sessions under the roles whose area holds the project, by state; absent when none. */ counts?: StateCounts })
+  | (Box & {
+      kind: "owner";
+      owner: GoalOwner;
+      owns: number;
+      /** A role's standing line, for the close card. */
+      line?: string;
+      /** The map's Everything: the card's sessions by state, and who it reports to. */
+      counts?: StateCounts;
+      reportsTo?: string;
+    });
 
 /** Where an edge meets a node, from the node's top. */
 export const goalsAnchor = (n: Pick<GoalsNode, "kind">): number => GOALS_SIZES.anchor[n.kind];
 
 /** `spine`: parent to child down the outline. `owner`: a goal or project to
  *  who answers for it. `ghost` is a proposed edge, `faded` the one it replaces. */
-export type GoalsEdge = { id: string; source: string; target: string; kind: "spine" | "owner"; ghost?: boolean; faded?: boolean };
+export type GoalsEdge = { id: string; source: string; target: string; kind: "spine" | "owner"; ghost?: boolean; /** The edge a change replaces: the old owner, or a moved goal's old place. */ faded?: boolean };
 
 export type GoalsLayout = {
   nodes: GoalsNode[];
@@ -298,9 +315,9 @@ export type GoalsLayout = {
 
 export const titleLines = (title: string) => wrappedLines(title, GOALS_SIZES.titleChars);
 /** The far card's height: its title alone. */
-export const goalFarHeight = (title: string) => GOALS_SIZES.farPad + wrappedLines(title, GOALS_SIZES.farChars) * GOALS_SIZES.farRow;
-const goalHeight = (g: PlanGoal, metric: boolean, refs: number) =>
-  GOALS_SIZES.goal.h + (titleLines(g.title) - 1) * GOALS_SIZES.titleRow + (metric ? GOALS_SIZES.metricRow : 0) + quietChipLines(g.chips.length) * GOALS_SIZES.chipRow + (g.was ? GOALS_SIZES.wasRow : 0) + (refs ? GOALS_SIZES.refRow : 0);
+export const goalFarHeight = (title: string, mission = false) => GOALS_SIZES.farPad + (mission ? GOALS_SIZES.missionRow : 0) + wrappedLines(title, GOALS_SIZES.farChars) * GOALS_SIZES.farRow;
+const goalHeight = (g: PlanGoal, metric: boolean, refs: number, mission: boolean) =>
+  GOALS_SIZES.goal.h + (mission ? GOALS_SIZES.missionRow : 0) + (titleLines(g.title) - 1) * GOALS_SIZES.titleRow + (metric ? GOALS_SIZES.metricRow : 0) + quietChipLines(g.chips.length) * GOALS_SIZES.chipRow + (g.was ? GOALS_SIZES.wasRow : 0) + (refs ? GOALS_SIZES.refRow : 0);
 /** What the close card adds under the middle one: the description, the
  *  metrics past the first, the latest update, the running sessions. */
 const goalCloseExtra = (g: PlanGoal, metrics: number, running: number) => {
@@ -308,17 +325,21 @@ const goalCloseExtra = (g: PlanGoal, metrics: number, running: number) => {
   return rows ? rows + GOALS_SIZES.closeRule : 0;
 };
 
+/** Every session under a role whose area holds one of the projects. */
+export function sessionsUnder(tree: OrgTree, projectIds: readonly string[]): OrgSession[] {
+  if (projectIds.length === 0) return [];
+  const ids = new Set(projectIds);
+  return tree.roles.filter((r) => r.status !== "retired" && r.scope.project_ids.some((p) => ids.has(p))).flatMap((r) => r.sessions);
+}
+
 /** Sessions working now under a role whose area holds one of the projects, newest first, three at most. */
 export const RUNNING_MAX = 3;
 export function runningUnder(tree: OrgTree, projectIds: readonly string[]): OrgSession[] {
-  if (projectIds.length === 0) return [];
-  const ids = new Set(projectIds);
-  return tree.roles
-    .filter((r) => r.status !== "retired" && r.scope.project_ids.some((p) => ids.has(p)))
-    .flatMap((r) => r.sessions.filter((x) => x.state === "working"))
-    .sort((a, b) => b.updated_at - a.updated_at)
-    .slice(0, RUNNING_MAX);
+  return sessionsUnder(tree, projectIds).filter((x) => x.state === "working").sort((a, b) => b.updated_at - a.updated_at).slice(0, RUNNING_MAX);
 }
+
+/** A card's sessions by state, or nothing when it has none (the card then draws no bar). */
+const countsOf = (sessions: readonly OrgSession[]): StateCounts | undefined => (sessions.length ? countStates([...sessions]) : undefined);
 
 /**
  * Where each project is drawn, when several goals carry it: under the goal
@@ -359,8 +380,7 @@ export function projectRows(goals: readonly { id: string; depth: number; goal: P
 export function layoutGoals(input: GoalsInput, /** The zoom level the cards are sized for (orgZoom). */ level: ZoomLevel = "close"): GoalsLayout {
   const { goals, changeGoal } = goalsPlan(input);
   const S = GOALS_SIZES;
-  const focus = input.focusChangeId ?? null;
-  const actionRow = S.actionRow + (input.focusAnswered ? S.answerRow : 0);
+  const people = input.people ?? "owners";
   const nodes: GoalsNode[] = [];
   const edges: GoalsEdge[] = [];
   const kids = new Map<string | null, PlanGoal[]>();
@@ -379,34 +399,56 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
   for (const g of kids.get(null) ?? []) walk(g, COMPANY_NODE_ID, 1);
   const placed = projectRows(outline);
 
+  // The mission: a top level goal that other goals feed (the word a person
+  // reads for the top of the outline; a flat list of top level goals has none).
+  const missions = new Set(outline.filter((o) => o.depth === 1 && (kids.get(o.id)?.length ?? 0) > 0).map((o) => o.id));
   const drawnProjects = new Set<string>();
-  nodes.push({ id: COMPANY_NODE_ID, kind: "company", x: 0, y: 0, ...S.company, name: input.tree.workspace.name || (input.tree.workspace.kind === "user" ? "Personal" : "Company"), goals: goals.length, projects: 0 });
+  nodes.push({ id: COMPANY_NODE_ID, kind: "company", x: 0, y: 0, ...S.company, name: input.tree.workspace.name || (input.tree.workspace.kind === "user" ? "Personal" : "Company"), goals: goals.length, projects: 0, mission: missions.size > 0 });
   let y = S.company.h;
-  const spine = (source: string, target: string, ghost: boolean) => edges.push({ id: `s:${source}->${target}`, source, target, kind: "spine", ...(ghost ? { ghost: true } : {}) });
+  const spine = (source: string, target: string, ghost: boolean, faded = false) => edges.push({ id: `s:${source}->${target}${faded ? ":was" : ""}`, source, target, kind: "spine", ...(ghost ? { ghost: true } : {}), ...(faded ? { faded: true } : {}) });
   const owned: { node: string; owner: GoalOwner; ghost?: boolean; faded?: boolean }[] = [];
+  const projectRow = (p: PlanProject, parent: string, x: number) => {
+    const pid = projectNodeId(parent === LOOSE_NODE_ID ? LOOSE_NODE_ID : parent.slice("goal:".length), p.id);
+    y += S.rowGap;
+    const ph = S.project.h + (level === "close" ? S.projectClose : 0);
+    const counts = countsOf(sessionsUnder(input.tree, [p.id]));
+    nodes.push({ id: pid, kind: "project", x, y, w: S.project.w, h: ph, project: p, ...(counts ? { counts } : {}) });
+    spine(parent, pid, !!p.ghost && !p.ghost.solid);
+    y += ph;
+    drawnProjects.add(p.id);
+    if (p.lead) owned.push({ node: pid, owner: p.lead });
+  };
 
   for (const { id: goalId, depth, goal: g, parentNode } of outline) {
     const id = goalNodeId(goalId);
     const { rows, refs } = placed.get(goalId)!;
     const metrics = g.row ? metricReadings(g.row) : [];
     const running = runningUnder(input.tree, g.projects.map((p) => p.id));
+    const mission = missions.has(goalId);
     y += depth === 1 ? S.blockGap : S.rowGap;
-    const h = level === "far" ? goalFarHeight(g.title) : goalHeight(g, metrics.length > 0, refs.length) + (level === "close" ? goalCloseExtra(g, metrics.length, running.length) : 0);
-    nodes.push({ id, kind: "goal", x: depth * S.indent, y, w: S.goal.w, h, goal: g, metrics, rows, refs, running });
+    const h = level === "far" ? goalFarHeight(g.title, mission) : goalHeight(g, metrics.length > 0, refs.length, mission) + (level === "close" ? goalCloseExtra(g, metrics.length, running.length) : 0);
+    nodes.push({ id, kind: "goal", x: depth * S.indent, y, w: S.goal.w, h, goal: g, metrics, rows, refs, running, mission });
     spine(parentNode, id, !!g.ghost && !g.ghost.solid);
-    y += h + (goalFocusedChange(focus, g.ghost, g.chips) ? actionRow : 0);
+    // A moved goal keeps a faint line from where it was, so the move reads as a move and not a new goal.
+    if (g.wasId && g.ghost && !g.ghost.solid && seen.has(g.wasId) && g.wasId !== g.parentId) spine(goalNodeId(g.wasId), id, false, true);
+    y += h;
     if (g.owner) owned.push({ node: id, owner: g.owner, ghost: !!g.ownerGhost && !g.ownerGhost.solid });
     if (g.formerOwner) owned.push({ node: id, owner: g.formerOwner, faded: true });
-    for (const p of rows) {
-      const pid = projectNodeId(g.id, p.id);
-      y += S.rowGap;
-      const ph = S.project.h + (level === "close" ? S.projectClose : 0);
-      nodes.push({ id: pid, kind: "project", x: (depth + 1) * S.indent, y, w: S.project.w, h: ph, project: p });
-      spine(id, pid, !!p.ghost && !p.ghost.solid);
-      y += ph + (p.ghost?.kind === "initiative_projects" && goalFocusedChange(focus, p.ghost) ? actionRow : 0);
-      drawnProjects.add(p.id);
-      if (p.lead) owned.push({ node: pid, owner: p.lead });
-    }
+    for (const p of rows) projectRow(p, id, (depth + 1) * S.indent);
+  }
+  // The projects no goal carries, under a quiet header at the foot of the
+  // outline: real work the picture would otherwise hide, and what a head of
+  // people's goals proposal is there to place.
+  const loose = input.projects.filter((p) => !drawnProjects.has(p._id) && !goals.some((g) => g.projects.some((x) => x.id === p._id)) && p.status !== "done");
+  if (loose.length) {
+    y += S.blockGap;
+    nodes.push({ id: LOOSE_NODE_ID, kind: "loose", x: S.indent, y, ...S.loose, projects: loose.length });
+    y += S.loose.h;
+    const leadOf = (p: GoalProject): GoalOwner | null => {
+      const lead = projectLeadOf(p, input.tree.roles);
+      return lead?.kind === "lead" && lead.by !== "workspace" ? { kind: "role", id: lead.role._id, name: lead.role.name, handle: lead.role.handle, avatar: lead.role.avatar } : null;
+    };
+    for (const p of loose) projectRow({ id: p._id, title: p.title, short_id: p.short_id, status: p.status, lead: leadOf(p) }, LOOSE_NODE_ID, 2 * S.indent);
   }
   (nodes[0] as Extract<GoalsNode, { kind: "company" }>).projects = drawnProjects.size;
 
@@ -427,12 +469,29 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
   }
   const ox = outlineRight + S.ownerGap;
   let floor = 0;
-  const column = [...owners.entries()].map(([id, e]) => ({ id, ...e, at: Math.min(...e.ys) })).sort((a, b) => a.at - b.at);
+  const column = people === "none" ? [] : [...owners.entries()].map(([id, e]) => ({ id, ...e, at: Math.min(...e.ys) })).sort((a, b) => a.at - b.at);
+  // Everything: the people and roles that own nothing join the column under
+  // the owners, so the whole company is on the map and "owns nothing" is read.
+  if (people === "everyone") {
+    const have = new Set(column.map((c) => c.id));
+    const botIds = new Set(input.tree.anchors.map((a) => a.bot_user_id));
+    const rest: GoalOwner[] = [
+      ...input.tree.people.filter((p) => !botIds.has(p.user_id)).sort((a, b) => Number(b.is_me) - Number(a.is_me) || a.name.localeCompare(b.name)).map<GoalOwner>((p) => ({ kind: "person", id: p.user_id, name: p.name, image: p.image, me: p.is_me })),
+      ...input.tree.roles.filter((r) => r.status !== "retired").sort((a, b) => a.name.localeCompare(b.name)).map<GoalOwner>((r) => ({ kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar })),
+    ];
+    for (const o of rest) { const id = ownerNodeId(o); if (!have.has(id)) { have.add(id); column.push({ id, owner: o, ys: [], owns: 0, at: Number.MAX_SAFE_INTEGER }); } }
+  }
+  const nameOf = (ref: { kind: "user"; user_id: string } | { kind: "role"; role_id: string }): string | undefined =>
+    ref.kind === "user" ? input.tree.people.find((p) => p.user_id === ref.user_id)?.name : input.tree.roles.find((r) => r._id === ref.role_id && r.status !== "retired")?.name;
   for (const o of column) {
-    const oy = Math.max(floor, o.at - S.anchor.owner);
-    const line = o.owner.kind === "role" ? input.tree.roles.find((r) => r._id === o.owner.id)?.standing?.state_line?.trim() || undefined : undefined;
-    const h = S.owner.h + (line && level === "close" ? S.ownerClose : 0);
-    nodes.push({ id: o.id, kind: "owner", x: ox, y: oy, w: S.owner.w, h, owner: o.owner, owns: o.owns, ...(line ? { line } : {}) });
+    const oy = Math.max(floor, o.at === Number.MAX_SAFE_INTEGER ? floor : o.at - S.anchor.owner);
+    const role = o.owner.kind === "role" ? input.tree.roles.find((r) => r._id === o.owner.id) : undefined;
+    const person = o.owner.kind === "person" ? input.tree.people.find((p) => p.user_id === o.owner.id) : undefined;
+    const line = role?.standing?.state_line?.trim() || undefined;
+    const counts = people === "everyone" ? countsOf(role?.sessions ?? person?.sessions ?? []) ?? (role || person ? EMPTY_COUNTS : undefined) : undefined;
+    const reportsTo = people === "everyone" && role ? nameOf(role.reports_to) : undefined;
+    const h = S.owner.h + (counts ? S.ownerStateRow : 0) + (line && level === "close" ? S.ownerClose : 0);
+    nodes.push({ id: o.id, kind: "owner", x: ox, y: oy, w: S.owner.w, h, owner: o.owner, owns: o.owns, ...(line ? { line } : {}), ...(counts ? { counts } : {}), ...(reportsTo ? { reportsTo } : {}) });
     floor = oy + h + S.ownerRowGap;
   }
 
@@ -445,9 +504,8 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
   };
 }
 
-/** The change whose action strip a goal or project card shows: its own ghost
- *  or one of its chips, when the chart is focused on that change. Goal rows
- *  sit tight, so unlike a role stub the strip waits for the focus. */
+/** The change a goal or project card is lit for: its own ghost or one of its
+ *  chips, when the chart is focused on that change. */
 export const goalFocusedChange = (focusChangeId: string | null | undefined, ghost: GoalGhost | undefined, chips: readonly OrgGhostChip[] = []): GoalGhost | OrgGhostChip | null =>
   !focusChangeId ? null : ghost?.change_id === focusChangeId ? ghost : chips.find((c) => c.change_id === focusChangeId) ?? null;
 
