@@ -264,8 +264,8 @@ describe("startCheckout and openPortal", () => {
       "metadata[plan]": "pro",
       "subscription_data[metadata][user_id]": user,
     });
-    expect(stripe.calls[0].form.success_url).toEndWith("/simple/plan?billing=done");
-    expect(stripe.calls[0].form.cancel_url).toEndWith("/simple/plan?billing=canceled");
+    expect(stripe.calls[0].form.success_url).toEndWith("/settings/plan?billing=done");
+    expect(stripe.calls[0].form.cancel_url).toEndWith("/settings/plan?billing=canceled");
     // A double click asks Stripe for the same session, not a second one.
     await authed.action(api.billing.startCheckout, { plan: "pro" });
     expect(stripe.calls[0].headers["Idempotency-Key"]).toStartWith(`checkout:${user}:pro:`);

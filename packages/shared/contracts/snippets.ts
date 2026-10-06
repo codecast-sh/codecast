@@ -286,6 +286,8 @@ A human tracks your work through a dashboard: report status through tasks and pl
 
 **Keep the bound item true.** When scope or approach shifts, rewrite the title and description (\`cast task update <id> -t "..." -d "..."\`), comment at milestones and changes of direction, move status the moment it changes, and mark done only what you verified. A task describing an hour-old understanding misleads everyone reading the board.
 
+**Hand a code change off with a guide.** You know why each piece exists and in what order it makes sense; the reviewer sees only a diff. With \`--guide -\` on the handoff, walk them through it in the order that explains the change best (not file order): one heading per step with its \`file:start-end\` on the heading line, and why that piece exists under it. The hunks are captured for you, and the guide reaches the review, the pull request and the Changes story.
+
 If bound to a plan: post progress with \`cast plan comment <plan_id> "..."\` so the plan reads true without opening your session; suggest splitting a task that grew; flag dependencies you create; record directional decisions with \`cast plan comment <plan_id> "decision" -d -r "rationale"\`; ask when acceptance criteria are ambiguous.
 
 If blocked, say so: **BLOCKED: <reason>** (needs a human), **NEEDS_CONTEXT: <what>** (escalates to the user), **DONE_WITH_CONCERNS: <concern>** (finished, flagged for review).
@@ -312,6 +314,7 @@ cast task update <id> -t "..." -d "..." -s <status>
 cast task update <id> --plan <plan_id>      # also --human, --parent <task_id>, --project "<name>" ('' clears parent or project)
 cast task done <id> --cascade               # close a parent and its open subtasks
 cast task handoff <id> --status done --evidence - --page <slug|url>   # hand off with evidence; the page attaches to the task
+cast task handoff <id> --status done --evidence "<what you verified>" --guide -   # plus a change guide from stdin (heredoc)
 cast project ls | show <id>                 # projects, and every task in one
 cast integrations ls|sources|import <provider> <ref>   # Linear teams/projects and GitHub repos as projects; their issues are tasks, synced both ways
 cast plan ls -q "<topic>"                   # search active plans by title/goal
@@ -841,6 +844,7 @@ cast pr threads [ref]                       # open review threads, each with a s
 cast pr events [ref]                        # timeline: pushes, reviews, checks, merges
 cast pr watch [ref]                         # one line per change; the first frame is silent
 cast pr open [ref]                          # the page in codecast (--print for the URL only)
+cast pr create -t "<title>" -b -            # open one with gh; the bound task's change guide becomes its walkthrough (--dry-run)
 \`\`\`
 
 ### Reviewing a pull request
@@ -1634,4 +1638,24 @@ export function snippetByEndMarker(endMarker: string): SnippetDescriptor | undef
  *  `computer` section (ct-49522) joins the list by landing in the catalog. */
 export function guideTopics(): SnippetDescriptor[] {
   return SNIPPET_CATALOG.filter((s) => s.section);
+}
+
+/**
+ * Every section a full install writes, in catalog order, with the shared
+ * "Referencing objects" block once after the first snippet that asks for it:
+ * the codecast part of a CLAUDE.md on a machine with every feature on. The
+ * guidance eval loads this as the agent's global instructions, so it grades
+ * the text an install would put on disk.
+ */
+export function renderGuidanceFile(mode: GuidanceMode, version: string): string {
+  const parts: string[] = [];
+  let references = false;
+  for (const descriptor of guideTopics()) {
+    parts.push(renderSectionBody(descriptor, mode, version));
+    if (descriptor.section!.references && !references) {
+      references = true;
+      parts.push(stampSectionBody(REFERENCES_SNIPPET, REFERENCES_SNIPPET_END, version));
+    }
+  }
+  return parts.join("");
 }

@@ -1,3 +1,5 @@
+import { isHostedAgentType } from "@codecast/shared/contracts";
+
 export type StatusPillSpec = { tone: string; dot: string; label: string; short: string };
 
 const LIVE_TONES = {
@@ -35,4 +37,24 @@ export function agentStatusPillSpec(
   if (disconnected) return (agentStatus && DELIVERING[agentStatus]) || DISCONNECTED;
   if (agentStatus) return LIVE_TONES[agentStatus as keyof typeof LIVE_TONES] ?? null;
   return live ? LIVE_TONES.working : null;
+}
+
+/**
+ * Whether an active session's process is gone: its row says it is not
+ * connected (a row that does not say, seeded from a summary, does not count)
+ * and the transcript has not moved recently. Never a hosted assistant
+ * conversation, which has no process: it runs a turn when the person writes.
+ */
+export function sessionDisconnected({
+  active,
+  isConnected,
+  recentlyMoved,
+  agentType,
+}: {
+  active: boolean;
+  isConnected: boolean | undefined;
+  recentlyMoved: boolean;
+  agentType: string | undefined;
+}): boolean {
+  return active && isConnected === false && !recentlyMoved && !isHostedAgentType(agentType);
 }

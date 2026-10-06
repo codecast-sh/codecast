@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Riff · studio direction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600&family=Funnel+Sans:wght@400;500;600&family=Fragment+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F3F2EE;
+    --surface: #FFFFFF;
+    --glass: rgba(255, 255, 255, 0.86);
+    --ink: #15161A;
+    --ink-2: #5C5E67;
+    --ink-3: #9C9EA6;
+    --line: rgba(21, 22, 26, 0.09);
+    --line-2: rgba(21, 22, 26, 0.16);
+    --accent: #2B44FF;
+    --accent-soft: rgba(43, 68, 255, 0.08);
+    --accent-ink: #1A2BC4;
+    --shadow-float: 0 1px 0 rgba(255,255,255,.7) inset, 0 24px 60px -24px rgba(21,22,26,.28), 0 2px 8px -2px rgba(21,22,26,.08);
+    --radius: 14px;
+    --display: "Funnel Display", ui-sans-serif, sans-serif;
+    --sans: "Funnel Sans", ui-sans-serif, sans-serif;
+    --mono: "Fragment Mono", ui-monospace, monospace;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--sans);
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 700px at 85% -10%, rgba(43,68,255,.06), transparent 60%),
+      radial-gradient(900px 600px at -10% 40%, rgba(255,255,255,.9), transparent 60%),
+      var(--paper);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "ss01", "tnum";
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .35; mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* Presentation canvas */
+  .deck { width: 1328px; margin: 0 auto; padding: 72px 0 120px; display: grid; gap: 88px; }
+  .deck-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .deck-head h1 { font-family: var(--display); font-weight: 500; font-size: 28px; letter-spacing: -.02em; }
+  .deck-head p { color: var(--ink-2); font-size: 14px; max-width: 520px; line-height: 1.5; }
+  .scene { display: grid; gap: 16px; opacity: 0; transform: translateY(14px); animation: rise .9s var(--ease) forwards; }
+  .scene:nth-of-type(2) { animation-delay: .08s } .scene:nth-of-type(3) { animation-delay: .16s }
+  .scene:nth-of-type(4) { animation-delay: .24s } .scene:nth-of-type(5) { animation-delay: .32s }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  .scene-label { display: flex; gap: 14px; align-items: baseline; font-size: 14px; color: var(--ink-2); }
+  .scene-label b { font-family: var(--display); font-weight: 500; color: var(--ink); font-size: 18px; letter-spacing: -.01em; }
+  .scene-label .n { font-family: var(--mono); color: var(--ink-3); font-size: 12px; }
+
+  .window { position: relative; height: 880px; border-radius: 18px; overflow: hidden; background: var(--surface);
+    box-shadow: 0 0 0 1px var(--line), 0 40px 80px -40px rgba(21,22,26,.25); }
+  .urlbar { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line); background: #FAFAF8; }
+  .urlbar .dots { display: flex; gap: 6px; } .urlbar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #E2E1DC; }
+  .urlbar .url { flex: 1; text-align: center; font-size: 12.5px; color: var(--ink-2); }
+  .urlbar .url span { color: var(--ink); }
+  .viewport { position: absolute; inset: 40px 0 0 0; }
+
+  img.face { display: block; border-radius: 50%; object-fit: cover; background: #ECEAE4; }
+  .faces { display: flex; } .faces img { width: 26px; height: 26px; box-shadow: 0 0 0 2px var(--surface); }
+  .faces img + img { margin-left: -8px; }
+
+  .btn { font: 500 13px/1 var(--sans); border: 0; border-radius: 9px; padding: 9px 13px; cursor: pointer; background: transparent; color: var(--ink); display: inline-flex; align-items: center; gap: 7px; }
+  .btn.ghost { box-shadow: inset 0 0 0 1px var(--line-2); }
+  .btn.solid { background: var(--ink); color: #fff; }
+  .btn.accent { background: var(--accent); color: #fff; }
+  .kc { font: 11px/1 var(--mono); color: var(--ink-2); padding: 3px 5px 2px; border-radius: 5px; background: #F1F0EC; box-shadow: inset 0 -1px 0 var(--line-2), inset 0 0 0 1px var(--line); }
+  .kc.on-dark { background: rgba(255,255,255,.14); color: rgba(255,255,255,.8); box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+
+  /* 01 Home */
+  .home { position: absolute; inset: 0; overflow: hidden; background: var(--paper); }
+  .home nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 40px; }
+  .wordmark { font-family: var(--display); font-weight: 600; font-size: 21px; letter-spacing: -.035em; display: flex; align-items: center; gap: 8px; }
+  .wordmark i { width: 9px; height: 9px; border-radius: 3px; background: var(--accent); transform: rotate(45deg); }
+  .you-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 12px 4px 4px; border-radius: 99px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+  .you-chip img { width: 26px; height: 26px; }
+  .hero { padding: 76px 0 0; text-align: center; }
+  .hero h2 { font-family: var(--display); font-weight: 500; font-size: 64px; line-height: 1.02; letter-spacing: -.045em; }
+  .hero p { margin: 18px auto 0; color: var(--ink-2); font-size: 17px; max-width: 520px; line-height: 1.5; }
+  .make { margin: 40px auto 0; width: 700px; padding: 8px 8px 8px 24px; display: flex; align-items: center; gap: 12px; background: var(--surface); border-radius: 18px;
+    box-shadow: 0 0 0 1px var(--line), 0 30px 60px -30px rgba(43,68,255,.35), 0 2px 6px rgba(21,22,26,.04); }
+  .make .field { flex: 1; text-align: left; font-family: var(--display); font-size: 22px; letter-spacing: -.02em; color: var(--ink); display: flex; align-items: center; }
+  .make .field .caret { width: 2px; height: 26px; background: var(--accent); margin-left: 2px; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0 } }
+  .make .btn { padding: 15px 20px; border-radius: 12px; font-size: 15px; }
+  .starters { margin: 18px auto 0; display: flex; gap: 8px; justify-content: center; }
+  .starters span { font-size: 13px; color: var(--ink-2); padding: 7px 12px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); }
+  .gallery-head { width: 1200px; margin: 72px auto 18px; display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; color: var(--ink-2); }
+  .gallery-head b { font-family: var(--display); font-weight: 500; font-size: 20px; color: var(--ink); letter-spacing: -.02em; }
+  .gallery { width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+  .card { display: grid; gap: 12px; }
+  .thumb { height: 196px; border-radius: 12px; position: relative; overflow: hidden; box-shadow: 0 0 0 1px var(--line); }
+  .thumb .live { position: absolute; top: 10px; left: 10px; font-size: 11px; font-weight: 500; padding: 4px 8px 4px 7px; border-radius: 99px; background: rgba(255,255,255,.9); display: flex; gap: 5px; align-items: center; }
+  .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 rgba(43,68,255,.5); animation: ping 2s infinite; }
+  @keyframes ping { 70% { box-shadow: 0 0 0 6px rgba(43,68,255,0) } 100% { box-shadow: 0 0 0 0 rgba(43,68,255,0) } }
+  .card-meta { display: flex; justify-content: space-between; align-items: center; }
+  .card-meta h4 { font-family: var(--display); font-weight: 500; font-size: 16px; letter-spacing: -.015em; }
+  .card-meta p { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+  .card .faces img { width: 22px; height: 22px; }
+
+  /* thumbnails: each a little app */
+  .t-seq { background: #FBF6EC; display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 44px 16px 16px; }
+  .t-seq i { border-radius: 3px; background: #EDE5D3; } .t-seq i.a { background: #FF5A36; } .t-seq i.b { background: #0E8C7F; } .t-seq i.c { background: #F2B705; }
+  .t-garden { background: linear-gradient(#CFE8FF, #EAF5E6 62%, #7DB46C 62%); }
+  .t-garden::after { content: ""; position: absolute; left: 30px; right: 30px; bottom: 30px; height: 40px; background:
+    radial-gradient(circle at 10% 40%, #FF6F91 8px, transparent 9px), radial-gradient(circle at 30% 20%, #FFD23F 9px, transparent 10px),
+    radial-gradient(circle at 52% 45%, #FF6F91 7px, transparent 8px), radial-gradient(circle at 74% 25%, #fff 8px, transparent 9px), radial-gradient(circle at 92% 50%, #FFD23F 7px, transparent 8px); }
+  .t-poll { background: #111; padding: 48px 20px 0; display: grid; gap: 10px; align-content: start; }
+  .t-poll i { height: 18px; border-radius: 4px; background: #E9FF5A; } .t-poll i:nth-child(2) { width: 70%; background: #fff; } .t-poll i:nth-child(3) { width: 42%; background: #555; } .t-poll i:nth-child(1) { width: 92%; }
+  .t-board { background: #EBE7FF; padding: 42px 18px; }
+  .t-board i { position: absolute; width: 64px; height: 56px; border-radius: 4px; box-shadow: 0 6px 12px -6px rgba(0,0,0,.25); }
+
+  /* 02 Clean link: the sequencer app */
+  .app { position: absolute; inset: 0; background: #FBF6EC; color: #2A2016; font-family: "Funnel Sans", sans-serif; padding: 56px 72px; }
+  .app h3 { font-family: var(--display); font-weight: 600; font-size: 40px; letter-spacing: -.03em; color: #2A2016; }
+  .app .sub { color: #8A7A63; margin-top: 6px; font-size: 15px; }
+  .app .controls { display: flex; gap: 12px; margin-top: 28px; align-items: center; }
+  .app .play { width: 52px; height: 52px; border-radius: 50%; background: #FF5A36; display: grid; place-items: center; }
+  .app .play::after { content: ""; border-left: 15px solid #fff; border-top: 9px solid transparent; border-bottom: 9px solid transparent; margin-left: 4px; }
+  .app .knob { font-size: 13px; padding: 10px 14px; background: #F2EAD8; border-radius: 10px; color: #5C4A33; }
+  .app .knob.fresh { background: #2A2016; color: #FBF6EC; position: relative; }
+  .grid { margin-top: 30px; display: grid; grid-template-columns: 110px repeat(16, 1fr); gap: 6px; align-items: center; }
+  .grid .lbl { font-size: 13px; color: #8A7A63; display: flex; align-items: center; gap: 8px; }
+  .grid .lbl img { width: 18px; height: 18px; }
+  .grid .cell { aspect-ratio: 1; border-radius: 6px; background: #EFE6D2; }
+  .grid .cell.q { margin-left: 4px; }
+  .grid .on.r0 { background: #FF5A36 } .grid .on.r1 { background: #F2B705 } .grid .on.r2 { background: #0E8C7F }
+  .grid .on.r3 { background: #3D6BFF } .grid .on.r4 { background: #2A2016 } .grid .on.r5 { background: #E36FB0 }
+  .grid .head { outline: 2px solid #2A2016; outline-offset: 2px; }
+  .cursor { position: absolute; display: flex; align-items: center; gap: 6px; pointer-events: none; }
+  .cursor svg { filter: drop-shadow(0 2px 3px rgba(0,0,0,.2)); }
+  .cursor span { font-size: 12px; font-weight: 500; padding: 3px 8px; border-radius: 99px; color: #fff; }
+
+  /* presence affordance */
+  .presence { position: absolute; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 8px;
+    border-radius: 99px; background: var(--glass); backdrop-filter: blur(14px) saturate(1.4); box-shadow: var(--shadow-float), 0 0 0 1px var(--line); }
+  .presence .grip { width: 6px; height: 14px; background-image: radial-gradient(circle, var(--ink-3) 1px, transparent 1.4px); background-size: 3px 4px; opacity: .8; }
+  .presence .faces img { width: 28px; height: 28px; box-shadow: 0 0 0 2px #fff; }
+  .presence .count { font-size: 13px; color: var(--ink-2); }
+  .presence .open { width: 34px; height: 34px; border-radius: 50%; background: var(--ink); display: grid; place-items: center; position: relative; }
+  .presence .open .badge { position: absolute; top: -2px; right: -2px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px #fff; }
+  .hint { position: absolute; right: 20px; bottom: 74px; width: 252px; padding: 12px 14px; border-radius: 12px; background: var(--ink); color: #fff; font-size: 13px; line-height: 1.45; box-shadow: var(--shadow-float); }
+  .hint b { font-weight: 500; }
+  .hint .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; color: rgba(255,255,255,.65); font-size: 12px; }
+
+  /* 03 Room overlay */
+  .room { position: absolute; top: 12px; right: 12px; bottom: 12px; width: 408px; border-radius: 16px; display: flex; flex-direction: column;
+    background: var(--glass); backdrop-filter: blur(22px) saturate(1.5); box-shadow: var(--shadow-float), 0 0 0 1px var(--line); overflow: hidden; }
+  .room-head { padding: 14px 14px 12px 18px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+  .room-head h5 { font-family: var(--display); font-weight: 500; font-size: 16px; letter-spacing: -.015em; flex: 1; }
+  .room-head h5 small { display: block; font-family: var(--sans); font-weight: 400; font-size: 12px; color: var(--ink-3); margin-top: 2px; letter-spacing: 0; }
+  .icon-btn { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--ink-2); }
+  .stream { flex: 1; overflow: hidden; padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 14px; justify-content: flex-end; }
+  .msg { display: grid; grid-template-columns: 28px 1fr; gap: 10px; }
+  .msg img { width: 28px; height: 28px; }
+  .msg .who { font-size: 12.5px; font-weight: 500; } .msg .who time { color: var(--ink-3); font-weight: 400; margin-left: 6px; }
+  .msg .body { font-size: 14px; line-height: 1.45; margin-top: 2px; color: #2B2C31; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font: 11.5px/1 var(--mono); padding: 5px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-ink); margin-top: 6px; }
+  .note { font-size: 12px; color: var(--ink-3); text-align: center; }
+  .note b { color: var(--ink-2); font-weight: 500; }
+
+  .bcard { margin-left: 38px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line), 0 8px 20px -14px rgba(21,22,26,.3); overflow: hidden; }
+  .bcard-top { padding: 12px 14px 10px; display: flex; align-items: center; gap: 9px; }
+  .bcard-top .state { font-size: 12.5px; font-weight: 500; flex: 1; display: flex; align-items: center; gap: 7px; }
+  .bcard-top .v { font: 11.5px/1 var(--mono); color: var(--ink-3); }
+  .spinner { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  .narr { padding: 0 14px 12px; display: grid; gap: 6px; font-size: 13px; color: var(--ink-2); }
+  .narr li { list-style: none; display: grid; grid-template-columns: 14px 1fr; gap: 6px; align-items: baseline; }
+  .narr li::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3); transform: translateY(-2px); justify-self: center; }
+  .narr li.now { color: var(--ink); } .narr li.now::before { background: var(--accent); }
+  .narr li.now span::after { content: "…"; animation: blink 1s steps(1) infinite; }
+  .files { padding: 0 14px 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .files span { font: 11px/1 var(--mono); color: var(--ink-2); padding: 5px 7px; border-radius: 5px; background: #F4F3EF; }
+  .files span.w { color: var(--accent-ink); background: var(--accent-soft); }
+  .bar { height: 2px; background: var(--accent-soft); position: relative; overflow: hidden; }
+  .bar::after { content: ""; position: absolute; inset: 0; width: 34%; background: var(--accent); animation: sweep 1.6s var(--ease) infinite; }
+  @keyframes sweep { from { transform: translateX(-100%) } to { transform: translateX(300%) } }
+  .bcard.live { box-shadow: 0 0 0 1px rgba(43,68,255,.22), 0 10px 26px -16px rgba(43,68,255,.5); }
+  .bcard.live .state { color: var(--accent-ink); }
+  .bcard .summary { padding: 0 14px 12px; font-size: 14px; line-height: 1.45; }
+  .bcard .acts { display: flex; gap: 6px; padding: 10px 10px; border-top: 1px solid var(--line); background: #FBFBF9; }
+  .bcard .acts .btn { padding: 7px 10px; font-size: 12.5px; }
+  .bcard .acts .sp { flex: 1; }
+  .bcard .acts .ago { font-size: 12px; color: var(--ink-3); align-self: center; padding-right: 4px; }
+
+  .typing { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-3); padding: 0 18px 8px; }
+  .typing img { width: 16px; height: 16px; }
+  .composer { margin: 0 12px 12px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line-2); }
+  .composer .input { padding: 13px 14px 6px; font-size: 14px; color: var(--ink); min-height: 44px; }
+  .composer .input .ph { color: var(--ink-3); }
+  .composer .tools { display: flex; align-items: center; gap: 6px; padding: 6px 8px 8px; }
+  .seg { display: flex; padding: 2px; border-radius: 8px; background: #F2F1ED; font-size: 12px; }
+  .seg span { padding: 5px 9px; border-radius: 6px; color: var(--ink-2); }
+  .seg span.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(21,22,26,.12); font-weight: 500; }
+  .composer .send { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .composer .send .go { width: 30px; height: 30px; border-radius: 8px; background: var(--ink); display: grid; place-items: center; }
+
+  /* timeline strip */
+  .timeline { position: absolute; left: 12px; right: 432px; bottom: 12px; height: 76px; border-radius: 14px; padding: 12px 16px;
+    background: var(--glass); backdrop-filter: blur(22px) saturate(1.5); box-shadow: var(--shadow-float), 0 0 0 1px var(--line); display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; }
+  .timeline .tl-label { font-size: 12.5px; color: var(--ink-2); line-height: 1.4; }
+  .timeline .tl-label b { display: block; font-family: var(--display); font-weight: 500; color: var(--ink); font-size: 14px; }
+  .ticks { position: relative; height: 44px; display: flex; align-items: flex-end; gap: 0; }
+  .ticks::before { content: ""; position: absolute; left: 0; right: 0; bottom: 14px; height: 1px; background: var(--line-2); }
+  .tick { flex: 1; position: relative; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
+  .tick i { width: 1.5px; height: 10px; background: var(--ink-3); border-radius: 1px; margin-bottom: 9px; }
+  .tick span { font: 10.5px/1 var(--mono); color: var(--ink-3); position: absolute; bottom: -2px; }
+  .tick.restore i { background: var(--ink); height: 14px; }
+  .tick.fork i { background: transparent; border: 1.5px solid var(--ink-2); width: 7px; height: 7px; border-radius: 50%; margin-bottom: 10px; }
+  .tick.live i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-bottom: 9px; box-shadow: 0 0 0 4px var(--accent-soft); }
+  .tick.live span { color: var(--accent-ink); }
+  .tick.peek i { height: 22px; background: var(--ink); }
+  .tick.queued i { background: transparent; border: 1.5px dashed var(--accent); width: 9px; height: 9px; border-radius: 50%; margin-bottom: 10px; }
+  .tick-face { position: absolute; bottom: 30px; width: 16px; height: 16px; }
+  .tip { position: absolute; bottom: 84px; left: 49%; transform: translateX(-50%); width: 270px; padding: 12px 14px; border-radius: 12px; background: var(--surface);
+    box-shadow: var(--shadow-float), 0 0 0 1px var(--line); font-size: 13px; }
+  .tip .tip-top { display: flex; align-items: center; gap: 8px; }
+  .tip .tip-top img { width: 22px; height: 22px; }
+  .tip .tip-top b { font-weight: 500; flex: 1; } .tip .tip-top time { font-size: 12px; color: var(--ink-3); }
+  .tip p { margin: 8px 0 10px; line-height: 1.4; color: #2B2C31; }
+  .tip .acts { display: flex; gap: 6px; } .tip .acts .btn { padding: 7px 10px; font-size: 12.5px; }
+
+  .viewing-pill { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; padding: 6px 6px 6px 14px; border-radius: 99px; background: var(--ink); color: #fff; font-size: 13px; box-shadow: var(--shadow-float); }
+  .viewing-pill .btn { background: #fff; color: var(--ink); padding: 7px 11px; border-radius: 99px; }
+
+  /* point-and-talk highlight in app */
+  .pick { position: absolute; border-radius: 10px; box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-soft); }
+  .pick span { position: absolute; top: -26px; left: 0; font: 11px/1 var(--mono); background: var(--accent); color: #fff; padding: 5px 7px; border-radius: 5px; white-space: nowrap; }
+
+  /* 04 Character picker */
+  .scrim { position: absolute; inset: 0; background: rgba(243,242,238,.62); backdrop-filter: blur(6px); }
+  .picker { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 620px; border-radius: 20px; background: var(--surface);
+    box-shadow: 0 50px 100px -40px rgba(21,22,26,.4), 0 0 0 1px var(--line); padding: 28px; }
+  .picker-top { display: flex; gap: 20px; align-items: center; }
+  .picker-top .big { width: 96px; height: 96px; box-shadow: 0 0 0 4px #fff, 0 0 0 5px var(--line-2); }
+  .picker-top h6 { font-family: var(--display); font-weight: 500; font-size: 13px; color: var(--ink-3); letter-spacing: 0; }
+  .name-field { margin-top: 8px; display: flex; align-items: center; gap: 10px; border-bottom: 1.5px solid var(--ink); padding-bottom: 6px; width: 330px; }
+  .name-field .val { font-family: var(--display); font-size: 32px; font-weight: 500; letter-spacing: -.03em; flex: 1; display: flex; align-items: center; }
+  .name-field .val .caret { width: 2px; height: 30px; background: var(--accent); margin-left: 2px; animation: blink 1.1s steps(1) infinite; }
+  .suggest { margin-top: 10px; display: flex; gap: 6px; font-size: 12.5px; color: var(--ink-2); align-items: center; }
+  .suggest span { padding: 4px 9px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); }
+  .animals { margin-top: 26px; display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px; }
+  .animal { display: grid; gap: 6px; justify-items: center; font-size: 11.5px; color: var(--ink-3); }
+  .animal img { width: 56px; height: 56px; transition: transform .25s var(--ease); }
+  .animal:hover img { transform: scale(1.06); }
+  .animal.sel img { box-shadow: 0 0 0 3px #fff, 0 0 0 5px var(--accent); }
+  .animal.sel { color: var(--accent-ink); font-weight: 500; }
+  .animal.taken img { opacity: 1; }
+  .picker-foot { margin-top: 26px; display: flex; align-items: center; gap: 10px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-3); }
+  .picker-foot .sp { flex: 1; }
+
+  /* naming board */
+  .names { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 20px; }
+  .name-card { background: var(--surface); border-radius: var(--radius); padding: 28px; box-shadow: 0 0 0 1px var(--line); }
+  .name-card.lead { background: var(--ink); color: #fff; }
+  .name-card .nm { font-family: var(--display); font-weight: 600; font-size: 54px; letter-spacing: -.05em; line-height: 1; display: flex; align-items: center; gap: 10px; }
+  .name-card.lead .nm i { width: 14px; height: 14px; border-radius: 4px; background: var(--accent); transform: rotate(45deg); }
+  .name-card p { margin-top: 14px; font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+  .name-card.lead p { color: rgba(255,255,255,.7); }
+  .name-card .url { margin-top: 18px; font: 12px/1 var(--mono); color: var(--ink-3); }
+  .name-card.lead .url { color: rgba(255,255,255,.5); }
+  .tokens { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-top: 20px; }
+  .sw { border-radius: 12px; height: 84px; padding: 10px; display: flex; flex-direction: column; justify-content: flex-end; font-size: 12px; box-shadow: 0 0 0 1px var(--line); }
+  .sw code { font: 11px/1.4 var(--mono); opacity: .7; }
+</style>
+</head>
+<body>
+<main class="deck">
+
+  <header class="deck-head scene">
+    <h1>Studio</h1>
+    <p>A calm, precise room around a loud little app. The chrome is glass and hairlines in one ink; ultramarine only ever means "this is live" or "this is you, acting".</p>
+  </header>
+
+  <!-- 01 HOME -->
+  <section class="scene">
+    <div class="scene-label"><span class="n">01</span><b>Home</b> One input, then a wall of apps people are changing right now.</div>
+    <div class="window">
+      <div class="urlbar"><div class="dots"><i></i><i></i><i></i></div><div class="url"><span>riff.so</span></div><div style="width:42px"></div></div>
+      <div class="viewport home">
+        <nav>
+          <div class="wordmark"><i></i>Riff</div>
+          <div class="you-chip"><img class="face" data-a="otter" alt="">Pebble</div>
+        </nav>
+        <div class="hero">
+          <h2>Make an app with<br>everyone who opens it.</h2>
+          <p>Describe it. It goes live. Share the link and anyone can change it by talking.</p>
+          <div class="make">
+            <div class="field">A drum machine four friends can jam on<span class="caret"></span></div>
+            <button class="btn accent">Make it <span class="kc on-dark">↵</span></button>
+          </div>
+          <div class="starters"><span>A potluck sign-up</span><span>Pixel garden we all water</span><span>Office tier list</span><span>A really hard trivia game</span></div>
+        </div>
+        <div class="gallery-head"><b>Live right now</b><span>Sorted by who is in them</span></div>
+        <div class="gallery">
+          <div class="card">
+            <div class="thumb t-seq" data-seq><span class="live"><span class="live-dot"></span>4 here</span></div>
+            <div class="card-meta"><div><h4>Pocket Orchestra</h4><p>14 versions · 9 people changed it</p></div><div class="faces"><img class="face" data-a="fox"><img class="face" data-a="toucan"><img class="face" data-a="stag"></div></div>
+          </div>
+          <div class="card">
+            <div class="thumb t-garden"><span class="live"><span class="live-dot"></span>2 here</span></div>
+            <div class="card-meta"><div><h4>Shared Window Box</h4><p>31 versions · 17 people</p></div><div class="faces"><img class="face" data-a="snail"><img class="face" data-a="frog"></div></div>
+          </div>
+          <div class="card">
+            <div class="thumb t-poll"><span class="live"><span class="live-dot"></span>11 here</span><i></i><i></i><i></i></div>
+            <div class="card-meta"><div><h4>Best Sandwich, Final</h4><p>8 versions · 40 people</p></div><div class="faces"><img class="face" data-a="raccoon"><img class="face" data-a="penguin"><img class="face" data-a="koala"></div></div>
+          </div>
+          <div class="card">
+            <div class="thumb t-board"><span class="live"><span class="live-dot"></span>3 here</span>
+              <i style="left:22px;top:52px;background:#FFE36E;transform:rotate(-4deg)"></i><i style="left:98px;top:70px;background:#fff;transform:rotate(3deg)"></i><i style="left:170px;top:48px;background:#FF9EC4;transform:rotate(-2deg)"></i><i style="left:70px;top:122px;background:#9EE6C9;transform:rotate(5deg)"></i></div>
+            <div class="card-meta"><div><h4>Trip Ideas: Lisbon</h4><p>forked from Trip Ideas v6</p></div><div class="faces"><img class="face" data-a="whale"><img class="face" data-a="crane"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 CLEAN LINK -->
+  <section class="scene">
+    <div class="scene-label"><span class="n">02</span><b>The clean link</b> The app is the whole page. One small glass pill says who is here.</div>
+    <div class="window">
+      <div class="urlbar"><div class="dots"><i></i><i></i><i></i></div><div class="url">riff.so/<span>pocket-orchestra</span></div><div style="width:42px"></div></div>
+      <div class="viewport">
+        <div class="app" data-app></div>
+        <div class="hint"><b>4 people are jamming here.</b> Open the room to watch them, or ask for a change.<div class="row"><span class="kc on-dark">/</span> opens the room · drag the pill anywhere</div></div>
+        <div class="presence">
+          <span class="grip"></span>
+          <div class="faces"><img class="face" data-a="fox"><img class="face" data-a="toucan"><img class="face" data-a="stag"><img class="face" data-a="otter"></div>
+          <span class="count">4 here</span>
+          <span class="open"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg><span class="badge"></span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 ROOM -->
+  <section class="scene">
+    <div class="scene-label"><span class="n">03</span><b>The room</b> Opened beside the app, which keeps playing. Every change is a card, every version a tick.</div>
+    <div class="window">
+      <div class="urlbar"><div class="dots"><i></i><i></i><i></i></div><div class="url">riff.so/<span>pocket-orchestra?room</span></div><div style="width:42px"></div></div>
+      <div class="viewport">
+        <div class="app" data-app data-fresh></div>
+        <div class="pick" style="left:66px;top:236px;width:66px;height:30px"><span>row.kick</span></div>
+
+        <aside class="room">
+          <div class="room-head">
+            <h5>Pocket Orchestra<small>v14 live · 4 here · forked 2 times</small></h5>
+            <div class="faces"><img class="face" data-a="fox"><img class="face" data-a="toucan"><img class="face" data-a="stag"><img class="face" data-a="otter"></div>
+            <span class="icon-btn" title="Copy link"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6.5 9.5l3-3M7 4.5l1.2-1.2a2.6 2.6 0 013.6 3.6L10.6 8M9 11.5l-1.2 1.2a2.6 2.6 0 01-3.6-3.6L5.4 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+            <span class="icon-btn" title="Close"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+          </div>
+          <div class="stream">
+            <div class="note"><b>Rowan</b> forked v9 into <b>Pocket Orchestra, Minor Key</b></div>
+            <div class="msg"><img class="face" data-a="fox"><div><div class="who">Ember<time>2m</time></div><div class="body">it drags a little. can we get swing?</div></div></div>
+            <div class="bcard live">
+              <div class="bcard-top"><span class="state"><span class="live-dot"></span>Live</span><span class="v">v14</span></div>
+              <div class="summary">Added a swing slider under the tempo. It shifts every second step up to 60ms.</div>
+              <div class="acts"><button class="btn ghost">See it</button><button class="btn">Undo</button><span class="sp"></span><span class="ago">for Ember · 40s</span></div>
+            </div>
+            <div class="msg"><img class="face" data-a="toucan"><div><div class="who">Mango<time>now</time></div><div class="body">yes!! now make the kick row glow on every beat</div><span class="chip">◎ row.kick · "Kick"</span></div></div>
+            <div class="bcard">
+              <div class="bcard-top"><span class="state"><span class="spinner"></span>Building for Mango</span><span class="v">v15 · 9s</span></div>
+              <ol class="narr">
+                <li><span>Read Sequencer.jsx and the step clock</span></li>
+                <li><span>Added a beat glow keyed to the playhead</span></li>
+                <li class="now"><span>Scoping it to the kick row only</span></li>
+              </ol>
+              <div class="files"><span>App.jsx</span><span class="w">Sequencer.jsx</span><span class="w">glow.css</span></div>
+              <div class="bar"></div>
+            </div>
+            <div class="note">Next up: Rowan's "add a hi-hat row" · position 2</div>
+          </div>
+          <div class="typing"><img class="face" data-a="stag">Rowan is typing</div>
+          <div class="composer">
+            <div class="input"><span class="ph">Ask for a change, or just talk</span></div>
+            <div class="tools">
+              <div class="seg"><span class="on">Change it</span><span>Just chat</span></div>
+              <span class="icon-btn" title="Point at something"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg></span>
+              <div class="send"><span class="kc">↵</span><span class="go"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5v-9M3 6l4-4 4 4" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+            </div>
+          </div>
+        </aside>
+
+        <div class="tip">
+          <div class="tip-top"><img class="face" data-a="whale"><b>v9 · Tide asked</b><time>yesterday</time></div>
+          <p>Made the snare row pink and added a clear-all button.</p>
+          <div class="acts"><button class="btn solid">View v9</button><button class="btn ghost">Restore</button><button class="btn ghost">Fork from here</button></div>
+        </div>
+        <div class="timeline">
+          <div class="tl-label"><b>14 versions</b>since Sunday</div>
+          <div class="ticks" data-ticks></div>
+          <div style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-3)"><span class="kc">←</span><span class="kc">→</span>step</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 PICKER -->
+  <section class="scene">
+    <div class="scene-label"><span class="n">04</span><b>Who you are</b> Everyone arrives as an animal. Change the face, change the name, keep going.</div>
+    <div class="window">
+      <div class="urlbar"><div class="dots"><i></i><i></i><i></i></div><div class="url">riff.so/<span>pocket-orchestra</span></div><div style="width:42px"></div></div>
+      <div class="viewport">
+        <div class="app" data-app></div>
+        <div class="scrim"></div>
+        <div class="picker">
+          <div class="picker-top">
+            <img class="face big" data-a="otter">
+            <div>
+              <h6>This is you in every app</h6>
+              <div class="name-field"><span class="val">Pebble<span class="caret"></span></span><span class="kc">↵</span></div>
+              <div class="suggest">Or <span>Brook</span><span>Tarka</span><span>Ripple</span></div>
+            </div>
+          </div>
+          <div class="animals" data-animals></div>
+          <div class="picker-foot"><span>Two Pebbles in a room? Faces tell you apart.</span><span class="sp"></span><button class="btn ghost">Shuffle</button><button class="btn solid">Done</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NAME + TOKENS -->
+  <section class="scene">
+    <div class="scene-label"><span class="n">05</span><b>Name and tokens</b></div>
+    <div class="names">
+      <div class="name-card lead"><div class="nm"><i></i>Riff</div><p>A riff is a small change someone plays on top of what is there, and the next person riffs on that. It is the verb for the whole product: "riff on my app".</p><div class="url">riff.so/pocket-orchestra</div></div>
+      <div class="name-card"><div class="nm">Hubbub</div><p>The happy noise of a crowded room changing one thing together; nobody else owns the word.</p><div class="url">hubbub.app/pocket-orchestra</div></div>
+      <div class="name-card"><div class="nm">Kiln</div><p>Say it, it gets fired, it comes out real; short, warm and studio-native.</p><div class="url">kiln.fun/pocket-orchestra</div></div>
+    </div>
+    <div class="tokens">
+      <div class="sw" style="background:#F3F2EE">Paper<code>#F3F2EE</code></div>
+      <div class="sw" style="background:#fff">Surface<code>#FFFFFF</code></div>
+      <div class="sw" style="background:#15161A;color:#fff">Ink<code>#15161A</code></div>
+      <div class="sw" style="background:#5C5E67;color:#fff">Ink 2<code>#5C5E67</code></div>
+      <div class="sw" style="background:#9C9EA6;color:#fff">Ink 3<code>#9C9EA6</code></div>
+      <div class="sw" style="background:#2B44FF;color:#fff">Ultramarine<code>#2B44FF</code></div>
+    </div>
+  </section>
+</main>
+
+<script>
+  // Mockup scaffolding only: fills repeated markup so the scenes stay readable.
+  const AVATARS = "../../web/components/org/avatars/";
+  const rows = [["Kick","fox"],["Snare","whale"],["Clap","toucan"],["Bass","stag"],["Hat","otter"],["Bell","octopus"]];
+  const pattern = [
+    "1000100010001000","0000100100001000","0010000000100010",
+    "1001001010010010","1010101010101010","0000001000000100"];
+
+  function appMarkup(fresh) {
+    const cells = rows.map(([name, face], r) =>
+      `<div class="lbl"><img class="face" data-a="${face}">${name}</div>` +
+      [...pattern[r]].map((c, i) => `<div class="cell ${c === "1" ? "on r" + r : ""} ${i === 6 ? "head" : ""}"></div>`).join("")
+    ).join("");
+    return `
+      <h3>Pocket Orchestra</h3>
+      <div class="sub">Sixteen steps, six rows, everyone on the same loop.</div>
+      <div class="controls"><div class="play"></div><span class="knob">Tempo 112</span>
+        <span class="knob ${fresh ? "fresh" : ""}">Swing 34%</span><span class="knob">Clear</span></div>
+      <div class="grid">${cells}</div>
+      <div class="cursor" style="left:640px;top:330px"><svg width="16" height="18" viewBox="0 0 16 18"><path d="M1 1l13 7-6 1.5L5 16z" fill="#F2B705" stroke="#fff" stroke-width="1.5"/></svg><span style="background:#C48F00">Mango</span></div>
+      <div class="cursor" style="left:420px;top:470px"><svg width="16" height="18" viewBox="0 0 16 18"><path d="M1 1l13 7-6 1.5L5 16z" fill="#FF5A36" stroke="#fff" stroke-width="1.5"/></svg><span style="background:#E04020">Ember</span></div>`;
+  }
+  document.querySelectorAll("[data-app]").forEach(el => el.innerHTML = appMarkup(el.hasAttribute("data-fresh")));
+
+  document.querySelector("[data-seq]").insertAdjacentHTML("beforeend",
+    Array.from({ length: 32 }, (_, i) => `<i class="${["a","","b","","c","","",""][(i * 5) % 8]}"></i>`).join(""));
+
+  const ticks = Array.from({ length: 16 }, (_, i) => {
+    const n = i + 1;
+    const kind = n === 15 ? "queued" : n === 14 ? "live" : n === 9 ? "peek" : n === 11 ? "restore" : n === 6 ? "fork" : "";
+    const face = { 3: "fox", 9: "whale", 12: "stag", 14: "fox", 15: "toucan" }[n];
+    return `<div class="tick ${kind}">${face ? `<img class="face tick-face" data-a="${face}">` : ""}<i></i><span>${n <= 14 ? n : "15"}</span></div>`;
+  });
+  document.querySelector("[data-ticks]").innerHTML = ticks.join("");
+
+  const animals = ["otter","fox","owl","crane","bear","hare","moth","whale","hedgehog","stag","raccoon","penguin","seal","lynx","octopus","toucan","frog","goat","swan","snail","elephant","koala","squirrel","robin"];
+  document.querySelector("[data-animals]").innerHTML = animals.map(a =>
+    `<div class="animal ${a === "otter" ? "sel" : ""}"><img class="face" data-a="${a}">${a[0].toUpperCase() + a.slice(1)}</div>`).join("");
+
+  document.querySelectorAll("img[data-a]").forEach(img => { img.src = AVATARS + img.dataset.a + ".webp"; img.alt = img.dataset.a; });
+</script>
+</body>
+</html>

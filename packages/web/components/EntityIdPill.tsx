@@ -83,7 +83,8 @@ import { REF_CERTAIN_ATTR } from "../lib/remarkEntityCards";
 import { useIsEstablishedRef } from "../hooks/entityMentionScope";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { chosenOptions } from "../lib/decisionLinks";
-import type { SessionDecisionItem } from "../store/inboxStore";
+import { useInboxStore, type SessionDecisionItem } from "../store/inboxStore";
+import { pageSurface, surfaceShown } from "../lib/surfaces";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
@@ -1271,13 +1272,19 @@ export function EntityIdPill({
   // real (cmd-click, copy link).
   const clickStaysHere = !!entity && isSession;
 
-  // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
+  // A reference to a page this mode hides (an initiative, a proposal or a
+  // decision in hosted mode) stays the text it was written as: a pill would
+  // open a page the person cannot otherwise reach.
+  const pageHidden = useInboxStore((s) => {
+    const surface = href ? pageSurface(href) : null;
+    return !!surface && !surfaceShown(s, surface);
+  });
 
   // Unknown id shape, or a Convex id that resolved to no entity table (message
   // id, random hash) — render the caller's original element, or the raw text.
   // Also the transient state while resolveIdType is in flight.
   const suffix = mention?.suffix;
-  if (!type) return fallback !== undefined ? <>{fallback}{suffix}</> : <span>{rawId}{suffix}</span>;
+  if (!type || pageHidden) return fallback !== undefined ? <>{fallback}{suffix}</> : <span>{rawId}{suffix}</span>;
   // A pull request or commit reference written as bare text wears a pill only
   // once its row is in hand. `owner/repo#12` is also the shape of a file path
   // with a line hash, and `owner/repo@1234567` of a version pin, so one that
