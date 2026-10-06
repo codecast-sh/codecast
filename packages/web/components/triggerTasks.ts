@@ -52,6 +52,9 @@ export type TaskRow = {
   created_by_conversation_id?: string;
   created_by_conversation_title?: string;
   target_conversation_id?: string;
+  // The routine's home is a hosted assistant conversation (agentTasks
+  // hostedHomeStamp): the assistant's routine, in hosted mode's scope.
+  hosted_home?: boolean;
   retry_count?: number;
   max_runtime_ms?: number;
   // `cast trigger add --precheck`: the shell gate run before each scheduled or

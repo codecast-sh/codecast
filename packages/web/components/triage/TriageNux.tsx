@@ -4,6 +4,9 @@ import { useCallback, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Check, MoreHorizontal } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { hasCollectionRows } from "../../lib/hasCollectionRows";
+import { useSurface } from "../../lib/surfaces";
+import { useFirstRun } from "../../lib/firstRun";
 import { useTrackedStore } from "../../store/inboxStore";
 import { getShortcutsForAction, matchShortcut, type ShortcutAction } from "../../shortcuts";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
@@ -489,16 +492,20 @@ export function TriageNuxGate() {
   const s = useTrackedStore([
     (st) => st.tour?.id === TOUR_ID,
     (st) => (st.clientState.tips?.seen?.length ?? 0) + (st.clientState.tips?.completed?.length ?? 0) >= 8,
-    (st) => Object.keys(st.sessions).length > 0,
+    (st) => hasCollectionRows(st.sessions),
     (st) => isInboxSessionView(pathname, st.currentConversation?.source),
   ]);
   const onInboxView = isInboxSessionView(pathname, s.currentConversation?.source);
   const open = s.tour?.id === TOUR_ID;
-  const hasSessions = Object.keys(s.sessions).length > 0;
+  const hasSessions = hasCollectionRows(s.sessions);
   // Same thresholds as useTips.currentPhase: 8+ tips absorbed = phase 3.
   const tips = s.clientState.tips;
   const veteran = (tips?.seen?.length ?? 0) + (tips?.completed?.length ?? 0) >= 8;
-  useTourAutoStart(TOUR_ID, onInboxView && hasSessions && !veteran);
+  // Hosted mode never opens it unasked (lib/surfaces.ts).
+  const unasked = useSurface("tour.agentInbox");
+  // Nor over the first run: a composer's unsent stub is a row, not a session.
+  const pastFirstRun = useFirstRun() === "no";
+  useTourAutoStart(TOUR_ID, onInboxView && hasSessions && !veteran && unasked && pastFirstRun);
 
   if (!open) return null;
   return <TriageNux />;

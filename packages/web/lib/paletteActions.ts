@@ -4,7 +4,8 @@ import { cleanTitle } from "./conversationProcessor";
 import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
-import { canSwitchSessionAgent } from "./sessionControl";
+import { canMoveSessionToMachine, sessionMoveVerbs } from "./sessionControl";
+import { DEVELOPER_MODE, type SurfaceMode } from "./surfaceRules";
 import { isForeignSession } from "./liveEntities";
 import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
 import { isTriggerEditable } from "./triggerEditable";
@@ -49,7 +50,9 @@ function isPersonified(target: { _id: string; character_avatar?: string | null; 
   return sessionIdentity(target as never, false).kind !== "plain";
 }
 
-export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false): PaletteAction[] {
+/** `mode` is hosted mode's registry (lib/surfaces.ts useSurfaceMode): model
+ *  and machine verbs follow its pickers and chips. */
+export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false, mode: SurfaceMode = DEVELOPER_MODE): PaletteAction[] {
   const target = targets[0];
   if (!type || !target) return [];
   const single = targets.length === 1;
@@ -84,37 +87,50 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     // files) only show for one row; the rest act on every target.
     const n = targets.length;
     const many = (one: string, several: string) => (single ? one : several.replace("#", String(n)));
+    // The same move verbs the session control menu offers (none for a hosted
+    // assistant conversation), and Move to machine only where one runs it.
+    const verbs = sessionMoveVerbs(target.agent_type, target.session_id, target.model);
+    // The mode's noun ("session", or "conversation" in hosted mode), and the
+    // fleet verbs (stash and hide, defer, dormant) only where its triage bar shows.
+    const { words } = mode;
+    const noun = words.conversation.toLowerCase();
+    const nouns = words.conversations.toLowerCase();
+    const fleet = mode.shows("triageBar");
     return [
       ...(single ? [
-        ...(canSwitchSessionAgent(target.agent_type, target.session_id, target.model) ? [row("agent_switch", "Switch agent…", Bot, "a")] : []),
-        row("agent_fork", "Fork session as…", GitBranch, "f"),
-        row("agent_handoff", "Hand off to…", ArrowRightLeft, "t"),
-        ...(canControlModel(target.agent_type, target.session_id, target.model) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
-        row("rename", "Rename session…", Pencil, "r", "session.rename"),
+        ...(verbs.includes("switch") ? [row("agent_switch", "Switch agent…", Bot, "a")] : []),
+        ...(verbs.includes("fork") ? [row("agent_fork", `Fork ${noun} as…`, GitBranch, "f")] : []),
+        ...(verbs.includes("handoff") ? [row("agent_handoff", "Hand off to…", ArrowRightLeft, "t")] : []),
+        ...(mode.shows("modelPicker") && canControlModel(target.agent_type, target.session_id, target.model) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
+        row("rename", `Rename ${noun}…`, Pencil, "r", "session.rename"),
       ] : []),
       // Personifying is opt in, so the verb names what it does for a row that
-      // has no character yet (session-characters.md S2).
-      row("character", isPersonified(target) ? many("Change character…", "Change character for # sessions…") : many("Give it a character…", "Give # sessions characters…"), Smile, "y"),
-      row("session_pin", target.is_pinned ? many("Unpin session", "Unpin # sessions") : many("Pin session", "Pin # sessions"), target.is_pinned ? PinOff : Pin, "p", "session.pin"),
+      // has no character yet (session-characters.md S2). Hosted mode offers
+      // only the change, for a row that already has one.
+      ...(mode.shows("conversation.internals") || isPersonified(target) ? [row("character", isPersonified(target) ? many("Change character…", `Change character for # ${nouns}…`) : many("Give it a character…", `Give # ${nouns} characters…`), Smile, "y")] : []),
+      row("session_pin", target.is_pinned ? many(`Unpin ${noun}`, `Unpin # ${nouns}`) : many(`Pin ${noun}`, `Pin # ${nouns}`), target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? many("Remove from favorites", "Remove # from favorites") : many("Add to favorites", "Add # to favorites"), Star, "v", "conv.favorite"),
-      row("bucket", many("Label session…", "Label # sessions…"), Tag, "l", "session.moveToBucket"),
-      row("device", many("Move to machine…", "Move # sessions to machine…"), ArrowRightLeft, "w"),
-      ...(!isSessionKilled(target) ? [row("snooze", many("Snooze session…", "Snooze # sessions…"), Clock, "z", "session.snooze")] : []),
+      row("bucket", many(`Label ${noun}…`, `Label # ${nouns}…`), Tag, "l", "session.moveToBucket"),
+      ...(mode.shows("machineChips") && targets.every((t) => canMoveSessionToMachine(t.agent_type)) ? [row("device", many("Move to machine…", `Move # ${nouns} to machine…`), ArrowRightLeft, "w")] : []),
+      ...(!isSessionKilled(target) ? [row("snooze", many(`Snooze ${noun}…`, `Snooze # ${nouns}…`), Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
-      ...(isSessionSetAside(target) ? [row("session_restore", many("Restore session to inbox", "Restore # sessions to inbox"), RefreshCw, "u")] : [
-        row("session_stash", many("Stash session", "Stash # sessions"), Archive, "s", "session.stash"),
-        row("session_stash_hide", many("Stash and hide session", "Stash and hide # sessions"), EyeOff, "b", "session.stashHide"),
-        row("session_defer", many("Defer session", "Defer # sessions"), Clock, "d", "session.deferAdvance"),
-        row("session_dormant", "Dormant — a machine wakes it", Moon, "z", "session.dormantAdvance"),
+      ...(isSessionSetAside(target) ? [row("session_restore", many(`Restore ${noun} to inbox`, `Restore # ${nouns} to inbox`), RefreshCw, "u")] : [
+        row("session_stash", many(`${words.stash} ${noun}`, `${words.stash} # ${nouns}`), Archive, "s", "session.stash"),
+        ...(fleet ? [
+          row("session_stash_hide", many(`Stash and hide ${noun}`, `Stash and hide # ${nouns}`), EyeOff, "b", "session.stashHide"),
+          row("session_defer", many(`Defer ${noun}`, `Defer # ${nouns}`), Clock, "d", "session.deferAdvance"),
+          row("session_dormant", "Dormant: a machine wakes it", Moon, "z", "session.dormantAdvance"),
+        ] : []),
         row("session_done", "Mark done", CheckCircle2, "e"),
-        row("session_needs_input", "Mark needs input", CircleDot, "g"),
+        row("session_needs_input", words.markNeedsInput, CircleDot, "g"),
       ]),
-      ...(!isSessionKilled(target) ? [row("session_kill", many("Kill session", "Kill # sessions"), Square, "k", "session.kill")] : []),
-      ...(!target.persistent ? [row("session_delete", many("Delete session…", "Delete # sessions…"), Trash2, "x")] : []),
+      ...(!isSessionKilled(target) ? [row("session_kill", many(`${words.killConfirm} ${noun}`, `${words.killConfirm} # ${nouns}`), Square, "k", "session.kill")] : []),
+      ...(!target.persistent ? [row("session_delete", many(`Delete ${noun}…`, `Delete # ${nouns}…`), Trash2, "x")] : []),
       ...(single && target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
       ...(single && target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),
       ...(single && (target.project_path || target.git_root) ? [row("session_files", "Open project files", Folder)] : []),
-      ...common,
+      // A conversation's id is machinery in hosted mode.
+      ...(mode.shows("conversation.internals") ? common : common.filter((action) => action.key !== "copy")),
     ];
   }
   if (type === "task") return [
@@ -193,7 +209,26 @@ const PALETTE_MATCH = 1;
 // typing a command's name ranks it above session and entity hits, which all
 // score a flat PALETTE_MATCH, so Enter runs the command the person named.
 const PALETTE_LABEL_HIT = 1.5;
+// Every query word found in the row's label, in any order ("task new" names
+// "New task"): below a label that starts with the query, above a keyword hit.
+const PALETTE_LABEL_WORDS = 1.25;
 const PALETTE_COMPOSE = 0.1;
+
+/** Between a row's label and its keywords in a cmdk value (paletteValue). */
+const LABEL_END = "\u2063";
+
+/** A row's cmdk value: the label it renders (in the mode's words, so a hosted
+ *  label is always searchable) and then its keywords. paletteItemScore ranks
+ *  a hit in the label above a hit in the keywords. */
+export function paletteValue(label: string, keywords = ""): string {
+  return `${label}${LABEL_END} ${keywords}`;
+}
+
+/** Every word of the query appears somewhere in the text, in any order. */
+function hasEveryWord(hay: string, words: string[]): boolean {
+  return words.length > 0 && words.every((word) => hay.includes(word));
+}
+
 // Session filter completions: a value for a typed operator (`file:` → paths)
 // leads, since the operator alone searches nothing; an operator name for a
 // word that may just be text (`au` → author:) trails the real matches.
@@ -205,6 +240,15 @@ const PALETTE_FILTER_NAME = 0.5;
  *  must score below a real match. Scoring it with matches puts
  *  "Files: New note" at the top and Enter creates a note instead of opening
  *  the hit. */
+/** Whether a query asks to make something ("new", "create", or either with
+ *  what to make): the palette then leads with its Create group, so the word
+ *  reaches New conversation, task, doc and routine before any command that
+ *  merely starts with it. Two letters at least, so "n" stays a search. */
+export function queryAsksToCreate(query: string): boolean {
+  const q = query.trim().toLowerCase();
+  return q.length >= 2 && ["new", "create"].some((word) => word.startsWith(q) || q.startsWith(`${word} `));
+}
+
 export function paletteItemScore(value: string, search: string): number {
   if (value.startsWith("__compose__")) return PALETTE_COMPOSE;
   if (value.startsWith("__filter__v")) return PALETTE_FILTER_VALUE;
@@ -221,6 +265,11 @@ export function paletteItemScore(value: string, search: string): number {
   const searchable = idx >= 0 ? value.slice(0, idx) : value;
   const hay = searchable.toLowerCase();
   const needle = search.trim().toLowerCase();
-  if (needle && hay.startsWith(needle)) return PALETTE_LABEL_HIT;
-  return hay.includes(search.toLowerCase()) ? PALETTE_MATCH : 0;
+  if (!needle) return PALETTE_MATCH;
+  if (hay.startsWith(needle)) return PALETTE_LABEL_HIT;
+  // Each word on its own, so "new task" finds "Create task new todo".
+  const words = needle.split(/\s+/);
+  const labelEnd = hay.indexOf(LABEL_END);
+  if (labelEnd >= 0 && hasEveryWord(hay.slice(0, labelEnd), words)) return PALETTE_LABEL_WORDS;
+  return hay.includes(needle) || hasEveryWord(hay, words) ? PALETTE_MATCH : 0;
 }

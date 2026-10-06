@@ -22,6 +22,8 @@ system_prompt?    the file body
 prompt_mode       append (default) | replace
 mode              apply (default) | propose (read only)
 isolated?         start in its own git worktree
+merge_back?       bring an isolated worker's changes into its parent's
+                  checkout when it finishes done (absent = on when isolated)
 ```
 
 `agent_chains` carries `name`, `description` and `steps: [{ agent, prompt }]`,
@@ -98,3 +100,35 @@ compose: a node may name `definition=<name>`; a prompt may read another node's
 result as `$<id>.output`; a `component` shaped fanout runs every branch
 concurrently (four at once) and continues at the `tripleoctagon` fanin, whose
 `$<fanin>.output` is every branch's output under a heading.
+
+## D6. The subagent fleet and merge back
+
+A `cast spawn --subagent` worker takes a slot. Two limits bound the fleet:
+workers per session (default 4) and per machine (default 8), read from the
+spawning machine's config (`cast config set subagents.per_session 6`) and
+stamped on each row, so a queued row is judged by the limits it was spawned
+under. A spawn past either limit is not refused: the row is created queued,
+with its start held on the row, and the CLI prints it as queued. When a worker
+ends (it declares done or blocked with `cast state`, closes or hands off its
+task, or is killed) its slot frees and the queue drains first in, first out,
+skipping a row whose own session or machine is still full so it does not hold
+up another's. The row's `subagent_slot` field is the one home of this state;
+the web derives "queued, 2 ahead" from the queued rows in the store with the
+same pure function the server drains with (`shared/contracts/subagentFleet.ts`,
+`convex/subagentFleet.ts`). `cast plan orchestrate` and `autopilot` take the
+per session limit as their default `--max`.
+
+An isolated worker with merge back (`merge_back` on its definition, on by
+default for an isolated one, or `cast spawn --merge-back`) that ends done gets
+a `merge_back` command on the machine holding its worktree.
+`cli/src/mergeBack.ts` measures the worker's own change the way `cast land`
+does (from the commit its worktree was cut at to its working state, untracked
+files included) and judges each file against the parent's working copy: taken
+where the parent has not touched it, three way merged where both changed it.
+One file that does not merge cleanly and nothing is written; the parent gets a
+session message naming the conflicting files and the worker's row a conflict
+chip. A worker that ends blocked or killed keeps its worktree and the parent is
+told where it is. Nothing is committed. A merge records the merged tree under
+`refs/codecast/merged/<worktree>`, so a later done brings only what is new, and
+the worktree GC releases a worktree whose working tree is exactly what it last
+merged.

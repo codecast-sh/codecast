@@ -237,11 +237,7 @@ export default function ConversationPage() {
   const shareToken = searchParams.get("share") || undefined;
   const [targetMessageId] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
-    const hash = window.location.hash;
-    if (hash && hash.startsWith("#msg-")) {
-      return hash.slice(5);
-    }
-    return undefined;
+    return parseMessageHash(window.location.hash)?.messageId;
   });
 
   // A failed resolve (a backend without the function, a server error) must
