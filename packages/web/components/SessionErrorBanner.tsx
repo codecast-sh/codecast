@@ -16,7 +16,7 @@ import { useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
 import { deviceSeesPath } from "../lib/machinePicker";
-import { classifyApiErrorBanner, cloudAgentProviderOfConversation, SAFETY_BLOCK_HINT } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, cloudAgentProviderOfConversation, isHostedAgentType, SAFETY_BLOCK_HINT } from "@codecast/shared/contracts";
 import { isInterruptControlMessage, useInboxStore } from "../store/inboxStore";
 
 const mib = (bytes: number) => `${Math.ceil(bytes / 1048576)} MiB`;
@@ -29,6 +29,8 @@ const ABANDONED_AFTER_MS = 5 * 60 * 1000;
  * spoke last, not to interrupt, and nothing has moved since. Never a cloud
  * agent's session: its turn runs on the provider's machines and writes
  * nothing here until it ends, and a message waiting behind it is held, not lost.
+ * Never a hosted assistant conversation either: no process of the person's
+ * runs it, so there is nothing to resume.
  */
 export function sessionLooksAbandoned(
   conversation: { agent_type?: string; session_id?: string | null; model?: string | null; updated_at?: number; messages?: { role?: string; content?: string }[] } | null | undefined,
@@ -38,6 +40,7 @@ export function sessionLooksAbandoned(
   const last = conversation?.messages?.at(-1);
   return isIdle && last?.role === "user" && !isInterruptControlMessage(last.content)
     && now - (conversation?.updated_at || 0) > ABANDONED_AFTER_MS
+    && !isHostedAgentType(conversation?.agent_type)
     && !cloudAgentProviderOfConversation(conversation?.agent_type, conversation?.session_id, conversation?.model);
 }
 

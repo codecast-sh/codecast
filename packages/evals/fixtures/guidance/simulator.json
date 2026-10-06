@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "Simulators come from the shared pool through cast sim.",
+  "label": {
+    "want": [
+      "cast\\s+sim\\b"
+    ],
+    "avoid": [
+      "xcrun simctl",
+      "\\baxe\\b",
+      "sim-acquire"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Take a screenshot of the Settings app running in an iOS simulator and show it to me."
+  }
+}

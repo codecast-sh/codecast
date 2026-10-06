@@ -1,4 +1,5 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
+import { assistantScopeOnly, restorableIn } from "../../lib/assistantScope";
 import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -22,6 +23,7 @@ import { ConversationSharePopover } from "../../components/ConversationSharePopo
 import { SessionErrorBanner, SessionResumeBanner, sessionLooksAbandoned } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { EmptyState } from "../../components/EmptyState";
+import { useFirstRun } from "../../lib/firstRun";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
@@ -366,11 +368,9 @@ export function QueuePageClient() {
   const trackedSessions = useTrackedStore([s => sessionsWakeSig(s.sessions)]);
   const sessions = trackedSessions.sessions;
   const clientStateInitialized = useInboxStore((s) => s.clientStateInitialized);
-  // True only once the user doc has synced AND no CLI has ever checked in —
-  // the boolean selector stays stable across heartbeat churn on currentUser.
-  const showCliOnboarding = useInboxStore(
-    (s) => s.currentUser != null && !s.currentUser.cli_version && !s.currentUser.daemon_last_seen && !s.currentUser.last_heartbeat
-  );
+  // No machine and no conversation (lib/firstRun.ts); the string stays
+  // stable across heartbeat churn on currentUser.
+  const showFirstRun = useFirstRun() === "yes";
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
@@ -384,6 +384,9 @@ export function QueuePageClient() {
   // chronological feed. Persisted per-user (stamped LWW).
   const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
+  const scopeOnly = useInboxStore((s) => assistantScopeOnly(s.clientState.ui));
+  // What may open on its own: in the Assistant scope, only the assistant's.
+  const restorable = useCallback((row: { agent_type?: string | null }) => restorableIn(scopeOnly, row), [scopeOnly]);
 
 
   const isPopstateRef = useRef(false);
@@ -651,8 +654,11 @@ export function QueuePageClient() {
       setShowMySessions(true);
       return;
     }
-    if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id, "adopt");
-  }, [paramSessionId, currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions]);
+    // In the Assistant scope only the assistant's conversations are adopted;
+    // with none, the pane shows the assistant's start (below).
+    const top = sortedSessions.find(restorable);
+    if (top) setCurrentSession(top._id, "adopt");
+  }, [paramSessionId, currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions, restorable]);
 
   // Sync URL when current session changes (but not before initial param is
   // resolved). Only the active tab owns the address bar — a background pane must
@@ -743,11 +749,22 @@ export function QueuePageClient() {
     setShowMySessions(true);
   }, [setShowMySessions]);
 
+  // The first run: no machine has ever checked in and there is nothing to
+  // show, so the home (board or feed alike) offers the two starts instead.
+  const firstRun = (
+    <div className="h-full overflow-y-auto" data-main-scroll>
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
+        <ErrorBoundary name="Onboarding" level="inline">
+          <EmptyState variant="onboarding" title="" description="" />
+        </ErrorBoundary>
+      </div>
+    </div>
+  );
   const inboxContent = (
     <>
       {pendingInjectId && isConvexId(pendingInjectId) && <SessionPrewarm sessionId={pendingInjectId} />}
       {renderShowMine ? (
-        inboxHome === "board" ? (
+        showFirstRun ? firstRun : inboxHome === "board" ? (
           <ErrorBoundary name="FleetBoard" level="inline">
             <FleetBoard />
           </ErrorBoundary>
@@ -802,20 +819,17 @@ export function QueuePageClient() {
           actionLabel="Back to inbox"
           onAction={() => { setUnavailableId(null); handleBack(); }}
         />
+      ) : showFirstRun || (scopeOnly && !sortedSessions.some(restorable)) ? (
+        // Nothing of the assistant's to open: its start, with the composer.
+        firstRun
       ) : sortedSessions.length > 0 ? (
         <div className="h-full" />
       ) : (
         <div className="h-full overflow-y-auto" data-main-scroll>
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
-            {showCliOnboarding ? (
-              <ErrorBoundary name="Onboarding" level="inline">
-                <EmptyState variant="onboarding" title="" description="" />
-              </ErrorBoundary>
-            ) : (
-              <ErrorBoundary name="ActivityFeed" level="inline">
-                <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
-              </ErrorBoundary>
-            )}
+            <ErrorBoundary name="ActivityFeed" level="inline">
+              <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
+            </ErrorBoundary>
           </div>
         </div>
       )}
