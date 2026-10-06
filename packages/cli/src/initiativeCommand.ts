@@ -89,7 +89,7 @@ export function progressText(counts?: { total: number; done: number }): string {
   return `${counts.done}/${counts.total} done (${Math.round((counts.done / counts.total) * 100)}%)`;
 }
 
-/** One row of `cast initiative ls`. */
+/** One row of `cast goal ls`. */
 export function initiativeLine(c: Palette, row: any): string {
   const facts = [
     INITIATIVE_STATUS_LABEL[row.status as InitiativeStatus] ?? row.status,
@@ -203,10 +203,10 @@ export function recordEntries(row: any, list: InitiativeRecordList): RecordEntry
 
 // The command that adds the first entry of each list, said when a goal has none.
 const RECORD_ADD: Record<InitiativeRecordList, (on: string) => string> = {
-  milestones: (on) => `cast initiative milestone ${on} "<title>" --date <YYYY-MM-DD>`,
-  questions: (on) => `cast initiative ask ${on} "<question>"`,
-  decisions: (on) => `cast initiative decide ${on} "<decision>"`,
-  sources: (on) => `cast initiative source ${on} <address or the words said>`,
+  milestones: (on) => `cast goal milestone ${on} "<title>" --date <YYYY-MM-DD>`,
+  questions: (on) => `cast goal ask ${on} "<question>"`,
+  decisions: (on) => `cast goal decide ${on} "<decision>"`,
+  sources: (on) => `cast goal source ${on} <address or the words said>`,
 };
 
 export type PickOpts = {
@@ -264,12 +264,12 @@ function readSaidSource(text: string | null): Read<IntentSource | null> {
   return text === null ? null : readSourceArg(text) ?? { error: SOURCE_NEEDED };
 }
 
-/** `cast initiative milestone`: add one, reach one (--done, on the day --at names), change one (--edit) or take one off (--remove). */
+/** `cast goal milestone`: add one, reach one (--done, on the day --at names), change one (--edit) or take one off (--remove). */
 export function milestoneWrite(ref: string, title: string | undefined, o: { done?: string; edit?: string; remove?: string; date?: Clearable; source?: Clearable; at?: Clearable }, now = Date.now()): Read<RecordWrite> {
   const on = normalizeInitiativeRef(ref);
   const picks = [o.done, o.edit, o.remove].filter((x) => x !== undefined);
   if (picks.length > 1 || (!picks.length && title === undefined)) return { error: "Give one of: a title to add, --done <n|title>, --edit <n|title> with what changes, or --remove <n|title>" };
-  const named = (text: string, flag: string) => ({ text, retry: `cast initiative milestone ${on} ${flag} <n>` });
+  const named = (text: string, flag: string) => ({ text, retry: `cast goal milestone ${on} ${flag} <n>` });
 
   if (o.remove !== undefined) {
     if (given(title, o.date, o.source, o.at)) return { error: "--remove takes the milestone alone" };
@@ -277,7 +277,7 @@ export function milestoneWrite(ref: string, title: string | undefined, o: { done
   }
   if (o.done !== undefined) {
     if (given(title, o.date, o.source)) return { error: "--done takes only --at, the day it was reached. A title, --date and --source belong to a new milestone or to --edit" };
-    if (o.at === null) return { error: `A reached milestone is reopened with: cast initiative milestone ${on} --edit <n> --at none` };
+    if (o.at === null) return { error: `A reached milestone is reopened with: cast goal milestone ${on} --edit <n> --at none` };
     const at = o.at === undefined ? undefined : readMomentArg(o.at, "--at", now);
     if (unread(at)) return at;
     return { verb: "Reached a milestone of", op: { list: "milestones", action: "close", ...(at === undefined ? {} : { at }) }, pick: named(o.done, "--done") };
@@ -315,7 +315,7 @@ export function milestoneWrite(ref: string, title: string | undefined, o: { done
   return { verb: "Changed a milestone of", op: { list: "milestones", action: "edit", entry }, pick: named(o.edit, "--edit") };
 }
 
-/** `cast initiative ask` and `decide`: put the words on the record, or change an entry that is there (--edit). */
+/** `cast goal ask` and `decide`: put the words on the record, or change an entry that is there (--edit). */
 export function saidWrite(ref: string, list: "questions" | "decisions", words: string | undefined, o: { edit?: string; by?: Clearable; source?: Clearable }): Read<RecordWrite> {
   const noun = INITIATIVE_RECORD_NOUN[list];
   const command = list === "questions" ? "ask" : "decide";
@@ -329,7 +329,7 @@ export function saidWrite(ref: string, list: "questions" | "decisions", words: s
   }
   if (o.edit !== undefined) {
     if (!Object.keys(entry).length) return { error: "Nothing to change: give the new words, --by or --source" };
-    return { verb: `Changed a ${noun} on`, op: { list, action: "edit", entry }, pick: { text: o.edit, retry: `cast initiative ${command} ${normalizeInitiativeRef(ref)} --edit <n> "<new words>"` } };
+    return { verb: `Changed a ${noun} on`, op: { list, action: "edit", entry }, pick: { text: o.edit, retry: `cast goal ${command} ${normalizeInitiativeRef(ref)} --edit <n> "<new words>"` } };
   }
   if (!words?.trim()) return { error: `Give the ${noun}, or --edit <n|words> to change one` };
   // Only an edit clears: a new entry that names nobody is signed by whoever adds it.
@@ -337,7 +337,7 @@ export function saidWrite(ref: string, list: "questions" | "decisions", words: s
   return { verb: list === "questions" ? "Asked on" : "Recorded a decision on", op: { list, action: "add", entry } };
 }
 
-/** `cast initiative answer`: close an open question. One that is answered keeps its answer unless --replace. */
+/** `cast goal answer`: close an open question. One that is answered keeps its answer unless --replace. */
 export function answerWrite(ref: string, pick: string, answer: string, o: { replace?: boolean; at?: string } = {}, now = Date.now()): Read<RecordWrite> {
   const at = o.at === undefined ? undefined : readMomentArg(o.at, "--at", now);
   if (unread(at)) return at;
@@ -349,11 +349,11 @@ export function answerWrite(ref: string, pick: string, answer: string, o: { repl
   return {
     verb: o.replace ? "Replaced the answer to a question on" : "Answered a question on",
     op: { list: "questions", action: "close", answer, ...(at === undefined ? {} : { at }) },
-    pick: { text: pick, retry: `cast initiative answer ${normalizeInitiativeRef(ref)} <n> "<answer>"`, ...(o.replace ? {} : { only }) },
+    pick: { text: pick, retry: `cast goal answer ${normalizeInitiativeRef(ref)} <n> "<answer>"`, ...(o.replace ? {} : { only }) },
   };
 }
 
-/** `cast initiative source`: where the goal was stated, who said it, and when as a moment. */
+/** `cast goal source`: where the goal was stated, who said it, and when as a moment. */
 export function sourceWrite(text: string, o: { quote?: string; by?: string; at?: string } = {}, now = Date.now()): Read<RecordWrite> {
   const at = o.at === undefined ? undefined : readMomentArg(o.at, "--at", now);
   if (unread(at)) return at;
@@ -361,11 +361,11 @@ export function sourceWrite(text: string, o: { quote?: string; by?: string; at?:
   return entry ? { verb: "Added a source to", op: { list: "sources", action: "add", entry } } : { error: SOURCE_NEEDED };
 }
 
-/** `cast initiative record --list <list> --remove <n|key>`: take one entry of any list off. */
+/** `cast goal record --list <list> --remove <n|key>`: take one entry of any list off. */
 export function removeWrite(ref: string, listText: string, pick: string): Read<RecordWrite> {
   const list = INITIATIVE_RECORD_LISTS.find((l) => l === listText);
   if (!list) return { error: `Invalid --list "${listText}": ${INITIATIVE_RECORD_LISTS.join(", ")}` };
-  return { verb: `Removed a ${INITIATIVE_RECORD_NOUN[list]} from`, op: { list, action: "remove" }, pick: { text: pick, retry: `cast initiative record ${normalizeInitiativeRef(ref)} --list ${list} --remove <n>` } };
+  return { verb: `Removed a ${INITIATIVE_RECORD_NOUN[list]} from`, op: { list, action: "remove" }, pick: { text: pick, retry: `cast goal record ${normalizeInitiativeRef(ref)} --list ${list} --remove <n>` } };
 }
 
 /** The verb a write prints: its own, or that nothing moved (an add of what is already there, a close or an edit that says what stands). A server that does not say whether it moved prints the write's own. */
@@ -458,7 +458,7 @@ export function recordWriteLines(c: Palette, verb: string, result: any, list: In
 const indented = (text: string, by = "  "): string[] => text.split("\n").map((l) => `${by}${l}`);
 
 /**
- * `cast initiative show`: the whole goal in the order a person asks about it
+ * `cast goal show`: the whole goal in the order a person asks about it
  * (I5, the test). What it is, why it matters, what done looks like, who
  * drives it, the numbers against their targets and which way they move, the
  * next milestone and every milestone, what is undecided, what was decided,
@@ -490,7 +490,7 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
     const trends = metricTrends(row);
     out.push(head("Metrics", "each number against its target"));
     for (const m of readings) out.push(`  ${metricRecordLine(c, m, trends[m.key], now)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
-    out.push(hint(`Report a value: cast initiative report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
+    out.push(hint(`Report a value: cast goal report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
   }
 
   const section = (list: InitiativeRecordList, title: string, entries: RecordEntry[]) => {
@@ -505,22 +505,22 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
   section("sources", "Sources", recordEntries(row, "sources"));
 
   const gaps = [!row.why && "why", !row.done_when && "done when", !milestones.length && "milestones", !row.sources?.length && "sources"].filter(Boolean);
-  if (gaps.length) out.push("", hint(`Not on the record yet: ${gaps.join(", ")}. cast initiative --help lists the commands that write them.`));
+  if (gaps.length) out.push("", hint(`Not on the record yet: ${gaps.join(", ")}. cast goal --help lists the commands that write them.`));
 
   const projects: any[] = row.projects ?? [];
   out.push(head(`Projects (${projects.length})`, progressText(row.task_counts)));
-  if (!projects.length) out.push(hint(`None yet: cast initiative add-project ${row.short_id} <project>`));
+  if (!projects.length) out.push(hint(`None yet: cast goal add-project ${row.short_id} <project>`));
   for (const p of projects) {
     out.push(`  ${opts.projectIcons?.[p.status] ?? "?"} ${c.bold}${p.title}${c.reset} ${c.dim}${p.status} | lead ${p.lead ?? `${c.yellow}none${c.reset}${c.dim}`} | ${progressText(p.task_counts)}${c.reset}`);
   }
 
   const updates: any[] = row.updates ?? [];
   out.push(head(`Updates (${updates.length})`));
-  if (!updates.length) out.push(hint(`None yet: cast initiative update ${row.short_id} --health on_track "How it is going"`));
+  if (!updates.length) out.push(hint(`None yet: cast goal update ${row.short_id} --health on_track "How it is going"`));
   for (const u of updates) out.push(`  ${healthText(c, u.health)} ${c.dim}· ${u.by_label ?? "unknown"} · ${opts.ago(u.at)}${c.reset}`, ...indented(u.body, "    "));
 
   if (row.sub_initiatives?.length) {
-    out.push(head("Sub initiatives"));
+    out.push(head("Goals under it"));
     for (const s of row.sub_initiatives) out.push(`  ${icon(s.status)} ${c.cyan}${s.short_id}${c.reset} ${s.title} ${healthText(c, s.health)}`);
   }
   out.push("");

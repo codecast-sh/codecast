@@ -1,6 +1,5 @@
-import { useState, Suspense } from "react";
+import { Suspense } from "react";
 import Link from "next/link";
-import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
@@ -9,24 +8,18 @@ import { AuthProviderButtons } from "../../components/AuthProviderButtons";
 import { EmailVerificationForm } from "../../components/EmailVerificationForm";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
+import { useEmailAuth } from "../../hooks/useEmailAuth";
 import { LANE_PATHS } from "../../components/simple/lanePaths";
-import { assistantInvite, useConnectAvailable } from "../../components/simple/assistantPromise";
+import { AssistantWayIn } from "../../components/simple/AssistantWayIn";
 
 function SignUpForm() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [pendingVerification, setPendingVerification] = useState(false);
-
-  const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to");
   const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/inbox";
-  const connect = useConnectAvailable();
+
+  const { email, setEmail, password, setPassword, confirmPassword, setConfirmPassword, error, loading, submit: handleSubmit, pendingVerification, verified, startOver } = useEmailAuth("signUp", redirectTo);
 
   // Local-first: same instant bounce as the login page for a stored token.
   const localAuthed = useLocalAuth();
@@ -43,54 +36,9 @@ function SignUpForm() {
     );
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (password !== confirmPassword) {
-      setError("Passwords do not match");
-      return;
-    }
-    setLoading(true);
-    setError("");
-
-    try {
-      const result = await signIn("password", { email, password, flow: "signUp" });
-      if (result && result.signingIn === false) {
-        // Email verification is enabled: the account exists but a code was
-        // emailed and must be entered before the session is granted.
-        setPendingVerification(true);
-        setLoading(false);
-        return;
-      }
-      window.location.href = redirectTo;
-    } catch (err) {
-      if (err instanceof Error) {
-        if (
-          err.message.includes("already") ||
-          err.message.includes("exists") ||
-          err.message.includes("registered")
-        ) {
-          setError("Email already registered");
-        } else if (err.message.includes("password")) {
-          setError("Password must be at least 8 characters");
-        } else {
-          setError("Sign up failed. Please try again.");
-        }
-      } else {
-        setError("An unexpected error occurred.");
-      }
-      setLoading(false);
-    }
-  };
-
   if (pendingVerification) {
     return (
-      <EmailVerificationForm
-        email={email}
-        onVerified={() => {
-          window.location.href = redirectTo;
-        }}
-        onBack={() => setPendingVerification(false)}
-      />
+      <EmailVerificationForm email={email} onVerified={verified} onBack={startOver} />
     );
   }
 
@@ -103,6 +51,15 @@ function SignUpForm() {
             Create your account
           </p>
         </div>
+
+        {/* The fork for someone who does not write code, before the developer
+            form: the hosted assistant's onboarding, which signs them in on its
+            own. */}
+        {redirectTo !== LANE_PATHS.welcome ? (
+          <div className="mb-6 flex justify-center">
+            <AssistantWayIn location="signup" tone="app" />
+          </div>
+        ) : null}
 
         <div className="bg-sol-bg-alt backdrop-blur-sm border border-sol-border rounded-xl p-8 shadow-xl">
           <AuthProviderButtons verb="up" redirectTo={redirectTo} />
@@ -203,19 +160,6 @@ function SignUpForm() {
           </p>
         </div>
 
-        {/* The way in for someone who does not write code: the hosted
-            assistant's onboarding, which signs them in on its own. */}
-        {redirectTo !== LANE_PATHS.welcome ? (
-          <p className="mt-6 text-center text-sm text-sol-text-dim">
-            Don't write code?{" "}
-            <Link
-              href={LANE_PATHS.welcome}
-              className="text-sol-text-muted hover:text-sol-text underline underline-offset-4 decoration-sol-border transition-colors"
-            >
-              {assistantInvite(connect.available === true)}
-            </Link>
-          </p>
-        ) : null}
       </div>
     </main>
   );

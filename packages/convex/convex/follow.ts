@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { canAccessConversation } from "./lib/access";
-import { FOLLOW_LEASE_MS } from "@codecast/shared/contracts/follow";
+import { FOLLOW_LEASE_MS, clampFollowView } from "@codecast/shared/contracts/follow";
+import { followViewValidator } from "./lib/followView";
 
 // Follow mode: one person mirrors another's view until they stop.
 //
@@ -27,27 +28,30 @@ async function liveFollowers(ctx: any, leaderId: Id<"users">, now: number) {
     .query("view_follows")
     .withIndex("by_leader", (q: any) => q.eq("leader_id", leaderId).gt("updated_at", now - FOLLOW_LEASE_MS))
     .collect();
-  return rows as Array<{ _id: Id<"view_follows">; follower_id: Id<"users">; leader_id: Id<"users">; updated_at: number }>;
+  return (rows as Array<{ _id: Id<"view_follows">; follower_id: Id<"users">; leader_id: Id<"users">; updated_at: number; dropped_at?: number }>).filter((r) => !r.dropped_at);
 }
 
 async function myFollowRow(ctx: any, followerId: Id<"users">) {
   return (await ctx.db
     .query("view_follows")
     .withIndex("by_follower", (q: any) => q.eq("follower_id", followerId))
-    .first()) as { _id: Id<"view_follows">; leader_id: Id<"users">; updated_at: number } | null;
+    .first()) as { _id: Id<"view_follows">; leader_id: Id<"users">; updated_at: number; dropped_at?: number } | null;
 }
 
-/** Start or renew following `leader_id`. One leader per follower: a new
- *  leader replaces the old lease. Following yourself is a no op. */
+/** Start (`fresh`) or renew following `leader_id`. One leader per follower:
+ *  a new leader replaces the old lease. Following yourself is a no op. A
+ *  renewal of a lease the leader dropped is refused; only a fresh start, the
+ *  follower choosing to follow again, revives it. */
 export const follow = mutation({
-  args: { leader_id: v.id("users") },
+  args: { leader_id: v.id("users"), fresh: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const me = await requireAuth(ctx);
     if (args.leader_id === me) return;
     const now = Date.now();
     const existing = await myFollowRow(ctx, me);
     if (existing) {
-      await ctx.db.patch(existing._id, { leader_id: args.leader_id, updated_at: now });
+      if (existing.dropped_at && existing.leader_id === args.leader_id && !args.fresh) return;
+      await ctx.db.patch(existing._id, { leader_id: args.leader_id, updated_at: now, dropped_at: undefined });
     } else {
       await ctx.db.insert("view_follows", { follower_id: me, leader_id: args.leader_id, updated_at: now });
     }
@@ -63,6 +67,19 @@ export const unfollow = mutation({
   },
 });
 
+/** The leader stops sharing their view with one follower. The lease stays,
+ *  marked, so the follower's next renewal is refused and its window learns
+ *  the follow ended (viewOf) instead of quietly reviving it. */
+export const dropFollower = mutation({
+  args: { follower_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const me = await requireAuth(ctx);
+    const row = await myFollowRow(ctx, args.follower_id);
+    if (!row || row.leader_id !== me || row.dropped_at) return;
+    await ctx.db.patch(row._id, { dropped_at: Date.now() });
+  },
+});
+
 /** The leader's place. Refused (silently) when nobody holds a live lease on
  *  them, so a client that reports on a stale belief writes nothing. */
 export const reportView = mutation({
@@ -70,6 +87,7 @@ export const reportView = mutation({
     path: v.string(),
     conversation_id: v.optional(v.id("conversations")),
     anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
+    view: v.optional(followViewValidator),
   },
   handler: async (ctx, args) => {
     const me = await requireAuth(ctx);
@@ -80,6 +98,7 @@ export const reportView = mutation({
       path: args.path.slice(0, 512),
       conversation_id: args.conversation_id,
       anchor: args.anchor ? { message_id: args.anchor.message_id.slice(0, 128), offset: Math.min(1, Math.max(0, args.anchor.offset)) } : undefined,
+      view: clampFollowView(args.view),
       updated_at: now,
     };
     const existing = await ctx.db.query("view_states").withIndex("by_user", (q: any) => q.eq("user_id", me)).first();
@@ -113,7 +132,7 @@ export const following = query({
   handler: async (ctx) => {
     const me = await requireAuth(ctx);
     const row = await myFollowRow(ctx, me);
-    if (!row || row.updated_at <= Date.now() - FOLLOW_LEASE_MS) return null;
+    if (!row || row.dropped_at || row.updated_at <= Date.now() - FOLLOW_LEASE_MS) return null;
     return { leader_id: row.leader_id };
   },
 });
@@ -132,14 +151,18 @@ export const viewOf = query({
       path: v.string(),
       conversation_id: v.optional(v.id("conversations")),
       anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
+      view: v.optional(followViewValidator),
       updated_at: v.number(),
       withheld: v.boolean(),
+      /** The leader stopped sharing with this follower. */
+      ended: v.optional(v.boolean()),
     }),
   ),
   handler: async (ctx, args) => {
     const me = await requireAuth(ctx);
     const lease = await myFollowRow(ctx, me);
     if (!lease || lease.leader_id !== args.leader_id || lease.updated_at <= Date.now() - FOLLOW_LEASE_MS) return null;
+    if (lease.dropped_at) return { path: "", updated_at: lease.dropped_at, withheld: false, ended: true };
     const state = await ctx.db.query("view_states").withIndex("by_user", (q: any) => q.eq("user_id", args.leader_id)).first();
     if (!state) return null;
     if (state.conversation_id) {
@@ -147,6 +170,6 @@ export const viewOf = query({
       const ok = !!conversation && (await canAccessConversation(ctx, me, conversation as any));
       if (!ok) return { path: "", updated_at: state.updated_at, withheld: true };
     }
-    return { path: state.path, conversation_id: state.conversation_id, anchor: state.anchor, updated_at: state.updated_at, withheld: false };
+    return { path: state.path, conversation_id: state.conversation_id, anchor: state.anchor, view: state.view, updated_at: state.updated_at, withheld: false };
   },
 });

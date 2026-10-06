@@ -45,6 +45,7 @@ import {
   type OrgReviseOp,
   type OrgRevision,
   type OrgVerdictSeen,
+  orgRecordRedundancyErrors,
 } from "@codecast/shared/contracts/orgProposal";
 import { orgAppliedDiff } from "@codecast/shared/contracts/orgChange";
 
@@ -129,8 +130,21 @@ async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, wsK
   if (!/^(pl|ct|pr|in)-\d+$/.test(ref)) return change;
   const row = await ctx.db.query(table).withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
   if (row && row.workspace !== wsKey) throw new Error(`${ref} belongs to another workspace; a proposal changes only this workspace's records`);
-  if (change.title?.trim() || !row || typeof row.title !== "string" || !row.title.trim()) return change;
-  return { ...change, title: row.title.trim() };
+  if (!row) return change;
+  // Where the record sits (its plan, its project), so the proposal groups by
+  // it (orgRecordGroups) and a drop its plan's close covers is caught here.
+  const under: Record<string, string> = {};
+  if (change.kind === "task_status" || change.kind === "plan_status") {
+    const project = row.project_id ? await ctx.db.get(row.project_id) : null;
+    if (project?.short_id && !change.project?.trim()) under.project = project.short_id;
+    if (change.kind === "task_status" && row.plan_id && !change.plan?.trim()) {
+      const plan = await ctx.db.get(row.plan_id);
+      if (plan?.short_id) under.plan = plan.short_id;
+      if (!under.project && plan?.project_id) { const p = await ctx.db.get(plan.project_id); if (p?.short_id) under.project = p.short_id; }
+    }
+  }
+  const title = change.title?.trim() || typeof row.title !== "string" || !row.title.trim() ? {} : { title: row.title.trim() };
+  return { ...change, ...title, ...under };
 }
 
 export async function performCreateProposal(
@@ -203,8 +217,14 @@ export async function performCreateProposal(
 
   const changes = [];
   const wsKey = workspaceKey(args.team_id ? { type: "team", teamId: args.team_id } : { type: "personal", userId });
+  const checked: OrgChange[] = [];
+  for (const c of spec.changes) checked.push(await checkedRecordChange(ctx, c.change, wsKey));
+  // A task the author did not place under its plan may still sit under one
+  // this proposal closes: the records say so, and the refusal is the parser's.
+  const covered = orgRecordRedundancyErrors(checked.map((change) => ({ change })));
+  if (covered.length) throw new Error(`The proposal spec is not valid:\n- ${covered.join("\n- ")}`);
   for (const [i, c] of spec.changes.entries()) {
-    const change = await checkedRecordChange(ctx, c.change, wsKey);
+    const change = checked[i];
     const id = await ctx.db.insert("org_proposal_changes", {
       proposal_id: proposalId,
       seq: i + 1,
