@@ -11,11 +11,31 @@ export type TmuxPasteReceipt = TmuxDeliveryIdentity & {
   phase: "paste" | "submit" | "verified";
   pasteAt: number;
   terminalExited?: number;
+  /** Writes of this payload into a pane so far, this one included. */
+  writes?: number;
 };
 
 export class TmuxDeliveryUncertainError extends Error {
   constructor(reason: string) {
     super(`INJECT_UNVERIFIED: ${reason}; preserving the original terminal write`);
+  }
+}
+
+// How many times one message may be written into a pane before the daemon
+// stops and says so. Every write past the first is a re-write after a receipt
+// settled with no echo, or into a pane that replaced the one written to. The
+// re-write exists for a paste lost to the terminal; it is wrong for a payload
+// that reached the agent and came back changed. A trigger prompt typed into
+// jx7b88a on 2026-10-05 lost six bytes to tmux's parser on every write, so the
+// transcript never matched the payload, and the daemon typed it five times in
+// 100 minutes: the agent ran the same message five times. Three writes cover
+// one lost paste and one replaced pane; a fourth is a loop.
+export const TMUX_PASTE_WRITE_CAP = 3;
+
+/** The cap above is spent: the message is failed, loudly, never re-written. */
+export class TmuxDeliveryExhaustedError extends Error {
+  constructor(readonly messageId: string, readonly writes: number) {
+    super(`INJECT_EXHAUSTED: written into the pane ${writes} times and never acknowledged; not writing it again`);
   }
 }
 
@@ -32,11 +52,17 @@ export class TmuxDeliveryJournal {
         phase TEXT NOT NULL CHECK (phase IN ('paste','submit','verified')), pasteAt INTEGER NOT NULL
       );
       CREATE UNIQUE INDEX IF NOT EXISTS tmux_paste_pending ON tmux_pastes(generation) WHERE phase != 'verified';
-      CREATE TABLE IF NOT EXISTS tmux_paste_failures (messageId TEXT PRIMARY KEY);`);
+      CREATE TABLE IF NOT EXISTS tmux_paste_failures (messageId TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS tmux_paste_writes (messageId TEXT PRIMARY KEY, writes INTEGER NOT NULL);`);
   }
 
   get(messageId: string): TmuxPasteReceipt | null {
-    return this.db.query<TmuxPasteReceipt, [string]>("SELECT *, EXISTS(SELECT 1 FROM tmux_paste_failures f WHERE f.messageId = p.messageId) AS terminalExited FROM tmux_pastes p WHERE messageId = ?").get(messageId);
+    return this.db.query<TmuxPasteReceipt, [string]>("SELECT *, EXISTS(SELECT 1 FROM tmux_paste_failures f WHERE f.messageId = p.messageId) AS terminalExited, (SELECT writes FROM tmux_paste_writes w WHERE w.messageId = p.messageId) AS writes FROM tmux_pastes p WHERE messageId = ?").get(messageId);
+  }
+
+  /** Writes of this message into a pane so far: a receipt's history survives its release. */
+  writesOf(messageId: string): number {
+    return this.db.query<{ writes: number }, [string]>("SELECT writes FROM tmux_paste_writes WHERE messageId = ?").get(messageId)?.writes ?? 0;
   }
 
   pending(generation: string): TmuxPasteReceipt | null {
@@ -58,7 +84,10 @@ export class TmuxDeliveryJournal {
         return { receipt: prior, fresh: false };
       }
       if (this.pending(generation)) throw new TmuxDeliveryUncertainError("an earlier message still owns the terminal input");
-      const receipt: TmuxPasteReceipt = { ...identity, generation, payloadHash, phase: "paste", pasteAt: Date.now() };
+      const writes = this.writesOf(identity.messageId);
+      if (writes >= TMUX_PASTE_WRITE_CAP) throw new TmuxDeliveryExhaustedError(identity.messageId, writes);
+      this.db.query("INSERT INTO tmux_paste_writes VALUES (?, 1) ON CONFLICT(messageId) DO UPDATE SET writes = writes + 1").run(identity.messageId);
+      const receipt: TmuxPasteReceipt = { ...identity, generation, payloadHash, phase: "paste", pasteAt: Date.now(), writes: writes + 1 };
       this.db.query("INSERT INTO tmux_pastes VALUES (?, ?, ?, ?, ?, ?)")
         .run(receipt.messageId, receipt.conversationId, generation, payloadHash, receipt.phase, receipt.pasteAt);
       return { receipt, fresh: true };
@@ -67,6 +96,8 @@ export class TmuxDeliveryJournal {
 
   advance(messageId: string, phase: "submit" | "verified"): void {
     this.db.query("UPDATE tmux_pastes SET phase = ? WHERE messageId = ? AND phase != 'verified'").run(phase, messageId);
+    // A verified message spent nothing: its write history guards only the loop.
+    if (phase === "verified") this.db.query("DELETE FROM tmux_paste_writes WHERE messageId = ?").run(messageId);
   }
 
   abandonUnsubmitted(messageId: string): void {

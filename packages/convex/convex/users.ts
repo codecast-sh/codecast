@@ -13,7 +13,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots, ownDevice } from "./devices";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
-import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
+import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, isPinnableAgentId, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
 import { normalizeTimezone } from "./lib/teamDay";
@@ -4318,13 +4318,14 @@ export const getAgentPermissionModes = query({
 });
 
 /** The agents the viewer's pickers show. Every supported client stays
- *  launchable; this only decides which ones sit in the pickers. */
+ *  launchable; this only decides which ones sit in the pickers. The hosted
+ *  assistant is pinnable like any client. */
 export const setPinnedAgents = mutation({
   args: { agents: v.array(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const unknown = args.agents.filter((id) => !(id in LOCAL_AGENT_CLIENTS));
+    const unknown = args.agents.filter((id) => !isPinnableAgentId(id));
     if (unknown.length) throw new Error(`Unknown agent client: ${unknown.join(", ")}`);
     await ctx.db.patch(userId, { pinned_agents: [...new Set(args.agents)] });
   },

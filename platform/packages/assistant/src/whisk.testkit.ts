@@ -2,7 +2,7 @@
 // by path (a dispatch by its action name) and records every call, so a test
 // sees exactly what the tools asked Whisk for. No bun:test import, so the
 // module is safe wherever the convex bundle reaches it.
-import type { WhiskCall } from "../../lib/whisk";
+import type { WhiskCall } from "./whisk";
 
 export type WhiskTestCall = { kind: string; path: string; args: any };
 

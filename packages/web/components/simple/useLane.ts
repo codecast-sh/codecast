@@ -13,7 +13,7 @@ import { inboxFloorFlags } from "../../hooks/useSyncInboxSessions";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useRetryConversationStart } from "./startConversation";
+import { useRetryHostedStart } from "../../lib/startHostedConversation";
 import {
   buildTranscript, conversationState, conversationTitle, countByConversation, isLaneConversation, isLaneRoutine, isOpenApproval, isUnsent, oldestFirst,
   type ConversationState, type LaneMessage, type TranscriptItem,
@@ -110,7 +110,7 @@ export function useLaneConversation(id: string, onRealId: (liveId: string) => vo
     return row ? conversationState(row, 0, now) : null;
   });
   const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
-  const retryStart = useRetryConversationStart();
+  const retryStart = useRetryHostedStart();
 
   useWatchEffect(() => {
     if (liveId !== id && isConvexId(liveId)) onRealId(liveId);

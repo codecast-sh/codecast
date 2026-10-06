@@ -8,7 +8,27 @@ import fs from "node:fs";
 import { AGENT_START_JITTER_MS, type ProcessInfo } from "./resourceMonitor.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
 
-const KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION", "TMUX"];
+/** The variables that name the session a process works for (sessionIdFromEnv reads them). */
+export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"];
+const KEYS = [...SESSION_ENV_KEYS, "TMUX"];
+
+/** An environment that names no session: for what the daemon starts on its own behalf. */
+export function withoutSessionIds<T extends Record<string, string | undefined>>(env: T): T {
+  const out = { ...env };
+  for (const k of SESSION_ENV_KEYS) delete out[k];
+  return out;
+}
+
+/**
+ * The tmux options that make a session an agent creates carry the agent's id:
+ * tmux copies only the variables in `update-environment` from the creating
+ * client, so without them every pane inherits the server's environment and
+ * names nobody. Returns the `set-option` calls still needed, given the current value.
+ */
+export function tmuxSessionEnvUpdates(current: string): string[][] {
+  const have = new Set(current.split(/\s+/).filter(Boolean));
+  return SESSION_ENV_KEYS.filter((k) => !have.has(k)).map((k) => ["set-option", "-ga", "update-environment", k]);
+}
 type Env = Record<string, string>;
 
 /** Pick the keys we care about out of NUL-separated `KEY=value` strings. */
@@ -68,33 +88,48 @@ function readEnv(pid: number): Env | null {
 }
 
 const cache = new Map<number, { startedAt?: number; env: Env | null }>();
-/** Reads per sample. A daemon's first sample meets every process at once; the rest are read on later samples. */
+/** Reads per periodic sample. A daemon's first sample meets every process at once; the rest are read on later samples. */
 const READS_PER_SAMPLE = 400;
 
+export type EnvSession = { sessionId: string; via: "tmux" | "background" };
+
 /**
- * A lookup from a process to the live session its environment names, for
- * processes outside every session's tree. A process inside a tmux pane
- * inherits the tmux server's environment, so an id the server itself carries
- * (an agent started the server) says nothing about the pane and is ignored.
+ * A lookup from a process to the session its environment names, for processes
+ * outside every session's tree. Two inherited ids are no evidence and are
+ * ignored: one the tmux server itself carries (an agent started the server, so
+ * every pane inherits it), and anything under this daemon (started from an
+ * agent's shell, its children all carry that agent's id).
  */
-export function envSessionLookup(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, read: (pid: number) => Env | null = readEnv): (p: ProcessInfo) => string | undefined {
+export function envSessionLookup(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, read: (pid: number) => Env | null = readEnv, self = process.pid, budget = READS_PER_SAMPLE): (p: ProcessInfo) => EnvSession | undefined {
   for (const pid of cache.keys()) if (!snapshot.has(pid)) cache.delete(pid);
   let reads = 0;
   const env = (pid: number): Env | null => {
     const p = snapshot.get(pid);
     const hit = cache.get(pid);
     if (hit && (hit.startedAt === undefined || p?.startedAt === undefined || Math.abs(hit.startedAt - p.startedAt) <= AGENT_START_JITTER_MS)) return hit.env;
-    if (++reads > READS_PER_SAMPLE) return null;
+    if (++reads > budget) return null;
     const e = read(pid);
     cache.set(pid, { startedAt: p?.startedAt, env: e });
     return e;
   };
+  const under = (p: ProcessInfo, ancestor: number) => {
+    const seen = new Set<number>();
+    for (let c: ProcessInfo | undefined = p; c && !seen.has(c.pid); c = snapshot.get(c.ppid)) {
+      if (c.pid === ancestor) return true;
+      seen.add(c.pid);
+    }
+    return false;
+  };
   return (p) => {
     const e = env(p.pid);
     const id = e ? sessionIdFromEnv(e) : null;
-    if (!id || !sessions.has(id)) return undefined;
+    if (!id || !sessions.has(id) || under(p, self)) return undefined;
     const server = Number(e!.TMUX?.split(",")[1]);
-    if (server && server !== p.pid && (() => { const s = env(server); return s && sessionIdFromEnv(s) === id; })()) return undefined;
-    return id;
+    if (server && server !== p.pid) {
+      const s = env(server);
+      if (s && sessionIdFromEnv(s) === id) return undefined;
+    }
+    // TMUX is inherited too: a job an agent in a pane backgrounds carries it, yet left the pane.
+    return { sessionId: id, via: server && under(p, server) ? "tmux" : "background" };
   };
 }

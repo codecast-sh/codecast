@@ -3,9 +3,9 @@
 // and that the app token only ever rides in the request to Whisk.
 import { describe, expect, test } from "bun:test";
 import { runTool, type Tool } from "@platform/agent";
-import { whiskHttpCall, whiskThreadLink, type WhiskCall } from "../../lib/whisk";
+import { whiskHttpCall, whiskThreadLink, type WhiskCall } from "./whisk";
 import { bareAddress, callKey, deliveredAddress, mailTools, recipient, replyEnvelopeFor, THREAD_MAX_CHARS, threadSubject } from "./mail";
-import { whiskMailbox } from "./whisk";
+import { whiskMailbox } from "./whiskEngine";
 import { fakeWhisk } from "./whisk.testkit";
 
 const ME = { _id: "acc1", email: "me@example.com", send_as: [{ email: "me@alias.example" }] };
@@ -384,7 +384,7 @@ describe("archive and label", () => {
   test("archive removes INBOX, one op per mailbox", async () => {
     const w = fakeWhisk({ ...byIds(thread("t1"), thread("t2", { account_id: "acc2" }), thread("t3")), "dispatch:applyThreadOps": () => ({ applied: [] }) });
     await run(tool(w.call, "archive"), { thread_ids: ["t1", "t2", "t3"] });
-    expect(w.calls.at(-1)!.args).toEqual({
+    expect(w.calls[w.calls.length - 1].args).toEqual({
       action: "applyThreadOps",
       args: [{ ops: [
         { account_id: "acc1", thread_gmail_ids: ["t1", "t3"], add_label_ids: [], remove_label_ids: ["INBOX"] },
@@ -400,7 +400,7 @@ describe("archive and label", () => {
       "dispatch:applyThreadOps": () => ({ applied: [] }),
     });
     await run(tool(w.call, "archive"), { thread_ids: ["t1", "m1"] });
-    expect(w.calls.at(-1)!.args.args[0].ops).toEqual([{ account_id: "acc1", thread_gmail_ids: ["t1"], add_label_ids: [], remove_label_ids: ["INBOX"] }]);
+    expect(w.calls[w.calls.length - 1].args.args[0].ops).toEqual([{ account_id: "acc1", thread_gmail_ids: ["t1"], add_label_ids: [], remove_label_ids: ["INBOX"] }]);
     const before = w.calls.length;
     await expect(runTool(tool(w.call, "archive"), { thread_ids: ["m1", "nope"] }, { callId: "c" })).rejects.toThrow("No thread nope in the person's mail");
     expect(w.calls.slice(before).some((c) => c.path === "dispatch:dispatch")).toBe(false);
@@ -418,7 +418,7 @@ describe("archive and label", () => {
       "dispatch:applyThreadOps": () => ({ applied: [] }),
     });
     const { text } = await run(tool(w.call, "label"), { thread_ids: ["t1", "t2"], add: ["receipts"], remove: ["starred"] });
-    expect(w.calls.at(-1)!.args.args[0].ops).toEqual([
+    expect(w.calls[w.calls.length - 1].args.args[0].ops).toEqual([
       { account_id: "acc1", thread_gmail_ids: ["t1"], add_label_ids: ["Label_1"], remove_label_ids: ["STARRED"] },
       { account_id: "acc2", thread_gmail_ids: ["t2"], add_label_ids: ["Label_9"], remove_label_ids: ["STARRED"] },
     ]);
@@ -467,7 +467,7 @@ describe("the door to Whisk", () => {
     expect(f.seen[0].url).toBe("https://fox.convex.cloud/api/action");
     expect(f.seen[0].body).toEqual({ path: "search:runFullSearch", args: { q: "x", token: TOKEN }, format: "json" });
     // The token rides only in the body to Whisk: no header carries it.
-    expect([...f.seen[0].headers.values()].some((h) => h.includes(TOKEN))).toBe(false);
+    expect(Array.from(f.seen[0].headers as unknown as Iterable<[string, string]>, ([, value]) => value).some((h) => h.includes(TOKEN))).toBe(false);
   });
 
   test("a Whisk error reads as its sentence; a revoked token as a reconnect; neither carries the token", async () => {

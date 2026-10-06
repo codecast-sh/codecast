@@ -260,6 +260,17 @@ export function sortRows(rows: TableRow[], sort: Sort): TableRow[] {
 
 // ---- formatting ----
 
+/** How a process outside its session's tree was started, as a short tag. */
+export function outsideLabel(detached: ResourceProcess["detached"]): string | undefined {
+  return detached === "tmux" ? "tmux" : detached === "background" ? "background" : detached ? "outside tree" : undefined;
+}
+
+/** Process names with the outside ones tagged: "ffmpeg (tmux), bun". */
+export function namedStops(ps: Array<{ label: string; detached?: ResourceProcess["detached"] }>, max = 4): string {
+  const shown = ps.slice(0, max).map((p) => (outsideLabel(p.detached) ? `${p.label} (${outsideLabel(p.detached)})` : p.label));
+  return `${shown.join(", ")}${ps.length > max ? `, +${ps.length - max} more` : ""}`;
+}
+
 export function fmtBytes(bytes: number | undefined): string {
   if (bytes === undefined || !Number.isFinite(bytes)) return "n/a";
   const gb = bytes / 1024 ** 3;
