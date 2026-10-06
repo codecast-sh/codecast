@@ -31,6 +31,7 @@ import { RepoWindowControl } from "../../../../../components/repo/RepoWindowCont
 import { useRepoFamily } from "../../../../../components/repo/useRepoFamily";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
 import { useDiffAddress } from "../../../../../hooks/useDiffAddress";
+import { useFollowScroll } from "../../../../../hooks/useFollowSurface";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { PRLineThread } from "../../../../../components/pr/PRThread";
 import { CommitLinks } from "../../../../../components/repo/CommitLinks";
@@ -428,6 +429,7 @@ function CommitContent({
     rootRef,
     stickyTop: 0,
   });
+  useFollowScroll("commit", rootRef);
   // An older link names a file in the query (`?file=`, from a Threads card):
   // it becomes the fragment, which is the address from here on.
   const filesReady = !!commit?.files?.length;
@@ -455,7 +457,7 @@ function CommitContent({
   const lineThreads: FileLineThreads = useMemo(
     () => ({
       threadsFor: (filename) => lineComments.threadsByFile.get(filename),
-      render: (filename, anchor, items) => (
+      render: (filename, anchor, items, placement) => (
         <PRLineThread
           repository={repository}
           threadKey={codeThreadRootKey(repository, sha, { file_path: filename, line_number: anchor.lineNumber })}
@@ -463,6 +465,7 @@ function CommitContent({
           authed={lineComments.authed}
           lineNumber={anchor.lineNumber}
           lineEnd={anchor.lineEnd}
+          placement={placement}
           onReply={(content) =>
             lineComments.post({
               file_path: filename,
@@ -482,8 +485,8 @@ function CommitContent({
           onClose={lineComments.closeComposer}
         />
       ),
-      onComment: (filename, anchor) => {
-        if (anchor) lineComments.openComposer(filename, anchor);
+      onComment: (filename, anchor, _code, anchorLines) => {
+        if (anchor) lineComments.openComposer(filename, anchor, anchorLines);
       },
     }),
     [lineComments, pr, repository, sha],

@@ -12,6 +12,7 @@ import { PLAN_STATUS_OPTIONS } from "./menus/entityOptions";
 import { LivenessDot } from "./LivenessDot";
 import { isBrowserRoutePath } from "../lib/browserPane";
 import { visitDetailParts } from "../lib/recentVisitDetails";
+import { currentPagePath } from "../lib/renamedPages";
 
 // One surface → icon map for every place that shows a page reference (the
 // recents rows, the tab bar). Route prefix decides; LayoutGrid is the generic.
@@ -28,7 +29,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
   if (path.startsWith("/files") || path.startsWith("/vault")) return <Folder className={className} />;
   if (path.startsWith("/pages") || path.startsWith("/artifacts")) return <Globe className={className} />;
   if (isBrowserRoutePath(path)) return <Globe className={className} />;
-  if (path.startsWith("/initiatives")) return <Flag className={className} />;
+  if (currentPagePath(path).startsWith("/goals")) return <Flag className={className} />;
   if (path.startsWith("/projects")) return <FolderKanban className={className} />;
   if (path.startsWith("/workflows") || path.startsWith("/routines") || path.startsWith("/line")) return <Workflow className={className} />;
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return <Zap className={className} />;

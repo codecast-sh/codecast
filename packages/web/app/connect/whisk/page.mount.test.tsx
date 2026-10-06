@@ -18,7 +18,7 @@ let auth = { isAuthenticated: false, isLoading: false };
 let calls: unknown[] = [];
 const finish = async (args: unknown) => {
   calls.push(args);
-  return { ok: true, return_to: "/simple/connections" };
+  return { ok: true, return_to: "/settings/integrations" };
 };
 const convex = await import("convex/react");
 mock.module("convex/react", () => ({ ...convex, useConvexAuth: () => auth, useAction: () => finish }));
@@ -54,7 +54,7 @@ describe("/connect/whisk", () => {
     await render();
     await flush();
     expect(calls).toEqual([{ code: "one-time", state: "signed", error: undefined }]);
-    expect(here()).toBe("/simple/connections?whisk=connected");
+    expect(here()).toBe("/settings/integrations?whisk=connected");
     expect(sessionStorage.length).toBe(0);
   });
 
@@ -75,16 +75,16 @@ describe("/connect/whisk", () => {
     await render();
     await flush();
     expect(calls).toEqual([{ code: "one-time", state: "signed", error: undefined }]);
-    expect(here()).toBe("/simple/connections?whisk=connected");
+    expect(here()).toBe("/settings/integrations?whisk=connected");
     expect(sessionStorage.length).toBe(0);
   });
 
-  test("a visit with nothing to finish says so on Connections and calls nothing", async () => {
+  test("a visit with nothing to finish says so on Integrations and calls nothing", async () => {
     auth = { isAuthenticated: true, isLoading: false };
     window.history.replaceState(null, "", "/connect/whisk");
     await render();
     await flush();
     expect(calls).toEqual([]);
-    expect(here()).toBe("/simple/connections?whisk=error&reason=bad_state");
+    expect(here()).toBe("/settings/integrations?whisk=error&reason=bad_state");
   });
 });

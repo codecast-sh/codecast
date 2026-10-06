@@ -486,7 +486,7 @@ async function verifyStaffingPane() {
   await clearBatch();
   // The card's why and effect are the author's for a lone change, and the
   // derived sentence for a fold of several.
-  assert.match(card(0).querySelector("[data-ask-effect]")!.textContent!, /3 changes on the initiatives page/);
+  assert.match(card(0).querySelector("[data-ask-effect]")!.textContent!, /3 changes on the goals page/);
 
   // ── a proposal that is one ask (S39): its entries under the title, the ledger's closing row ──
   // Eleven goal changes in one stored ask: no card, no fold. The purpose

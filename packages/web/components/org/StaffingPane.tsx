@@ -745,7 +745,7 @@ export function AreaDetail({ row, now, onOpenSession, onSelectNode, onTrigger, o
           <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Serves</div>
           {a.initiatives!.map((i) => (
             <div key={i.id} className="mt-0.5 text-[12px] leading-snug" data-area-initiative={i.short_id} data-area-initiative-owned={i.owned || undefined}>
-              <Link href={`/initiatives/${i.short_id}`} className="font-medium no-underline hover:underline" style={{ color: "var(--sol-text)" }}>{i.title}</Link>
+              <Link href={`/goals/${i.short_id}`} className="font-medium no-underline hover:underline" style={{ color: "var(--sol-text)" }}>{i.title}</Link>
               {i.chain.length > 0 && <span style={{ color: "var(--sol-text-dim)" }}> under {i.chain.map((c) => c.title).join(", under ")}</span>}
               {i.metrics.map((m) => <MetricReadingLine key={m.key} reading={m} now={now} className="block mt-0.5 text-[11px]" />)}
             </div>

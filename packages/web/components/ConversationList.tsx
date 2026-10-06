@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { AgentTypeIcon } from "./AgentTypeIcon";
+import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { AvatarImg } from "../lib/avatarCache";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -8,6 +9,7 @@ import { useState, useMemo, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cleanTitle, isSystemMessage, isCommandMessage, isImportNotice } from "../lib/conversationProcessor";
+import { sessionCardTitle } from "../lib/sessionCard";
 import { stripTeammateFraming } from "./sessionMessage";
 import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
@@ -368,10 +370,10 @@ export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: str
         <GrokIcon className="w-2.5 h-2.5 text-white" />
       </span>
     );
-  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse") {
-    // opencode/pi/muse have no dedicated badge glyph here — reuse the canonical
-    // AgentTypeIcon (its own accent color) inside the badge chrome so they never
-    // fall through to the Claude icon.
+  } else if (agentType === "opencode" || agentType === "pi" || agentType === "muse" || isHostedAgentType(agentType)) {
+    // opencode/pi/muse and the hosted assistant have no dedicated badge glyph
+    // here — reuse the canonical AgentTypeIcon (its own accent color) inside
+    // the badge chrome so they never fall through to the Claude icon.
     return (
       <span className={`${className} rounded bg-sol-bg-alt flex items-center justify-center shrink-0`}>
         <AgentTypeIcon agentType={agentType} className="w-2.5 h-2.5" />
@@ -531,7 +533,7 @@ export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam 
                     ? "font-normal text-xs sm:text-sm text-sol-text-dim/70"
                     : isOthersRestrictedView ? "font-medium text-sm sm:text-base text-sol-text-muted" : "font-medium text-sm sm:text-base text-sol-text"
                 }`}>
-                  {cleanTitle(conv.title || "Untitled")}
+                  {sessionCardTitle(conv)}
                 </span>
                 {conv.is_active && (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0 select-none">
@@ -742,21 +744,9 @@ function groupByTime(conversations: Conversation[]): TimeGroup[] {
   return groups.filter((g) => g.conversations.length > 0);
 }
 
-function getAgentTypeLabel(agentType: string): string {
-  if (agentType === "claude_code") return "Claude Code";
-  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  if (agentType === "opencode") return "OpenCode";
-  if (agentType === "pi") return "pi";
-  if (agentType === "grok") return "Grok";
-  if (agentType === "muse") return "Muse Spark";
-  return agentType;
-}
-
 function createConversationAriaLabel(conv: Conversation): string {
-  const title = cleanTitle(conv.title || "Untitled");
-  const agentType = getAgentTypeLabel(conv.agent_type || "claude_code");
+  const title = sessionCardTitle(conv);
+  const agentType = formatAgentType(conv.agent_type || "claude_code");
   const time = getRelativeTime(conv.updated_at);
   const status = conv.is_active ? ", active" : "";
   return `${title}, ${agentType}, ${time}${status}`;
