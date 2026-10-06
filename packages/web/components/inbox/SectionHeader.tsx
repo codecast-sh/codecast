@@ -2,7 +2,9 @@ import type { CSSProperties } from "react";
 
 // The collapsible caption over an inbox section: its name, its count and the
 // chevron. The color rides on the header element itself so simple view can
-// tint the divider rule with currentColor; children set their own.
+// tint the divider rule with currentColor; children set their own. It sticks
+// to the top of the list while its section scrolls under it, so the reader
+// always knows which section they are in; every style must keep it opaque.
 export function SectionHeader({
   label,
   count,
@@ -33,7 +35,7 @@ export function SectionHeader({
       data-inbox-section={sectionKey}
       data-inbox-section-count={count}
       onClick={onToggle}
-      className={`relative w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2 ${color}`}
+      className={`sticky top-0 z-10 w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2 ${color}`}
       style={landedColor ? ({ "--hold-dest": landedColor } as CSSProperties) : undefined}
     >
       {landedColor && <span key={landedColor} aria-hidden className="absolute inset-0 pointer-events-none animate-inbox-landed" />}
@@ -44,7 +46,9 @@ export function SectionHeader({
         </span>
       ) : (
         <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
-          {label} ({count})
+          {/* Hosted mode (globals.css) drops the brackets and sets the bare
+              count in the family's mono. */}
+          {label} <span data-cc-sec-count><span data-cc-bracket>(</span>{count}<span data-cc-bracket>)</span></span>
         </span>
       )}
       <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -139,6 +139,20 @@ describe("the gate (LE11, LE16)", () => {
     expect(waiting[0].link).toBe(`/decisions/${out.decision_short_id}`);
   });
 
+  test("the notice names the change by the card's headline, with the cause's id", async () => {
+    const { t, ids, read } = await setup({ status: "in_progress" });
+    await t.mutation(api.workflow_runs.pauseAtGate, {
+      api_token: TOKEN, run_id: ids.runId, node_id: "decide", prompt: "Ship this change?",
+      choices: [{ key: "S", label: "[S] Ship", target: "ship" }, { key: "D", label: "[D] Drop", target: "drop" }],
+      // Not a whole card: the gate asks without it, and the headline still names the change.
+      card: { headline: "Follow-ups lead with the question" },
+    });
+    const { notes } = await read();
+    const waiting = notes.filter((n) => n.type === "card_waiting");
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].message).toContain("Follow-ups lead with the question (ct-1)");
+  });
+
   test("a review approve inside a live line run leaves the cause in review: the run decides done", async () => {
     const { t, ids, read } = await setup({ status: "in_progress" });
     await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "done", review_verdict: "approve" });

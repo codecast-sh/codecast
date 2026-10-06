@@ -1,6 +1,8 @@
 import type { LucideIcon } from "lucide-react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supportMailto } from "../../lib/siteLinks";
+import type { SupportWords } from "../simple/lane";
 
 /** The settings design kit. Every settings panel renders through these four
  *  shapes, so density, typography and spacing are decided once:
@@ -50,7 +52,7 @@ export function SettingsSection({ title, icon: Icon, description, actions, padde
       <div className="mb-2 flex items-center justify-between gap-4 px-1">
         <div className="flex items-center gap-2 min-w-0">
           {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />}
-          <h3 className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-sol-text-muted">{title}</h3>
+          <h3 data-cc-settings-title className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-sol-text-muted">{title}</h3>
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
@@ -265,5 +267,18 @@ export function SettingsOptionGroup({
         );
       })}
     </div>
+  );
+}
+
+/** A sentence that asks the person to write to support, its link a mail with
+ *  the subject filled in. Sits inside a callout or a note, which owns the
+ *  tone and size. */
+export function SupportSentence({ words }: { words: SupportWords }) {
+  return (
+    <>
+      {words.before}
+      <a href={supportMailto(words.subject)} className="underline underline-offset-2">{words.link}</a>
+      {words.after}
+    </>
   );
 }

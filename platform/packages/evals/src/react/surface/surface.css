@@ -1,0 +1,391 @@
+/* The Surface group's rules: one surface over time (the header, the toolbar,
+   the seismograph and its tooltips, the verdict line), a product's gate, and
+   the surface wall with What moved (codecast docs/architecture/evals-ui.md
+   4.1, 4.2 and 6), with the cost track the Run group draws under the chart.
+   The plate, compare drawer and epoch sheet's rules are the Freeze group's.
+   Colour and type only through var(--ev-*) (tokens.css); state also by shape. */
+
+.ev-sf { max-width: 1680px; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.ev-sf-head { display: flex; gap: 32px; align-items: flex-start; justify-content: space-between; }
+.ev-sf-head-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.ev-sf-crumb { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ev-text-dim); }
+.ev-sf-crumb a:hover { color: var(--ev-text); }
+.ev-sf-crumb svg { width: 0.75rem; height: 0.75rem; }
+.ev-sf-head-nums { display: flex; gap: 28px; flex-shrink: 0; padding-top: 18px; }
+.ev-sf-num-label { margin-top: 6px; font-size: 11px; color: var(--ev-text-dim); }
+
+.ev-sf-criteria { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12.5px; color: var(--ev-text-muted); }
+.ev-sf-criteria-toggle { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 0; border: 0; background: none; font-size: 12px; font-weight: 600; color: var(--ev-text); cursor: pointer; }
+.ev-sf-criteria-toggle svg { width: 0.75rem; height: 0.75rem; transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.ev-sf-criteria-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.ev-sf-criteria-peek { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-sf-criteria-body { max-width: 760px; line-height: 1.55; }
+.ev-sf-criteria-body p { margin: 0; }
+.ev-sf-criteria-body .ev-chips { margin-top: 0.5rem; }
+
+/* ── Toolbar ────────────────────────────────────────────────────────────── */
+
+.ev-sf-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 20px 0 14px; }
+.ev-sf-toolbar-gap { flex: 1; }
+.ev-sf-toolbar-sep { width: 1px; height: 16px; background: var(--ev-rule); }
+.ev-sf-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+  color: var(--ev-text-dim);
+  background: none;
+  border: 1px solid var(--ev-rule);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.ev-sf-toggle:hover { color: var(--ev-text); }
+.ev-sf-toggle-box {
+  width: 9px;
+  height: 9px;
+  border: 1.25px solid currentColor;
+  border-radius: 2px;
+  transition: background 120ms ease;
+}
+.ev-sf-toggle[aria-pressed="true"] { color: var(--ev-text); border-color: color-mix(in srgb, var(--ev-cyan) 55%, transparent); }
+.ev-sf-toggle[aria-pressed="true"] .ev-sf-toggle-box { background: var(--ev-cyan); border-color: var(--ev-cyan); }
+
+/* ── Layout: the main column and, when two batches are pinned, the drawer ─ */
+
+.ev-sf-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.ev-sf.ev-sf--compare .ev-sf-grid { grid-template-columns: minmax(0, 1fr) clamp(320px, 34cqw, 400px); }
+/* Below this the chart would be too narrow beside the drawer: it stacks under the chart instead. */
+@container evals (max-width: 820px) {
+  .ev-sf.ev-sf--compare .ev-sf-grid { grid-template-columns: minmax(0, 1fr); }
+  .ev-sf-head { flex-direction: column; gap: 4px; }
+  .ev-sf-head-nums { padding-top: 6px; }
+}
+.ev-sf-main { min-width: 0; display: flex; flex-direction: column; gap: 22px; }
+
+.ev-sf-chart-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; margin-bottom: 8px; }
+.ev-sf-chart-head h2 { margin: 0; }
+.ev-sf-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 11.5px; color: var(--ev-text-muted); }
+.ev-sf-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.ev-sf-legend-hatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background-image: repeating-linear-gradient(135deg, var(--ev-yellow) 0 1px, transparent 1px 3px);
+  background-color: var(--ev-hatch);
+}
+.ev-sf-legend-median { width: 14px; height: 0; border-top: 1.75px solid var(--ev-text); }
+.ev-sf-legend-notch { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 6px solid currentColor; }
+.ev-sf-count { font-size: 12px; font-weight: 400; }
+.ev-sf-refreshing { font-size: 11px; font-weight: 400; color: var(--ev-text-dim); }
+
+.ev-sf-chart-body {
+  border: 1px solid var(--ev-rule);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ev-bg);
+}
+.ev-sf-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; font-size: 11px; color: var(--ev-text-dim); }
+.ev-sf-keys > span { display: inline-flex; align-items: center; gap: 4px; }
+.ev-sf-note { margin: 0; padding: 12px 2px; font-size: 12px; line-height: 1.5; }
+
+/* ── Seismograph ────────────────────────────────────────────────────────── */
+
+.ev-sf-seis { position: relative; user-select: none; }
+.ev-sf-seis-svg { display: block; overflow: visible; }
+.ev-brush { fill: color-mix(in srgb, var(--ev-cyan) 10%, transparent); stroke: color-mix(in srgb, var(--ev-cyan) 50%, transparent); }
+.ev-sf-band { fill: transparent; pointer-events: none; }
+.ev-sf-band--alt { fill: color-mix(in srgb, var(--ev-text) 4.5%, transparent); }
+.ev-sf-perf { stroke: var(--ev-text-dim); stroke-width: 1.5; stroke-dasharray: 1.5 3.5; stroke-linecap: round; pointer-events: none; }
+.ev-sf-epoch-label { cursor: pointer; outline: none; }
+.ev-sf-epoch-label rect { fill: var(--ev-card); stroke: var(--ev-rule); stroke-width: 1; transition: stroke 120ms ease; }
+.ev-sf-epoch-label text { font: 600 10.5px var(--ev-font-mono); fill: var(--ev-text-muted); font-variant-ligatures: none; }
+.ev-sf-epoch-label:hover rect, .ev-sf-epoch-label:focus-visible rect { stroke: var(--ev-cyan); }
+.ev-sf-epoch-label:hover text, .ev-sf-epoch-label:focus-visible text { fill: var(--ev-text); }
+.ev-sf-gridline { stroke: var(--ev-text); stroke-width: 0.5; opacity: 0.12; pointer-events: none; }
+.ev-sf-passmark { stroke: var(--ev-text); stroke-width: 0.9; stroke-dasharray: 4 3; opacity: 0.55; pointer-events: none; }
+.ev-sf-ylabel { font: 10px var(--ev-font-mono); fill: var(--ev-text-dim); font-variant-numeric: tabular-nums; }
+.ev-sf-ylabel--mark { fill: var(--ev-text); }
+.ev-sf-xlabel { font: 10.5px var(--ev-font-ui); fill: var(--ev-text-dim); }
+.ev-sf-lane-label { font: 10.5px var(--ev-font-mono); fill: currentColor; }
+.ev-sf-axis { stroke: var(--ev-border); stroke-width: 1; }
+.ev-sf-hit { fill: transparent; cursor: crosshair; }
+.ev-sf-pass-through, .ev-sf-cursor, .ev-sf-median { pointer-events: none; }
+.ev-sf-pin { fill: color-mix(in srgb, var(--ev-cyan) 14%, transparent); stroke: color-mix(in srgb, var(--ev-cyan) 55%, transparent); stroke-width: 1; }
+.ev-sf-pin-letter { font: 700 10px var(--ev-font-mono); fill: var(--ev-cyan); }
+.ev-sf-cursor { stroke: var(--ev-text); stroke-width: 1; opacity: 0.3; }
+.ev-sf-median { fill: none; stroke: var(--ev-text); stroke-width: 1.75; stroke-linejoin: round; }
+.ev-sf-dot { cursor: pointer; }
+.ev-sf-dot:hover > :not(circle[fill^="url"]) { stroke-width: 2; }
+
+.ev-sf-tip { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; line-height: 1.4; }
+.ev-sf-tip b { font-weight: 600; }
+.ev-sf-tip-dim { opacity: 0.68; }
+
+/* ── Cost track (the Run group's CostTrack, drawn under the seismograph) ─ */
+
+.ev-sf-cost { border-top: 1px solid var(--ev-rule); padding: 6px 0 4px; background: var(--ev-bg); }
+.ev-sf-cost-model { fill: color-mix(in srgb, var(--ev-text) 42%, transparent); }
+.ev-sf-cost-judge { fill: color-mix(in srgb, var(--ev-violet) 70%, transparent); }
+
+.ev-sf-commit { color: var(--ev-text-muted); cursor: pointer; }
+.ev-sf-commit line { stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; opacity: 0.75; }
+.ev-sf-commit:hover line { opacity: 1; stroke-width: 2.2; }
+.ev-sf-footing-rule { stroke: currentColor; stroke-width: 1.25; stroke-dasharray: 4 3; opacity: 0.6; pointer-events: none; }
+
+/* The wall's verdict, said again on the page its link opens. */
+.ev-sf-verdictline { font-size: 12px; line-height: 1.6; margin-top: 8px; max-width: 80ch; display: flex; flex-direction: column; gap: 2px; }
+.ev-sf-verdictline-main { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.ev-sf-verdictline-base { display: flex; align-items: center; gap: 7px; }
+/* The baseline's mark, as the seismograph draws it under its axis. */
+.ev-sf-basemark { flex: none; width: 14px; height: 6px; border-left: 2px solid var(--ev-cyan); border-right: 2px solid var(--ev-cyan); background: linear-gradient(var(--ev-cyan), var(--ev-cyan)) center / 100% 1px no-repeat; opacity: 0.8; }
+.ev-sf-nowrap { white-space: nowrap; }
+.ev-sf-verdictline .ev-btn { height: 22px; }
+
+/* A product's own gate (SurfaceInfo.gate): its word is red where it failed, the gate's colour. */
+.ev-gate-chip { gap: 6px; }
+.ev-gate-chip svg { width: 10px; height: 10px; }
+.ev-gate-chip > .ev-quiet { padding-left: 6px; border-left: 1px solid var(--ev-rule); }
+.ev-gate-chip[data-ev-gate="red"] { border-color: color-mix(in srgb, var(--ev-red) 45%, transparent); }
+
+/* ── The surface wall ───────────────────────────────────────────────────
+   Rows are 56px and the header 32px, both multiples of the 8px bench grid,
+   so the paper under the strip column runs unbroken from row to row. */
+
+.ev-wall-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 28px;
+  align-items: start;
+  max-width: 1680px;
+}
+
+.ev-wall-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 14px;
+}
+.ev-wall-summary { font-size: 12px; color: var(--ev-text-muted); }
+.ev-wall-keys { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--ev-text-dim); }
+.ev-wall-keys > span { display: inline-flex; align-items: center; gap: 3px; }
+
+/* ── The table ─────────────────────────────────────────────────────────── */
+
+.ev-wall-table {
+  /* The verdict column fits "vs pooled 3, 2 broke, 1 fixed" whole: an ellipsis there hid the fixed count.
+     The latest batch column fits "12 of 12 reps" (13 characters of 10.5px mono, about 82px) at every width. */
+  --ev-wall-cols: 176px minmax(0, 1fr) 84px 188px 52px;
+  border-top: 1px solid var(--ev-rule);
+}
+.ev-wall-row {
+  display: grid;
+  grid-template-columns: var(--ev-wall-cols);
+  align-items: center;
+  column-gap: 16px;
+  height: 62px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--ev-rule);
+  box-shadow: inset 3px 0 0 transparent;
+  cursor: pointer;
+  transition: background-color 120ms ease, box-shadow 160ms ease;
+}
+.ev-wall-row[aria-selected="true"] { background: color-mix(in srgb, var(--ev-bg-highlight) 70%, transparent); }
+.ev-wall-row[data-ev-worse] {
+  box-shadow: inset 3px 0 0 var(--ev-magenta);
+  background: color-mix(in srgb, var(--ev-magenta) 5%, transparent);
+}
+.ev-wall-row[data-ev-worse][aria-selected="true"] { background: color-mix(in srgb, var(--ev-magenta) 10%, var(--ev-bg-highlight)); }
+
+.ev-wall-row--head {
+  height: 40px;
+  cursor: default;
+  font-size: 11px;
+  color: var(--ev-text-dim);
+}
+.ev-wall-row--spend { height: 56px; cursor: default; border-bottom: 0; }
+
+/* The bench paper runs down the strip column only. */
+.ev-wall-strip {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  /* A pane resize paints before the width observer fires; never let a strip run over the pass rate. */
+  overflow: hidden;
+  background-image:
+    linear-gradient(to right, var(--ev-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--ev-grid) 1px, transparent 1px);
+  background-size: 8px 8px;
+  background-position: -1px 0;
+}
+.ev-wall-axis { position: relative; align-self: stretch; }
+.ev-wall-axis > span {
+  position: absolute;
+  bottom: 7px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ev-wall-axis > .ev-wall-axis-now { left: auto; right: 0; transform: none; color: var(--ev-text-muted); }
+.ev-wall-axis > .ev-wall-axis-what { left: 0; top: 3px; bottom: auto; transform: none; color: var(--ev-text-muted); }
+.ev-wall-nobatch { font-size: 11.5px; color: var(--ev-text-dim); padding-left: 8px; }
+
+.ev-wall-name { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ev-wall-name-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.ev-wall-id {
+  font-family: var(--ev-font-mono);
+  font-variant-ligatures: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ev-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ev-wall-id:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ev-wall-route { height: 17px; padding: 0 5px; font-size: 10px; flex-shrink: 0; }
+.ev-wall-model {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ev-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ev-wall-landing {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ev-cyan);
+  flex-shrink: 0;
+}
+
+.ev-wall-rate { display: flex; flex-direction: column; justify-content: center; line-height: 1; gap: 4px; }
+.ev-wall-rate-num {
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ev-text);
+}
+.ev-wall-rate-pct { font-size: 13px; font-weight: 400; color: var(--ev-text-dim); margin-left: 1px; }
+.ev-wall-row[data-ev-worse] .ev-wall-rate-num { color: var(--ev-magenta); }
+.ev-wall-sub { font-size: 10.5px; color: var(--ev-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ev-wall-verdict { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ev-wall-verdict-line { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; min-width: 0; }
+.ev-wall-p { font-size: 10.5px; color: var(--ev-text-dim); font-variant-numeric: tabular-nums; }
+.ev-wall-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ev-text-muted);
+}
+.ev-wall-stale[data-ev-stale="fresh"] { color: var(--ev-text-dim); }
+.ev-wall-stale[data-ev-stale="blocked"] { color: var(--ev-text); font-weight: 600; }
+.ev-wall-spend-head { text-align: right; }
+.ev-wall-spend { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ev-text-muted); }
+
+.ev-wall-foot-label { font-size: 12px; font-weight: 600; color: var(--ev-text); }
+.ev-wall-key { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.ev-wall-key--model, .ev-wall-spend-model { background: color-mix(in srgb, var(--ev-text) 38%, transparent); fill: color-mix(in srgb, var(--ev-text) 38%, transparent); }
+.ev-wall-key--judge, .ev-wall-spend-judge { background: color-mix(in srgb, var(--ev-violet) 75%, transparent); fill: color-mix(in srgb, var(--ev-violet) 75%, transparent); }
+
+/* The strip's tooltip sits on HoverTip's dark chip. */
+.ev-wall-tip { display: flex; flex-direction: column; gap: 2px; font-size: 10.5px; line-height: 1.45; }
+.ev-wall-tip-dim { opacity: 0.65; }
+.ev-wall-tip-mono { font-family: var(--ev-font-mono); font-variant-ligatures: none; opacity: 0.8; }
+
+/* ── The foot ──────────────────────────────────────────────────────────── */
+
+.ev-wall-foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 22px;
+}
+.ev-wall-foot-block { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ev-wall-more { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--ev-text-dim); }
+.ev-wall-more:hover { color: var(--ev-text); text-decoration: underline; text-underline-offset: 3px; }
+.ev-wall-foot-empty { font-size: 12px; color: var(--ev-text-dim); padding: 10px 12px; border: 1px dashed var(--ev-rule); border-radius: 8px; }
+.ev-wall-ribbons { display: flex; flex-direction: column; gap: 6px; }
+.ev-wall-ribbon {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "head head" "range budget";
+  gap: 6px 12px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--ev-text);
+  background: var(--ev-card);
+  border: 1px solid var(--ev-rule);
+  border-left: 3px solid var(--ev-violet);
+  border-radius: 6px;
+}
+.ev-wall-ribbon:hover { border-color: var(--ev-border); border-left-color: var(--ev-violet); }
+.ev-wall-ribbon-head { grid-area: head; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ev-wall-ribbon-range { grid-area: range; font-size: 11px; color: var(--ev-text-muted); }
+.ev-wall-ribbon-budget { grid-area: budget; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ev-text-muted); }
+.ev-wall-ribbon-track { width: 84px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--ev-text) 9%, transparent); overflow: hidden; }
+.ev-wall-ribbon-fill { display: block; height: 100%; background: var(--ev-violet); }
+
+/* ── What moved ─────────────────────────────────────────────────────────── */
+
+.ev-moved {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 10px 10px;
+  background: var(--ev-card);
+  border: 1px solid var(--ev-rule);
+  border-radius: 8px;
+}
+.ev-moved > .ev-title { padding: 0 6px; }
+.ev-moved-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ev-moved-line {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ev-text);
+  border-radius: 5px;
+}
+.ev-moved-line:hover { background: var(--ev-bg-highlight); }
+.ev-moved-mark { display: flex; height: 17px; align-items: center; }
+.ev-moved-text { min-width: 0; overflow-wrap: anywhere; }
+.ev-moved-at { font-size: 11px; color: var(--ev-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ev-moved-empty { font-size: 12px; color: var(--ev-text-dim); margin: 0; padding: 0 6px 6px; line-height: 1.5; }
+
+/* ── Narrow: a split pane or a small window ─────────────────────────────── */
+
+@container evals (max-width: 1180px) {
+  .ev-wall-layout { grid-template-columns: minmax(0, 1fr); }
+  .ev-moved { position: static; }
+}
+@container evals (max-width: 1000px) {
+  .ev-wall-table { --ev-wall-cols: 160px minmax(0, 1fr) 84px 184px; }
+  .ev-wall-row { column-gap: 14px; }
+  .ev-wall-row > :nth-child(5) { display: none; }
+  .ev-wall-rate-num { font-size: 24px; }
+}
+@container evals (max-width: 720px) {
+  .ev-wall-table { --ev-wall-cols: 132px minmax(0, 1fr) 84px; }
+  .ev-wall-row > :nth-child(4) { display: none; }
+  .ev-wall-keys { display: none; }
+  .ev-wall-foot { grid-template-columns: minmax(0, 1fr); }
+}

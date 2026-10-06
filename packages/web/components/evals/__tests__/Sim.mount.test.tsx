@@ -34,6 +34,7 @@ const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { ShortcutProvider, useShortcuts } = await import("../../../shortcuts/ShortcutProvider");
 const { useEvalsStore } = await import("../../../store/evalsStore");
+const { CodecastEvalsProvider } = await import("../host");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { SimCatalogView } = await import("../SimCatalogView");
 const { cellFailure, gridRows, markersFor } = await import("../simModel");
@@ -52,19 +53,19 @@ afterAll(() => {
 
 const NOW = Date.parse("2026-10-03T12:00:00.000Z");
 const world = evalsFixtureWorld({ now: NOW });
-const catalog = world.answer("GET /sim/catalog", {}, {}) as SimCatalogResponse;
-const { sessions } = world.answer("GET /sim/sessions", {}, {}) as SimSessionsResponse;
+const catalog: SimCatalogResponse = await world.answer("GET /sim/catalog");
+const { sessions }: SimSessionsResponse = await world.answer("GET /sim/sessions");
 const failingCell = catalog.grid.find((c) => c.newestFailure)!;
-const runOf = (session: string, run: string) => world.answer("GET /sim/run/:session/:run", { session, run }, {}) as SimRunResponse;
-const shrunk = runOf(failingCell.newestFailure!.session, failingCell.newestFailure!.run);
+const runOf = (session: string, run: string): Promise<SimRunResponse> => world.answer("GET /sim/run/:session/:run", { session, run });
+const shrunk = await runOf(failingCell.newestFailure!.session, failingCell.newestFailure!.run);
 const olderFail = [...sessions].reverse().find((s) => s.failed && !s.unsessioned && s.id !== failingCell.newestFailure!.session)!;
-const unshrunk = runOf(olderFail.id, failingCell.newestFailure!.run);
+const unshrunk = await runOf(olderFail.id, failingCell.newestFailure!.run);
 
 async function mount(node: React.ReactNode, path = "/evals/sim") {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => root.render(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>));
+  await act(async () => root.render(<MemoryRouter initialEntries={[path]}><CodecastEvalsProvider>{node}</CodecastEvalsProvider></MemoryRouter>));
   return { container, unmount: () => act(async () => root.unmount()) };
 }
 

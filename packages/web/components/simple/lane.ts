@@ -1,23 +1,25 @@
-// The simple lane's model (plan pl-840, docs/architecture/hosted-assistant.md
-// "The simple lane"): which conversations are the assistant's, what home
-// shows in each of its three bands, how a transcript reads once tool steps
-// fold into plain lines, and how a routine and the month's usage are said
-// out loud. Pure: the screens read the store through hooks (useLane.ts) and
-// hand the rows here, so every rule is testable without a browser.
+// Hosted mode's rules and words (plan pl-840,
+// docs/architecture/hosted-assistant.md): which conversations are the
+// assistant's and where one stands, what an approval card asks, and how a
+// routine and the month's usage are said out loud. Pure: the screens read
+// the store through hooks (useLane.ts) and hand the rows here, so every rule
+// is testable without a browser.
 //
 // Every word this file returns is shown to someone who has never used a
 // developer tool: no agent, session, model, token, repo or device.
 
-import { isHostedAgentType, parseDecisionAnswer } from "@codecast/shared/contracts";
-import { PLANS, TOPUP, routineFloor, topupCredit, type BillingReturnOutcome, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
-import { classifyUserMessage, isHiddenStubMessage, stripSystemTags } from "../conversation/classify";
-import { cadenceLabel } from "../org/staffingModel";
+import { ACTIVE_AGENT_STATUSES, isHostedAgentType } from "@codecast/shared/contracts";
+import { MODE_WORDS } from "../../lib/surfaceRules";
+import { ASKS } from "./assistantPromise";
+export { ASKS };
+import { APPROVAL_ANSWERS, PLANS, TOPUP, topupCredit, type BillingReturnOutcome, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
 import type { InboxSession, SessionDecisionItem } from "../../store/inboxStore";
-import { ARMED_STATUSES, isTriggerFailing, lastRunHeadline, type TaskRow } from "../triggerTasks";
+import { isTriggerFailing, lastRunHeadline, type TaskRow } from "../triggerTasks";
 import type { MailAbilities } from "@codecast/convex/convex/lib/whisk";
 import type { WalletAccountLine, WalletSummary } from "@codecast/convex/convex/lib/wallet";
 import { sessionLiveAt } from "../../lib/liveness";
 import { describeConnectorError } from "../../lib/connectorReturn";
+import { isConnectorSentence } from "@codecast/shared/contracts/connectorReasons";
 
 import { LANE_CONVERSATION_ROUTE, LANE_PATHS, conversationPath } from "./lanePaths";
 import { askFirstFor } from "./askFirst";
@@ -54,16 +56,17 @@ export function isLaneConversation(row: Pick<InboxSession, "agent_type"> & { inb
   return isHostedAgentType(row.agent_type) && !row.inbox_killed_at;
 }
 
-const PLACEHOLDER_TITLES = new Set(["new session", "new conversation", "untitled", ""]);
+export { conversationTitle } from "../../lib/conversationTitle";
+import { ownTitle, type TitleRow } from "../../lib/conversationTitle";
+import { allowancePoint, dollars, planPoints, planPrice, plural } from "./planWords";
+import { cadenceLabel } from "../../lib/cadence";
+export { dollars, planPoints, planPrice } from "./planWords";
 
-/** What a conversation is called: its title once it has a real one, else
- *  what the person asked, else a plain fallback. */
-export function conversationTitle(row: { title?: string | null; short_title?: string | null; last_user_message?: string | null } | null | undefined): string {
-  const title = (row?.short_title || row?.title || "").trim();
-  if (title && !PLACEHOLDER_TITLES.has(title.toLowerCase())) return title;
-  const ask = (row?.last_user_message ?? "").trim().replace(/\s+/g, " ");
-  if (ask) return ask.length > 64 ? `${ask.slice(0, 61).trimEnd()}...` : ask;
-  return "A new conversation";
+/** Whether the title is the person's own ask, standing in until a real one
+ *  is written. A row whose title is the ask does not repeat the ask as its
+ *  second line. */
+export function titleIsAsk(row: TitleRow): boolean {
+  return !ownTitle(row) && !!(row?.last_user_message ?? "").trim();
 }
 
 /** The live states the lane distinguishes. `working` covers queued input the
@@ -76,59 +79,17 @@ export type LaneStateRow = Parameters<typeof sessionLiveAt>[0] & Pick<InboxSessi
 
 /** Where a conversation stands at `now`. Working is the app's one liveness
  *  rule (sessionLiveAt), so a turn whose status froze at "working" settles
- *  here exactly when it settles in the inbox. */
+ *  here exactly when it settles in the inbox. A hosted turn's status is
+ *  written by the turn itself, never read off a terminal, so once it says
+ *  the turn ended and the assistant spoke last, the conversation is done at
+ *  once: the idle grace that steadies a daemon's status would keep "On it"
+ *  showing under a finished answer. */
 export function conversationState(row: LaneStateRow, openApprovals: number, now: number): ConversationState {
   if (openApprovals > 0 || row.awaiting_input) return "waiting";
-  if (row.has_pending || sessionLiveAt(row, now)) return "working";
-  return "done";
-}
-
-export interface HomeBands<S> {
-  /** Conversations parked on the person, newest question first. */
-  waiting: S[];
-  working: S[];
-  /** Everything else, most recently touched first. */
-  done: S[];
-}
-
-/** Splits the lane's conversations into home's three bands. */
-export function homeBands<S extends LaneStateRow & Pick<InboxSession, "_id">>(
-  rows: S[],
-  approvalsByConversation: Map<string, number>,
-  now: number,
-): HomeBands<S> {
-  const bands: HomeBands<S> = { waiting: [], working: [], done: [] };
-  for (const row of rows) bands[conversationState(row, approvalsByConversation.get(row._id) ?? 0, now)].push(row);
-  const newest = (a: S, b: S) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
-  bands.waiting.sort(newest);
-  bands.working.sort(newest);
-  bands.done.sort(newest);
-  return bands;
-}
-
-/** How many approval cards home shows before "See all", and how many done
- *  conversations before "Show more". */
-export const HOME_APPROVALS = 2;
-export const HOME_DONE = 6;
-
-/** What home shows, read the same on every platform: the waiting
- *  conversations that hold no approval card (the card already speaks for
- *  them), whether the list is known to be empty (the first-run ideas) or only
- *  not here yet (a quiet line), and the done rows shown so far. */
-export function homeView<S extends Pick<InboxSession, "_id">>(
-  bands: HomeBands<S>,
-  approvalsByConversation: Map<string, number>,
-  total: number,
-  ready: boolean,
-  allDone: boolean,
-): { waitingRows: S[]; nothingYet: boolean; loading: boolean; done: S[]; moreDone: number } {
-  return {
-    waitingRows: bands.waiting.filter((row) => !approvalsByConversation.get(String(row._id))),
-    nothingYet: ready && total === 0,
-    loading: !ready && total === 0,
-    done: allDone ? bands.done : bands.done.slice(0, HOME_DONE),
-    moreDone: allDone ? 0 : Math.max(0, bands.done.length - HOME_DONE),
-  };
+  if (row.has_pending) return "working";
+  const status = row.agent_status_raw ?? row.agent_status;
+  if (status && !ACTIVE_AGENT_STATUSES.has(status) && !row.last_role_is_user) return "done";
+  return sessionLiveAt(row, now) ? "working" : "done";
 }
 
 const STATE_WORDS: Record<ConversationState, string> = {
@@ -138,9 +99,17 @@ const STATE_WORDS: Record<ConversationState, string> = {
 };
 
 /** A conversation row's second line: where it stands while it is live, else
- *  what came of it, else what the person asked. */
-export function conversationSubline(row: { idle_summary?: string | null; last_user_message?: string | null }, state: ConversationState): string {
-  return STATE_WORDS[state] || row.idle_summary || row.last_user_message || "";
+ *  what came of it, else what the person asked (unless the title is already
+ *  that ask). A row waiting on an answer says what it asks (`asked`, the open
+ *  question) rather than a state word, so it never reads like the name of
+ *  another inbox section. */
+export function conversationSubline(
+  row: { title?: string | null; short_title?: string | null; idle_summary?: string | null; last_user_message?: string | null },
+  state: ConversationState,
+  asked?: string | null,
+): string {
+  if (state === "waiting" && asked?.trim()) return asked.trim();
+  return STATE_WORDS[state] || row.idle_summary || (titleIsAsk(row) ? "" : row.last_user_message) || "";
 }
 
 // ── Approvals ──────────────────────────────────────────────────────────────
@@ -152,12 +121,6 @@ export function isOpenApproval(d: Pick<SessionDecisionItem, "status" | "conversa
 
 export function oldestFirst<T extends { created_at: number }>(rows: T[]): T[] {
   return [...rows].sort((a, b) => a.created_at - b.created_at);
-}
-
-export function countByConversation(rows: Array<{ conversation_id: string }>): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const r of rows) out.set(String(r.conversation_id), (out.get(String(r.conversation_id)) ?? 0) + 1);
-  return out;
 }
 
 /** Whether a card can take the answer with one tap. A pick-several, a
@@ -177,17 +140,32 @@ export function approvalAsk(d: Pick<SessionDecisionItem, "kind" | "options">): "
 
 export const APPROVAL_LABEL = { permission: "Needs your OK", choice: "Needs your answer" } as const;
 
-/** The plain notes under a card's answers: each answer that explains itself
- *  ("Always allow" saying what it allows from now on), shown in full because
- *  a phone never shows a tooltip. */
+/** The plain notes under a card's answers, shown in full because a phone
+ *  never shows a tooltip: each answer whose meaning is not its label ("Always
+ *  allow" saying what it allows from now on). On a request for permission
+ *  the yes and the no say themselves, so only the answers between them keep
+ *  a note; on a choice every described answer does. */
 export function answerNotes(options: Array<{ label: string; description?: string }>): Array<{ label: string; note: string }> {
-  return options.flatMap((o) => (o.description?.trim() ? [{ label: o.label, note: o.description.trim() }] : []));
+  const tones = options.map((o, i) => answerTone(o.label, i));
+  const permission = tones.includes("no");
+  return options.flatMap((o, i) => (o.description?.trim() && !(permission && tones[i] !== "plain") ? [{ label: o.label, note: o.description.trim() }] : []));
 }
 
 /** How each answer button looks: the first is the yes, a refusal is quiet. */
 export function answerTone(label: string, index: number): "yes" | "plain" | "no" {
   if (/^(decline|no\b|don'?t|cancel|skip|not now|reject)/i.test(label.trim())) return "no";
   return index === 0 ? "yes" : "plain";
+}
+
+/** The quiet note where an approval card was, once the person answered it,
+ *  or null when the transcript already says the answer. A decline reads in
+ *  the step it declined ("Didn't set up a routine (you said no)"), so its
+ *  note would say the same thing twice. The rule reads the answer alone and
+ *  never the step's result, which lands a moment after the answer does. */
+export function answerNote(answer: string | null | undefined): string | null {
+  const said = answer?.trim();
+  if (!said || said === APPROVAL_ANSWERS.decline) return null;
+  return LANE_COPY.transcript.answered(said);
 }
 
 /** Whether a card's draft is long enough to fold behind "Show all of it". */
@@ -197,298 +175,12 @@ export function draftIsLong(draft: string): boolean {
 
 // ── Tool steps ─────────────────────────────────────────────────────────────
 
-export interface ToolCallLike {
-  id?: string;
-  name?: string;
-  input?: unknown;
-  /** A plain past-tense sentence the tool or the engine wrote for people. */
-  summary?: string;
-}
-
-export interface ToolResultLike {
-  tool_use_id?: string;
-  content?: unknown;
-  is_error?: boolean;
-  summary?: string;
-}
-
-export interface Step {
-  id: string;
-  text: string;
-  state: "running" | "done" | "failed";
-}
-
-function parsedInput(input: unknown): Record<string, any> {
-  if (input && typeof input === "object") return input as Record<string, any>;
-  if (typeof input === "string") {
-    try {
-      const v = JSON.parse(input);
-      return v && typeof v === "object" ? v : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
-/** A person's name from an address: "Dana Ruiz <dana@x.org>" is Dana Ruiz,
- *  "dana.ruiz@x.org" is Dana. */
-export function personName(raw: unknown): string | null {
-  const first = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof first !== "string" || !first.trim()) return null;
-  const s = first.trim();
-  const named = s.match(/^"?([^"<]+?)"?\s*<[^>]+>$/);
-  let name = named ? named[1].trim() : s;
-  if (name.includes("@")) {
-    const local = name.split("@")[0].split(/[._+-]/)[0];
-    name = local ? local[0].toUpperCase() + local.slice(1) : name;
-  }
-  const more = Array.isArray(raw) && raw.length > 1 ? ` and ${raw.length - 1} other${raw.length > 2 ? "s" : ""}` : "";
-  return name + more;
-}
-
-function quoted(s: unknown, max = 48): string | null {
-  if (typeof s !== "string" || !s.trim()) return null;
-  const t = s.trim().replace(/\s+/g, " ");
-  return `"${t.length > max ? `${t.slice(0, max - 3).trimEnd()}...` : t}"`;
-}
-
-function hostOf(url: unknown): string | null {
-  if (typeof url !== "string") return null;
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return null;
-  }
-}
-
-/** How many items a result lists, when it says so plainly. */
-function resultCount(content: unknown): number | null {
-  if (Array.isArray(content)) return content.length;
-  if (content && typeof content === "object") {
-    const o = content as Record<string, unknown>;
-    for (const k of ["count", "total", "results"]) {
-      if (typeof o[k] === "number") return o[k] as number;
-      if (Array.isArray(o[k])) return (o[k] as unknown[]).length;
-    }
-  }
-  return null;
-}
-
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
-const SPAN_WORDS: Record<string, [string, string]> = { d: ["day", "days"], w: ["week", "weeks"], m: ["month", "months"], y: ["year", "years"] };
-
-/** A mail search in plain words. The query is Gmail's search syntax, which
- *  means nothing to this reader: "from:dana is:unread newer_than:7d" reads as
- *  unread emails " from Dana from the past week". Plain words stay as what was
- *  searched for; operators with no plain reading are left out. */
-export function mailSearch(raw: unknown): { unread: boolean; scope: string } {
-  if (typeof raw !== "string" || !raw.trim()) return { unread: false, scope: "" };
-  const from: string[] = [];
-  const about: string[] = [];
-  const words: string[] = [];
-  let unread = false;
-  let since = "";
-  for (const tok of raw.match(/-?[a-z_]+:"[^"]*"|"[^"]*"|\S+/gi) ?? []) {
-    const op = tok.match(/^(-?)([a-z_]+):(.*)$/i);
-    if (!op) {
-      if (!/^(OR|AND)$/.test(tok)) words.push(tok.replace(/"/g, ""));
-      continue;
-    }
-    if (op[1]) continue;
-    const key = op[2].toLowerCase();
-    const value = op[3].replace(/^"|"$/g, "").replace(/^[({]|[)}]$/g, "");
-    if (!value) continue;
-    if (key === "from") {
-      const name = personName(value) ?? value;
-      from.push(/[A-Z]/.test(name) ? name : name.replace(/\b\w/g, (c) => c.toUpperCase()));
-    } else if (key === "subject") about.push(value);
-    else if (key === "is" && value.toLowerCase() === "unread") unread = true;
-    else if (key === "newer_than") {
-      const span = value.match(/^(\d+)([dwmy])$/i);
-      if (span) {
-        const n = Number(span[1]);
-        const [one, many] = SPAN_WORDS[span[2].toLowerCase()];
-        since = n === 1 ? ` from the past ${one}` : n === 7 && one === "day" ? " from the past week" : ` from the past ${n} ${many}`;
-      }
-    }
-  }
-  const q = quoted(words.join(" "));
-  const subject = quoted(about.join(" "));
-  const scope = `${from.length ? ` from ${from.join(" or ")}` : ""}${subject ? ` about ${subject}` : ""}${q ? ` matching ${q}` : ""}${since}`;
-  return { unread, scope };
-}
-
-type Phrase = (input: Record<string, any>, result: ToolResultLike | undefined) => string;
-
-// The assistant's tools by what they do. A name matches the first rule whose
-// pattern it fits, so a new tool with a familiar name reads well before
-// anyone writes it a sentence; a tool can always say it best itself through
-// `summary`.
-const PHRASES: Array<[RegExp, Phrase]> = [
-  [/^suggest_reply$|(suggest|write).*reply/i, () => "Wrote a reply in your voice"],
-  [/summar(y|ize).*(thread|mail|email)/i, () => "Summed up an email"],
-  [/(send|reply).*(mail|email|message)|^send_?(mail|email)$/i, (i) => {
-    const who = personName(i.to ?? i.recipient ?? i.recipients);
-    return who ? `Sent an email to ${who}` : "Sent an email";
-  }],
-  [/draft/i, (i) => {
-    const who = personName(i.to ?? i.recipient ?? i.recipients);
-    return who ? `Drafted a reply to ${who}` : "Drafted a reply";
-  }],
-  [/(search|list|read|get|find|check).*(mail|email|inbox|thread)/i, (i, r) => {
-    const n = resultCount(r?.content);
-    const { unread, scope } = mailSearch(i.query ?? i.q);
-    if (n !== null) return `Read ${n} ${unread ? "unread " : ""}${n === 1 ? "email" : "emails"}${scope}`;
-    return scope || unread ? `Looked for ${unread ? "unread " : ""}emails${scope}` : "Looked through your email";
-  }],
-  [/^(archive|label)$|(label|archive|file|move|mark).*(mail|email|thread)/i, () => "Tidied your inbox"],
-  [/(create|add|schedule|book).*(event|meeting|calendar)/i, (i) => {
-    const t = quoted(i.title ?? i.summary);
-    return t ? `Added ${t} to your calendar` : "Added an event to your calendar";
-  }],
-  [/(update|move|change|reschedule).*(event|meeting)/i, () => "Changed an event on your calendar"],
-  [/(delete|cancel|remove).*(event|meeting)/i, () => "Removed an event from your calendar"],
-  [/(read|list|get|check|find|search).*(calendar|event|availability|free|busy)/i, (_i, r) => {
-    const n = resultCount(r?.content);
-    return n !== null ? `Checked your calendar (${plural(n, "event")})` : "Checked your calendar";
-  }],
-  [/web_?search|search_?web|^search$/i, (i) => {
-    const q = quoted(i.query ?? i.q);
-    return q ? `Searched the web for ${q}` : "Searched the web";
-  }],
-  [/fetch|read_?page|browse|open_?url|web_?read/i, (i) => {
-    const host = hostOf(i.url);
-    return host ? `Read a page on ${host}` : "Read a web page";
-  }],
-  [/(create|add).*(task|todo|to_do)/i, (i) => {
-    const t = quoted(i.title);
-    return t ? `Added a to-do: ${t}` : "Added a to-do";
-  }],
-  [/(list|read|get|check).*(task|todo|to_do)/i, () => "Checked your to-dos"],
-  [/(update|change|edit|complete).*(task|todo|to_do)/i, () => "Updated a to-do"],
-  [/(create|write|add).*(doc|note|page)/i, (i) => {
-    const t = quoted(i.title);
-    return t ? `Wrote a note: ${t}` : "Wrote a note";
-  }],
-  [/(create|add|set|schedule).*(routine|trigger|reminder)/i, (i) => {
-    const t = quoted(i.title);
-    return t ? `Set up a routine: ${t}` : "Set up a routine";
-  }],
-  [/(list|read|get|check).*(routine|trigger|reminder)/i, () => "Checked your routines"],
-  [/(cancel|stop|delete|remove).*(routine|trigger|reminder)/i, () => "Stopped a routine"],
-  [/(read|get|open).*(doc|note)/i, () => "Read a note"],
-  [/(replace|update|edit).*(doc|note)/i, () => "Updated a note"],
-  [/^remember$/i, () => "Made a note to remember"],
-  [/^recall$/i, () => "Remembered what you told me"],
-  [/lookup/i, () => "Looked something up"],
-  // Whole words only: "ask" inside "tasks" is not a question to the person.
-  [/(^|_)(ask|approval|decide)(_|$)/i, () => "Asked for your go-ahead"],
-];
-
-/** One tool call as one plain line. */
-export function stepText(call: ToolCallLike, result?: ToolResultLike): string {
-  const own = (result?.summary ?? call.summary)?.trim();
-  if (own) return own;
-  const name = call.name ?? "";
-  const input = parsedInput(call.input);
-  for (const [pattern, phrase] of PHRASES) if (pattern.test(name)) return phrase(input, result);
-  // A tool's own name is jargon; one nobody has phrased yet stays neutral.
-  return "Did a step";
-}
-
-// ── Transcript ─────────────────────────────────────────────────────────────
-
-export interface LaneMessage {
-  _id: string;
-  role: string;
-  content?: string;
-  timestamp: number;
-  tool_calls?: ToolCallLike[];
-  tool_results?: ToolResultLike[];
-  images?: any[];
-  _isOptimistic?: true;
-  _isQueued?: true;
-  _isFailed?: true;
-  _clientId?: string;
-  client_id?: string;
-}
-
-export type TranscriptItem =
-  | { kind: "you"; id: string; text: string; pending: boolean; failed: boolean; at: number }
-  | { kind: "said"; id: string; text: string; at: number }
-  | { kind: "steps"; id: string; steps: Step[] }
-  | { kind: "answer"; id: string; text: string; at: number }
-  | { kind: "note"; id: string; text: string; at: number };
-
-/** A message of the person's still on its way. A failed send is not: it
- *  waits on the person (Try again), so nothing may look busy on its account. */
-export function isUnsent(m: Pick<LaneMessage, "_isOptimistic" | "_isQueued" | "_isFailed">): boolean {
-  return !m._isFailed && !!(m._isOptimistic || m._isQueued);
-}
-
-/** The transcript as the lane shows it: the person's words, the assistant's
- *  words, and between them each run of tool calls folded into a list of
- *  plain lines. `live` says a turn is still running, so a call with no
- *  result yet is in progress rather than lost. */
-export function buildTranscript(messages: LaneMessage[], live: boolean): TranscriptItem[] {
-  const results = new Map<string, ToolResultLike>();
-  for (const m of messages) for (const r of m.tool_results ?? []) if (r?.tool_use_id) results.set(r.tool_use_id, r);
-
-  const items: TranscriptItem[] = [];
-  let prev: LaneMessage | null = null;
-  const pushStep = (step: Step) => {
-    const last = items[items.length - 1];
-    if (last?.kind === "steps") last.steps.push(step);
-    else items.push({ kind: "steps", id: `steps-${step.id}`, steps: [step] });
-  };
-
-  for (const m of messages) {
-    if (m.role === "user") {
-      const kind = classifyUserMessage(m as any, undefined, prev as any).kind;
-      if (kind === "normal" || kind === "direct_user") {
-        const text = stripSystemTags(m.content ?? "").trim();
-        if (text) items.push({ kind: "you", id: m._id, text, pending: isUnsent(m), failed: !!m._isFailed, at: m.timestamp });
-      } else if (kind === "decision_answer") {
-        const answer = parseDecisionAnswer(m.content)?.answer;
-        if (answer) items.push({ kind: "answer", id: m._id, text: `You said: ${answer}`, at: m.timestamp });
-      } else if (kind === "scheduled_task") {
-        items.push({ kind: "note", id: m._id, text: "A routine started this", at: m.timestamp });
-      }
-    } else if (m.role === "assistant") {
-      const text = stripSystemTags(m.content ?? "").trim();
-      if (text && !isHiddenStubMessage(m)) items.push({ kind: "said", id: m._id, text, at: m.timestamp });
-      for (const [i, call] of (m.tool_calls ?? []).entries()) {
-        const result = call.id ? results.get(call.id) : undefined;
-        const state: Step["state"] = result ? (result.is_error ? "failed" : "done") : live ? "running" : "done";
-        pushStep({ id: call.id ?? `${m._id}-${i}`, text: stepText(call, result), state });
-      }
-    }
-    prev = m;
-  }
-  return items;
-}
-
-/** How many steps a folded run shows. */
-export const STEPS_SHOWN = 4;
-
-/** The steps a run shows, and how many sit behind "N more steps". A fold
- *  that would hide a single step shows it instead. */
-export function visibleSteps<T>(steps: T[], open: boolean): { shown: T[]; more: number } {
-  if (open || steps.length - STEPS_SHOWN <= 1) return { shown: steps, more: 0 };
-  const shown = steps.slice(0, STEPS_SHOWN - 1);
-  return { shown, more: steps.length - shown.length };
-}
+// Each call said as one plain line, and the fold rule, live in the platform
+// core (@platform/assistant/steps), shared with the main transcript's
+// receipts for hosted conversations.
+export { mailSearch, personName, stepOutcome, stepText, visibleSteps, STEPS_SHOWN, type StepOutcome, type ToolCallLike, type ToolResultLike } from "@platform/assistant/steps";
 
 // ── Routines ───────────────────────────────────────────────────────────────
-
-/** A routine the lane lists: armed or paused, bound to one of its conversations. */
-export function isLaneRoutine(t: Pick<TaskRow, "status" | "originating_conversation_id">, laneIds: Set<string>): boolean {
-  return ARMED_STATUSES.has(t.status) && !!t.originating_conversation_id && laneIds.has(String(t.originating_conversation_id));
-}
 
 /** How a routine's last run reads. A run that broke or wants the person
  *  says so in a warm line of its own; only a run that went well shows its
@@ -534,14 +226,6 @@ export function routineSchedule(t: Pick<TaskRow, "schedule_type" | "interval_ms"
   return t.schedule_type === "recurring" ? `Runs ${cadence}. Next: ${next}` : `Runs once, ${next}`;
 }
 
-/** Whether a routine runs (or ran) today: home's "coming up today" line. */
-export function runsToday(t: Pick<TaskRow, "status" | "run_at">, now: number): boolean {
-  if (t.status !== "scheduled" || !t.run_at) return false;
-  const end = new Date(now);
-  end.setHours(23, 59, 59, 999);
-  return t.run_at <= end.getTime();
-}
-
 // ── Usage and plans ────────────────────────────────────────────────────────
 
 export interface MeterFigures {
@@ -560,9 +244,49 @@ export function meterFill(w: MeterFigures): { used: number; held: number } {
   return { used, held };
 }
 
-export function dollars(usd: number): string {
-  const v = Math.max(0, usd);
-  return v >= 100 ? `$${Math.round(v)}` : `$${v.toFixed(2)}`;
+/** Money the person pays: plan prices and the top-up buttons. Never the
+ *  work itself, which is measured in monthShare. */
+const QUARTERS: Record<number, string> = { 0.25: "a quarter of a month", 0.5: "half a month", 0.75: "three quarters of a month" };
+
+/** A share of the month as a percent, the one rounding every percent on the
+ *  plan screen and the sidebar uses: "under 1%" for any work too small to
+ *  round to 1%, and never "100%" for a month that is not used up. */
+export function monthPercent(r: number): string {
+  if (r <= 0) return "0%";
+  if (r < 0.01) return "under 1%";
+  return `${r < 1 ? Math.min(99, Math.round(r * 100)) : Math.round(r * 100)}%`;
+}
+
+/** Work said the way the person reads it: a share of a month on their plan
+ *  ("4% of a month", "half a month", "3 months"). The wallet keeps work in
+ *  dollars at cost, and a second dollar figure next to a price reads as money
+ *  that vanished, so every amount of work on screen goes through here, always
+ *  against the plan's full month (usePlanMeter's `month`), never the period's
+ *  prorated cap. Whole months round down, so a figure never promises more
+ *  than it buys. */
+export function monthShare(usd: number, month: number): string {
+  if (month <= 0 || usd <= 0) return "nothing";
+  const r = usd / month;
+  if (r < 0.95) {
+    const quarter = Math.round(r * 4) / 4;
+    return Math.abs(r - quarter) < 0.03 && QUARTERS[quarter] ? QUARTERS[quarter] : `${monthPercent(r)} of a month`;
+  }
+  const months = Math.max(1, Math.floor(r * 2) / 2);
+  return months === 1 ? "a month" : `${months} months`;
+}
+
+/** An amount of work as a phrase that reads inside a sentence: "about half a
+ *  month on Plus", or "under 1% of a month on Plus", which takes no "about".
+ *  `planLabel` names the plan whose month it is measured in, when the
+ *  sentence does not already. */
+export function aboutShare(usd: number, month: number, planLabel?: string): string {
+  const share = monthShare(usd, month);
+  const on = planLabel ? ` on ${planLabel}` : "";
+  return share.startsWith("under ") || share === "nothing" ? `${share}${on}` : `about ${share}${on}`;
+}
+
+function capitalized(text: string): string {
+  return text[0].toUpperCase() + text.slice(1);
 }
 
 /** The meter's headline: how much of the month is left, in words. */
@@ -572,33 +296,28 @@ export function usageHeadline(w: MeterFigures): string {
   if (w.used_usd >= w.cap_usd) return "This month's allowance is used up, so your extra credit is in use";
   if (used >= 0.8) return "Most of this month's allowance is used";
   if (used === 0) return "Nothing used yet this month";
-  return `${Math.round(used * 100)}% of this month's allowance used`;
+  return `${capitalized(monthPercent(used))} of this month's allowance used`;
 }
 
-/** The lines under the meter, each with the figure it leads with (shown
- *  strong) and the words after it. `resets` is the day the month starts fresh. */
-export function meterLegend(w: MeterFigures, resets: string | null): Array<{ key: string; strong: string | null; rest: string }> {
-  const lines: Array<{ key: string; strong: string | null; rest: string }> = [
-    { key: "used", strong: dollars(w.used_usd), rest: ` of ${dollars(w.cap_usd)} used` },
-  ];
-  if (w.reserved_usd > 0) lines.push({ key: "held", strong: null, rest: `${dollars(w.reserved_usd)} set aside for work in progress` });
-  if (w.topup_usd > 0) lines.push({ key: "extra", strong: dollars(w.topup_usd), rest: " extra credit" });
-  if (w.topup_usd < 0) lines.push({ key: "owed", strong: dollars(-w.topup_usd), rest: " owed for refunded extra credit, taken from next month's allowance first" });
+/** The meter in a few words, for the sidebar: "25% used this month". */
+export function meterShort(w: MeterFigures): string {
+  const { used } = meterFill(w);
+  if (used >= 1) return "All used this month";
+  if (w.used_usd <= 0) return "Nothing used this month";
+  return `${capitalized(monthPercent(used))} used this month`;
+}
+
+/** The lines under the meter (the headline already says how much is used),
+ *  each with the figure it leads with (shown strong) and the words after it.
+ *  Amounts of work are shares of the plan's `month` (usePlanMeter). `resets`
+ *  is the day the month starts fresh. */
+export function meterLegend(w: MeterFigures, resets: string | null, month: number): Array<{ key: string; strong: string | null; rest: string }> {
+  const lines: Array<{ key: string; strong: string | null; rest: string }> = [];
+  if (w.reserved_usd > 0) lines.push({ key: "held", strong: null, rest: `${capitalized(aboutShare(w.reserved_usd, month))} is set aside for work still running, and comes back when it ends` });
+  if (w.topup_usd > 0) lines.push({ key: "extra", strong: null, rest: `Extra credit for ${aboutShare(w.topup_usd, month)} more` });
+  if (w.topup_usd < 0) lines.push({ key: "owed", strong: null, rest: `Refunded extra credit you'd already used (${aboutShare(-w.topup_usd, month)}) comes out of next month first` });
   if (resets) lines.push({ key: "resets", strong: null, rest: `Starts fresh ${resets}` });
   return lines;
-}
-
-/** What each plan gives, in plain words. Every number comes from PLANS. */
-export function planPoints(plan: PlanSpec): string[] {
-  const { max } = plan.routines;
-  const routines = `${max === null ? "Unlimited routines" : plural(max, "routine")}, ${cadenceLabel(routineFloor(plan)).replace(/^every /, "at most every ")}`;
-  const together = plan.concurrent_turns === 1 ? "One thing at a time" : `${plan.concurrent_turns} things at once`;
-  const thinking = plan.strong_model !== plan.default_model ? "Deeper thinking for hard problems" : null;
-  return [`${dollars(plan.included_usd)} of work included each month`, routines, together, ...(thinking ? [thinking] : [])];
-}
-
-export function planPrice(plan: PlanSpec): string {
-  return `${dollars(plan.price_usd).replace(/\.00$/, "")} a month`;
 }
 
 /** The plans above `current`, cheapest first: what an upgrade can move to. */
@@ -611,9 +330,20 @@ export function upgradesFrom(current: PlanId): PlanSpec[] {
 /** The top-up amounts the plan screen offers, in US dollars (the catalog's). */
 export const TOPUP_AMOUNTS_USD = TOPUP.amounts_usd;
 
-/** A top-up button's two lines: "Add $10" and what it buys. */
-export function topupLabel(usd: number): { label: string; note: string } {
-  return { label: `Add ${dollars(usd).replace(/\.00$/, "")}`, note: `${dollars(topupCredit(usd))} of extra work` };
+/** A top-up button's two lines: "Add $10" and what it buys on the person's
+ *  plan ("About half a month on Plus"). */
+export function topupLabel(usd: number, plan: PlanSpec): { label: string; note: string } {
+  const label = `Add ${dollars(usd).replace(/\.00$/, "")}`;
+  if (plan.included_usd <= 0) return { label, note: "Extra credit" };
+  return { label, note: capitalized(aboutShare(topupCredit(usd), plan.included_usd, plan.label)) };
+}
+
+/** "Where it went" in the order that matters: the costliest conversations
+ *  first, and every line under 1% of the plan's `month` folded into one
+ *  count, so the ledger never lists conversations that used nothing visible. */
+export function ledgerLines<L extends { cost_usd: number }>(lines: L[], month: number): { shown: L[]; small: number } {
+  const shown = lines.filter((l) => month > 0 && l.cost_usd / month >= 0.01).sort((a, b) => b.cost_usd - a.cost_usd);
+  return { shown, small: lines.length - shown.length };
 }
 
 /** "Where it went": how many times the assistant worked on a conversation. */
@@ -635,24 +365,27 @@ export function planCard(
   return { current, offer: billing.plans.includes(id) ? "checkout" : "ask" };
 }
 
-/** One line of the plan screen's history (WalletSummary.account) in plain
- *  words, with its amount signed the way it moved extra credit. Every amount
- *  arrives positive; the kind says which way it went. A new month moves no
- *  credit, so what it forgave is a `detail`, not an amount. A refund that took
- *  nothing back says nothing, so it is left out (null). */
-export function accountLine(line: Pick<WalletAccountLine, "kind" | "amount_usd">): { text: string; amount: string | null; detail?: string } | null {
+/** One line of the plan screen's history (WalletSummary.account) as a plain
+ *  sentence: what happened, and how much work it moved as a share of a month
+ *  on `plan`. The ledger does not record the plan a line was bought under, so
+ *  the sentence names the plan it is measured in. A new month moves no
+ *  credit, so what it used is a `detail`. A refund that took nothing back says
+ *  nothing, so it is left out (null). */
+export function accountLine(line: Pick<WalletAccountLine, "kind" | "amount_usd">, plan: Pick<PlanSpec, "label" | "included_usd">): { text: string; detail?: string } | null {
   const usd = Math.max(0, line.amount_usd);
+  const month = plan.included_usd;
+  const share = aboutShare(usd, month, plan.label);
   switch (line.kind) {
     case "topup":
-      return { text: "Extra credit you bought", amount: `+${dollars(usd)}` };
+      return { text: `Extra credit you bought: ${share}` };
     case "grant":
-      return { text: "Extra credit from us", amount: `+${dollars(usd)}` };
+      return { text: `Extra credit from us: ${share}` };
     case "period_reset":
-      return { text: "A new month started", amount: null, ...(usd > 0 ? { detail: `${dollars(usd)} used the month before` } : {}) };
+      return { text: "A new month started", ...(usd > 0 && month > 0 ? { detail: `${monthPercent(usd / month)} of the month before used` } : {}) };
     case "refund":
-      return usd > 0 ? { text: "Refunded extra credit taken back", amount: `-${dollars(usd)}` } : null;
+      return usd > 0 ? { text: `Refunded extra credit taken back: ${share}` } : null;
     case "repay":
-      return { text: "Paid back what was owed", amount: dollars(usd) };
+      return { text: `Paid back what was owed: ${share}` };
   }
 }
 
@@ -680,12 +413,15 @@ export function billingReturnSettled(
  *  seconds; past this something is wrong (Stripe down, the webhook refused). */
 export const BILLING_RETURN_PATIENCE_MS = 5 * 60_000;
 
+/** A sentence that asks the person to write to support: `before`, then
+ *  `link` as a mail to support with `subject` filled in, then `after`. */
+export type SupportWords = { before?: string; link: string; after: string; subject: string };
+
 export type BillingReturnNote = {
   text: string;
   tone: "done" | "pending" | "late" | "plain";
-  /** A mail to support, offered when the payment is late: `text`, then
-   *  `link` as a mailto with `subject`, then `after`. */
-  support?: { subject: string; link: string; after: string };
+  /** A mail to support, offered when the payment is late; `text` leads into it. */
+  support?: SupportWords;
 };
 
 /** What the plan screen says after Stripe sends the person back
@@ -709,28 +445,8 @@ export function billingReturnNote(outcome: BillingReturnOutcome | null, settled:
 
 // ── Greeting ───────────────────────────────────────────────────────────────
 
-export function greeting(now: number, name?: string | null): string {
-  const h = new Date(now).getHours();
-  const part = h < 5 ? "Hello" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-  const first = name?.trim().split(/\s+/)[0];
-  return first ? `${part}, ${first}` : part;
-}
-
 // ── First asks ─────────────────────────────────────────────────────────────
 
-/** The asks the lane suggests, worded once for home and /welcome. */
-export const ASKS = {
-  week: "Look through my email and calendar and tell me what needs me this week",
-  replies: "What needs a reply from me this week?",
-  overnight: "Every weekday at 8, tell me what came in overnight that matters",
-  calendarWeek: "What's on my calendar this week, and when am I free?",
-  focus: "Find a free hour for me to focus this week",
-  morning: "Every weekday at 8, tell me what's on today",
-  planWeek: "Help me plan my week. Ask me what's on my plate first.",
-  sayNo: "Help me write a kind note saying no to an invitation",
-  compare: "Compare the three best rated robot vacuums for a small apartment",
-  mondays: "Every Monday at 9, remind me to plan the week",
-} as const;
 
 /** What to suggest first, from what the person has connected: with mail, the
  *  one ask that shows what the assistant is for (what needs them this week)
@@ -746,13 +462,6 @@ export function firstAsks(can: MailAbilities | null | undefined): { lead: string
   return { lead: null, more: [ASKS.planWeek, ASKS.sayNo, ASKS.compare, ASKS.mondays] };
 }
 
-/** The ideas under home's composer before the first conversation: the same
- *  first asks /welcome offers, so home never suggests what is not connected. */
-export function homeIdeas(can: MailAbilities | null | undefined): string[] {
-  const { lead, more } = firstAsks(can);
-  return (lead ? [lead, ...more] : more).slice(0, 3);
-}
-
 // ── Connections ────────────────────────────────────────────────────────────
 
 /** A connect or disconnect refusal in plain words, through the connectors'
@@ -762,8 +471,16 @@ export function homeIdeas(can: MailAbilities | null | undefined): string[] {
 export function plainConnectError(message: string | null | undefined): string | null {
   if (!message) return null;
   if (/not configured|GOOGLE_OAUTH/i.test(message)) return describeConnectorError("whisk_not_configured");
-  return describeConnectorError(message);
+  const said = describeConnectorError(message);
+  // Only the table's own sentences reach the person. Anything else is an
+  // exception's text (a validator, a function the deployment lacks), which
+  // reads as one calm line instead.
+  return isConnectorSentence(said) ? said : MAIL_CONNECT_CLOSED;
 }
+
+/** The one line for a mail connect that failed for a reason the person
+ *  cannot act on. */
+export const MAIL_CONNECT_CLOSED = "Mail connect isn't open yet. You can start without it.";
 
 /** What the person's mail and calendar connection lets the assistant do
  *  (convex/whisk.ts `connection`'s `can`, the same rule the tools read). */
@@ -808,22 +525,28 @@ export { ASK_FIRST, askFirstFor } from "./askFirst";
 /** Every fixed line the lane's pages say, once for the web and the phone.
  *  The rules above say what changes with the data; these are the rest. */
 export const LANE_COPY = {
-  menu: {
-    light: "Light appearance",
-    dark: "Dark appearance",
-    full: "Open the full app",
-    fullNote: "Every tool, for people who build software",
-    more: "More",
-    home: "Home",
-  },
-  tabs: {
-    sections: "Sections",
-    /** A tab's spoken name, with what waits on the person behind it. */
-    label: (label: string, waiting: number) => (waiting > 0 ? `${label}, ${waiting} waiting` : label),
+  /** Where a person starts with the assistant: an empty inbox in hosted
+   *  mode and the new conversation sheet, on the web and the phone. */
+  intro: {
+    title: "Ask the Codecast assistant",
+    lede: (mailConnected: boolean) =>
+      mailConnected ? "Research, writing, planning, your mail and calendar. Ask in plain words." : "Research, writing, planning. Ask in plain words.",
   },
   home: {
     lede: (can: MailAbilities | null | undefined) => `Hand me anything on your list. ${askFirstFor(can)}`,
-    placeholder: "What can I take off your plate?",
+    /** The one resting line every hosted composer shows. */
+    placeholder: MODE_WORDS.hosted.composerPlaceholder,
+    /** First things to ask: each fills the composer with a request that works sent as is, and the person can edit it first. The mail ones need Whisk connected. */
+    starters: (mailConnected: boolean): Array<{ label: string; text: string }> => [
+      ...(mailConnected
+        ? [
+            { label: "Catch me up on mail", text: "Catch me up on what's new in my inbox and what needs a reply." },
+            { label: "Plan my week", text: "Look at my calendar and help me plan this week." },
+          ]
+        : [{ label: "Plan a trip", text: "Help me plan a trip. Start by asking me where and when." }]),
+      { label: "Research a question", text: "Research a question for me. Start by asking what I want to know." },
+      { label: "Help me write", text: "Help me write something. Start by asking what it is and who it's for." },
+    ],
     loading: "Getting your conversations",
     waiting: "Waiting on you",
     happening: "Happening now",
@@ -832,33 +555,24 @@ export const LANE_COPY = {
     showMore: (n: number) => `Show ${n} more`,
   },
   conversation: {
-    loading: "Opening the conversation",
-    back: "Back",
-    earlier: "Show earlier",
-    loadingEarlier: "Loading",
     working: "On it",
     reply: "Reply",
     send: "Send",
     change: "Or tell me what to change",
   },
   transcript: {
-    steps: "What the assistant did",
-    failed: " (didn't work)",
-    moreSteps: (n: number) => `${n} more steps`,
-    didntSend: "Didn't send. ",
-    retry: "Try again",
-    sending: "Sending",
+    /** The note where an approval card was, once the person answered it. */
+    answered: (answer: string) => `You said: ${answer}`,
   },
   approval: {
     showAll: "Show all of it",
     showLess: "Show less",
-    answerThere: "Answer in the conversation",
-  },
-  approvals: {
-    title: "Approvals",
-    lede: "Nothing goes out or changes until you say so. Oldest first.",
-    empty: "You're all caught up. When I need your OK, it shows up here.",
-    loading: "Looking for anything waiting on you",
+    /** Under the person's answer in a hosted conversation: the way back to
+     *  the question it answered. */
+    showQuestion: "Show the question",
+    showQuestionTip: "Go back to where your assistant asked",
+    /** The card's typed answer, in a hosted conversation. */
+    typeAnswer: "Answer in your own words; your assistant will read it.",
   },
   routines: {
     title: "Routines",
@@ -877,6 +591,10 @@ export const LANE_COPY = {
     lede: (can: MailAbilities | null | undefined) => `What I can see and do for you. ${askFirstFor(can)}`,
     connected: "Connected",
     notConnected: "Not connected",
+    checking: "Checking",
+    coming: "Coming soon",
+    /** Mail not open yet, said by Settings (the assistant says MAIL_COMING). */
+    comingNote: "Email and calendar are on their way.",
     mail: "Mail and calendar",
     through: "Through Whisk",
     on: "On",
@@ -886,6 +604,8 @@ export const LANE_COPY = {
     email: "Email",
     calendar: "Calendar",
     connect: "Connect mail and calendar",
+    /** The connect button while it asks for Whisk's page and leaves for it. */
+    opening: "Opening Whisk…",
     allow: "Connect again to allow everything",
     openWhisk: "Open Whisk",
     disconnect: "Disconnect",
@@ -899,22 +619,32 @@ export const LANE_COPY = {
   plan: {
     title: "Your plan",
     lede: "Your plan covers the work I do each month: reading, writing, searching and checking in.",
+    /** The same, said by Settings rather than by the assistant. */
+    settingsLede: "Your plan covers the work your assistant does each month: reading, writing, searching and checking in.",
     checking: "Checking this month's use",
+    /** Said above the composer, and under a budget stop, once the month is used. */
+    allowanceOut: (resets: string | null) => resets ? `You've used this month's allowance. It comes back on ${resets}.` : "You've used this month's allowance.",
     meterLabel: "Allowance used",
     thisMonth: "This month",
     extraCredit: "Extra credit",
     plans: "Plans",
     yours: "Your plan",
-    cardClosed: { before: "Paying by card isn't open yet. To change plans or add credit before then, ", link: "write to us", after: " and we'll do it by hand." },
-    cardClosedSubject: "Change my plan",
+    cardClosed: { before: "Upgrades are coming soon. If you need more before then, ", link: "write to us", after: ".", subject: "Change my plan" },
+    /** Before the card note: what the person's plan already covers. */
+    planCovers: (plan: PlanSpec) => `You're on ${plan.label}, which gives you ${allowancePoint(plan).replace(/^Room for /, "room for ").replace(/^(\d+) times/, "$1 times")}.`,
     moveTo: (label: string) => `Move to ${label}`,
     askMove: (label: string) => `Ask us to move you to ${label}`,
     askMoveSubject: (label: string) => `Move me to ${label}`,
+    billing: "Billing",
     manage: "Manage billing",
     manageNote: "Your card, receipts, and changing or ending your plan.",
     more: "Need a little more this month?",
     moreNote: "Extra credit is used after your plan's allowance and carries over until it's spent.",
+    /** Only while plans can be paid by card and extra credit cannot; when
+     *  card payments are closed altogether, cardClosed already says it. */
+    topupClosed: { before: "Extra credit can't be bought by card yet. Until then, ", link: "write to us", after: " to add some.", subject: "Add extra credit" },
     where: "Where it went",
+    smallLines: (n: number) => `${n} other ${n === 1 ? "conversation" : "conversations"}, each under 1% of a month`,
     history: "History",
   },
 } as const;

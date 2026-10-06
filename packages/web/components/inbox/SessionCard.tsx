@@ -3,7 +3,8 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import { withSafetyBlock } from "@codecast/shared/contracts";
+import { withSafetyBlock, isHostedAgentType } from "@codecast/shared/contracts";
+import { lastNoticeKind } from "../../lib/hostedNotice";
 import { imageBytes } from "../../lib/imageByteCache";
 import { compressImage } from "../../lib/compressImage";
 import { threadStateView } from "../../lib/threadState";
@@ -22,6 +23,8 @@ import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration } from "../../lib/sessionCard";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
+import { useSurface } from "../../lib/surfaces";
+import { showsAgentIcon } from "../simple/lanePaths";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -32,7 +35,7 @@ import { useInboxSelection } from "../../lib/inboxSelection";
 /** The card-chrome toggles the row draws, as one string. */
 function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
-  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -104,6 +107,7 @@ export const SessionCard = memo(function SessionCard({
   const deviceId = session.owner_device_id;
   const hasDraft = !!session._hasDraft;
   const cardId = session._id;
+  const hosted = isHostedAgentType(session.agent_type);
   // ONE subscription for the whole card (ct-49746). Every value below used to be
   // its own useInboxStore/hook subscription — 13 of them, so a sidebar showing 75
   // rows held ~1000 subscriptions and zustand ran ~1000 selectors on every
@@ -131,6 +135,9 @@ export const SessionCard = memo(function SessionCard({
     // a ring on the card). The signature is the viewer id list, so a roster
     // push that changes nothing about who is here wakes nothing.
     (s) => viewersSig(s.teamMembers, cardId, s.currentUser?._id?.toString?.() ?? null),
+    // A hosted conversation that ended on a stop notice: the kind, a string,
+    // so a streamed message wakes the card only when the answer changes.
+    (s) => (hosted ? lastNoticeKind(s.messages[cardId]) : null),
   ]);
   const meId = st.currentUser?._id?.toString?.() ?? null;
   const viewers = viewersOf(st.teamMembers, cardId, meId);
@@ -161,12 +168,14 @@ export const SessionCard = memo(function SessionCard({
   const ownerDevice = rosterDeviceOf(st.machineRoster as any, deviceId);
   const runHost = ownerDevice && deviceWakesOnUse(ownerDevice) ? ownerDevice : null;
   const chromeSig = cardChromeSig(st.clientState);
+  const showGitChips = useSurface("gitChips");
   const chrome = useMemo<SessionCardChrome>(() => ({
     showModelBadge: chromeSig[0] === "1",
     showAgentIcon: chromeSig[1] === "1",
     personifyAll: chromeSig[3] === "1",
     showBranchPill: chromeSig[4] === "1",
-  }), [chromeSig]);
+    showGitChips,
+  }), [chromeSig, showGitChips]);
   // Cache-first bytes: a thumbnail seen once paints locally (and offline)
   // instead of re-fetching per scroll-through of the inbox.
   const thumbSrc = imageBytes.useSrc(chromeSig[2] === "1" ? session.image_preview_url : undefined);
@@ -266,11 +275,14 @@ export const SessionCard = memo(function SessionCard({
       now={coarseNow}
       chrome={chrome}
       liveness={{
-        isLive,
+        // A hosted conversation that stopped on a notice is settled: no live
+        // dot, whatever the work state's heartbeat still says.
+        isLive: isLive && !(hosted && lastNoticeKind(st.messages[cardId])),
         pendingSend: convHasPendingSend(st.pendingMessages[cardId]),
         blockedReviveAt: reviveRequestedAt,
         restarting,
         draft: hasDraft ? ((st.drafts[cardId]?.draft_message as string | undefined) ?? "") : "",
+        stopped: hosted ? lastNoticeKind(st.messages[cardId]) : null,
       }}
       viewerId={meId}
       author={author}

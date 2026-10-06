@@ -1,7 +1,8 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
-import { familyHeading } from "../hooks/useForkTree";
+import { familyHeading, firstUserPromptOf } from "../hooks/useForkTree";
+import { conversationTitle } from "./simple/lane";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { knownPullRequestIds, madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -31,6 +32,8 @@ import { OrgChartChip } from "./org/orgChartLink";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
+import { foldHostedRetries, type RetryFoldRow } from "../lib/hostedNotice";
+import { ApprovalAnswerLine, HostedNotice, MailConnectChip, approvalAnswerAddsToReceipt, hostedNoticeKind, offersMailConnect } from "./conversation/HostedNotice";
 import { agentSupportsFork, agentForksFromAnyMessage, isHostedAgentType, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
@@ -46,7 +49,7 @@ import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
 import { toast } from "sonner";
 import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge } from "./conversationScroll";
-import { deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
+import { deriveHostedRunningPhrase, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { enterReviewNearCenter } from "../lib/reviewNav";
@@ -66,6 +69,7 @@ import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
 import { AgentStatusPill, ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
+import { sessionDisconnected } from "./conversation/agentStatusPill";
 import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -97,6 +101,7 @@ import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearc
 import { FilePathContext } from "../lib/filePathLinks";
 import { WorktreesProvider } from "./worktree/WorktreesContext";
 import { SessionWorktreePills } from "./worktree/WorktreePill";
+import { Surface, useModeWords, useSurface } from "../lib/surfaces";
 import { isStickyEligible, pickStickyFallback, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt } from "./sessionMessage";
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -104,7 +109,7 @@ import { composerPresenceEnabled } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
-import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView } from "../store/inboxStore";
+import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -385,7 +390,7 @@ const ConversationViewInner = (
   const simpleViewPref = useInboxStore((st) => resolveSimpleView(st.clientState.ui));
   // Minimal tucks the schedule, plan and workflow strips under the header
   // away; this preference (session menu, command palette) brings them back.
-  const minimalStyle = useInboxStore((st) => st.clientState.ui?.visual_style === "minimal");
+  const minimalStyle = useInboxStore((st) => resolveVisualStyle(st.clientState.ui) === "minimal");
   const showSessionContext = useInboxStore((st) => st.clientState.ui?.show_session_context === true);
   useWatchEffect(() => {
     if (conversation?._id && DENSITY_BY_CONVERSATION.has(conversation._id)) return;
@@ -3023,7 +3028,12 @@ const ConversationViewInner = (
     setDensity(FEED_DENSITY_CYCLE[(FEED_DENSITY_CYCLE.indexOf(feedDensity) + 1) % FEED_DENSITY_CYCLE.length]);
   }, [feedDensity, setDensity]));
 
-  const title = cleanTitle(conversation?.title || "New Session");
+  // A hosted conversation is called by the hosted rule (its ask until the
+  // assistant names it), so a turn that failed before naming it never reads
+  // "New Session".
+  const title = isHostedAgentType(conversation?.agent_type)
+    ? conversationTitle({ title: conversation?.title, last_user_message: firstUserPromptOf(messages) })
+    : cleanTitle(conversation?.title || "New Session");
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
   const latestMessageTimestamp = useMemo(() => {
     for (let i = timeline.length - 1; i >= 0; i--) {
@@ -3058,7 +3068,13 @@ const ConversationViewInner = (
   // reads as "Working · 3:14 · running deploy.sh". The composer prefers the
   // row's server side activity stamp; this is its fallback from the loaded
   // timeline. See deriveRunningPhrase.
-  const workingPhrase = useMemo(() => deriveRunningPhrase(timeline), [timeline]);
+  // A hosted conversation says its step in the assistant's own words, and a
+  // step parked on an approval as waiting for the person's go-ahead.
+  const hostedAsking = isHostedAgentType(conversation?.agent_type) ? managedSession?.agent_status === "permission_blocked" : null;
+  const workingPhrase = useMemo(
+    () => (hostedAsking === null ? deriveRunningPhrase(timeline) : deriveHostedRunningPhrase(timeline, hostedAsking)),
+    [timeline, hostedAsking],
+  );
   // Clock for the liveness booleans below. Re-renders THIS whole view only when
   // one of them would flip (45s / 5min since last activity; 30s / 120s of age),
   // not on every tick — an unconditional 10s ticker re-rendered the entire
@@ -3075,10 +3091,14 @@ const ConversationViewInner = (
   const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
-  // Only a row that says it is not connected: a row seeded from a summary
-  // that did not carry is_connected (a session outside the inbox window)
-  // does not know, and is not called disconnected (sessionRowFromSummary).
-  const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession?.is_connected === false && !isSessionConnected;
+  // Only a row that says it is not connected (sessionRowFromSummary), and
+  // never a hosted conversation (sessionDisconnected).
+  const isSessionDisconnected = sessionDisconnected({
+    active: !!conversation && conversation.status === "active",
+    isConnected: managedSession?.is_connected,
+    recentlyMoved: isSessionConnected,
+    agentType: conversation?.agent_type,
+  });
   const sessionAge = now - (conversation?.started_at ?? 0);
   const isNewEmptySession = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0;
   // A fresh fork has messages but no daemon yet — give it the same
@@ -3143,26 +3163,29 @@ const ConversationViewInner = (
   // A cloud agent session's actions (Create PR, Apply, Archive), in the palette as in the header and the session menu.
   const cloudAgentActions = useCloudAgentActions(conversation?._id, effectiveIsOwner);
   // A session with an agent process of its own (not a cloud agent's): the one a restart or a resume command reaches.
-  // A share guest has no machine for a resume command to run on.
-  const hasLocalAgent = !guest && !!conversation?.session_id && !cloudAgentActions.cloud;
+  // A share guest has no machine for a resume command to run on, and the hosted assistant has no process at all.
+  const hasLocalAgent = !guest && !!conversation?.session_id && !cloudAgentActions.cloud && !isHostedAgentType(conversation?.agent_type);
+  // The menu's working parts (short id, resume commands, the model and agent panel, token counts) and the mode's words.
+  const internalsShown = useSurface("conversation.internals");
+  const words = useModeWords();
   usePaletteSessionCommands(conversation?._id, [
     ...cloudAgentActions.palette,
     { key: "view_restart", label: "Restart session", icon: PaletteRestart, available: !!isOwner && hasLocalAgent, run: handleRestartSession },
-    { key: "view_profile_pin", label: conversation?.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile", icon: PalettePin, available: !!isOwner, run: togglePublicProfilePin },
+    { key: "view_profile_pin", label: conversation?.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile", icon: PalettePin, available: !!isOwner && internalsShown, run: togglePublicProfilePin },
     { key: "view_copy_all", label: "Copy all messages", icon: PaletteCopy, run: handleCopyAll },
-    { key: "view_resume_claude", label: "Copy Claude resume command", icon: PaletteCopy, available: hasLocalAgent, run: () => { void handleCopyResumeCommand("claude"); } },
-    { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: hasLocalAgent, run: () => { void handleCopyResumeCommand("codex"); } },
+    { key: "view_resume_claude", label: "Copy Claude resume command", icon: PaletteCopy, available: hasLocalAgent && internalsShown, run: () => { void handleCopyResumeCommand("claude"); } },
+    { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: hasLocalAgent && internalsShown, run: () => { void handleCopyResumeCommand("codex"); } },
     { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
-    { key: "view_ask", label: "Ask this session…", icon: PaletteAsk, shortcutAction: "conv.ask", available: !guest, run: openAskPanel },
+    { key: "view_ask", label: `Ask ${words.thisConversation}…`, icon: PaletteAsk, shortcutAction: "conv.ask", available: !guest, run: openAskPanel },
     { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
     { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, shortcutAction: "conv.toggleThinking", available: hasAnyThinking, run: () => setShowThinking(s => !s) },
     { key: "view_context", label: showSessionContext ? "Hide schedule and plan" : "Show schedule and plan", icon: PaletteEye, available: minimalStyle, run: () => updateUI({ show_session_context: !showSessionContext }) },
-    { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
+    { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, available: internalsShown, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
     { key: "view_source", label: "Browse repository source", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoTreeHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_history", label: "Browse commit history", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoCommitsHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_diff", label: diffExpanded ? "Hide git diff" : "Show git diff", icon: PaletteBranch, available: !!conversation?.git_branch, run: () => setDiffExpanded(s => !s) },
-    { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner, run: toggleMap },
-    { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
+    { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner && internalsShown, run: toggleMap },
+    { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", available: internalsShown, run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
   const knownPrIdsRaw = useMemo(
     () => knownPullRequestIds(codeRepository, messages as any, [...pullRequests, ...linkedPullRequests], transcriptOutcomes.prRefs),
@@ -3210,6 +3233,35 @@ const ConversationViewInner = (
     }
     return null;
   };
+  // The person's own words before a row: what a hosted notice's Try again sends.
+  const lastPersonWords = (index: number): string | undefined => {
+    for (let i = index - 1; i >= 0; i--) {
+      const item = timeline[i];
+      if (item?.type !== "message") continue;
+      const m = item.data as Message;
+      if (m.role !== "user") continue;
+      const kind = userMsgKindMap.get(m._id)?.kind ?? "normal";
+      if (kind !== "normal" && kind !== "direct_user") continue;
+      const text = m.content?.trim();
+      if (text) return text;
+    }
+    return undefined;
+  };
+  // A hosted turn that failed and was tried again (the person's Try again, or
+  // the engine retrying) reads as one turn: the earlier notices and the
+  // repeated request fold away and the shown notice counts the attempts
+  // (lib/hostedNotice foldHostedRetries, one pass so the two always agree).
+  const retryFold = useMemo(() => {
+    if (!isHostedAgentType(conversation?.agent_type)) return null;
+    const rows: RetryFoldRow[] = [];
+    for (const item of timeline) {
+      if (item?.type !== "message") continue;
+      const m = item.data as Message;
+      const kind = m.role === "user" ? (userMsgKindMap.get(m._id)?.kind ?? "normal") : null;
+      rows.push({ ...m, person: kind === "normal" || kind === "direct_user" });
+    }
+    return foldHostedRetries(rows);
+  }, [timeline, userMsgKindMap, conversation?.agent_type]);
   // A "continue" account recovery sent after a usage limit (not the person).
   const isRecoveryContinue = (m: Message | null | undefined): boolean =>
     !!m && m.role === "user" && (isRecoveryContinueClientId(m.client_id) || !!(m as any)._recoveryContinue);
@@ -3470,6 +3522,16 @@ const ConversationViewInner = (
           // a sender outside the viewer's team).
           const directFrom = kind.kind === 'direct_user' ? kind.from : undefined;
           const userName = msgSender?.name || directFrom || conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+          if (retryFold?.hidden.has(msg._id)) return null;
+          // A hosted conversation's approval answer is a quiet receipt line,
+          // and only when it says more than the step's own receipt, which
+          // already reads "Didn't update the note (you said no)" in the step's
+          // words. A plain yes or no drawn again named one action twice and
+          // sat above the ask it answered.
+          if (kind.kind === 'decision_answer' && isHostedAgentType(conversation?.agent_type)) {
+            if (!approvalAnswerAddsToReceipt(kind.decision.answer)) return null;
+            return <ApprovalAnswerLine key={msg._id} answer={kind.decision.answer} />;
+          }
           // A decision answer is a normal user bubble whose body is the chosen
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
@@ -3491,6 +3553,16 @@ const ConversationViewInner = (
       if (msg.subtype === "workflow_event" || wfEvent) {
         if (wfEvent?.__wf === "workflow_run" && wfEvent.run_id && wfRunCardOwner.get(wfEvent.run_id) !== msg._id) return null;
         return <WorkflowEventBlock key={msg._id} content={msg.content || ""} workflowRun={workflowRun as any} onGateChoice={handleGateChoice} />;
+      }
+
+      // A hosted turn's stop notice: one calm block with its action. Try
+      // again sends the person's last words again (folded into this turn, see
+      // retryFold), and only the last row's notice offers anything.
+      const notice = hostedNoticeKind(msg);
+      if (notice) {
+        if (retryFold?.hidden.has(msg._id)) return null;
+        const asked = lastPersonWords(index);
+        return <HostedNotice key={msg._id} kind={notice} content={msg.content || ""} conversationId={conversation?._id} retryText={asked} live={!nextMessage(index)} retries={(retryFold?.attempts.get(msg._id) ?? 1) - 1} />;
       }
 
       const prevMsgForCompaction = getPreviousNonToolResultMessage(index);
@@ -3603,7 +3675,13 @@ const ConversationViewInner = (
           globalFileMap={globalFileMap}
         />
       );
-      return foldCard ? <Fragment key={msg._id}>{foldCard}{assistantBlock}</Fragment> : assistantBlock;
+      // A hosted reply that offers to connect mail and calendar carries the
+      // button to do it, as its standing instructions promise.
+      const connectChip = isHostedAgentType(conversation?.agent_type) && offersMailConnect(msg.content) && !nextMessage(index)
+        ? <MailConnectChip key={`${msg._id}:connect`} />
+        : null;
+      if (foldCard || connectChip) return <Fragment key={msg._id}>{foldCard}{assistantBlock}{connectChip}</Fragment>;
+      return assistantBlock;
     }
 
     return null;
@@ -3793,8 +3871,10 @@ const ConversationViewInner = (
                     A share guest gets what ran and when; the rest links into a workspace they cannot open. */}
                 {!guest && <>
                 <CloudAgentLink actions={cloudAgentActions} />
-                <BranchCodeLink session={conversation} />
-                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
+                <Surface name="gitChips">
+                  <BranchCodeLink session={conversation} />
+                  <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
+                </Surface>
             {(conversation as any)?.active_plan && (
               <span data-simple-hide className="contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
@@ -3887,17 +3967,19 @@ const ConversationViewInner = (
                     "where is this running" reads as one thing. */}
                 <span data-cc-runner data-cc-keep="live" className="inline-flex items-center flex-shrink-0">
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
-                {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
-                {conversation?._id && !guest && <SessionHooksOffChip conversationId={String(conversation._id)} />}
+                {conversation?._id && !guest && <Surface name="machineChips">
+                  <SessionDaemonChip conversationId={String(conversation._id)} />
+                  <SessionHooksOffChip conversationId={String(conversation._id)} />
+                </Surface>}
                 {/* Kept in simple view (dimmed, copy sub-button hidden inside
                     the pill): the live tmux badge is how you reach the
                     terminal split, which simple view users still want. */}
-                {!guest && <span data-simple-dim className="inline-flex items-stretch">
+                {!guest && <Surface name="terminal"><span data-simple-dim className="inline-flex items-stretch">
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
-                </span>}
+                </span></Surface>}
                 </span>
                 {/* Where a cloud session's edits land on a laptop, when mirrored (LocalMirror.tsx). */}
-                {conversation?._id && !guest && <LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} />}
+                {conversation?._id && !guest && <Surface name="machineChips"><LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} /></Surface>}
 
                 {/* Who has this session open right now: teammates' faces off
                     the roster's viewing field. A solo session shows nothing. */}
@@ -3976,7 +4058,7 @@ const ConversationViewInner = (
                       <button
                         onClick={() => { askSession(localSearchQuery); onClearHighlight(); openAskPanel(); }}
                         className="ml-1 px-1 rounded text-[10px] font-medium whitespace-nowrap hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
-                        title="Ask this session instead of searching it"
+                        title={`Ask ${words.thisConversation} instead of searching it`}
                       >
                         Ask
                       </button>
@@ -4026,7 +4108,7 @@ const ConversationViewInner = (
                     {/* data-cc-keep: the Minimal style rests the header on the
                         title, the live status and this menu; the rest of the
                         cluster fades in on hover or keyboard focus. */}
-                    <button data-cc-keep aria-label="Session menu" className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                    <button data-cc-keep aria-label={`${words.conversation} menu`} className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                       </svg>
@@ -4044,7 +4126,7 @@ const ConversationViewInner = (
                       Copy link
                       <MenuKeyCaps action="conv.copyLink" />
                     </DropdownMenuItem>
-                    {!guest && conversation?.short_id && (
+                    {!guest && internalsShown && conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
@@ -4074,7 +4156,7 @@ const ConversationViewInner = (
                       </svg>
                       Copy all messages
                     </DropdownMenuItem>
-                    {hasLocalAgent && (
+                    {hasLocalAgent && internalsShown && (
                       <>
                         <DropdownMenuItem onSelect={() => setTimeout(() => handleCopyResumeCommand("claude"))}>
                           <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4111,7 +4193,7 @@ const ConversationViewInner = (
                     {!guest && (
                       <DropdownMenuItem onSelect={() => setTimeout(openAskPanel)}>
                         <PaletteAsk className="w-3 h-3 mr-1.5" />
-                        Ask this session…
+                        Ask {words.thisConversation}…
                         <MenuKeyCaps action="conv.ask" />
                       </DropdownMenuItem>
                     )}
@@ -4158,7 +4240,7 @@ const ConversationViewInner = (
                     {(isOwner || (effectiveIsOwner && conversation?.session_id)) && (
                       <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Session</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">{words.conversation}</DropdownMenuLabel>
                       </>
                     )}
                     {isOwner && (
@@ -4198,7 +4280,7 @@ const ConversationViewInner = (
                         {isHeaderRestarting ? "Restarting…" : "Restart session"}
                       </DropdownMenuItem>
                     )}
-                    {isOwner && (
+                    {isOwner && internalsShown && (
                       <>
                         {/* One row for the whole session control panel (model,
                             effort, switch agent, fork as, hand off) — the
@@ -4286,7 +4368,7 @@ const ConversationViewInner = (
                       </>
                     )}
                     {!guest && conversation?._id && <ConversationTaskStatsMenuItem conversationId={conversation._id} />}
-                    {!guest && latestUsage && (
+                    {!guest && internalsShown && latestUsage && (
                       <>
                         <DropdownMenuSeparator />
                         <div className="px-2 py-1.5">
@@ -4331,9 +4413,11 @@ const ConversationViewInner = (
             drag. */}
         {conversation && !guest && (
           <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
-            <Suspense fallback={null}>
-              <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
-            </Suspense>
+            <Surface name="terminal">
+              <Suspense fallback={null}>
+                <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+              </Suspense>
+            </Surface>
             <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} lastPage={lastBrowserPage} />
           </ErrorBoundary>
         )}

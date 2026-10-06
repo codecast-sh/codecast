@@ -598,9 +598,11 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, k
 // The fence-splitting run of blocks — code fences to CodeBlockWithCopy /
 // CastCanvas, everything else to MarkdownTextBlock. Internal: MarkdownContent
 // wraps this with insight-block extraction; InsightCard bodies reuse it.
-function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandles, selectable = true }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string; knownMentionHandles?: Set<string>; selectable?: boolean }) {
-  // Language may be hyphenated (cast-canvas, objective-c).
-  const codeBlockRegex = /```([\w-]+)?\n([\s\S]*?)```/g;
+function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandles, selectable = true, plainTextFences = false }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
+  // Language may be hyphenated (cast-canvas, objective-c). A fence closes on
+  // a run as long as the one that opened it, so a block that quotes three
+  // backticks inside a four backtick fence stays one block.
+  const codeBlockRegex = /(`{3,})([\w-]+)?\n([\s\S]*?)\1/g;
   const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
   let lastIndex = 0;
   let match;
@@ -610,7 +612,7 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandle
       const t = text.slice(lastIndex, match.index);
       if (t.trim()) blocks.push({ type: 'text', content: replaceShortcodes(t) });
     }
-    blocks.push({ type: 'code', content: match[2].trimEnd(), language: match[1] || 'plaintext' });
+    blocks.push({ type: 'code', content: match[3].trimEnd(), language: match[2] || 'plaintext' });
     lastIndex = match.index + match[0].length;
   }
 
@@ -631,6 +633,11 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, knownMentionHandle
           // fall through to the plain code block.
           if (block.language === 'cast-canvas' && canvasAvailable) {
             return <CastCanvas key={idx} code={block.content} />;
+          }
+          // Words quoted exactly (an approval's draft): plain lines, with no
+          // highlighting, expand or copy, because they are not code.
+          if (plainTextFences && block.language === 'text') {
+            return <RNText key={idx} selectable={selectable} style={baseStyle}>{block.content}</RNText>;
           }
           return (
             <CodeBlockWithCopy key={idx} content={block.content} language={block.language || 'plaintext'} />
@@ -660,7 +667,10 @@ function InsightCard({ label, content, baseStyle, knownMentionHandles }: { label
   );
 }
 
-export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionHandles, selectable = true }: { text: string; baseStyle: any; isUser?: boolean; knownMentionHandles?: Set<string>; selectable?: boolean }) {
+/** `plainTextFences` draws a fence marked `text` as plain lines: the shape an
+ *  approval's draft arrives in (@platform/assistant approvalContext quotes
+ *  long text exactly, in a fence so nothing in it renders as markdown). */
+export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionHandles, selectable = true, plainTextFences = false }: { text: string; baseStyle: any; isUser?: boolean; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
   // Insight extraction runs on every assistant text (same placement as web's
   // assistant-message flat run) so cards show up on ALL surfaces that render
   // markdown — message bubbles, tool results, plan/teammate cards.
@@ -675,7 +685,7 @@ export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionH
         part.type === 'insight' ? (
           <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} knownMentionHandles={knownMentionHandles} />
         ) : (
-          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} knownMentionHandles={knownMentionHandles} selectable={selectable} />
+          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} knownMentionHandles={knownMentionHandles} selectable={selectable} plainTextFences={plainTextFences} />
         )
       )}
     </RNView>

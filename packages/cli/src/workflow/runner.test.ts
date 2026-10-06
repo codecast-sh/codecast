@@ -758,6 +758,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   let calls: Array<{ route: string; body: any }>;
   let pinned: { state: string; status: string };
   let workState: string;
+  let inboxReads: Array<{ id: string; work_state: string; is_live: boolean }>;
 
   beforeEach(() => {
     tmpDir = makeTmpDir();
@@ -766,13 +767,17 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     calls = [];
     pinned = { state: "Grounded ct-9", status: "done" };
     workState = "needs_input";
+    inboxReads = [];
     globalThis.fetch = (async (url: any, init: any) => {
       const route = String(url).replace(/^https?:\/\/[^/]+/, "");
       const body = JSON.parse(init?.body || "{}");
       calls.push({ route, body });
       const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
       if (route === "/cli/spawn") return reply({ conversation_id: "conv_hand", short_id: "jx7hand" });
-      if (route === "/cli/inbox") return reply({ sessions: [{ id: "conv_hand", work_state: workState, is_live: false }] });
+      if (route === "/cli/inbox") {
+        const next = inboxReads.shift();
+        return reply({ sessions: [next ?? { id: "conv_hand", work_state: workState, is_live: false }] });
+      }
       if (route === "/cli/sessions/state/get") return reply(pinned);
       if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: "S" });
       return reply({ ok: true });
@@ -804,6 +809,24 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(spawn.body.title).toBe("Ground");
     expect(stationTitle({ id: "prove", label: "Prove" }, { task_id: "ct-9" })).toBe("Prove · ct-9");
     expect(stationTitle({ id: "prove", label: "" }, {})).toBe("prove");
+  }, 30000);
+
+  test("a live hand that reads needs input once, then works on, is not taken as settled", async () => {
+    const live = (work_state: string) => ({ id: "conv_hand", work_state, is_live: true });
+    inboxReads = [live("working"), live("needs_input"), live("working"), live("working")];
+    workState = "done";
+    await run();
+    const reads = calls.filter(c => c.route === "/cli/inbox").length;
+    // Settled only on the final done read, after the flicker and the work that followed it.
+    expect(reads).toBe(5);
+  }, 30000);
+
+  test("a live hand that stays on needs input settles on the second read", async () => {
+    const live = (work_state: string) => ({ id: "conv_hand", work_state, is_live: true });
+    inboxReads = [live("needs_input"), live("needs_input")];
+    workState = "working";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
   }, 30000);
 
   test("a station that declared done is retired, so a later settle cannot file it under needs input", async () => {

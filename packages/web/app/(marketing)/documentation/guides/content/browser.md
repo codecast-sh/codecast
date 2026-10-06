@@ -2,6 +2,8 @@ An agent that changes a web app needs to look at the result, and the pages worth
 
 The second idea is that evidence belongs in the conversation. A screenshot appears inline in the thread. A step that fails prints what the page logged, which requests failed, and what the screen showed, so the human reads the cause without sending the agent back to look. The browser snippet ([how snippets work](/documentation/agent-snippets)) teaches agents the commands and the rules below.
 
+![A Codex worker's conversation showing a cast browser open call and its result](/documentation/remote-and-cloud-sessions/cloud-worker.webp "A worker opens a staging page with cast browser open. The call, the tab it got and an open tab control land in the conversation, then the worker reports what it saw.")
+
 ```bash
 cast browser open https://app.example.com      # this session's tab, in the human's Chrome
 cast browser snapshot -i -s "[role=main]"      # interactive elements with #eNN refs, one region
@@ -50,6 +52,11 @@ EOF
 
 A flow stops at the first failing step and reports which steps ran and which did not, because later steps almost always depend on earlier ones. `--keep-going` continues past a failure. The conversation shows each step with its own result.
 
+```figure
+DoFlowFigure
+Six commands start cast six times. One do flow starts it once, and stops at the first failing step with the evidence attached.
+```
+
 ## One tab for each session
 
 Each session owns one background tab, created only when it opens a URL. Status checks and tab lists create nothing. Every agent tab lives in one Chrome tab group named `Cast`. If the human opens a tab of their own next to an agent tab, Chrome puts it in the same group, and the extension moves it back out at once.
@@ -79,6 +86,11 @@ A ref points at a node. When the page renders again, that node can be gone. The 
 
 Each snapshot therefore writes a small table for the session: the role, the name, and the position of every ref among elements that share that role and name. When a ref goes stale, the CLI takes a fresh snapshot and retries on the element at the same position. The table is a cache. Losing it costs one failed retry and never a wrong click. The same numbering is available to `find`: `find "Delete (3rd)"` picks the third visible match.
 
+```figure
+StaleRefFigure
+The agent chose the third Delete. A re-find by role and name lands on the first; the saved position lands on the third.
+```
+
 ## Pages the agent cannot drive
 
 Chrome forbids an extension from attaching to `chrome://` pages, `chrome-extension://` pages, and the Chrome Web Store with its developer dashboard. `cast browser open` checks the URL first and refuses with that reason, because the refusal from Chrome arrives after the tab is attached and reads like a broken bridge. Those pages are the human's to click through. The agent hands over the URL and the exact steps, and continues with everything around them.
@@ -96,6 +108,11 @@ The CLI and the extension meet at a bridge host: one process that listens on `12
 Pairing is one command that the human runs once: `cast browser extension setup`. The token travels in a URL fragment that the options page reads and then removes from the address bar.
 
 Neither side trusts the port, because any local account can bind it while no host is running. The extension sends a fresh nonce with `HMAC(token, "ext:" + nonce)`, the host answers `HMAC(token, nonce)`, and the extension executes nothing until that answer checks out. The CLI proves the host the same way through `/healthz` before it presents the token. The host refuses any WebSocket upgrade that carries an `http` or `https` Origin header, so a web page cannot connect. `cast browser extension revoke` rotates the token and stops the host.
+
+```figure
+BridgeFigure
+Every command is a short process. The bridge host outlives them all, and the extension drives nothing until the host proves it holds the pairing token.
+```
 
 A command repairs the connection before it reports a problem:
 

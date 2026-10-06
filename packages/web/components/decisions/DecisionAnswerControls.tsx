@@ -1,5 +1,6 @@
 "use client";
 
+import { useModeWords } from "../../lib/surfaces";
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
@@ -144,9 +145,10 @@ function GenericAnswerControls({
   );
   const openOther = () => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); };
 
+  const words = useModeWords();
   const dismissBtn = onDismiss && (
-    <button onClick={onDismiss} className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors" title="Dismiss without answering — the agent is not told">
-      {keys && <KeyCap size="xs">x</KeyCap>}<span>dismiss</span>
+    <button onClick={onDismiss} className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors" title={words.dismissAskTip}>
+      {keys && <KeyCap size="xs">x</KeyCap>}<span>{words.dismissAsk}</span>
     </button>
   );
 

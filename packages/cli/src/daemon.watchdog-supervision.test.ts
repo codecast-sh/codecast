@@ -5,6 +5,7 @@ import {
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
+  daemonPlistRunsLegacyCommand,
   daemonTickStale,
   DAEMON_EXIT_STAMP_FILE,
   DAEMON_HEARTBEAT_STALE_MS,
@@ -207,6 +208,32 @@ describe("daemonPlistNeedsUpgrade migrates legacy direct-binary installs", () =>
   test("leaves the /bin/sh launcher form alone (migration runs once)", () => {
     const current = buildDaemonPlistXml({ scriptPath: "/Users/x/.codecast/daemon-launcher.sh", configDir: "/Users/x/.codecast" });
     expect(daemonPlistNeedsUpgrade(current)).toBe(false);
+  });
+});
+
+// Regression: the daemon job set no ProcessType, so launchd's throttled default
+// reached tmux, every pane and every tool call, and macOS kept the whole agent
+// fleet on the 4 efficiency cores while the 12 performance cores idled (load 124,
+// 2026-10-05). Existing installs must be rewritten, and a launcher-form plist must
+// keep its launcher: reading its ProgramArguments as the daemon command would
+// write a launcher that execs itself.
+describe("daemon plist runs the agent fleet unclamped", () => {
+  const current = buildDaemonPlistXml({ scriptPath: "/Users/x/.codecast/daemon-launcher.sh", configDir: "/Users/x/.codecast" });
+  const beforeProcessType = current.replace(/  <key>ProcessType<\/key>\n  <string>Interactive<\/string>\n/, "");
+
+  test("declares ProcessType Interactive", () => {
+    expect(current).toMatch(/<key>ProcessType<\/key>\s*<string>Interactive<\/string>/);
+    expect(spawnSync("plutil", ["-lint", "-"], { input: current }).status).toBe(0);
+  });
+
+  test("a launcher-form plist without it is upgraded, but not as a legacy command", () => {
+    expect(beforeProcessType).not.toContain("ProcessType");
+    expect(daemonPlistNeedsUpgrade(beforeProcessType)).toBe(true);
+    expect(daemonPlistRunsLegacyCommand(beforeProcessType)).toBe(false);
+  });
+
+  test("the legacy direct-binary form is still a legacy command", () => {
+    expect(daemonPlistRunsLegacyCommand(buildLegacyDirectBinaryDaemonPlist())).toBe(true);
   });
 });
 

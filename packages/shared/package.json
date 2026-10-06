@@ -48,10 +48,12 @@
     "./contracts/orgTemplateBind": "./contracts/orgTemplateBind.ts",
     "./contracts/orgTemplateReadiness": "./contracts/orgTemplateReadiness.ts",
     "./contracts/orgTemplateManifest": "./contracts/orgTemplateManifest.ts",
+    "./contracts/orgTemplateRelease": "./contracts/orgTemplateRelease.ts",
     "./contracts/orgTemplateState": "./contracts/orgTemplateState.ts",
     "./contracts/orgTemplateLearning": "./contracts/orgTemplateLearning.ts",
     "./contracts/orgLead": "./contracts/orgLead.ts",
     "./contracts/orgWhere": "./contracts/orgWhere.ts",
+    "./contracts/projectMemory": "./contracts/projectMemory.ts",
     "./contracts/orgRoute": "./contracts/orgRoute.ts",
     "./contracts/initiative": "./contracts/initiative.ts",
     "./contracts/orgAssignee": "./contracts/orgAssignee.ts",
@@ -68,6 +70,7 @@
     "./render/changeCardHtml": "./render/changeCardHtml.ts",
     "./render/mobileTabsStyle": "./render/mobileTabsStyle.ts",
     "./render/mobileSessionStyle": "./render/mobileSessionStyle.ts",
+    "./render/codecastMark": "./render/codecastMark.ts",
     "./tasks": "./tasks/index.ts",
     "./docs": "./docs/index.ts",
     "./docs/drafting": "./docs/drafting.ts",
@@ -101,6 +104,7 @@
   "dependencies": {
     "css-tree": "3.2.1",
     "@platform/analytics": "file:../../platform/packages/analytics",
+    "@platform/assistant": "file:../../platform/packages/assistant",
     "@platform/evals": "file:../../platform/packages/evals",
     "@platform/fence": "file:../../platform/packages/fence"
   },

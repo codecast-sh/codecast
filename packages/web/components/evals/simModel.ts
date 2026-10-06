@@ -3,7 +3,7 @@
 // markers, and the order chips. Pure, beside the sim views.
 
 import type { SimSessionSummary, SimCatalogResponse, SimGridCell, SimMarker, SimMode, SimScenario } from "@codecast/shared/contracts/evalsApi";
-import type { VerdictState } from "./verdictModel";
+import type { VerdictState } from "@platform/evals/client";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { parseChannel } from "./simLanes";
 

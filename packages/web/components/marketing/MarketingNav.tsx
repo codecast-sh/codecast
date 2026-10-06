@@ -23,6 +23,11 @@ import { visitorPlatform } from "@/lib/visitorPlatform";
  * signed-out state while the server confirms.
  */
 const MARKETING_NAV_LINKS = [
+  // The path for someone who does not write code: the hosted assistant's
+  // own door (/welcome), first so it is not lost among the developer pages.
+  // It lands on the home page's section in the assistant's own look, which
+  // leads on to /welcome.
+  { href: "/#everyone", label: "For everyone" },
   { href: "/documentation", label: "Docs" },
   { href: "/features", label: "CLI" },
   { href: "/pricing", label: "Pricing" },

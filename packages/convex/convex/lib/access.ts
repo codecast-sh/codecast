@@ -13,6 +13,7 @@ import { canOwnerOrTeamAccess, isTeamMember, teamVisibleConvTeam } from "../priv
 import { forbidden, notFound } from "./auth";
 import { roleDropForVisibility } from "../sessionOwnership";
 import { invalidateForConversation } from "./changesDirty";
+import { recordAuthorityEvent } from "./authorityEvents";
 import {
   accessStampFor,
   accessStampFromDoc,
@@ -197,6 +198,9 @@ export async function patchConversationVisibility(
     team_visibility?: string;
   },
   updates: Record<string, any>,
+  /** Who moved it; the owner when the caller does not know (a sweep, a late
+   *  path restamp). Every visibility move is an authority event. */
+  actor: Id<"users"> = conversation.user_id,
 ): Promise<number> {
   // A team role may hold only a session its team can see: a session that
   // stops being visible leaves the role, and its escalation, in this same
@@ -215,6 +219,14 @@ export async function patchConversationVisibility(
   await ctx.db.patch(conversation._id, drop ? { ...updates, ...drop.patch } : updates);
   if (drop) await drop.tell();
   const after = { ...conversation, ...updates };
+  const VIS = ["is_private", "team_visibility", "team_id", "auto_shared"] as const;
+  const pick = (row: Record<string, any>) => Object.fromEntries(VIS.filter((k) => k in updates).map((k) => [k, row[k]]));
+  await recordAuthorityEvent(ctx, {
+    kind: "conversation_visibility_changed",
+    actor_user_id: actor,
+    conversation: after,
+    detail: { before: pick(conversation), after: pick(after) },
+  });
   await invalidateForConversation(ctx, after);
   return recomputeWorkspaceForConversation(ctx, after);
 }

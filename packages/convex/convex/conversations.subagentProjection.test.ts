@@ -91,6 +91,38 @@ describe("every emitted inbox row carries the projection stamp", () => {
   });
 });
 
+// The line's runner watches each station's hand by naming it alone
+// (`/cli/inbox` with session_ids, the namedOnly read). A hand is a subagent of
+// the run's own session, and a child was emitted only under a parent row, so a
+// worker named without its parent came back as nothing: the runner never saw
+// it settle, waited out the node's timeout and killed a hand that had finished
+// (three Union line runs, "hand killed after 30m").
+describe("a subagent named without its parent still answers", () => {
+  const narrow = (db: any) =>
+    computeInboxSessions({ db }, ME as any, {
+      show_all: true,
+      projection: true,
+      extraConvIds: ["conversations_sub"],
+      namedOnly: true,
+    });
+
+  test("the named read returns the worker alone, stamped, once", async () => {
+    const { sessions } = await narrow(fixtures());
+    expect(sessions.map((s: any) => s._id.toString())).toEqual(["conversations_sub"]);
+    expect(sessions[0]).toMatchObject({ is_subagent: true, work_state: expect.any(String), bucket: expect.any(String) });
+  });
+
+  test("named with its parent, it is listed once, under it", async () => {
+    const { sessions } = await computeInboxSessions({ db: fixtures() }, ME as any, {
+      show_all: true,
+      projection: true,
+      extraConvIds: ["conversations_parent", "conversations_sub"],
+      namedOnly: true,
+    });
+    expect(sessions.map((s: any) => s._id.toString()).sort()).toEqual(["conversations_parent", "conversations_sub"]);
+  });
+});
+
 describe("one stampless row degrades to one missing row, never a dead inbox", () => {
   const row = (over: Record<string, any> = {}) => ({
     _id: "conversations_ok",

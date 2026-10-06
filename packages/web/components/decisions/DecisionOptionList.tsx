@@ -84,7 +84,9 @@ export function DecisionOptionRow({
 
   const body = (
     <>
-      <span className={`shrink-0 ${compact ? "mt-[3px]" : "mt-[2px]"}`}>{badge}</span>
+      {/* A plain number badge is a key hint by another name; hosted mode
+          (globals.css) leaves it off. */}
+      <span data-cc-option-number={leading || keys ? undefined : ""} className={`shrink-0 ${compact ? "mt-[3px]" : "mt-[2px]"}`}>{badge}</span>
       <span className="min-w-0 flex-1 text-left [overflow-wrap:anywhere]">
         <span className="flex items-center gap-2 flex-wrap">
           <span className={`${compact ? "text-[13px]" : "text-[15px]"} leading-snug text-sol-text`}>{label}</span>
@@ -156,7 +158,7 @@ export function DecisionOptionList({
 export function TypeAnswerButton({ onOpen, keys = false }: { onOpen: () => void; keys?: boolean }) {
   return (
     <button type="button" onClick={onOpen} className="flex items-center gap-1.5 text-[12px] text-sol-text-dim hover:text-sol-text transition-colors">
-      {keys && <KeyCap size="xs">t</KeyCap>}<span>or type an answer in your own words</span>
+      {keys && <KeyCap size="xs">t</KeyCap>}<span>Or answer in your own words</span>
     </button>
   );
 }

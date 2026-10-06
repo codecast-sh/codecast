@@ -51,7 +51,7 @@ describe("runtime neutrality", () => {
     );
     expect([...new Set(external)]).toEqual(["require-call:node:fs"]);
 
-    // The Anthropic provider is reached through static imports only (the entry
+    // The Anthropic provider and the OpenAI fallback are reached through static imports only (the entry
     // chunk or a chunk it statically imports), never behind a dynamic import,
     // which a Convex isolate refuses at call time.
     const outputs = result.metafile.outputs;
@@ -63,10 +63,12 @@ describe("runtime neutrality", () => {
       for (const imported of outputs[name]?.imports ?? []) if (imported.kind === "import-statement" && !imported.external) walk(imported.path);
     };
     walk(entryName);
-    const anthropicHome = Object.keys(outputs).find((name) =>
-      Object.keys(outputs[name].inputs).some((path) => path.endsWith("pi-ai/dist/providers/anthropic.js")),
-    );
-    expect(anthropicHome && loadedAtStart.has(anthropicHome)).toBe(true);
+    for (const provider of ["anthropic.js", "openai-responses.js"]) {
+      const home = Object.keys(outputs).find((name) =>
+        Object.keys(outputs[name].inputs).some((path) => path.endsWith(`pi-ai/dist/providers/${provider}`)),
+      );
+      expect(home && loadedAtStart.has(home)).toBe(true);
+    }
   }, 120_000);
 
   it("keeps @platform/agent/meter free of runtime imports, so any Convex module can read the price table", async () => {

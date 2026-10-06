@@ -70,6 +70,9 @@ export interface DoctorDeps {
     cursorAccess?: "granted" | "denied";
     /** Hang marker the daemon consumed at boot (see daemonMarkers.ts). */
     lastHang?: HangMarker;
+    /** How hard the last boot was allowed to push (see bootPacing.ts). */
+    bootPacingTier?: string;
+    bootPacingReason?: string;
   } | null;
   getStuckSyncs: () => Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }> | Promise<Array<{ sessionId: string; unsyncedBytes: number; lastSyncedAt: number }>>;
 }
@@ -238,6 +241,10 @@ export async function checkDoctorTmuxServers(
   const plan = staleTmuxServerKillPlan(procs, await io.liveTmuxServerPid(), io.uid(), io.selfPid);
   if (plan.refused) return { ok: false, warn: true, skip: true, detail: `tmux reap skipped: ${plan.refused}` };
   const stale = plan.kill;
+  if (plan.restore.length) {
+    const fleet = plan.restore[0];
+    return { ok: false, warn: true, detail: `tmux server pid ${fleet.pid} holds ${fleet.agents} agent(s) but lost the default socket — the daemon hands it back within the hour, or run \`kill -USR1 ${fleet.pid}\`` };
+  }
   const spared = plan.selfHosted.length ? `; skipped self-hosting server(s) ${plan.selfHosted.map(s => s.pid).join(", ")}` : "";
   if (stale.length === 0) return { ok: !spared, warn: !!spared, skip: !!spared, detail: `no safely reapable stale servers${spared}` };
   const trees = stale.reduce((n, s) => n + s.tree.length, 0);
@@ -418,6 +425,11 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
     name: "loop hang",
     run: () => loopHangCheck(state?.lastHang, deps.configDir),
   });
+
+  // A cautious boot is the daemon protecting a loaded machine, not a fault.
+  if (state?.bootPacingTier) {
+    passive.push({ name: "boot pacing", run: () => ({ ok: true, detail: `${state.bootPacingTier}${state.bootPacingReason ? ` (${state.bootPacingReason})` : ""}` }) });
+  }
 
   passive.push({
     name: "convex",

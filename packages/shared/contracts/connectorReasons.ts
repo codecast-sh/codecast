@@ -77,6 +77,13 @@ export function describeConnectorError(reason: string): string {
   return known(reason) ?? (CODE_SHAPED.test(reason) ? CONNECTOR_FAILED : reason);
 }
 
+/** Whether `text` is one of this table's own sentences (or the generic
+ *  line), rather than words an exception carried. A surface for people who
+ *  do not code shows only these. */
+export function isConnectorSentence(text: string): boolean {
+  return text === CONNECTOR_FAILED || Object.values(REASONS).includes(text);
+}
+
 /** Describe a reason read from a URL: a known code, or the generic line. */
 export function describeReturnReason(reason: string | null | undefined): string {
   return (reason && known(reason)) || CONNECTOR_FAILED;
