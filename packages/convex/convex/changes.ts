@@ -617,6 +617,11 @@ export async function runBuildDay(ctx: ActionCtx, args: { team_id: Id<"teams">; 
     prs.push(...(await ctx.runQuery(internal.changes.readPrs, { team_id, repository, pr_ids: ids })));
   }
   const prById = new Map(prs.map((p) => [p.id, p]));
+  // The sessions a pull request links are its authors (a squash merge's commit names none); they pass the same gate.
+  const prSessions = [...new Set(prs.flatMap((p) => p.conversation_ids ?? []))].filter((id) => !gateById.has(id)) as Id<"conversations">[];
+  for (const ids of chunks(prSessions, GATE_CHUNK)) {
+    for (const g of await ctx.runQuery(internal.changes.readVisible, { team_id, conversation_ids: ids })) gateById.set(String(g.conversation_id), g);
+  }
 
   const result = buildLayerZero({
     team_id: String(team_id),
@@ -634,16 +639,17 @@ export async function runBuildDay(ctx: ActionCtx, args: { team_id: Id<"teams">; 
   });
 
   const writes: StoryWrite[] = result.stories.map((s) => {
-    // The story's own sessions, then its commits' authors: grouping stays on
-    // the trailers, and the authors only add what the story can tell.
+    // The story's own sessions, then its pull requests' sessions, then its
+    // commits' authors: grouping stays on the trailers, and the rest only add
+    // what the story can tell.
     // A story names a commit's author only for work in it: a slice of a batch commit takes the authors whose edits fall in its areas.
     const areas = Object.keys(s.area_counts);
     const wrote = (sha: string) => (authors[sha] ?? [])
       .filter((a) => s.whole_shas.includes(sha) || a.paths.some((p) => areas.some((area) => pathInArea(p, area))))
       .map((a) => String(a.id));
-    const named = [...new Set([...s.conversation_ids, ...s.commit_shas.flatMap(wrote)])];
-    const rows = named.filter((id) => gateById.has(id)).slice(0, STORY_SESSIONS).map((id) => gateById.get(id)!);
     const storyPrs = s.pr_ids.map((id) => prById.get(id)).filter((p): p is PrRow => !!p);
+    const named = [...new Set([...s.conversation_ids, ...storyPrs.flatMap((p) => p.conversation_ids ?? []), ...s.commit_shas.flatMap(wrote)])];
+    const rows = named.filter((id) => gateById.has(id)).slice(0, STORY_SESSIONS).map((id) => gateById.get(id)!);
     return {
       story_key: s.story_key,
       area: s.area,

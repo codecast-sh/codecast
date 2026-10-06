@@ -317,6 +317,15 @@ describe("authors", () => {
     expect(story.conversation_ids.map(String)).not.toContain(String(ids.priv));
   });
 
+  test("a squash merge with no session trailer takes the sessions its pull request links", async () => {
+    const { ids, commit, build, stories } = await setup();
+    await commit("sq1", "Stop telling a caller to get what the card never asked for (#1)", "15:00", ["packages/api/feedback.ts"], { pr_id: ids.visPr });
+    await build();
+    const story = (await stories()).find((x) => x.commit_shas.includes("sq1"))!;
+    expect(story.conversation_ids.map(String)).toContain(String(ids.vis));
+    expect(story.pr_ids.map(String)).toContain(String(ids.visPr));
+  });
+
   test("a slice of a batch commit names only the session whose edits are in its area", async () => {
     const { t, ids, commit, build, stories } = await setup();
     const sessions = await t.run(async (ctx) => {
