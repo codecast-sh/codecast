@@ -26,14 +26,14 @@ describe("attachCommand", () => {
     expect(attachCommand("cc-x", wsl, true)).toBe("wsl.exe -d Ubuntu -e tmux attach -t cc-x");
     expect(attachCopy("cc-x", wsl).message).not.toContain("PowerShell"); // test runner is no Windows browser
     // Viewed from inside a Linux shell (or any non-Windows browser) the plain form stays right.
-    expect(attachCommand("cc-x", wsl, false)).toBe("tmux attach -t 'cc-x'");
+    expect(attachCommand("cc-x", wsl, false)).toBe("tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'");
     // An ssh target the user set still wins: they chose how to reach that machine.
     expect(attachCommand("cc-x", { ...mine("box"), wsl_distro: "Ubuntu" }, true)).toContain("ssh box -t ");
   });
 
   test("your machine with an ssh host: wraps the attach for a remote shell", () => {
     expect(attachCommand("cc-resume-7ea05201", mine("nose"))).toBe(
-      `ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux attach -t 'cc-resume-7ea05201'"`,
+      `ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux -L 'cast-cc-resume-7ea05201' attach -t 'cc-resume-7ea05201' 2>/dev/null || tmux attach -t 'cc-resume-7ea05201'"`,
     );
   });
 
@@ -41,7 +41,7 @@ describe("attachCommand", () => {
   // PATH, so no tmux on a stock Mac. The command has to bring its own PATH.
   test("the ssh form names where tmux lives, since the remote shell won't", () => {
     const cmd = attachCommand("cc-x", mine("nose"))!;
-    expect(cmd).toContain("PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin tmux attach");
+    expect(cmd).toContain("PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin tmux -L");
   });
 
   // Without -t, ssh allocates no TTY and tmux exits with
@@ -54,13 +54,13 @@ describe("attachCommand", () => {
   // remote shell re-parses must be double quotes.
   test("quoting nests rather than collides", () => {
     const cmd = attachCommand("cc-x", mine("m1@10.0.0.4"))!;
-    expect(cmd).toBe(`ssh m1@10.0.0.4 -t "PATH=${REMOTE_TMUX_PATH} tmux attach -t 'cc-x'"`);
+    expect(cmd).toBe(`ssh m1@10.0.0.4 -t "PATH=${REMOTE_TMUX_PATH} tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'"`);
     expect(cmd.match(/"/g)).toHaveLength(2);
-    expect(cmd.match(/'/g)).toHaveLength(2);
+    expect(cmd.match(/'/g)).toHaveLength(6);
   });
 
   test("your machine with no ssh host: the plain local command", () => {
-    expect(attachCommand("cc-x", mine(null))).toBe("tmux attach -t 'cc-x'");
+    expect(attachCommand("cc-x", mine(null))).toBe("tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'");
   });
 
   // The whole point: a pane on a machine that isn't yours has no command that
@@ -70,8 +70,8 @@ describe("attachCommand", () => {
   });
 
   test("unknown machine falls back to the pre-existing local form", () => {
-    expect(attachCommand("cc-x", null)).toBe("tmux attach -t 'cc-x'");
-    expect(attachCommand("cc-x", undefined)).toBe("tmux attach -t 'cc-x'");
+    expect(attachCommand("cc-x", null)).toBe("tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'");
+    expect(attachCommand("cc-x", undefined)).toBe("tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'");
   });
 });
 
@@ -83,13 +83,13 @@ describe("attachCommand", () => {
 describe("attachCopy", () => {
   test("your machine, no ssh host: local command, and the toast names the machine", () => {
     const c = attachCopy("cc-resume-7974cafd", { ...mine(null), label: "macOS - MacBook-Pro-168", platform: "darwin" });
-    expect(c.command).toBe("tmux attach -t 'cc-resume-7974cafd'");
+    expect(c.command).toBe("tmux -L 'cast-cc-resume-7974cafd' attach -t 'cc-resume-7974cafd' 2>/dev/null || tmux attach -t 'cc-resume-7974cafd'");
     expect(c.message).toContain("MacBook-Pro-168");
   });
 
   test("your machine with an ssh host: the ssh form, plainly labelled", () => {
     const c = attachCopy("cc-x", mine("nose"));
-    expect(c.command).toBe(`ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux attach -t 'cc-x'"`);
+    expect(c.command).toBe(`ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'"`);
     expect(c.message).toBe("ssh + tmux attach copied");
   });
 
@@ -101,6 +101,6 @@ describe("attachCopy", () => {
   });
 
   test("unknown machine: the pre-existing local form with the plain toast", () => {
-    expect(attachCopy("cc-x", null)).toEqual({ command: "tmux attach -t 'cc-x'", message: "tmux attach copied" });
+    expect(attachCopy("cc-x", null)).toEqual({ command: "tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'", message: "tmux attach copied" });
   });
 });

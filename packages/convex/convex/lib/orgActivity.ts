@@ -127,7 +127,7 @@ export type ActivitySession = {
   active_task_id?: string | null;
 };
 
-export type ActivityProject = { id: string; title: string; status: string; project_path?: string | null; updated_at: number };
+export type ActivityProject = { id: string; short_id?: string; title: string; status: string; project_path?: string | null; updated_at: number };
 /** `last_entry_at` is the newest entry on the plan's own timeline (a comment, a decision, a progress note): a word somebody wrote, where `updated_at` moves on any write, a bulk apply included. */
 export type ActivityPlan = { id: string; short_id: string; title: string; status: string; project_id?: string | null; updated_at: number; last_entry_at?: number | null };
 /** A plan row as the activity reading takes it, from the stored row: the one
@@ -429,6 +429,10 @@ function computePeople(input: ActivityInputs, authorToMember: Map<string, string
 // ── Stale records: the filing the evidence contradicts ──────────────────────
 export function computeStale(input: ActivityInputs): StaleWork {
   const { now } = input;
+  // The refs a record change carries so a proposal can group by them (orgRecordGroups).
+  const projectRef = new Map(input.projects.filter((p) => p.short_id).map((p) => [p.id, p.short_id!]));
+  const planRef = new Map(input.plans.map((p) => [p.id, p.short_id]));
+  const under = (t: { plan_id?: string | null; project_id?: string | null }) => ({ ...(t.plan_id && planRef.get(String(t.plan_id)) ? { plan: planRef.get(String(t.plan_id)) } : {}), ...(t.project_id && projectRef.get(String(t.project_id)) ? { project: projectRef.get(String(t.project_id)) } : {}) });
   const tasksByPlan = new Map<string, ActivityTask[]>();
   const tasksByProject = new Map<string, ActivityTask[]>();
   for (const t of input.tasks) {
@@ -487,7 +491,7 @@ export function computeStale(input: ActivityInputs): StaleWork {
       // A session parked on the plan after it closed (waiting on a person, or on a wake) is not working it; only a session working now is.
       // Five finished Union plans were flagged on parked sessions alone (2026-09-21).
       const workedLive = bound.some((s) => s.state === "working");
-      if (workedOpen || workedLive) plans.push({ short_id: pl.short_id, title: pl.title, status: pl.status, last_task_activity_at: lastOpenTaskAt || null, sessions_live: liveSessions.length, reason: "marked done, still worked" });
+      if (workedOpen || workedLive) plans.push({ short_id: pl.short_id, title: pl.title, status: pl.status, ...under(pl), last_task_activity_at: lastOpenTaskAt || null, sessions_live: liveSessions.length, reason: "marked done, still worked" });
       continue;
     }
     if (pl.status !== "active" && pl.status !== "draft") continue;
@@ -499,7 +503,7 @@ export function computeStale(input: ActivityInputs): StaleWork {
     if (mine.length > 0 && open.length === 0) reason = "every task closed";
     else if (lastWordAt !== null && now - lastWordAt >= STALE_PLAN_DAYS * D && liveSessions.length === 0) reason = "no activity 21d";
     else if (lastWordAt !== null && now - lastWordAt >= STALE_TASK_DAYS * D && bound.length > 0 && bound.every((s) => s.state === "done")) reason = "bound sessions all done";
-    if (reason) plans.push({ short_id: pl.short_id, title: pl.title, status: pl.status, last_task_activity_at: lastTaskAt, sessions_live: liveSessions.length, reason });
+    if (reason) plans.push({ short_id: pl.short_id, title: pl.title, status: pl.status, ...under(pl), last_task_activity_at: lastTaskAt, sessions_live: liveSessions.length, reason });
   }
 
   // Tasks: an open task a landed commit already carried; an in-progress task
@@ -524,7 +528,7 @@ export function computeStale(input: ActivityInputs): StaleWork {
     else if (t.status === "in_progress" && !everHad) reason = "in progress, no session 14d";
     else if (t.status === "in_progress" && linked.every((s) => s.state === "done")) reason = "in progress, sessions done 14d";
     else if (t.status === "open" && !everHad && now - (t.updated_at ?? 0) >= STALE_OPEN_DAYS * D) reason = "open, untouched 45d";
-    if (reason) tasks.push({ short_id: t.short_id, title: t.title, status: t.status, last_session_activity_at: lastSessionAt, reason });
+    if (reason) tasks.push({ short_id: t.short_id, title: t.title, status: t.status, ...under(t), last_session_activity_at: lastSessionAt, reason });
   }
 
   // Projects: nothing touched them in the window. A task, a plan, a session in

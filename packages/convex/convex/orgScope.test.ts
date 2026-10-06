@@ -287,8 +287,8 @@ describe("F2 org.scopeFeed", () => {
       "call:ended:Planning", // -7h, cited by the decision's source
     ]);
     expect(rows.every((r) => r.kind === "call" || r.short_id === "in-1")).toBe(true);
-    expect(rows[0]).toMatchObject({ id: "iu1", href: "/initiatives/in-1", actor: { name: "Me" }, preview: "Waiting on the pricing page." });
-    expect(rows[1]).toMatchObject({ id: `${G}:milestones:beta`, href: "/initiatives/in-1" });
+    expect(rows[0]).toMatchObject({ id: "iu1", href: "/goals/in-1", actor: { name: "Me" }, preview: "Waiting on the pricing page." });
+    expect(rows[1]).toMatchObject({ id: `${G}:milestones:beta`, href: "/goals/in-1" });
     expect(rows[2]).toMatchObject({ id: `${G}:questions:seat`, preview: "Per seat" });
     expect(rows[3]).toMatchObject({ id: "transcripts_c1", short_id: "cl-5", href: "/calls/cl-5", actor: { name: "Mate" }, preview: "The broker launch is a week late." });
     expect(rows[4]).toMatchObject({ id: `${G}:questions:tier`, actor: { name: "Mate" } });

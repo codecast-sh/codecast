@@ -17,6 +17,7 @@ import { TabParamsCtx, parseTabLocation } from "../lib/tabParams";
 const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
 const Docs = lazyPage("@/app/docs/page", () => import("@/app/docs/page"));
 const Capabilities = lazyPage("@/app/capabilities/page", () => import("@/app/capabilities/page"));
+const AgentFeatures = lazyPage("@/app/agent-features/page", () => import("@/app/agent-features/page"));
 const DocDetail = lazyPage("@/app/docs/[id]/page", () => import("@/app/docs/[id]/page"));
 const Plans = lazyPage("@/app/plans/page", () => import("@/app/plans/page"));
 const Calls = lazyPage("@/app/calls/page", () => import("@/app/calls/page"));
@@ -40,7 +41,6 @@ const Org = lazyPage("@/app/org/page", () => import("@/app/org/page"));
 const OrgScope = lazyPage("@/app/org/[id]/page", () => import("@/app/org/[id]/page"));
 const Initiatives = lazyPage("@/app/initiatives/page", () => import("@/app/initiatives/page"));
 const InitiativeDetail = lazyPage("@/app/initiatives/[id]/page", () => import("@/app/initiatives/[id]/page"));
-const Timeline = lazyPage("@/app/timeline/page", () => import("@/app/timeline/page"));
 const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
 const Community = lazyPage("@/app/community/page", () => import("@/app/community/page"));
 const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/workflows/dashboard"));
@@ -147,6 +147,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/tasks$/, paramNames: [], component: Tasks },
   { pattern: /^\/docs$/, paramNames: [], component: Docs },
   { pattern: /^\/capabilities$/, paramNames: [], component: Capabilities },
+  { pattern: /^\/agent-features$/, paramNames: [], component: AgentFeatures },
   { pattern: /^\/plans$/, paramNames: [], component: Plans },
   { pattern: /^\/calls$/, paramNames: [], component: Calls },
   { pattern: /^\/projects$/, paramNames: [], component: Projects },
@@ -162,9 +163,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/browser$/, paramNames: [], component: Browser },
   { pattern: /^\/org$/, paramNames: [], component: Org },
   { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },
-  { pattern: /^\/initiatives$/, paramNames: [], component: Initiatives },
-  { pattern: /^\/initiatives\/([^/]+)$/, paramNames: ["id"], component: InitiativeDetail },
-  { pattern: /^\/timeline$/, paramNames: [], component: Timeline },
+  { pattern: /^\/goals$/, paramNames: [], component: Initiatives },
+  { pattern: /^\/goals\/([^/]+)$/, paramNames: ["id"], component: InitiativeDetail },
   { pattern: /^\/chat$/, paramNames: [], component: Chat },
   { pattern: /^\/community$/, paramNames: [], component: Community },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },

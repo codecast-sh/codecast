@@ -17,6 +17,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { MID_WORK_REVIVE_MESSAGE } from "@codecast/shared/contracts";
 import { workflowRunLastActivity } from "./workflowRunLive.js";
 
 // The statuses that mean the turn was not over. "waiting" is the daemon's word
@@ -40,10 +41,9 @@ export const REVIVE_BUDGET_WINDOW_MS = 6 * 60 * 60 * 1000;
 // wait for the next watchdog pass, five minutes later.
 export const REVIVE_MAX_PER_PASS = 3;
 
-export const REVIVE_MESSAGE =
-  "Your agent process exited while this work was still in progress, and codecast restarted the session. " +
-  "Anything that was running in the background stopped with it. Pick up where you left off: relaunch what was " +
-  "interrupted (a workflow resumes from its run id, with finished agents returned from cache), then carry on with the task.";
+// The web recognizes it by content (isMidWorkReviveNotice) to render it as
+// a restart rule and keep it out of the sticky prompt.
+export const REVIVE_MESSAGE = MID_WORK_REVIVE_MESSAGE;
 
 // Shares the recovery prefix family (isRecoveryContinueClientId), so the web
 // shows it as the system's message rather than the person's. Minute-bucketed

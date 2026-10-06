@@ -11,6 +11,7 @@ import { identityRowOf } from "../../lib/sessionIdentity";
 import { categoryMeaning } from "../../lib/decisionCategory";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { askingSessionName } from "../../lib/decisionLinks";
+import { useSurface } from "../../lib/surfaces";
 
 // Who is in a decision: the session that asked, the person who holds it, and
 // what its category means. One rendering for the queue card and the document
@@ -63,11 +64,15 @@ export function AskingSessionView({
   const title = askingSessionName(fullTitle, omitRef);
   const project = session?.project_path || decision.project_path;
   const live = session?.status === "running" || session?.status === "working";
+  // Hosted mode names the asking conversation and nothing else: no repo, and
+  // no second dot for whether it runs.
+  const projectShown = useSurface("gitChips");
+  const internals = useSurface("questions.internals");
   return (
     <span className={`inline-flex items-center gap-1.5 min-w-0 ${className}`} data-asking-session={decision.conversation_id}>
       {/* Who is asking (session-characters.md S3), then whether it is live. */}
       {!label && <SessionGlyph row={session ? identityRowOf(session as any) : null} size={14} className="shrink-0" />}
-      {!label && <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${live ? "bg-sol-green" : "bg-sol-text-dim"}`} title={live ? "The asking session is running" : "The asking session is idle"} aria-label={live ? "running" : "idle"} />}
+      {!label && internals && <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${live ? "bg-sol-green" : "bg-sol-text-dim"}`} title={live ? "The asking session is running" : "The asking session is idle"} aria-label={live ? "running" : "idle"} />}
       <Link
         href={`/conversation/${decision.conversation_id}`}
         className="truncate text-sol-text-muted hover:text-sol-blue transition-colors"
@@ -80,7 +85,7 @@ export function AskingSessionView({
       >
         {label || title || "a session with no name yet"}
       </Link>
-      {project && !label && <span className="truncate text-sol-text-dim">{getProjectName(project)}</span>}
+      {project && !label && projectShown && <span className="truncate text-sol-text-dim">{getProjectName(project)}</span>}
     </span>
   );
 }

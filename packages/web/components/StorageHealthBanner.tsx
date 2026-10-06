@@ -1,6 +1,7 @@
 import { HardDrive } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useStatusNotice } from "../hooks/useStatusNotice";
+import { useHostedMode, useSurface } from "../lib/surfaces";
 
 /**
  * Status notice shown while durable IndexedDB writes are not landing (the
@@ -13,16 +14,23 @@ import { useStatusNotice } from "../hooks/useStatusNotice";
  */
 export function StorageHealthBanner() {
   const degraded = useInboxStore((s) => s.storageDegraded);
+  // A plain stall changes nothing a hosted person does (sends are unaffected),
+  // so only the case they can fix is said, in their words.
+  const stallShown = useSurface("notice.storageStall");
+  const hosted = useHostedMode();
+  const shown = degraded === "blocked" || (degraded && stallShown);
   useStatusNotice(
     "storage-health",
-    degraded
+    shown
       ? {
           tone: "orange",
           icon: HardDrive,
-          title: degraded === "blocked" ? "Another Codecast window is blocking a storage update" : "Local storage is not keeping up",
+          title: degraded === "blocked"
+            ? hosted ? "Another Codecast window needs a reload" : "Another Codecast window is blocking a storage update"
+            : "Local storage is not keeping up",
           detail:
             degraded === "blocked"
-              ? "close or reload your other Codecast windows. Messages still send meanwhile."
+              ? hosted ? "Your messages are safe." : "close or reload your other Codecast windows. Messages still send meanwhile."
               : "messages still send, but offline cache and crash recovery are degraded until local saving recovers.",
         }
       : null,

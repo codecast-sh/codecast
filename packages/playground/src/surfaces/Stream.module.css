@@ -1,0 +1,37 @@
+.wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.stream { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--s4); }
+.items { display: flex; flex-direction: column; gap: var(--s3); min-height: 100%; justify-content: flex-end; }
+.items > [data-flash] { animation: ring-mint 900ms var(--glide); }
+.more { display: grid; place-items: center; padding: var(--s2); }
+
+.newPill {
+  position: absolute; bottom: var(--s3); left: 50%; translate: -50% 0; z-index: 2;
+  background: var(--butter); border: var(--line); border-radius: var(--r-pill); box-shadow: var(--pop-xs);
+  padding: 4px 14px; font: 800 13px var(--ui); animation: arrive var(--t-arrive) var(--squish);
+}
+
+.typing { display: flex; align-items: center; gap: var(--s2); font: 700 13px var(--ui); color: var(--ink-soft); animation: fade-up var(--t-quick) var(--glide); }
+.typingFaces { display: inline-flex; }
+.typingFaces > span + span { margin-left: -8px; }
+
+.empty { margin: auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--s2); padding: var(--s6) var(--s2); }
+.quiet { font: 400 17px/1 var(--display); margin-top: var(--s3); }
+.emptyHint { font: 600 13px/1.4 var(--ui); color: var(--ink-soft); max-width: 280px; }
+.ideas { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2); margin-top: var(--s3); }
+.ideas > button { font-size: 13px; padding: 5px 12px; }
+
+.lineage {
+  display: flex; flex-direction: column; gap: 4px; text-decoration: none;
+  background: var(--pool); color: var(--paper); border: var(--line-thick); border-radius: var(--r-lg);
+  box-shadow: var(--pop-sm); padding: 12px 14px; transition: transform var(--t-press), box-shadow var(--t-press);
+}
+.lineage:hover { transform: translate(-1px, -1px); box-shadow: var(--pop); }
+.lineage b { font: 800 15px var(--ui); display: flex; align-items: center; gap: 6px; }
+.lineage b svg { width: 16px; height: 16px; }
+.lineage span { font: 600 13px var(--ui); }
+
+.latest {
+  flex: none; display: flex; align-items: center; gap: var(--s2); padding: 2px 16px 8px;
+  font: 600 14px var(--ui); white-space: nowrap; overflow: hidden;
+}
+.latest span { overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); }
