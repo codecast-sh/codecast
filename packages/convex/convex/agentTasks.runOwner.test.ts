@@ -366,3 +366,54 @@ describe("a lapsed lease on a spawn run", () => {
     expect(wakes(tables)).toHaveLength(0);
   });
 });
+
+describe("a limit park waits on the account the run used", () => {
+  const H = 3_600_000;
+  const D = 24 * H;
+  const parkedOn = (run: Record<string, any>, device: Record<string, any>) => world({}, {
+    conversations: [
+      { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", owner_device_id: "laptop" },
+      { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", pending_api_error_kind: "limit", owner_device_id: "laptop", ...run },
+    ],
+    devices: [{ _id: "devices_laptop", user_id: USER, device_id: "laptop", is_remote: false, last_seen: NOW - 1000, cc_auto_continue: true, ...device }],
+  });
+
+  test("a pinned run re-arms at its own account's longest pegged window, not the earliest reset anywhere", async () => {
+    const { ctx, tables } = await parkedOn({ cc_account: "b" }, {
+      cc_accounts: {
+        active_email: "a@example.com",
+        profiles: [
+          { name: "a", email: "a@example.com", usage: { fetched_at: NOW, session: { percent: 100, resets_at: NOW + 10 * 60_000 } } },
+          { name: "b", email: "b@example.com", usage: { fetched_at: NOW, session: { percent: 100, resets_at: NOW + 30 * 60_000 }, weekly: { percent: 100, resets_at: NOW + 2 * D } } },
+        ],
+      },
+    });
+    await fail(ctx, { error: "Exceeded max runtime (10min)" });
+    expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", run_at: NOW + 2 * D + 120_000, parked_run_session_uuid: RUN_UUID });
+  });
+
+  test("an unpinned run reads the fleet account; another account's sooner reset is ignored", async () => {
+    const { ctx, tables } = await parkedOn({}, {
+      cc_accounts: {
+        active_email: "a@example.com",
+        profiles: [
+          { name: "a", email: "a@example.com", usage: { fetched_at: NOW, session: { percent: 100, resets_at: NOW + H }, weekly: { percent: 100, resets_at: NOW + 3 * D } } },
+          { name: "b", email: "b@example.com", usage: { fetched_at: NOW, session: { percent: 100, resets_at: NOW + 10 * 60_000 } } },
+        ],
+      },
+    });
+    await fail(ctx, { error: "Exceeded max runtime (10min)" });
+    expect(tables.agent_tasks[0].run_at).toBe(NOW + 3 * D + 120_000);
+  });
+
+  test("with recovery on, the trigger re-arms no earlier than the loop's booked check", async () => {
+    const accounts = { active_email: "a@example.com", profiles: [{ name: "a", email: "a@example.com", usage: { fetched_at: NOW, session: { percent: 100, resets_at: NOW + H } } }] };
+    const on = await parkedOn({}, { cc_accounts: accounts, cc_auto_switch_state: { next_check_at: NOW + 5 * H } });
+    await fail(on.ctx, { error: "Exceeded max runtime (10min)" });
+    expect(on.tables.agent_tasks[0].run_at).toBe(NOW + 5 * H + 120_000);
+    // Recovery off: the booking is stale by definition and the account's own reset stands.
+    const off = await parkedOn({}, { cc_accounts: accounts, cc_auto_continue: false, cc_auto_switch_state: { next_check_at: NOW + 5 * H } });
+    await fail(off.ctx, { error: "Exceeded max runtime (10min)" });
+    expect(off.tables.agent_tasks[0].run_at).toBe(NOW + H + 120_000);
+  });
+});

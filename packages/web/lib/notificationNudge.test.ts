@@ -51,4 +51,10 @@ describe("decideNotificationNudge", () => {
     const later = NOW + NUDGE_MISS_OVERRIDE_AFTER_MS;
     expect(decideNotificationNudge({ readiness: "off", snoozedAt, miss: miss(later - 1000), now: later }).show).toBe(true);
   });
+
+  test("hosted mode waits for a miss before asking", () => {
+    expect(decideNotificationNudge({ readiness: "ask", snoozedAt: 0, miss: null, now: NOW, onlyAfterMiss: true }).show).toBe(false);
+    const v = decideNotificationNudge({ readiness: "ask", snoozedAt: 0, miss: miss(NOW), now: NOW, onlyAfterMiss: true });
+    expect(v.show && v.escalated).toBe(true);
+  });
 });

@@ -402,7 +402,7 @@ describe("churn exemption (design D1)", () => {
       const conversation = await db.get(lastId);
       const tracked = makeChangeTrackedDb(db, makeSyncAckCollector());
       const patch: Record<string, unknown> = { message_count: 1, updated_at: 100 };
-      await rollUpUsage({ db: tracked }, conversation, [{ usage: { input_tokens: 10, output_tokens: 5 }, inserted: true }], patch, 100);
+      await rollUpUsage({ db: tracked, scheduler: { runAfter: async () => {} } }, conversation, [{ usage: { input_tokens: 10, output_tokens: 5 }, inserted: true }], patch, 100);
       await tracked.patch(lastId, patch);
       // The assertion this test cares about is the sync head below; the totals
       // are here to prove the rollup ran. Match its fields loosely so a new
@@ -418,7 +418,7 @@ describe("churn exemption (design D1)", () => {
 
     const tracked = makeChangeTrackedDb(db, makeSyncAckCollector());
     const patch: Record<string, unknown> = { title: "Updated title" };
-    await rollUpUsage({ db: tracked }, await db.get(lastId), [{ usage: { input_tokens: 2, output_tokens: 3 }, inserted: true }], patch, 200);
+    await rollUpUsage({ db: tracked, scheduler: { runAfter: async () => {} } }, await db.get(lastId), [{ usage: { input_tokens: 2, output_tokens: 3 }, inserted: true }], patch, 200);
     await tracked.patch(lastId, patch);
     expect(head(scope)?.position).toBe(1);
     expect(actions(scope)[0].patch).toEqual({ title: "Updated title" });

@@ -1,4 +1,5 @@
 "use client";
+import { useModeWords } from "../../lib/surfaces";
 import { useCallback, useMemo, useRef, useEffect } from "react";
 import { sharePageUrl } from "../../lib/utils";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
@@ -148,6 +149,7 @@ function useDocUrlState() {
 }
 
 export function DocListContent() {
+  const words = useModeWords();
   const params = useParams();
   const { docType, group, sort, dir, project: projectFilter, label: labelFilter, source: sourceFilter, setParam, setGroup, setSort, toggleSortDir, buildShareUrl } = useDocUrlState();
   const router = useRouter();
@@ -326,7 +328,7 @@ export function DocListContent() {
     <GenericListView<DocItem>
       activeItemId={params?.id as string | undefined}
       paletteTargetType="doc"
-      title="Documents"
+      title={words.docsPage}
       tabs={[
         { key: "", label: "All", count: sourceFilteredDocs.length },
         ...DOC_TYPES.map((t) => ({
@@ -356,7 +358,7 @@ export function DocListContent() {
       listFooter={hiddenAgentCount > 0 ? (
         <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
           <Bot className="w-3.5 h-3.5 opacity-40" />
-          <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "doc" : "docs"} not shown</span>
+          <span>{hiddenAgentCount} {hiddenAgentCount === 1 ? words.agentDoc : words.agentDocs} not shown</span>
           <button onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
             Show all
           </button>
