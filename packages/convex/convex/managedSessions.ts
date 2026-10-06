@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
+import { releaseQueuedRows } from "./pendingMessageWrites";
 import type { QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -927,6 +928,8 @@ async function applyAgentStatus(ctx: MutationCtx, session: Doc<"managed_sessions
     ACTIVE_AGENT_STATUSES.has(session.agent_status ?? "") && !ACTIVE_AGENT_STATUSES.has(args.agent_status);
   if (turnStampAdvanced || activeSettled) {
     await scheduleFedSessionSettle(ctx, args.conversation_id);
+    // What people queued for the end of this turn goes in now.
+    await releaseQueuedRows(ctx, args.conversation_id);
   }
   // The activity line names what the agent does NOW; a settled turn does
   // nothing, so the stamp comes off the row here rather than lingering until

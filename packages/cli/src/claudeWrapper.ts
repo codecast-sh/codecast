@@ -4,6 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
 import { hasTmux, tmuxExecSync } from "./tmux.js";
+import { routeTmuxArgs } from "./tmuxRoute.js";
 import { clientAcceptsBracketedPaste, pasteTextIntoPane } from "./tmuxPaste.js";
 import type { Config } from "./config/types.js";
 import { readAuthConfig } from "./config/readAuthConfig.js";
@@ -167,7 +168,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
       log(`Created tmux session and started Claude`);
 
       // Attach to the tmux session
-      const attach = spawn("tmux", ["attach-session", "-t", tmuxSessionName], {
+      const attach = spawn("tmux", routeTmuxArgs(["attach-session", "-t", tmuxSessionName])[0], {
         stdio: "inherit",
       });
 

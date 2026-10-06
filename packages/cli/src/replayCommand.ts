@@ -5,12 +5,16 @@
 //   cast replay ls [--source s] [--group eg-N]
 //   cast replay show rp-N | <recording id> --source <posthog source>
 //   cast replay repro rp-N [--base-url https://app] [--out repro.spec.ts]
+//   cast replay import --source <posthog|sentry source> [--since 30d] [--status | --stop]
 //
 // Routes: /cli/replays/* in http.ts. `show` prints the cached timeline; a
 // PostHog or Sentry recording is imported the first time it is read
 // (sources/vendorReplay.ts), and a timeline not
 // assembled yet is rendered here from the chunks. `repro` always reads the
 // chunks: the events are the source, the timeline is only their summary.
+// `import` pulls every recording a vendor source still keeps, one page per
+// scheduled action on the server (convex sources/replayBackfill.ts); this
+// command starts it and follows the progress the source row carries.
 import fs from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -18,10 +22,10 @@ import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
-import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead } from "./externalDataCli.js";
+import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite } from "./externalDataCli.js";
 import { fenceProductText } from "@codecast/shared/contracts";
 import { INGEST_SHORT_ID_PREFIX } from "@codecast/shared/contracts/ingest";
-import { needsVendorImport, type ReplayEvent } from "@codecast/shared/contracts/replay";
+import { REPLAY_BACKFILL_WINDOWS, isReplayBackfillWindow, needsVendorImport, replayBackfillLine, replayBackfillState, type ReplayBackfill, type ReplayEvent } from "@codecast/shared/contracts/replay";
 import { parseReplayEvents, renderTimeline, sortReplayEvents, toRepro } from "@codecast/shared/replay";
 
 export interface ReplayRow {
@@ -120,6 +124,36 @@ export function formatReplayDetail(d: ReplayDetail, timeline: string | null, now
   return lines.join("\n");
 }
 
+/** A source's import as `cast replay import --status` prints it. */
+export function formatReplayImport(source: { name: string; replay_backfill?: ReplayBackfill }, now: number = Date.now()): string {
+  const b = source.replay_backfill;
+  if (!b) return `${source.name}: no import yet. Recordings come over when opened; cast replay import --source ${source.name} brings them all.`;
+  return `${source.name}: ${replayBackfillLine(b, now)}`;
+}
+
+/**
+ * Prints the import's line whenever it changes, until it is no longer running.
+ * The import runs on the server either way; leaving this only stops watching.
+ */
+export async function followReplayImport(
+  read: () => Promise<{ name: string; replay_backfill?: ReplayBackfill }>,
+  print: (line: string) => void,
+  opts: { interval_ms?: number; sleep?: (ms: number) => Promise<void>; now?: () => number } = {},
+): Promise<ReplayBackfill | undefined> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
+  let last = "";
+  for (;;) {
+    const source = await read();
+    const line = formatReplayImport(source, now());
+    if (line !== last) print(line);
+    last = line;
+    const b = source.replay_backfill;
+    if (!b || replayBackfillState(b, now()) !== "running") return b;
+    await sleep(opts.interval_ms ?? 5_000);
+  }
+}
+
 export function registerReplayCommand(program: Command, deps: PublishDeps): void {
   const replay = program.command("replay").description(commandGroup("replay").description);
 
@@ -175,6 +209,45 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
       const timeline = detail.timeline_md ?? (detail.chunk_urls.length ? renderTimeline(await readReplayEvents(detail.chunk_urls)) : null);
       const { chunk_urls: _urls, ...shown } = detail;
       emit(o.json, { ...shown, timeline_md: timeline }, () => formatReplayDetail(detail, timeline));
+    });
+
+  replay
+    .command("import")
+    .description("Import every recording a PostHog or Sentry source still keeps, in the background; a stopped import continues where it was")
+    .requiredOption("--source <name>", "The PostHog or Sentry source")
+    .option("--since <window>", `How far back: ${REPLAY_BACKFILL_WINDOWS.join(", ")} (default 30d, or the stopped import's)`)
+    .option("--restart", "Start over instead of continuing a stopped import")
+    .option("--status", "Show where the import stands and change nothing")
+    .option("--stop", "Stop it; the next import continues from there")
+    .option("--detach", "Start it and return without following the progress")
+    .option(...TEAM_OPTION)
+    .option(...JSON_OPTION)
+    .action(async (o: { source: string; since?: string; restart?: boolean; status?: boolean; stop?: boolean; detach?: boolean; team?: string; json?: boolean }) => {
+      if (o.since !== undefined && !isReplayBackfillWindow(o.since)) fail(`--since takes ${REPLAY_BACKFILL_WINDOWS.join(", ")}`);
+      const read = async () => scopedRead(deps, "/cli/sources/get", { source: o.source }, o.team);
+      if (o.status) {
+        const source = await read();
+        emit(o.json, source.replay_backfill ?? null, () => formatReplayImport(source));
+        return;
+      }
+      if (o.stop) {
+        const res = await scopedWrite(deps, "/cli/replays/backfill-stop", { source: o.source }, o.team);
+        emit(o.json, res.source.replay_backfill ?? null, () => formatReplayImport(res.source));
+        return;
+      }
+      const res = await scopedWrite(deps, "/cli/replays/backfill", { source: o.source, ...(o.since ? { window: o.since } : {}), ...(o.restart ? { restart: true } : {}) }, o.team);
+      if (o.json) {
+        emit(true, { started: res.started, resumed: !!res.resumed, ...res.source.replay_backfill }, () => "");
+        return;
+      }
+      console.log(fmt.muted(res.started ? (res.resumed ? "Continuing the stopped import." : "Import started.") : "An import is already running."));
+      if (o.detach) {
+        console.log(formatReplayImport(res.source));
+        console.log(fmt.muted(`It runs on the server; cast replay import --source ${o.source} --status shows where it is.`));
+        return;
+      }
+      console.log(fmt.muted("It runs on the server: leaving this (Ctrl-C) only stops watching."));
+      await followReplayImport(read, (line) => console.log(line));
     });
 
   replay

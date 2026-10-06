@@ -1,0 +1,22 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "A one-off follow-up later in this conversation: a trigger, not a sleep, wakeup or cron tool.",
+  "label": {
+    "want": [
+      "cast\\s+trigger\\s+add\\b(?![^\\n]*--help)"
+    ],
+    "avoid": [
+      "^ScheduleWakeup:",
+      "^CronCreate:",
+      "^RemoteTrigger:",
+      "^Monitor:",
+      "\\bsleep\\s+\\d",
+      "run_in_background\\\":\\s*true",
+      "^Skill: .*\\b(loop|schedule)\\b"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "In 30 minutes, check whether the latest CI run on main in codecast-sh/codecast went green and tell me then. Nothing to do before that."
+  }
+}

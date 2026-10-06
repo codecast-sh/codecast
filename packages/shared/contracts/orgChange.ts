@@ -347,6 +347,8 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
     case "move": return { kind: "move", handle, reports_to: partyName(row, row.after.reports_to), ...(gained.length ? { scope_add: gained } : {}), ...(lost.length ? { scope_remove: lost } : {}) };
     case "scope": return { kind: "scope", handle, ...(gained.length ? { add: gained } : {}), ...(lost.length ? { remove: lost } : {}) };
     case "budget": return { kind: "budget", handle, caps: row.after.caps ?? {} };
+    // The row holds the charter before and after; the line says a passage moved, the page draws the two.
+    case "charter_edit": return { kind: "charter_edit", handle, edits: [row.before.charter ? { op: "replace", before: row.before.charter, after: row.after.charter ?? "" } : { op: "add", line: row.after.charter ?? "" }] };
     case "trust": return { kind: "trust", handle, trust: (row.after.trust ?? "understand") as any };
     case "hire": return row.after.instance ? { kind: "hire", handle, template: row.after.instance.template_id, version: row.after.instance.version, digest: "", instance: row.after.instance.instance, project: nameOf(row, row.after.instance.project_id, "its project") } : null;
     case "upgrade": return row.after.upgrade ? { kind: "upgrade", instance: row.after.upgrade.instance, template: row.after.upgrade.template_id, to: row.after.upgrade.to, digest: "" } : null;
@@ -440,7 +442,7 @@ export function addedRecordWords(before: OrgLogFields, after: OrgLogFields): Org
  *  the log, and a goal's record lists arrive as what was added (`added`),
  *  never whole. */
 export const ORG_DIFF_FIELDS = [
-  "status", "name", "reports_to", "scope", "trust", "authority", "instance", "upgrade", "standing_session", "routine",
+  "status", "name", "charter", "reports_to", "scope", "trust", "authority", "instance", "upgrade", "standing_session", "routine",
   "owner_role_id", "project_id", "goal", "success_metrics", "priority", "non_goals", "risks", "projects",
   "owner", "project_ids", "parent_initiative_id", "metrics", "why", "done_when",
 ] as const satisfies readonly (keyof OrgLogFields)[];
@@ -520,7 +522,7 @@ function logOnlySentence(row: OrgLogRow): string {
       return `session ${row.subject.label} now reports to ${to}`;
     }
     case "lead": return row.after.owner_role_id ? `${nameOf(row, row.after.owner_role_id)} now leads the project ${row.subject.label}` : `the project ${row.subject.label} has no lead`;
-    case "initiative_cancel": return `cancel the goal ${row.subject.label}; it stays on the initiatives page as cancelled`;
+    case "initiative_cancel": return `cancel the goal ${row.subject.label}; it stays on the goals page as cancelled`;
     case "role_edit": { const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[]; return `change the ${andList(words) || "settings"} of ${at(handleOf(row))}`; }
     case "restore": return `bring back ${at(handleOf(row))}, with its area of work, its limits and its routines`;
     case "unseat": return `${at(handleOf(row))} gives up its standing session${row.before.standing_session ? ` ${row.before.standing_session.short_id}` : ""}; the session keeps running under its person`;
@@ -594,7 +596,7 @@ export const ORG_INVERSE_KIND: Record<OrgLogKind, OrgLogKind> = {
   routine: "routine_stop", routine_stop: "routine",
   routine_tune: "routine_tune",
   projects: "project_remove", project_remove: "projects",
-  move: "move", scope: "scope", budget: "budget", trust: "trust", role_edit: "role_edit",
+  move: "move", scope: "scope", budget: "budget", trust: "trust", role_edit: "role_edit", charter_edit: "charter_edit",
   lead: "lead", session: "session",
   // The goals (I1, revised): a set goal is cancelled, never erased; the other two restore their fields.
   initiative: "initiative_cancel", initiative_cancel: "initiative", initiative_projects: "initiative_projects", initiative_owner: "initiative_owner", initiative_shape: "initiative_shape",

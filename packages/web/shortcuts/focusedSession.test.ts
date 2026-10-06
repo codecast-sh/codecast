@@ -12,11 +12,12 @@ import { createWorkspace, showPane, type WorkspaceState } from "../store/workspa
 // sessionListActiveId in DashboardLayout).
 describe("focusedActionSessionId", () => {
   const state = (
-    over: Partial<Record<"currentSessionId" | "viewingDismissedId" | "sidePanelSessionId", string | null>>,
+    over: Partial<Record<"currentSessionId" | "viewingDismissedId" | "heldViewId" | "sidePanelSessionId", string | null>>,
     workspace: WorkspaceState = createWorkspace(),
   ) => ({
     currentSessionId: null,
     viewingDismissedId: null,
+    heldViewId: null,
     sidePanelSessionId: null,
     workspace,
     ...over,
@@ -54,6 +55,20 @@ describe("focusedActionSessionId", () => {
   test("inbox: no peek open targets the current session", () => {
     const s = state({ currentSessionId: "live-working" });
     expect(focusedActionSessionId(s, true)).toBe("live-working");
+  });
+
+  // jx7970z (2026-10-06): opening a teammate's share link from the desktop
+  // handoff toast holds the inbox pane on that conversation (not in
+  // `sessions`) while currentSessionId stays on the session just created. The
+  // kill chord pressed there tore down the hidden new session.
+  test("inbox: a held link target is the target, not the session hidden behind it", () => {
+    const s = state({ currentSessionId: "new-session", heldViewId: "shared-link" });
+    expect(focusedActionSessionId(s, true)).toBe("shared-link");
+  });
+
+  test("inbox: a held link target outranks a stashed peek it replaced on screen", () => {
+    const s = state({ currentSessionId: "live", viewingDismissedId: "stashed-peek", heldViewId: "shared-link" });
+    expect(focusedActionSessionId(s, true)).toBe("shared-link");
   });
 
   test("off the inbox: targets the side panel selection", () => {

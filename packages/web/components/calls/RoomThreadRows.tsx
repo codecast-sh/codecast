@@ -3,7 +3,7 @@
 // RoomThread owns the reads and the writes and lays these out in time order.
 
 import { useState } from "react";
-import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, Globe, ImageUp, Link2Off, ListChecks, Sparkles, Square, Trash2, UserMinus, Video, VideoOff } from "lucide-react";
+import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, Globe, ImageUp, Link2Off, ListChecks, ListPlus, Sparkles, Square, Trash2, UserMinus, Video, VideoOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { callShareHref, describeClockSpans, recordingFailureWords, recordingLostWords, recordingStoppedItselfWords } from "@codecast/shared/contracts";
 import { ChatAttachments } from "../chat/ChatMessage";
@@ -204,10 +204,16 @@ export function RecapCard({
   live,
   callId,
   focus,
+  taskFor,
+  onMakeTask,
 }: {
   summary: string;
   items: string[];
   live: boolean;
+  /** The task made from an action item, when there is one. */
+  taskFor?: (item: string) => { short_id: string } | undefined;
+  /** Make an action item a task on this call. */
+  onMakeTask?: (item: string) => void;
   /** The call the recap belongs to: the summary and each item offer links. */
   callId?: string;
   /** A link landed on the summary or on one item: the recap opens for it. */
@@ -252,22 +258,34 @@ export function RecapCard({
                 <ListChecks className="h-3 w-3" /> Action items
               </div>
               <ul>
-                {items.map((a, i) => (
-                  <li key={i} className="group" data-call-anchor={`action-${i}`}>
-                    <span className="text-sol-violet">→</span>
-                    <span>
-                      {a}
-                      {callId && (
-                        <CallLinkButton
-                          callId={callId}
-                          anchor={{ kind: "action", index: i }}
-                          title="Copy a link to this action item"
-                          className="ml-1 align-middle"
-                        />
-                      )}
-                    </span>
-                  </li>
-                ))}
+                {items.map((a, i) => {
+                  const task = taskFor?.(a);
+                  return (
+                    <li key={i} className="group" data-call-anchor={`action-${i}`}>
+                      <span className="text-sol-violet">→</span>
+                      <span>
+                        {a}
+                        {callId && (
+                          <CallLinkButton
+                            callId={callId}
+                            anchor={{ kind: "action", index: i }}
+                            title="Copy a link to this action item"
+                            className="ml-1 align-middle"
+                          />
+                        )}
+                        {task ? (
+                          <span className="rt-item-task" title={`Tracked as ${task.short_id}`}>
+                            <ListPlus className="h-3 w-3" /> {task.short_id}
+                          </span>
+                        ) : onMakeTask ? (
+                          <button type="button" className="rt-item-make" onClick={() => onMakeTask(a)} title="Make this action item a task on this call">
+                            <ListPlus className="h-3 w-3" /> Task
+                          </button>
+                        ) : null}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

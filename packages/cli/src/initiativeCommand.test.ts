@@ -212,7 +212,7 @@ describe("cast initiative: which entry a person means", () => {
     expect(pickRecordEntry(FULL, "decisions", "lenders")).toEqual({ error: 'No decision on in-3 matches "lenders". It has:\n  1. Ship to brokers first' });
   });
   test("a goal with none of a list says the command that adds one", () => {
-    expect(pickRecordEntry({ short_id: "in-9" }, "milestones", "1")).toEqual({ error: 'in-9 has no milestones yet. Add one: cast initiative milestone in-9 "<title>" --date <YYYY-MM-DD>' });
+    expect(pickRecordEntry({ short_id: "in-9" }, "milestones", "1")).toEqual({ error: 'in-9 has no milestones yet. Add one: cast goal milestone in-9 "<title>" --date <YYYY-MM-DD>' });
     expect(pickRecordEntry({ short_id: "in-9" }, "questions", "1")).toEqual({ error: 'in-9 has no questions yet. Add one: cast initiative ask in-9 "<question>"' });
     expect(pickRecordEntry({ short_id: "in-9" }, "decisions", "x")).toEqual({ error: 'in-9 has no decisions yet. Add one: cast initiative decide in-9 "<decision>"' });
     expect(pickRecordEntry({ short_id: "in-9" }, "sources", "x")).toEqual({ error: "in-9 has no sources yet. Add one: cast initiative source in-9 <address or the words said>" });
@@ -474,15 +474,15 @@ describe("cast initiative show", () => {
     Two partners slipped.
     One signed.
 
-  Sub initiatives
+  Goals under it
   ◌ in-5 Broker outreach No update
 `);
   });
   test("a bare goal says what its record lacks", () => {
     const text = show({ short_id: "in-1", title: "T", status: "proposed", health: "none", project_ids: [] });
     expect(text).toContain("  Owner none");
-    expect(text).toContain("  Not on the record yet: why, done when, milestones, sources. cast initiative --help lists the commands that write them.");
-    expect(text).toContain("  None yet: cast initiative add-project in-1 <project>");
-    for (const absent of ["Why", "Done when", "Metrics", "Milestones", "questions", "Decisions", "Sources (", "Sub initiatives"]) expect(text).not.toContain(absent);
+    expect(text).toContain("  Not on the record yet: why, done when, milestones, sources. cast goal --help lists the commands that write them.");
+    expect(text).toContain("  None yet: cast goal add-project in-1 <project>");
+    for (const absent of ["Why", "Done when", "Metrics", "Milestones", "questions", "Decisions", "Sources (", "Goals under it"]) expect(text).not.toContain(absent);
   });
 });

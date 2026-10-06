@@ -76,7 +76,7 @@ export function RoleScopeView({ model, density, renderLead, renderInitiative, on
   return (
     <div className={cn(card ? "grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2.5 gap-y-2 text-[11px] leading-snug" : "space-y-5", className)} data-role-scope={density}>
       {model.initiatives.length > 0 && (
-        <Section density={density} label="Initiatives" name="initiatives">
+        <Section density={density} label="Goals" name="initiatives">
           <ul className={card ? "space-y-0.5" : "space-y-0.5"}>
             {model.initiatives.map((i) => <li key={i.id}><InitiativeRowView i={i} density={density} now={now} /></li>)}
           </ul>
@@ -195,7 +195,7 @@ function InitiativeRowView({ i, density, now }: { i: RoleInitiative; density: Ro
     );
   }
   return (
-    <Link href={`/initiatives/${i.ref}`} className="group flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg no-underline transition-colors hover:bg-sol-bg-highlight/70" data-scope-initiative={i.ref}>
+    <Link href={`/goals/${i.ref}`} className="group flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg no-underline transition-colors hover:bg-sol-bg-highlight/70" data-scope-initiative={i.ref}>
       <span className="w-[3px] self-stretch rounded-full shrink-0 bg-sol-magenta/70" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium text-sol-text group-hover:underline underline-offset-2">{i.title}</span>
