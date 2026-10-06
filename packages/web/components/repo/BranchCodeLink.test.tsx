@@ -49,3 +49,15 @@ describe("BranchCodeLink in the header", () => {
     expect(html).toContain(`href="${repoHomeHref(repository)}"`);
   });
 });
+
+describe("BranchCodeLink pick up", () => {
+  test("a dirty tree offers to copy the pickup command", () => {
+    const html = renderToStaticMarkup(<BranchCodeLink session={{ git_remote_url: remote, git_branch: "main", git_commit_hash: sha, git_dirty: true, short_id: "jx7abcd" }} />);
+    expect(html).toContain('aria-label="Pick up this tree"');
+    expect(html).toContain("cast ws acquire pickup-jx7abcd --from jx7abcd");
+  });
+  test("a clean tree, or a card, does not", () => {
+    expect(renderToStaticMarkup(<BranchCodeLink session={{ git_remote_url: remote, git_branch: "main", short_id: "jx7abcd" }} />)).not.toContain("Pick up");
+    expect(renderToStaticMarkup(<BranchCodeLink detail={false} session={{ git_remote_url: remote, git_branch: "fix", git_dirty: true, short_id: "jx7abcd" }} />)).not.toContain("Pick up");
+  });
+});

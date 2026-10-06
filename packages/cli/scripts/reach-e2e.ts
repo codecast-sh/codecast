@@ -53,7 +53,9 @@ async function until(what: () => boolean, timeoutMs: number, stepMs = 1_000): Pr
   return what();
 }
 const state = (p: string) => readReachStatus()?.hosts[cloud.id]?.[p]?.state;
-const isMounted = (p: string) => onHost(`findmnt -n -M ${shq(p)} >/dev/null && echo yes || echo no`).out.trim() === "yes";
+// `mount` reads " on <mountpoint> " on Linux and macOS alike (findmnt is Linux only).
+const isMounted = (p: string) => onHost(`mount | grep -qF ${shq(` on ${p} `)} && echo yes || echo no`).out.trim() === "yes";
+const macHost = cloud.platform === "darwin" || cloud.provider === "scaleway-mac";
 /** The laptop ssh carrying one reach: its argv holds the quoted mountpoint. */
 function laptopSshPids(p: string): number[] {
   const ps = execFileSync("ps", ["-axo", "pid=,args="], { encoding: "utf-8" });
@@ -84,7 +86,7 @@ try {
   // 2. Reads, writes, in-place edits and grep through the mount.
   const q = shq(folder);
   check("the host reads a laptop file at the laptop path", onHost(`cat ${q}/todo.md`).out === "# todo\n- ship reach\n");
-  const w = onHost(`echo 'written on the host' > ${q}/from-host.txt && sed -i 's/ship reach/ship reach (edited on host)/' ${q}/todo.md && mkdir -p ${q}/sub && echo deep > ${q}/sub/deep.txt`);
+  const w = onHost(`echo 'written on the host' > ${q}/from-host.txt && perl -pi -e 's/ship reach/ship reach (edited on host)/' ${q}/todo.md && mkdir -p ${q}/sub && echo deep > ${q}/sub/deep.txt`);
   check("the host writes, edits in place and makes folders", w.ok, w.out);
   check("the host's new file is on the laptop", fs.readFileSync(path.join(folder, "from-host.txt"), "utf-8") === "written on the host\n");
   check("the host's in-place edit is on the laptop", fs.readFileSync(path.join(folder, "todo.md"), "utf-8").includes("(edited on host)"));
@@ -94,16 +96,16 @@ try {
   const esc = onHost(`cat ${q}/escape`);
   check("a symlink out of the folder reads nothing of the laptop's", !esc.out.includes("laptop secret"), esc.out);
 
-  // 3. The idle watchdog does not count the reach's own connection.
-  const wd = onHost(`conns=$(ss -Htn state established '( sport = :22 )' | wc -l); reaches=$(pgrep -c -f '^cast-reach :'); echo "$conns $reaches"`).out.trim().split(" ").map(Number);
-  check("the watchdog's anchored pgrep counts the reach (one sshfs per folder)", wd[1] === 1, `conns=${wd[0]} reaches=${wd[1]}`);
+  // 3. One sshfs per folder, under the argv0 the Linux idle watchdog subtracts (a Mac has no watchdog).
+  const sshfsCount = Number(onHost(`pgrep -f '^cast-reach :' | wc -l`).out.trim());
+  check(`the host runs one sshfs for the folder, as cast-reach${macHost ? "" : " (what the idle watchdog subtracts)"}`, sshfsCount === 1, `count=${sshfsCount}`);
 
   // 4. A dropped connection: offline note, writes refused, remount.
   for (const pid of laptopSshPids(folder)) process.kill(pid, "SIGKILL");
   check("the mount goes away when the laptop side drops", await until(() => !isMounted(folder), 20_000));
   check("while it is down the folder shows the offline note", onHost(`ls -A ${q}`).out.trim() === REACH_NOTE && onHost(`cat ${q}/${REACH_NOTE}`).out.includes("not connected"));
   const offlineWrite = onHost(`echo x > ${q}/offline.txt`);
-  check("a write while it is down is refused", !offlineWrite.ok && /Permission denied/.test(offlineWrite.out), offlineWrite.out);
+  check("a write while it is down is refused", !offlineWrite.ok && /permission denied/i.test(offlineWrite.out), offlineWrite.out);
   const t1 = Date.now();
   check("the daemon remounts it", await until(() => isMounted(folder) && state(folder) === "mounted", 150_000, 2_000));
   console.log(`      (${Math.round((Date.now() - t1) / 1000)}s to remount)`);
@@ -144,7 +146,7 @@ try {
   check("the laptop folder is intact", fs.readFileSync(path.join(folder, "todo.md"), "utf-8").includes("edited on host"));
 } finally {
   cleanup();
-  onHost(`for d in ${shq(folder)} ${shq(occupied)}; do findmnt -n -M "$d" >/dev/null && fusermount3 -uz "$d"; [ -d "$d" ] && sudo -n rm -rf "$d"; done; true`);
+  onHost(`for d in ${shq(folder)} ${shq(occupied)}; do mount | grep -qF " on $d " && { umount -f "$d" 2>/dev/null || fusermount3 -uz "$d"; }; [ -d "$d" ] && sudo -n rm -rf "$d"; done; true`);
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");

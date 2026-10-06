@@ -2,6 +2,7 @@ import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActi
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import type { SharedObjectKind } from "@codecast/shared/entities";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 import { carryRingStubs } from "../lib/calls/ringStubs";
 import { runFilesOf } from "../lib/calls/callVideo";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
@@ -67,7 +68,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -139,8 +140,9 @@ export {
 } from "./inboxOverlays";
 export { monotonicNow } from "./syncActivity";
 import { decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
-import type { LocalMirror, OpenTaskReport, SessionActivity } from "@codecast/shared/contracts";
+import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
+import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import { isAgentSpawnedConversation, isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -213,9 +215,23 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
+import { firstRun } from "./firstRunState";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
 import { projectRootOf } from "../lib/recentProjectPaths";
-import { cloudPlacementFor, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
+import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
+import { promptTitle } from "@codecast/shared/contracts/assistant";
+
+/** What a conversation being started is called until its row syncs: a
+ *  hosted one by the person's first words (the server stores the same
+ *  placeholder), else the generic name in the agent's own words. */
+function stubTitle(agentType: string, firstMessage?: string): string {
+  if (!isHostedAgentType(agentType)) return "New session";
+  return promptTitle(firstMessage) || "New conversation";
+}
+import { defaultAgentType } from "../lib/defaultAgent";
+import { retryHostedStart } from "../lib/startHostedConversation";
+import { isHostedUi } from "../components/simple/lanePaths";
+import { assistantScopeOnly, inAssistantScope, restorableIn, type ScopeUi } from "../lib/assistantScope";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
@@ -799,6 +815,14 @@ export type InboxSession = {
   // so a card can show its state without reading pull_requests. `state` is the
   // shepherd state (review_pending, ci_red, behind, approved, merged, ...).
   pr_status?: PrStatus | null;
+  // The subagent fleet (convex/subagentFleet.ts): a worker's slot ("running"
+  // or "queued"), when it took it, the machine and limits it counts against,
+  // and what became of its worktree's changes when it ended.
+  subagent_slot?: SubagentSlot | null;
+  subagent_slot_at?: number | null;
+  subagent_slot_device?: string | null;
+  subagent_caps?: SubagentCaps | null;
+  merge_back?: MergeBackStatus | null;
   // The page an agent offered as a pane (`cast browser pane <url>`). The card
   // wears a small glyph while the offer is unhandled; opening or dismissing it
   // stamps opened_at. See lib/browserPaneOffer.
@@ -1630,6 +1654,10 @@ export type ClientUI = {
   // lane (/simple, docs/architecture/hosted-assistant.md), "full" or absent is
   // the whole app. Stamped LWW, so a switch on one device follows the person.
   lane?: "simple" | "full";
+  // The agent a new conversation starts with (a Convex agent_type), read only
+  // through lib/defaultAgent, which also decides hosted mode's and a
+  // machine-less account's default. Absent means Claude.
+  default_agent?: string;
   /** Resource pressure suggestions dismissed per machine (device id → until, ms). */
   resource_plan_dismissed?: Record<string, number>;
   visual_style?: "classic" | "minimal";
@@ -1649,6 +1677,12 @@ export type ClientUI = {
   // Files the reader has marked viewed on a pull request, by pull request id.
   // A reading mark, so it follows the person to every device.
   pr_viewed_files?: Record<string, string[]>;
+  // The conversation diff pane's base (shared/diff DiffBase), by conversation id.
+  diff_base?: Record<string, "session" | "branch" | "commit" | "turn">;
+  // Files the reader marked seen in a conversation's diff pane, by conversation
+  // id, then path, to the stamp of the file's text when marked: a mark lapses
+  // when the file changes after it (lib/diffSeenMarks).
+  diff_seen_files?: Record<string, Record<string, string>>;
   // Where a new line note goes on a pull request: held for the review, or out
   // at once. A reading habit, so it follows the person.
   pr_note_mode?: "review" | "now";
@@ -1738,6 +1772,10 @@ export type ClientUI = {
   // every team-visible session across the active team (a superset of "mine").
   // Stamped LWW so the chosen scope survives reloads and follows the user.
   inbox_scope?: "mine" | "team";
+  // Hosted mode's inbox lists the assistant's conversations; true widens it
+  // to everything the developer inbox holds (hostedOnlyInbox). Ctrl+, and the
+  // panel's Assistant / Everything switch flip it.
+  hosted_inbox_everything?: boolean;
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
   // Show a session's checkout position (its branch, or the short sha of a
@@ -1879,6 +1917,11 @@ export type ClientUI = {
   // One line per session in the inbox list, in every style. Unset means the
   // style decides (resolveInboxCompact).
   inbox_compact?: boolean;
+  // The person's own style and list density for hosted mode, picked while in
+  // it. Unset, hosted mode starts Minimal and compact; the developer picks
+  // above are left alone either way.
+  hosted_visual_style?: "classic" | "minimal";
+  hosted_inbox_compact?: boolean;
   // Open an agent's pane offer (`cast browser pane <url>`) without a click,
   // while the offered session is the one being read and the stage has room.
   // Off by default — an agent may ask for a pane, never take one. Per-user
@@ -1958,11 +2001,22 @@ function patchedTab(t: AppTab, patch: Partial<AppTab>): AppTab {
 // it cannot). Undefined when the URL names none, so boot restores the client's
 // own position. Landing on another session while a link resolves was the silent
 // redirect: an unavailable link showed whatever the viewer had open last.
-function bootLinkTarget(sessions: Record<string, unknown>): string | null | undefined {
-  if (typeof window === "undefined" || !window.location) return undefined;
-  const ref = conversationRefInPath(window.location.pathname + window.location.search);
-  if (!ref) return undefined;
-  return sessions[ref] ? ref : null;
+//
+// A URL that names any other shell page (/questions, /triggers, /tasks) also
+// owns the view, so it is null too: restoring the last conversation there
+// moved the address bar off the page the link pointed at (an approval
+// notification, /welcome's way into the app). Only the inbox and the app root
+// restore the client's own position.
+export function bootLinkTarget(sessions: Record<string, unknown>, path?: string): string | null | undefined {
+  if (path === undefined) {
+    if (typeof window === "undefined" || !window.location) return undefined;
+    path = window.location.pathname + window.location.search;
+  }
+  const ref = conversationRefInPath(path);
+  if (ref) return sessions[ref] ? ref : null;
+  const page = path.split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
+  if (page === "/" || page === "/inbox" || isNonTabRoute(page)) return undefined;
+  return null;
 }
 
 // The path to stamp onto a tab from the live browser URL when switching away.
@@ -2668,22 +2722,53 @@ function pendingSendEchoed(msg: Message, localMessages: Message[]): boolean {
   });
 }
 
+/** A hosted conversation took an approval's answer. Its turn consumes the
+ *  answer without writing a transcript row, so the bubble the store painted
+ *  for it (answerDecision) never meets an echo. What the turn resumes on is
+ *  the decision itself (assistant/input.ts: `resolved`), so the proof is the
+ *  decision's own row: the server has acknowledged the answer once no local
+ *  lock holds its status and the row no longer reads pending. The row must
+ *  also have moved past the stamp the answer was sent at with nothing left
+ *  queued. Row movement alone proves nothing: a title or summary write lands
+ *  the same way while the answer still waits in the outbox, and a bubble
+ *  settled then is skipped by every path that would later show it failed. */
+export type DecisionEvidence = { sessionDecisions: Record<string, { status: string } | undefined>; pending: Record<string, unknown> };
+function hostedAnswerTaken(
+  session: Pick<InboxSession, "has_pending" | "updated_at"> | undefined,
+  sentBaselineTs: number,
+  decisionId: string | undefined,
+  decisions: DecisionEvidence | undefined,
+): boolean {
+  if (!session || session.has_pending || (session.updated_at ?? 0) <= sentBaselineTs) return false;
+  if (!decisionId || !decisions) return false;
+  if (decisions.pending[`sessionDecisions:${decisionId}:status`]) return false;
+  return decisions.sessionDecisions[decisionId]?.status !== "pending";
+}
+
 export function reconcilePendingSendForSession(
   pendingMessages: Record<string, Message[]>,
   convId: string,
-  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
+  session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at" | "agent_type"> | undefined,
   _focusedConvId: string | null,
   localMessages?: Message[],
+  decisions?: DecisionEvidence,
 ): boolean {
   const pending = pendingMessages[convId];
   if (!pending?.length) return false;
   let changed = false;
   const kept = pending.filter((m) => m._isLocalQueue || !pendingSendEchoed(m, localMessages ?? []));
+  const hosted = isHostedAgentType(session?.agent_type);
   for (const message of kept) {
     if (message._isFailed || message._isSettled || message._isLocalQueue) continue;
-    if (!isInterruptControlMessage(message.content) && !/^\/(?:model|effort)(?:\s|$)/.test(message.content ?? "")) continue;
-    if (Date.now() - message.timestamp < PENDING_SEND_PRUNE_GRACE_MS) continue;
-    if (!pendingSendConsumed(session, message._sentBaselineTs ?? message.timestamp)) continue;
+    const sentAt = message._sentBaselineTs ?? message.timestamp;
+    const answers = hosted ? parseDecisionAnswer(message.content)?.id : undefined;
+    if (answers) {
+      if (!hostedAnswerTaken(session, sentAt, answers, decisions)) continue;
+    } else {
+      if (!isInterruptControlMessage(message.content) && !/^\/(?:model|effort)(?:\s|$)/.test(message.content ?? "")) continue;
+      if (Date.now() - message.timestamp < PENDING_SEND_PRUNE_GRACE_MS) continue;
+      if (!pendingSendConsumed(session, sentAt)) continue;
+    }
     message._isSettled = true;
     delete message._isOptimistic;
     delete message._isQueued;
@@ -2764,12 +2849,14 @@ export function isSessionHardBlocked(
 // stale key. `waiting` here is the no-in-flight verdict; the chokepoint
 // layers the tiny in-flight set on top (an in-flight send forces a session
 // OUT of needs-input).
-const _workStateCache = new WeakMap<object, WorkState>();
+const _placementCache = new WeakMap<object, { bucket: InboxBucket; work_state: WorkState }>();
 const _classifyCache = new WeakMap<object, SessionVerdict>();
-/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
-export function sessionWorkState(s: InboxSession): WorkState {
-  let ws = _workStateCache.get(s);
-  if (!ws) {
+/** One row's bucket and work state from its shipped live fields, outside the
+ *  working set: the per-row placement the inbox sections use, without the
+ *  membership fold. For a surface listing rows the inbox may not hold. */
+export function sessionPlacement(s: InboxSession): { bucket: InboxBucket; work_state: WorkState } {
+  let p = _placementCache.get(s);
+  if (!p) {
     // The shipped live fields as they stand — no clock, no re-derivation.
     const live: LiveFacts = {
       agent_status: s.agent_status ?? null,
@@ -2778,10 +2865,14 @@ export function sessionWorkState(s: InboxSession): WorkState {
       awaiting_input: !!s.awaiting_input,
       daemon_alive: !!s.is_connected,
     };
-    ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
-    _workStateCache.set(s, ws);
+    p = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0));
+    _placementCache.set(s, p);
   }
-  return ws;
+  return p;
+}
+/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
+export function sessionWorkState(s: InboxSession): WorkState {
+  return sessionPlacement(s).work_state;
 }
 export function classifySession(s: InboxSession): SessionVerdict {
   let c = _classifyCache.get(s);
@@ -3902,6 +3993,24 @@ export function yourMoveOf(placed: PlacedInbox): (s: InboxSession) => boolean {
   return (s) => placed.isQuestion(s) || keep.has(s._id);
 }
 
+/** Hosted mode's Assistant scope reads whose move it is in three words, so
+ *  a row moves once, from "Working on it" to "Your turn" or Done: an
+ *  approval (the questions bucket) is the person's turn like a reply is, a
+ *  new conversation is already being worked on, and Done reads newest first.
+ *  A presentation fold of the placed buckets, shared by the panel and the
+ *  keyboard walk (visualOrderSessions), so the two cannot disagree. */
+export function hostedStatusSections<T extends { _id: string; updated_at?: number }>(placed: {
+  pinned: T[]; questions: T[]; needsInput: T[]; newSessions: T[]; working: T[]; done: T[]; dormant: T[];
+}): Array<[T[], "pinned" | "needs_input" | "working" | "done" | "dormant"]> {
+  return [
+    [placed.pinned, "pinned"],
+    [[...placed.questions, ...placed.needsInput], "needs_input"],
+    [[...placed.newSessions, ...placed.working], "working"],
+    [[...placed.done].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)), "done"],
+    [placed.dormant, "dormant"],
+  ];
+}
+
 export function visualOrderSessions(
   placed: PlacedInbox,
   projectFilters?: readonly ProjectFilterTerm[],
@@ -3916,13 +4025,15 @@ export function visualOrderSessions(
     // Narrow the walk to the "your move" rows: questions, NEEDS INPUT and DONE
     // exactly as the chokepoint files them (Ctrl+I, queue advance).
     yourMove?: boolean;
+    // Hosted mode's assistant-only inbox (hostedOnlyInbox).
+    hostedOnly?: boolean;
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
   // Same order the status view renders: questions, pinned, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
-  const sections: Array<[InboxSession[], string]> = [
+  const sections: Array<[InboxSession[], string]> = opts.hostedOnly ? hostedStatusSections(placed) : [
     [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
@@ -3934,11 +4045,12 @@ export function visualOrderSessions(
       // The shared predicate (chipMatchesSession) so the walk and the render
       // can never disagree — including the mid-create stub carve-out.
       if (
-        (projectFilters?.length || opts.bucketFilters?.length) &&
+        (projectFilters?.length || opts.bucketFilters?.length || opts.hostedOnly) &&
         !chipMatchesSession(s, {
           projectFilters,
           bucketFilters: opts.bucketFilters,
           bucketByConv: opts.bucketByConv ?? {},
+          hostedOnly: opts.hostedOnly,
         })
       ) continue;
       result.push(s);
@@ -4361,17 +4473,28 @@ export type ScheduleNavSets = {
   triggerOrder?: Array<{ key: string; ids: string[] }>;
 };
 
+// The style on screen. Hosted mode (ui.lane "simple") is always Minimal; any
+// other viewer gets their own pick. Every reader of the style goes through
+// here, so hosted mode reaches the shell, the layout defaults and the feed.
+export function resolveVisualStyle(ui: { visual_style?: "classic" | "minimal"; hosted_visual_style?: "classic" | "minimal"; lane?: string } | undefined): "classic" | "minimal" {
+  if (isHostedUi(ui)) return ui?.hosted_visual_style ?? "minimal";
+  return ui?.visual_style === "minimal" ? "minimal" : "classic";
+}
+
 // Simple view is a preference in Classic and a given in Minimal: the Minimal
 // style has no dense variant, so it never reads the toggle. Every reader goes
 // through here so the shell class, the feed density and the settings row agree.
-export function resolveSimpleView(ui: { simple_view?: boolean; visual_style?: "classic" | "minimal" } | undefined): boolean {
-  return ui?.visual_style === "minimal" || ui?.simple_view !== false;
+export function resolveSimpleView(ui: { simple_view?: boolean; visual_style?: "classic" | "minimal"; hosted_visual_style?: "classic" | "minimal"; lane?: string } | undefined): boolean {
+  return resolveVisualStyle(ui) === "minimal" || ui?.simple_view !== false;
 }
 
-// One line per session. The person's own choice wins in either style; with no
-// choice made, Minimal lists compactly and Classic keeps its full cards.
-export function resolveInboxCompact(ui: { inbox_compact?: boolean; visual_style?: "classic" | "minimal" } | undefined): boolean {
-  return ui?.inbox_compact ?? ui?.visual_style === "minimal";
+// One line per session. The person's own choice wins in either style, and
+// with no choice made, Minimal lists compactly and Classic keeps its full
+// cards. Hosted mode keeps its own choice (hosted_inbox_compact) and starts
+// compact, so a pick in one mode never moves the other.
+export function resolveInboxCompact(ui: { inbox_compact?: boolean; hosted_inbox_compact?: boolean; visual_style?: "classic" | "minimal"; hosted_visual_style?: "classic" | "minimal"; lane?: string } | undefined): boolean {
+  if (isHostedUi(ui)) return ui?.hosted_inbox_compact ?? true;
+  return ui?.inbox_compact ?? resolveVisualStyle(ui) === "minimal";
 }
 
 // Resolve the active inbox view mode from client UI state. Shared by the
@@ -4521,15 +4644,35 @@ export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined
 // bucket must stay reachable before its assignment syncs (an excluded label
 // never files new sessions, see beginOptimisticSession). Both axes are term
 // lists with per-term polarity, judged by passesFilterTerms.
+/** Hosted mode's inbox shows only the assistant's conversations unless the
+ *  person widened it to everything. A view filter like a chip: the panel and
+ *  Ctrl+J/K both read it through chipMatchesSession, so keyboard triage never
+ *  walks into a developer session the panel hides. */
+export function hostedOnlyInbox(ui: ScopeUi): boolean {
+  return assistantScopeOnly(ui);
+}
+
+/** The chip filters (and hosted mode's scope) off a store snapshot, as
+ *  chipMatchesSession takes them. */
+export function chipFilterOpts(
+  state: Parameters<typeof chipProjectFilters>[0] & Parameters<typeof chipBucketFilters>[0] & { clientState: { ui?: { lane?: string; hosted_inbox_everything?: boolean } } },
+  bucketByConv: Record<string, string | undefined>,
+): ChipFilterOpts {
+  return { projectFilters: chipProjectFilters(state), bucketFilters: chipBucketFilters(state), bucketByConv, hostedOnly: hostedOnlyInbox(state.clientState.ui) };
+}
+
+export type ChipFilterOpts = { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined>; hostedOnly?: boolean };
+
 export function chipMatchesSession(
   s: InboxSession,
-  opts: { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined> },
+  opts: ChipFilterOpts,
 ): boolean {
   // Mid-create stubs get the same carve-out on both axes: the session you
   // just summoned must stay reachable no matter which chip is focused — under
   // a project EXCLUDE, Ctrl+N from a focused session in that project would
   // otherwise navigate you onto a card the panel refuses to render.
   if (!isConvexId(s._id)) return true;
+  if (opts.hostedOnly && !inAssistantScope(s.agent_type)) return false;
   if (opts.projectFilters?.length && !passesFilterTerms(opts.projectFilters, getProjectName(s.git_root, s.project_path))) return false;
   return passesFilterTerms(opts.bucketFilters, opts.bucketByConv[s._id]);
 }
@@ -4693,7 +4836,7 @@ export function computeManualSortKey(orderedKeys: number[], insertIndex: number)
 // is what re-plans the inbox warm loop (hooks/inboxWarm.ts). Lives beside the
 // chokepoint so the synced view keys are read inside the store, nowhere else.
 export function visualOrderViewSig(state: {
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; lane?: string; hosted_inbox_everything?: boolean } };
   activeProjectFilter?: string | null;
   activeBucketFilter?: string | null;
   chipFilterExclude?: boolean;
@@ -4708,6 +4851,7 @@ export function visualOrderViewSig(state: {
     resolveInboxViewMode(ui), resolveShowOld(ui), ui?.inbox_scope ?? "mine", ui?.show_subagents ?? true,
     state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude,
     terms(state.extraBucketFilters), terms(state.extraProjectFilters), !!state.showFavorites, state.teamInboxIds?.size ?? 0,
+    hostedOnlyInbox(ui),
   ].join("|");
 }
 
@@ -4747,7 +4891,7 @@ export function computeVisualOrder(state: {
   // Local answered/dismissed marks — same map the panel renders with, so nav
   // walks exactly the QUESTIONS section on screen.
   questionResolutions?: QuestionResolutions;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; lane?: string; hosted_inbox_everything?: boolean } };
 }, opts: {
   // Only the rows that are the user's move (questions, NEEDS INPUT, DONE), in
   // the same on-screen order — see visualOrderSessions. Every mode honors it,
@@ -4785,7 +4929,7 @@ export function computeVisualOrder(state: {
       focusedId,
       manualOrder: state.clientState.ui?.inbox_manual_order,
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
-      chipMatches: (s) => chipMatchesSession(s, { projectFilters: chipProjectFilters(state), bucketFilters: chipBucketFilters(state), bucketByConv }),
+      chipMatches: (s) => chipMatchesSession(s, chipFilterOpts(state, bucketByConv)),
     });
     if (!opts.yourMove) return flat;
     // A flat card still wears the bucket verdict (its badge reads from the same
@@ -4799,6 +4943,7 @@ export function computeVisualOrder(state: {
     bucketByConv,
     collapsedSections: mode === "grouped" ? collapsed : undefined,
     yourMove: opts.yourMove,
+    hostedOnly: hostedOnlyInbox(state.clientState.ui),
   });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
@@ -5398,7 +5543,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
   // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
   // self-heal create (ensureSessionCreated routes through it too).
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => Promise<any>;
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string; firstMessage?: { content: string; clientId: string } }) => Promise<any>;
+  /** Puts the person in hosted mode, or takes them out of it. */
+  setLane: (lane: "simple" | "full") => void;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -5573,6 +5720,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
+  markOptimisticAsRetrying: (convId: string, clientId: string) => void;
   removeOptimisticMessage: (convId: string, clientId: string) => void;
   settleOptimisticMessage: (convId: string, clientId: string) => void;
   // Swap an optimistic message's still-uploading images for their resolved
@@ -5791,6 +5939,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // outbox) and, for answers, send the chosen option into the session as a
   // normal user message. `text` is the free-form escape hatch.
   answerDecision: (decisionId: string, answer: DecisionAnswerInput) => void;
+  startShip: (target: { kind: "task" | "conversation" | "pull_request"; id: string }, clientKey: string, decisionId?: string) => void;
   // "Disagree and reopen" (D2): the row goes back to pending held by the
   // viewer, leaves "Handled without you", and the reopenDecision side effect
   // does the server write.
@@ -5870,8 +6019,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Local-first team create: a stub team row and the active team switch land
    *  in the same tick; resolves the REAL team id once the server answers, and
    *  rolls the stub and the active team back if it refuses. */
-  createTeam: (opts: { name: string; icon?: string; icon_color?: string }) => Promise<string>;
-  dispatchCreateTeam: (stubId: string, opts: { name: string; icon?: string; icon_color?: string }) => Promise<string>;
+  createTeam: (opts: { name: string; icon?: string; icon_color?: string; discoverable?: boolean }) => Promise<string>;
+  dispatchCreateTeam: (stubId: string, opts: { name: string; icon?: string; icon_color?: string; discoverable?: boolean }) => Promise<string>;
   resolveTeamStub: (stubId: string, teamId: string) => void;
   discardTeamStub: (stubId: string, previousActiveTeamId: string | undefined) => void;
   deleteTeam: (teamId: string, confirmName: string) => Promise<void>;
@@ -5888,7 +6037,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
   // Teammate comment actions (optimistic → dispatch side-effect → live-query reconcile).
-  addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
+  addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number; anchorLines?: CodeAnchorText }) => Promise<unknown>;
   editComment: (commentId: string, content: string) => Promise<unknown>;
   deleteComment: (commentId: string) => Promise<unknown>;
   askAgentInThread: (conversationId: string, opts?: { messageId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
@@ -6736,6 +6885,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
           (table[s._id] as InboxSession | undefined) ?? s,
           draft.currentSessionId,
           draft.messages[s._id],
+          draft,
         );
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
@@ -6768,9 +6918,10 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
         const persisted = draft.lastFocusedConversationId
           ?? draft.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
+        const only = assistantScopeOnly(draft.clientState.ui);
         declareViewNav("adopt");
-        draft.currentSessionId = (persisted && table[persisted])
-          ? persisted : (sorted[0]?._id ?? null);
+        draft.currentSessionId = (persisted && restorableIn(only, table[persisted] as InboxSession | undefined))
+          ? persisted : (sorted.find((row) => restorableIn(only, row))?._id ?? null);
       }
     },
   },
@@ -7040,6 +7191,64 @@ export function pendingRowSendArgs(message: Message): { content: string; imageId
     imageIds: imageIds.length ? imageIds : undefined,
     uploading: images.some((image: any) => image?.uploading),
   };
+}
+
+/** How a retry of one pending send came out: `uploading` (an image is still
+ *  on its way, so the upload task owns the send), `unavailable` (the server
+ *  gave no answer, or the conversation could not be created), `resent` (the
+ *  server no longer held the send, so it went out again; also a stub that was
+ *  created and replayed), `restarted` (a hosted conversation with no server
+ *  row started again from its first words), or the server's own word for a
+ *  row it still holds (`pending`, `delivered`, `injected`, `cancelled`). */
+export type PendingRetryStatus = "uploading" | "unavailable" | "resent" | "restarted" | (string & {});
+
+/** The one rule for sending a pending bubble again, shared by the web's
+ *  bubble and the phone's. It replays the row's own send args under the same
+ *  client id (pendingRowSendArgs: a rebuilt payload is refused as
+ *  COMMAND_ID_REUSED), asks the server to retry the row it holds, and sends
+ *  again when the server holds none. A failed bubble reads as on its way from
+ *  the tap, and goes back to failed when the retry could not be made or the
+ *  send was cancelled. A conversation whose create never landed has no server
+ *  row to retry: a hosted one starts again from its first words
+ *  (retryHostedStart), and any other re-creates its stub and replays what
+ *  waits on it (healStrandedStub). Each surface keeps only how it reports the
+ *  status. */
+export async function retryPendingSend(convId: string, clientId: string, fallbackContent: string): Promise<PendingRetryStatus> {
+  const store = useInboxStore.getState();
+  const row = (store.pendingMessages[convId] ?? []).find((m: Message) => m._clientId === clientId || m._id === clientId);
+  const send = row ? pendingRowSendArgs(row) : { content: fallbackContent, imageIds: undefined, uploading: false };
+  if (send.uploading) return "uploading";
+  const wasFailed = !!row?._isFailed;
+  const failAgain = () => { if (wasFailed) useInboxStore.getState().markOptimisticAsFailed(convId, clientId); };
+  if (!isConvexId(convId)) {
+    const stub = store.sessions[convId] ?? store.conversations[convId];
+    if (isHostedAgentType(stub?.agent_type)) {
+      retryHostedStart(convId, clientId, send.content || fallbackContent);
+      return "restarted";
+    }
+    if (wasFailed) store.markOptimisticAsRetrying(convId, clientId);
+    if (await store.healStrandedStub(convId)) return "resent";
+    failAgain();
+    return "unavailable";
+  }
+  if (wasFailed) store.markOptimisticAsRetrying(convId, clientId);
+  let status: string | undefined;
+  try {
+    status = await store.retryPendingMessage(convId, { clientId });
+  } catch (error) {
+    failAgain();
+    throw error;
+  }
+  if (!status) {
+    failAgain();
+    return "unavailable";
+  }
+  if (status === "not_found") {
+    useInboxStore.getState().sendMessage(convId, send.content || fallbackContent, send.imageIds, clientId);
+    return "resent";
+  }
+  if (status === "cancelled") failAgain();
+  return status;
 }
 
 export function redrivePendingMessagesFor(convexId: string, messages?: Message[]): void {
@@ -8882,48 +9091,28 @@ const inboxStoreConfig = (set: any, get: any) => ({
     };
   }),
   answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
-    const row = this.sessionDecisions[decisionId];
-    // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
-    // the agent went ahead on its default, so a new pick is one more message.
-    if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
-    dropDraft(this, decisionDraftKey(decisionId));
-    const now = Date.now();
-    if ("dismiss" in answer) {
-      row.status = "dismissed";
-      row.resolved_at = now;
-      return;
+    answerDecisionDraft(this, decisionId, answer);
+  }),
+
+  // One Ship control (docs/architecture/ship.md): every Ship press, the
+  // change card's included. The press paints on the target's shipTargets row
+  // and rides the startShip side effect (convex/ship.ts). A press that answers
+  // a line run's change card answers it here on the decision rail, exactly as
+  // the card's own answer does, and names the card so the server records the
+  // run against it.
+  startShip: action(function (this: Draft, target: { kind: "task" | "conversation" | "pull_request"; id: string }, clientKey: string, decisionId?: string) {
+    if (decisionId) {
+      const row = this.sessionDecisions[decisionId];
+      const ship = row ? cardVerdictIndexes(row.options)?.ship : undefined;
+      if (ship !== undefined) answerDecisionDraft(this, decisionId, { index: ship });
     }
-    row.status = "answered";
-    row.answer_index = answer.index ?? (Array.isArray(answer.json) ? answer.json[0] : undefined);
-    row.answer_text = answer.text;
-    row.answer_json = answer.json;
-    row.resolved_at = now;
-    // The chosen option enters the session as a normal user message so the
-    // parked agent resumes with it — same rail as typing into the composer,
-    // reusing the standard optimistic-bubble + outbox send pair (the mobile
-    // AUQ answer path does the identical two-step). Deferred to after this
-    // draft commits because both are themselves decorated store functions.
-    // The one-line label is the shared contract the server uses for its own
-    // answers (decisionAnswerLabel), so a multi, rank or form answer reads
-    // the same whichever path delivered it.
-    const answerText = decisionAnswerLabel(row, { answer_index: row.answer_index, answer_text: answer.text, answer_json: answer.json });
-    // Wire format (shared contracts): "Decision: <answer>" plus a tag naming
-    // the decision and its question, so the bubble can render the answer
-    // against its ask and link back to the `cast decide` call.
-    // A silent card (a staffing proposal's pointer, org-staffing.md S4) is
-    // cleared by the answer and delivers nothing: the author is not woken.
-    const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
-    const convId = row.conversation_id;
-    // A decision bound to a run (the-line.md L4) is the server's to deliver:
-    // its run consumes the answer as the open gate, or, when the run is past
-    // it, the server sends the same message (settleClientResolution).
-    if (content && !row.workflow_run_id) {
-      queueMicrotask(() => {
-        const s = useInboxStore.getState();
-        const clientId = s.addOptimisticMessage(convId, content);
-        s.sendMessage(convId, content, undefined, clientId);
-      });
-    }
+    const key = `${target.kind}:${target.id}`;
+    const slot = (this as any).shipTargets as Record<string, any>;
+    const prev = slot[key];
+    slot[key] = {
+      ...(prev ?? { _id: key, target, plan: null, pr_id: null, line: null }),
+      run: { id: clientKey, client_key: clientKey, procedure: prev?.plan?.procedure ?? null, conversation_id: null, short_id: null, decision_id: decisionId ?? null, workflow_run_id: null, created_at: Date.now() },
+    };
   }),
 
   reopenDecision: action(function (this: Draft, decisionId: string) {
@@ -10240,7 +10429,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...existing,
       _id: sessionId,
       session_id: sessionId,
-      title: "New session",
+      title: stubTitle(opts.agent_type, opts.first_message),
       updated_at: now,
       started_at: existing?.started_at ?? now,
       project_path: opts.project_path,
@@ -10281,12 +10470,49 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // compose popup intentionally allows a project-less stub → the daemon starts in
   // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
   // ensureSessionCreated), so this only creates.
-  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string }) => {
+  //
+  // A hosted agent (the Codecast assistant) runs in codecast's backend, so its
+  // create carries no project, machine, model or cloud placement: only the
+  // stub id and, when the caller has it, the first message, which the server
+  // queues in the same transaction (`firstMessage.clientId` is the optimistic
+  // bubble's, so the two reconcile).
+  // Entering hosted mode folds the conversations panel away once: a newcomer
+  // starts on the reply they asked for, not beside a list of everything. The
+  // panel's open or closed state stays the one preference it always was, so
+  // opening it again sticks.
+  setLane: (lane: "simple" | "full") => {
+    const s = get();
+    const entering = lane === "simple" && !isHostedUi(s.clientState.ui);
+    // The assistant files what it makes in the person's Personal workspace,
+    // so hosted mode starts there: its notes and to-dos are on the pages and
+    // in search from the first ask. Both halves of the switch, as
+    // hooks/useSwitchWorkspace writes them (the mirror and the canonical pointer).
+    s.updateClientUI(entering ? { lane, active_team_id: undefined } : { lane });
+    if (entering) s.setActiveTeamPointer(null);
+    if (entering && isSessionRailOpen(s.workspace)) s.wsHide("context");
+  },
+
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string; private?: boolean; model?: string; targetDeviceId?: string; firstMessage?: { content: string; clientId: string } }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
+    const agentType = cur?.agent_type || fallback?.agentType || defaultAgentType(s);
+    if (isHostedAgentType(agentType)) {
+      // Someone whose first conversation, with no machine, goes to the hosted
+      // assistant is in hosted mode from then on, as /welcome leaves them.
+      // Read here, the one create every entry point reaches (the composer,
+      // Ctrl+N, the palette, the context composer, the self-heal), and before
+      // the caller tracks this create, which would end the first run.
+      if (firstRun(s) === "yes") s.setLane("simple");
+      return s.createSession({
+        agent_type: agentType,
+        session_id: stubId,
+        ...(fallback?.firstMessage
+          ? { first_message: fallback.firstMessage.content, first_message_client_id: fallback.firstMessage.clientId }
+          : {}),
+      });
+    }
     const projectPath = cur?.project_path ?? fallback?.projectPath;
     const gitRoot = cur?.git_root ?? fallback?.gitRoot ?? projectPath;
-    const agentType = cur?.agent_type || fallback?.agentType || "claude_code";
     // Fold in the blank session's chosen model/effort. The launch picker stamps
     // these on the stub row (setConversationModel) with no server round-trip;
     // this is where the choice reaches the daemon's launch flags. The row stores
@@ -10412,7 +10638,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         _id: stubId, _creationTime: now, user_id: "", agent_type: opts.agentType,
         session_id: stubId, project_path: opts.projectPath, git_root: opts.gitRoot,
         started_at: now, updated_at: now, message_count: 0, status: "active",
-        title: "New session", messages: [],
+        title: stubTitle(opts.agentType), messages: [],
         ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
       });
       // Also seed the inbox session row. The conversation page resolves a stub from
@@ -10422,7 +10648,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // (which doesn't touch the store) rely on it. session_id === stubId so the server
       // resolver (by_session_id) also maps the stub once the create lands.
       store.syncRecord("sessions", stubId, {
-        _id: stubId, session_id: stubId, title: "New session",
+        _id: stubId, session_id: stubId, title: stubTitle(opts.agentType),
         updated_at: now, started_at: now, project_path: opts.projectPath,
         git_root: opts.gitRoot, agent_type: opts.agentType, message_count: 0,
         is_idle: true, has_pending: false, last_user_message: null,
@@ -11030,6 +11256,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
         if (stripSet?.has(key)) continue;
         if (!Object.is(row[key], fields[key])) row[key] = fields[key];
       }
+      // The overlay carries the facts a send is settled by (updated_at, the
+      // status), and a finished conversation may get no base row after it:
+      // a send still on its way is read against them here too, or it waits
+      // for the minute coverage pass with its row reading as working.
+      if (field === "sessions" && pendingRowsUnsettled(this.pendingMessages[id])) {
+        reconcilePendingSendForSession(this.pendingMessages, id, row, this.currentSessionId, this.messages[id], this);
+      }
     }
   }),
 
@@ -11484,6 +11717,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
+  // The other way: a failed bubble the person asked to send again reads as on
+  // its way from the same gesture. Nothing else clears the flag (an echo
+  // prunes the row, and a hosted approval's answer has no echo), and the
+  // settle and redrive passes all skip a failed row, so a retry that worked
+  // would read "Failed to send" for good. A retry refused again is marked
+  // failed again by the paths that marked it the first time.
+  markOptimisticAsRetrying: sync(function (this: Draft, convId: string, clientId: string) {
+    const pending = this.pendingMessages[convId];
+    if (!pending) return;
+    this.pendingMessages[convId] = pending.map((m: Message): Message => {
+      if (!m._isFailed || (m._clientId !== clientId && m._id !== clientId)) return m;
+      const { _isFailed: _failed, ...rest } = m;
+      return { ...rest, _isOptimistic: true as const };
+    });
+  }),
+
   // The revert half of addOptimisticMessage: drop a bubble whose delivery was
   // refused before it ever reached the rail (the blocked-revive paint, whose
   // mutation threw). Marking it failed would keep it forever — the prune
@@ -11851,7 +12100,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // path is set (updateSessionProject) the retry re-creates normally. The
     // automatic heal-on-load already filters pathless stubs out, so this only
     // gates the user-triggered awaitConvexId retry.
-    if (!stub.project_path && !stub.git_root) {
+    // A hosted assistant conversation has no folder by design.
+    if (!stub.project_path && !stub.git_root && !isHostedAgentType(stub.agent_type)) {
       return Promise.reject(new Error("Pick a folder for this session before sending"));
     }
     // Route through createSessionFromStub (not a bare createSession) so the live
@@ -12374,7 +12624,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // lib/__tests__/activeTeamPointer.guard.test.ts). The `teams` list is
   // replaced wholesale on echo, which retires the stub; resolveTeamStub rekeys
   // it first so a caller holding the real id never sees a gap.
-  createTeam: async (opts: { name: string; icon?: string; icon_color?: string }) => {
+  createTeam: async (opts: { name: string; icon?: string; icon_color?: string; discoverable?: boolean }) => {
     const name = (opts?.name || "").trim();
     if (!name) throw new Error("Team name is required");
     const stubId = `team-stub-${Math.random().toString(36).slice(2)}`;
@@ -12409,7 +12659,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   },
 
-  dispatchCreateTeam: asyncAction(function (this: Draft, stubId: string, opts: { name: string; icon?: string; icon_color?: string }) {
+  dispatchCreateTeam: asyncAction(function (this: Draft, stubId: string, opts: { name: string; icon?: string; icon_color?: string; discoverable?: boolean }) {
     this.teams = [
       ...(this.teams ?? []),
       {
@@ -12527,7 +12777,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // the comments altKey config, and the server dedups on client_id so an outbox
   // retry can't double-insert. The same-named dispatch side effect does the
   // durable write (notifications, mentions, github sync) via comments.addComment.
-  addComment: receiptAsyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number }) {
+  addComment: receiptAsyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string; filePath?: string; lineNumber?: number; anchorLines?: CodeAnchorText }) {
     const body = content.trim();
     if (!body) return;
     const clientId = `commentstub-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
@@ -12540,6 +12790,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       parent_comment_id: opts?.parentCommentId,
       file_path: opts?.filePath,
       line_number: opts?.lineNumber,
+      anchor_lines: opts?.anchorLines,
       content: body,
       user_id: me?._id ?? "",
       created_at: Date.now(),
@@ -12553,6 +12804,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       parentCommentId: opts?.parentCommentId,
       filePath: opts?.filePath,
       lineNumber: opts?.lineNumber,
+      anchorLines: opts?.anchorLines,
       clientId,
       commandId: `legacy-comments-create:${clientId}`,
     };
@@ -13767,6 +14019,56 @@ function patchMyProfileInDraft(draft: any, patch: MyProfilePatch) {
   if (me) Object.assign(me, patch);
 }
 
+/**
+ * A decision answered on the draft: the row flips and, for a decision not
+ * bound to a run, the answer goes into the session as a message. The
+ * answerDecision action and a Ship press on a change card both answer here.
+ */
+function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionAnswerInput): void {
+  const row = draft.sessionDecisions[decisionId];
+  // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
+  // the agent went ahead on its default, so a new pick is one more message.
+  if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
+  dropDraft(draft, decisionDraftKey(decisionId));
+  const now = Date.now();
+  if ("dismiss" in answer) {
+    row.status = "dismissed";
+    row.resolved_at = now;
+    return;
+  }
+  row.status = "answered";
+  row.answer_index = answer.index ?? (Array.isArray(answer.json) ? answer.json[0] : undefined);
+  row.answer_text = answer.text;
+  row.answer_json = answer.json;
+  row.resolved_at = now;
+  // The chosen option enters the session as a normal user message so the
+  // parked agent resumes with it — same rail as typing into the composer,
+  // reusing the standard optimistic-bubble + outbox send pair (the mobile
+  // AUQ answer path does the identical two-step). Deferred to after this
+  // draft commits because both are themselves decorated store functions.
+  // The one-line label is the shared contract the server uses for its own
+  // answers (decisionAnswerLabel), so a multi, rank or form answer reads
+  // the same whichever path delivered it.
+  const answerText = decisionAnswerLabel(row, { answer_index: row.answer_index, answer_text: answer.text, answer_json: answer.json });
+  // Wire format (shared contracts): "Decision: <answer>" plus a tag naming
+  // the decision and its question, so the bubble can render the answer
+  // against its ask and link back to the `cast decide` call.
+  // A silent card (a staffing proposal's pointer, org-staffing.md S4) is
+  // cleared by the answer and delivers nothing: the author is not woken.
+  const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
+  const convId = row.conversation_id;
+  // A decision bound to a run (the-line.md L4) is the server's to deliver:
+  // its run consumes the answer as the open gate, or, when the run is past
+  // it, the server sends the same message (settleClientResolution).
+  if (content && !row.workflow_run_id) {
+    queueMicrotask(() => {
+      const s = useInboxStore.getState();
+      const clientId = s.addOptimisticMessage(convId, content);
+      s.sendMessage(convId, content, undefined, clientId);
+    });
+  }
+}
+
 export const useInboxStore = survivingInboxStore ?? createInboxStore();
 
 // An undo that restores the viewed conversation moves the pointer and the
@@ -13899,10 +14201,15 @@ const serverSnapshot = () => useInboxStore.getInitialState();
 
 export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): InboxStoreState {
   const prevRef = useRef<{ deps: any[]; state: InboxStoreState } | null>(null);
+  let lastReadState: InboxStoreState | undefined;
+  let lastReadSnapshot: InboxStoreState | undefined;
   return useSyncExternalStore(useInboxStore.subscribe, () => {
     const state = useInboxStore.getState();
+    if (state === lastReadState && lastReadSnapshot) return lastReadSnapshot;
     const prev = prevRef.current;
     const snapshot = resolveTrackedStoreSnapshot(state, deps, prev);
+    lastReadState = state;
+    lastReadSnapshot = snapshot.state;
     if (snapshot === prev) return prev.state;
     const next = snapshot.deps;
     if (process.env.NODE_ENV !== "production" && prev) {
@@ -14323,7 +14630,11 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     }
     if (!st.currentSessionId) {
       const linked = bootLinkTarget(st.sessions);
-      const restoreId = linked !== undefined ? linked : ownId ?? st.clientState?.current_conversation_id;
+      const remembered = ownId ?? st.clientState?.current_conversation_id;
+      // A link opens what it names; a remembered position comes back only
+      // when the Assistant scope would list it (restorableIn).
+      const restoreId = linked !== undefined ? linked
+        : remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null;
       if (restoreId && st.sessions[restoreId]) {
         // The divider anchor (_seenUpToAt) is persisted, so reopening the app to
         // this session naturally shows what arrived while it was closed — no

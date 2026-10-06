@@ -33,27 +33,22 @@ function RedirectUnsignedIn({ to }: { to: string }) {
  * marketing home page in an always-on-top square. Invisible glass is the
  * honest signed-out state there, and children resume the moment a sign-in
  * flips the gate.
- *
- * signedOutPath: where a signed-out visitor is sent (the home page by
- * default; the simple lane sends them to its own welcome).
  */
 export function AuthGuard({
   children,
   guestOk,
   blankSignedOut,
-  signedOutPath = "/",
 }: {
   children: React.ReactNode;
   guestOk?: boolean;
   blankSignedOut?: boolean;
-  signedOutPath?: string;
 }) {
   return (
     <LocalFirstAuthGuard
       guestOk={guestOk}
       useLocalAuth={useLocalAuth}
       loading={blankSignedOut ? null : <AppLoader />}
-      unauthenticated={blankSignedOut ? null : <RedirectUnsignedIn to={signedOutPath} />}
+      unauthenticated={blankSignedOut ? null : <RedirectUnsignedIn to="/" />}
     >
       {children}
     </LocalFirstAuthGuard>

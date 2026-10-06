@@ -1,0 +1,906 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Stoop · street direction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Stencil+Display:wght@700;900&family=Sedgwick+Ave+Display&family=Familjen+Grotesk:wght@400;500;600;700&family=Martian+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ---------- tokens ---------- */
+:root {
+  --paper: #efe8d8;        /* newsprint: every panel the hand touches */
+  --paper-2: #e4dcc8;
+  --wall: #c9c4b9;         /* concrete: the street behind everything */
+  --ink: #15130f;
+  --ink-soft: #4a463d;
+  --blue: #1f35ff;         /* poster blue: the dominant voice, the "make" color */
+  --blue-deep: #1426c4;
+  --lime: #d4ff2e;         /* fluoro: live, here, now */
+  --red: #ff3b1f;          /* signal: building, sending, urgent */
+  --pink: #ff9ccc;         /* riso pink: other people */
+  --tape: rgba(240, 228, 170, .82);
+
+  --f-stencil: "Big Shoulders Stencil Display", Impact, sans-serif;
+  --f-tag: "Sedgwick Ave Display", cursive;
+  --f-ui: "Familjen Grotesk", sans-serif;
+  --f-mono: "Martian Mono", monospace;
+
+  --noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  --torn-b: polygon(0 0,100% 0,100% 94%,97% 97%,93% 94%,88% 99%,82% 95%,76% 98%,70% 94%,63% 99%,57% 95%,50% 98%,44% 94%,37% 99%,31% 95%,24% 98%,18% 94%,11% 99%,5% 95%,0 98%);
+  --torn-r: polygon(0 0,96% 0,99% 6%,96% 13%,100% 21%,97% 30%,99% 38%,96% 47%,100% 55%,97% 64%,99% 72%,96% 81%,100% 90%,97% 100%,0 100%);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--wall); }
+body {
+  font-family: var(--f-ui);
+  color: var(--ink);
+  background:
+    var(--noise),
+    radial-gradient(1200px 600px at 20% 10%, rgba(255,255,255,.35), transparent 60%),
+    radial-gradient(900px 700px at 85% 70%, rgba(0,0,0,.10), transparent 60%),
+    var(--wall);
+  min-width: 1440px;
+  -webkit-font-smoothing: antialiased;
+}
+img { display: block; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+
+/* ---------- shared pieces ---------- */
+.plate { position: relative; width: 1440px; margin: 0 auto; padding: 72px 64px 96px; }
+.plate + .plate { border-top: 3px dashed rgba(21,19,15,.18); }
+.plate-label {
+  position: absolute; top: 22px; left: 64px; z-index: 5;
+  font-family: var(--f-tag); font-size: 30px; color: var(--ink);
+  transform: rotate(-3deg);
+}
+.plate-label b {
+  display: inline-grid; place-items: center; width: 44px; height: 44px; margin-right: 10px;
+  border-radius: 50%; background: var(--red); color: var(--paper);
+  font-family: var(--f-stencil); font-weight: 900; font-size: 26px; vertical-align: middle;
+}
+.note {
+  position: absolute; font-family: var(--f-tag); font-size: 22px; line-height: 1.05; color: var(--blue);
+  max-width: 220px;
+}
+.note::before { content: "↖ "; }
+.note.r::before { content: ""; }
+.note.r::after { content: " ↘"; }
+
+.paper {
+  background: var(--noise), linear-gradient(180deg, var(--paper), var(--paper-2));
+}
+.tape {
+  position: absolute; width: 92px; height: 26px; background: var(--tape);
+  box-shadow: 0 1px 2px rgba(0,0,0,.12); mix-blend-mode: multiply; z-index: 3;
+}
+.tape::before, .tape::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 6px;
+  background: repeating-linear-gradient(180deg, transparent 0 3px, var(--wall) 3px 5px);
+}
+.tape::before { left: -3px; } .tape::after { right: -3px; }
+
+/* a face is a die-cut sticker of the real avatar art */
+.face {
+  width: 40px; height: 40px; border-radius: 11px; overflow: hidden; flex: none;
+  border: 3px solid #fffdf6; box-shadow: 0 2px 0 rgba(0,0,0,.18), 0 3px 8px rgba(0,0,0,.12);
+  background: var(--paper);
+}
+.face img { width: 100%; height: 100%; object-fit: cover; }
+.face.s { width: 28px; height: 28px; border-radius: 8px; border-width: 2px; }
+.face.xs { width: 22px; height: 22px; border-radius: 6px; border-width: 2px; }
+.stack { display: flex; align-items: center; }
+.stack .face + .face { margin-left: -10px; }
+.stack .face:nth-child(odd) { transform: rotate(-6deg); }
+.stack .face:nth-child(even) { transform: rotate(5deg); }
+
+.live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 2px var(--ink); display: inline-block; }
+.live-dot.pulse { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 2px var(--ink), 0 0 0 7px rgba(212,255,46,.45); } }
+
+kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 4px;
+  font: 600 10px/1 var(--f-mono); color: var(--ink-soft);
+  background: rgba(21,19,15,.06); border: 1px solid rgba(21,19,15,.22);
+  box-shadow: 0 1px 0 rgba(0,0,0,.14);
+}
+kbd.on-accent { color: #fff; background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.35); }
+
+/* browser frame used by plates 2 to 4 */
+.frame {
+  position: relative; width: 1312px; border-radius: 14px; overflow: hidden;
+  background: #fff; box-shadow: 0 0 0 3px var(--ink), 10px 12px 0 var(--ink);
+}
+.frame-bar {
+  height: 40px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+  background: var(--ink); color: var(--paper);
+}
+.frame-bar i { width: 11px; height: 11px; border-radius: 50%; background: #3b3830; display: inline-block; }
+.url {
+  margin-left: 18px; flex: 1; max-width: 520px; height: 24px; border-radius: 6px; padding: 0 12px;
+  display: flex; align-items: center; background: #2a2720; font: 400 12px/1 var(--f-mono); color: #d8d1bf;
+}
+.url em { font-style: normal; color: var(--lime); }
+
+/* ---------- load: posters slap onto the wall one after another ---------- */
+@keyframes slap {
+  0% { opacity: 0; transform: translateY(-14px) scale(1.06) rotate(var(--r, 0deg)); }
+  60% { opacity: 1; transform: translateY(2px) scale(.99) rotate(var(--r, 0deg)); }
+  100% { opacity: 1; transform: translateY(0) scale(1) rotate(var(--r, 0deg)); }
+}
+.slap { animation: slap .5s cubic-bezier(.2,.9,.25,1.2) both; animation-delay: calc(var(--i, 0) * 90ms + 120ms); transform: rotate(var(--r, 0deg)); }
+@media (prefers-reduced-motion: reduce) { .slap, .live-dot.pulse, .spray, .typing i, .cursor { animation: none !important; } }
+
+/* ============ 1. HOME ============ */
+.home-top { display: flex; align-items: center; justify-content: space-between; margin: 26px 0 36px; }
+.logo {
+  font-family: var(--f-stencil); font-weight: 900; font-size: 64px; line-height: .8;
+  background: var(--lime); padding: 10px 18px 4px; transform: rotate(-2deg);
+  box-shadow: 4px 4px 0 var(--ink); letter-spacing: .01em;
+}
+.logo small { font-family: var(--f-tag); font-size: 22px; font-weight: 400; color: var(--blue); margin-left: 6px; }
+.home-top .right { display: flex; align-items: center; gap: 22px; font-weight: 600; }
+.block-count { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.you-chip {
+  display: flex; align-items: center; gap: 10px; padding: 5px 14px 5px 5px; border-radius: 999px;
+  background: var(--paper); box-shadow: 0 0 0 2px var(--ink);
+}
+.you-chip span { font-family: var(--f-tag); font-size: 20px; }
+
+.make {
+  --r: -1deg;
+  position: relative; padding: 46px 56px 40px; color: var(--paper);
+  background:
+    var(--noise),
+    radial-gradient(circle at 1px 1px, rgba(255,255,255,.14) 1.2px, transparent 1.6px) 0 0 / 9px 9px,
+    linear-gradient(160deg, var(--blue), var(--blue-deep));
+  clip-path: var(--torn-b);
+  box-shadow: 0 10px 30px rgba(0,0,0,.2);
+}
+.make-word {
+  font-family: var(--f-stencil); font-weight: 900; font-size: 172px; line-height: .78; letter-spacing: -.01em;
+  color: var(--paper);
+}
+.make-word span { color: var(--lime); }
+.make-field {
+  margin-top: 30px; display: flex; align-items: center; gap: 22px;
+  border-bottom: 4px solid var(--paper); padding-bottom: 14px;
+}
+.make-field .typed { flex: 1; font-size: 40px; font-weight: 500; letter-spacing: -.01em; }
+.cursor { display: inline-block; width: 3px; height: 40px; background: var(--lime); vertical-align: -6px; margin-left: 2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.paste-btn {
+  position: relative; display: grid; place-items: center; width: 172px; height: 172px; margin: -70px -10px -40px 0;
+  border-radius: 50%; background: var(--red); color: var(--paper); transform: rotate(9deg);
+  box-shadow: 0 0 0 5px var(--paper), 6px 8px 0 5px var(--ink);
+  font-family: var(--f-stencil); font-weight: 900; font-size: 38px; line-height: .85; text-align: center;
+}
+.paste-btn kbd { margin-top: 8px; }
+.make-hint { margin-top: 16px; font-size: 16px; opacity: .85; display: flex; gap: 8px; align-items: center; }
+
+.starters { display: flex; flex-wrap: wrap; gap: 14px 18px; margin: 30px 0 64px 8px; align-items: center; }
+.starters .lead { font-family: var(--f-tag); font-size: 26px; margin-right: 6px; }
+.sticker {
+  padding: 9px 16px; font-weight: 600; font-size: 16px; border-radius: 6px;
+  background: var(--lime); box-shadow: 0 0 0 2px var(--ink), 3px 3px 0 2px var(--ink);
+}
+.sticker.p { background: var(--pink); } .sticker.w { background: var(--paper); }
+
+.wall-head { display: flex; align-items: baseline; gap: 24px; margin-bottom: 26px; }
+.wall-head h2 { font-family: var(--f-tag); font-weight: 400; font-size: 64px; line-height: 1; color: var(--ink); }
+.wall-head p { font-size: 17px; color: var(--ink-soft); }
+.gallery { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; gap: 34px 30px; align-items: start; }
+.poster { position: relative; background: var(--paper); padding: 12px 12px 16px; box-shadow: 0 8px 18px rgba(0,0,0,.16); }
+.poster .tape { top: -12px; left: 50%; margin-left: -46px; transform: rotate(-4deg); }
+.thumb { height: 190px; overflow: hidden; position: relative; border: 2px solid var(--ink); }
+.poster.big .thumb { height: 300px; }
+.poster h3 { font-family: var(--f-stencil); font-weight: 900; font-size: 34px; line-height: .9; margin-top: 12px; }
+.poster .meta { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; font-size: 14px; color: var(--ink-soft); }
+.poster .here { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--ink); }
+.poster .forked { font-size: 13px; margin-top: 4px; color: var(--blue); font-weight: 600; }
+
+/* thumbnails: each app looks like itself, not like the shell */
+.t-draw { background: #fffef9; }
+.t-draw svg { position: absolute; inset: 0; }
+.t-pong { background: #0c0c0c; }
+.t-pong .paddle { position: absolute; width: 8px; height: 46px; background: #2bff88; }
+.t-pong .ball { position: absolute; width: 10px; height: 10px; background: #fff; left: 48%; top: 40%; }
+.t-pong .net { position: absolute; left: 50%; top: 0; bottom: 0; border-left: 3px dashed #333; }
+.t-pong .score { position: absolute; top: 10px; left: 0; right: 0; text-align: center; color: #2bff88; font: 600 26px var(--f-mono); }
+.t-pot { background: #fff4e6; padding: 16px; font-size: 13px; }
+.t-pot h4 { font: 700 18px/1 var(--f-ui); color: #c2410c; margin-bottom: 10px; }
+.t-pot div { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed #f0c9a0; }
+.t-play { background: linear-gradient(160deg, #ffe1f0, #d9e4ff); padding: 14px; }
+.t-play .row { display: flex; gap: 8px; align-items: center; background: rgba(255,255,255,.75); border-radius: 8px; padding: 7px 9px; margin-bottom: 7px; font-size: 12px; font-weight: 600; }
+.t-play .row b { font: 600 11px var(--f-mono); color: #6b21a8; width: 22px; }
+.t-bingo { background: #f7f5ff; padding: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.t-bingo span { background: #fff; border-radius: 5px; height: 36px; border: 1px solid #e2defa; }
+.t-bingo span.x { background: #ffd84d; border-color: #e5b800; }
+
+/* ============ 2. CLEAN LINK ============ */
+.p2 .frame { margin-top: 34px; }
+.app {
+  position: relative; height: 760px; overflow: hidden;
+  background: radial-gradient(800px 500px at 70% 0%, #ece8ff, transparent 70%), #f8f7fd;
+  font-family: var(--f-ui); color: #26224a;
+}
+.app-in { padding: 46px 70px; }
+.app h1 { font: 700 46px/1 var(--f-ui); letter-spacing: -.02em; }
+.app .sub { margin-top: 8px; font-size: 17px; color: #6a6596; }
+.app .players { margin-top: 18px; display: flex; gap: 10px; font-size: 14px; color: #6a6596; align-items: center; }
+.board { margin-top: 28px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; max-width: 860px; }
+.cell {
+  position: relative; height: 104px; border-radius: 14px; background: #fff; border: 1.5px solid #e1ddf6;
+  padding: 14px; font-size: 15px; font-weight: 600; line-height: 1.2; display: flex; align-items: flex-end;
+}
+.cell.x { background: #ffd84d; border-color: #e5b800; }
+.cell.x::after { content: "✓"; position: absolute; top: 10px; right: 12px; font-size: 18px; }
+.cell.free { background: #26224a; color: #fff; justify-content: center; align-items: center; text-align: center; font-size: 13px; }
+.cell.free .mug { font-size: 34px; display: block; }
+.app-side { position: absolute; right: 70px; top: 120px; width: 300px; background: #fff; border-radius: 16px; border: 1.5px solid #e1ddf6; padding: 20px; }
+.app-side h4 { font-size: 15px; margin-bottom: 12px; }
+.app-side .lb { display: flex; justify-content: space-between; padding: 9px 0; border-top: 1px solid #efedf9; font-size: 14px; }
+.app-side button.claim { margin-top: 14px; width: 100%; height: 44px; border-radius: 12px; background: #5b4dff; color: #fff; font-weight: 700; }
+
+/* the presence affordance: a sticker cluster slapped in a corner */
+.dock {
+  position: absolute; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 12px;
+  padding: 8px 10px 8px 8px; background: var(--paper); border-radius: 16px;
+  box-shadow: 0 0 0 2.5px var(--ink), 4px 5px 0 2.5px var(--ink);
+  transform: rotate(-1.5deg);
+}
+.dock .grip { width: 10px; height: 30px; background: radial-gradient(circle, var(--ink) 1.3px, transparent 1.6px) 0 0 / 5px 6px; opacity: .45; }
+.dock .say {
+  height: 40px; padding: 0 14px; border-radius: 11px; background: var(--blue); color: var(--paper);
+  display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px;
+}
+.dock .count { font-family: var(--f-tag); font-size: 22px; margin-left: 2px; }
+.dock .tuck { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; font-weight: 700; color: var(--ink-soft); }
+.dock .bubble {
+  position: absolute; bottom: 66px; right: 42px; padding: 8px 12px; background: var(--lime); border-radius: 10px;
+  font-size: 14px; font-weight: 600; box-shadow: 0 0 0 2px var(--ink); white-space: nowrap;
+}
+.dock .bubble::after { content: ""; position: absolute; bottom: -7px; right: 30px; width: 12px; height: 12px; background: var(--lime); border-right: 2px solid var(--ink); border-bottom: 2px solid var(--ink); transform: rotate(45deg); }
+.tucked {
+  position: absolute; right: 0; top: 46%; padding: 10px 8px 10px 10px; background: var(--paper); border-radius: 12px 0 0 12px;
+  box-shadow: 0 0 0 2.5px var(--ink); display: flex; flex-direction: column; gap: 6px; align-items: center;
+}
+.swap-toast {
+  position: absolute; left: 50%; top: 22px; transform: translateX(-50%) rotate(1deg);
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; border-radius: 12px;
+  background: var(--ink); color: var(--paper); font-size: 14px; font-weight: 500;
+}
+.swap-toast b { font-family: var(--f-stencil); font-weight: 900; font-size: 20px; color: var(--lime); }
+
+/* ============ 3. ROOM ============ */
+.room-wrap { position: relative; display: flex; height: 960px; }
+.room-wrap .app { flex: 1; height: auto; }
+.room-wrap .app-in { padding: 40px 44px; }
+.room-wrap .board { grid-template-columns: repeat(4, 1fr); max-width: 680px; }
+.room-wrap .app-side { display: none; }
+.picking { outline: 3px dashed var(--red); outline-offset: 4px; }
+.picking-tag {
+  position: absolute; top: -34px; left: -6px; padding: 4px 10px; background: var(--red); color: #fff;
+  font: 600 11px var(--f-mono); border-radius: 6px; white-space: nowrap; z-index: 2;
+}
+.cell.glow { box-shadow: 0 0 0 3px #ffd84d, 0 0 26px 6px rgba(255,216,77,.75); }
+
+.room {
+  position: relative; width: 500px; flex: none; display: flex; flex-direction: column;
+  border-left: 3px solid var(--ink);
+}
+.room-head { padding: 16px 20px 14px; border-bottom: 2px solid var(--ink); background: var(--ink); color: var(--paper); }
+.room-head .row1 { display: flex; align-items: center; justify-content: space-between; }
+.room-head h2 { font-family: var(--f-stencil); font-weight: 900; font-size: 40px; line-height: .85; }
+.room-head .tools { display: flex; gap: 6px; }
+.room-head .tools button {
+  height: 30px; padding: 0 10px; border-radius: 8px; background: #2a2720; color: var(--paper); font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+}
+.room-head .row2 { display: flex; align-items: center; gap: 12px; margin-top: 12px; font-size: 13px; color: #cfc8b4; }
+.room-head .row2 .stack .face { border-color: var(--ink); }
+.typing { display: inline-flex; gap: 3px; margin-left: 4px; }
+.typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); animation: hop 1s infinite; }
+.typing i:nth-child(2) { animation-delay: .15s; } .typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes hop { 30% { transform: translateY(-4px); } }
+
+.stream { flex: 1; overflow: hidden; padding: 16px 18px 8px; display: flex; flex-direction: column; gap: 12px; }
+.msg { display: flex; gap: 10px; align-items: flex-start; }
+.msg .body { max-width: 360px; }
+.msg .who { font-family: var(--f-tag); font-size: 19px; line-height: 1; margin-bottom: 3px; }
+.msg .who time { font: 400 10px var(--f-mono); color: var(--ink-soft); margin-left: 6px; }
+.msg .text {
+  padding: 9px 12px; background: #fffdf6; font-size: 15px; line-height: 1.35;
+  border: 2px solid var(--ink); border-radius: 3px 12px 12px 12px;
+}
+.msg.me { flex-direction: row-reverse; }
+.msg.me .who { text-align: right; }
+.msg.me .text { background: var(--pink); border-radius: 12px 3px 12px 12px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; padding: 4px 9px 4px 6px;
+  background: var(--ink); color: var(--paper); border-radius: 7px; font: 400 11px var(--f-mono);
+}
+.chip b { background: var(--red); color: #fff; border-radius: 4px; padding: 1px 5px; font-weight: 600; }
+.sys { align-self: center; font-size: 13px; color: var(--ink-soft); display: flex; align-items: center; gap: 7px; }
+.sys b { font-family: var(--f-tag); font-weight: 400; font-size: 16px; color: var(--ink); }
+
+.card { position: relative; border: 2.5px solid var(--ink); border-radius: 4px; }
+.card .top { display: flex; align-items: center; gap: 10px; padding: 10px 12px 0; }
+.card .state { font-family: var(--f-stencil); font-weight: 900; font-size: 30px; line-height: .9; }
+.card .ask { font-size: 14px; color: var(--ink-soft); padding: 4px 12px 0; }
+.card.live {
+  background: var(--noise), radial-gradient(circle at 1px 1px, rgba(255,255,255,.12) 1.1px, transparent 1.5px) 0 0/8px 8px, var(--blue);
+  color: var(--paper); clip-path: var(--torn-r); padding-right: 14px; transform: rotate(-.6deg);
+}
+.card.live .ask { color: #c8cdff; }
+.card.live .summary { padding: 8px 12px 0; font-size: 16px; font-weight: 600; }
+.card.live .acts { display: flex; gap: 8px; padding: 12px; }
+.btn {
+  height: 34px; padding: 0 13px; border-radius: 8px; font-weight: 700; font-size: 14px;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.btn.lime { background: var(--lime); color: var(--ink); box-shadow: 2px 2px 0 var(--ink); }
+.btn.ghost { box-shadow: inset 0 0 0 2px currentColor; }
+.btn.ink { background: var(--ink); color: var(--paper); }
+.btn.red { background: var(--red); color: #fff; }
+.vnum { font: 600 12px var(--f-mono); padding: 3px 7px; border-radius: 5px; background: var(--lime); color: var(--ink); }
+
+.card.building { background: #fffdf6; box-shadow: 5px 5px 0 var(--red); }
+.card.building .state { color: var(--red); display: flex; align-items: center; gap: 10px; }
+.spray { width: 16px; height: 16px; border-radius: 50%; background: var(--red); animation: spray 1.2s ease-in-out infinite; }
+@keyframes spray { 0%,100% { box-shadow: 0 0 0 0 rgba(255,59,31,.5); } 50% { box-shadow: 0 0 0 9px rgba(255,59,31,0); transform: scale(.85); } }
+.elapsed { margin-left: auto; font: 600 12px var(--f-mono); color: var(--ink-soft); }
+.narr { margin: 10px 12px 0; padding: 10px 12px; background: var(--ink); color: #d8d1bf; border-radius: 4px; font: 400 12px/1.7 var(--f-mono); }
+.narr div::before { content: "✓ "; color: var(--lime); }
+.narr div.now { color: #fff; }
+.narr div.now::before { content: "› "; color: var(--red); }
+.files { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 12px; }
+.files span { font: 400 11px var(--f-mono); padding: 3px 7px; border: 1.5px solid var(--ink); border-radius: 5px; }
+.files span.w { background: var(--lime); }
+.bar { height: 6px; margin: 0 12px 12px; background: rgba(21,19,15,.1); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 62%; background: repeating-linear-gradient(-45deg, var(--red) 0 8px, #ff6a52 8px 16px); }
+
+.card.queued { background: transparent; border-style: dashed; display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 14px; }
+.card.queued .pos { font-family: var(--f-stencil); font-weight: 900; font-size: 28px; line-height: 1; }
+
+.composer { padding: 12px 16px 14px; border-top: 2px solid var(--ink); }
+.mode { display: inline-flex; padding: 3px; border-radius: 10px; background: rgba(21,19,15,.08); margin-bottom: 10px; }
+.mode button { height: 28px; padding: 0 12px; border-radius: 8px; font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+.mode button.on { background: var(--blue); color: var(--paper); }
+.mode-hint { font-size: 12px; color: var(--ink-soft); margin-left: 10px; }
+.input-row { display: flex; gap: 8px; align-items: center; }
+.input {
+  flex: 1; height: 48px; border-radius: 12px; border: 2.5px solid var(--ink); background: #fffdf6;
+  display: flex; align-items: center; padding: 0 12px; font-size: 15px; color: var(--ink-soft); gap: 8px;
+}
+.pick { width: 48px; height: 48px; border-radius: 12px; border: 2.5px solid var(--ink); display: grid; place-items: center; background: var(--paper); }
+.send { width: 48px; height: 48px; border-radius: 12px; background: var(--red); color: #fff; display: grid; place-items: center; box-shadow: 3px 3px 0 var(--ink); }
+
+/* timeline: every version is a paste-up layered over the last */
+.timeline {
+  position: relative; height: 150px; border-top: 3px solid var(--ink);
+  background: var(--noise), linear-gradient(180deg, #d6d1c6, #c3beb2);
+  display: flex; align-items: flex-end; padding: 0 24px 0 24px; overflow: visible;
+}
+.tl-label { position: absolute; left: 24px; top: 12px; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--ink-soft); }
+.tl-label strong { font-family: var(--f-tag); font-weight: 400; font-size: 24px; color: var(--ink); }
+.layers { display: flex; align-items: flex-end; height: 100px; padding-bottom: 14px; }
+.layer {
+  position: relative; width: 104px; height: 70px; margin-right: -26px; padding: 6px 8px;
+  border: 2px solid var(--ink); clip-path: polygon(0 4%,8% 0,30% 3%,55% 0,80% 4%,100% 0,98% 50%,100% 96%,70% 100%,40% 96%,12% 100%,0 95%);
+  transform: rotate(var(--r)); transition: transform .2s;
+  display: flex; flex-direction: column; justify-content: space-between;
+}
+.layer .n { font-family: var(--f-stencil); font-weight: 900; font-size: 30px; line-height: .8; }
+.layer .tag { font-family: var(--f-tag); font-size: 15px; line-height: 1; opacity: .9; }
+.layer.old { filter: saturate(.35) contrast(.9); opacity: .78; }
+.layer.c1 { background: var(--pink); } .layer.c2 { background: var(--paper); } .layer.c3 { background: var(--lime); }
+.layer.c4 { background: var(--blue); color: var(--paper); } .layer.c5 { background: #ffd84d; } .layer.c6 { background: var(--red); color: #fff; }
+.layer.focus { transform: translateY(-20px) rotate(0deg); z-index: 4; box-shadow: 0 0 0 3px var(--lime); }
+.layer.livev { z-index: 3; height: 84px; }
+.layer.livev::after {
+  content: "LIVE"; position: absolute; top: 4px; right: 22px; font: 600 10px var(--f-mono); color: var(--ink);
+  background: var(--lime); padding: 2px 5px; border-radius: 3px;
+}
+.layer.ghost { background: transparent; border-style: dashed; color: var(--red); margin-right: 0; }
+.layer.restore { background: repeating-linear-gradient(-45deg, var(--paper) 0 7px, #e2dbc7 7px 14px); }
+.tl-pop {
+  position: absolute; bottom: 132px; width: 300px; padding: 12px; z-index: 6;
+  background: #fffdf6; border: 2.5px solid var(--ink); border-radius: 6px; box-shadow: 5px 5px 0 var(--ink);
+}
+.tl-pop .h { display: flex; align-items: center; gap: 8px; }
+.tl-pop .h b { font-family: var(--f-stencil); font-weight: 900; font-size: 28px; line-height: .9; }
+.tl-pop .h span { font-size: 12px; color: var(--ink-soft); }
+.tl-pop p { font-size: 14px; margin: 6px 0 10px; line-height: 1.3; }
+.tl-pop .acts { display: flex; gap: 6px; }
+.tl-pop .keys { margin-top: 10px; font-size: 12px; color: var(--ink-soft); display: flex; align-items: center; gap: 5px; }
+.viewing-pill {
+  position: absolute; left: 50%; top: 18px; transform: translateX(-50%); z-index: 5;
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px; border-radius: 999px;
+  background: var(--lime); box-shadow: 0 0 0 2.5px var(--ink), 3px 3px 0 2.5px var(--ink); font-weight: 700; font-size: 14px;
+}
+.viewing-pill button { height: 28px; padding: 0 12px; border-radius: 999px; background: var(--ink); color: var(--lime); font-weight: 700; font-size: 13px; }
+.tl-share { position: absolute; top: 10px; right: 24px; display: flex; gap: 8px; }
+.tl-share .btn { background: var(--paper); box-shadow: 0 0 0 2px var(--ink); height: 32px; font-size: 13px; }
+
+/* ============ 4. CHARACTER PICKER ============ */
+.p4 .stage { position: relative; height: 820px; margin-top: 34px; border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 3px var(--ink), 10px 12px 0 var(--ink); }
+.p4 .dim { position: absolute; inset: 0; background: rgba(21,19,15,.62); backdrop-filter: blur(2px); }
+.p4 .ghost-app { position: absolute; inset: 0; background: #f8f7fd; }
+.picker {
+  position: absolute; left: 50%; top: 56px; transform: translateX(-50%) rotate(-.5deg);
+  width: 1060px; display: grid; grid-template-columns: 360px 1fr; gap: 0;
+  box-shadow: 0 0 0 3px var(--ink), 12px 14px 0 var(--ink);
+}
+.picker .tape.a { top: -14px; left: 40px; transform: rotate(-8deg); }
+.picker .tape.b { top: -12px; right: 60px; transform: rotate(6deg); }
+.me-side { padding: 36px 32px; background: var(--noise), var(--blue); color: var(--paper); position: relative; }
+.me-side .big-face { width: 210px; height: 210px; border-radius: 34px; border: 8px solid #fffdf6; overflow: hidden; transform: rotate(-4deg); box-shadow: 8px 10px 0 var(--ink); }
+.me-side .big-face img { width: 100%; height: 100%; object-fit: cover; }
+.me-side .tagname { font-family: var(--f-tag); font-size: 76px; line-height: .9; margin-top: 26px; color: var(--lime); transform: rotate(-3deg); }
+.me-side label { display: block; margin-top: 24px; font-size: 13px; font-weight: 600; opacity: .85; }
+.name-input { margin-top: 6px; display: flex; align-items: center; height: 50px; border-bottom: 3px solid var(--paper); font-size: 26px; font-weight: 600; }
+.name-input .cursor { height: 28px; vertical-align: 0; }
+.name-input small { margin-left: auto; font: 400 11px var(--f-mono); opacity: .7; }
+.suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.suggest span { padding: 5px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.55); }
+.suggest span.on { background: var(--lime); color: var(--ink); box-shadow: none; }
+.me-side .twin { margin-top: 22px; font-size: 13px; line-height: 1.4; opacity: .85; }
+
+.sheet { padding: 30px 34px 28px; background: var(--noise), linear-gradient(135deg, #f6f2e8, #e9e3d2); position: relative; }
+.sheet h3 { font-family: var(--f-stencil); font-weight: 900; font-size: 44px; line-height: .9; }
+.sheet .sub { font-size: 15px; color: var(--ink-soft); margin-top: 6px; }
+.grid24 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px 14px; margin-top: 22px; }
+.slot { position: relative; text-align: center; }
+.slot .cut {
+  width: 86px; height: 86px; margin: 0 auto; border-radius: 20px; padding: 5px; background: #fffdf6;
+  box-shadow: 0 0 0 1.5px rgba(21,19,15,.18), 0 2px 0 rgba(0,0,0,.08);
+  transform: rotate(var(--r, 0deg));
+}
+.slot .cut img { width: 100%; height: 100%; border-radius: 15px; object-fit: cover; }
+.slot small { display: block; margin-top: 5px; font-size: 12px; color: var(--ink-soft); font-weight: 500; }
+.slot.on .cut { transform: translateY(-8px) rotate(-6deg) scale(1.08); box-shadow: 0 0 0 4px var(--lime), 0 0 0 6.5px var(--ink), 6px 12px 16px rgba(0,0,0,.28); }
+.slot.on small { color: var(--ink); font-weight: 700; }
+.slot.taken::after {
+  content: "2 here"; position: absolute; top: -6px; right: 4px; font: 600 9px var(--f-mono);
+  background: var(--pink); padding: 2px 5px; border-radius: 4px; border: 1.5px solid var(--ink);
+}
+.sheet-foot { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
+.sheet-foot .btn { height: 46px; padding: 0 20px; font-size: 16px; }
+.sheet-foot .grow { flex: 1; font-size: 13px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; }
+
+/* ============ 5. NAME ============ */
+.names { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 34px; margin-top: 40px; align-items: start; }
+.name-card { position: relative; padding: 30px 30px 28px; box-shadow: 0 10px 24px rgba(0,0,0,.18); }
+.name-card .w { font-family: var(--f-stencil); font-weight: 900; font-size: 130px; line-height: .78; }
+.name-card .why { margin-top: 16px; font-size: 18px; line-height: 1.35; max-width: 460px; }
+.name-card .dom { margin-top: 12px; font: 400 12px var(--f-mono); opacity: .8; }
+.name-card.main { background: var(--noise), var(--lime); --r: -1.5deg; }
+.name-card.main .tape { top: -12px; left: 40px; transform: rotate(-5deg); }
+.name-card.a { background: var(--noise), var(--blue); color: var(--paper); --r: 2deg; }
+.name-card.a .w, .name-card.b .w { font-size: 84px; }
+.name-card.b { background: var(--noise), var(--red); color: #fff; --r: -2.5deg; }
+.name-card .tagover { position: absolute; right: 26px; bottom: 18px; font-family: var(--f-tag); font-size: 30px; color: var(--blue); transform: rotate(-8deg); }
+</style>
+</head>
+<body>
+
+<!-- ======================= 1. HOME ======================= -->
+<section class="plate p1">
+  <div class="plate-label"><b>1</b>home: the wall</div>
+
+  <header class="home-top">
+    <div class="logo slap" style="--r:-2deg;--i:0">stoop<small>.fun</small></div>
+    <div class="right">
+      <div class="block-count"><span class="live-dot pulse"></span>214 people on the stoop right now</div>
+      <div class="you-chip">
+        <div class="face s"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div>
+        <span>Bandit</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="make slap" style="--i:1">
+    <div class="make-word">MAKE <span>SOMETHING</span></div>
+    <div class="make-field">
+      <div class="typed">a karaoke queue for our office party, anyone can add songs<span class="cursor"></span></div>
+      <button class="paste-btn">PASTE<br>IT UP<kbd class="on-accent">↵</kbd></button>
+    </div>
+    <div class="make-hint">No account. It goes live on its own link, and anyone you send it to can change it by talking.</div>
+  </div>
+
+  <div class="starters">
+    <span class="lead">or start from</span>
+    <span class="sticker slap" style="--r:-3deg;--i:2">a wall everyone draws on</span>
+    <span class="sticker p slap" style="--r:2deg;--i:3">potluck sign-up</span>
+    <span class="sticker w slap" style="--r:-1deg;--i:4">two player pong</span>
+    <span class="sticker slap" style="--r:3deg;--i:5">meeting bingo</span>
+    <span class="sticker p slap" style="--r:-2deg;--i:6">rank our playlist</span>
+  </div>
+
+  <div class="wall-head">
+    <h2>on the wall now</h2>
+    <p>Most changed in the last hour. Walk in, say what you would change.</p>
+  </div>
+
+  <div class="gallery">
+    <article class="poster big slap" style="--r:-1.5deg;--i:4">
+      <div class="tape"></div>
+      <div class="thumb t-draw">
+        <svg viewBox="0 0 400 300" preserveAspectRatio="none">
+          <path d="M30 220 C90 120 140 260 210 150 S330 80 370 190" fill="none" stroke="#1f35ff" stroke-width="14" stroke-linecap="round"/>
+          <path d="M60 70 Q120 30 170 80 T280 60" fill="none" stroke="#ff3b1f" stroke-width="10" stroke-linecap="round"/>
+          <circle cx="300" cy="230" r="34" fill="#d4ff2e" stroke="#15130f" stroke-width="4"/>
+          <path d="M120 250 l30 -40 l30 40 z" fill="#ff9ccc" stroke="#15130f" stroke-width="4"/>
+        </svg>
+      </div>
+      <h3>THE BIG WALL</h3>
+      <div class="meta">
+        <span>412 hands · v88</span>
+        <span class="here">
+          <span class="stack">
+            <span class="face xs"><img src="../../web/components/org/avatars/fox.webp" alt=""></span>
+            <span class="face xs"><img src="../../web/components/org/avatars/octopus.webp" alt=""></span>
+            <span class="face xs"><img src="../../web/components/org/avatars/frog.webp" alt=""></span>
+            <span class="face xs"><img src="../../web/components/org/avatars/swan.webp" alt=""></span>
+          </span>
+          <span class="live-dot pulse"></span>31 here
+        </span>
+      </div>
+    </article>
+
+    <article class="poster slap" style="--r:2deg;--i:5">
+      <div class="tape" style="transform:rotate(5deg)"></div>
+      <div class="thumb t-pong"><div class="net"></div><div class="score">7 · 5</div><div class="paddle" style="left:14px;top:60px"></div><div class="paddle" style="right:14px;top:100px"></div><div class="ball"></div></div>
+      <h3>PONG BUT RUDE</h3>
+      <div class="meta">
+        <span>58 hands · v40</span>
+        <span class="here"><span class="stack"><span class="face xs"><img src="../../web/components/org/avatars/lynx.webp" alt=""></span><span class="face xs"><img src="../../web/components/org/avatars/goat.webp" alt=""></span></span><span class="live-dot"></span>6</span>
+      </div>
+    </article>
+
+    <article class="poster slap" style="--r:-2.5deg;--i:6">
+      <div class="tape" style="transform:rotate(-7deg)"></div>
+      <div class="thumb t-pot">
+        <h4>Friday potluck</h4>
+        <div><span>Dumplings</span><span>Otter</span></div>
+        <div><span>Something green</span><span>Fig</span></div>
+        <div><span>Cups (please)</span><span>?</span></div>
+        <div><span>Pie, two pies</span><span>Honey</span></div>
+      </div>
+      <h3>FRIDAY POTLUCK</h3>
+      <div class="meta">
+        <span>12 hands · v19</span>
+        <span class="here"><span class="stack"><span class="face xs"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><span class="face xs"><img src="../../web/components/org/avatars/bear.webp" alt=""></span><span class="face xs"><img src="../../web/components/org/avatars/frog.webp" alt=""></span></span><span class="live-dot"></span>3</span>
+      </div>
+    </article>
+
+    <article class="poster slap" style="--r:1deg;--i:7">
+      <div class="tape" style="transform:rotate(3deg)"></div>
+      <div class="thumb t-play">
+        <div class="row"><b>01</b>Dancing in the Moonlight</div>
+        <div class="row"><b>02</b>September</div>
+        <div class="row"><b>03</b>Rock Lobster</div>
+        <div class="row"><b>04</b>Heroes</div>
+      </div>
+      <h3>ROAD TRIP RANKS</h3>
+      <div class="meta"><span>27 hands · v33</span><span class="here"><span class="stack"><span class="face xs"><img src="../../web/components/org/avatars/toucan.webp" alt=""></span></span>1</span></div>
+      <div class="forked">forked from Playlist Fight v12</div>
+    </article>
+  </div>
+</section>
+
+<!-- ======================= 2. CLEAN LINK ======================= -->
+<section class="plate p2">
+  <div class="plate-label"><b>2</b>the clean link: just the app</div>
+  <span class="note r" style="right:64px;top:40px;text-align:right">no chat chrome. the app owns the screen</span>
+
+  <div class="frame">
+    <div class="frame-bar"><i></i><i></i><i></i><div class="url">stoop.fun/<em>office-bingo</em></div></div>
+    <div class="app">
+      <div class="swap-toast">
+        <div class="face xs"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+        <span><b>v12</b> just went up: Ember put a mug on the free space</span>
+      </div>
+      <div class="app-in">
+        <h1>Office Bingo</h1>
+        <div class="sub">Tap a square when someone says it. First to five wins the good chair.</div>
+        <div class="players">Round 3 · 9 players · ends at 4pm</div>
+        <div class="board">
+          <div class="cell x">"Let's take this offline"</div>
+          <div class="cell">"Circle back"</div>
+          <div class="cell x">Someone is on mute</div>
+          <div class="cell">"Can everyone see my screen?"</div>
+          <div class="cell">A dog barks</div>
+          <div class="cell">"Synergy"</div>
+          <div class="cell x">"Quick question"</div>
+          <div class="cell free"><span><span class="mug">☕</span>Gary's mug</span></div>
+          <div class="cell">Late by 5+ min</div>
+          <div class="cell x">"Per my last email"</div>
+          <div class="cell">"Low hanging fruit"</div>
+          <div class="cell">Frozen video</div>
+          <div class="cell x">"Bandwidth"</div>
+          <div class="cell">Echo</div>
+          <div class="cell">"Going forward"</div>
+        </div>
+      </div>
+      <div class="app-side">
+        <h4>Leaderboard</h4>
+        <div class="lb"><span>Ember</span><b>4</b></div>
+        <div class="lb"><span>Bandit</span><b>3</b></div>
+        <div class="lb"><span>Pip</span><b>3</b></div>
+        <div class="lb"><span>Marin</span><b>1</b></div>
+        <button class="claim">BINGO!</button>
+      </div>
+
+      <div class="dock">
+        <div class="bubble">Pip: make claimed squares glow?</div>
+        <div class="grip" title="drag"></div>
+        <div class="stack">
+          <div class="face s"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+          <div class="face s"><img src="../../web/components/org/avatars/owl.webp" alt=""></div>
+          <div class="face s"><img src="../../web/components/org/avatars/whale.webp" alt=""></div>
+          <div class="face s"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div>
+        </div>
+        <span class="count">+5</span>
+        <button class="say">Talk to change it <kbd class="on-accent">/</kbd></button>
+        <button class="tuck" title="tuck to the edge">›</button>
+      </div>
+    </div>
+  </div>
+  <span class="note" style="right:280px;bottom:20px">drag the grip anywhere. › tucks it into a tab on the edge</span>
+  <span class="note" style="left:64px;bottom:22px;max-width:560px">new versions cross-fade in place. your bingo marks survive the swap</span>
+</section>
+
+<!-- ======================= 3. ROOM ======================= -->
+<section class="plate p3">
+  <div class="plate-label"><b>3</b>the room: talk, build, scrape it off</div>
+
+  <div class="frame" style="margin-top:34px">
+    <div class="frame-bar"><i></i><i></i><i></i><div class="url">stoop.fun/<em>office-bingo</em>?room</div></div>
+    <div class="room-wrap">
+      <div class="app">
+        <div class="app-in">
+          <h1>Office Bingo</h1>
+          <div class="sub">Tap a square when someone says it.</div>
+          <div class="board">
+            <div class="cell x glow">"Let's take this offline"</div>
+            <div class="cell">"Circle back"</div>
+            <div class="cell x">Someone is on mute</div>
+            <div class="cell">"Can everyone see my screen?"</div>
+            <div class="cell picking"><span class="picking-tag">div.cell · "Synergy"</span>"Synergy"</div>
+            <div class="cell x">"Quick question"</div>
+            <div class="cell free"><span><span class="mug">☕</span>Gary's mug</span></div>
+            <div class="cell">A dog barks</div>
+            <div class="cell x">"Per my last email"</div>
+            <div class="cell">"Low hanging fruit"</div>
+            <div class="cell">Frozen video</div>
+            <div class="cell x">"Bandwidth"</div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="room paper">
+        <div class="room-head">
+          <div class="row1">
+            <h2>OFFICE BINGO</h2>
+            <div class="tools">
+              <button>⧉ Copy link</button>
+              <button>✕</button>
+            </div>
+          </div>
+          <div class="row2">
+            <span class="stack">
+              <span class="face xs"><img src="../../web/components/org/avatars/fox.webp" alt=""></span>
+              <span class="face xs"><img src="../../web/components/org/avatars/owl.webp" alt=""></span>
+              <span class="face xs"><img src="../../web/components/org/avatars/whale.webp" alt=""></span>
+              <span class="face xs"><img src="../../web/components/org/avatars/moth.webp" alt=""></span>
+              <span class="face xs"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></span>
+            </span>
+            <span>9 here · Luna is typing</span><span class="typing"><i></i><i></i><i></i></span>
+          </div>
+        </div>
+
+        <div class="stream">
+          <div class="msg">
+            <div class="face s"><img src="../../web/components/org/avatars/fox.webp" alt=""></div>
+            <div class="body"><div class="who">Ember<time>2:41</time></div><div class="text">free space should be Gary's mug. he will know</div></div>
+          </div>
+
+          <div class="card live">
+            <div class="top"><span class="state">V12 IS UP</span><span class="vnum">v12</span><span class="elapsed" style="color:#c8cdff">took 21s</span></div>
+            <div class="ask">Ember asked: free space should be Gary's mug</div>
+            <div class="summary">The free square now shows a coffee mug labeled "Gary's mug".</div>
+            <div class="acts">
+              <button class="btn lime">See it</button>
+              <button class="btn ghost">Undo</button>
+              <button class="btn ghost">Fork</button>
+            </div>
+          </div>
+
+          <div class="msg me">
+            <div class="face s"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div>
+            <div class="body"><div class="who">Bandit (you)</div><div class="text">lmao he is going to lose it</div></div>
+          </div>
+
+          <div class="msg">
+            <div class="face s"><img src="../../web/components/org/avatars/owl.webp" alt=""></div>
+            <div class="body">
+              <div class="who">Pip<time>2:43</time></div>
+              <div class="text">make claimed squares glow so you can tell from across the room
+                <div><span class="chip"><b>picked</b>div.cell "Let's take this offline"</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card building">
+            <div class="top"><span class="state"><span class="spray"></span>PAINTING V13</span><span class="elapsed">0:14</span></div>
+            <div class="ask">for Pip: claimed squares glow</div>
+            <div class="narr">
+              <div>read src/Board.jsx and styles.css</div>
+              <div>claimed cells already get class "x"</div>
+              <div class="now">adding a soft yellow glow keyframe to .cell.x</div>
+            </div>
+            <div class="files"><span>src/Board.jsx</span><span class="w">styles.css ✎</span></div>
+            <div class="bar"><i></i></div>
+          </div>
+
+          <div class="card queued">
+            <span class="pos">#2</span>
+            <div class="face xs"><img src="../../web/components/org/avatars/whale.webp" alt=""></div>
+            <span><b>Marin</b>: a dark mode for the night shift</span>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div>
+            <span class="mode"><button class="on">Change it</button><button>Just chat</button></span>
+            <span class="mode-hint">this goes live for everyone</span>
+          </div>
+          <div class="input-row">
+            <button class="pick" title="point at something in the app">⌖</button>
+            <div class="input">make the BINGO button shake when you press it</div>
+            <button class="send">↑</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="timeline">
+      <div class="tl-label"><strong>the layers</strong><span>13 versions · 7 hands · <kbd>←</kbd><kbd>→</kbd> to scrub</span></div>
+      <div class="layers">
+        <div class="layer c2 old" style="--r:-3deg"><span class="n">1</span><span class="tag">seed</span></div>
+        <div class="layer c1 old" style="--r:2deg"><span class="n">2</span><span class="tag">Pip</span></div>
+        <div class="layer c3 old" style="--r:-1deg"><span class="n">3</span><span class="tag">Ember</span></div>
+        <div class="layer c5 old" style="--r:3deg"><span class="n">4</span><span class="tag">Marin</span></div>
+        <div class="layer c4 old" style="--r:-2deg"><span class="n">5</span><span class="tag">Bandit</span></div>
+        <div class="layer c6 old" style="--r:1deg"><span class="n">6</span><span class="tag">Luna</span></div>
+        <div class="layer c1 old" style="--r:-3deg"><span class="n">7</span><span class="tag">Pip</span></div>
+        <div class="layer c3 old" style="--r:2deg"><span class="n">8</span><span class="tag">Ember</span></div>
+        <div class="layer restore old" style="--r:-1deg"><span class="n">9</span><span class="tag">↺ v7</span></div>
+        <div class="layer c5 focus" style="--r:0deg"><span class="n">10</span><span class="tag">Marin</span></div>
+        <div class="layer c4" style="--r:-2deg"><span class="n">11</span><span class="tag">Bandit</span></div>
+        <div class="layer c6 livev" style="--r:1.5deg"><span class="n">12</span><span class="tag">Ember</span></div>
+        <div class="layer ghost" style="--r:0deg"><span class="n">13</span><span class="tag">painting…</span></div>
+      </div>
+      <div class="tl-pop" style="left:640px">
+        <div class="h"><b>v10</b><div class="face xs"><img src="../../web/components/org/avatars/whale.webp" alt=""></div><span>Marin · 2:12</span></div>
+        <p>Added a leaderboard and the BINGO button.</p>
+        <div class="acts"><button class="btn ink">View just for me</button><button class="btn red">Restore</button><button class="btn ghost">Fork from here</button></div>
+        <div class="keys">Restore paints a new layer on top. Nothing gets lost.</div>
+      </div>
+      <div class="tl-share">
+        <button class="btn">⧉ App link</button>
+        <button class="btn">⧉ Room link</button>
+        <button class="btn">⧉ This version</button>
+      </div>
+    </div>
+  </div>
+  <span class="note r" style="left:64px;bottom:30px;max-width:560px">older layers fade like weathered paste. the live one gets the lime tag</span>
+</section>
+
+<!-- ======================= 3b. VIEWING A PAST LAYER ======================= -->
+<section class="plate p3b" style="padding-top:64px">
+  <div class="plate-label"><b>3b</b>viewing a past layer: you only</div>
+  <div class="frame" style="margin-top:34px">
+    <div class="frame-bar"><i></i><i></i><i></i><div class="url">stoop.fun/<em>office-bingo</em>/v/10</div></div>
+    <div class="app" style="height:300px">
+      <div class="viewing-pill">You're viewing v10, nobody else is <button>Back to live</button></div>
+      <div class="app-in" style="padding-top:80px; filter:saturate(.75)">
+        <h1>Office Bingo</h1>
+        <div class="board" style="grid-template-columns:repeat(5,1fr)">
+          <div class="cell x">"Let's take this offline"</div>
+          <div class="cell">"Circle back"</div>
+          <div class="cell x">Someone is on mute</div>
+          <div class="cell free">FREE</div>
+          <div class="cell">A dog barks</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 4. CHARACTER PICKER ======================= -->
+<section class="plate p4">
+  <div class="plate-label"><b>4</b>pick your face: the sticker sheet</div>
+  <div class="stage">
+    <div class="ghost-app"></div>
+    <div class="dim"></div>
+    <div class="picker">
+      <div class="tape a"></div><div class="tape b"></div>
+      <div class="me-side">
+        <div class="big-face"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div>
+        <div class="tagname">Bandit</div>
+        <label>Your name in every room</label>
+        <div class="name-input">Bandit<span class="cursor" style="background:var(--lime)"></span><small>6 / 24</small></div>
+        <div class="suggest">
+          <span class="on">Bandit</span><span>Rascal</span><span>Pocket</span><span>Scout</span><span>Ziggy</span><span>Nook</span>
+        </div>
+        <div class="twin">Two Bandits in one room is fine. Your face is how people tell you apart.</div>
+      </div>
+      <div class="sheet">
+        <h3>PEEL ONE OFF</h3>
+        <div class="sub">24 faces. Change whenever you like, it follows you to every app.</div>
+        <div class="grid24">
+          <div class="slot" style="--r:-3deg"><div class="cut"><img src="../../web/components/org/avatars/fox.webp" alt=""></div><small>Fox</small></div>
+          <div class="slot" style="--r:2deg"><div class="cut"><img src="../../web/components/org/avatars/owl.webp" alt=""></div><small>Owl</small></div>
+          <div class="slot" style="--r:-1deg"><div class="cut"><img src="../../web/components/org/avatars/otter.webp" alt=""></div><small>Otter</small></div>
+          <div class="slot" style="--r:3deg"><div class="cut"><img src="../../web/components/org/avatars/crane.webp" alt=""></div><small>Crane</small></div>
+          <div class="slot" style="--r:-2deg"><div class="cut"><img src="../../web/components/org/avatars/bear.webp" alt=""></div><small>Bear</small></div>
+          <div class="slot" style="--r:1deg"><div class="cut"><img src="../../web/components/org/avatars/hare.webp" alt=""></div><small>Hare</small></div>
+          <div class="slot" style="--r:2deg"><div class="cut"><img src="../../web/components/org/avatars/moth.webp" alt=""></div><small>Moth</small></div>
+          <div class="slot taken" style="--r:-3deg"><div class="cut"><img src="../../web/components/org/avatars/whale.webp" alt=""></div><small>Whale</small></div>
+          <div class="slot" style="--r:1deg"><div class="cut"><img src="../../web/components/org/avatars/hedgehog.webp" alt=""></div><small>Hedgehog</small></div>
+          <div class="slot" style="--r:-2deg"><div class="cut"><img src="../../web/components/org/avatars/stag.webp" alt=""></div><small>Stag</small></div>
+          <div class="slot on"><div class="cut"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></div><small>Raccoon</small></div>
+          <div class="slot" style="--r:2deg"><div class="cut"><img src="../../web/components/org/avatars/penguin.webp" alt=""></div><small>Penguin</small></div>
+          <div class="slot" style="--r:-1deg"><div class="cut"><img src="../../web/components/org/avatars/seal.webp" alt=""></div><small>Seal</small></div>
+          <div class="slot" style="--r:3deg"><div class="cut"><img src="../../web/components/org/avatars/lynx.webp" alt=""></div><small>Lynx</small></div>
+          <div class="slot" style="--r:-2deg"><div class="cut"><img src="../../web/components/org/avatars/octopus.webp" alt=""></div><small>Octopus</small></div>
+          <div class="slot" style="--r:1deg"><div class="cut"><img src="../../web/components/org/avatars/toucan.webp" alt=""></div><small>Toucan</small></div>
+          <div class="slot" style="--r:-3deg"><div class="cut"><img src="../../web/components/org/avatars/frog.webp" alt=""></div><small>Frog</small></div>
+          <div class="slot" style="--r:2deg"><div class="cut"><img src="../../web/components/org/avatars/goat.webp" alt=""></div><small>Goat</small></div>
+          <div class="slot" style="--r:-1deg"><div class="cut"><img src="../../web/components/org/avatars/swan.webp" alt=""></div><small>Swan</small></div>
+          <div class="slot" style="--r:3deg"><div class="cut"><img src="../../web/components/org/avatars/snail.webp" alt=""></div><small>Snail</small></div>
+          <div class="slot" style="--r:-2deg"><div class="cut"><img src="../../web/components/org/avatars/elephant.webp" alt=""></div><small>Elephant</small></div>
+          <div class="slot" style="--r:1deg"><div class="cut"><img src="../../web/components/org/avatars/koala.webp" alt=""></div><small>Koala</small></div>
+          <div class="slot" style="--r:-3deg"><div class="cut"><img src="../../web/components/org/avatars/squirrel.webp" alt=""></div><small>Squirrel</small></div>
+          <div class="slot" style="--r:2deg"><div class="cut"><img src="../../web/components/org/avatars/robin.webp" alt=""></div><small>Robin</small></div>
+        </div>
+        <div class="sheet-foot">
+          <button class="btn red">Wear it <kbd class="on-accent">↵</kbd></button>
+          <button class="btn ghost">Shuffle</button>
+          <span class="grow">Arrows move across the sheet <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> · <kbd>esc</kbd> closes</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 5. NAME ======================= -->
+<section class="plate p5">
+  <div class="plate-label"><b>5</b>what we call it</div>
+  <div class="names">
+    <div class="name-card main slap" style="--i:0">
+      <div class="tape"></div>
+      <div class="w">STOOP</div>
+      <div class="why">The front step where the block hangs out and anyone walking by can pull up and join in. Short, warm, says "come sit with us" instead of "sign up".</div>
+      <div class="dom">stoop.fun · "meet me on the stoop"</div>
+      <span class="tagover">pull up</span>
+    </div>
+    <div class="name-card a slap" style="--i:1">
+      <div class="w">PASTEUP</div>
+      <div class="why">The zine and street poster word for slapping a sheet onto the wall, which is exactly what every new version is.</div>
+    </div>
+    <div class="name-card b slap" style="--i:2">
+      <div class="w">TAGWALL</div>
+      <div class="why">A wall everyone writes on and nobody owns, with the history visible in the layers.</div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

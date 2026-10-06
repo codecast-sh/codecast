@@ -52,6 +52,12 @@
         if (visualStyle === 'minimal' || visualStyle === 'codex') {
           document.documentElement.classList.add('minimal-style');
         }
+        // Hosted mode in its Minimal look (ThemeProvider stores the flag):
+        // the first frame is already the family's paper, not the developer
+        // default the app would correct a moment later.
+        if (localStorage.getItem('codecast-hosted-look') === '1') {
+          document.documentElement.classList.add('minimal-style', 'hosted-mode');
+        }
       })();
     </script>
     <script>
@@ -84,6 +90,7 @@
       html.dark #boot-shell { background: #002b36; }
       html.minimal-style #boot-shell { background: #ffffff; color: #8a8a85; }
       html.dark.minimal-style #boot-shell { background: #161615; color: #7c7a74; }
+      html.hosted-mode.minimal-style #boot-shell#boot-shell { background: var(--pd-bg); color: var(--pd-ink-faint); }
       #boot-shell[data-hidden="true"] { opacity: 0; pointer-events: none; }
       #boot-shell .indicator {
         display: flex;
