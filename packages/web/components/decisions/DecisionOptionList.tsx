@@ -19,6 +19,9 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 // since a button cannot nest buttons.
 export type OptionTone = "primary" | "picked" | "plain";
 
+/** The asker's own "recommended" mark at the end of an option's label. */
+const SUGGESTED_MARK = /\s*\((?:recommended|suggested)\)\s*$/i;
+
 export function DecisionOptionRow({
   option,
   position,
@@ -45,7 +48,10 @@ export function DecisionOptionRow({
   tags?: ReactNode;
   compact?: boolean;
 }) {
-  const label = option.label.replace(" (Recommended)", "");
+  // An asker's "(Recommended)" is a mark, not part of the option's name: it
+  // becomes the Suggested tag at the row's end.
+  const suggested = SUGGESTED_MARK.test(option.label);
+  const label = option.label.replace(SUGGESTED_MARK, "");
   const border =
     tone === "picked"
       ? "border-sol-green/50 bg-sol-green/5"
@@ -84,7 +90,9 @@ export function DecisionOptionRow({
 
   const body = (
     <>
-      <span className={`shrink-0 ${compact ? "mt-[3px]" : "mt-[2px]"}`}>{badge}</span>
+      {/* A plain number badge is a key hint by another name; hosted mode
+          (globals.css) leaves it off. */}
+      <span data-cc-option-number={leading || keys ? undefined : ""} className={`shrink-0 ${compact ? "mt-[3px]" : "mt-[2px]"}`}>{badge}</span>
       <span className="min-w-0 flex-1 text-left [overflow-wrap:anywhere]">
         <span className="flex items-center gap-2 flex-wrap">
           <span className={`${compact ? "text-[13px]" : "text-[15px]"} leading-snug text-sol-text`}>{label}</span>
@@ -98,14 +106,15 @@ export function DecisionOptionRow({
         )}
         {extras}
       </span>
+      {suggested && <span data-cc-suggested className="shrink-0 self-center text-[10.5px] font-medium text-sol-text-dim">Suggested</span>}
       {trailing && <span className="shrink-0 flex items-center gap-0.5 self-center">{trailing}</span>}
     </>
   );
   const cls = `decision-option w-full flex items-start gap-3 rounded-lg border transition-colors ${pad} ${border} ${hover}`;
   return onPick ? (
-    <button type="button" onClick={onPick} className={cls} data-option={position}>{body}</button>
+    <button type="button" onClick={onPick} className={cls} data-option={position} data-suggested={suggested ? "" : undefined}>{body}</button>
   ) : (
-    <div className={cls} data-option={position}>{body}</div>
+    <div className={cls} data-option={position} data-suggested={suggested ? "" : undefined}>{body}</div>
   );
 }
 
@@ -156,7 +165,7 @@ export function DecisionOptionList({
 export function TypeAnswerButton({ onOpen, keys = false }: { onOpen: () => void; keys?: boolean }) {
   return (
     <button type="button" onClick={onOpen} className="flex items-center gap-1.5 text-[12px] text-sol-text-dim hover:text-sol-text transition-colors">
-      {keys && <KeyCap size="xs">t</KeyCap>}<span>or type an answer in your own words</span>
+      {keys && <KeyCap size="xs">t</KeyCap>}<span>Or answer in your own words</span>
     </button>
   );
 }

@@ -75,11 +75,26 @@ export function isPollResponsePayload(rawContent: string | null | undefined): bo
   try { return !!JSON.parse(t).__cc_poll; } catch { return false; }
 }
 
+// The message the daemon's watchdog queues when a session's process died
+// mid-work (cli midWorkRevive.ts). Codecast wrote it, not the person.
+export const MID_WORK_REVIVE_MESSAGE =
+  "Your agent process exited while this work was still in progress, and codecast restarted the session. " +
+  "Anything that was running in the background stopped with it. Pick up where you left off: relaunch what was " +
+  "interrupted (a workflow resumes from its run id, with finished agents returned from cache), then carry on with the task.";
+
+export function isMidWorkReviveNotice(rawContent: string | null | undefined): boolean {
+  return !!rawContent && stripInjectionNoise(rawContent).startsWith(MID_WORK_REVIVE_MESSAGE.slice(0, 60));
+}
+
+// A notice that the previous turn was cut off (a deliberate interrupt, or a
+// process exit codecast revived). Never the person's ask: the navigator and
+// the sticky prompt skip it.
 export function isTurnInterruptionNotice(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;
   const text = stripInjectionNoise(rawContent);
   return text.startsWith("<turn_aborted>")
-    || text.startsWith("The user interrupted the previous turn on purpose.");
+    || text.startsWith("The user interrupted the previous turn on purpose.")
+    || isMidWorkReviveNotice(text);
 }
 
 export function isAgentContextMessage(rawContent: string | null | undefined): boolean {
@@ -756,6 +771,15 @@ export function decisionIdFromClientId(clientId: string | null | undefined): str
 
 export function formatDecisionAnswer(a: { id: string; question: string; answer: string }): string {
   return `Decision: ${a.answer}\n<cast-decision id="${a.id}" question="${escapeTagAttr(a.question)}"/>`;
+}
+
+/** Whether a message is an answer that names its decision (the tagged
+ *  form). A hosted conversation's turn consumes such a message and never
+ *  writes it to the transcript (convex/assistant/input.ts decisionAnswerOf),
+ *  so a client that painted it has no echo to wait for. The legacy untagged
+ *  line does not count: a person may type exactly that. */
+export function isTaggedDecisionAnswer(rawContent: string | null | undefined): boolean {
+  return !!parseDecisionAnswer(rawContent)?.id;
 }
 
 export function parseDecisionAnswer(rawContent: string | null | undefined): DecisionAnswerMessage | null {

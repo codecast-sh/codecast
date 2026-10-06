@@ -10,6 +10,7 @@ import { useLocalAuth } from "@/lib/localAuth";
 import { RepoPulseChip } from "@/components/marketing/RepoPulseChip";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { visitorPlatform } from "@/lib/visitorPlatform";
+import { AssistantMark } from "@/components/simple/AssistantMark";
 
 /**
  * The one nav bar for every marketing page (landing, pricing, docs, blog...).
@@ -23,14 +24,24 @@ import { visitorPlatform } from "@/lib/visitorPlatform";
  * signed-out state while the server confirms.
  */
 const MARKETING_NAV_LINKS = [
+  // The path for someone who does not write code: the hosted assistant's
+  // own door (/welcome), first so it is not lost among the developer pages.
+  // It lands on the home page's section in the assistant's own look, which
+  // leads on to /welcome.
+  { href: "/#everyone", label: "For everyone" },
   { href: "/documentation", label: "Docs" },
   { href: "/features", label: "CLI" },
   { href: "/pricing", label: "Pricing" },
   { href: "/changelog", label: "Changelog" },
   { href: "/blog", label: "Blog" },
-  { href: "/security", label: "Security" },
-  { href: "/support", label: "Support" },
+  // Security and Support live in the footer (MarketingFooter), which leaves
+  // the bar room for "Open app" at a laptop's width.
 ] as const;
+
+/** The everyone link's own look: the family's interface face beside the
+ *  assistant's mark, so it reads as a different door from the mono links. */
+const EVERYONE_HREF = "/#everyone";
+const WAY_FONT = { fontFamily: "var(--pd-font-ui, ui-sans-serif, system-ui, sans-serif)" } as const;
 
 const INK = "#002b36";
 const MUTED = "#657b83";
@@ -52,9 +63,14 @@ export function MarketingNav({
   // page leads with the CLI and the browser, so a plain download mark fits.
   // Decided after mount so the prerendered bar and the first client paint agree.
   const [apple, setApple] = useState(true);
+  // The auth buttons wait for the client: the prerendered bar cannot know who
+  // is visiting, and drawing "Sign in" first flips to "Open app" a moment
+  // later for everyone signed in. A fixed-width slot holds the place.
+  const [mounted, setMounted] = useState(false);
   useMountEffect(() => {
     const p = visitorPlatform();
     setApple(p === "mac" || p === "ios");
+    setMounted(true);
   });
   return (
     <nav
@@ -73,14 +89,16 @@ export function MarketingNav({
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
           {MARKETING_NAV_LINKS.map(({ href, label }) => (
             <Link
               key={href}
               href={href}
-              className="hidden md:block font-medium text-sm px-3 py-1.5 transition-colors hover:text-[#002b36]"
-              style={{ color: href === active ? INK : MUTED }}
+              // Changelog steps out below 1500px, so "Open app" always fits.
+              className={`hidden ${href === "/changelog" ? "min-[1500px]:flex" : "md:flex"} items-center gap-1.5 font-medium text-sm px-2.5 py-1.5 transition-colors hover:text-[#002b36]`}
+              style={{ color: href === active ? INK : MUTED, ...(href === EVERYONE_HREF ? WAY_FONT : null) }}
             >
+              {href === EVERYONE_HREF && <AssistantMark size={14} />}
               {label}
             </Link>
           ))}
@@ -97,7 +115,9 @@ export function MarketingNav({
             <span className="sm:hidden max-[379px]:hidden">Apps</span>
           </Link>
           <RepoPulseChip className="hidden sm:flex" />
-          {signedIn ? (
+          {!mounted ? (
+            <span aria-hidden className="block h-9 w-[7.5rem] shrink-0" />
+          ) : signedIn ? (
             <Link href="/inbox">
               <Button className="font-medium text-[#fdf6e3] gap-1.5 hover:bg-[#073642]" style={{ backgroundColor: INK }}>
                 Open app

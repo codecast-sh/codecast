@@ -7,6 +7,9 @@
 // push, the app's one session path, a scroll to a message. Any move the
 // follower makes on their own ends the follow, as in Figma.
 
+import { clampFollowView, type FollowView } from "@codecast/shared/contracts/follow";
+export type { FollowView };
+
 export type FollowerRow = { user_id: string; name: string; image?: string };
 
 /** Where this window is in a transcript: the top visible message and how much
@@ -17,15 +20,145 @@ export type LeaderView = {
   path: string;
   conversation_id?: string;
   anchor?: { message_id: string; offset: number };
+  view?: FollowView;
   updated_at: number;
   withheld: boolean;
 };
 
+/** What a follower's window does with a report: where to go, then which
+ *  in-page parts (panel, diff, scroll) to apply once it is there. */
 export type FollowPlan =
   | { kind: "blocked" }
-  | { kind: "stay" }
-  | { kind: "route"; path: string }
-  | { kind: "session"; conversationId: string; scrollTo: string | null };
+  | { kind: "stay"; view: FollowView | null }
+  | { kind: "route"; path: string; view: FollowView | null }
+  | { kind: "session"; conversationId: string; scrollTo: string | null; view: FollowView | null };
+
+// ── in-page state: scroll regions and surfaces ──
+
+/**
+ * Every region a follow can scroll, by the key both sides send. A scroll
+ * region names one scroller on one kind of page; a page with several
+ * scrollers registers the one a person reads. Adding a region is one line
+ * here plus `useFollowScroll(key, ref)` on its scroller.
+ */
+export const FOLLOW_SCROLL_REGIONS = {
+  doc: "a doc's body (DocumentDetailLayout)",
+  task: "a task page's body",
+  review: "a review's file list and diff (ReviewView)",
+  pr: "a pull request page (app/pr)",
+  commit: "a commit page (app/commit)",
+  "diff-pane": "a conversation's diff pane, one file or all of them (FileDiffLayout)",
+} as const;
+export type FollowScrollKey = keyof typeof FOLLOW_SCROLL_REGIONS;
+
+export function isFollowScrollKey(key: string): key is FollowScrollKey {
+  return Object.prototype.hasOwnProperty.call(FOLLOW_SCROLL_REGIONS, key);
+}
+
+export type FollowViewPart = keyof FollowView;
+const PARTS: readonly FollowViewPart[] = ["panel", "diff", "scroll"];
+
+/**
+ * A surface that holds part of a person's place inside a page. `read` says
+ * what it holds now (the leader side); `apply` takes the parts it owns from a
+ * leader's view and moves this window there the way the person would, and
+ * returns the parts it took (the follower side). Surfaces register while
+ * mounted (hooks/useFollowSurface), so the follow hook never names them.
+ */
+export type FollowSurface = {
+  read?: () => FollowView | null | undefined;
+  apply?: (view: FollowView) => readonly FollowViewPart[];
+};
+
+const surfaces = new Set<FollowSurface>();
+const surfaceListeners = new Set<() => void>();
+
+function emitSurfaces(): void {
+  for (const l of surfaceListeners) l();
+}
+
+export function registerFollowSurface(surface: FollowSurface): () => void {
+  surfaces.add(surface);
+  emitSurfaces();
+  return () => {
+    surfaces.delete(surface);
+    emitSurfaces();
+  };
+}
+
+/** A surface's state changed (a file picked, a panel opened, a scroll). */
+export const notifyFollowView = emitSurfaces;
+
+export function subscribeFollowSurfaces(fn: () => void): () => void {
+  surfaceListeners.add(fn);
+  return () => {
+    surfaceListeners.delete(fn);
+  };
+}
+
+/** The leader's in-page view, composed from every mounted surface. */
+export function readLeaderView(): FollowView | undefined {
+  return composeLeaderView([...surfaces].map((s) => s.read?.()));
+}
+
+/**
+ * Hand a view's parts to the mounted surfaces, first taker wins per part.
+ * Returns what no surface took yet (its page is still mounting), or null.
+ */
+export function applyFollowView(view: FollowView): FollowView | null {
+  let left: FollowView = { ...view };
+  for (const s of surfaces) {
+    if (!s.apply || !hasParts(left)) break;
+    for (const part of s.apply(left)) delete left[part];
+  }
+  return hasParts(left) ? left : null;
+}
+
+function hasParts(view: FollowView | null | undefined): view is FollowView {
+  return !!view && PARTS.some((p) => view[p] !== undefined);
+}
+
+/**
+ * One view from the surfaces' parts: the first surface to name a part holds
+ * it, and a scroll in a region nobody registered is dropped, so a stray key
+ * never reaches a follower. Clamped as the server stores it.
+ */
+export function composeLeaderView(parts: readonly (FollowView | null | undefined)[]): FollowView | undefined {
+  const out: FollowView = {};
+  for (const p of parts) {
+    if (!p) continue;
+    if (out.panel === undefined && p.panel) out.panel = p.panel;
+    if (out.diff === undefined && p.diff?.file) out.diff = p.diff;
+    if (out.scroll === undefined && p.scroll && isFollowScrollKey(p.scroll.key)) out.scroll = p.scroll;
+  }
+  return clampFollowView(out);
+}
+
+/** A view as a string that changes exactly when a follower would move. */
+export function followViewSig(view: FollowView | null | undefined): string {
+  if (!view) return "";
+  const d = view.diff;
+  const sc = view.scroll;
+  return `${view.panel ?? ""}|${d ? `${d.file}:${d.line ?? ""}@${d.base ?? ""}` : ""}|${sc ? `${sc.key}:${sc.offset.toFixed(3)}` : ""}`;
+}
+
+/**
+ * The parts of `next` a follower still has to apply, given what it applied
+ * last: a part that changed, or one it has not applied at all. A scroll that
+ * moved less than half a percent is the same place.
+ */
+export function planViewApply(next: FollowView | null | undefined, applied: FollowView | null | undefined): FollowView | null {
+  if (!next) return null;
+  const out: FollowView = {};
+  if (next.panel && next.panel !== applied?.panel) out.panel = next.panel;
+  const d = next.diff;
+  const a = applied?.diff;
+  if (d && (!a || d.file !== a.file || d.line !== a.line || d.base !== a.base)) out.diff = d;
+  const sc = next.scroll;
+  const as = applied?.scroll;
+  if (sc && (!as || sc.key !== as.key || Math.abs(sc.offset - as.offset) >= 0.005)) out.scroll = sc;
+  return hasParts(out) ? out : null;
+}
 
 
 export function followersSig(rows: readonly FollowerRow[] | null | undefined): string {
@@ -68,19 +201,27 @@ export function anchorFromRects(
  */
 export function planFollowApply(
   view: LeaderView,
-  current: { pathname: string | null; conversationId: string | null; anchorMessageId: string | null },
+  current: {
+    pathname: string | null;
+    conversationId: string | null;
+    anchorMessageId: string | null;
+    /** The in-page view this window applied last, on this page. */
+    appliedView?: FollowView | null;
+  },
 ): FollowPlan {
   if (view.withheld) return { kind: "blocked" };
+  // A move to another page lands with nothing applied there yet.
+  const inPage = (moved: boolean) => planViewApply(view.view, moved ? null : current.appliedView);
   if (view.conversation_id) {
     const target = view.anchor?.message_id ?? null;
-    if (current.conversationId !== view.conversation_id) return { kind: "session", conversationId: view.conversation_id, scrollTo: target };
-    if (target && target !== current.anchorMessageId) return { kind: "session", conversationId: view.conversation_id, scrollTo: target };
-    return { kind: "stay" };
+    if (current.conversationId !== view.conversation_id) return { kind: "session", conversationId: view.conversation_id, scrollTo: target, view: inPage(true) };
+    if (target && target !== current.anchorMessageId) return { kind: "session", conversationId: view.conversation_id, scrollTo: target, view: inPage(false) };
+    return { kind: "stay", view: inPage(false) };
   }
   const path = view.path.trim();
-  if (!path) return { kind: "stay" };
-  if (current.pathname && samePath(current.pathname, path)) return { kind: "stay" };
-  return { kind: "route", path };
+  if (!path) return { kind: "stay", view: null };
+  if (current.pathname && samePath(current.pathname, path)) return { kind: "stay", view: inPage(false) };
+  return { kind: "route", path, view: inPage(true) };
 }
 
 /** Two paths are the same view when they agree without a trailing slash. */

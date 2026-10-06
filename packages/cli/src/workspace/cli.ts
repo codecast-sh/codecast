@@ -36,6 +36,16 @@ import {
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
 import { commandGroup } from "../commandGroups.js";
+import { defaultConfigDir, readAuthConfig } from "../config/readAuthConfig.js";
+import { formatRelativeTime } from "../formatter.js";
+import {
+  fetchPickupConversation,
+  PickupError,
+  pickupBranches,
+  preparePickup,
+  type PickupConversation,
+  type PickupSnapshot,
+} from "./pickup.js";
 
 /**
  * Resolve the repo root for the current working directory.
@@ -85,6 +95,7 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--branch <branch>", "Override branch name")
     .option("--start-point <ref>", "Create the branch at this commit-ish instead of the checkout's HEAD (requires --branch); a codecast WIP snapshot commit starts at its parent with the snapshot as uncommitted work")
     .option("--alt-branch <branch>", "Branch name to use instead when --branch already exists (requires --start-point)")
+    .option("--from <session>", "Pick up a session's working tree: its branch at its base commit, with its uncommitted and untracked files as uncommitted work (from the snapshot its daemon pushed to the remote)")
     .option("--input-root <path>", "Read the manifest and setup copy files from a workspace input snapshot")
     .option("--backend <name>", "Sandbox backend to use (default: local)")
     .option("--skip-setup", "Skip install/generate/migrate commands")
@@ -100,6 +111,7 @@ export function registerWorkspaceCommand(program: Command): void {
           branch?: string;
           startPoint?: string;
           altBranch?: string;
+          from?: string;
           inputRoot?: string;
           backend?: string;
           skipSetup?: boolean;
@@ -119,6 +131,10 @@ export function registerWorkspaceCommand(program: Command): void {
           console.error("--alt-branch only applies with --start-point");
           process.exit(1);
         }
+        if (opts.from && opts.startPoint) {
+          console.error("--from picks its own start point (the session's snapshot); drop --start-point");
+          process.exit(1);
+        }
         // Backend validation: if user passed --backend, ensure it exists.
         if (opts.backend && !defaultRegistry.has(opts.backend)) {
           console.error(
@@ -127,10 +143,11 @@ export function registerWorkspaceCommand(program: Command): void {
           process.exit(1);
         }
         try {
+          const pickup = opts.from ? await resolvePickup(repoRoot, opts.from, opts.branch) : undefined;
           const r = await acquireWorkspace(repoRoot, name, {
-            branch: opts.branch,
-            startPoint: opts.startPoint,
-            altBranch: opts.altBranch,
+            branch: pickup?.branch ?? opts.branch,
+            startPoint: pickup?.snapshot.ref ?? opts.startPoint,
+            altBranch: pickup?.altBranch ?? opts.altBranch,
             inputRoot: opts.inputRoot,
             skipSetup: opts.skipSetup,
             skipHooks: opts.skipHooks,
@@ -151,6 +168,7 @@ export function registerWorkspaceCommand(program: Command): void {
           console.log(`  branch:  ${ws.branch}`);
           console.log(`  state:   ${ws.state}`);
           console.log(`  ports:   ${describePorts(ws)}`);
+          if (pickup) printPickup(pickup);
           for (const notice of r.notices ?? []) console.error(`  ${notice}`);
           if (ws.contract && !ws.contract.ok) {
             console.error("\nContract failures:");
@@ -534,4 +552,29 @@ function renderManifestToml(m: WorkspaceManifest): string {
 function describePorts(ws: { ports: Record<string, number>; noPorts?: boolean }): string {
   const ports = Object.entries(ws.ports).map(([name, port]) => `${name}=${port}`).join(" ");
   return ports || (ws.noPorts ? "none (--no-ports)" : "none");
+}
+
+interface ResolvedPickup {
+  conversation: PickupConversation;
+  snapshot: PickupSnapshot;
+  branch: string;
+  altBranch?: string;
+}
+
+/** `--from <session>`: the session's snapshot, fetched and checked, plus the branch names to create. */
+async function resolvePickup(repoRoot: string, ref: string, branchOverride?: string): Promise<ResolvedPickup> {
+  const config = readAuthConfig(defaultConfigDir());
+  if (!config?.auth_token || !config.convex_url) throw new PickupError("not signed in; run: cast auth");
+  const conversation = await fetchPickupConversation(ref, { convexUrl: config.convex_url, authToken: config.auth_token });
+  const snapshot = await preparePickup(repoRoot, conversation);
+  return { conversation, snapshot, ...pickupBranches(snapshot, conversation.id, branchOverride) };
+}
+
+function printPickup(p: ResolvedPickup): void {
+  const { snapshot: s, conversation: c } = p;
+  console.log(`  from:    ${c.id.slice(0, 7)}${c.title ? ` (${c.title})` : ""}, on ${s.branch}`);
+  console.log(`  base:    ${s.base.slice(0, 10)} (committed ${formatRelativeTime(s.baseDate)})`);
+  console.log(`  changes: ${s.files} file${s.files === 1 ? "" : "s"} differ from base, left uncommitted`);
+  if (c.updatedAt) console.log(`  session: last active ${formatRelativeTime(c.updatedAt)}`);
+  for (const w of s.warnings) console.error(`  warning: ${w}`);
 }

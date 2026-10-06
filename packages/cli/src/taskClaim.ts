@@ -79,6 +79,8 @@ export interface HandoffInput {
   pr?: string;
   /** Page slugs attached as evidence (the-line.md L6), listed in the comment. */
   pages?: string[];
+  /** The author's walkthrough of the change (ct-57527), hunks attached. */
+  guide?: ChangeGuide;
 }
 
 /** `--files a,b` → ["a", "b"]; blanks dropped. */
@@ -114,6 +116,7 @@ export function buildTaskHandoffBody(shortId: string, sessionId: string | null, 
     verification_evidence: input.evidence,
   };
   if (input.files?.length) body.files_changed = input.files;
+  if (input.guide) body.change_guide = input.guide;
   if (sessionId) body.conversation_id = sessionId;
   return body;
 }
@@ -123,6 +126,7 @@ export function handoffCommentText(input: HandoffInput): string {
   if (input.files?.length) lines.push("", `Files: ${input.files.join(", ")}`);
   if (input.pr) lines.push("", `PR: ${input.pr}`);
   if (input.pages?.length) lines.push("", `Pages: ${input.pages.map((slug) => `/a/${slug}`).join(", ")}`);
+  if (input.guide) lines.push("", `Guide: ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}, on the task's evidence`);
   return lines.join("\n");
 }
 

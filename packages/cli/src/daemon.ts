@@ -242,7 +242,8 @@ import {
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { TokenDecryptError } from "./tokenEncryption.js";
-import { bearerFromStored, storedFromBearer } from "./bearerToken.js";
+import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
+import { startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -9197,6 +9198,7 @@ function resolveTranscriptProjectPath(filePath: string, dirName: string): string
   let recordedCwd: string | undefined;
   try { recordedCwd = extractCwd(readFileHeadLines(filePath)); } catch {}
   const result = pickProjectPath({ decodedSlugPath, recordedCwd, home: process.env.HOME });
+  trackKnownValueCwd(recordedCwd ?? result);
   // Only memoize a trustworthy answer: a found cwd, or a slug that resolved to a
   // real non-$HOME project. A not-yet-populated transcript (no cwd line yet)
   // stays re-checkable so a transient guess isn't cached for the session's life.
@@ -29030,6 +29032,20 @@ async function main(): Promise<void> {
     userId: config.user_id,
   });
   syncServiceRef = syncService;
+  // Before any transcript is read: redactSecrets replaces this machine's real
+  // secret values from here on (knownValueRedaction.ts).
+  startKnownValueRedaction({
+    home: process.env.HOME || require("os").homedir(),
+    configDir: CONFIG_DIR,
+    env: () => process.env,
+    cwds: () => [...transcriptProjectPathCache.values(), ...sessionCwdCache.values()],
+    codecastSecrets: () => {
+      const token = readConfig()?.auth_token;
+      if (!token) return [];
+      try { return [token, secretFromStored(token)]; } catch { return [token]; }
+    },
+    log,
+  });
   resumeStartedSessionDiscovery();
 
   // Listen NOW, before the forced update check, the warm restart scan and the

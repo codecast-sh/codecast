@@ -78,6 +78,7 @@ import {
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
 import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
+import { changeGuideInputValidator } from "./lib/changeGuideValidator";
 export { canAccessTask };
 
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
@@ -2023,6 +2024,8 @@ export const update = mutation({
     execution_concerns: v.optional(v.string()),
     verification_evidence: v.optional(v.string()),
     files_changed: v.optional(v.array(v.string())),
+    // `cast task handoff --guide`: the author's walkthrough, stamped here.
+    change_guide: v.optional(changeGuideInputValidator),
     estimated_minutes: v.optional(v.number()),
     // The review station's verdict (the-line.md L3), recorded with the status
     // move in this one write. by_conversation_id is the caller's session.
@@ -2139,6 +2142,7 @@ export const update = mutation({
     if (args.execution_concerns !== undefined) updates.execution_concerns = args.execution_concerns;
     if (args.verification_evidence !== undefined) updates.verification_evidence = args.verification_evidence;
     if (args.files_changed) updates.files_changed = args.files_changed;
+    if (args.change_guide) updates.change_guide = { ...args.change_guide, written_at: now };
     if (args.estimated_minutes !== undefined) updates.estimated_minutes = args.estimated_minutes;
     Object.assign(updates, groundPatch(args));
     if (args.watch_days !== undefined) updates.watch_until = watchUntilFor(args.watch_days, now);
@@ -2886,6 +2890,8 @@ async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promis
         }
       : null;
     t.session_count = (t.conversation_ids || []).length;
+    // The guide carries its hunks and rides the evidence read, never a list.
+    delete t.change_guide;
   }
   return result;
 }

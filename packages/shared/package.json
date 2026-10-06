@@ -34,6 +34,7 @@
     "./contracts/codecastSignature": "./contracts/codecastSignature.ts",
     "./contracts/codecastConfig": "./contracts/codecastConfig.ts",
     "./contracts/changeCard": "./contracts/changeCard.ts",
+    "./contracts/changeGuide": "./contracts/changeGuide.ts",
     "./contracts/orgLog": "./contracts/orgLog.ts",
     "./contracts/orgCapacity": "./contracts/orgCapacity.ts",
     "./contracts/orgAreas": "./contracts/orgAreas.ts",
