@@ -272,7 +272,7 @@ describe("the header draws the model's row", () => {
     expect(h.q("[data-open-call]")).toBeNull();
   });
 
-  test("Open the call opens the stage in a browser, and nothing opens it on its own", async () => {
+  test("Expand opens the stage in a browser, and nothing opens it on its own", async () => {
     fakeRow = rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" })], [link(ANN, "call")], liveCard);
     const h = await mount();
     expect(getCallStageOpen()).toBe(false);
@@ -285,11 +285,11 @@ describe("the header draws the model's row", () => {
     threadUnread = 0;
     let h = await mount();
     expect(h.q("[data-open-call]")!.textContent).toBe("");
-    expect(h.q("[data-open-call]")!.getAttribute("aria-label")).toBe("Open the call");
+    expect(h.q("[data-open-call]")!.getAttribute("aria-label")).toBe("Expand the call");
     threadUnread = 3;
     h = await mount();
     expect(h.q("[data-open-call]")!.textContent).toBe("3");
-    expect(h.q("[data-open-call]")!.getAttribute("aria-label")).toBe("Open the call, 3 new in its chat");
+    expect(h.q("[data-open-call]")!.getAttribute("aria-label")).toBe("Expand the call, 3 new in its chat");
     // The count is why they clicked: the stage opens on its thread.
     await h.fire(h.q("[data-open-call]")!, "click");
     expect(takeCallThreadRequest()).toBe(true);
@@ -418,13 +418,13 @@ describe("the pop out", () => {
     expect(floating.set).toEqual([true]);
   });
 
-  test("while the faces float the header keeps one chip, which brings them back", async () => {
+  test("while the faces float the header keeps one chip, which docks them", async () => {
     floating.floating = true;
     const h = await mount();
     expect(h.q("[data-face-id]")).toBeNull();
     const chip = h.q("[data-dock-faces]")!;
-    // It says what a click does: bring them back.
-    expect(chip.textContent).toContain("Bring faces back");
+    // It says what a click does, in the float's own verb.
+    expect(chip.textContent).toContain("Dock faces");
     await h.fire(chip, "click");
     expect(floating.set).toEqual([false]);
   });

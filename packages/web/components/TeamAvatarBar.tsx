@@ -8,7 +8,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useSyncTeamMembers } from "../hooks/useSyncTeamMembers";
 import { useFaceRow } from "../hooks/useFaceRow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
-import { POP_OUT_PEOPLE_TITLE, useFacesFloating } from "../lib/desktop";
+import { DOCK_FACES_TITLE, POP_OUT_PEOPLE_TITLE, useFacesFloating } from "../lib/desktop";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import { memberDisplayName } from "./presence/memberPresence";
 import { popOutPeople } from "./people/popOutPeople";
@@ -109,8 +109,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     : null;
 
   // The row is floating over the work: one chip, and the pump. The chip
-  // says what a click does, not what the state is: "Faces are floating" read
-  // as a status line, and nothing about it said it would bring them home.
+  // says what a click does, in the same verb the float's own button uses.
   if (floating.floating) {
     return (
       <div className="people-bar flex items-center gap-1 px-2" data-floating="1">
@@ -120,10 +119,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           data-dock-faces
           onClick={() => floating.setFloating(false)}
           className="flex h-7 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 px-2.5 text-[11px] text-sol-cyan transition-colors hover:bg-sol-cyan/20"
-          title="The faces are floating over your work. Click to dock them back in the header."
+          title={DOCK_FACES_TITLE}
         >
           <PanelTop className="h-3.5 w-3.5" />
-          Bring faces back
+          Dock faces
         </button>
       </div>
     );
@@ -149,12 +148,9 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         callsEnabled={callsEnabled}
         onOpenProfile={(m) => router.push(`/team/${m.github_username || m._id}`)}
       >
-        {/* THE DOOR TO THE STAGE rides the call's own card, beside the mic
-            and End: it acts on the call, so it sits in the call. After the
-            roster it read as one more header control, three faces away. The
-            full stage (video, screen share, transcript) opens only when
-            asked; on the desktop the call already has a window, so this
-            raises it, or gives it one. */}
+        {/* EXPAND rides the call's own card, beside the mic and End: it
+            acts on the call, so it sits in the call. Pop out (below, at the
+            row's end) moves the whole row; expand opens the call's stage. */}
         <EngagementCard
           card={row.card}
           density="bar"
