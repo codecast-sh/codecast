@@ -20,9 +20,39 @@ export function useConnectAvailable(): ConnectAvailability {
   return { available: res.error ? undefined : res.data, failed: !!res.error };
 }
 
+/** Whether the assistant can think right now (assistant/incidents.ts
+ *  thinkingAvailable). True until the deployment says otherwise, and when
+ *  the question fails: a worry is said only when it is known. */
+export function useThinkingAvailable(): boolean {
+  return useQueryNoThrow(api.assistant.incidents.thinkingAvailable, {}).data !== false;
+}
+
+/** Said before the person types while no provider can serve a turn. */
+export const THINKING_DOWN = "I'm having trouble thinking right now. Anything you ask waits here, and I'll answer as soon as I'm back.";
+
+/** The asks the lane suggests, worded once for home and /welcome. */
+export const ASKS = {
+  week: "Look through my email and calendar and tell me what needs me this week",
+  replies: "What needs a reply from me this week?",
+  overnight: "Every weekday at 8, tell me what came in overnight that matters",
+  calendarWeek: "What's on my calendar this week, and when am I free?",
+  focus: "Find a free hour for me to focus this week",
+  morning: "Every weekday at 8, tell me what's on today",
+  planWeek: "Help me plan my week. Ask me what's on my plate first.",
+  sayNo: "Help me write a kind note saying no to an invitation",
+  compare: "Compare the three best rated robot vacuums for a small apartment",
+  mondays: "Every Monday at 9, remind me to plan the week",
+} as const;
+
+/** The assistant's one line of promise as a headline: /welcome's sign in and
+ *  the marketing page's section for people who do not write code. */
+export const ASSISTANT_HEADLINE = "An assistant for the busywork.";
+
 /** The link that invites a visitor who does not write code. */
 export function assistantInvite(mail: boolean): string {
-  return mail ? "Get an assistant for your email and calendar" : "Get a personal assistant";
+  return mail
+    ? "Get an assistant for your errands, notes and routines, mail included"
+    : "Get an assistant for your errands, notes and routines";
 }
 
 /** The one line under the sign in heading, in the assistant's own voice and

@@ -156,7 +156,7 @@ export function DecisionOptionList({
 export function TypeAnswerButton({ onOpen, keys = false }: { onOpen: () => void; keys?: boolean }) {
   return (
     <button type="button" onClick={onOpen} className="flex items-center gap-1.5 text-[12px] text-sol-text-dim hover:text-sol-text transition-colors">
-      {keys && <KeyCap size="xs">t</KeyCap>}<span>or type an answer in your own words</span>
+      {keys && <KeyCap size="xs">t</KeyCap>}<span>Or answer in your own words</span>
     </button>
   );
 }

@@ -104,6 +104,16 @@ function layerProblems(files: Map<string, string>, exportsMap: Record<string, st
     return candidates.find((c) => files.has(c)) ?? null;
   };
 
+  // A file's global scan depends only on the layer it is judged for, so each is scanned once per layer, however many starts reach it.
+  const scanned = new Map<string, string[]>();
+  const globalsOf = (layer: Layer, path: string) => {
+    const k = `${layer}\0${path}`;
+    if (!scanned.has(k)) scanned.set(k, globalProblems(layer, sourceOf(path)));
+    return scanned.get(k)!;
+  };
+  const imports = new Map<string, ReturnType<typeof moduleSpecifiers>>();
+  const importsOf = (path: string) => imports.get(path) ?? imports.set(path, moduleSpecifiers(sourceOf(path))).get(path)!;
+
   const problems = new Set<string>();
   for (const start of files.keys()) {
     const layer = layerOf(start);
@@ -117,9 +127,8 @@ function layerProblems(files: Map<string, string>, exportsMap: Record<string, st
     };
     while (queue.length) {
       const at = queue.shift()!;
-      const sf = sourceOf(at);
-      for (const g of globalProblems(layer, sf)) problems.add(`${chain(at)}: ${g}`);
-      for (const { spec, line } of moduleSpecifiers(sf)) {
+      for (const g of globalsOf(layer, at)) problems.add(`${chain(at)}: ${g}`);
+      for (const { spec, line } of importsOf(at)) {
         const where = `${chain(at)}:${line}`;
         if (spec.endsWith('.css')) continue; // CSS imports are react/guards.test.ts's rule
         const target = resolve(at, spec);
@@ -157,9 +166,10 @@ describe('layers', () => {
     }
   });
 
+  // Parses every product source once: about a second on an idle machine, several under load, so it gets more than the default 5 s.
   it('the package keeps the layer rule', () => {
     expect(layerProblems(tree(), pkg.exports)).toEqual([]);
-  });
+  }, 30_000);
 
   describe('the checker catches each kind of break', () => {
     const exportsMap = { '.': './src/index.ts', './react': './src/react/index.ts', './query': './src/query/index.ts' };

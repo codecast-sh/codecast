@@ -1,8 +1,9 @@
-import { attributionSearchable, flipReading, largestDrops, type Attribution, type BisectPlan, type Candidate, type CostBound, type ProbeReading, type RenderClass, type RunRowCore } from '../contract';
+import { attributionSearchable, flipReading, largestDrops, type Attribution, type BisectPlan, type BisectResponse, type BisectState, type BisectStatus, type BisectStep, type BisectSummary, type Candidate, type CostBound, type ProbeReading, type RenderClass, type RunRowCore } from '../contract';
 import { formatCost } from '@platform/cli-kit/format';
 
 import { median, separate } from './stats';
 import type { AttributionMeta } from './attribution';
+import { EVALS_STALL_MS } from './liveness';
 import { batchSet, BISECT_CADENCE, gradedSet, scoreOrZero, type VerdictKit } from './verdict';
 
 // The bisect's pure parts: how a set of reps reads against the ends of a
@@ -460,3 +461,64 @@ export const argsOf = (plan: BisectPlan): PlanArgs => ({
   maxMinutes: plan.maxMinutes,
   allCommits: plan.allCommits,
 });
+
+// ── Reading a bisect's state ────────────────────────────────────────────────
+// What a product's bisect source answers from the state its runner wrote:
+// the list's summary and the page's response. The product reads its files;
+// these say what they mean, so a server and a fixture cannot disagree.
+
+/** The statuses of a bisect still at work. */
+export const BISECT_LIVE: ReadonlySet<BisectStatus> = new Set(['planning', 'controls', 'probing', 'confirming']);
+export const isBisectLive = (status: BisectStatus): boolean => BISECT_LIVE.has(status);
+
+/** A bisect's outcome and culprit, as its summary, its glyph and its words read them. */
+export const bisectOutcomeOf = (state: Pick<BisectState, 'status' | 'answer'>) => ({
+  status: state.status,
+  outcome: state.answer?.kind ?? null,
+  culprit: state.answer?.kind === 'culprit' ? state.answer.commit.sha : null,
+});
+
+/** One bisect as the list shows it. */
+export const bisectSummaryOf = (s: BisectState): BisectSummary => ({
+  id: s.id,
+  surface: s.surface,
+  good: s.range.good,
+  bad: s.range.bad,
+  ...bisectOutcomeOf(s),
+  spentUsd: s.spentUsd,
+  budgetUsd: s.budgetUsd,
+  startedAt: s.startedAt,
+  updatedAt: s.updatedAt,
+  finishedAt: s.finishedAt,
+});
+
+/** The controls' reps on the flipped freezes, and whether the bad end separated from the good (BisectResponse.controls). */
+export function bisectControls(state: BisectState): BisectResponse['controls'] {
+  const focus = new Set(state.plan.freezes?.filter((f) => f.role === 'flipped').map((f) => f.id) ?? []);
+  const side = (kind: 'control-good' | 'control-bad') => state.probes.filter((p) => p.kind === kind).flatMap((p) => p.reps).filter((r) => (!focus.size || focus.has(r.freezeId)) && r.passed !== null);
+  const good = side('control-good');
+  const bad = side('control-bad');
+  if (!good.length && !bad.length) return null;
+  const tally = (reps: typeof good) => ({ passed: reps.filter((r) => r.passed).length, reps: reps.length });
+  const scores = (reps: typeof good) => reps.map((r) => r.score ?? (r.passed ? 1 : 0));
+  return { good: tally(good), bad: tally(bad), separation: separate(scores(bad), scores(good)) };
+}
+
+/** A live bisect that has written neither a step nor its state for the stall window. */
+export function bisectStalled(state: BisectState, steps: readonly BisectStep[], now: number, stallMs = EVALS_STALL_MS): boolean {
+  const lastAt = Math.max(Date.parse(steps.at(-1)?.at ?? '') || 0, Date.parse(state.updatedAt) || 0);
+  return isBisectLive(state.status) && now - lastAt > stallMs;
+}
+
+/** One bisect's page: its state, every step after `since` (`steps` is all of them, in order), the log's tail, the stall flag and the controls. */
+export function bisectResponseOf(o: { state: BisectState; steps: readonly BisectStep[]; since: number; logTail: string[]; now: number }): BisectResponse {
+  const { state, steps, since } = o;
+  return {
+    state,
+    steps: steps.filter((s) => s.seq > since),
+    cursor: Math.max(since, ...steps.map((s) => s.seq)),
+    logTail: o.logTail,
+    stalled: bisectStalled(state, steps, o.now),
+    controls: bisectControls(state),
+  };
+}

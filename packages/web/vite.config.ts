@@ -204,6 +204,8 @@ export default defineConfig(({ mode, command }) => ({
       // re-optimize that 504s their stale module URLs until restart.
       "prosemirror-collab",
       "@xyflow/react",
+      // The Evals area's shared views (app/evals/page.tsx), a lazy route too.
+      "@platform/evals/react",
     ],
   },
   build: {

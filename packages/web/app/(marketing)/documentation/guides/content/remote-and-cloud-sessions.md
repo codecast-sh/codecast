@@ -59,7 +59,14 @@ Use an Ubuntu 24.04 x86_64 AMI and a public subnet whose security group permits 
 4. The host runs its own `cast ws acquire` for each task. Dependency install runs on the host, and ports are probed on the machine that binds them. The session sees `PORT_WEB` and the worktree identity in its environment.
 5. The conversation row is created already pointed at the worktree and routed to the host's device.
 
+```figure
+CloudSpawnFigure
+The laptop prepares the host over SSH, then creates the row routed to the host, where the session starts on the host's own daemon.
+```
+
 A worktree starts from your checkout by default: its branch, its HEAD including commits you have not pushed, and its uncommitted, untracked and gitignored files (a `.env`, a local config). Dependency and build folders are rebuilt on the host instead, and very large files wait until asked for; the `[sync]` section below has the rules. The laptop takes a snapshot commit with a temporary index, so your own index and branches do not change. It pushes that commit to a hidden ref, `refs/codecast/cloud/<worktree-name>`, which `git ls-remote --heads` does not list. The host creates the branch under the laptop's branch name, or `<branch>-<hex>` when that name exists, and resets to the laptop HEAD so the changes are uncommitted again. `--from origin-main` starts clean instead. If you asked for your checkout and the snapshot, push or reset fails, the spawn fails with the tool's error. It does not fall back to origin/main silently.
+
+![A Codex worker running in a cloud worktree, its header naming the worktree and the tmux pane](/documentation/remote-and-cloud-sessions/cloud-worker.webp "A worker spawned with --cloud. Its header and its inbox row name the worktree cloud-4f2a91 on the host, and the tmux chip opens its pane; the conversation is the same thread as any local session.")
 
 `--shared` runs one task in the host's main checkout. One checkout holds one session: the row claims the path in Convex before anything moves, a second claimant is refused with the winner's session named, and a dirty checkout is refused with the files listed. A shared session always starts from origin/main on a new branch `codecast/cloud-<hex>`.
 
@@ -159,6 +166,11 @@ The batch runs on an online local daemon, which starts a detached runner and log
 
 Every ownership flip writes a divider into the transcript. Convex inserts a message that begins `[codecast] Now running on <machine> (was <machine>).` at the moment of the flip, and the timeline renders it as a rule across the thread. The destination daemon's later notice to the agent folds into the same divider. An empty conversation gets none.
 
+```figure
+MoveStagesFigure
+Fence, wait, quiesce, transfer, flip. Messages sent during the move are held, then delivered on the destination after the flip.
+```
+
 ## Keeping a fleet within a machine's means
 
 Hibernation parks a healthy session to give the machine back its resources. It is the reaper's teardown with a different status left behind: the daemon stops the session's heartbeat, keeps the transcript, kills the tmux session and its process tree, and sets the agent status to `hibernated`. The inbox shows the session as hibernated. The next message resumes it, because a wake is a resume. `cast wake` sends `resume_session`, and there is no separate wake command in the daemon.
@@ -182,6 +194,11 @@ Two other mechanisms serve the same goal. At boot and once an hour the daemon lo
 The terminal in a conversation normally connects to a WebSocket that the daemon serves on loopback, so it reaches only the machine the browser runs on. For a pane on another of your machines the split uses a second transport. The viewer takes a lease on one relay row in Convex and queues a `stream_pane` command for the far daemon. That daemon captures the whole screen with `tmux capture-pane -p -e` and pushes it to the row only when it changed. There is no PTY and no scrollback.
 
 Typing rides the same request in the other direction. The viewer appends bytes, as hex, to the row. The daemon's next push returns them in its answer and clears them in the same transaction, then writes them to the pane with `tmux send-keys -H`. A keystroke therefore arrives exactly once and cannot outlive the lease. It waits for the next capture tick, and its echo waits for the one after. That suits answering an agent and does not suit an editor that uses the whole screen.
+
+```figure
+PaneRelayFigure
+The viewer keeps a lease alive; the far daemon pushes captures while it lasts and collects keystrokes with each push. Closing the tab simply lets the lease run out.
+```
 
 | Quantity | Value |
 |----------|-------|

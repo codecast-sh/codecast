@@ -34,20 +34,18 @@ const { matchEvalsRoute } = await import("@codecast/shared/contracts/evalsApi");
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { evalsFixtureWorld } = await import("../__fixtures__/world");
 const { attributionPairs, fixtureBisect } = await import("../__fixtures__/bisect");
-const { rulerModel, orderCandidates, probesLeftFor, bisectSummaryWord, repTally, answerStepText } = await import("../bisectModel");
-const { AttributionView } = await import("../AttributionView");
-const { BisectView } = await import("../BisectView");
-const { isStalled } = await import("../bisectModel");
-const { BisectListView } = await import("../BisectListView");
-const { CommitPanelView } = await import("../CommitPanel");
-const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
-type EvalsHost = import("../host").EvalsHost;
+const { rulerModel, orderCandidates, probesLeftFor, bisectSummaryWord, repTally, answerStepText, isStalled, canStart, localTransport } = await import("@platform/evals/client");
+const { AttributionView } = await import("@platform/evals/react");
+const { BisectView } = await import("@platform/evals/react");
+const { BisectListView } = await import("@platform/evals/react");
+const { CommitPanelView } = await import("@platform/evals/react");
+const { codecastEvalsHost, CodecastEvalsProvider } = await import("../host");
+type EvalsHost = import("@platform/evals/react").EvalsHost;
 type CommitResponse = import("@codecast/shared/contracts/evalsApi").CommitResponse;
-const { BisectPlanPanel } = await import("../BisectPlanPanel");
-const { canStart } = await import("../bisectModel");
-const { BisectNewPage } = await import("../pages/BisectNewPage");
-const { BisectPage } = await import("../pages/BisectPage");
-const { BisectListPage } = await import("../pages/BisectListPage");
+const { BisectPlanPanel } = await import("@platform/evals/react");
+const { BisectNewPage } = await import("@platform/evals/react");
+const { BisectPage } = await import("@platform/evals/react");
+const { BisectListPage } = await import("@platform/evals/react");
 type Attribution = import("@codecast/shared/contracts/evalsApi").Attribution;
 type BisectResponse = import("@codecast/shared/contracts/evalsApi").BisectResponse;
 type BisectPlan = import("@codecast/shared/contracts/evalsApi").BisectPlan;
@@ -56,11 +54,17 @@ type BisectListResponse = import("@codecast/shared/contracts/evalsApi").BisectLi
 // A loaded machine renders a DiffView in seconds, and the case search walks the world.
 setDefaultTimeout(120_000);
 
-// The world reads the clock: each bisect takes its range from the records before it, and at some hours no pair fits a
-// case, so the world leaves that bisect out. The test runs at one fixed instant (the clock still ticks from it).
+// The world's bisects run on the real clock, and the pages weigh them against it. The test runs at one fixed instant
+// (the clock still ticks from it), so what it reads off the world and what the pages draw agree.
 setSystemTime(new Date("2026-10-05T23:30:00.000Z"));
 const world = evalsFixtureWorld();
-const pairs = attributionPairs(world as never);
+const pairs = await attributionPairs(world);
+// Every answer the tests read off the world, asked once: a describe body cannot wait for one.
+const attributions = new Map<string, Attribution>();
+for (const [k, p] of Object.entries(pairs)) attributions.set(k, await world.answer("GET /attribution", {}, { surface: p.surface, good: p.good, bad: p.bad }));
+const bisectList: BisectListResponse = await world.answer("GET /bisects");
+const bisects = new Map<string, BisectResponse>();
+for (const b of bisectList.bisects) bisects.set(b.id, await world.answer("GET /bisect/:id", { id: b.id }));
 const posts: Array<{ path: string; body: unknown }> = [];
 const gets: Array<{ path: string; query: Record<string, string> }> = [];
 /** Whether the world's running bisect holds the one-bisect lock (or a named holder the list does not carry); most tests start on a free machine. */
@@ -69,7 +73,8 @@ let lockHeld: boolean | string = false;
 const notYet = new Map<string, { misses: number; as: string }>();
 
 beforeAll(() => {
-  // One world for the test and the pages, so batch names agree.
+  // One world for the test and the pages, so batch names agree. Each answer is a copy, as it is over the wire.
+  const answers = localTransport(world.handle, "fixture");
   const transport = {
     kind: "fixture" as const,
     async send(req: import("@codecast/shared/contracts/evalsApi").EvalsBridgeRequest) {
@@ -79,15 +84,10 @@ beforeAll(() => {
       if (!route) return { status: 404, body: { error: "no route", reason: "not-found" } };
       const pending = route.key === "GET /bisect/:id" ? notYet.get(route.params.id!) : undefined;
       if (pending && pending.misses-- > 0) return { status: 404, body: { error: "no such bisect", reason: "not-found" } };
-      if (pending) return { status: 200, body: structuredClone(world.answer(route.key, { id: pending.as }, req.query)) };
-      try {
-        const body = structuredClone(world.answer(route.key, route.params, req.query, req.body));
-        if (route.key === "GET /bisects" && !lockHeld) (body as BisectListResponse).running = null;
-        if (route.key === "GET /bisects" && typeof lockHeld === "string") (body as BisectListResponse).running = lockHeld;
-        return { status: 200, body };
-      } catch (e) {
-        return { status: 404, body: { error: (e as Error).message, reason: "not-found" } };
-      }
+      const res = await answers.send(pending ? { ...req, path: `/bisect/${pending.as}` } : req);
+      if (res.status === 200 && route.key === "GET /bisects" && !lockHeld) (res.body as BisectListResponse).running = null;
+      if (res.status === 200 && route.key === "GET /bisects" && typeof lockHeld === "string") (res.body as BisectListResponse).running = lockHeld;
+      return res;
     },
   };
   useEvalsStore.setState({ connection: "connected", transport, resources: {} });
@@ -106,7 +106,7 @@ async function mount(node: React.ReactNode) {
   await act(async () =>
     root.render(
       <ConvexProvider client={heroConvexStub}>
-        <MemoryRouter initialEntries={["/evals/bisect"]}>{node}</MemoryRouter>
+        <MemoryRouter initialEntries={["/evals/bisect"]}><CodecastEvalsProvider>{node}</CodecastEvalsProvider></MemoryRouter>
       </ConvexProvider>,
     ),
   );
@@ -120,11 +120,8 @@ async function settle(container: HTMLElement, until: (c: HTMLElement) => boolean
   return until(container);
 }
 
-const attribution = (k: keyof typeof pairs) => {
-  const p = pairs[k]!;
-  return world.answer("GET /attribution", {}, { surface: p.surface, good: p.good, bad: p.bad }) as Attribution;
-};
-const bisect = (id: string) => world.answer("GET /bisect/:id", { id }, {}) as BisectResponse;
+const attribution = (k: keyof typeof pairs) => attributions.get(k)!;
+const bisect = (id: string) => bisects.get(id)!;
 
 describe("the ruler model", () => {
   const running = bisect("b-settle-1003");
@@ -201,6 +198,21 @@ describe("the free answer", () => {
       await unmount();
     });
   }
+
+  it("keeps each flip's before and after side by side, with no size container of its own to stack them in", async () => {
+    const a = (Object.keys(pairs) as Array<keyof typeof pairs>).map(attribution).find((x) => x.examples.length > 0)!;
+    expect(a).toBeTruthy();
+    const { container, unmount } = await mount(<AttributionView attribution={a} />);
+    const examples = [...container.querySelectorAll("[data-evb-examples] .cc-example")];
+    expect(examples.length).toBe(a.examples.length);
+    // Before the host seam these pairs sat bare in their row; the host's stacking container is for comparison lists.
+    for (const ex of examples) expect(ex.parentElement!.hasAttribute("data-ev-flip")).toBe(true);
+    await unmount();
+    const { ExamplePair } = codecastEvalsHost.ui;
+    const list = await mount(<ExamplePair ex={a.examples[0]!} />);
+    expect(list.container.querySelector(".cc-example")!.parentElement).not.toBe(list.container);
+    await list.unmount();
+  });
 
   it("shows a pinned answer's commit and no Start", async () => {
     const p = pairs.pinned!;
@@ -341,8 +353,8 @@ describe("the free answer", () => {
     }
   });
 
-  it("refuses Start over budget or with no freeze", () => {
-    const plan = (world.answer("POST /bisect/plan", {}, {}, { surface: pairs.narrowed!.surface, good: pairs.narrowed!.good, bad: pairs.narrowed!.bad }) as BisectPlan);
+  it("refuses Start over budget or with no freeze", async () => {
+    const plan = await world.answer("POST /bisect/plan", {}, {}, { surface: pairs.narrowed!.surface, good: pairs.narrowed!.good, bad: pairs.narrowed!.bad });
     const settings = { freezes: plan.freezes.map((f) => f.id), reps: 3, budgetUsd: null, maxMinutes: null, allCommits: false };
     expect(canStart({ plan, pending: false, starting: false, confirm: false, settings })).toBe(true);
     expect(canStart({ plan, pending: false, starting: false, confirm: false, settings: { ...settings, budgetUsd: plan.bound.maxUsd / 2 } })).toBe(false);
@@ -351,7 +363,7 @@ describe("the free answer", () => {
   });
 
   it("shows the bound in plain words and an over-budget warning", async () => {
-    const plan = (world.answer("POST /bisect/plan", {}, {}, { surface: pairs.agent!.surface, good: pairs.agent!.good, bad: pairs.agent!.bad }) as BisectPlan);
+    const plan = await world.answer("POST /bisect/plan", {}, {}, { surface: pairs.agent!.surface, good: pairs.agent!.good, bad: pairs.agent!.bad });
     const settings = { freezes: plan.freezes.map((f) => f.id), reps: 3, budgetUsd: plan.bound.maxUsd / 2, maxMinutes: null, allCommits: false };
     const noop = () => {};
     const { container, unmount } = await mount(
@@ -472,13 +484,13 @@ describe("one bisect", () => {
   });
 
   it("names a commit's session only through a host that reads one, and shows the message whole otherwise", async () => {
-    const data = world.answer("GET /commit/:sha", { sha: "28a65ba1d0a91b5a0a2f1536cd86e6a554e4dc8d" }, {}) as CommitResponse;
+    const data: CommitResponse = await world.answer("GET /commit/:sha", { sha: "28a65ba1d0a91b5a0a2f1536cd86e6a554e4dc8d" });
     expect(data.commit.session).toBeTruthy();
     const render = (commitSession: EvalsHost["commitSession"]) =>
       mount(
-        <EvalsHostProvider host={{ ...codecastEvalsHost, commitSession, ui: { ...codecastEvalsHost.ui, SessionPill: ({ id }) => <span data-test-pill={id} /> } }}>
+        <CodecastEvalsProvider host={{ ...codecastEvalsHost, commitSession, ui: { ...codecastEvalsHost.ui, SessionPill: ({ id }) => <span data-test-pill={id} /> } }}>
           <CommitPanelView data={data} whole={false} onWhole={() => {}} />
-        </EvalsHostProvider>,
+        </CodecastEvalsProvider>,
       );
     const reading = await render(codecastEvalsHost.commitSession);
     expect(reading.container.querySelector("[data-test-pill]")!.getAttribute("data-test-pill")).toBe(codecastEvalsHost.commitSession!.id(data.commit.session!));
@@ -546,7 +558,7 @@ describe("one bisect", () => {
 
 describe("the list", () => {
   it("lists running bisects first, then newest", async () => {
-    const list = world.answer("GET /bisects", {}, {}) as BisectListResponse;
+    const list = bisectList;
     // The world's bisects run on the real clock, as the pages weigh them (buildBisects).
     const { container, unmount } = await mount(<BisectListView bisects={list.bisects} now={Date.now()} />);
     const rows = [...container.querySelectorAll("[data-evb-row]")];

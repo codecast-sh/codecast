@@ -19,7 +19,7 @@
 // membership-only when they truly render no row fields.
 import { useMemo } from "react";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
-import { activeWorkspaceKeyOf, filterByWorkspace, inWorkspace, type WorkspaceKey } from "../lib/workspaceScope";
+import { activeWorkspaceKeyOf, inWorkspace, type WorkspaceKey } from "../lib/workspaceScope";
 import { collectionRowListed, type WorkspaceScopedStoreKey } from "../store/clientSyncRegistry";
 
 // Derived from the registry: a collection declares `workspaceScoped: true`
@@ -91,12 +91,14 @@ export function defaultFieldSig(row: any): string {
  */
 export function workspaceRows<T = any>(table: WorkspaceScopedTable, coll: Record<string, T>, key: WorkspaceKey | null): T[] {
   const listed = collectionRowListed(table);
-  return filterByWorkspace(
-    Object.entries(coll ?? {})
-      .filter(([k, row]) => k === String((row as any)?._id) && (!listed || listed(row)))
-      .map(([, row]) => row) as any[],
-    key,
-  ) as T[];
+  const rows: T[] = [];
+  for (const id in coll) {
+    if (!Object.hasOwn(coll, id)) continue;
+    const row = coll[id];
+    if (id !== String((row as any)?._id) || (listed && !listed(row))) continue;
+    if (inWorkspace(row as any, key)) rows.push(row);
+  }
+  return rows;
 }
 
 /**

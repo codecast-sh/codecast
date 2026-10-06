@@ -146,7 +146,7 @@ function GenericAnswerControls({
 
   const dismissBtn = onDismiss && (
     <button onClick={onDismiss} className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors" title="Dismiss without answering — the agent is not told">
-      {keys && <KeyCap size="xs">x</KeyCap>}<span>dismiss</span>
+      {keys && <KeyCap size="xs">x</KeyCap>}<span>Dismiss</span>
     </button>
   );
 

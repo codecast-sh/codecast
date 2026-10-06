@@ -2,7 +2,6 @@
 // a page outside the app (the marketing site, signup) can link into the lane
 // without loading the store or the lane's model. lanePref.ts and lane.ts
 // re-export these names for everything inside the app.
-import { BILLING_RETURN } from "@codecast/shared/contracts/assistant";
 import { LANE_CONVERSATION_ROUTE, LANE_ROOT, WELCOME_PATH } from "./laneBoot";
 
 export { LANE_CONVERSATION_ROUTE };
@@ -10,18 +9,23 @@ export { LANE_CONVERSATION_ROUTE };
 /** "simple" is the hosted assistant's lane; "full" or absent is the whole app. */
 export type Lane = "simple" | "full";
 
-/** Where each lane opens. */
-export const LANE_HOME: Record<Lane, string> = { simple: LANE_ROOT, full: "/inbox" };
+/** Where hosted mode opens on the web: the main app's inbox, the same home
+ *  as the developer default. */
+export const HOSTED_HOME = "/inbox";
 
-/** Where each surface of the lane lives. */
+/** A conversation's page in the main app, hosted or not. */
+export function hostedConversationPath(id: string): string {
+  return `/conversation/${id}`;
+}
+
+/** The retired lane's addresses, which old links, pushes and returns still
+ *  carry (lib/laneRedirect sends each to its main-app page), and /welcome. */
 export const LANE_PATHS = {
-  home: LANE_HOME.simple,
+  home: LANE_ROOT,
   approvals: `${LANE_ROOT}/approvals`,
   routines: `${LANE_ROOT}/routines`,
   connections: `${LANE_ROOT}/connections`,
-  // Stripe returns people here (convex/billing.ts), so the server and the
-  // route read the one path.
-  plan: BILLING_RETURN.path,
+  plan: `${LANE_ROOT}/plan`,
   welcome: WELCOME_PATH,
 } as const;
 
@@ -30,6 +34,20 @@ export function laneOf(ui: { lane?: string } | null | undefined): Lane {
   return ui?.lane === "simple" ? "simple" : "full";
 }
 
+/** Hosted mode: the person lives in the hosted assistant's lane. Every
+ *  reader of hosted mode asks this rather than comparing the lane string. */
+export function isHostedUi(ui: { lane?: string } | null | undefined): boolean {
+  return laneOf(ui) === "simple";
+}
+
+/** A conversation's address in the retired lane (lib/laneRedirect sends it
+ *  to the conversation page). */
 export function conversationPath(id: string): string {
   return LANE_CONVERSATION_ROUTE.replace(":id", id);
+}
+
+/** Whether an inbox row leads with its agent's glyph: on by default, off by
+ *  default in hosted mode, where the person has the one assistant. */
+export function showsAgentIcon(ui: { show_agent_icon?: boolean; lane?: string } | null | undefined): boolean {
+  return ui?.show_agent_icon ?? !isHostedUi(ui);
 }

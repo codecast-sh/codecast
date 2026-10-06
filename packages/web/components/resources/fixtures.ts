@@ -94,6 +94,10 @@ function laptopSnapshot(now: number, sample: ResourcePoint): MachineResourceSnap
     proc("claude", "agent", 0.3, 410, "ms-api"),
     proc("bun server.ts", "tool", 35, 1400, "ms-api"),
     proc("k6 run", "tool", 120, 900, "ms-api"),
+    // Left running outside the agents' trees, found through their environment.
+    { ...proc("ffmpeg", "tool", 180, 120, "ms-docs"), detached: "background" },
+    { ...proc("bun scenario.ts", "tool", 42, 260, "ms-api"), detached: "tmux" },
+    { ...proc("npm install", "tool", 11, 180, "ms-api"), detached: "tmux" },
     proc("node next dev :3200", "tool", 44, 2800, undefined, ["ms-perf", "ms-e2e"], 280),
     // Nobody's session started these.
     proc("Google Chrome", "browser", 28, 2300),
@@ -107,7 +111,7 @@ function laptopSnapshot(now: number, sample: ResourcePoint): MachineResourceSnap
   ];
   // The machine counted far more than the top list: every kind carries a tail.
   const tail: Record<ResourceKind, [number, number, number]> = {
-    agent: [12, 9 * GB, 54], tool: [140, 11 * GB, 420], browser: [80, 14 * GB, 160],
+    agent: [12, 9 * GB, 54], tool: [140, 11 * GB, 417], browser: [80, 14 * GB, 160],
     simulator: [30, 4 * GB, 210], app: [40, 6 * GB, 300], system: [120, 7 * GB, 640],
   };
   const groups = (Object.keys(tail) as ResourceKind[]).map((kind) => {

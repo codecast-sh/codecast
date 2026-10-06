@@ -5,7 +5,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 
 // The undo card opens sessions through useOpenSession, and the card mounts in
-// frames outside the tab shell too (the simple lane, the standalone /r pages).
+// frames outside the tab shell too (the standalone /r pages).
 // There usePathname still reports the active tab's path (/inbox), and opening
 // "in place" only writes the store's pointer: the page never moves. Outside
 // the shell, opening a session must leave for it.

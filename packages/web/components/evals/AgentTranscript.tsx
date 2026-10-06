@@ -5,7 +5,7 @@
 
 import type { AgentDetail, AgentItem } from "@codecast/shared/contracts/evalsApi";
 import { TokenLine } from "./CallPane";
-import { TextPane } from "./parts";
+import { TextPane } from "@platform/evals/react";
 
 function toolInput(input: unknown): string {
   if (input && typeof input === "object") {

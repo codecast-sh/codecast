@@ -1,9 +1,9 @@
-import { Outlet, useLocation } from "react-router";
+import { Navigate, Outlet, useLocation } from "react-router";
 import { AuthGuard } from "@/components/AuthGuard";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SettingsRedirect } from "@/components/settings/SettingsRedirect";
-import { settingsSectionForPath } from "@/lib/settingsSections";
+import { SETTINGS_PAGES_MOVED, settingsSectionForPath } from "@/lib/settingsSections";
 
 /**
  * Settings render in a modal (components/settings/SettingsModal.tsx), not as
@@ -20,6 +20,8 @@ export function SettingsLayout() {
   const hit = settingsSectionForPath(location.pathname + location.search);
 
   if (hit) return <SettingsRedirect hit={hit} />;
+  const moved = SETTINGS_PAGES_MOVED[location.pathname.replace(/\/+$/, "")];
+  if (moved) return <Navigate to={moved + location.search} replace />;
 
   return (
     <AuthGuard>

@@ -1,7 +1,7 @@
 {
   "name": "@platform/evals",
   "version": "0.1.0",
-  "description": "Read conversations, freeze a moment, replay and simulate it, judge the result: the terminal CLI, the on-disk run layout, and the multiplayer HTML pages, with the app's data behind adapter seams",
+  "description": "Read conversations, freeze a moment, replay and simulate it, judge the result: the terminal CLI, the on-disk run layout, the multiplayer HTML pages, and the shared Evals views over one verdict implementation (contract, analysis, query, client and react layers), with the app's data behind adapter seams",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -23,6 +23,9 @@
   },
   "files": [
     "src"
+  ],
+  "sideEffects": [
+    "*.css"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

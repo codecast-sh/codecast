@@ -46,10 +46,17 @@ function install(win: Window): HandlerRef {
 }
 
 // Eagerly register at module-evaluation time (runs before any React effects).
-const handlerRef: HandlerRef = typeof window === 'undefined' ? { current: null } : install(window);
+const detached: HandlerRef = typeof window === 'undefined' ? { current: null } : install(window);
+
+/**
+ * The current window's slot. In an app it is the one installed at load; a
+ * test that swaps the window (one jsdom per file, one module cache per run)
+ * gets a slot on its own window instead of handing keys to a closed one.
+ */
+const slot = (): HandlerRef => (typeof window === 'undefined' ? detached : install(window));
 
 export function setShortcutHandler(handler: KeyHandler | null): void {
-  handlerRef.current = handler;
+  slot().current = handler;
 }
 
 /**
@@ -58,12 +65,11 @@ export function setShortcutHandler(handler: KeyHandler | null): void {
  * document, capture or bubble) and no React handler sees it. Returns the
  * release.
  *
- * The current window's slot is used, installed if a test swapped the window
- * after this module loaded; in an app the slot was installed at load.
+ * Claims go to the current window's slot, as the handler does.
  */
 export function claimKeys(claim: KeyClaim): () => void {
   if (typeof window === 'undefined') return () => {};
-  const claims = install(window).claims!;
+  const claims = slot().claims!;
   claims.push(claim);
   return () => {
     const at = claims.indexOf(claim);

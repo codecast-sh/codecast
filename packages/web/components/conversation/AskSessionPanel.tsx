@@ -16,6 +16,7 @@ import { askCiteTarget, linkAskCitations } from "../../lib/askSession";
 import { useAskSession, useAskThread, type AskEntry } from "../../hooks/useAskSession";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { MenuKeyCaps, KeyCap } from "../KeyboardShortcutsHelp";
+import { useModeWords } from "../../lib/surfaces";
 
 // ── Answer body ────────────────────────────────────────────────────────────
 const CiteContext = createContext<(messageId: string) => void>(() => {});
@@ -97,6 +98,7 @@ export function AskSessionPanel({
   onCite: (messageId: string) => void;
   onClose: () => void;
 }) {
+  const words = useModeWords();
   const entries = useAskThread(conversationId);
   const ask = useAskSession(conversationId);
   const [draft, setDraft] = useState("");
@@ -124,7 +126,7 @@ export function AskSessionPanel({
     >
       <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/60">
         <MessageCircleQuestion className="w-3.5 h-3.5 text-sol-cyan" />
-        <span className="text-[12px] font-medium text-sol-text">Ask this session</span>
+        <span className="text-[12px] font-medium text-sol-text">Ask {words.thisConversation}</span>
         <MenuKeyCaps action="conv.ask" className="flex items-center gap-[2px] opacity-70" />
         <button
           type="button"
@@ -156,7 +158,7 @@ export function AskSessionPanel({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={entries.length > 0 ? "Ask a follow-up" : "What did this session decide about…"}
+          placeholder={entries.length > 0 ? "Ask a follow-up" : `What did ${words.thisConversation} decide about…`}
           className="flex-1 resize-none bg-transparent outline-none text-[13px] leading-5 text-sol-text placeholder:text-sol-text-dim max-h-28 [field-sizing:content] [font-variant-ligatures:none]"
         />
         <button

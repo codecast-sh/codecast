@@ -265,8 +265,8 @@ Short ids render as live pills wherever codecast shows prose.`,
   cast expectations apply|drop <xp-N>
 
 --brief is what a judge reads: the active lines with ids under the version a
-finding cites. A proposal that only adds lines with quoted, dated sources
-applies on its own; edits and retirements wait for the project's person.`,
+finding cites. A proposal that only adds lines, each in a person's quoted,
+dated words, applies on its own; any other change waits for the project's person.`,
     load: () => import("./expectationsCommand.js").then((m) => m.registerExpectationsCommand),
   },
   {

@@ -11,10 +11,10 @@ import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { useTheme } from "./ThemeProvider";
 import {
-  Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
+  Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
-  Blocks, Sun, Moon, SquareTerminal,
+  Blocks, Library, Sun, Moon, SquareTerminal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -211,8 +211,9 @@ export function UserMenu() {
               onClick={() => { setOpen(false); toggleTheme(); }}
             />
             <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />
+            <MenuItem icon={Blocks} label="Agent features" onClick={() => go("/agent-features")} />
             <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />
-            <MenuItem icon={Blocks} label="Capabilities" onClick={() => go("/capabilities")} />
+            <MenuItem icon={Library} label="Capabilities" onClick={() => go("/capabilities")} />
             <MenuItem
               icon={BookOpen}
               label="Documentation"
@@ -243,7 +244,6 @@ export function UserMenu() {
 
           <div className="border-t border-sol-border py-1">
             <MenuItem icon={CircleUser} label="Profile" onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)} />
-            <MenuItem icon={History} label="Timeline" onClick={() => go("/timeline")} />
             <MenuItem icon={Rss} label="Feed" onClick={() => go("/feed")} />
             <MenuItem icon={Radio} label="Crosstalk" onClick={() => go("/crosstalk")} />
             <MenuItem icon={ListChecks} label="Tasks" onClick={() => go("/tasks")} />

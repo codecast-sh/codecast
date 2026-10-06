@@ -1639,6 +1639,26 @@ export function planStuckMessageHeal(
   return { kind: "skip" };
 }
 
+// A session with no live process never becomes ready on its own. The daemon resumes a dead
+// session only for a `pending` row, so a row left `injected` when its session died before the
+// text was submitted waited for a readiness that could not come (jx71gjy, 2026-10-05: a card
+// sent to a reaped session sat for a day until the human sent it again). Re-pending it lets the
+// daemon resume the session exactly as it would for a new send. Three bounds keep the backlog of
+// weeks-old rows from becoming a resume storm: only recent rows, each row once, and a few
+// sessions per pass. `undeliverable` is left alone: the daemon already spent its budget on it.
+export const DEAD_SESSION_REVIVE_WINDOW_MS = 6 * 60 * 60_000;
+export const DEAD_SESSION_REVIVES_PER_PASS = 3;
+
+export function planDeadSessionRevive(
+  msg: { status: string; content: string; created_at: number; dead_session_revived_at?: number },
+  now: number
+): boolean {
+  if (msg.dead_session_revived_at !== undefined) return false;
+  if (msg.status !== "injected" && msg.status !== "failed") return false;
+  if (now - msg.created_at >= DEAD_SESSION_REVIVE_WINDOW_MS) return false;
+  return planStuckMessageHeal(msg, now).kind === "repend";
+}
+
 // The cron only revives a stranded message when its session is live AND settled — i.e. ready to
 // receive it right now. A user message is NEVER dropped: if the session is busy, blocked, stopped,
 // resuming, or gone, the message is left untouched and revived on a later tick once the session
@@ -1785,6 +1805,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
     const reflag = new Set<Id<"conversations">>();
     const safetyBlocked = new Map<string, boolean>();
     const gone = new Set<string>();
+    const deadRevived = new Set<string>();
     // Hosted conversations are served by their turn engine, not a daemon: a
     // stale row there means a wake was lost, so the backstop wakes the
     // conversation again (once per pass) instead of re-pending for a daemon.
@@ -1838,8 +1859,21 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
       }
       // Session not ready to receive (busy / blocked / stopped / gone): leave the message
       // exactly as-is — preserved, never dropped — and revive it once the session is idle.
-      if (!ready.has(msg.conversation_id.toString())) {
-        waiting++;
+      // A session with no live process is the exception: see planDeadSessionRevive.
+      if (!ready.has(conversationId)) {
+        const revivable = !live.has(conversationId) && !gone.has(conversationId)
+          && planDeadSessionRevive(msg, now)
+          && (deadRevived.has(conversationId) || deadRevived.size < DEAD_SESSION_REVIVES_PER_PASS);
+        if (!revivable) {
+          waiting++;
+          continue;
+        }
+        deadRevived.add(conversationId);
+        if (await rependPendingMessage(ctx, msg, 0)) {
+          await ctx.db.patch(msg._id, { dead_session_revived_at: now });
+          reflag.add(msg.conversation_id);
+          revived++;
+        }
         continue;
       }
       const action = planStuckMessageHeal(msg, now);

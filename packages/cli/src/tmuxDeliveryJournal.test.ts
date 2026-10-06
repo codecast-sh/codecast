@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pendingMessageFinished, prepareTmuxDelivery, TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { pendingMessageFinished, prepareTmuxDelivery, TMUX_PASTE_WRITE_CAP, TmuxDeliveryExhaustedError, TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 
 const dirs: string[] = [];
 const stores: TmuxDeliveryJournal[] = [];
@@ -132,4 +132,48 @@ test("a verification the server never acknowledged is reported once the receipt 
   const settled = await prepareTmuxDelivery("target", identity, query, async () => false, store, { settleMs: 0 });
   expect(settled.unacknowledged).toBe(true);
   expect(settled.prior?.phase).toBe("verified");
+});
+
+test("a message is written at most TMUX_PASTE_WRITE_CAP times, then refused loudly", () => {
+  // jx7b88a, 2026-10-05: each write reached the agent six bytes short, the
+  // transcript never matched, and the receipt was released and rewritten
+  // five times. The cap ends that at a fixed count, with the count on record.
+  const store = open();
+  for (let write = 1; write <= TMUX_PASTE_WRITE_CAP; write++) {
+    const { receipt, fresh } = store.begin(identity, generation, "continue");
+    expect({ fresh, writes: receipt.writes }).toEqual({ fresh: true, writes: write });
+    expect(store.get(identity.messageId)?.writes).toBe(write);
+    store.advance(identity.messageId, "submit");
+    store.release(identity.messageId);
+  }
+  expect(store.get(identity.messageId)).toBeNull();
+  expect(store.writesOf(identity.messageId)).toBe(TMUX_PASTE_WRITE_CAP);
+  let error: unknown;
+  try { store.begin(identity, generation, "continue"); } catch (e) { error = e; }
+  expect(error).toBeInstanceOf(TmuxDeliveryExhaustedError);
+  expect((error as TmuxDeliveryExhaustedError).writes).toBe(TMUX_PASTE_WRITE_CAP);
+  expect(String(error)).toMatch(/^Error: INJECT_EXHAUSTED: written into the pane 3 times/);
+  // Nothing was written: the pane is free for the next message.
+  expect(store.begin({ ...identity, messageId: "message-b" }, generation, "next").fresh).toBe(true);
+});
+
+test("a re-begin of the same write and a verified delivery spend nothing", () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  expect(store.begin(identity, generation, "continue").fresh).toBe(false);
+  expect(store.writesOf(identity.messageId)).toBe(1);
+  store.advance(identity.messageId, "verified");
+  expect(store.writesOf(identity.messageId)).toBe(0);
+  expect(store.get(identity.messageId)?.writes).toBeNull();
+});
+
+test("the write count survives a reopen and a replaced pane", async () => {
+  const path = file();
+  const first = open(path);
+  first.begin(identity, generation, "continue");
+  first.abandonUnsubmitted(identity.messageId);
+  const reopened = open(path);
+  expect(reopened.writesOf(identity.messageId)).toBe(1);
+  const other = JSON.stringify(["101", "/socket", "%2", "201", "301"]);
+  expect(reopened.begin(identity, other, "continue").receipt.writes).toBe(2);
 });

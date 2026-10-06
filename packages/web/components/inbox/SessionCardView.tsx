@@ -3,6 +3,8 @@ import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { withSafetyBlock, isStashHidden, type UserRest } from "@codecast/shared/contracts";
+import type { NoticeKind } from "@codecast/shared/contracts/assistant";
+import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
 import { AvatarImg } from "../../lib/avatarCache";
@@ -56,6 +58,9 @@ export type SessionCardChrome = {
   showBranchPill: boolean;
   /** The workspace asks for every session to have a face. */
   personifyAll: boolean;
+  /** Branch, worktree and pull request chips at all (lib/surfaces.ts
+   *  "gitChips"; off in hosted mode). Absent means shown. */
+  showGitChips?: boolean;
 };
 
 /** The per-card live facts that are not fields of the session row. */
@@ -70,6 +75,10 @@ export type SessionCardLiveness = {
   restarting: boolean;
   /** The kept compose draft's unsent text; "" when there is none. */
   draft: string;
+  /** A hosted conversation whose transcript ends on a stop notice: the
+   *  notice's kind, so the row says it stopped rather than looking like one
+   *  that was answered. */
+  stopped?: NoticeKind | null;
 };
 
 export type SessionCardViewProps = {
@@ -218,7 +227,9 @@ export function SessionCardView({
     liveness.blockedReviveAt,
     now,
   );
-  const { showModelBadge, showAgentIcon, showBranchPill } = chrome;
+  const { showModelBadge, showAgentIcon } = chrome;
+  const showGitChips = chrome.showGitChips !== false;
+  const showBranchPill = chrome.showBranchPill && showGitChips;
   // Personification is opt in (session-characters.md S2): a session shows a
   // face once somebody gives it one, or when the workspace asks for every
   // session to have one. A role's standing session always has one — the role
@@ -289,7 +300,7 @@ export function SessionCardView({
     onDropFiles,
   });
 
-  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
+  const worktreeChip = showGitChips && (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
     <SessionWorktreeChip
       name={session.worktree_name}
       branch={session.worktree_branch}
@@ -375,7 +386,7 @@ export function SessionCardView({
                 </span>
               )}
               {!isLive && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Idle" />
               )}
               {session.message_count > 0 && (
                 <span className="text-[9px] tabular-nums text-sol-text-dim/50">{session.message_count}</span>
@@ -541,6 +552,12 @@ export function SessionCardView({
             </span>
           )}
           {isUnread && !isActive && <UnreadDot />}
+          {liveness.stopped && (
+            <span data-sv-stopped className="flex-shrink-0 flex items-center gap-1 text-[11px] font-medium text-sol-text-muted" title="The assistant stopped before answering. Open it to try again.">
+              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${NOTICE_DOT[liveness.stopped]}`} />
+              {NOTICE_ROW_WORD[liveness.stopped]}
+            </span>
+          )}
           {/* Name, then the title: "Ember: Fixing the auth race". The name is
               the row's identity and never truncates; the title does. */}
           <SessionIdentityLine
@@ -695,7 +712,7 @@ export function SessionCardView({
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
-            <PrStatusChip status={session.pr_status} />
+            {showGitChips && <PrStatusChip status={session.pr_status} />}
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">

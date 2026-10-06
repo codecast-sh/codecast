@@ -68,6 +68,9 @@ export interface ReorientationFacts {
   /** Pre-rendered transfer verification (SSH move only) — kept as a string so
    * this module never depends on the move/transport code. */
   verification?: string;
+  /** Processes the session started on the previous machine outside its own
+   *  process tree (tmux panes, backgrounded jobs), which the move stops there. */
+  stoppedOnSource?: Array<{ name: string; via?: string }>;
 }
 
 /**
@@ -132,6 +135,12 @@ export function reorientationNotice(f: ReorientationFacts): string | null {
   if (f.machineChanged) {
     lines.push(
       `Processes, ports, and any files outside the working tree from the previous machine are not here.`,
+    );
+  }
+  if (f.stoppedOnSource?.length) {
+    const named = f.stoppedOnSource.slice(0, 8).map((p) => `${p.name}${p.via === "tmux" ? " (in a tmux pane)" : p.via === "background" ? " (backgrounded)" : ""}`);
+    lines.push(
+      `The move stops what this session left running on the previous machine outside its own process tree: ${named.join(", ")}${f.stoppedOnSource.length > 8 ? `, and ${f.stoppedOnSource.length - 8} more` : ""}. Start again here anything you still need.`,
     );
   }
 

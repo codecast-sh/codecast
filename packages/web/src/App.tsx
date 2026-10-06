@@ -35,6 +35,8 @@ const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-requ
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
+const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
+const BlogFieldManualChapter = lazy(() => import("@/app/(marketing)/blog/field-manual/ChapterPage"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -63,7 +65,6 @@ const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
-const Timeline = lazy(() => import("@/app/timeline/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
 const Line = lazy(() => import("@/app/line/page"));
@@ -109,6 +110,7 @@ const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
+const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
@@ -156,15 +158,10 @@ const CallRing = lazy(() => import("@/app/call-ring/page"));
 const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
-// The simple lane (plan pl-840): the hosted assistant's own shell and pages.
-const SimpleShell = lazy(() => import("./layouts/SimpleShell"));
-const SimpleHome = lazy(() => import("@/app/simple/page"));
-const SimpleConversation = lazy(() => import("@/app/simple/c/[id]/page"));
-const SimpleApprovals = lazy(() => import("@/app/simple/approvals/page"));
-const SimpleRoutines = lazy(() => import("@/app/simple/routines/page"));
-const SimpleConnections = lazy(() => import("@/app/simple/connections/page"));
-const SimplePlan = lazy(() => import("@/app/simple/plan/page"));
+// The hosted assistant's front door (plan pl-840), and the retired simple
+// lane's addresses, which lead into the main app.
 const Welcome = lazy(() => import("@/app/welcome/page"));
+const LaneRedirect = lazy(() => import("@/components/LaneRedirect"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
@@ -227,6 +224,8 @@ export function App() {
               <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
               <Route path="blog/one-repository-twenty-checkouts" element={<E name="BlogWorktrees"><BlogWorktrees /></E>} />
               <Route path="blog/fewer-bigger-jumps" element={<E name="BlogJumps"><BlogJumps /></E>} />
+              <Route path="blog/field-manual" element={<E name="BlogFieldManual"><BlogFieldManual /></E>} />
+              <Route path="blog/field-manual/:chapter" element={<E name="BlogFieldManualChapter"><BlogFieldManualChapter /></E>} />
               <Route path="compare" element={<E name="CompareIndex"><CompareIndex /></E>} />
               <Route path="compare/:slug" element={<E name="Compare"><Compare /></E>} />
             </Route>
@@ -285,6 +284,7 @@ export function App() {
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />
               <Route path="capabilities" element={<E name="Capabilities"><Capabilities /></E>} />
+              <Route path="agent-features" element={<E name="AgentFeatures"><AgentFeatures /></E>} />
               <Route path="files" element={<E name="Files"><Vault /></E>} />
               {/* /vault = pre-rename alias for /files. Permanent: `cast vault open`
                   has printed /vault?f=… deep links into sessions, notes and users'
@@ -334,7 +334,6 @@ export function App() {
                 pass page-specific props to DashboardLayout (windows' hideSidebar) or
                 aren't tab-routable. */}
             <Route path="explore" element={<E name="Explore"><Explore /></E>} />
-            <Route path="timeline" element={<E name="Timeline"><Timeline /></E>} />
             <Route path="windows" element={<E name="Windows"><Windows /></E>} />
             <Route path="orchestration" element={<E name="Orchestration"><Orchestration /></E>} />
             <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
@@ -432,20 +431,13 @@ export function App() {
                 MUST stay above ":username" or the profile catch-all eats it. */}
             <Route path="people" element={<E name="People"><People /></E>} />
 
-            {/* The simple lane: the hosted assistant for people who do not
-                code (docs/architecture/hosted-assistant.md). Its own shell,
-                never DashboardLayout, and outside the tab shell (lib/tabRoutes
-                excludes /simple and /welcome). /welcome is where someone new
-                starts, signed in or not. */}
-            <Route element={<SimpleShell />}>
-              <Route path="simple" element={<E name="SimpleHome"><SimpleHome /></E>} />
-              <Route path="simple/c/:id" element={<E name="SimpleConversation"><SimpleConversation /></E>} />
-              <Route path="simple/approvals" element={<E name="SimpleApprovals"><SimpleApprovals /></E>} />
-              <Route path="simple/routines" element={<E name="SimpleRoutines"><SimpleRoutines /></E>} />
-              <Route path="simple/connections" element={<E name="SimpleConnections"><SimpleConnections /></E>} />
-              <Route path="simple/plan" element={<E name="SimplePlan"><SimplePlan /></E>} />
-            </Route>
+            {/* /welcome is where someone new to the hosted assistant starts,
+                signed in or not (docs/architecture/hosted-assistant.md),
+                outside the tab shell. The simple lane folded into the main
+                app as hosted mode: its old addresses (/simple and below)
+                replace themselves with their main-app pages. */}
             <Route path="welcome" element={<E name="Welcome"><Welcome /></E>} />
+            <Route path="simple/*" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
 
             {/* Settings - shared sidebar layout */}
             <Route path="settings" element={<SettingsLayout />}>

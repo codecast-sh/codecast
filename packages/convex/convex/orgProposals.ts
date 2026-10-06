@@ -1,4 +1,5 @@
 import { openOrgBatch, orgBatchHead, takeOrgRows, type OrgBatchHead } from "./lib/orgChangeLog";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { mutation, query, internalMutation } from "./functions";
 import { internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -385,6 +386,10 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
   if (!orgBatchHead(ctx)) openOrgBatch(ctx, { door: "proposal", gesture: "accept_change", proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } });
   const merged = editedChange(change.change, edits);
   await ctx.db.patch(change._id, { status: "accepted", edits: edits ?? undefined, decided_by: userId, decided_at: now });
+  await recordAuthorityEvent(ctx, {
+    kind: "org_proposal_accepted", actor_user_id: userId, team_id: proposal.team_id,
+    detail: { before: { status: change.status }, after: { status: "accepted", proposal: proposal.short_id, change_id: change._id, change: merged } },
+  });
   // A throw escapes the mutation: Convex then discards every write of this
   // call, the accepted stamp included, so a half applied change never
   // commits and the row stays decidable. Only a refusal the core returns as

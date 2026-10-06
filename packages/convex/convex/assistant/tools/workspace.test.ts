@@ -17,7 +17,7 @@ import { connectionNote, toolsFor } from "./index";
 import { SEARCH_MAX_PER_TURN } from "./web";
 import { sealWhiskToken, type WhiskAccess } from "../../whisk";
 import { WHISK_PROVIDER } from "../../lib/whisk";
-import { fakeWhisk } from "./whisk.testkit";
+import { fakeWhisk } from "@platform/assistant/testkit";
 
 setDefaultTimeout(120_000);
 
@@ -415,7 +415,7 @@ describe("toolsFor", () => {
       expect(names).toContain("fetch_page");
       expect(names.some((n) => ["search_mail", "list_events", "send_mail"].includes(n))).toBe(false);
       expect(set.note).toContain("has not connected their mail and calendar");
-      expect(set.note).toContain("Connections");
+      expect(set.note).toContain("Settings, under Integrations");
     }));
 
   test("on a server with no Whisk settings: no mail tools, and a note that offers nothing to connect", async () => {
@@ -424,7 +424,7 @@ describe("toolsFor", () => {
     const set = await withEnv({ WHISK_APP_SECRET_CODECAST: undefined, WHISK_CONVEX_URL: undefined }, () => toolsFor(deps, user, conversationId));
     expect(set.tools.some((x) => ["search_mail", "list_events", "send_mail"].includes(x.name))).toBe(false);
     expect(set.note).toContain("not available on this server");
-    expect(set.note).not.toContain("Connections");
+    expect(set.note).not.toContain("Integrations");
   });
 
   test("connected: every tool, nothing to offer, and every call carries the stored token to Whisk and nowhere else", () =>
@@ -453,7 +453,7 @@ describe("toolsFor", () => {
       expect(names.filter((n) => ["search_mail", "read_thread", "summarize_thread", "suggest_reply", "draft_reply", "send_mail", "archive", "list_events"].includes(n)))
         .toEqual(["search_mail", "read_thread", "summarize_thread"]);
       expect(set.note).toBe(
-        "Mail and calendar are connected through Whisk, but you cannot draft, archive or label mail, or send mail, or see or change their calendar. If they ask for that, offer to connect mail and calendar again from Connections.",
+        "Mail and calendar are connected through Whisk, but you cannot draft, archive or label mail, or send mail, or see or change their calendar. If they ask for that, offer to connect them again in Settings, under Integrations.",
       );
     }));
 

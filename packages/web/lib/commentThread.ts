@@ -5,6 +5,8 @@
 // A thread is the set of comments sharing the same anchor — that's the unit a
 // teammate (or the agent) chats in.
 
+import { agentDisplayName } from "@codecast/shared/contracts";
+
 // The server's thread identity (thread_reads root keys) and the one normalizer
 // from its anchor key to this file's thread key, shared with the Threads page.
 export {
@@ -131,14 +133,6 @@ export function groupComments(comments: Comment[]): { global: CommentThread; anc
 
 export function isAgentComment(c: Comment): boolean {
   return c.author_kind === "agent";
-}
-
-// The agent's product name (short), so a reply reads "Claude"/"Codex" — not "Agent".
-export function agentDisplayName(agentType?: string): string {
-  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "gemini") return "Gemini";
-  return "Claude";
 }
 
 export function commentAuthorName(c: Comment, currentUserId?: string, agentType?: string): string {

@@ -7,7 +7,7 @@
 // its versions are what each graph the line ran delivered; and its
 // expectations, when the project has them. Edits go through /line/settings,
 // which writes the repo.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, ChevronRight, SlidersHorizontal } from "lucide-react";
 import type { ExpectationCitation } from "@codecast/shared/contracts/expectations";
@@ -146,6 +146,12 @@ function Expectations({ data, setupHref }: { data: ExpectationsData; setupHref?:
     return [...by.entries()];
   }, [active]);
   const pending = (data?.proposals ?? []).filter((p) => p.status === "open").length;
+  // A link to one line (`#ex-<project>-<n>`, as a finding cites it) lands on
+  // it once the document has rendered.
+  useEffect(() => {
+    const id = decodeURIComponent(window.location.hash.slice(1));
+    if (id.startsWith("ex-")) document.getElementById(id)?.scrollIntoView({ block: "center" });
+  }, [doc]);
   const aside = (
     <span className="inline-flex items-center gap-3">
       {doc && <span>version {doc.version} · {shortDay(doc.applied_at)}{pending ? ` · ${pending} proposed` : ""}</span>}
@@ -164,8 +170,10 @@ function Expectations({ data, setupHref }: { data: ExpectationsData; setupHref?:
               <div className="text-[11px] font-semibold text-sol-text-dim mb-1">{part}</div>
               <ul className="space-y-1.5">
                 {items.map((e) => (
-                  <li key={e.id} className="text-[12.5px] text-sol-text leading-snug" data-expectation={e.id}>
+                  <li key={e.id} id={e.id} className="scroll-mt-16 rounded text-[12.5px] text-sol-text leading-snug target:bg-sol-yellow/15" data-expectation={e.id}>
                     {e.text}
+                    {/* The handle a finding cites, so a cause's "Expects" row can be matched by eye. */}
+                    <span className="ml-1.5 whitespace-nowrap font-mono text-[10.5px] text-sol-text-dim" data-expectation-id>{e.id}</span>
                     {e.citations.length > 0 && (
                       <span className="ml-1.5 inline-flex flex-wrap items-center gap-1 align-baseline text-[11px] text-sol-text-dim" data-expectation-sources>
                         {e.citations.slice(0, 3).map((c, i) => <CitationRef key={`${c.kind}-${c.ref}-${i}`} c={c} />)}

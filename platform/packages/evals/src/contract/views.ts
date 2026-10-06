@@ -20,6 +20,14 @@ export interface EvalsCapabilities {
   bisect: boolean;
   changes: boolean;
   liveness: boolean;
+  /** The rows name the model that answered and the judge that graded. */
+  models: boolean;
+  /** Two reps can be weighed side by side: their scores diffed and their replies read. */
+  compare: boolean;
+  /** The product records the pass mark its reps are held to. Off, no view draws a mark: none is on record, and the default would be a guess. */
+  marks: boolean;
+  /** The product keeps the prompt files a rep sent, so two reps' prompts can be diffed. Off, an epoch is known by its prompt's hash alone, and no view offers a prompt diff it cannot fill. */
+  promptFiles: boolean;
 }
 
 export interface HealthResponse {
@@ -33,6 +41,8 @@ export interface HealthResponse {
   startedAt: string;
   /** What the product's sources can answer; absent from a server that predates it. */
   capabilities?: EvalsCapabilities;
+  /** Where the history the views read starts, when the product's read was cut short of it (EvalsSources.historyFrom); null or absent when they hold it all. */
+  historyFrom?: string | null;
 }
 
 export interface OverviewQuery {
@@ -47,6 +57,8 @@ export interface SurfaceOverview {
   route: string | null;
   model: string | null;
   freezes: { public: number; private: number };
+  /** The pass mark its reps are held to, when the surface names its own. */
+  passMark?: number | null;
   /** The last 30 days of batches, oldest first. */
   strip: BatchStats[];
   /** The reps behind the strip as faint dots, one per status and pixel row of score (scored reps only): the wall's resolution, not every rep. */
@@ -95,7 +107,7 @@ export interface SurfaceInfo {
   title: string;
   model: string | null;
   route: string | null;
-  /** The pass mark its reps are held to, when the product has one. */
+  /** The pass mark its reps are held to, when the surface names its own. */
   passMark?: number | null;
   /** A product's own gate, shown as data (union: the Jeffreys rule from its backend). */
   gate?: { rule: string; status: "green" | "red" | "unknown"; detail: string } | null;
@@ -267,6 +279,36 @@ export interface TokenUsage {
   cacheWrite: number | null;
 }
 
+/** A gate a rep will be held to, before it is scored. */
+export type RubricGate = Pick<GateResultJson, "id" | "title" | "decidedBy">;
+
+/** A judged check a rep will be held to, before it is scored. */
+export type RubricCheck = Pick<CheckResultJson, "id" | "ask" | "weight" | "must">;
+
+/** What an unscored rep will be held to: the criteria in words, the pass mark, and, where the product knows them, each gate and check by name. */
+export interface RunRubric {
+  criteria: string | null;
+  passMark: number;
+  gates?: RubricGate[];
+  checks?: RubricCheck[];
+}
+
+/**
+ * Trouble a run recorded as it went. A fatal one stopped the run; any other
+ * is a step that failed without stopping it (union: a persona whose reply
+ * could not be injected), which matters most on a run that finished: the
+ * behaviour being graded may never have happened.
+ */
+export interface RunProblem {
+  id: string;
+  /** Where in the run's own log it sits. */
+  seq?: number | null;
+  /** What was being done: "inject reply", "send email". */
+  label?: string | null;
+  error: string;
+  fatal?: boolean;
+}
+
 /** One rep's page: the row, its result and score, and where it sits among its siblings. A product adds its own anatomy by intersection. */
 export interface RunResponse<R extends RunRowCore = RunRowCore> {
   row: R;
@@ -274,8 +316,13 @@ export interface RunResponse<R extends RunRowCore = RunRowCore> {
   score: ScoreJson | null;
   scoreVersions: ScoreVersion[];
   /** When the rep is unscored: what it will be held to. */
-  rubric: { criteria: string | null; passMark: number } | null;
+  rubric: RunRubric | null;
+  /** What this kind of rep never has, left out of its page rather than drawn empty (union: a simulation answers nothing and runs on no one model). */
+  without?: Array<"reply" | "model">;
+  /** Trouble the run recorded, shown in its header. Codecast sends none: a crash is its log tail. */
+  problems?: RunProblem[];
   sends: RunSendView[];
+  /** The judge's call. A product that keeps only what the judge said sends an empty prompt, and the page shows the reply as the judge's words. */
   judge: { model: string | null; prompt: string; reply: string | null; costUsd: number | null } | null;
   /** The tail of the rep's log, shown first when the rep crashed. */
   logTail: string | null;

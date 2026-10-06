@@ -51,9 +51,14 @@ async function emit(ctx: any, type: "card_waiting" | "change_shipped" | "cause_r
   });
 }
 
-/** A card's decision waits on a person (LE11): the person holding it. */
-export async function noticeCardWaiting(ctx: any, task: any, holderUserId: Id<"users">, decisionShortId?: string) {
-  await emit(ctx, "card_waiting", task, [holderUserId], `has a change card waiting on your answer: ${label(task)}`,
+/**
+ * A card's decision waits on a person (LE11): the person holding it. The
+ * notice leads with the card's headline, which says what the change does; a
+ * cause's own title can be a long statement of what was observed.
+ */
+export async function noticeCardWaiting(ctx: any, task: any, holderUserId: Id<"users">, decisionShortId?: string, headline?: string) {
+  const what = headline?.trim() ? `${headline.trim()} (${task.short_id})` : label(task);
+  await emit(ctx, "card_waiting", task, [holderUserId], `has a change card waiting on your answer: ${what}`,
     decisionShortId ? `/decisions/${decisionShortId}` : undefined);
 }
 
