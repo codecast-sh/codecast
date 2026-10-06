@@ -140,7 +140,8 @@ function barHtml(o: BrandOpts): string {
      bar reads as part of the page instead of a white strip over a dark one. */
   html { margin-top: 40px !important; }
   /* Minimized: the bar slides away and a small corner pill brings it back. */
-  html.__cc_min { margin-top: 0 !important; }
+  html.__cc_min, html.__cc_embed { margin-top: 0 !important; }
+  html.__cc_embed #__cc_bar, html.__cc_embed #__cc_pill { display: none !important; }
   html.__cc_min #__cc_bar { transform: translateY(-100%); box-shadow: none; pointer-events: none; }
   html.__cc_min #__cc_pill { display: inline-flex; }
   #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill, #__cc_mlist, #__cc_notes, #__cc_qbtn {
@@ -576,6 +577,9 @@ function barHtml(o: BrandOpts): string {
   if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false,true);});
   var minPref=sGet(minKey);
   if(minPref==="1"||(framed&&minPref!=="0"))setMin(true,false);
+  // A codecast conversation frames the page frameless (?embed=1) and carries
+  // every verb in its own toolbar, so neither the bar nor its pill shows.
+  if(framed&&/[?&]embed=1(&|$)/.test(location.search))document.documentElement.classList.add("__cc_embed");
   // --- notes layer ---
   // The codecast gallery's way of commenting on a picture, on a page: pin
   // mode turns a click into a numbered dot, its note opens beside the dot, and

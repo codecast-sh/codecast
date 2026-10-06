@@ -113,6 +113,7 @@ import {
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
+import { agentDisplayName } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
@@ -1183,16 +1184,9 @@ function formatBehind(ms: number): string {
   return `${(ms / (60 * 60_000)).toFixed(1)}h`;
 }
 
-function getAgentLabel(agentType?: string): string | null {
-  if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
-  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-  if (agentType === "cursor") return "Cursor";
-  if (agentType === "grok") return "Grok";
-  if (agentType === "gemini") return "Gemini";
-  if (agentType === "opencode") return "OpenCode";
-  if (agentType === "muse") return "Muse Spark";
-  return agentType;
-}
+/** An agent_type as the session lists name it (the registry's names, the
+ *  hosted Codecast assistant included). */
+const getAgentLabel = agentDisplayName;
 
 function homeRelPath(p: string): string {
   const home = process.env.HOME;

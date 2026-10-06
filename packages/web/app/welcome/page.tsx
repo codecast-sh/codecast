@@ -31,7 +31,7 @@ import { LaneSync } from "../../components/simple/LaneSync";
 import { ASK_FIRST, LANE_COPY, LANE_PATHS, conversationPath, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
 import { laneOf, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
-import { startConversationWith } from "../../components/simple/startConversation";
+import { startHostedConversation } from "../../lib/startHostedConversation";
 import "../../components/simple/laneLook";
 import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
 import { useLaneMail } from "../../components/simple/useLaneMail";
@@ -306,7 +306,7 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
   const begin = (text: string) => {
     if (leaving) return;
     joinLane();
-    const id = startConversationWith(text);
+    const id = startHostedConversation(text);
     setLeaving(text);
     window.setTimeout(() => navigate(conversationPath(id)), SEND_OFF_MS);
   };

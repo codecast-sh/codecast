@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { envSessionLookup, parseProcArgs2 } from "./processEnv";
-import { attributeProcesses, listedProcesses, summarizeProcesses } from "./systemResources";
+import { attributeProcesses, listedProcesses, processesStartedOutside, summarizeProcesses } from "./systemResources";
 import type { ResourceProcess } from "@codecast/shared/contracts";
 
 const procargs = (args: string[], env: string[]) => {
@@ -24,8 +24,8 @@ describe("session from inherited environment", () => {
     ]);
     const sessions = new Map([["s1", 10]]);
     const env: Record<number, Record<string, string>> = { 20: { CLAUDE_CODE_SESSION_ID: "s1" }, 40: { CLAUDE_CODE_SESSION_ID: "s1" } };
-    const rows = attributeProcesses(snapshot, sessions, envSessionLookup(snapshot, sessions, (pid) => env[pid] ?? {}));
-    expect(rows.map((p) => [p.pid, p.sessionId, p.detached])).toEqual([[10, "s1", undefined], [20, "s1", true], [30, undefined, undefined], [40, undefined, undefined]]);
+    const rows = attributeProcesses(snapshot, sessions, envSessionLookup(snapshot, sessions, (pid) => env[pid] ?? {}, 0));
+    expect(rows.map((p) => [p.pid, p.sessionId, p.detached])).toEqual([[10, "s1", undefined], [20, "s1", "background"], [30, undefined, undefined], [40, undefined, undefined]]);
   });
 
   test("an id every tmux pane inherits from the server names no session", () => {
@@ -41,10 +41,38 @@ describe("session from inherited environment", () => {
       21: { CLAUDE_CODE_SESSION_ID: "s1", TMUX: "/tmp/t,900,0" },
       22: { CLAUDE_CODE_SESSION_ID: "s1", TMUX: "/tmp/t,900,3" },
     };
-    const lookup = envSessionLookup(snapshot, sessions, (pid) => env[pid] ?? {});
+    const lookup = envSessionLookup(snapshot, sessions, (pid) => env[pid] ?? {}, 0);
     expect(lookup(snapshot.get(21)!)).toBeUndefined();
     // Reparented out of the pane (pid 22 escaped to init) yet still carrying the server's id: still not evidence.
     expect(lookup(snapshot.get(22)!)).toBeUndefined();
+  });
+});
+
+describe("what a move stops", () => {
+  const snapshot = new Map([
+    [10, { pid: 10, ppid: 1, cpu: 1, rss: 100, command: "claude" }],
+    [11, { pid: 11, ppid: 10, cpu: 1, rss: 100, command: "bash" }],
+    [20, { pid: 20, ppid: 1, cpu: 80, rss: 50, command: "ffmpeg" }],
+    [900, { pid: 900, ppid: 1, cpu: 0, rss: 10, command: "tmux" }],
+    [30, { pid: 30, ppid: 900, cpu: 9, rss: 10, command: "bun" }],
+    [50, { pid: 50, ppid: 1, cpu: 9, rss: 10, command: "claude" }],
+    [51, { pid: 51, ppid: 50, cpu: 9, rss: 10, command: "node" }],
+    [70, { pid: 70, ppid: 1, cpu: 1, rss: 10, command: "bun" }],
+    [71, { pid: 71, ppid: 70, cpu: 1, rss: 10, command: "git" }],
+  ]);
+  const env: Record<number, Record<string, string>> = {
+    20: { CLAUDE_CODE_SESSION_ID: "gone" },
+    30: { CLAUDE_CODE_SESSION_ID: "gone", TMUX: "/tmp/t,900,4" },
+    // A subagent the moved session spawned carries its id but is a session of its own, and so is its tree.
+    50: { CLAUDE_CODE_SESSION_ID: "gone" },
+    51: { CLAUDE_CODE_SESSION_ID: "gone" },
+    // The daemon (pid 70) was started from the moved session's shell.
+    70: { CLAUDE_CODE_SESSION_ID: "gone" },
+    71: { CLAUDE_CODE_SESSION_ID: "gone" },
+  };
+  test("background jobs and tmux work stop; other sessions and the daemon's children do not", () => {
+    const stops = processesStartedOutside(snapshot, new Map([["sub", 50], ["gone", 10]]), "gone", (pid) => env[pid] ?? {}, 70);
+    expect(stops.map((p) => [p.pid, p.detached])).toEqual([[20, "background"], [30, "tmux"]]);
   });
 });
 

@@ -200,6 +200,17 @@ export function mentionItemMatches(m: MentionItem, query: string): boolean {
   );
 }
 
+/** What a chat composer's @ may offer beyond the shared match: chat names
+ *  people by handle and has no labels. A bare @ belongs to the room (its
+ *  people, its roles, what the thread already cites); once anything is typed,
+ *  sessions compete by title like every other mention surface, so a session
+ *  is reachable by name and not only by its short id. */
+export function chatMentionOffers(m: MentionItem, query: string): boolean {
+  if (m.type === "label" || (m.type === "person" && !m.handle)) return false;
+  if (m.type === "session" && !m.contextAt && !query.trim()) return false;
+  return true;
+}
+
 export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, scope: MentionScope): MentionItem[] {
   const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
   const merged = (windowRows: Record<string, any>, storeRows: Record<string, any>) => {
