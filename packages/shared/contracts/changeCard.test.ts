@@ -16,6 +16,7 @@ import {
   PROOF_CHECK,
   riskLabel,
   SUITE_GATE_CHECK,
+  UNSCORED_DETAIL,
   validateChangeCard,
   type CardAssemblyInput,
   type ChangeCard,
@@ -78,6 +79,13 @@ describe("change card golden", () => {
 });
 
 describe("assembleChangeCard", () => {
+  it("a prompt or line change no eval judged says it is unscored; a code change says nothing about evals", () => {
+    const evalOf = (category: string) => assembleChangeCard({ task: { short_id: "ct-1", title: "T", category } }).checks.find((c) => c.name === "Eval");
+    expect(evalOf("line")?.detail).toBe(UNSCORED_DETAIL);
+    expect(evalOf("prompt")?.detail).toBe(UNSCORED_DETAIL);
+    expect(evalOf("code")).toBeUndefined();
+  });
+
   it("merges the recorded proof ahead of the eval proof and adds eval cost to the run's", () => {
     const card = sample();
     expect(card.proof.before.map((x) => x.name)).toEqual([

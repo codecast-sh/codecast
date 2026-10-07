@@ -78,6 +78,22 @@ describe("runPath", () => {
     expect(p.state).toBe("waiting");
   });
 
+  test("a card taken back, a run cut off, a station interrupted: none reads as a failure or as under way", () => {
+    const upToCard = shippedRun.node_statuses!.slice(0, 12);
+    // The card was withdrawn and the run routed on: Decide asked, Ship never ran.
+    const withdrawn: ReportRun = { ...shippedRun, gate_answer: undefined, gate_response: undefined, gate_decision_status: "withdrawn", node_statuses: [...upToCard, n("decide", 12, "failed", { outcome: "failure" }), n("ship", 13, "failed", { outcome: "failure" })] };
+    const steps = runPath(withdrawn).flatMap((p) => p.steps);
+    expect(steps.find((s) => s.id === "decide")).toMatchObject({ state: "noted", result: "Asked; the card was withdrawn" });
+    expect(steps.find((s) => s.id === "ship")).toMatchObject({ state: "noted", result: "Skipped: the card was withdrawn" });
+    expect(runOutcome(withdrawn)).toMatchObject({ tone: "closed", text: "Stopped: the card was withdrawn." });
+    // The run failed while its gate row still says running: finished, not live.
+    const cut: ReportRun = { ...withdrawn, status: "failed", current_node_id: "decide", fail_reason: "gate withdrawn", node_statuses: [...upToCard, n("decide", 12, "running", { outcome: undefined })] };
+    expect(runPath(cut).flatMap((p) => p.steps).find((s) => s.id === "decide")?.state).toBe("noted");
+    // Stopped by hand at Red: Red gave no verdict.
+    const sigint: ReportRun = { ...shippedRun, status: "failed", current_node_id: "red", fail_reason: "the runner was stopped (SIGINT) at red", gate_answer: undefined, node_statuses: [...shippedRun.node_statuses!.slice(0, 4), n("red", 4, "failed", { outcome: undefined })] };
+    expect(runPath(sigint).flatMap((p) => p.steps).find((s) => s.id === "red")).toMatchObject({ state: "noted", result: "Interrupted before it finished" });
+  });
+
   test("another workflow's run is one group of its steps", () => {
     const other: ReportRun = { _id: "r2", status: "completed", node_statuses: [n("start", 0), n("implement", 1)], created_at: T0, updated_at: T0 };
     const p = runPath(other);
@@ -117,11 +133,14 @@ describe("runOutcome", () => {
     expect(runOutcome(ends(["park"]), { status: "open", readiness_note: "No goal named" }).text).toBe("Parked: the cause is not ready to build. No goal named.");
     expect(runOutcome({ ...shippedRun, status: "running", current_node_id: "implement" }).text).toBe("Working: at Implement.");
     expect(runOutcome({ ...shippedRun, status: "paused", gate_node_id: "decide" }).text).toBe("Waiting for an answer on the card.");
-    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: the line had no next step.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: Prove finished, and the line has no route for that result yet.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome failure, review_verdict none)" }).text).toBe("Stopped at Prove: Prove failed outright, and the line has no route for that yet.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "max_visits=2 exceeded on prove" }).text).toBe("Stopped: Prove looped twice.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "implement", fail_reason: "max_visits=3 exceeded on implement" }).text).toBe("Stopped: Implement looped three times.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "hand jx79xc0 killed after 30m at prove" }).text).toBe("Stopped: Prove's session ran out of time.");
-    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "decide", fail_reason: "gate withdrawn" }).text).toBe("Stopped: the question was withdrawn.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "decide", fail_reason: "gate withdrawn" }).text).toBe("Stopped: the card was withdrawn.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "plan_gate", gate_node_id: "plan_gate", fail_reason: "gate withdrawn" }).text).toBe("Stopped: the question was withdrawn.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "red", fail_reason: "the runner was stopped (SIGINT) at red" })).toMatchObject({ tone: "closed", text: "Stopped by hand during Red." });
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "verify", fail_reason: "checks timed out" }).text).toBe("Stopped at Verify: checks timed out.");
     expect(runOutcome({ ...shippedRun, status: "failed", fail_reason: "Stopped: the cause was dropped by a person" }).text).toBe("Stopped: the cause was dropped by a person.");
   });
