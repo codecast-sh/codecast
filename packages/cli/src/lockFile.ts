@@ -119,7 +119,7 @@ export async function acquireFileLock(lockFile: string, opts: FileLockOptions = 
         }
         continue;
       }
-      if (Date.now() > deadline) {
+      if (Date.now() >= deadline) {
         const what = opts.describe ? `another \`${opts.describe}\`` : "another process";
         throw new Error(
           `${what} (pid ${holder.pid}) has held ${lockFile} for over ${Math.round(waitMs / 1000)}s — ` +
@@ -132,5 +132,35 @@ export async function acquireFileLock(lockFile: string, opts: FileLockOptions = 
       }
       await sleep(300);
     }
+  }
+}
+
+/**
+ * Take one of `slots` interchangeable locks in `dir`, queueing until one frees:
+ * a machine-wide cap on how many of something run at once. A slot is held for
+ * as long as its holder lives (no staleness bound, since the work it guards
+ * may run for an hour); a holder that died frees it on the next try.
+ */
+export async function acquireFileSlot(
+  dir: string,
+  slots: number,
+  opts: { waitMs?: number; onWait?: () => void; describe?: string } = {},
+): Promise<() => void> {
+  const deadline = Date.now() + (opts.waitMs ?? Number.POSITIVE_INFINITY);
+  let announced = false;
+  for (;;) {
+    for (let i = 0; i < slots; i++) {
+      try {
+        return await acquireFileLock(path.join(dir, `slot-${i}.lock`), { waitMs: 0, staleMs: Number.POSITIVE_INFINITY, describe: opts.describe });
+      } catch {
+        /* held by a live process */
+      }
+    }
+    if (Date.now() > deadline) throw new Error(`all ${slots} ${opts.describe ?? "slots"} are taken; try again later`);
+    if (!announced) {
+      announced = true;
+      opts.onWait?.();
+    }
+    await sleep(1_000);
   }
 }

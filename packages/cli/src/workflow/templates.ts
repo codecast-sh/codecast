@@ -15,6 +15,7 @@ import lineRed from "./templates/line/red.sh" with { type: "text" };
 import lineGreen from "./templates/line/green.sh" with { type: "text" };
 import lineEval from "./templates/line/eval.sh" with { type: "text" };
 import lineShip from "./templates/line/ship.sh" with { type: "text" };
+import lineDissolve from "./templates/line/dissolve.sh" with { type: "text" };
 import featureCast from "../../workflows/feature/workflow.cast" with { type: "text" };
 import planAutopilotCast from "../../workflows/plan-autopilot/workflow.cast" with { type: "text" };
 import * as fs from "fs";
@@ -38,6 +39,7 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "line/green.sh": lineGreen,
   "line/eval.sh": lineEval,
   "line/ship.sh": lineShip,
+  "line/dissolve.sh": lineDissolve,
 };
 
 /** Replace each quoted `"@<file>"` value naming one of `files` with that file's text as a DOT string. */

@@ -47,6 +47,8 @@ test-results/
 !.codecast/workspace.toml
 !.codecast/check.toml
 !.codecast/line.toml
+# The project's own line graph and station prompts (docs/architecture/line-map.md LX5)
+!.codecast/line/
 
 # Daemon files
 daemon.pid

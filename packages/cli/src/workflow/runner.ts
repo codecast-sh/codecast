@@ -5,6 +5,7 @@ import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./ty
 import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition";
 import { planReadiness } from "../planReadiness.js";
 import { readCardFile } from "../cardFile.js";
+import { resultPreview } from "./chainWorkflow.js";
 import { spawnSync } from "../proc.js";
 import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { applyUnattended } from "../unattended.js";
@@ -1135,8 +1136,34 @@ function getRetryTarget(nodeId: string, graph: WorkflowGraph): WorkflowNode | nu
   return null;
 }
 
+/** The node each unfinished run last reported, so a stopped runner can say where it stopped. */
+const lastReportedNode = new Map<string, string>();
+
+/**
+ * A runner stopped by a signal (Ctrl-C, a kill) records its run as failed at
+ * the node it was on, with why. Without this the run stays "running" for good:
+ * every surface shows a run in build that nothing is building, and the cause
+ * refuses a new run until it is forced.
+ */
+export async function reportRunStopped(options: RunOptions, signal: string): Promise<void> {
+  const node = options.runId ? lastReportedNode.get(options.runId) : undefined;
+  if (!node) return;
+  await reportProgress(options, {
+    current_node_id: node,
+    node_id: node,
+    node_status: "failed",
+    run_status: "failed",
+    fail_reason: `the runner was stopped (${signal}) at ${node}`,
+  });
+}
+
 async function reportProgress(options: RunOptions, payload: Record<string, any>): Promise<void> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return;
+  // A run that reported its end has nothing left to stop: forget it, so a late
+  // signal cannot mark a finished run failed.
+  const node = payload.current_node_id ?? payload.node_id;
+  if (payload.run_status === "completed" || payload.run_status === "failed") lastReportedNode.delete(options.runId);
+  else if (typeof node === "string") lastReportedNode.set(options.runId, node);
   const body = { api_token: options.apiToken, run_id: options.runId, ...payload };
   try {
     await fetch(`${options.convexSiteUrl}/cli/workflow-runs/progress`, {
@@ -1449,6 +1476,9 @@ async function runNodeLoop(
         node_status: outcome === "failure" ? "failed" : "completed",
         outcome,
         session_id: state.context[`${current.id}.session_id`],
+        // A station script's own words (the dissolve station's JSON, a
+        // check's failure) are what its node shows; a session node has its session.
+        result_preview: current.type === "command" ? resultPreview(state.context[`${current.id}.output`] ?? "") : undefined,
       });
     }
 

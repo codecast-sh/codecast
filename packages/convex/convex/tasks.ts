@@ -30,7 +30,8 @@ import {
   teamTaskStatuses,
 } from "@codecast/shared/tasks";
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
-import { LINE_CATEGORIES, LINE_READINESS, LINE_RISKS } from "@codecast/shared/contracts/goalsBrief";
+import { briefGoalRefs, LINE_CATEGORIES, LINE_READINESS, LINE_RISKS } from "@codecast/shared/contracts/goalsBrief";
+import { causeBrief } from "./goals";
 import { Id } from "./_generated/dataModel";
 import type { SubscriptionVia } from "./notificationRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -2166,6 +2167,15 @@ export const update = mutation({
     if (args.files_changed) updates.files_changed = args.files_changed;
     if (args.change_guide) updates.change_guide = { ...args.change_guide, written_at: now };
     if (args.estimated_minutes !== undefined) updates.estimated_minutes = args.estimated_minutes;
+    // A cause's goal is one its own goals brief offers (LE5): its project's,
+    // or a metric of an initiative carrying it. A ref from another project's
+    // brief ties the cause to a goal its people do not hold.
+    if (args.goal_ref?.trim() && task.source === "signal" && task.workspace) {
+      const offered = briefGoalRefs(await causeBrief(ctx, task));
+      if (!offered.has(args.goal_ref.trim())) {
+        throw new Error(`goal_ref "${args.goal_ref.trim()}" is not one of ${task.short_id}'s goals; its goals brief offers: ${[...offered].join(", ")} (cast goals --brief --task ${task.short_id})`);
+      }
+    }
     Object.assign(updates, groundPatch(args));
     if (args.watch_days !== undefined) updates.watch_until = watchUntilFor(args.watch_days, now);
 
