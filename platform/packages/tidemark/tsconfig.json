@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Convex loads platform sources with lib ES2021; checking against it keeps newer built-ins out of the core.
+    "lib": ["ES2021", "DOM"],
+    "types": ["bun"]
+  },
+  "include": ["src", "test", "examples"]
+}

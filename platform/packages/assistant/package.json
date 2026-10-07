@@ -9,6 +9,7 @@
     "./plans": "./src/plans.ts",
     "./wallet": "./src/wallet.ts",
     "./zone": "./src/zone.ts",
+    "./cadence": "./src/cadence.ts",
     "./text": "./src/text.ts",
     "./whisk": "./src/whisk.ts",
     "./rules": "./src/rules.ts",
@@ -27,6 +28,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test"
+  },
+  "peerDependencies": {
+    "@platform/agent": "*"
   },
   "devDependencies": {
     "@platform/agent": "file:../agent",

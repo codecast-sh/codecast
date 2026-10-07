@@ -88,9 +88,21 @@ describe("search_mail", () => {
     expect(details).toEqual({ threads: 5 });
   });
 
-  test("no match says so", async () => {
+  test("no match names the mailboxes searched and never calls them empty", async () => {
+    const w = fakeWhisk({
+      "search:runFullSearch": () => ({ rows: [], cursor: null }),
+      "sync:getAccount": () => ({ accounts: [{ _id: "a1", email: "me@x.org" }, { _id: "a2", email: "me@work.org" }] }),
+    });
+    const text = (await run(tool(w.call, "search_mail"), { query: "in:inbox newer_than:30d" })).text;
+    expect(text).toContain('Nothing matched "in:inbox newer_than:30d" in me@x.org, me@work.org.');
+    expect(text).toContain("not that the mailbox is empty");
+  });
+
+  test("a wildcard is not a search, and Whisk is never asked", async () => {
     const w = fakeWhisk({ "search:runFullSearch": () => ({ rows: [], cursor: null }) });
-    expect((await run(tool(w.call, "search_mail"), { query: "nothing" })).text).toContain('No threads match "nothing".');
+    const text = (await run(tool(w.call, "search_mail"), { query: "*" })).text;
+    expect(text).toContain("is not a search");
+    expect(w.calls).toHaveLength(0);
   });
 });
 

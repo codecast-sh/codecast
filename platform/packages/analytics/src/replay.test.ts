@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Window } from "happy-dom";
 import { sha256Hex, type CodecastErrorItem, type CodecastReplayManifest, type CodecastSink, type ReplayChunkSign, type ReplaySignResult } from "./codecast";
-import { cleanUrl, labelOf, startReplay, visibleOutline, REPLAY_LIMITS, type ReplayEvent, type ReplayRecorder } from "./replay";
+import { cleanUrl, labelOf, startReplay, visibleOutline, REPLAY_LIMITS, type DomEvent, type ReplayEvent, type ReplayRecorder, type StartDomRecording } from "./replay";
 
 // A real DOM for the recorder, installed as the globals it reads.
 let win: Window;
@@ -346,5 +346,155 @@ describe("startReplay", () => {
     r.stop();
     expect(win.history.pushState).toBe(pushState);
     expect(globalThis.fetch).toBe(pageFetch);
+  });
+});
+
+// A stand-in for rrweb: the test drives what it emits. Meta (4) and full
+// snapshot (2) open a segment; 3 is an incremental event.
+function fakeDom() {
+  let emit: ((e: DomEvent, isCheckout: boolean) => void) | null = null;
+  const state = { loads: 0, stopped: false, checkouts: 0 };
+  let ts = 0;
+  const snap = (checkout: boolean) => {
+    emit!({ type: 4, timestamp: ++ts, data: { href: "https://app.test/meet/k3yk3y?token=abc", width: 800, height: 600 } }, checkout);
+    emit!({ type: 2, timestamp: ++ts, data: { node: { text: `snapshot ${ts}` } } }, checkout);
+  };
+  const inc = (text: string) => emit!({ type: 3, timestamp: ++ts, data: { source: 0, text } }, false);
+  const load = async (): Promise<StartDomRecording> => {
+    state.loads++;
+    return (e) => {
+      emit = e;
+      snap(false);
+      return {
+        checkout: () => {
+          state.checkouts++;
+          snap(true);
+        },
+        stop: () => {
+          state.stopped = true;
+        },
+      };
+    };
+  };
+  return { load, snap, inc, state, started: () => emit !== null };
+}
+
+const domPuts = (signs: ReplayChunkSign[]) => puts.filter((_, i) => signs[i]?.kind === "dom");
+
+describe("DOM mode", () => {
+  it("is off by default: rrweb is never loaded", async () => {
+    const dom = fakeDom();
+    const { recorder: r } = start({ loadDomRecorder: dom.load });
+    await new Promise((res) => setTimeout(res, 20));
+    expect(dom.state.loads).toBe(0);
+    expect(r.domEvents).toBe(0);
+  });
+
+  it("onError keeps two segments, then ships them on an error, scrubbed", async () => {
+    const dom = fakeDom();
+    const { recorder: r, sink, signs } = start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    dom.inc("first segment");
+    dom.snap(true);
+    dom.inc("second segment, about /meet/k3yk3y");
+    dom.snap(true);
+    dom.inc("third segment");
+    // The first segment fell off: two checkouts later only two segments remain.
+    expect(r.domEvents).toBe(6);
+    expect(signs).toEqual([]);
+
+    sink.captureError(new Error("boom"));
+    await until(() => signs.some((s) => s.kind === "dom"));
+    await until(() => domPuts(signs).length === 1);
+    const chunk = domPuts(signs)[0].body as DomEvent[];
+    expect(chunk.map((e) => e.type)).toEqual([4, 2, 3, 4, 2, 3]);
+    expect(chunk[0].data).toMatchObject({ href: "https://app.test/meet/:token?token=" });
+    const text = JSON.stringify(chunk);
+    expect(text).not.toContain("k3yk3y");
+    expect(text).not.toContain("first segment");
+    expect(signs.find((s) => s.kind === "dom")).toMatchObject({ seq: 0, kind: "dom" });
+    // The semantic chunk keeps its own numbering and no kind.
+    expect(signs.find((s) => s.kind === undefined)).toMatchObject({ seq: 0 });
+    expect(r.domEvents).toBe(0);
+
+    // Kept now: later events stream without being trimmed to a ring.
+    dom.inc("after");
+    dom.snap(true);
+    dom.inc("after the checkout");
+    expect(r.domEvents).toBe(4);
+  });
+
+  it("onError does not ship the DOM of a session the sample kept, until an error", async () => {
+    const dom = fakeDom();
+    const { recorder: r, signs } = start({ replayDom: "onError", sampleRate: 1, loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    dom.inc("x");
+    await r.upload();
+    expect(signs.some((s) => s.kind === "dom")).toBe(false);
+  });
+
+  it("sampled ships the DOM of a sampled session from the start", async () => {
+    const dom = fakeDom();
+    const { recorder: r, signs } = start({ replayDom: "sampled", sampleRate: 1, loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    dom.inc("x");
+    await r.upload();
+    const chunk = domPuts(signs)[0].body as DomEvent[];
+    expect(chunk.map((e) => e.type)).toEqual([4, 2, 3]);
+  });
+
+  it("a door that keeps refusing drops the DOM back to a ring that opens on a fresh snapshot", async () => {
+    const dom = fakeDom();
+    const sink = fakeSink(() => null);
+    const { recorder: r } = start({ replayDom: "sampled", sampleRate: 1, loadDomRecorder: dom.load }, sink);
+    await until(() => dom.started());
+    for (let i = 0; i < 3; i++) await r.upload();
+    expect(r.kept).toBe(false);
+    expect(dom.state.checkouts).toBe(1);
+    expect(r.domEvents).toBe(2);
+  });
+
+  it("stop stops rrweb and drops what it held", async () => {
+    const dom = fakeDom();
+    const { recorder: r } = start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    r.stop();
+    expect(dom.state.stopped).toBe(true);
+    expect(r.domEvents).toBe(0);
+  });
+
+  it("records the page with real rrweb: values masked, editors masked, [data-private] blocked", async () => {
+    // rrweb reads DOM constructors as globals and window.Object; happy-dom
+    // has them only on its window. Under happy-dom rrweb reads every text
+    // node as "" and its MutationObserver never fires, so this checks the
+    // snapshot's structure and masks; text and incremental capture are
+    // checked in a browser (bench/replayDomBench.ts).
+    const added: string[] = [];
+    for (const k of Object.getOwnPropertyNames(win)) {
+      if (/^[A-Z]/.test(k) && !(k in globalThis)) {
+        (globalThis as any)[k] = (win as any)[k];
+        added.push(k);
+      }
+    }
+    (win as any).Object ??= Object;
+    try {
+      win.document.body.insertAdjacentHTML("beforeend", '<div contenteditable="true">typed draft text</div>');
+      (win.document.getElementById("card") as unknown as HTMLInputElement).value = "4242424242424242";
+      const { recorder: r, sink, signs } = start({ replayDom: "onError" });
+      await until(() => r.domEvents > 0);
+      sink.captureError(new Error("boom"));
+      await until(() => domPuts(signs).length === 1);
+      const chunk = domPuts(signs)[0].body as DomEvent[];
+      const text = JSON.stringify(chunk);
+      expect(chunk.slice(0, 2).map((e) => e.type)).toEqual([4, 2]);
+      expect(chunk[0].data).toMatchObject({ href: "https://app.test/start?token=" });
+      expect(text).toContain('"tagName":"h1"');
+      expect(text).toContain('"value":"****************"');
+      // The private subtree is an empty box its size.
+      expect(text).toMatch(/"attributes":\{"rr_width":"[^"]*","rr_height":"[^"]*"\},"childNodes":\[\]/);
+      for (const secret of ["4242", "prefilled note", "typed draft text", "Balance 999", "Account 12345", "token=secret"]) expect(text).not.toContain(secret);
+    } finally {
+      for (const k of added) delete (globalThis as any)[k];
+    }
   });
 });

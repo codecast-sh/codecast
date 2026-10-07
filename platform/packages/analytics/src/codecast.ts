@@ -78,6 +78,43 @@ export interface CodecastJson {
   endpoint?: string;
   ingestKey?: string;
   sources: Record<string, { id: string; workspace: string }>;
+  /** How the app's replay recorder runs (./replay). Absent: semantic only, errors upload. */
+  replay?: CodecastReplayConfig;
+}
+
+/**
+ * Whether the replay recorder also keeps the page's DOM (rrweb) so a replay
+ * plays visually: "off", "onError" (the minute before a reported error), or
+ * "sampled" (the sampled sessions from the start, and errors).
+ */
+export const REPLAY_DOM_MODES = ["off", "onError", "sampled"] as const;
+export type ReplayDomMode = (typeof REPLAY_DOM_MODES)[number];
+
+export interface CodecastReplayConfig {
+  dom?: ReplayDomMode;
+  /** Share of sessions recorded from the start, 0 to 1. */
+  sampleRate?: number;
+}
+
+/** A codecast.json's replay block, checked: what it holds, plus any problems appended to errors. */
+export function parseReplayConfig(raw: unknown, errors: string[]): CodecastReplayConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push('replay must be an object { "dom"?, "sampleRate"? }');
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const out: CodecastReplayConfig = {};
+  for (const key of Object.keys(r)) if (key !== "dom" && key !== "sampleRate") errors.push(`unknown key "replay.${key}"`);
+  if (r.dom !== undefined) {
+    if (!(REPLAY_DOM_MODES as readonly unknown[]).includes(r.dom)) errors.push(`replay.dom must be one of ${REPLAY_DOM_MODES.map((m) => `"${m}"`).join(", ")}`);
+    else out.dom = r.dom as ReplayDomMode;
+  }
+  if (r.sampleRate !== undefined) {
+    if (typeof r.sampleRate !== "number" || !(r.sampleRate >= 0 && r.sampleRate <= 1)) errors.push("replay.sampleRate must be a number from 0 to 1");
+    else out.sampleRate = r.sampleRate;
+  }
+  return out;
 }
 
 const SOURCE_ID = /^src-\d+$/;
@@ -88,8 +125,10 @@ export function parseCodecastJson(raw: unknown): { ok: true; config: CodecastJso
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, errors: ["codecast.json is not a JSON object"] };
   const r = raw as Record<string, unknown>;
   const errors: string[] = [];
-  for (const key of Object.keys(r)) if (!["$schema", "endpoint", "ingestKey", "sources"].includes(key)) errors.push(`unknown key "${key}"`);
+  for (const key of Object.keys(r)) if (!["$schema", "endpoint", "ingestKey", "sources", "replay"].includes(key)) errors.push(`unknown key "${key}"`);
   const config: CodecastJson = { sources: {} };
+  const replay = parseReplayConfig(r.replay, errors);
+  if (replay) config.replay = replay;
   if (r.endpoint !== undefined) {
     if (typeof r.endpoint !== "string" || !/^https?:\/\/[^\s]+$/.test(r.endpoint)) errors.push("endpoint must be an http(s) URL");
     else config.endpoint = r.endpoint.replace(/\/+$/, "");
@@ -160,6 +199,8 @@ export interface ReplayChunkSign {
   seq: number;
   sha256: string;
   size: number;
+  /** Which stream the chunk belongs to: the semantic events (absent) or the rrweb DOM capture. */
+  kind?: "events" | "dom";
 }
 
 /** Lowercase hex sha256, the form the door's chunk keys use. */

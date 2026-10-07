@@ -102,6 +102,15 @@ describe("createCodecastSink", () => {
     expect(parseCodecastJson({ sources: { a: { id: "4", workspace: "team:t" } } }).ok).toBe(false);
   });
 
+  it("reads the replay block of a codecast.json, and refuses a bad one", () => {
+    expect(parseCodecastJson({ sources: {}, replay: { dom: "onError", sampleRate: 0.1 } })).toEqual({ ok: true, config: { sources: {}, replay: { dom: "onError", sampleRate: 0.1 } } });
+    expect(parseCodecastJson({ sources: {} })).toEqual({ ok: true, config: { sources: {} } });
+    const bad = parseCodecastJson({ sources: {}, replay: { dom: "always", sampleRate: 2, extra: 1 } });
+    expect(bad.ok).toBe(false);
+    expect(!bad.ok && bad.errors).toEqual(['unknown key "replay.extra"', 'replay.dom must be one of "off", "onError", "sampled"', "replay.sampleRate must be a number from 0 to 1"]);
+    expect(parseCodecastJson({ sources: {}, replay: "on" }).ok).toBe(false);
+  });
+
   it("batches items behind a timer and posts the envelope to <endpoint>/<key>", async () => {
     const { sink, sent, clock } = sinkWith();
     sink.check("db", false, { title: "db down" });

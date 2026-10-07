@@ -11,13 +11,21 @@
 // fetch and XHR, and a throttled outline walk at navigation and before an
 // error. No MutationObserver, nothing per frame, nothing per DOM change.
 //
+// DOM mode (replayDom, off by default) adds the page itself, as rrweb records
+// it, so the replay plays visually in codecast's player. It is the one part
+// that observes DOM changes, so it costs what rrweb costs and an app turns it
+// on knowing that (./replayDom has the settings and what they leave out). The
+// semantic stream is unchanged by it and stays what agents read.
+//
 // The recorder keeps the last 60 seconds in a ring buffer. An error (any item
 // the sink captures) always uploads the buffer and keeps the recording going;
 // a sampled share of sessions (sampleRate) records from the start. Chunks are
 // gzipped JSON PUT to a presigned URL from the door's replay-sign endpoint,
 // then a replay manifest item goes through the sink.
 
-import { gzipText, sha256Hex, type CodecastErrorItem, type CodecastSink } from "./codecast";
+import { gzipText, sha256Hex, type CodecastErrorItem, type CodecastSink, type ReplayDomMode } from "./codecast";
+
+export { REPLAY_DOM_MODES, type ReplayDomMode } from "./codecast";
 
 // The event shapes match codecast packages/shared/contracts/replay.ts exactly
 // (codecast typechecks the two against each other). The platform package must
@@ -63,6 +71,37 @@ export const REPLAY_LIMITS = {
   signed_url_ttl_s: 300,
 } as const;
 
+/**
+ * The DOM capture's own caps (codecast contracts/replayPlayer.ts, held equal
+ * by codecast's drift test). A chunk is a gzipped JSON array of rrweb events
+ * with epoch timestamps, packed to about chunk_target_raw_bytes of JSON.
+ */
+export const REPLAY_DOM_LIMITS = {
+  chunk_max_bytes: 8 * 1024 * 1024,
+  chunk_target_raw_bytes: 6 * 1024 * 1024,
+  chunk_max_inflated_bytes: 48 * 1024 * 1024,
+  max_chunks_per_replay: 60,
+} as const;
+
+/** One rrweb event. The recorder reads only its type, its time and a meta event's href. */
+export interface DomEvent {
+  type: number;
+  timestamp: number;
+  data?: unknown;
+}
+/** rrweb's meta event, which names the page URL and the viewport. */
+const DOM_META = 4;
+/** A shipping recording uploads early once this many DOM events wait, rather than at the next tick. */
+const DOM_UPLOAD_EVENTS = 20_000;
+
+export interface DomRecording {
+  /** Start a new segment with a full snapshot. */
+  checkout(): void;
+  stop(): void;
+}
+/** Starts recording the DOM, calling emit per event (isCheckout on a checkout's meta and full snapshot). */
+export type StartDomRecording = (emit: (event: DomEvent, isCheckout: boolean) => void) => DomRecording | null;
+
 /** How often a kept recording ships what it gathered since the last chunk. */
 const CHUNK_INTERVAL_MS = 10_000;
 /** At most one outline walk in this window: navigation bursts and error storms walk once. */
@@ -76,6 +115,13 @@ export interface ReplayOptions {
   sink: CodecastSink;
   /** Share of sessions recorded and uploaded from the start. Errors always upload. Default 0. */
   sampleRate?: number;
+  /**
+   * Also record the DOM (rrweb) so the replay plays visually: "off" (default),
+   * "onError" (kept and uploaded only when an error is reported, carrying the
+   * minute before it), or "sampled" (also uploaded from the start in sessions
+   * sampleRate keeps). Costs main-thread time on every DOM change; see ./replayDom.
+   */
+  replayDom?: ReplayDomMode;
   /** URLs to leave out entirely: navigation to them and requests to them are not recorded. */
   redactUrl?: RegExp | ((url: string) => boolean);
   /** For tests. */
@@ -84,6 +130,8 @@ export interface ReplayOptions {
   fetch?: typeof fetch;
   setTimeout?: (fn: () => void, ms: number) => unknown;
   clearTimeout?: (handle: unknown) => void;
+  /** Loads the DOM recorder. Default: ./replayDom (rrweb record), imported on demand. */
+  loadDomRecorder?: () => Promise<StartDomRecording>;
 }
 
 export interface ReplayRecorder {
@@ -92,6 +140,8 @@ export interface ReplayRecorder {
   readonly kept: boolean;
   /** Events still held locally (the ring buffer, or what waits for the next chunk). */
   readonly events: readonly ReplayEvent[];
+  /** rrweb events held locally (DOM mode); 0 with it off. */
+  readonly domEvents: number;
   /** An app-defined state marker. */
   mark(name: string, data?: Record<string, unknown>): void;
   /** Keep the recording and upload what is held now. */
@@ -396,12 +446,14 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     }, CHUNK_INTERVAL_MS);
   };
 
-  const putChunk = async (batch: ReplayEvent[]): Promise<boolean> => {
+  // One chunk's JSON text, gzipped where the runtime can (the door reads
+  // plain JSON events chunks too), signed and PUT. "too_big" is a DOM chunk
+  // past its cap even gzipped, which no retry will fix.
+  const putChunk = async (text: string, seq: number, kind: "events" | "dom" = "events"): Promise<boolean | "too_big"> => {
     if (!baseFetch) return false;
-    const text = JSON.stringify(batch);
-    // Gzipped where the runtime can; the door reads plain JSON chunks too.
     const bytes = (await gzipText(text)) ?? new TextEncoder().encode(text);
-    const signed = await sink.signReplayChunk({ replay_id: replayId, seq: chunks, sha256: await sha256Hex(bytes), size: bytes.byteLength });
+    if (kind === "dom" && bytes.byteLength > REPLAY_DOM_LIMITS.chunk_max_bytes) return "too_big";
+    const signed = await sink.signReplayChunk({ replay_id: replayId, seq, sha256: await sha256Hex(bytes), size: bytes.byteLength, ...(kind === "dom" ? { kind } : {}) });
     if (!signed) return false;
     if ("exists" in signed) return true;
     uploadUrls.add(signed.upload_url);
@@ -424,8 +476,103 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     kept = false;
     const floor = t() - REPLAY_LIMITS.ring_buffer_ms;
     events = events.filter((e) => e.t >= floor);
+    domToRing();
   };
   const full = () => chunks >= REPLAY_LIMITS.max_chunks_per_replay;
+
+  // DOM mode. rrweb events live in segments, each opening on a checkout (a
+  // full snapshot). Until the DOM ships, only the current segment and the one
+  // before are kept, so memory is bounded by two checkout periods and the
+  // oldest event held is always a snapshot the player can start from.
+  const domMode: ReplayDomMode = options.replayDom ?? "off";
+  let domSegments: DomEvent[][] = [[]];
+  let domHeld = 0;
+  let domChunks = 0;
+  let domSawError = false;
+  let domRecording: DomRecording | null = null;
+  // "onError" ships the DOM once an error kept the recording; "sampled" also
+  // ships it when the sample kept the recording from the start.
+  const domShips = () => kept && domRecording !== null && (domMode === "sampled" || domSawError);
+
+  const onDomEvent = (event: DomEvent, isCheckout: boolean) => {
+    if (stopped) return;
+    if (event.type === DOM_META) {
+      const data = event.data as { href?: unknown } | undefined;
+      if (data && typeof data.href === "string") data.href = keepUrl(data.href);
+    }
+    // A checkout emits its meta event and its full snapshot both flagged; the
+    // segment opens on the meta, which comes first.
+    if (isCheckout && event.type === DOM_META && !domShips()) {
+      domSegments.push([]);
+      while (domSegments.length > 2) domHeld -= domSegments.shift()!.length;
+    }
+    domSegments[domSegments.length - 1].push(event);
+    if (++domHeld >= DOM_UPLOAD_EVENTS && domShips()) void upload();
+  };
+
+  // Back to a ring that starts on a fresh snapshot, since events after a gap
+  // in the shipped stream cannot be played from what came before.
+  function domToRing() {
+    if (!domRecording) return;
+    domSegments = [[]];
+    domHeld = 0;
+    domSawError = false;
+    domRecording.checkout();
+  }
+
+  const stopDom = () => {
+    domRecording?.stop();
+    domRecording = null;
+    domSegments = [[]];
+    domHeld = 0;
+  };
+
+  // Ship everything held as chunks of about chunk_target_raw_bytes of JSON.
+  // Each event is serialized once, its strings through the app's URL rewrite
+  // as they go, so a secret path in an href or a text node is named by its
+  // shape like everywhere else the recorder sends a URL. Per string, never
+  // over the JSON text: a rewrite written for URLs need not stop at a quote.
+  const scrubString = (_key: string, value: unknown) => (typeof value === "string" && value.includes("/") ? sink.scrubUrl(value) : value);
+  async function uploadDom(): Promise<void> {
+    if (!domShips()) return;
+    const held = domSegments.flat();
+    domSegments = [[]];
+    domHeld = 0;
+    let i = 0;
+    while (i < held.length && domRecording) {
+      if (domChunks >= REPLAY_DOM_LIMITS.max_chunks_per_replay) return stopDom();
+      const parts: string[] = [];
+      let size = 2;
+      while (i < held.length && (parts.length === 0 || size < REPLAY_DOM_LIMITS.chunk_target_raw_bytes)) {
+        const part = JSON.stringify(held[i++], scrubString);
+        parts.push(part);
+        size += part.length + 1;
+      }
+      const result = await putChunk(`[${parts.join(",")}]`, domChunks, "dom");
+      if (result === "too_big") continue;
+      if (!result) {
+        // Put back what did not go, ahead of anything that arrived meanwhile.
+        const rest = held.slice(i - parts.length);
+        domSegments[0] = rest.concat(domSegments[0]);
+        domHeld += rest.length;
+        return;
+      }
+      domChunks++;
+    }
+  }
+
+  if (domMode !== "off" && doc) {
+    const load = options.loadDomRecorder ?? (() => import("./replayDom").then((m) => m.startDomRecording));
+    void load()
+      .then((startDom) => {
+        if (stopped) return;
+        domRecording = startDom(onDomEvent);
+        if (domRecording && domShips()) scheduleChunks();
+      })
+      .catch(() => {
+        // no rrweb in this build: the semantic recording carries on alone
+      });
+  }
 
   async function upload(): Promise<void> {
     // A recording that used up its chunks has nowhere to send more.
@@ -438,7 +585,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
         // Halve until the raw JSON fits the chunk cap; gzip only makes it smaller.
         while (n > 1 && JSON.stringify(events.slice(0, n)).length > REPLAY_LIMITS.chunk_max_bytes) n = Math.ceil(n / 2);
         const batch = events.slice(0, n);
-        if (!(await putChunk(batch))) {
+        if ((await putChunk(JSON.stringify(batch), chunks)) !== true) {
           // Keep the events for the next attempt, unless the door keeps refusing.
           if (++failures >= MAX_FAILURES) {
             failures = 0;
@@ -458,6 +605,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
           counts: { ...counts },
         });
       }
+      if (failures === 0) await uploadDom();
     })().finally(() => {
       uploading = null;
     });
@@ -648,6 +796,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
         message: clip(item.message, REPLAY_LIMITS.console_message_max_chars),
         ...(item.stack ? { stack: clip(item.stack, REPLAY_LIMITS.error_stack_max_chars) } : {}),
       });
+      domSawError = true;
       void upload();
     }),
   );
@@ -665,6 +814,9 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     get events() {
       return events;
     },
+    get domEvents() {
+      return domSegments.reduce((n, seg) => n + seg.length, 0);
+    },
     mark(name, data) {
       let bounded = data;
       if (data) {
@@ -681,6 +833,7 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
       if (stopped) return;
       stopped = true;
       for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+      stopDom();
       if (chunkTimer !== null) clearTimer(chunkTimer);
       if (outlineTimer !== null) clearTimer(outlineTimer);
       chunkTimer = outlineTimer = null;

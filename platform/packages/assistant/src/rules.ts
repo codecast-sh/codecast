@@ -10,6 +10,7 @@
 // both read that table, so they cannot disagree.
 import type { Gate, GateDecision, ToolCallRequest } from "@platform/agent";
 import { normalizeTimezone } from "./zone";
+import { cadenceAt, cadenceOf, clockMinutes, firstCadenceRun, nextCadenceRun, plainCadence, START_DATE, weekdayNumbers, type WallCadence } from "./cadence";
 
 /** What a rule decides for its tool. With no rule the gate asks. */
 export type RuleDecision = "allow" | "ask" | "refuse";
@@ -128,6 +129,31 @@ export function plainInstant(at: number, timezone: string | null | undefined, no
   return `${day} at ${time}${timezone && timeZone === timezone ? "" : " UTC"}`;
 }
 
+/** The day an instant falls on, said from today on the clock of `timezone`:
+ *  "today", "tomorrow, Thursday", or "Thursday, October 8" (with the year
+ *  when it is not this one). Every place that says when a routine first runs
+ *  says it with this, so the card, the reply and Routines agree. */
+export function relativeDay(at: number, timezone: string | null | undefined, now = Date.now()): string {
+  const timeZone = normalizeTimezone(timezone);
+  const ymd = (t: number) => new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone }).format(t);
+  const dayNumber = (t: number) => Date.parse(`${ymd(t)}T00:00:00Z`) / 86_400_000;
+  const ahead = Math.round(dayNumber(at) - dayNumber(now));
+  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone }).format(at);
+  if (ahead === 0) return "today";
+  if (ahead === 1) return `tomorrow, ${weekday}`;
+  const year = (t: number) => new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone }).format(t);
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone, ...(year(at) === year(now) ? {} : { year: "numeric" }) }).format(at);
+}
+
+/** When a routine first runs, as one phrase: "tomorrow, Thursday, at 8:00
+ *  AM". The zone is named only when the person's is unknown. */
+export function firstRunWords(at: number, timezone: string | null | undefined, now = Date.now()): string {
+  const timeZone = normalizeTimezone(timezone);
+  const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone }).format(at);
+  const day = relativeDay(at, timezone, now);
+  return `${day}${day.includes(",") ? "," : ""} at ${time}${timezone && timeZone === timezone ? "" : " UTC"}`;
+}
+
 /** A repeat given in hours, as a person says it: 24 is "every day". */
 export function plainEvery(hours: number): string {
   const count = (n: number, unit: string) => (n === 1 ? `every ${unit}` : `every ${n} ${unit}s`);
@@ -152,25 +178,60 @@ export function plainSchedule(at: number, hours: number, timezone: string | null
     const day = fmt({ weekday: "long" });
     return `${weeks === 1 ? `every ${day}` : `every ${weeks} weeks on ${day}`} at ${time}, starting ${date(false)}`;
   }
-  if (hours % 24 === 0) return `${plainEvery(hours)} at ${time}, starting ${date(true)}`;
-  return `${plainEvery(hours)}, starting ${date(true)} at ${time}`;
+  if (hours % 24 === 0) return `${plainEvery(hours)} at ${time}, starting ${relativeDay(at, timezone, now)}`;
+  return `${plainEvery(hours)}, starting ${firstRunWords(at, timezone, now)}`;
+}
+
+/** Runs on some weekdays at a first run's time of day, as one line: "weekdays
+ *  at 8:00 AM, starting Wednesday, October 7". The start is the first run the
+ *  cadence actually makes, so a first run on a Saturday for a weekdays
+ *  routine says the Monday. */
+export function plainWeekdaySchedule(at: number, weekdays: readonly number[], timezone: string | null | undefined, now = Date.now()): string {
+  const cadence = cadenceAt(at, normalizeTimezone(timezone), weekdays);
+  return plainCadenceSchedule(cadence, nextCadenceRun(cadence, at - 1), timezone, now);
+}
+
+/** A cadence and its first run as one line: "every Saturday at 9:00 AM,
+ *  starting Saturday, October 10". */
+export function plainCadenceSchedule(cadence: WallCadence, first: number, timezone: string | null | undefined, now = Date.now()): string {
+  const timeZone = cadence.zone;
+  return `${plainCadence(cadence)}${timezone && timeZone === timezone ? "" : " UTC"}, starting ${relativeDay(first, timeZone, now)}`;
 }
 
 /** A field whose name says it is a repeat in hours (`repeat_every_hours`). */
 const EVERY_HOURS = /(^|_)every_hours$/;
 
+/** The field that lists the weekdays a routine runs on (`days: ["mon"]`). */
+const DAYS_FIELD = "days";
+
+/** With days, the time of day they run at ("18:30") and the date they may
+ *  start from ("2026-11-03"), which read as one schedule line with them. */
+const TIME_FIELD = "time";
+const START_FIELD = "starts_on";
+
 /** Fields that hold the plan the person is agreeing to, in their own words,
  *  shown under a heading as wrapped prose rather than as an exact draft. */
 const PLAN_FIELDS: Record<string, string> = { instruction: "What I'll do" };
+
+/** Text that renders exactly as written: every markdown punctuation mark escaped. */
+function escaped(line: string): string {
+  return line.replace(/[\\`*_{}\[\]()#+\-.!|<>~]/g, "\\$&");
+}
 
 /** Text as a quote in the reading face that still renders exactly as
  *  written: every markdown punctuation mark is escaped, each line quoted. */
 function quoted(text: string): string {
   return text
     .split("\n")
-    .map((line) => `> ${line.replace(/[\\`*_{}\[\]()#+\-.!|<>~]/g, "\\$&")}`)
+    .map((line) => `> ${escaped(line)}`)
     .join("\n");
 }
+
+/** The field that says, to the person, what a call will do ("Each weekday at
+ *  8 AM I'll send you your open to-dos"). Where a call carries one, the card
+ *  shows it as plain prose in place of the instruction the assistant wrote
+ *  for itself, which stays out of view. */
+const SUMMARY_FIELD = "summary";
 
 /** The exact draft or event a call would act with, as the card shows it:
  *  short fields as lines, long text whole in a block, nothing reworded. Every
@@ -191,16 +252,36 @@ export function approvalContext(input: Record<string, unknown>, opts: { timezone
   const lines: string[] = [];
   const instants: [string, number][] = [];
   let every: number | undefined;
+  let days: number[] | undefined;
+  let clock: number | undefined;
+  let startsOn: string | undefined;
   const plan: string[] = [];
   const blocks: string[] = [];
+  const summary = typeof input?.[SUMMARY_FIELD] === "string" ? (input[SUMMARY_FIELD] as string).trim() : "";
+  // The summary is already written to the person, so it reads as the card's
+  // own prose, with no label over it.
+  if (summary) plan.push(summary.split("\n").map(escaped).join("  \n"));
   for (const [key, value] of Object.entries(input ?? {})) {
     if (value === undefined || value === null || value === "") continue;
+    if (key === SUMMARY_FIELD || (summary && PLAN_FIELDS[key])) continue;
     if (typeof value === "string" && ISO_INSTANT.test(value) && !Number.isNaN(Date.parse(value))) {
       instants.push([key, Date.parse(value)]);
       continue;
     }
     if (typeof value === "number" && value > 0 && EVERY_HOURS.test(key)) {
       every = value;
+      continue;
+    }
+    if (key === DAYS_FIELD && Array.isArray(value) && weekdayNumbers(value.map(String)).length) {
+      days = weekdayNumbers(value.map(String));
+      continue;
+    }
+    if (key === TIME_FIELD && typeof value === "string" && clockMinutes(value) !== null) {
+      clock = clockMinutes(value)!;
+      continue;
+    }
+    if (key === START_FIELD && typeof value === "string" && START_DATE.test(value)) {
+      startsOn = value;
       continue;
     }
     if (typeof value === "string" && PLAN_FIELDS[key] && value.trim()) {
@@ -218,7 +299,12 @@ export function approvalContext(input: Record<string, unknown>, opts: { timezone
     else lines.push(`**${humanLabel(key)}:** ${typeof value === "boolean" ? shown : literal(shown)}`);
   }
   // One start and a repeat read as one schedule line; otherwise each says itself.
-  const when = every !== undefined && instants.length === 1
+  const cadence = days !== undefined && clock !== undefined ? cadenceOf(clock, opts.timezone, days) : null;
+  const when = cadence
+    ? [`**When:** ${capitalized(plainCadenceSchedule(cadence, firstCadenceRun(cadence, opts.now ?? Date.now(), startsOn), opts.timezone, opts.now))}`]
+    : days !== undefined && instants.length === 1
+    ? [`**When:** ${capitalized(plainWeekdaySchedule(instants[0]![1], days, opts.timezone, opts.now))}`]
+    : every !== undefined && instants.length === 1
     ? [`**When:** ${capitalized(plainSchedule(instants[0]![1], every, opts.timezone, opts.now))}`]
     : [
         ...instants.map(([key, at]) => `**${humanLabel(key)}:** ${plainInstant(at, opts.timezone, opts.now)}`),

@@ -115,6 +115,9 @@ export interface Mailbox {
   summarize(threadId: string, signal?: AbortSignal): Promise<string>;
   /** The link that opens a thread for the person. */
   link(threadId: string): string;
+  /** The addresses a search looks through, so a search that finds nothing
+   *  can say where it looked. */
+  addresses?(signal?: AbortSignal): Promise<string[]>;
 }
 
 // ── Addresses ───────────────────────────────────────────────────────────────
@@ -236,13 +239,22 @@ const ThreadIds = Type.Array(Type.String(), { minItems: 1, maxItems: 50 });
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const opens = (link: string | undefined) => (link ? [`Open in Whisk: ${link}`] : []);
 
+/** What a search that found nothing says: where it looked, and that this
+ *  is one search's answer, so the reply never calls a mailbox empty. */
+export async function noMatch(mailbox: Mailbox, query: string, signal?: AbortSignal): Promise<string> {
+  const where = await mailbox.addresses?.(signal).catch(() => [] as string[]) ?? [];
+  const inWhat = where.length ? ` in ${where.join(", ")}` : "";
+  return `Nothing matched "${query}"${inWhat}. This says only that this search found nothing, not that the mailbox is empty: try a broader search (fewer words, a longer newer_than) before telling the person there is no such mail.`;
+}
+
 export function searchMailTool(mailbox: Mailbox): Tool {
   return defineTool({
     name: "search_mail",
     label: "Search mail",
     description:
       "Search the person's mail with Gmail's search syntax (from:, to:, subject:, is:unread, newer_than:7d, in:inbox, has:attachment, and plain words), across every mailbox they keep in Whisk. " +
-      "Returns matching threads, newest first, with who wrote, subject, date, a snippet and a link that opens the thread in Whisk. Use read_thread to read one in full.",
+      "Returns matching threads, newest first, with who wrote, subject, date, a snippet and a link that opens the thread in Whisk. Use read_thread to read one in full. " +
+      "A search needs words or operators: * and an empty query match nothing. To see recent mail, search in:inbox newer_than:7d. One search that finds nothing says only that nothing matched it, never that the mailbox is empty.",
     parameters: Type.Object({
       query: Type.String({ description: "A Gmail search, such as \"is:unread newer_than:2d\"." }),
       max: Type.Optional(Type.Integer({ minimum: 1, maximum: SEARCH_MAX_THREADS, description: "How many threads, 10 by default." })),
@@ -250,8 +262,13 @@ export function searchMailTool(mailbox: Mailbox): Tool {
     risk: "read",
     source: "mail",
     run: async ({ query, max }, { signal }) => {
+      // A query with no letter or digit (a lone *, punctuation) is not a
+      // search: Gmail answers it with nothing, which read as an empty mailbox.
+      if (!/[\p{L}\p{N}]/u.test(query)) {
+        return { content: `"${query}" is not a search: it has no words or operators. To see recent mail, search in:inbox newer_than:7d.`, details: { threads: 0 } };
+      }
       const threads = await mailbox.search(query, max ?? 10, signal);
-      if (threads.length === 0) return { content: `No threads match "${query}".`, details: { threads: 0 } };
+      if (threads.length === 0) return { content: await noMatch(mailbox, query, signal), details: { threads: 0 } };
       const lines = threads.map((t) =>
         [
           `Thread ${t.id} · ${t.at} · ${plural(t.messages, "message")}${t.unread ? " · unread" : ""}`,

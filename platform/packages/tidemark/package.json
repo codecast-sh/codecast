@@ -1,0 +1,44 @@
+{
+  "name": "@platform/tidemark",
+  "version": "0.1.0",
+  "description": "A runtime for agents that live among many people over long stretches of time: scoped logs, history that zooms, everything as rows",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tree": "./src/tree.ts",
+    "./stores/memory": "./src/stores/memory.ts",
+    "./stores/postgres": "./src/stores/postgres.ts",
+    "./stores/contract": "./src/stores/contract.ts",
+    "./agent": "./src/agent/index.ts",
+    "./stores/convex": "./src/stores/convex.ts"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "example": "bun examples/group-chat/main.ts"
+  },
+  "peerDependencies": {
+    "@platform/agent": "*",
+    "convex": "^1.31.6"
+  },
+  "peerDependenciesMeta": {
+    "@platform/agent": {
+      "optional": true
+    },
+    "convex": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.2"
+  }
+}

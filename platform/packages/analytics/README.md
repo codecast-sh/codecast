@@ -176,7 +176,9 @@ ingest key only writes into one source, like a Sentry DSN):
 }
 ```
 
-`endpoint` is present only when it is not codecast prod. `parseCodecastJson`
+`endpoint` is present only when it is not codecast prod. An optional
+`replay` block configures the recorder (below): `{ "dom": "off" | "onError" |
+"sampled", "sampleRate": 0.05 }`; absent, an app records semantic events only. `parseCodecastJson`
 checks one and refuses unknown keys, so a misplaced secret is not carried in
 quietly.
 
@@ -246,6 +248,21 @@ blanks query values, and costs one capture listener per event type plus
 patches on history, console, fetch and XHR: no MutationObserver, nothing per
 frame. The event types match codecast `packages/shared/contracts/replay.ts`
 and codecast typechecks the two against each other.
+
+**DOM mode.** `startReplay({ ..., replayDom: "onError" | "sampled" })` (default
+`"off"`) also records the page with rrweb so codecast's player can play the
+replay visually; the semantic stream is unchanged. `"onError"` uploads the
+DOM only when an error keeps the recording; `"sampled"` also uploads it from
+the start in sessions `sampleRate` keeps. rrweb (`@rrweb/record`, an optional
+peer) is imported on demand only when the mode is on, and is configured to
+cost what it must (`./replayDom`): no mouse movement, clicks only among mouse
+interactions, scroll and media throttled, every input masked, rich text
+editors' text masked, `[data-private]` blocked whole, no canvas, fonts or
+inline images. Checkouts every 30 s (or 5000 events) bound the ring to two
+segments, each opening on a full snapshot. DOM chunks are gzipped JSON arrays
+of rrweb events, signed with `kind: "dom"` on the same replay-sign route and
+capped by `REPLAY_DOM_LIMITS`. Unlike the semantic recorder, it observes every
+DOM change, so turn it on knowing its cost.
 
 ## Tests
 

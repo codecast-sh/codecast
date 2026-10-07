@@ -174,6 +174,10 @@ export function whiskMailbox(call: WhiskCall, webUrl?: string): Mailbox {
   return {
     link,
 
+    async addresses(signal) {
+      return (await roster.accounts(signal)).map((a) => a.email).filter(Boolean);
+    },
+
     async search(query, max, signal) {
       const limit = Math.min(max, SEARCH_MAX_THREADS);
       const rows: WhiskThread[] = [];

@@ -107,7 +107,9 @@ export function mailSearch(raw: unknown): { unread: boolean; scope: string } {
   for (const tok of raw.match(/-?[a-z_]+:"[^"]*"|"[^"]*"|\S+/gi) ?? []) {
     const op = tok.match(/^(-?)([a-z_]+):(.*)$/i);
     if (!op) {
-      if (!/^(OR|AND)$/.test(tok)) words.push(tok.replace(/"/g, ""));
+      // A wildcard or bare punctuation (*, (, -) is query syntax, never a
+      // word the person would recognise.
+      if (!/^(OR|AND)$/.test(tok) && /[\p{L}\p{N}]/u.test(tok)) words.push(tok.replace(/"/g, ""));
       continue;
     }
     if (op[1]) continue;
@@ -197,7 +199,7 @@ const PHRASES: Array<[RegExp, Phrase]> = [
   }],
   [/(create|add|set|schedule).*(routine|trigger|reminder)/i, (i) => {
     const t = quoted(i.title);
-    const what = t ? `a routine: ${t}` : "a routine";
+    const what = t ? `the routine ${t}` : "a routine";
     return [`Set up ${what}`, `set up ${what}`];
   }],
   [/(list|read|get|check).*(routine|trigger|reminder)/i, () => ["Checked your routines", "check your routines"]],
@@ -235,10 +237,31 @@ function resultText(raw: unknown): string {
   return typeof raw === "string" ? raw : "";
 }
 
+/** The verbs the phrases start with, as they read in progress. Any other
+ *  verb takes the regular spelling (ongoingVerb). */
+const ONGOING: Record<string, string> = { sum: "summing", set: "setting", stop: "stopping", see: "seeing" };
+
+function ongoingVerb(verb: string): string {
+  if (ONGOING[verb]) return ONGOING[verb];
+  if (/[^aeiou]e$/.test(verb)) return `${verb.slice(0, -1)}ing`;
+  return `${verb}ing`;
+}
+
+/** A step while it runs, in the present progressive: "Searching the web for
+ *  flights". A step held on the person's approval says so instead
+ *  (stepText with `asking`), so work in flight never reads as waiting. */
+export function stepOngoing(call: ToolCallLike): string {
+  const todo = (phrased(call) ?? UNPHRASED)[1];
+  const [verb, ...rest] = todo.split(" ");
+  const said = [ongoingVerb(verb), ...rest].join(" ");
+  return said[0].toUpperCase() + said.slice(1);
+}
+
 /** One tool call as one plain line that never claims more than happened:
- *  done reads in the past tense, anything else says it did not happen.
- *  `asking` says a pending call waits on the person's approval (the caller
- *  knows the turn is parked rather than running). */
+ *  done reads in the past tense, anything else says it did not happen. A
+ *  call with no result yet is in progress (stepOngoing), unless `asking`
+ *  says it waits on the person's approval (the caller knows the turn is
+ *  parked rather than running). */
 export function stepText(call: ToolCallLike, result?: ToolResultLike, opts: { asking?: boolean } = {}): string {
   const outcome = stepOutcome(result);
   // A tool's own sentence is past tense, so it speaks only for a step that
@@ -250,7 +273,7 @@ export function stepText(call: ToolCallLike, result?: ToolResultLike, opts: { as
     case "done":
       return did;
     case "pending":
-      return opts.asking ? `Waiting for your go-ahead to ${todo}` : `Waiting to ${todo}`;
+      return opts.asking ? `Waiting for your go-ahead to ${todo}` : stepOngoing(call);
     case "declined":
       return `Didn't ${todo} (you said no)`;
     case "not_run":
