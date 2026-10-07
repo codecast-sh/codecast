@@ -500,8 +500,9 @@ async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: 
     killSignal: (opts?.killSignal ?? "SIGKILL") as any,
     env: { ...TMUX_ENV, ...opts?.env },
   });
-  return runTmux(args, { ...TMUX_ENV, ...opts?.env }, exec, (results) => ({ stdout: joinText(results), stderr: "" }));
+  return runTmux(args, { ...TMUX_ENV, ...opts?.env }, exec, joinExecResults);
 }
+const joinExecResults = (results: unknown[]): { stdout: string; stderr: string } => ({ stdout: joinText(results), stderr: "" });
 
 
 // Each tmux server learns once to copy the session id from the client that
