@@ -44,19 +44,25 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["prove.json.reproduced = true", {}, false],
     ["prove.json.reproduced = false", { "prove.json": '{"reproduced":false}' }, true],
     ["prove.json.reproduced = false", {}, false],
+    // No proof at all, whatever the hand said: never a dead end (ct-57659).
+    ["prove.json.reproduced != true and prove.json.reproduced != false", {}, true],
+    ["prove.json.reproduced != true and prove.json.reproduced != false", { "prove.json": '{"reproduced":false}' }, false],
     ["red.json.red = true", { "red.json": '{"red":true}' }, true],
     ["red.json.red = true", { "red.json": '{"red":false}' }, false],
     ["red.json.red != true", {}, true],
     ["red.json.red != true", { "red.json": '{"red":true}' }, false],
-    ["outcome = success and category != prompt", { outcome: "success", category: "code" }, true],
-    ["outcome = success and category != prompt", { outcome: "success", category: "prompt" }, false],
-    ["outcome = success and category = prompt", { outcome: "success", category: "prompt" }, true],
-    ["outcome = success and category = prompt", { outcome: "failure", category: "prompt" }, false],
+    ["outcome = success and category != prompt and category != line", { outcome: "success", category: "code" }, true],
+    ["outcome = success and category != prompt and category != line", { outcome: "success", category: "line" }, false],
+    ["outcome = success and (category = prompt or category = line)", { outcome: "success", category: "line" }, true],
+    ["outcome = success and (category = prompt or category = line)", { outcome: "failure", category: "prompt" }, false],
     // A profile command is a direct context key; absent from the profile it is empty.
     ["outcome = success and not line.commands.ship", { outcome: "success", "line.commands.ship": "" }, true],
     ["outcome = success and not line.commands.ship", { outcome: "success", "line.commands.ship": "bun ship.ts" }, false],
     ["outcome = success and line.commands.ship", { outcome: "success", "line.commands.ship": "bun ship.ts" }, true],
     ["outcome = success and line.commands.ship", { outcome: "success", "line.commands.ship": "" }, false],
+    ["outcome = failure and eval.exit_code = 1", { outcome: "failure", "eval.exit_code": "1" }, true],
+    ["outcome = failure and eval.exit_code = 1", { outcome: "failure", "eval.exit_code": "2" }, false],
+    ["outcome = failure and eval.exit_code != 1", { outcome: "failure", "eval.exit_code": "2" }, true],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

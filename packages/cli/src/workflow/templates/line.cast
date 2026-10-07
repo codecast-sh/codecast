@@ -30,7 +30,8 @@
 //   plan        only at risk = plan; a person approves it at plan_gate (LE7)
 //   analyze     acceptance criteria for the reviewer
 //   prove, red  the miss shown failing first; one that does not reproduce
-//               dissolves the cause with its evidence (LE8)
+//               dissolves the cause with its evidence (LE8); one that ends
+//               without its proof parks at unproven with what it tried
 //   implement, verify, green
 //               the change, the project's check command, the reproduction
 //               now passing; a prompt change, or a change to the line itself
@@ -80,6 +81,8 @@ digraph line {
   red [label="Red", shape=parallelogram, timeout=5400, script="@line/red.sh"]
 
   dissolve [label="Dissolve", shape=parallelogram, script="@line/dissolve.sh"]
+
+  unproven [label="Unproven", shape=parallelogram, script="@line/unproven.sh"]
 
   // The builder runs the project's check and its failing check, which for a
   // prompt is the proof's replays: the same hours as prove.
@@ -134,9 +137,11 @@ digraph line {
   analyze -> prove
   prove -> red       [condition="prove.json.reproduced = true"]
   prove -> dissolve  [condition="prove.json.reproduced = false"]
+  prove -> unproven  [condition="prove.json.reproduced != true and prove.json.reproduced != false", label="no proof"]
   red -> implement   [condition="red.json.red = true"]
   red -> prove       [condition="red.json.red != true", label="no miss shown"]
   dissolve -> exit
+  unproven -> exit
 
   implement -> verify    [condition="handoff = done"]
   verify -> green        [condition="outcome = success and category != prompt and category != line"]

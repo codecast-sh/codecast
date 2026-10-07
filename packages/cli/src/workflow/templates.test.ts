@@ -57,7 +57,7 @@ describe("line.cast template", () => {
     expect(validateWorkflow(graph)).toEqual([]);
     expect([...graph.nodes.keys()]).toEqual([
       "start", "exit", "ground", "park", "plan", "plan_gate", "analyze", "prove", "red", "dissolve",
-      "implement", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
+      "unproven", "implement", "verify", "green", "eval", "unscored", "review", "card_draft", "card_write", "card",
       "decide", "reopen", "drop", "ship", "watch",
     ]);
     expect(graph.nodes.get("verify")?.type).toBe("command");
@@ -209,10 +209,13 @@ describe("line.cast template", () => {
     expect(fired("ground", { outcome: "success" })).toEqual(["park"]);
   });
 
-  test("prove and red route on node JSON: no reproduction dissolves, no red check goes back to prove", () => {
+  test("prove and red route on node JSON: no reproduction dissolves, no proof parks, no red check goes back to prove", () => {
     expect(fired("prove", { "prove.json": '{"reproduced":true}' })).toEqual(["red"]);
     expect(fired("prove", { "prove.json": '{"reproduced":false}' })).toEqual(["dissolve"]);
-    expect(fired("prove", {})).toEqual([]);
+    // Prove ended without its proof, whether it failed or settled: never a dead end (ct-57659).
+    expect(fired("prove", {})).toEqual(["unproven"]);
+    expect(fired("prove", { outcome: "failure" })).toEqual(["unproven"]);
+    expect(fired("prove", { "prove.json": '{"tried":"x"}' })).toEqual(["unproven"]);
     expect(fired("red", { "red.json": '{"red":true,"dir":"/d"}' })).toEqual(["implement"]);
     expect(fired("red", { "red.json": '{"red":false,"dir":"/d"}' })).toEqual(["prove"]);
     expect(fired("red", {})).toEqual(["prove"]);
@@ -503,6 +506,17 @@ describe("line.cast station scripts", () => {
     ]);
   });
 
+  test("unproven parks the cause at open with what Prove tried, leaving a hand's own handoff in review", () => {
+    expect(run("unproven", { handoff: "none", "prove.output": "No test could reach the daemon's socket." }).code).toBe(0);
+    expect(run("unproven", { handoff: "needs_context", "prove.output": "" }).code).toBe(0);
+    const parked = "Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the line once it can be shown.";
+    expect(calls()).toEqual([
+      ["task", "update", "ct-1", "-s", "open"],
+      ["task", "comment", "ct-1", `${parked} What Prove tried: No test could reach the daemon's socket.`, "-t", "blocker"],
+      ["task", "comment", "ct-1", parked, "-t", "blocker"],
+    ]);
+  });
+
   test("park, drop, reopen, dissolve, watch and the card nodes call cast with the run's values", () => {
     run("park", { readiness: "needs_context", goal_ref: "in-3:activation", readiness_note: "which account?" });
     run("park", { readiness: "ready", goal_ref: "none", readiness_note: "" });
@@ -540,7 +554,7 @@ const offlineLine = (dir: string) => {
   stub("green", "true");
   stub("eval", "true");
   stub("card_draft", `echo '{"card": {"wrong": ""}}'`);
-  for (const id of ["card", "ship", "watch", "park", "dissolve", "reopen", "drop"]) stub(id, "true");
+  for (const id of ["card", "ship", "watch", "park", "dissolve", "unproven", "reopen", "drop"]) stub(id, "true");
   graph.nodes.get("verify")!.script = "true";
   return graph;
 };
@@ -683,6 +697,14 @@ describe("line.cast offline run through the session path", () => {
     expect(stations()).toEqual(["ground", "analyze", "prove"]);
     const node = calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "dissolve" && c.body.node_status === "completed")!.body;
     expect(JSON.parse(node.result_preview.split("\n")[0])).toEqual({ dissolved: "judge_defect", moments: 2 });
+  }, 30000);
+
+  test("a prove that ends without its proof parks at unproven and the run completes", async () => {
+    pinned.prove = "I could not write a test that shows the miss.";
+    expect(await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }))).toBe("completed");
+    expect(stations()).toEqual(["ground", "analyze", "prove"]);
+    const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
+    expect(ran.slice(-2)).toEqual(["unproven", "exit"]);
   }, 30000);
 
   test("a malformed profile stops the run before any hand starts", async () => {
