@@ -422,6 +422,20 @@ describe("applyHideTransition — explicit kill forces teardown", () => {
     expect(tables.conversations[0]).toMatchObject({ pending_kill_generation: 2, has_pending_messages: true, inbox_killed_at: 111 });
   });
 
+  // The command names who asked, and the daemon logs it with the teardown:
+  // without it, finding what killed jx7970z (2026-10-06) took a prod dump of
+  // daemon_commands plus PostHog forensics.
+  test("the kill command carries the cause its caller named", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const doc = prePatch(tables);
+    const patch = { inbox_dismissed_at: 222 };
+    await db.patch(CONV, patch);
+
+    await applyHideTransition({ db }, doc, patch, { forceKill: true, cause: "web:killSession" });
+    expect(JSON.parse(kills(db)[0].doc.args)).toMatchObject({ conversation_id: CONV, cause: "web:killSession" });
+  });
+
   test("a re-asserted EXPLICIT kill enqueues teardown again", async () => {
     const tables = mkTables();
     const db = makeFakeDb(tables);
