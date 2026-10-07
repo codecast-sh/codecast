@@ -44,6 +44,18 @@ export async function maybeScheduleTitleGeneration(
   });
 }
 
+/** A hosted turn's answer has landed in full: name the conversation from it
+ *  now. The count milestone at message 2 fires while the reply is still
+ *  streaming into its row, so that pass can see only the ask, and the floor
+ *  above then holds every later pass of a short conversation, which leaves the
+ *  ask itself as the title. Only while no pass has titled it (a pass always
+ *  writes a subtitle), so later turns follow the usual milestones. */
+export async function titleAfterHostedAnswer(ctx: MutationCtx, conversation: Doc<"conversations">): Promise<void> {
+  if (conversation.skip_title_generation || conversation.title_is_custom || conversation.subtitle !== undefined) return;
+  await ctx.db.patch(conversation._id, { title_gen_scheduled_at: Date.now() });
+  await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, { conversation_id: conversation._id });
+}
+
 export const setTitleAndSubtitle = internalMutation({
   args: {
     conversation_id: v.id("conversations"),
