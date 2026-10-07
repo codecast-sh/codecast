@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "codecast-in-the-cloud",
+    title: "Codecast in the cloud",
+    dek: "Every cloud feature, end to end: a host in your own AWS account that starts from your uncommitted work, carries your agent config and logins, mirrors its edits back to your laptop, takes whole batches of running sessions mid-flight, and sleeps when nothing is happening.",
+    author: "the codecast team",
+    date: "2026-10-07",
+    dateLabel: "October 7, 2026",
+    readingMinutes: 16,
+    cover: { src: "/blog/codecast-in-the-cloud/cover.png", alt: "What moves between a laptop and a cloud host: spawn, home mirror, logins, live sync, migrate, browser sync" },
+  },
+  {
     slug: "field-manual",
     cover: { src: "/blog/field-manual/inbox-hero.webp", alt: "The codecast inbox beside an open conversation" },
     title: "The codecast field manual: running a company of agents",
