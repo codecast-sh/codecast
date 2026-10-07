@@ -16,7 +16,6 @@ import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useInitiatives } from "../../hooks/useInitiatives";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../shortcuts";
-import { KeyHint } from "../changes/useChangesKeys";
 import { LINE_STATION_SETTINGS, lineSettingsHref, lineTabHref } from "../../lib/lineSettings";
 import { formatElapsed } from "../../lib/taskLine";
 import { cn } from "../../lib/utils";
@@ -32,6 +31,7 @@ import { LineProjectSwitcher, LineRollup, lineKeys } from "./LineProjects";
 import { useLineFloor } from "./useLineFloor";
 import { LineSetup } from "./LineSetup";
 import { LineMapView, useLineMapUrl } from "./map/LineMapView";
+import { useLineAdmission } from "./map/useLineAdmission";
 import "./line.css";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
@@ -63,7 +63,7 @@ const FIRST_SIGNAL = `cast signal add --source person --kind bug --title "What y
 export function LinePage({ project: pinned, workspace }: { project?: string; workspace?: string | null } = {}) {
   const initiatives = useInitiatives();
   const { now, projects, lineRows, rollup, line } = useLineFloor(pinned, workspace);
-  const mapUrl = useLineMapUrl();
+  const mapUrl = useLineMapUrl(pinned ? null : line.param);
   // Settings belong to one project's line; on the map they are a panel.
   const settingsProject = line.key === ALL_PROJECTS || line.key === NO_PROJECT ? null : line.param;
   const openSettings = () => mapUrl.set({ node: LINE_SETTINGS_NODE });
@@ -78,6 +78,8 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
   const findersSince = lineProfile?.changed_at;
 
   const scoped = useMemo(() => scopeLine(lineRows, line.key), [lineRows, line.key]);
+  // Whether the line may start its next cause: why nothing starts, and the switch and slots that decide it.
+  const admit = useLineAdmission(line.key === ALL_PROJECTS ? null : line.key);
   const flow = useMemo(() => buildLineFlow({
     ...scoped,
     initiatives: initiatives.map((i: InitiativeRow) => ({ short_id: i.short_id, title: i.title, priority: i.priority as GoalRow["priority"] })),
@@ -85,7 +87,8 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
     now,
     finders,
     findersSince,
-  }), [scoped, initiatives, projects, now, finders, findersSince]);
+    admission: admit.admission,
+  }), [scoped, initiatives, projects, now, finders, findersSince, admit.admission]);
 
   // Nothing anywhere on this line: the map still draws its stations, with the first step above them.
   const allEmpty = flow.sense.items.length === 0 && flow.causes.count === 0 && flow.build.count === 0 && flow.awaiting.count === 0 && flow.watching.count === 0 && flow.closed.count === 0;
@@ -106,6 +109,22 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
     return () => window.removeEventListener("keydown", onKey);
   }, [pinned, rollup, line]);
 
+  // The headline speaks for the selected line only, so it names it, and a
+  // card waiting in another project is one click away (LX1).
+  const scopeName = useMemo(() => rollup.find((r) => r.key === line.key)?.title ?? null, [rollup, line.key]);
+  const elsewhere = useMemo(() => {
+    const others = rollup.filter((r) => r.key !== line.key && r.awaiting > 0).sort((a, b) => b.awaiting - a.awaiting);
+    return others.length ? { key: others[0].key, title: others[0].title, count: others.reduce((n, r) => n + r.awaiting, 0), projects: others.length } : null;
+  }, [rollup, line.key]);
+
+  // With a card elsewhere the all-clear says "here", against the link to there;
+  // the project switcher right above already names this line.
+  const headline = useMemo(() => {
+    const parts = headlineLead(lineHeadline(flow, now, elsewhere ? null : scopeName));
+    return elsewhere ? parts.map((p) => (p.tone === "clear" ? { ...p, text: "nothing waiting on you here" } : p)) : parts;
+  }, [flow, now, scopeName, elsewhere]);
+  const panelOpen = !!(mapUrl.state.node || mapUrl.state.edge);
+
   // A headline part that names a station opens that node's panel on the map.
   const onStation = (key: NonNullable<HeadlinePart["station"]>) => {
     const node = key === "causes" ? "causes" : key === "awaiting" ? CARD_GATE_NODE_ID : key === "watching" ? "watch" : flow.build.items[0]?.run.current_node_id ?? "implement";
@@ -114,54 +133,65 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
 
   return (
     <div className="line-floor h-full flex flex-col min-h-0" data-line-page>
-      <header className="shrink-0 px-4 sm:px-6 pt-5 pb-3 flex flex-col gap-3">
-        <div className="flex items-baseline gap-3 min-w-0">
-          <h1 className="text-[13px] font-semibold text-sol-text leading-none">{pinned ? "The map" : "The line"}</h1>
-          <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
-          {tabHref && (
-            <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This project's line: its map, sources, stations and versions" data-line-tab-link>
-              Line tab
-            </Link>
-          )}
-          {pinned && (
-            <Link href={line.href} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project's line on one floor" data-line-all-link>
-              All lines
-            </Link>
-          )}
-          {settingsProject && (
-            <button type="button" onClick={openSettings} className={cn(tabHref || pinned ? "" : "ml-auto", "self-center shrink-0 inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text")} title="What this line listens to, checks, limits and runs" data-line-settings-link>
-              <SlidersHorizontal className="w-3 h-3" />
-              <span>settings</span>
-              <KeyHint action="line.settings" />
-            </button>
-          )}
-        </div>
-        {!pinned && <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => line.select(k)} />}
-        {onMap && !allEmpty && <Throughput t={flow.throughput} lead={<Headline parts={headlineLead(lineHeadline(flow, now))} onStation={onStation} />} />}
-      </header>
+      {/* The project's Line tab sits under the project's own header: the map
+          leads, its window and counts in the map's own bar. /line names itself
+          and switches lines; settings live once, in the map's bar. */}
+      {!pinned && (
+        <header className="shrink-0 px-4 sm:px-6 pt-4 pb-2.5 flex flex-col gap-2.5">
+          <div className="flex items-baseline gap-3 min-w-0">
+            <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
+            <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
+            {tabHref && (
+              <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This project's line: its map, sources, stations and versions" data-line-tab-link>
+                Line tab
+              </Link>
+            )}
+          </div>
+          <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => line.select(k)} />
+          {onMap && !allEmpty && <Throughput t={flow.throughput} brief={panelOpen} lead={<Headline parts={headline} onStation={onStation} elsewhere={elsewhere} onElsewhere={() => elsewhere && line.select(elsewhere.key)} />} />}
+        </header>
+      )}
 
       {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => line.select(k)} />
         : !onMap ? <Onboarding projects={projects} />
         : (
-          <div className="flex-1 min-h-0 border-t border-sol-border/30" data-line-flow>
+          <div className={cn("flex-1 min-h-0", !pinned && "border-t border-sol-border/30")} data-line-flow>
             <LineMapView
               projectId={line.key === NO_PROJECT ? null : line.key}
               rows={scoped}
               flow={flow}
               now={now}
               note={allEmpty ? <FirstSignal /> : undefined}
+              lineParam={pinned ? null : line.param}
+              admit={admit}
+              footEnd={<FooterLinks projectsKeys={rollup.length > 0 && !pinned} />}
+              barEnd={pinned ? (
+                <Link href={line.href} className="shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project's line on one floor" data-line-all-link>All lines</Link>
+              ) : undefined}
             />
           </div>
         )}
 
-      <footer className="shrink-0 flex items-center gap-4 px-4 sm:px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim">
-        {rollup.length > 0 && !pinned && <Hint label="projects"><KeyCap size="xs">[</KeyCap><KeyCap size="xs">]</KeyCap></Hint>}
-        <span className="ml-auto shrink-0 whitespace-nowrap flex items-center gap-3" data-line-footer-links>
-          <Link href="/questions" className="hover:text-sol-text">all questions</Link>
-          <Link href="/routines" className="hover:text-sol-text">workflows</Link>
-        </span>
-      </footer>
+      {/* On the map its key row carries these, one line, and the map keeps the height. */}
+      {(rollupView || !onMap) && (
+        <footer className="shrink-0 flex items-center gap-4 px-4 sm:px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim">
+          <FooterLinks projectsKeys={rollup.length > 0 && !pinned} />
+        </footer>
+      )}
     </div>
+  );
+}
+
+/** The page's own keys and links, at the end of whichever footer row shows. */
+function FooterLinks({ projectsKeys }: { projectsKeys: boolean }) {
+  return (
+    <>
+      {projectsKeys && <Hint label="projects"><KeyCap size="xs">[</KeyCap><KeyCap size="xs">]</KeyCap></Hint>}
+      <span className="ml-auto shrink-0 whitespace-nowrap flex items-center gap-3" data-line-footer-links>
+        <Link href="/questions" className="hover:text-sol-text">all questions</Link>
+        <Link href="/routines" className="hover:text-sol-text">workflows</Link>
+      </span>
+    </>
   );
 }
 
@@ -213,7 +243,8 @@ const boldNumbers = (text: string) => text.split(/(\d+)/).map((t, i) => (i % 2 ?
 
 /** The five-second read. A part that names a station links to it: the
  *  cursor moves there and the flow scrolls it into view. */
-function Headline({ parts, onStation }: { parts: HeadlinePart[]; onStation: (key: NonNullable<HeadlinePart["station"]>) => void }) {
+type Elsewhere = { key: string; title: string; count: number; projects: number };
+function Headline({ parts, onStation, elsewhere, onElsewhere }: { parts: HeadlinePart[]; onStation: (key: NonNullable<HeadlinePart["station"]>) => void; elsewhere?: Elsewhere | null; onElsewhere?: () => void }) {
   return (
     <p className="line-headline text-sol-text" data-line-headline>
       {parts.map((p, i) => {
@@ -225,14 +256,24 @@ function Headline({ parts, onStation }: { parts: HeadlinePart[]; onStation: (key
         const sep = i < parts.length - 1 ? ", " : "";
         return (
           <Fragment key={i}>
-            {station
+            {p.href
+              ? <Link href={p.href} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-run title="Open the run's report">{boldNumbers(text)}</Link>
+              : station
               ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{boldNumbers(text)}</a>
               : <span className={TONE[p.tone] || undefined}>{boldNumbers(text)}</span>}
             {sep}
           </Fragment>
         );
       })}
-      .
+      {elsewhere && (
+        <>
+          <span className="line-headline-sep" aria-hidden> · </span>
+          <button type="button" onClick={onElsewhere} className="line-headline-link text-sol-yellow" data-line-headline-elsewhere={elsewhere.key}>
+            {boldNumbers(`${elsewhere.count}\u00a0${elsewhere.count === 1 ? "card waits" : "cards wait"} in ${elsewhere.title}${elsewhere.projects > 1 ? ` and ${elsewhere.projects - 1} more` : ""}`)}
+            <ArrowRight className="inline-block w-[0.8em] h-[0.8em] ml-1 align-[-0.05em]" aria-hidden />
+          </button>
+        </>
+      )}
     </p>
   );
 }
@@ -243,8 +284,10 @@ const sparkable = (days: number[]) => days.filter((d) => d > 0).length >= 3;
 
 /** The headline, then the week as one dim trailing clause on its row; a
  *  click on the clause opens the week's figures under it. */
-function Throughput({ t, lead: headline }: { t: ReturnType<typeof buildLineFlow>["throughput"]; lead: ReactNode }) {
+function Throughput({ t, lead: headline, brief }: { t: ReturnType<typeof buildLineFlow>["throughput"]; lead: ReactNode; brief?: boolean }) {
   const [open, setOpen] = useState(false);
+  // A panel open on the map: the status alone, on one line, and the map takes the height.
+  if (brief) return <div className="line-head-row" data-brief="true">{headline}</div>;
   const moved = t.signalsIn + t.opened + t.dissolved + t.shipped + t.reopened > 0;
   if (!moved) {
     return <div className="line-head-row">{headline}<span className="text-[12px] text-sol-text-dim" data-line-throughput="quiet">no signals this week</span></div>;
@@ -277,7 +320,7 @@ function Throughput({ t, lead: headline }: { t: ReturnType<typeof buildLineFlow>
     {headline}
     {/* Each figure stays whole and the clause wraps between them; the
         chevron rides the last figure, so a wrap never strands it. */}
-    <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="line-meter-summary max-w-full text-[12px] text-sol-text-dim text-left hover:text-sol-text" data-line-throughput-summary title={open ? "Hide the week's figures" : "The week's figures"}>
+    <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="line-meter-summary whitespace-nowrap text-[12px] text-sol-text-dim text-right hover:text-sol-text" data-line-throughput-summary title={open ? "Hide the week's figures" : "The week's figures"}>
       {summary.map((p, i) => (
         <span key={p.words}>
           {i > 0 && <span> · </span>}

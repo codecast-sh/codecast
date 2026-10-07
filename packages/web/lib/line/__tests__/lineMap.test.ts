@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { SHIPPED_LINE } from "../shippedLine.generated";
 import { CAUSES_NODE, SIGNALS_NODE, buildLineMap, endNodeId, runVisits, sourceNodeId, windowLabel, type LineGraph, type MapRun } from "../lineMap";
 import * as F from "./lineFixtures";
+import { NO_PROJECT_ADMISSION } from "../../lineFlow";
 
 const { HOUR, DAY } = F;
 const map = (over: Partial<Parameters<typeof buildLineMap>[0]> = {}) => buildLineMap({ ...F.rows, finders: F.finders, now: F.NOW, windowMs: 7 * F.DAY, ...over });
@@ -60,6 +61,14 @@ describe("buildLineMap: nodes from the definition", () => {
     expect(node(m, "source:agentwatch").finder?.id).toBe("agentwatch-judge");
     expect(node(m, "source:ci").finder).toBeUndefined();
     expect(node(m, "source:ci").marks).toEqual([{ level: "info", words: "Files signals, but the profile does not declare it" }]);
+  });
+
+  test("people and lessons are sources of every line, declared or not (LX2)", () => {
+    const s0 = F.rows.signals[0];
+    const extra = ["person", "lesson"].map((source, i) => ({ ...s0, _id: `sig_${source}`, short_id: `sg-${source}`, task_id: null, source, fingerprint: `${source}:${i}`, created_at: F.NOW - F.HOUR }));
+    const m2 = map({ signals: [...F.rows.signals, ...extra] as typeof F.rows.signals });
+    expect(node(m2, "source:person").marks).toEqual([]);
+    expect(node(m2, "source:lesson").marks).toEqual([]);
   });
 
   test("expectations feed the finders that judge behavior", () => {
@@ -137,6 +146,23 @@ describe("buildLineMap: the data over a window", () => {
     expect(node(m, CAUSES_NODE).through).toBe(5);
   });
 
+  test("the queue's health: a usual wait from the runs, and a pile-up marked even when nothing failed", () => {
+    // Calm fixtures: few waiting, so no pile-up mark.
+    expect(node(m, CAUSES_NODE).marks.some((k) => /Piling up/.test(k.words))).toBe(false);
+    // Ten fresh causes nobody admitted: more came than left, and the queue says so.
+    const fresh = Array.from({ length: 10 }, (_, i) => ({ ...F.causeE, _id: `task_new${i}`, short_id: `ct-9${i}`, created_at: F.NOW - HOUR, cause: { ...F.causeE.cause!, first_seen: F.NOW - HOUR, fingerprints: [`fp:${i}`] } }));
+    const q = node(map({ tasks: [...F.rows.tasks, ...fresh] as any }), CAUSES_NODE);
+    expect(q.marks.find((k) => k.words.startsWith("Piling up"))).toMatchObject({ level: "warn" });
+    // One mark from one set of numbers: under the node the oldest wait (the
+    // node shows the count), in Health the same oldest wait against the usual one.
+    const pile = q.marks.find((k) => k.words.startsWith("Piling up"))!;
+    expect(q.marks.filter((k) => k.level === "warn")).toHaveLength(1);
+    const oldest = pile.short!.match(/^Oldest (\S+)$/)!;
+    expect(pile.words).toContain(`Oldest has waited ${oldest[1]}`);
+    // Its usual time is the wait from first sighting to first run, so Health has a norm.
+    expect(q.medianMs).not.toBeNull();
+  });
+
   test("a loop counts again: two rounds through implement and decide", () => {
     // run A twice, run F once; run C entered implement and is there now.
     expect(edge(m, "implement", "verify").count).toBe(3);
@@ -199,9 +225,19 @@ describe("buildLineMap: marks in words", () => {
   test("failure share over the window", () => {
     const m = map({ windowMs: 30 * DAY });
     expect(node(m, "verify")).toMatchObject({ failed: 2 });
-    expect(node(m, "verify").marks).toContainEqual({ level: "warn", words: `2 of ${node(m, "verify").through} failed in the last 30d` });
+    expect(node(m, "verify").marks).toContainEqual({ level: "warn", words: `2 of ${node(m, "verify").through} failed in the last 30d`, short: `2 of ${node(m, "verify").through} failed` });
     expect(edge(m, "verify", endNodeId("stopped")).count).toBe(2);
     expect(node(m, endNodeId("stopped")).through).toBe(2);
+  });
+
+  test("the ends that mean something went wrong say so; the good ends stay quiet", () => {
+    const m = map({ windowMs: 30 * DAY });
+    expect(node(m, endNodeId("stopped")).marks).toEqual([{ level: "warn", words: "2 runs stopped without a change in the last 30d" }]);
+    const reopened = node(m, endNodeId("reopened"));
+    expect(reopened.through).toBeGreaterThan(0);
+    expect(reopened.marks).toEqual([{ level: "warn", words: `${reopened.through === 1 ? "1 fix" : `${reopened.through} fixes`} came back during the watch in the last 30d` }]);
+    expect(node(m, endNodeId("held")).marks).toEqual([]);
+    expect(node(m, endNodeId("dissolved")).marks).toEqual([]);
   });
 
   test("a silent finder says so", () => {
@@ -219,6 +255,21 @@ describe("buildLineMap: marks in words", () => {
     const cards = [1, 2, 3].map((i) => ({ _id: `card${i}`, status: "pending", blocking: true, workflow_run_id: `r${i}`, gate_node_id: "decide", created_at: F.NOW - i * HOUR }));
     const m = map({ decisions: cards, cardsCap: 3 });
     expect(node(m, CAUSES_NODE).marks[0]).toMatchObject({ level: "warn", words: "Admission paused: queued behind 3 open cards" });
+  });
+});
+
+describe("admission on the queue's node (LE6)", () => {
+  test("not admitting leads Causes' marks, in the sentence the headline says", () => {
+    const m = map({ admission: { role: { id: "r1", handle: "aq-line", paused: false }, on: false, slots: 2, busy: 0, hands: 0, handsCap: 6 } });
+    expect(node(m, CAUSES_NODE).marks[0]).toMatchObject({ level: "warn", words: "Admission is off for @aq-line, so nothing starts on its own", short: "Admission off" });
+  });
+
+  test("under no project the queue says nothing starts it and how to move it, warning once the oldest is past the norm", () => {
+    const m = map({ admission: NO_PROJECT_ADMISSION });
+    const mark = node(m, CAUSES_NODE).marks[0];
+    expect(mark).toMatchObject({ words: "Nothing starts here on its own: these causes have no project. Move one into a project to run it", short: "No project" });
+    const oldest = Math.min(...node(m, CAUSES_NODE).now.map((it) => it.at));
+    expect(mark.level).toBe(F.NOW - oldest > DAY ? "warn" : "info");
   });
 });
 

@@ -7,13 +7,21 @@ numbered LX1 onward so code can cite them.
 
 ## LX1. One surface
 
-A project's line is one page: the map. It is the project's Line tab
-(`/projects/<id>?tab=line`), and `/line` is the same map for the project in
-focus with a switcher and an all-projects roll-up that only counts. Settings
-are not a separate place: every value of the line is read and changed where it
-shows on the map (LX5), so `/line/settings` opens the map with the matching
-panel open. The task page's cause story, the run page and the decision card
-link into the map's trace (LX4) instead of each telling part of the story.
+A project's line is one page: the map. It leads the project's Line tab
+(`/projects/<id>?tab=line`), followed by the project's expectations and what
+each version of the line delivered. `/line` is the same map for the project in
+focus, with a switcher of project chips (each showing its waiting cards) and an
+all-projects roll-up that only counts. The map's state lives in its URL
+(`?node=`, `?edge=`, `?window=`, `?trace=`, `?project=`), so every panel,
+window and trace is a link.
+
+Settings are not a separate place: every value of the line is read and changed
+where it shows on the map (LX5). `/line/settings` redirects onto the map with
+the matching panel open: a station's panel for `?station=`, else the line's
+settings panel (`?node=line`) at the `?section=` it names.
+
+The task page's cause story, the run page and the decision card each link into
+the trace (LX4) instead of each telling part of the story.
 
 ## LX2. The map
 
@@ -21,17 +29,32 @@ The map draws the project's line left to right as the path work takes, from
 the world to a held fix, and lays the data over it.
 
 - **Nodes, from the definition.** Sources (one per declared finder, plus
-  people and lessons), Expectations (feeding the finders that judge behavior),
-  Signals (intake and attach), Causes (the admission queue), each station of
-  the project's actual graph in order (the shipped line or the project's own,
-  so a customized line draws as customized), Decide, Ship, Watch, and the ends:
-  Held, Reopened, Dissolved, Dropped. Branches the graph takes (dissolve, the
-  revise loop back to implement, drop) draw as branches.
+  people and lessons, which are always sources, plus any source that filed
+  without being declared, marked so), Expectations (feeding the finders that
+  judge behavior), Signals (intake and attach), Causes (the admission queue),
+  each station of the project's actual graph in order (the shipped line or the
+  project's own, so a customized line draws as customized), Decide, Ship,
+  Watch, and the ends: Held, Reopened, Dissolved, Dropped. Branches the graph
+  takes (dissolve, the revise loop back to implement, drop) draw as branches
+  in a lane under the main row. Past five sources, the quiet ones fold into a
+  "+N more sources" pill; a source in trouble, the open one and one on a trace
+  always stay.
 - **Data, over a window.** 24 hours, 7 days or 30 days. Each node shows how
-  many items are there now and how many passed through in the window. Each
-  edge's width is the number of items that crossed it in the window. A node
-  with stuck items (past its usual time), failures or a silent finder is
-  marked, and the mark says what is wrong in words.
+  many items are there now and how many went through in the window ("N
+  through"; outcomes live in the mark, never in the count). An empty node says
+  "empty", an end with none yet says "none yet". Each edge's width is the
+  number of items that crossed it in the window.
+- **Marks say what is wrong in words.** A node with stuck items (past its
+  usual time), failures, a silent finder, or a queue that does not move is
+  marked, tinted, and its mark says why in a few words with the full sentence
+  in its tooltip. Causes always names why nothing starts when work waits: no
+  project, no role looks after it, the role is paused, admission is off, the
+  day's cap is spent, every slot is busy, none of the causes is ready, or
+  ready causes have waited with no start (the sweep is not running).
+- **Opening view.** The map opens on where attention is due: the node holding
+  a card for the viewer, else the node in the worst trouble, else the busiest
+  (`openTarget`). A strip under the map lists every node holding work, each a
+  button that opens its panel.
 - **Derived locally.** The map is a pure function of rows the store already
   holds (signals, cause tasks, workflow runs, decisions, the project's
   published profile and graph): `buildLineMap` in `packages/web/lib/line/`,
@@ -39,19 +62,31 @@ the world to a held fix, and lays the data over it.
 
 ## LX3. Node panel
 
-Clicking a node or an edge opens its panel beside the map. One shape for all:
+Clicking a node or an edge opens its panel beside the map, and the map steps
+back to keep the selected node and its neighbours in view. One shape for all:
 
 - **Now**: the items at this node, oldest first, each with its age and a link
-  to its trace.
+  to its trace. Items sharing a title prefix group under it; test signals fold
+  under their own heading. A source never holds work, so its panel has no Now
+  and opens on Through.
 - **Through**: the items that passed in the window, with how each left
   (moved on, failed, dissolved, dropped) and how long it stayed.
 - **Health**: in words first, numbers second: failure share, median time,
-  cost per item, a finder's last signal.
+  cost per item, a finder's last signal. On Causes, the first line is why
+  nothing starts (LX2), followed by the role's admission switch and its slots,
+  edited in place on the role (admission belongs to the role whose area holds
+  the project, not to the profile), and "Start the top cause" when the queue
+  is stalled.
 - **Definition**: what this node is and every value that shapes it (a
   finder's declaration, a station's prompt, script and timeout, a command, a
-  cap, the watch length, the expectations), each editable in place (LX5), with
-  the version history of this node.
-- **Change**: a composer to ask an agent for a change to this node (LX6).
+  cap, the watch length, the expectations), each editable in place (LX5). A
+  source that files without a declaration offers one action to declare it. A
+  station lists its own version history: each version of the line in which
+  that station changed, from when, and what it delivered (runs, shipped,
+  stopped).
+- **Change**: "Ask for a change to <node>", pinned to the panel's foot, opens
+  the composer for this node (LX6). With no panel open, the controls row asks
+  about the whole line.
 
 An edge's panel is the items that crossed it.
 
@@ -59,20 +94,29 @@ An edge's panel is the items that crossed it.
 
 A trace follows one thing through the line. `/line/trace/<ref>` takes any
 ref the line knows: a signal, a fingerprint, a cause task, a run or a card
-decision. The same trace opens in the panel from any item on the map.
+decision, and reads the cause from the workspace it lives in. The same trace
+draws on the map from any item (`?trace=`).
 
 - **On the map**, the trace dims everything else and draws the item's path,
-  including loops it took (two implement rounds draw twice).
+  including loops it took (two implement rounds draw twice, marked x2).
+- **At the top**, one sentence says where the item is now, built from one
+  value: the station the newest run is at, a card waiting on someone (with the
+  button to answer it), or an approved ship nobody is driving (with the run to
+  open). A strip of the stations on its path follows, each chip colored by
+  its last visit (passed, stopped, replaced, current, pending).
 - **As a story**, a vertical timeline with one step per stage, each saying
   what happened, when, how long it took and what it produced:
   finding (what the finder saw, in its words, the expectation it breaks, and
   a link back to where it was seen, such as the AgentWatch cluster) → group
-  (other signals with the same fingerprint, and how this one attached) →
-  cause (title, goal, category, readiness) → each run, station by station
-  (outcome, duration, the station's session, its artifacts: proof, eval
-  result, review) → card (headline, recommendation, who answered what, when)
-  → ship (what landed where) → watch (its window and any signal in it) →
-  outcome (held, reopened, dissolved or dropped, and why).
+  (other signals with the same fingerprint, how this one attached, and any
+  other cause the same finding opened elsewhere) → cause (title, goal,
+  category, readiness) → each run, station by station (outcome, duration, the
+  station's session, its artifacts: proof, eval result, review; runs that end
+  the same way fold together, and a run whose card was withdrawn because a
+  newer run started reads as replaced, not stopped) → card (headline,
+  recommendation, who answered what, when) → ship (what landed where) → watch
+  (its window and any signal in it) → outcome (held, reopened, dissolved or
+  dropped, and why).
 - A step with nothing yet says what it is waiting on.
 
 ## LX5. Editing in place, with the repo as home
@@ -81,33 +125,41 @@ The line's definition is its profile, its graph and its station prompts, and
 all three live in the project's repo (LM6):
 
 - the profile in `.codecast/line.toml` (LP2);
-- the graph and the station prompts in `.codecast/line/`: `line.cast` and one
-  file per station prompt, written out from the shipped line the first time a
-  project changes a station. A run in that project uses the repo's line when
+- the graph and the station prompts in `.codecast/line/*`: `line.cast` and one
+  file per station prompt or script, written out from the shipped line the
+  first time a project changes a station. A reset that leaves every station as
+  shipped removes the copy again, so the project follows the shipped line and
+  its later updates. A task-bound run in that project uses the repo's line when
   it exists, else the role's line, else the shipped one.
 
-An edit made on the map travels the profile's edit path: a command to the
-machine that published the project's line, which writes the file in the repo,
-checks it, and republishes, so the app mirrors what the repo holds and every
-run records the version (`graph_hash`) it ran. A value edit is direct. A
-change to a station's prompt is a prompt change: the editor offers to send it
-through the line (LX6) rather than apply it untested.
+An edit made on the map travels the profile's edit path
+(`dispatch.editLineProfile` to the daemon's `line_profile_edit`): a command to
+the machine that published the project's line, which writes the file in the
+repo through the config fence, checks it with the parser before writing
+anything, and republishes, so the app mirrors what the repo holds and every
+run records the version (`graph_hash`) it ran. The map paints the edit at once
+and shows where it is (with the machine, republishing, done, refused). A value
+edit is direct. A change to a station's prompt is a prompt change: the editor
+offers to send it through the line (LX6) beside applying it now.
 
 ## LX6. Changing the line with an agent
 
-The composer on the map and on every panel files a cause against the line
-itself: a task in the project with category `line`, its subject the node it
-names (`line:station:prove`, `line:finder:agentwatch`), the person's words as
-its first signal. The line runs it like any change. Implement edits the
-line's files on a branch; prove shows the problem on recorded runs where it
-can; eval replays the changed station on recorded inputs when the profile has
-an eval command for stations, and otherwise the card says the change is
-unscored; the card shows the diff; Ship lands it in the repo and the line
-republishes. The line changes itself under the same rules as everything else.
+The composer files a cause against the line itself: a task in the project
+with category `line`, its subject the node it names (`line:station:prove`,
+`line:finder:agentwatch`, `line:profile:watch_days`, or `line:whole`), the
+person's words as its first signal, and any draft they wrote attached for the
+agent to weigh. The composer lists the causes already filed on that node. The
+line runs it like any change: ground may choose the `line` category, implement
+edits the line's files, prove shows the problem on recorded runs where it can,
+verify routes it to eval, and eval replays the changed station on recorded
+inputs when the profile has an eval command for stations; otherwise the card
+says the change is unscored. The card shows the diff, Ship lands it in the
+repo, and the line republishes. The line changes itself under the same rules
+as everything else.
 
 ## LX7. Sources back to their origin
 
 Every signal carries where it was seen (`evidence_url`), and the trace's first
-step links there. A finder sets that link to the most specific page it has:
-AgentWatch to the finding's cluster on its admin page, CI to the failing run,
-chat to the line someone typed.
+step links there and shows the finder's own words. A finder sets that link to
+the most specific page it has: AgentWatch to the finding inside its cluster on
+Union's admin page, CI to the failing run, chat to the line someone typed.

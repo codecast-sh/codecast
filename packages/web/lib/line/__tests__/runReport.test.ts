@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { SHIPPED_LINE } from "../shippedLine.generated";
-import { LINE_PHASES, cardName, causeRunEntries, causeWhere, gateAnswer, isMainStation, lineVersions, runOutcome, runPath, shortDay, stationWords, versionChange, type ReportRun } from "../runReport";
+import { LINE_PHASES, cardName, causeRunEntries, causeWhere, gateAnswer, isMainStation, lineVersions, projectLineVersions, runOutcome, runPath, shortDay, stationHistory, stationWords, versionChange, type ReportRun } from "../runReport";
 
 const T0 = 1_790_000_000_000;
 const DAY = 86_400_000;
@@ -78,6 +78,22 @@ describe("runPath", () => {
     expect(p.state).toBe("waiting");
   });
 
+  test("a card taken back, a run cut off, a station interrupted: none reads as a failure or as under way", () => {
+    const upToCard = shippedRun.node_statuses!.slice(0, 12);
+    // The card was withdrawn and the run routed on: Decide asked, Ship never ran.
+    const withdrawn: ReportRun = { ...shippedRun, gate_answer: undefined, gate_response: undefined, gate_decision_status: "withdrawn", node_statuses: [...upToCard, n("decide", 12, "failed", { outcome: "failure" }), n("ship", 13, "failed", { outcome: "failure" })] };
+    const steps = runPath(withdrawn).flatMap((p) => p.steps);
+    expect(steps.find((s) => s.id === "decide")).toMatchObject({ state: "noted", result: "Asked; the card was withdrawn" });
+    expect(steps.find((s) => s.id === "ship")).toMatchObject({ state: "noted", result: "Skipped: the card was withdrawn" });
+    expect(runOutcome(withdrawn)).toMatchObject({ tone: "closed", text: "Stopped: the card was withdrawn." });
+    // The run failed while its gate row still says running: finished, not live.
+    const cut: ReportRun = { ...withdrawn, status: "failed", current_node_id: "decide", fail_reason: "gate withdrawn", node_statuses: [...upToCard, n("decide", 12, "running", { outcome: undefined })] };
+    expect(runPath(cut).flatMap((p) => p.steps).find((s) => s.id === "decide")?.state).toBe("noted");
+    // Stopped by hand at Red: Red gave no verdict.
+    const sigint: ReportRun = { ...shippedRun, status: "failed", current_node_id: "red", fail_reason: "the runner was stopped (SIGINT) at red", gate_answer: undefined, node_statuses: [...shippedRun.node_statuses!.slice(0, 4), n("red", 4, "failed", { outcome: undefined })] };
+    expect(runPath(sigint).flatMap((p) => p.steps).find((s) => s.id === "red")).toMatchObject({ state: "noted", result: "Interrupted before it finished" });
+  });
+
   test("another workflow's run is one group of its steps", () => {
     const other: ReportRun = { _id: "r2", status: "completed", node_statuses: [n("start", 0), n("implement", 1)], created_at: T0, updated_at: T0 };
     const p = runPath(other);
@@ -117,11 +133,14 @@ describe("runOutcome", () => {
     expect(runOutcome(ends(["park"]), { status: "open", readiness_note: "No goal named" }).text).toBe("Parked: the cause is not ready to build. No goal named.");
     expect(runOutcome({ ...shippedRun, status: "running", current_node_id: "implement" }).text).toBe("Working: at Implement.");
     expect(runOutcome({ ...shippedRun, status: "paused", gate_node_id: "decide" }).text).toBe("Waiting for an answer on the card.");
-    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: the line had no next step.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: Prove finished, and the line has no route for that result yet.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome failure, review_verdict none)" }).text).toBe("Stopped at Prove: Prove failed outright, and the line has no route for that yet.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "max_visits=2 exceeded on prove" }).text).toBe("Stopped: Prove looped twice.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "implement", fail_reason: "max_visits=3 exceeded on implement" }).text).toBe("Stopped: Implement looped three times.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "hand jx79xc0 killed after 30m at prove" }).text).toBe("Stopped: Prove's session ran out of time.");
-    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "decide", fail_reason: "gate withdrawn" }).text).toBe("Stopped: the question was withdrawn.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "decide", fail_reason: "gate withdrawn" }).text).toBe("Stopped: the card was withdrawn.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "plan_gate", gate_node_id: "plan_gate", fail_reason: "gate withdrawn" }).text).toBe("Stopped: the question was withdrawn.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "red", fail_reason: "the runner was stopped (SIGINT) at red" })).toMatchObject({ tone: "closed", text: "Stopped by hand during Red." });
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "verify", fail_reason: "checks timed out" }).text).toBe("Stopped at Verify: checks timed out.");
     expect(runOutcome({ ...shippedRun, status: "failed", fail_reason: "Stopped: the cause was dropped by a person" }).text).toBe("Stopped: the cause was dropped by a person.");
   });
@@ -156,6 +175,36 @@ describe("lineVersions", () => {
     const v1: ReportRun = { ...shippedRun, _id: "v1", graph_hash: "h1", graph_nodes: a, created_at: T0 };
     const v2: ReportRun = { ...shippedRun, _id: "v2", graph_hash: "h2", graph_nodes: [{ id: "prove", h: "19" }, { id: "review", h: "22" }, { id: "unscored", h: "33" }], created_at: T0 + DAY };
     expect(lineVersions([v2, v1], () => []).map((v) => v.change)).toEqual(["Prove edited", "First recorded version"]);
+  });
+});
+
+describe("stationHistory (LX3)", () => {
+  const at = (id: string, hash: string, nodes: Array<{ id: string; h: string }>, day: number, extra: Partial<ReportRun> = {}): ReportRun =>
+    ({ ...shippedRun, _id: id, graph_hash: hash, graph_nodes: nodes, created_at: T0 + day * DAY, ...extra });
+  const v1 = at("v1", "h1", [{ id: "prove", h: "p1" }, { id: "review", h: "r1" }], 0);
+  const v2 = at("v2", "h2", [{ id: "prove", h: "p1" }, { id: "review", h: "r2" }], 1, { status: "failed", gate_answer: undefined, node_statuses: [n("ground", 1), n("prove", 2, "failed")] });
+  const v3 = at("v3", "h3", [{ id: "prove", h: "p2" }, { id: "review", h: "r2" }], 2);
+
+  test("a station's history lists only the versions that changed it, and counts runs of the same text across versions", () => {
+    const versions = projectLineVersions({ runs: [v3, v2, v1], signals: [] });
+    expect(stationHistory(versions, "prove")).toEqual([
+      { hash: "h3", first: v3.created_at, last: v3.created_at, runs: 1, shipped: 1, stopped: 0, change: "edited" },
+      { hash: "h1", first: v1.created_at, last: v2.created_at, runs: 2, shipped: 1, stopped: 1, change: "first" },
+    ]);
+    expect(stationHistory(versions, "review").map((v) => [v.hash, v.change])).toEqual([["h2", "edited"], ["h1", "first"]]);
+  });
+
+  test("a station added or removed says so, and versions without per-station hashes say nothing", () => {
+    const v4 = at("v4", "h4", [{ id: "prove", h: "p2" }, { id: "review", h: "r2" }, { id: "eval", h: "e1" }], 3);
+    const v5 = at("v5", "h5", [{ id: "prove", h: "p2" }, { id: "review", h: "r2" }], 4);
+    const old = { ...shippedRun, _id: "v0", graph_hash: "h0", graph_nodes: undefined, created_at: T0 - DAY };
+    const versions = projectLineVersions({ runs: [v5, v4, v3, old], signals: [] });
+    expect(stationHistory(versions, "eval").map((v) => v.change)).toEqual(["removed", "added"]);
+  });
+
+  test("a reopened signal after the ship counts against its version", () => {
+    const [row] = projectLineVersions({ runs: [v1], signals: [{ task_id: "t1", reopened: true, created_at: T0 + 99_000 }] });
+    expect(row.reopened).toBe(1);
   });
 });
 

@@ -4,8 +4,12 @@
 // to connect to, resume or restart. One wait reads one way ("Thinking…", or
 // the step in flight in the assistant's words), waiting names the request it
 // waits behind, an approval is said by its card alone, and a stop by the
-// notice in the transcript, which carries Try again.
+// notice in the transcript, which carries Try again. While it works, the
+// person can Stop it.
+import { useEffect, useState } from "react";
 import { isHostedAgentType } from "@codecast/shared/contracts";
+import { KeyCap } from "../KeyboardShortcutsHelp";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import { useInboxStore } from "../../store/inboxStore";
 import { conversationTitle } from "../../lib/conversationTitle";
 import { usePlanMeter } from "../simple/usePlanFigures";
@@ -40,7 +44,7 @@ function WaitingLine({ conversationId }: { conversationId: string }) {
   const upgradesOpen = useUpgradesOpen();
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <Dot className="bg-sol-yellow/70 animate-pulse" />
+      <Dot className="bg-sol-text-dim/50 animate-pulse" />
       <span className="truncate">{busy ? `Finishing “${busy}” first, then this` : "Waiting for your other request to finish"}</span>
       {plan.id === "free" && upgradesOpen && (
         <button
@@ -55,14 +59,35 @@ function WaitingLine({ conversationId }: { conversationId: string }) {
   );
 }
 
+/** How long a wait reads as "Thinking…" before it says it is still at it:
+ *  a turn can run for minutes, and an unchanging line reads as a hang. */
+export const STILL_WORKING_AFTER_MS = 45_000;
+
 /** The one wait line, from a message on its way to the reply: the step in
- *  flight when there is one, else "Thinking…". No stopwatch: a person waiting
- *  on an answer reads a running clock as a slow one. */
-function ThinkingLine({ phrase }: { phrase?: string }) {
+ *  flight when there is one, else "Thinking…", and past
+ *  STILL_WORKING_AFTER_MS "Still working on it…". No stopwatch: a person
+ *  waiting on an answer reads a running clock as a slow one. With a
+ *  conversation, a quiet Stop ends the turn (store stopHostedTurn). */
+function ThinkingLine({ phrase, conversationId }: { phrase?: string; conversationId?: string }) {
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setLong(true), STILL_WORKING_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       <Dot className="bg-sol-cyan/50 animate-pulse" />
-      <span className="truncate">{phrase ?? "Thinking…"}</span>
+      <span className="truncate">{phrase ?? (long ? "Still working on it…" : "Thinking…")}</span>
+      {conversationId && (
+        <button
+          type="button"
+          data-cc-hosted-stop
+          onClick={() => useInboxStore.getState().stopHostedTurn(conversationId)}
+          className="ml-1 shrink-0 text-sol-text-dim underline-offset-2 hover:text-sol-text hover:underline"
+        >
+          Stop
+        </button>
+      )}
     </span>
   );
 }
@@ -73,7 +98,27 @@ function AllowanceOutLine({ words }: { words: string }) {
   return <AskHeldLine hold={{ words, allowance: true }} />;
 }
 
-export function HostedStatusLine({ conversationId, agentStatus, phrase, sending, allowanceOut }: {
+/** At rest with the composer focused and empty: Escape hands the keys to
+ *  the app (MessageInput), where single keys move around. Said once ever, in
+ *  the words a person uses for it: the first showing marks it seen on every
+ *  device, and after that the shortcuts sheet (?) carries it. */
+function EscapeHint() {
+  const seen = useInboxStore((s) => !!s.clientState.ui?.hosted_esc_hint_seen);
+  // Shown for this focus, then remembered: the mark lands after the paint, so
+  // this showing stays until the composer loses focus or fills.
+  const [showing] = useState(() => !seen);
+  useMountEffect(() => {
+    if (!seen) useInboxStore.getState().updateClientUI({ hosted_esc_hint_seen: true });
+  });
+  if (!showing) return " ";
+  return (
+    <span className="ml-auto hidden items-center gap-1 text-sol-text-dim sm:flex">
+      <KeyCap size="xs">Esc</KeyCap> for shortcuts
+    </span>
+  );
+}
+
+export function HostedStatusLine({ conversationId, agentStatus, phrase, sending, allowanceOut, escapeHint = false, awaitsOk = false }: {
   conversationId: string;
   agentStatus?: string;
   /** The step in flight, in the assistant's words (deriveHostedRunningPhrase). */
@@ -83,6 +128,10 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
   /** The month's allowance is used up (useAllowanceOut): said at rest, while
    *  the composer holds Send. */
   allowanceOut?: string | null;
+  /** The composer is focused and empty, so Escape would leave it. */
+  escapeHint?: boolean;
+  /** A decision row of this conversation is still pending (awaitingOkIds). */
+  awaitsOk?: boolean;
 }) {
   const thinking = useThinkingAvailable();
   // A transcript that ends on a stop notice is settled, whatever the work
@@ -99,7 +148,7 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
   if (connection) {
     return (
       <span className="flex min-w-0 items-center gap-1.5 text-sol-text-muted">
-        <Dot className="bg-sol-yellow/70 animate-pulse" />
+        <Dot className="bg-sol-text-dim/50 animate-pulse" />
         <span className="truncate">{sending ? "Reconnecting… your message will go as soon as we're back" : connection.label === "Offline" ? "You're offline" : "Reconnecting…"}</span>
       </span>
     );
@@ -109,11 +158,13 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
     // The conversation the outage stopped is where its reason belongs.
     return thinking === false ? <span className="truncate text-sol-text-muted">{THINKING_DOWN}</span> : " ";
   }
-  if (agentStatus === "working" || agentStatus === "thinking") return <ThinkingLine phrase={phrase} />;
+  if (agentStatus === "working" || agentStatus === "thinking") return <ThinkingLine phrase={phrase} conversationId={conversationId} />;
   if (agentStatus === "waiting") return <WaitingLine conversationId={conversationId} />;
   // The approval card sits at the end of the transcript and the composer's
-  // placeholder points at it; a third line saying so would be noise.
-  if (agentStatus === "permission_blocked") return " ";
+  // placeholder points at it; a third line saying so would be noise. Once the
+  // card is answered the row's status lags while the turn wraps up, and the
+  // rail already says Working on it, so the pane says so too.
+  if (agentStatus === "permission_blocked") return awaitsOk ? " " : <ThinkingLine phrase={phrase} />;
   if (sending) {
     return answeredBefore ? <ThinkingLine /> : (
       <span className="flex items-center gap-1.5">
@@ -124,5 +175,5 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
   }
   if (allowanceOut) return <AllowanceOutLine words={allowanceOut} />;
   if (thinking === false) return <span className="truncate text-sol-text-muted">{THINKING_DOWN}</span>;
-  return " ";
+  return escapeHint ? <EscapeHint /> : " ";
 }

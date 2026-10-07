@@ -107,10 +107,12 @@ that starts with a key picks that option; anything else is `answer_text` and
 routes the run on its unconditional edge, as today. `respondToGateFromCli` is
 the same call.
 
-Withdraw. `workflow_runs.cancel` withdraws the run's open gate decision.
-`withdraw` on a gate decision fails the run with `fail_reason: "gate
-withdrawn"`. Both go through `settleResolution` so ladder roles receive the
-passive fact.
+Withdraw. `workflow_runs.cancel` withdraws the run's open gate decision, and
+so does a runner reporting its run completed or failed (a runner stopped by a
+signal while it waits at the gate). `withdraw` on a gate decision fails the
+run with `fail_reason: "gate withdrawn"`. All go through `settleResolution`,
+so ladder roles receive the passive fact and the card's "card waiting" notice
+is marked read.
 
 Failure gates. The runner's existing decisions for a reject verdict and for
 exhausted retries (`queueTaskDecision`) carry `workflow_run_id` too, so the
@@ -271,6 +273,15 @@ task returns to open with a comment. Two implement cycles, then the task goes
 to `in_review` blocked with a decision to the person (L4, failure gates).
 
 ## L12. The merge step
+
+Since 2026-10-07 the shipped line has no merge node: with no ship command its
+ship station runs Ship (docs/architecture/ship.md), which opens the pull
+request. A line's change merges in either of two ways: the profile sets
+`[line.merge] auto`, or the role that owns the line holds the merge grant
+described below (`line_merge` on, a live merge authority, room in its daily
+limit). Under the grant the ship session merges through `cast line merge`,
+which checks the allowance again and counts the merge. A Ship pressed on the
+pull request's page also merges.
 
 Written 2026-10-02. A line may end in a merge to the default branch, and it
 is off unless a person turns it on for that line.

@@ -409,7 +409,13 @@ export interface LineProfileEditReply {
   warnings: string[];
   published: PublishOutcome | null;
   /** The repo's own line, when the edits changed a station (LX5). */
-  line?: { file: string; changed: boolean; materialized: boolean; stations: string[]; graph_hash: string };
+  line?: { file: string; changed: boolean; materialized: boolean; removed: boolean; stations: string[]; graph_hash: string };
+}
+
+/** Deletes one of the repo's line files, and `.codecast/line/` itself once it is empty. */
+export function removeLineFile(file: string): void {
+  fs.rmSync(file, { force: true });
+  try { fs.rmdirSync(path.dirname(file)); } catch { /* still holds files */ }
 }
 
 /**
@@ -423,6 +429,8 @@ export async function runLineProfileEdit(
   deps: {
     admit: (file: string) => Promise<string | null>;
     write: (file: string, content: string) => void;
+    /** Deletes a line file; a station reset that leaves the line as shipped removes the repo's copy (LX5). */
+    remove?: (file: string) => void;
     /** Absent: write without republishing (the reply's published is null). */
     publish?: (root: string) => PublishOutcome | Promise<PublishOutcome>;
   },
@@ -449,14 +457,23 @@ export async function runLineProfileEdit(
     if (!target) throw new LineProfileError(`${path.join(root, w.rel)} is not a line file in a project this machine tracks`);
     lineWrites.push({ file: target, content: w.content });
   }
+  const lineRemoves: string[] = [];
+  for (const rel of line?.removes ?? []) {
+    const target = await deps.admit(path.join(root, rel));
+    if (!target) throw new LineProfileError(`${path.join(root, rel)} is not a line file in a project this machine tracks`);
+    lineRemoves.push(target);
+  }
+  if (lineRemoves.length && !deps.remove) throw new LineProfileError("this editor cannot remove the repo's line files");
   if (result.changed) deps.write(file, result.content);
-  // line.cast comes last in the plan, so a run never reads it naming a file not yet written.
+  // line.cast comes last in the plan, so a run never reads it naming a file not yet written,
+  // and first among removes, so a run never reads it naming a file already gone.
   for (const w of lineWrites) deps.write(w.file, w.content);
+  for (const f of lineRemoves) deps.remove!(f);
   const changed = result.changed || !!line?.changed;
   const published = changed && deps.publish ? await deps.publish(root) : null;
   const r = result.resolved;
   return {
     file, content: result.content, changed, profile: r.profile, sources: r.sources, notes: r.notes, warnings: r.warnings, published,
-    ...(line ? { line: { file: path.join(root, REPO_LINE_REL_PATH), changed: line.changed, materialized: line.materialized && line.changed, stations: line.stations, graph_hash: line.graph_hash } } : {}),
+    ...(line ? { line: { file: path.join(root, REPO_LINE_REL_PATH), changed: line.changed, materialized: line.materialized && line.changed, removed: lineRemoves.length > 0, stations: line.stations, graph_hash: line.graph_hash } } : {}),
   };
 }

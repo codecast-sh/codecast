@@ -67,6 +67,24 @@ describe("gatherShipFacts", () => {
     expect(answered.facts.lineGate).toEqual({ decisionId: "session_decisions_d1" });
   });
 
+  test("a task on a role's line carries the role's merge grant, read as the merge step reads it", async () => {
+    const role = { _id: "org_roles_rel", handle: "release", status: "active", line_merge: true, authority: [{ id: "merge", kind: "write", label: "Merge", limit: { per_day: 3 }, expires_at: NOW * 2 }] };
+    const lineCtx = (r: any) => world({
+      org_roles: [r],
+      conversations: [
+        { _id: "conversations_work", user_id: OWNER, team_id: TEAM, is_private: false, status: "active", short_id: "jxwork0", git_branch: "fix-login", git_root: "/src/app", active_task_id: "tasks_t1", updated_at: NOW, created_at: 1, message_count: 4 },
+        { _id: "conversations_seat", user_id: OWNER, team_id: TEAM, is_private: false, status: "active", short_id: "jxseat0", standing_role_id: "org_roles_rel", updated_at: NOW, created_at: 1, message_count: 1 },
+      ],
+      workflow_runs: [{ _id: "workflow_runs_r1", task_id: "tasks_t1", spawner_conversation_id: "conversations_seat", status: "running", created_at: 1, updated_at: 1, node_statuses: [] }],
+    });
+    const got: any = await gatherShipFacts(lineCtx(role), OWNER, { kind: "task", id: "ct-7" });
+    expect(got.facts.line).toEqual({ runId: "workflow_runs_r1", role: { handle: "release", on: true, allowed: true, reason: null, used: 0, limit: 3 } });
+    expect(resolveShipPlan(got.facts).merge).toMatchObject({ will: true, via: "role" });
+    const off: any = await gatherShipFacts(lineCtx({ ...role, line_merge: undefined }), OWNER, { kind: "task", id: "ct-7" });
+    expect(off.facts.line.role.on).toBe(false);
+    expect(resolveShipPlan(off.facts).merge.will).toBe(false);
+  });
+
   test("someone else's task is not found", async () => {
     const got: any = await gatherShipFacts(world(), "users_stranger" as any, { kind: "task", id: "ct-7" });
     expect(got.error).toBe("Task not found");

@@ -82,6 +82,9 @@ signals {
   goal_hint     optional: the initiative metric key the finder believes it threatens
   observed_at, created_at
   task_id       the cause it attached to (LE4)
+  project_id    the cause's project, else the one it was filed for (LP1)
+  filed_for_project_id  set when the finder filed it for a project other
+                than its cause's (LE4)
   attach        "fingerprint" | "judge" | "new" | "person"
 }
 ```
@@ -93,8 +96,12 @@ line: the line starts at attach.
 
 `signals.ingest` attaches in order and records how:
 
-1. **Fingerprint.** An open cause already holding a signal with the same
-   `fingerprint` takes it. Deterministic.
+1. **Fingerprint.** An open cause in the workspace already holding a signal
+   with the same `fingerprint` takes it, in whatever project it sits.
+   Deterministic. One key is one problem even when a finder files it for a
+   different project later (a cluster whose top expectation moves): the cause
+   stays where it is, and the signal records `filed_for_project_id` so the
+   trace can say it was filed for another project.
 2. **Judge.** Otherwise the five closest open causes (text match on title and
    subject) go to one small call: "same cause as one of these, or none?". It
    answers with a task id, `none`, or `unsure`. `unsure` is `none`.
@@ -111,7 +118,10 @@ active initiatives with their metrics (target, latest scoreboard value, when),
 each project's charter (goal, success metrics, non-goals, priority), and the
 standing principles (the shared set that ships with the CLI, then the files
 the project's line profile names, LP5). The ground
-node reads that and the cause with its signals, and writes four fields:
+node reads the cause's own brief, `cast goals --brief --task <ct>` (its
+project's when it has one, else its workspace's, never the repo profile's
+default project; the same brief `cast task update` checks the goal_ref
+against), and the cause with its signals, and writes four fields:
 
 - `goal_ref`: the initiative metric or project goal the cause threatens, or
   `none`. A cause with `none` parks as `suggested` and never reaches a person
@@ -248,8 +258,10 @@ relayed by a session.
 
 **Ship.** The profile's ship command lands the change the project's way and
 prints one line saying what is true now, which goes on the task. A project
-with none lands it through the merge station (the-line.md L12, `cast line
-merge`). A prompt surface change records the eval run set as the new baseline.
+with none runs Ship (`cast ship run --task`, docs/architecture/ship.md): a ship
+session opens the pull request and shepherds it, and merges only when the
+profile sets `[line.merge] auto` or the line's role holds a merge grant
+(the-line.md L12). A prompt surface change records the eval run set as the new baseline.
 
 **Watch.** The cause enters `watch` for the profile's `watch_days` (default 7):
 `tasks.watch_until`. A signal with one of its fingerprints during watch

@@ -14,9 +14,11 @@ A line belongs to a project (a codecast `projects` row), not to a workspace.
 A team with eight projects has up to eight lines, each with its own signals,
 causes, goals, cards and throughput.
 
-- A signal carries `project_id`. A cause is a task, and its `project_id` is
-  the signal's. Fingerprint attach and the attach judge look only inside the
-  project.
+- A signal carries `project_id`. A new cause is a task, and its `project_id`
+  is the signal's. The attach judge looks only inside the project. Fingerprint
+  attach looks across the workspace: an open cause holding the key takes the
+  signal wherever it sits, and a signal filed for another project records
+  that project in `filed_for_project_id` (the-line-end-to-end.md LE4).
 - `cast signal add` takes `--project <ref>`. Without it the project comes
   from the repo's profile (`[line] project`), and a finder that serves several
   projects names one per signal.
@@ -107,7 +109,12 @@ declaration; the finder itself lives where its data lives.
   gate (`gates_failed`) reaches the card as its own red check, "Suite gates",
   naming each failing scenario, so the card cannot recommend Ship over it.
 - **ship** lands the change the project's way and prints one line saying what
-  is true now: live, or waiting on a deploy and where.
+  is true now: live, or waiting on a deploy and where. Without one the ship
+  station runs Ship (docs/architecture/ship.md), which opens the pull request
+  and merges in either of two cases: the profile sets `[line.merge] auto`, or
+  the role that owns the line holds a merge grant (`org_roles.line_merge` with
+  its merge authority, the-line.md L12). A grant merges through `cast line
+  merge`, so it counts against the role's daily limit.
 
 ## LP5. Principles and prompting per project
 

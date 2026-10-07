@@ -25,6 +25,7 @@ import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { CARD_GATE_NODE_ID, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode } from "./taskLine";
 import { isConvexId } from "./entityLinks";
+import { runHref } from "./decisionLinks";
 import { lineForkIndex, lineRunKind, type LineRunKind } from "./line/lineStations";
 
 export const HOUR = 60 * 60 * 1000;
@@ -68,6 +69,8 @@ export type LineCauseTask = {
   risk?: string | null;
   readiness?: string | null;
   readiness_note?: string | null;
+  /** Who the task is assigned to: the sweep admits an unassigned cause, or one assigned to its role. */
+  assignee?: string | null;
   watch_until?: number | null;
   resolved_at?: number | null;
   project_id?: string | null;
@@ -113,7 +116,8 @@ export type LineProject = GoalRow & {
  *  In build while causes wait and nothing builds. clear: a downstream station
  *  with nothing in it, the good outcome. ask: cards wait on the viewer. */
 export type StageKind = "running" | "ask" | "paused" | "starved" | "failing" | "idle" | "clear";
-export type StageState = { kind: StageKind; since?: number | null; why: string };
+/** `run`: the run the state speaks about (the failed one), so its words can open its report. */
+export type StageState = { kind: StageKind; since?: number | null; why: string; run?: string };
 
 export type GoalChip = { ref: string; label: string; kind: "initiative" | "project" | "unknown" | "parked" | "ungrounded" };
 
@@ -134,7 +138,99 @@ export type SenseSource = {
   undeclared: boolean;
 };
 
+/** Whether the line may start its next cause, as the sweep decides it
+ *  (convex orgLine admissionWait, LE6): the role that starts this project's
+ *  line, its switch, and the answering person's card slots. `role: null`:
+ *  no role looks after the project, so nothing starts on its own. */
+export type LineAdmission = {
+  role: { id: string; handle: string; paused: boolean } | null;
+  /** Work filed under no project: no role admits it, so no line ever starts it. */
+  noProject?: boolean;
+  on: boolean;
+  /** Codecast's line sweep is off (convex lib/lineSweep.ts LINE_SWEEP_ON): no
+   *  line starts a cause on its own, whatever the role's switch says. */
+  sweepOff?: boolean;
+  /** Open cards the answering person may hold across their lines (caps.cards). */
+  slots: number;
+  /** Cards they hold open now; null until the server has said. */
+  busy: number | null;
+  /** Hands the role has started today and may start a day; null until known. */
+  hands: number | null;
+  handsCap: number | null;
+};
+
+/** Why the line starts nothing while causes wait, in one sentence, and the
+ *  two words a node mark has room for; null when it may start the next one.
+ *  The order is the sweep's: the switch, the day's hands, then the slots. */
+export type AdmissionHold = { why: string; short: string; long?: string };
+export function admissionHold(a: LineAdmission): AdmissionHold | null {
+  // `long` is the node's own sentence (its mark and Health), with the way out.
+  if (a.noProject) return { why: "they have no project, so nothing starts them", short: "No project", long: "Nothing starts here on its own: these causes have no project. Move one into a project to run it" };
+  if (!a.role) return { why: "no role looks after this project, so nothing starts on its own", short: "No role starts it" };
+  const who = `@${a.role.handle}`;
+  if (a.sweepOff) return {
+    why: "codecast's line sweep is off, so no line starts a cause on its own",
+    short: "Sweep off",
+    long: `Nothing starts here on its own: codecast's line sweep is off for every line (LINE_SWEEP_ON in packages/convex/convex/lib/lineSweep.ts), whatever ${who}'s switch says. Start a cause by hand`,
+  };
+  if (a.role.paused) return { why: `${who} is paused, so admission is held`, short: "Admission held" };
+  if (!a.on) return { why: `admission is off for ${who}, so nothing starts on its own`, short: "Admission off" };
+  if (a.hands != null && a.handsCap != null && a.hands >= a.handsCap) return { why: `${who} started its ${a.handsCap} sessions for today`, short: "Day's cap reached" };
+  if (a.busy != null && a.busy >= a.slots) return { why: a.slots === 1 ? "its one slot is busy until its card is answered" : `all ${a.slots} slots are busy until a card is answered`, short: `${a.slots} of ${a.slots} slots busy` };
+  return null;
+}
+
+/** LE5, LE6: a cause the sweep may admit, the test orgLine isReadyCause
+ *  makes: ground marked it ready and named its goal, and nobody else holds it. */
+export const readyForLine = (t: LineCauseTask) => t.readiness === "ready" && !!t.goal_ref?.trim() && !t.assignee;
+
+/** The sweep looks every two minutes (orgLine.sweep): a ready cause still
+ *  waiting this long with a slot free was not passed over by chance. */
+export const ADMISSION_STALL_MS = 30 * 60_000;
+
+/** Why nothing starts while admission is on and a slot is free (LE6, line-map.md
+ *  LX3): none of the waiting causes is one the sweep takes, or the sweep is not
+ *  starting the ones it should. `top` is the cause to start by hand. Null
+ *  while the queue moves as it should. */
+export function admissionStall(a: LineAdmission, ranked: CauseRow[], lastStart: number | null, now: number): (AdmissionHold & { top: CauseRow | null }) | null {
+  if (!a.role || !ranked.length) return null;
+  const waited = (t: LineCauseTask) => now - (t.cause?.first_seen ?? t.created_at);
+  const ready = ranked.filter((r) => readyForLine(r.task));
+  if (!ready.length) {
+    if (!ranked.some((r) => waited(r.task) > ADMISSION_STALL_MS)) return null;
+    const count = (pred: (t: LineCauseTask) => boolean) => ranked.filter((r) => pred(r.task)).length;
+    const parts = [
+      [count((t) => t.readiness === "needs_context"), "needs context from a person", "need context from a person"],
+      [count((t) => !t.readiness), "is not grounded yet", "are not grounded yet"],
+      [count((t) => t.readiness === "not_actionable"), "has nothing to change", "have nothing to change"],
+      [count((t) => !!t.assignee), "is assigned to someone", "are assigned to someone"],
+    ].filter(([n]) => (n as number) > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+    const n = ranked.length;
+    const why = `none is ready for the line${parts.length ? `: ${parts.join(", ")}` : ""}`;
+    return { why, short: "None ready", long: `${n === 1 ? "The cause here is" : `None of the ${n} causes here is`} ready for the line${parts.length ? `: ${parts.join(", ")}` : ""}. Admission takes only causes ground marked ready`, top: null };
+  }
+  // Ready since ground last touched it: a cause first seen days ago and
+  // grounded a minute ago has not waited on the sweep yet.
+  const readySince = Math.min(...ready.map((r) => r.task.updated_at ?? r.task.created_at));
+  const since = Math.max(readySince, lastStart ?? 0);
+  if (now - since <= ADMISSION_STALL_MS) return null;
+  const age = ageShort(now - since);
+  const free = a.busy != null ? a.slots - a.busy : null;
+  const slots = free == null ? "a free slot" : `${free} free slot${free === 1 ? "" : "s"}`;
+  const readyWords = `${ready.length} ${ready.length === 1 ? "cause" : "causes"} ready`;
+  return {
+    why: `nothing has started in ${age}, though ${free == null ? "a slot is" : `${free} ${free === 1 ? "slot is" : "slots are"}`} free`,
+    short: `No start in ${age}`,
+    long: `Admission is on with ${slots} and ${readyWords}, but nothing has started in ${age}. The sweep that starts the top one every two minutes is not running; start it by hand`,
+    top: ready[0],
+  };
+}
+
 export type CauseRow = { task: LineCauseTask; score: number; signals: number; goal: GoalChip };
+/** The admission of work filed under no project: no role takes it in, so
+ *  causes wait there until a person moves one into a project. */
+export const NO_PROJECT_ADMISSION: LineAdmission = { role: null, noProject: true, on: false, slots: 0, busy: null, hands: null, handsCap: null };
+
 /** stalled: live by status but silent for a day; it holds no hand that is working. */
 export type BuildRow = {
   run: LineFlowRun;
@@ -148,8 +244,6 @@ export type BuildRow = {
   workflow: string | null;
   /** The step it is at (the node label), null when the run names none. */
   step: string | null;
-  /** Where a line run sits in LINE_STEPS (0 to 4), null for any other workflow. */
-  stepIndex: number | null;
   /** The shipped line, a project's customized copy, or null for another workflow. */
   line: LineRunKind | null;
 };
@@ -182,7 +276,10 @@ export type Moved = { causes: number; build: number; awaiting: number; watching:
 
 export type LineFlow<D extends LineDecision = LineDecision> = {
   sense: Column<SenseSource>;
-  causes: Column<CauseRow> & { parked: CauseRow[] };
+  /** hold: why nothing starts while causes wait (the switch, the caps, or
+   *  admitting nothing it should), the sentence every surface reads. `top`:
+   *  the cause to start by hand when the sweep is not starting it. */
+  causes: Column<CauseRow> & { parked: CauseRow[]; hold: (AdmissionHold & { top?: CauseRow | null }) | null };
   /** otherRuns: live runs whose task is not a cause; the page counts them
    *  apart so In build never claims work the line did not start. */
   build: Column<BuildRow> & { otherRuns: number };
@@ -219,22 +316,6 @@ function runStep(run: LineFlowRun, node: LiveNode | null): string | null {
   return live?.phase ?? node?.label ?? null;
 }
 
-/** The line workflow's nodes folded into five steps, so In build can show
- *  how far along a run is. Gates and closing nodes fold into the step they
- *  belong to; a node outside the map (or another workflow) has no place. */
-export const LINE_STEPS = ["Plan", "Prove", "Build", "Check", "Card"] as const;
-const LINE_STEP_OF: Record<string, number> = {
-  ground: 0, park: 0, plan: 0, plan_gate: 0, analyze: 0,
-  prove: 1, red: 1, dissolve: 1,
-  implement: 2,
-  verify: 3, green: 3, eval: 3, review: 3,
-  card_draft: 4, card_write: 4, card: 4, decide: 4,
-};
-export function lineStepIndex(line: LineRunKind | null, node: Pick<LiveNode, "id"> | null): number | null {
-  if (!line || !node) return null;
-  return LINE_STEP_OF[node.id] ?? null;
-}
-
 /** A run's name: its task, its goal, its first phase, its workflow when that
  *  is a real name, and only then its step and a short id. */
 export function runName(run: LineFlowRun, task?: { title: string }, step?: string | null): { name: string; workflow: string | null } {
@@ -264,6 +345,15 @@ export const isGateCard = (d: LineDecision) => isLineCard(d) && d.gate_node_id =
 /** LE12: the quiet watch end stamps resolved_at; a close after it is a later
  *  ship of a reopened cause. */
 const resolvedQuietly = (t: LineCauseTask) => typeof t.resolved_at === "number" && t.resolved_at >= (t.closed_at ?? 0);
+
+/** When a closed cause's watch ended quiet (LE12), or null: swept, it carries
+ *  resolved_at; not swept yet, it still holds its past watch_until. The one
+ *  rule /line, the map and a trace read "held" by. */
+export function quietWatchEnd(t: LineCauseTask, now: number): number | null {
+  if (!terminal(t.status) || inWatch(t, now)) return null;
+  if (resolvedQuietly(t)) return t.resolved_at!;
+  return typeof t.watch_until === "number" ? t.watch_until : null;
+}
 
 /** The goal a cause names (LE5): an initiative ref ("in-3" or
  *  "in-3:metric"), a project ref, "none" (parked), or nothing yet. */
@@ -308,6 +398,16 @@ const oldest = (times: Array<number | null | undefined>): number | null => {
   return min;
 };
 
+
+/** Sources every line has without declaring them: a person filing by hand or
+ *  through the map's composer (lineCause.ts), and the line's own lessons
+ *  (line-map.md LX2: "one per declared finder, plus people and lessons"). */
+const BUILT_IN_SOURCES = new Set(["person", "lesson"]);
+/** A person or the line's lessons: filing here needs no finder. */
+export const isBuiltInSource = (source: string) => BUILT_IN_SOURCES.has(source.toLowerCase());
+/** A source that filed signals while the profile declares finders but not it. */
+export const isUndeclaredSource = (source: string, finders: ReadonlyArray<{ source: string }>) =>
+  finders.length > 0 && !BUILT_IN_SOURCES.has(source.toLowerCase()) && !finders.some((f) => f.source.toLowerCase() === source.toLowerCase());
 export function buildLineFlow<D extends LineDecision>(input: {
   signals: LineSignal[];
   tasks: LineCauseTask[];
@@ -322,6 +422,8 @@ export function buildLineFlow<D extends LineDecision>(input: {
   finders?: LineFinderDecl[];
   /** When the profile declaring them last changed: a finder with nothing in the window that may be newer than the window is new, not silent. */
   findersSince?: number;
+  /** The sweep's admission for this project's line, when the caller knows its role. */
+  admission?: LineAdmission | null;
 }): LineFlow<D> {
   const { now } = input;
   const cardsCap = input.cardsCap ?? DEFAULT_LINE_CARDS_CAP;
@@ -360,7 +462,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   for (const s of sources) {
     const mayBeNew = !s.newest && input.findersSince != null && now - input.findersSince < LINE_SIGNAL_WINDOW_MS;
     s.silent = !!s.finder && s.day === 0 && !mayBeNew;
-    s.undeclared = finders.length > 0 && !s.finder;
+    s.undeclared = isUndeclaredSource(s.source, finders);
   }
   const newestAt = (s: SenseSource) => s.newest?.created_at ?? 0;
   sources.sort((a, b) => b.day - a.day || b.week - a.week || newestAt(b) - newestAt(a) || a.source.localeCompare(b.source));
@@ -396,7 +498,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
     const node = runLiveNode(run);
     const step = runStep(run, node);
     const line = lineRunKind(run, forks);
-    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, stepIndex: lineStepIndex(line, node), line, ...runName(run, task, step) });
+    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, line, ...runName(run, task, step) });
   }
   buildItems.sort((a, b) => Number(a.stalled) - Number(b.stalled) || a.since - b.since);
   const fresh = buildItems.filter((b) => !b.stalled);
@@ -428,11 +530,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
     }
     if (terminal(t.status)) {
       const at = t.closed_at ?? t.updated_at ?? 0;
-      // A watch that ended quiet is resolved (LE12): swept, it carries
-      // resolved_at; not yet swept, it still holds its past watch_until.
-      const resolved = resolvedQuietly(t) || typeof t.watch_until === "number";
-      const outcome: ClosedOutcome = t.status === "dropped" || lineEnd.get(t._id)?.kind === "dissolved" ? "dissolved" : resolved ? "resolved" : "shipped";
-      const closedAt = outcome === "resolved" ? (t.resolved_at ?? t.watch_until ?? at) : at;
+      const quiet = quietWatchEnd(t, now);
+      const outcome: ClosedOutcome = t.status === "dropped" || lineEnd.get(t._id)?.kind === "dissolved" ? "dissolved" : quiet != null ? "resolved" : "shipped";
+      const closedAt = outcome === "resolved" ? quiet! : at;
       if (closedAt >= weekAgo) closedItems.push({ task: t, outcome, at: closedAt });
       continue;
     }
@@ -450,16 +550,26 @@ export function buildLineFlow<D extends LineDecision>(input: {
   // LE6: admission waits while the viewer holds cardsCap open cards at the
   // decide gate (other blocking asks on a run do not hold a slot). Since
   // when: the moment the cap filled, the cap-th oldest card.
+  // With the role known, its admission says why nothing starts (the switch,
+  // the day's hands, the slots), the sweep's own order.
   const gateCards = awaitingItems.filter(isGateCard);
   const capped = gateCards.length >= cardsCap;
-  const causesState: StageState = capped
-    ? { kind: "paused", since: gateCards[cardsCap - 1]?.created_at ?? null, why: `queued behind ${gateCards.length} open cards` }
-    : openRows.length > 0
-      ? { kind: "running", why: `${ranked.length} queued` }
-      : { kind: "idle", why: started ? "no open cause" : "opens on the first signal" };
+  const lastStart = lineRuns.reduce<number | null>((m, r) => (m === null || r.created_at > m ? r.created_at : m), null);
+  const held = input.admission && ranked.length > 0 ? admissionHold(input.admission) : null;
+  // With the sweep off, starting by hand is the only way in: the top ready cause is offered.
+  const hold = input.admission && ranked.length > 0
+    ? (held && input.admission.sweepOff ? { ...held, top: ranked.find((r) => readyForLine(r.task)) ?? null } : held) ?? admissionStall(input.admission, ranked, lastStart, now)
+    : null;
+  const causesState: StageState = hold
+    ? { kind: "paused", since: null, why: hold.why }
+    : !input.admission && capped
+      ? { kind: "paused", since: gateCards[cardsCap - 1]?.created_at ?? null, why: `queued behind ${gateCards.length} open cards` }
+      : openRows.length > 0
+        ? { kind: "running", why: input.admission ? `${ranked.length} queued; the next starts within two minutes` : `${ranked.length} queued` }
+        : { kind: "idle", why: started ? "no open cause" : "opens on the first signal" };
 
   const buildState: StageState = lastEnded?.status === "failed"
-    ? { kind: "failing", since: lastEnded.updated_at, why: lastEnded.fail_reason?.trim() || "last run failed" }
+    ? { kind: "failing", since: lastEnded.updated_at, why: lastEnded.fail_reason?.trim() || "last run failed", run: lastEnded._id }
     : pausedRuns.length > 0
       ? { kind: "paused", since: pausedRuns[0].run.updated_at, why: `${pausedRuns.length} run${pausedRuns.length === 1 ? "" : "s"} paused${stalledNote}` }
       : fresh.length > 0
@@ -505,7 +615,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
 
   return {
     sense: { items: sources, count: daySignals.length, oldestAt: oldest(daySignals.map((s) => s.created_at)), state: senseState },
-    causes: { items: ranked, parked, count: openRows.length, oldestAt: oldest(openRows.map((r) => r.task.cause?.first_seen ?? r.task.created_at)), state: causesState },
+    causes: { items: ranked, parked, hold, count: openRows.length, oldestAt: oldest(openRows.map((r) => r.task.cause?.first_seen ?? r.task.created_at)), state: causesState },
     build: { items: buildItems, otherRuns, count: buildItems.length, oldestAt: oldest(buildItems.map((b) => b.since)), state: buildState },
     awaiting: { items: awaitingItems, count: awaitingItems.length, oldestAt: oldest(awaitingItems.map((d) => d.created_at)), state: awaitingState },
     watching: { items: watchItems, count: watchItems.length, oldestAt: oldest(watchItems.map((w) => w.task.closed_at)), state: watchState },
@@ -540,12 +650,16 @@ export function ageShort(ms: number): string {
 }
 
 /** station names the column a part points at, so the page can link it. */
-export type HeadlinePart = { text: string; tone: "ask" | "warn" | "fail" | "live" | "calm" | "clear"; station?: "causes" | "build" | "awaiting" | "watching" };
+/** href: a page the part opens instead (a failed run's report). */
+export type HeadlinePart = { text: string; tone: "ask" | "warn" | "fail" | "live" | "calm" | "clear"; station?: "causes" | "build" | "awaiting" | "watching"; href?: string };
 
 /** One sentence from the flow's state, what needs the founder first: cards
  *  waiting on them, then what is building and what stalled or failed, then
  *  what waits to be admitted. Ends on the calm part when nothing waits. */
-export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
+/** `scope` names the line the headline speaks for ("Agent Quality"), so an
+ *  all-clear never reads as the whole workspace's while another project
+ *  holds a card (line-map.md LX1). */
+export function lineHeadline(flow: LineFlow, now: number, scope?: string | null): HeadlinePart[] {
   const parts: HeadlinePart[] = [];
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const { awaiting, build, causes, watching } = flow;
@@ -559,42 +673,15 @@ export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
     const silent = Math.max(...stalled.map((b) => now - (b.run.updated_at ?? b.run.created_at)));
     parts.push({ text: `${stalled.length} stalled ${ageShort(silent)}`, tone: "warn" });
   }
-  if (build.state.kind === "failing") parts.push({ text: `last run failed${build.state.since ? ` ${ageShort(now - build.state.since)} ago` : ""}`, tone: "fail" });
-  if (causes.state.kind === "paused") parts.push({ text: `admission paused, ${causes.state.why}`, tone: "warn" });
+  if (build.state.kind === "failing") parts.push({ text: `last run failed${build.state.since ? ` ${ageShort(now - build.state.since)} ago` : ""}`, tone: "fail", ...(build.state.run ? { href: runHref(build.state.run) } : {}) });
+  // The count every surface shows for the queue: parked causes wait here too.
+  if (causes.state.kind === "paused") parts.push({ text: `${plural(causes.count, "cause waits", "causes wait")}: ${causes.state.why}`, tone: "warn", station: "causes" });
   else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} queued`, tone: "live", station: "causes" });
   if (watching.count > 0) parts.push({ text: `${watching.count} in watch`, tone: "calm", station: "watching" });
   if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached the line yet", tone: "calm" }];
-  if (awaiting.count === 0) parts.push({ text: parts.length ? "nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "clear" });
+  const here = scope ? ` in ${scope}` : "";
+  if (awaiting.count === 0) parts.push({ text: parts.length ? `nothing waiting on you${here}` : scope ? "Quiet: nothing building, nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "clear" });
   return parts;
-}
-
-/** A block of In build rows: a step holding two or more runs gets a labelled
- *  group; runs alone at their step sit in an unlabelled block and carry the
- *  step as a chip. order is the row's keyboard index across blocks. */
-export type BuildBlock = { label: string | null; stalled: boolean; rows: Array<BuildRow & { order: number; chip: string | null }> };
-
-export function groupBuild(items: BuildRow[]): BuildBlock[] {
-  const labelOf = (b: BuildRow) => (b.stalled ? "stalled, silent a day" : b.step ?? (b.run.status === "pending" ? "starting" : null));
-  const counts = new Map<string, number>();
-  for (const b of items) { const l = labelOf(b); if (l) counts.set(l, (counts.get(l) ?? 0) + 1); }
-  const blocks: BuildBlock[] = [];
-  const byLabel = new Map<string, BuildBlock>();
-  for (const b of items) {
-    const l = labelOf(b);
-    const grouped = !!l && (counts.get(l) ?? 0) >= 2;
-    if (grouped) {
-      let block = byLabel.get(l!);
-      if (!block) { block = { label: l, stalled: b.stalled, rows: [] }; byLabel.set(l!, block); blocks.push(block); }
-      block.rows.push({ ...b, order: 0, chip: null });
-      continue;
-    }
-    const last = blocks[blocks.length - 1];
-    const block = last && last.label === null ? last : (blocks.push({ label: null, stalled: false, rows: [] }), blocks[blocks.length - 1]);
-    block.rows.push({ ...b, order: 0, chip: l });
-  }
-  let order = 0;
-  for (const block of blocks) for (const r of block.rows) r.order = order++;
-  return blocks;
 }
 
 // ── One project's line (line-profile.md LP1) ──
@@ -638,6 +725,8 @@ export type RollupRow = {
   closed: number;
   finders: number;
   silent: number;
+  /** Finder sources (not people or lessons) that filed here this week with no declared finder, busiest first. */
+  undeclared: string[];
 };
 
 /**
@@ -670,6 +759,7 @@ export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: 
       closed: f.closed.count,
       finders: project?.line_profile?.finders.length ?? 0,
       silent: f.sense.items.filter((s) => s.silent).length,
+      undeclared: f.sense.items.filter((s) => !s.finder && s.week > 0 && !isBuiltInSource(s.source)).sort((a, b) => b.week - a.week).map((s) => s.source),
     });
   }
   return out.sort((a, b) => Number(a.key === NO_PROJECT) - Number(b.key === NO_PROJECT) || b.causes - a.causes || b.awaiting - a.awaiting || b.signalsDay - a.signalsDay || a.title.localeCompare(b.title));

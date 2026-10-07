@@ -7,7 +7,7 @@
 // A card in the toast corner, never modal: ⌘Z keeps stepping while it is
 // open, and the "now" rule slides with the head. Rows hang from the same rail
 // as the org record (components/history/HistoryRail).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Command } from "cmdk";
 import { Ban, CornerDownLeft, History, Network, Redo2, Undo2 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -18,6 +18,7 @@ import { HISTORY_STRUCK, HistoryFold, HistoryRailDot, HistoryRailLine } from "..
 import { RecentVisitGlyph } from "../RecentVisitRow";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { claimKeys } from "../../shortcuts/keyOwnership";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 /** How many rows a peek shows around the head. */
 const PEEK_ABOVE = 3;
@@ -119,7 +120,7 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, canO
   // back to the card. After a key the card passed on (Tab, a chord it does not
   // take), focus going elsewhere is the person leaving, and the card closes.
   const lastInput = useRef<"card" | "elsewhere">("card");
-  useEffect(() => {
+  useWatchEffect(() => {
     if (peek) return;
     const inside = (e: Event) => !!cardRef.current && !!e.target && cardRef.current.contains(e.target as Node);
     const onPointer = (e: Event) => {
@@ -211,7 +212,7 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, canO
     if (!["Shift", "Meta", "Control", "Alt"].includes(e.key)) lastInput.current = mine ? "card" : "elsewhere";
     return mine;
   };
-  useEffect(() => {
+  useWatchEffect(() => {
     if (peek) return;
     return claimKeys((e) => !!cardRef.current?.contains(e.target as Node | null) && onKeyRef.current(e));
   }, [peek]);

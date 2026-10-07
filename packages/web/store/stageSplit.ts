@@ -372,6 +372,43 @@ export function stageGeometry(root: StageNode): StageGeometry {
 }
 
 // ---------------------------------------------------------------------------
+// The wide leaf (store.stageWide): one leaf takes the stage, every sibling
+// folds to a rail. The tree and its sizes are untouched, so the arrangement
+// returns the moment the wide leaf stands down.
+// ---------------------------------------------------------------------------
+
+/** A folded sibling's width: a rotated title fits, nothing else. */
+export const STAGE_RAIL_PX = 36;
+
+export type StageWideCell = {
+  id: string;
+  path: string;
+  /** Which edge this sibling folds to; null for the wide leaf itself. */
+  rail: "left" | "right" | null;
+  /** CSS lengths: the wide leaf spans the stage less one rail per sibling. */
+  style: { left: string; top: string; width: string; height: string };
+};
+
+/**
+ * The cells when `leafId` takes the width: siblings before it in reading
+ * order fold to rails on the left edge, those after it to rails on the right,
+ * each `railPx` wide, and the leaf spans what is left. Null when the leaf is
+ * not in the tree or has no sibling (nothing to fold).
+ */
+export function stageWideCells(root: StageNode, leafId: string, railPx = STAGE_RAIL_PX): StageWideCell[] | null {
+  const leaves = leavesOf(root);
+  const at = leaves.findIndex((l) => l.id === leafId);
+  if (at < 0 || leaves.length < 2) return null;
+  const rails = leaves.length - 1;
+  return leaves.map((l, i) => {
+    if (i === at) return { id: l.id, path: l.path, rail: null, style: { left: `${at * railPx}px`, top: "0%", width: `calc(100% - ${rails * railPx}px)`, height: "100%" } };
+    const rail = i < at ? "left" as const : "right" as const;
+    const left = rail === "left" ? `${i * railPx}px` : `calc(100% - ${(leaves.length - i) * railPx}px)`;
+    return { id: l.id, path: l.path, rail, style: { left, top: "0%", width: `${railPx}px`, height: "100%" } };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Drop-zone resolution — shared by the drop layer and its preview.
 // ---------------------------------------------------------------------------
 

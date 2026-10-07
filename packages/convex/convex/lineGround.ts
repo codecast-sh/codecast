@@ -17,10 +17,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { callModel, parseJsonBlock, STRONG_MODEL } from "./lib/anthropic";
 import { patchTask } from "./lib/taskWrite";
 import { insertTaskComment } from "./tasks";
-import { gatherGoalsBrief } from "./goals";
+import { causeBrief } from "./goals";
+export { causeBrief };
 import {
   briefGoalRefs,
   groundCausePrompt,
+  LINE_CATEGORIES,
   parseGroundReply,
   type GoalsBrief,
   type GroundCauseInput,
@@ -52,14 +54,6 @@ export async function ungroundedCauses(ctx: { db: any }, limit: number): Promise
   return rows.filter(isUngroundedCause).slice(0, limit);
 }
 
-/** The brief a cause is grounded against: its project's when it names one in its own workspace, else its workspace's. */
-export async function causeBrief(ctx: { db: any }, task: Doc<"tasks">): Promise<GoalsBrief> {
-  const workspaceKey = task.workspace!;
-  const teamId = workspaceKey.startsWith("team:") ? workspaceKey.slice("team:".length) : undefined;
-  const projectRows = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspaceKey)).take(2000);
-  const only = task.project_id ? projectRows.find((p: any) => String(p._id) === String(task.project_id)) ?? null : null;
-  return gatherGoalsBrief(ctx, { workspaceKey, teamId, only, projectRows });
-}
 
 export async function groundInput(ctx: { db: any }, task: Doc<"tasks">): Promise<GroundCauseInput> {
   const signals = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).order("desc").take(SIGNALS_SHOWN);
@@ -118,7 +112,7 @@ export async function recordGroundCore(ctx: any, taskId: Id<"tasks">, outcome: {
 
 const groundFieldsValidator = v.object({
   goal_ref: v.string(),
-  category: v.union(v.literal("code"), v.literal("prompt"), v.literal("ux"), v.literal("infra"), v.literal("data")),
+  category: v.union(...LINE_CATEGORIES.map((c) => v.literal(c))),
   risk: v.union(v.literal("low"), v.literal("review"), v.literal("plan")),
   readiness: v.union(v.literal("ready"), v.literal("needs_context"), v.literal("not_actionable")),
   readiness_note: v.string(),

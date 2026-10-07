@@ -15,14 +15,14 @@ import { cn } from "../../../lib/utils";
 const PILL_KINDS = new Set(["call", "call_grade", "task", "decision", "session", "signal", "desk", "doc"]);
 
 /** A citation's day in a reader's words: "Sep 30" for an ISO day, else as written. */
-export function citationWhen(when: string | undefined): string | null {
+function citationWhen(when: string | undefined): string | null {
   if (!when) return null;
   const at = Date.parse(when);
   return Number.isFinite(at) && /^\d{4}-\d{2}-\d{2}/.test(when) ? shortDay(at) : when;
 }
 
 /** The person a "person" citation names (its ref is their user id), by name from the live roster. */
-export function usePersonName(userId: string | null): string | null {
+function usePersonName(userId: string | null): string | null {
   return useInboxStore((s) => (userId ? resolveAssigneeInfo(userId, null, s.teamMembers, s.currentUser as any)?.name ?? null : null));
 }
 

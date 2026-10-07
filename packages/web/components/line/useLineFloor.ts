@@ -5,7 +5,8 @@
 // switching pages keeps the project.
 import { useMemo } from "react";
 import type { SessionDecisionItem, TaskItem } from "../../store/inboxStore";
-import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
+import { useActiveWorkspaceKey, useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
+import { workspaceRefOf } from "../../lib/workspaceScope";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useSyncRuns, useWorkspaceRuns } from "../../hooks/useSyncRuns";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
@@ -17,11 +18,20 @@ import { useLineProject } from "./LineProjects";
 const RUNS_FEED = { limit: 200 };
 
 const causeSig = (t: TaskItem & LineCauseTask) =>
-  t.cause ? `${t.status}|${t.updated_at ?? 0}|${t.watch_until ?? 0}|${t.goal_ref ?? ""}|${t.cause.signal_count}|${t.priority ?? ""}|${t.closed_at ?? 0}|${t.resolved_at ?? 0}|${t.project_id ?? ""}` : `|${t.project_id ?? ""}`;
+  t.cause ? `${t.status}|${t.updated_at ?? 0}|${t.watch_until ?? 0}|${t.goal_ref ?? ""}|${t.cause.signal_count}|${t.priority ?? ""}|${t.closed_at ?? 0}|${t.resolved_at ?? 0}|${t.project_id ?? ""}|${t.readiness ?? ""}|${t.assignee ?? ""}` : `|${t.project_id ?? ""}`;
 // published_at moves when the profile moves to another checkout or machine,
 // which changes where an edit goes even when the content holds still.
-const projectSig = (p: LineProject) => `${p.short_id ?? ""}|${p.title ?? ""}|${p.priority ?? ""}|${p.project_path ?? ""}|${p.line_profile?.changed_at ?? 0}|${p.line_profile?.published_at ?? 0}`;
+export const projectSig = (p: LineProject) => `${p.short_id ?? ""}|${p.title ?? ""}|${p.priority ?? ""}|${p.project_path ?? ""}|${p.line_profile?.changed_at ?? 0}|${p.line_profile?.published_at ?? 0}`;
 const cardSig = (d: SessionDecisionItem) => `${d.status}|${d.updated_at ?? 0}|${d.task_id ?? ""}|${d.workflow_run_id ?? ""}`;
+
+/** A project's (or a cause's) own workspace key when it is not the active
+ *  one: the floor then reads the line where it lives. */
+export function useProjectWorkspace(row: { workspace?: string | null; team_id?: string | null } | null): string | null {
+  const active = useActiveWorkspaceKey();
+  const ref = row ? workspaceRefOf(row as Parameters<typeof workspaceRefOf>[0]) : null;
+  const key = ref ? `${ref.kind}:${ref.id}` : null;
+  return key && key !== active ? key : null;
+}
 
 /** `project` pins the floor to one project's line (the project's Line tab).
  *  `workspace` reads the floor where the project lives (its stored access

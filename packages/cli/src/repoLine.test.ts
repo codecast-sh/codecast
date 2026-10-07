@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { chooseLineSource, findNodeStmt, planStationEdits, publishedRepoLine, repoLineFile, repoLineForRun, setNodeAttr, shippedRepoLineFiles } from "./repoLine";
-import { runLineProfileEdit } from "./lineProfileEdit";
+import { removeLineFile, runLineProfileEdit } from "./lineProfileEdit";
 import { publishFacts } from "./lineProfileCommand";
 import { loadLineProfile } from "./lineProfile";
 import { graphForDaemonRun } from "./workflow/daemonGraph";
@@ -63,12 +63,13 @@ describe("materialize", () => {
 });
 
 describe("station edits", () => {
+  // A repo holding the shipped line written out, as the first edit writes it.
   const materialized = () => {
     const root = checkout();
-    apply(root, planStationEdits(root, [{ op: "set_station", station: "prove", prompt: "x" }]).writes);
-    apply(root, planStationEdits(root, [{ op: "reset_station", station: "prove" }]).writes);
+    apply(root, Object.entries(shippedRepoLineFiles()).map(([name, content]) => ({ rel: path.posix.join(".codecast/line", name), content })));
     return root;
   };
+  const remove = (root: string, rels: string[]) => { for (const rel of rels) fs.rmSync(path.join(root, rel)); };
 
   test("an edit of a station whose prompt is a file rewrites that file only", () => {
     const root = materialized();
@@ -87,11 +88,32 @@ describe("station edits", () => {
     expect(parsedRepo(root).nodes.get("verify")!.script).toBe("bun test");
   });
 
-  test("reset puts every value back as shipped, and a whole line back to the shipped hash", () => {
+  test("reset puts a station's values back as shipped while another station still differs", () => {
     const root = materialized();
-    apply(root, planStationEdits(root, [{ op: "set_station", station: "verify", script: "bun test", timeout: 60 }]).writes);
-    apply(root, planStationEdits(root, [{ op: "reset_station", station: "verify" }]).writes);
-    expect(graphHash(parsedRepo(root))).toBe(shippedHash);
+    apply(root, planStationEdits(root, [{ op: "set_station", station: "verify", script: "bun test", timeout: 60 }, { op: "set_station", station: "prove", prompt: "x" }]).writes);
+    const plan = planStationEdits(root, [{ op: "reset_station", station: "verify" }]);
+    expect(plan.removes).toEqual([]);
+    apply(root, plan.writes);
+    const verify = parsedRepo(root).nodes.get("verify")!;
+    const shippedVerify = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line).nodes.get("verify")!;
+    expect([verify.script, verify.timeout]).toEqual([shippedVerify.script, shippedVerify.timeout]);
+  });
+
+  test("a reset that leaves the whole line as shipped removes the repo's copy, line.cast first", () => {
+    const root = checkout();
+    apply(root, planStationEdits(root, [{ op: "set_station", station: "prove", prompt: "x" }]).writes);
+    const plan = planStationEdits(root, [{ op: "reset_station", station: "prove" }]);
+    expect(plan).toMatchObject({ changed: true, writes: [], stations: ["prove"], graph_hash: shippedHash });
+    expect(plan.removes[0]).toBe(".codecast/line/line.cast");
+    remove(root, plan.removes);
+    expect(fs.readdirSync(path.join(root, ".codecast/line"))).toEqual([]);
+    expect(publishedRepoLine(root)).toBeNull();
+  });
+
+  test("a reset on a repo with no line of its own writes nothing", () => {
+    const root = checkout();
+    expect(planStationEdits(root, [{ op: "reset_station", station: "prove" }])).toMatchObject({ changed: false, writes: [], removes: [] });
+    expect(fs.existsSync(path.join(root, ".codecast/line"))).toBe(false);
   });
 
   test("a no-op edit writes nothing and names no station", () => {
@@ -129,6 +151,19 @@ describe("the edit command (line_profile_edit)", () => {
     expect(reply.line).toMatchObject({ changed: true, materialized: true, stations: ["prove"] });
     expect(written.at(-1)).toBe(".codecast/line/line.cast");
     expect(written).not.toContain(".codecast/line.toml");
+    expect(published).toBe(1);
+  });
+
+  test("a reset back to shipped removes .codecast/line/ through the fence, then republishes", async () => {
+    const root = checkout();
+    const write = (file: string, content: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); };
+    await runLineProfileEdit({ root, edits: [{ op: "set_station", station: "prove", timeout: 120 }] }, { admit: async (f) => f, write });
+    let published = 0;
+    const reply = await runLineProfileEdit({ root, edits: [{ op: "reset_station", station: "prove" }] }, {
+      admit: async (f) => f, write, remove: removeLineFile, publish: () => { published++; return { ok: true }; },
+    });
+    expect(reply.line).toMatchObject({ changed: true, removed: true, materialized: false, stations: ["prove"] });
+    expect(fs.existsSync(path.join(root, ".codecast/line"))).toBe(false);
     expect(published).toBe(1);
   });
 

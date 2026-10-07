@@ -5,7 +5,9 @@
 // referenced the way the shipped template references templates/line/*
 // (`prompt="@ground.md"`), so parseWorkflowSource with the directory reads
 // them like any workflow file. Nothing is written until a station changes:
-// the first station edit writes the shipped line out, then changes it.
+// the first station edit writes the shipped line out, then changes it, and a
+// reset that leaves every station as shipped removes the copy again, so the
+// project follows the shipped line (and its later updates) once more.
 //
 // Three readers share this module:
 //   - the runner (`cast workflow run`, `run-daemon`): a task-bound run of the
@@ -206,6 +208,10 @@ const refOf = (raw: string | null): string | null => {
 export interface StationEditPlan {
   /** Repo-relative paths and their new text, line.cast last. Empty when nothing changed. */
   writes: Array<{ rel: string; content: string }>;
+  /** Repo-relative paths to delete, line.cast first: a reset left the line
+   *  equal to the shipped one, so the repo's copy goes and the project runs
+   *  the shipped line again. Empty otherwise. */
+  removes: string[];
   changed: boolean;
   /** True when the repo had no line and this edit writes it out from the shipped one. */
   materialized: boolean;
@@ -288,6 +294,17 @@ export function planStationEdits(root: string, edits: LineStationEdit[]): Statio
   files.set("line.cast", cast);
   const graph = parseRepoLine(cast, get);
   const graph_hash = graphHash(graph);
+  const was = exists ? safeHashes(root) : null;
+  const now = new Map(graphToPushPayload(graph).nodes.map((n) => [n.id, stationKey(n)]));
+  const moved = () => [...touched].filter((s) => !was || was.get(s) !== now.get(s));
+
+  // A reset that brings the line back to the shipped one removes the repo's
+  // copy rather than freezing it, so later shipped updates reach the project.
+  if (edits.some((e) => e?.op === "reset_station") && graph_hash === shippedGraphHash(shipped)) {
+    if (!exists) return { writes: [], removes: [], changed: false, materialized: false, stations: [], graph_hash };
+    const removes = [REPO_LINE_REL_PATH, ...fs.readdirSync(dir).filter((n) => n !== "line.cast" && REPO_LINE_FILE_RE.test(n)).map((n) => path.posix.join(REPO_LINE_REL_DIR, n))];
+    return { writes: [], removes, changed: true, materialized: false, stations: moved(), graph_hash };
+  }
 
   // What actually differs from the files as they stand; a materialize writes them all.
   const writes: StationEditPlan["writes"] = [];
@@ -302,10 +319,12 @@ export function planStationEdits(root: string, edits: LineStationEdit[]): Statio
   if (castChanged) writes.push({ rel: REPO_LINE_REL_PATH, content: cast });
   const changed = writes.length > 0;
   // Only a station whose parsed values moved counts, so a no-op edit says so.
-  const was = exists ? safeHashes(root) : null;
-  const now = new Map(graphToPushPayload(graph).nodes.map((n) => [n.id, stationKey(n)]));
-  const stations = [...touched].filter((s) => !was || was.get(s) !== now.get(s));
-  return { writes: changed ? writes : [], changed, materialized: !exists, stations: changed ? stations : [], graph_hash };
+  return { writes: changed ? writes : [], removes: [], changed, materialized: !exists, stations: changed ? moved() : [], graph_hash };
+}
+
+/** The hash a run of the shipped line records, read from the same files a repo copy starts from. */
+function shippedGraphHash(shipped: Record<string, string>): string {
+  return graphHash(parseRepoLine(shipped["line.cast"], (name) => shipped[name] ?? null));
 }
 
 /** Whether `name` is referenced by no station but `station` (so `station` may reuse it). */

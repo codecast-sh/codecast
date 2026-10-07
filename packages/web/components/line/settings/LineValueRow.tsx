@@ -4,10 +4,11 @@
 // default), and the journey of an edit. The value is a button; return opens
 // it in place, return again (or leaving it) sends, escape puts it back, and
 // backspace on the row returns a value the file sets to its default.
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { LineValueSource } from "@codecast/shared/contracts/lineProfile";
 import type { EditState } from "./useLineProfileEdits";
 import { KeyCap } from "../../KeyboardShortcutsHelp";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 
 /**
  * A value edited where it sits. `onCommit` answers an error to show beside
@@ -29,7 +30,7 @@ export function InlineEdit({ text, placeholder, multiline, disabled, label, disp
   const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const open = draft !== null;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) return;
     field.current?.focus();
     field.current?.select();
@@ -156,7 +157,8 @@ export function LineValueRow({ label, what, unit, children, source, status, note
   what: string;
   unit?: string;
   children: ReactNode;
-  source: LineValueSource | null;
+  /** Where the value came from; undefined for a value the file does not hold (a role's setting), which shows no tag. */
+  source?: LineValueSource | null;
   status?: ReactNode;
   note?: string | null;
   refused?: boolean;
@@ -164,7 +166,7 @@ export function LineValueRow({ label, what, unit, children, source, status, note
   defaultText?: string;
 }) {
   return (
-    <div className="lset-row" data-lset-row data-source={source ?? "unknown"} data-refused={refused ? "true" : undefined}>
+    <div className="lset-row" data-lset-row data-source={source === undefined ? undefined : source ?? "unknown"} data-refused={refused ? "true" : undefined}>
       <div className="lset-key">
         <span className="lset-label">{label}</span>
         <span className="lset-what">{what}</span>
@@ -178,7 +180,7 @@ export function LineValueRow({ label, what, unit, children, source, status, note
               use default
             </button>
           )}
-          <SourceTag source={source} />
+          {source !== undefined && <SourceTag source={source} />}
         </div>
         {note && <p className="lset-note" data-lset-note>{note}</p>}
         {status}

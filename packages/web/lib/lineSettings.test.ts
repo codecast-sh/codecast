@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
-import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, editKey, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineValue, lineWriteGate } from "./lineSettings";
+import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, editKey, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineEditStatus, lineValue, lineWriteGate } from "./lineSettings";
 
 const field = (key: string) => LINE_FIELDS.find((f) => f.key === key)!;
 
@@ -18,7 +18,7 @@ const profile = (over: Partial<PublishedLineProfile> = {}): PublishedLineProfile
   commands: { check: "cast ws check", prove: null, eval: null, ship: null },
   caps: { cards: 5 },
   sources: { "commands.check": "default", size_budget: "file", "caps.cards": "default", finders: "file" },
-  notes: ["no prove command: the prove station passes with a note", "no eval command: the eval station passes with a note", "no ship command: the line's own merge step lands the change"],
+  notes: ["no prove command: the prove station passes with a note", "no eval command: the eval station passes with a note", "no ship command: the ship station runs Ship, which opens a pull request and merges only under [line.merge] auto or the line's role's merge grant"],
   warnings: [],
   file: ".codecast/line.toml",
   device_id: "mac",
@@ -94,6 +94,9 @@ describe("lineWriteGate", () => {
     expect(lineWriteGate(lp, [{ device_id: "other", online: true }])).toMatchObject({ writable: false, reason: expect.stringMatching(/teammate's machine/) });
     expect(lineWriteGate({ finders: [], changed_at: 1, root: "/r" }, [])).toMatchObject({ writable: false, reason: expect.stringMatching(/older cast/) });
     expect(lineWriteGate(null, [])).toMatchObject({ writable: false, reason: expect.stringMatching(/No machine has published/) });
+    // Nothing published but a known checkout: the defaults edit, and the first edit publishes.
+    expect(lineWriteGate(null, [], "/Users/a/src/union")).toMatchObject({ writable: true, first: true });
+    expect(lineWriteGate({ finders: [], changed_at: 1, root: "/r" }, [], "/r")).toMatchObject({ writable: false, reason: expect.stringMatching(/older cast/) });
   });
 });
 
@@ -108,6 +111,20 @@ describe("editOutcome", () => {
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: false, detail: "no project" } }) })).toMatchObject({ state: "saved", note: expect.stringMatching(/republish failed: no project/) });
     // A daemon that republishes after it answers: written, and the row follows.
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: "pending" } }) })).toEqual({ state: "saved" });
+  });
+});
+
+describe("lineEditStatus", () => {
+  const row = (result: object) => ({ _id: "r1", requested_at: 1_000, executed_at: 1_300, command_id: "c1", result: JSON.stringify(result), error: null, edits: [{ op: "set" as const, key: "watch_days", value: 8 }] });
+  test("the machine's own republish lands before it answers: the edit is saved, not still republishing", () => {
+    expect(lineEditStatus(row({ changed: true, published: { ok: true } }), profile({ published_at: 1_200 }), 2_000).state).toBe("saved");
+  });
+  test("a copy published before the request does not carry the edit", () => {
+    expect(lineEditStatus(row({ changed: true, published: { ok: true } }), profile({ published_at: 900 }), 2_000).state).toBe("publishing");
+  });
+  test("a republish still pending waits for a copy stamped after the answer", () => {
+    expect(lineEditStatus(row({ changed: true, published: { ok: "pending" } }), profile({ published_at: 1_200 }), 2_000).state).toBe("publishing");
+    expect(lineEditStatus(row({ changed: true, published: { ok: "pending" } }), profile({ published_at: 1_400 }), 2_000).state).toBe("saved");
   });
 });
 

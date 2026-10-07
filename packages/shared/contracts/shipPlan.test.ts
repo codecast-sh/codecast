@@ -71,9 +71,37 @@ describe("resolveShipPlan", () => {
     const plan = resolveShipPlan({ ...base, profile, lineGate: { decisionId: "d1" } });
     expect(plan.procedure).toBe("line_gate");
     expect(plan.steps[1]).toContain("./ship.sh $branch");
-    const merges = resolveShipPlan({ ...base, lineGate: { decisionId: "d1" } });
-    expect(merges.merge.will).toBe(true);
-    expect(merges.steps[1]).toContain("merge step");
+  });
+
+  test("a line card on a project with no ship command opens and shepherds a PR, and never merges unless merge.auto", () => {
+    const plan = resolveShipPlan({ ...base, lineGate: { decisionId: "d1" } });
+    expect(plan.procedure).toBe("line_gate");
+    expect(plan.merge.will).toBe(false);
+    expect(plan.merge.why).toContain("Only Ship on the pull request's page merges");
+    expect(plan.steps[1]).toContain("starts a ship session");
+    expect(plan.steps[1]).toContain("opens a pull request into main, then shepherds it");
+    expect(plan.steps.join(" ")).not.toMatch(/[Mm]erges with|merge step/);
+    const auto = resolveShipPlan({ ...base, profile: { ...profile, ship: null, merge: { auto: true, method: "rebase" } }, lineGate: { decisionId: "d1" } });
+    expect(auto.merge).toMatchObject({ will: true, method: "rebase" });
+    expect(auto.steps).toContain("Merges with rebase once the checks are green.");
+  });
+
+  test("a line card on a project with no ship command merges when the line's role holds a merge grant", () => {
+    const granted = { runId: "r1", role: { handle: "release", on: true, allowed: true, reason: null, used: 1, limit: 3 } };
+    const plan = resolveShipPlan({ ...base, lineGate: { decisionId: "d1" }, line: granted });
+    expect(plan.merge).toMatchObject({ will: true, via: "role", runId: "r1", role: "release" });
+    expect(plan.merge.why).toContain("The role that owns this line, @release, holds a merge grant (1 of 3 merges today)");
+    expect(plan.steps.join(" ")).toContain("cast line merge");
+    expect(shipBrief(plan, base)).toContain("cast line merge --run r1 --branch fix-login --into main --task ct-42");
+    // The station's own cast ship run, after the card is answered, merges the same way.
+    expect(resolveShipPlan({ ...base, line: granted }).merge.via).toBe("role");
+    // A switch that is on but out of allowance, or off, does not merge.
+    const spent = resolveShipPlan({ ...base, lineGate: { decisionId: "d1" }, line: { ...granted, role: { ...granted.role, allowed: false, reason: "the role has reached its daily merge limit (3 of 3)" } } });
+    expect(spent.merge.will).toBe(false);
+    expect(spent.merge.why).toContain("cannot merge now: the role has reached its daily merge limit");
+    expect(resolveShipPlan({ ...base, lineGate: { decisionId: "d1" }, line: { ...granted, role: { ...granted.role, on: false } } }).merge.will).toBe(false);
+    // A ship command still decides on a line card, grant or not.
+    expect(resolveShipPlan({ ...base, profile, lineGate: { decisionId: "d1" }, line: granted }).merge.will).toBe(false);
   });
 });
 

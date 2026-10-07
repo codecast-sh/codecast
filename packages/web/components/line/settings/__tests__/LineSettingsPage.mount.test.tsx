@@ -86,7 +86,7 @@ const lineProfile = () => ({
   commands: { check: "cast check", prove: null, eval: null, ship: null },
   caps: { cards: 5 },
   sources: { principles: "file", prompting: "default", size_budget: "file", watch_days: "default", "commands.check": "file", "commands.prove": "default", "commands.eval": "default", "commands.ship": "default", "caps.cards": "default", finders: "file" },
-  notes: ["no prove command: the prove station passes with a note", "no eval command: the eval station passes with a note", "no ship command: the line's own merge step lands the change"],
+  notes: ["no prove command: the prove station passes with a note", "no eval command: the eval station passes with a note", "no ship command: the ship station runs Ship, which opens a pull request and merges only under [line.merge] auto or the line's role's merge grant"],
   warnings: [],
   file: ".codecast/line.toml",
   device_id: "mac-1",
@@ -173,8 +173,11 @@ test("an edit shows at once and waits on the machine; a daemon refusal stops sho
   await act(async () => {
     const [id, r] = Object.entries((useInboxStore.getState() as any).sessionCommands)[0] as [string, any];
     useInboxStore.getState().syncTable("sessionCommands", [{ ...r, _id: id, executed_at: Date.now(), error: "/src/codecast/.codecast/line.toml: [line] size_budget must be at most 2000" }], { isDelta: true });
-    // The store tells its subscribers on the next tick.
-    await new Promise((r) => setTimeout(r, 20));
+    // The store tells its subscribers on a later tick, which a loaded machine
+    // can stretch well past a fixed wait: wait for the row instead.
+    for (let i = 0; i < 100 && row(host, "Size budget").querySelector(".lset-status")?.getAttribute("data-state") !== "refused"; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
   });
   const status = row(host, "Size budget").querySelector(".lset-status")!;
   expect(status.getAttribute("data-state")).toBe("refused");
@@ -198,13 +201,12 @@ test("a teammate's machine makes the page read only and says why", async () => {
   const { host, unmount } = await mount();
   expect(host.querySelector("[data-lset-gate]")!.getAttribute("data-lset-gate")).toBe("read-only");
   expect(host.querySelector("[data-lset-plate]")!.textContent).toMatch(/teammate's machine/);
-  // Read only stays focusable for the arrow walk; nothing opens, and the key hints are gone.
+  // Read only stays focusable for the arrow walk, and nothing opens.
   const value = row(host, "Check").querySelector<HTMLButtonElement>(".lset-value")!;
   expect(value.getAttribute("aria-disabled")).toBe("true");
   expect(value.disabled).toBe(false);
   await act(async () => { value.click(); });
   expect(row(host, "Check").querySelector("[data-lset-input]")).toBeNull();
-  expect(host.querySelector("[data-lset-footer]")).toBeNull();
   expect(host.querySelector(".lset-add")).toBeNull();
   await unmount();
 });

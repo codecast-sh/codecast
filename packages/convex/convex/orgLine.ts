@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { LINE_SWEEP_ON } from "./lib/lineSweep";
 import { internalMutation, query } from "./functions";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { TASK_PRIORITIES } from "@codecast/shared/tasks";
@@ -29,6 +30,8 @@ type Ctx = { db: any };
 // How many runs one sweep may start in total, so a large backlog is drained
 // two minutes at a time instead of in one long mutation.
 export const MAX_STARTS_PER_SWEEP = 10;
+export { LINE_SWEEP_ON };
+
 
 export const LINE_STARTED_PREFIX = "the line started: run ";
 
@@ -336,7 +339,7 @@ export const sweep = internalMutation({
 });
 
 export type LineQueueItem = { task_id: string; short_id: string | null; title: string; cause: boolean; priority: number; waiting: string | null };
-export type LineQueue = { role_id: string; open_cards: number; cards_cap: number; hands: number; hands_cap: number; waiting: string | null; items: LineQueueItem[] };
+export type LineQueue = { role_id: string; sweep_on: boolean; open_cards: number; cards_cap: number; hands: number; hands_cap: number; waiting: string | null; items: LineQueueItem[] };
 
 // LE6: the line page's queue for one role: its candidates in admission order,
 // each with why it waits (null: it starts at the next sweep). `waiting` on the
@@ -360,6 +363,7 @@ export async function lineQueueFor(ctx: Ctx, role: any, now = Date.now()): Promi
   };
   return {
     role_id: String(role._id),
+    sweep_on: LINE_SWEEP_ON,
     open_cards: cards,
     cards_cap: cardsCap,
     hands,

@@ -3,13 +3,14 @@
 // in the line page's header, the URL that holds the choice, and the "all
 // projects" roll-up, which only counts. Every number comes from lib/lineFlow
 // (lineRollup builds each project's flow the way its own page does).
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { ALL_PROJECTS, NO_PROJECT, defaultLineKey, type LineProject, type RollupRow } from "../../lib/lineFlow";
 import { cn } from "../../lib/utils";
 import { lineProjectParam } from "../../lib/line/lineStations";
-import { centerInRow, edgeAttrs, useScrollEdges } from "./useScrollEdges";
+import { centerInRow, edgeAttrs, useScrollEdges, type ScrollEdges } from "./useScrollEdges";
+import { EdgeArrows } from "./EdgeArrows";
 
 /** The URL names a line by its project's short id (or id), "none" or "all". */
 const paramOf = (key: string, projects: LineProject[]) => {
@@ -64,10 +65,12 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
     const pill = nav?.querySelector<HTMLElement>("[data-active=true]");
     if (nav && pill) centerInRow(nav, pill);
   }, [selected, rollup.length]);
+  const waiting = useClippedWaiting(row, edges, rollup);
   if (rollup.length === 0) return null;
   const total = rollup.reduce((n, r) => n + r.causes, 0);
   return (
-    <nav ref={row} className="line-edge-fade line-scroll-quiet flex items-center gap-1 overflow-x-auto -mx-4 px-4 sm:-mx-6 sm:px-6 pb-0.5" aria-label="Projects" data-line-projects {...edgeAttrs(edges)}>
+    <div className="relative -mx-4 sm:-mx-6 min-w-0">
+    <nav ref={row} className="line-edge-fade line-scroll-quiet flex items-center gap-1 overflow-x-auto px-4 sm:px-6 pb-0.5" aria-label="Projects" data-line-projects {...edgeAttrs(edges)}>
       <Pill active={selected === ALL_PROJECTS} onClick={() => onSelect(ALL_PROJECTS)} label="All projects" count={total} />
       {rollup.map((r) => (
         <Pill
@@ -79,17 +82,48 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
           count={r.causes}
           awaiting={r.awaiting}
           silent={r.silent}
-          tip={[r.short_id, `${r.causes} open cause${r.causes === 1 ? "" : "s"}`, r.awaiting ? `${r.awaiting} card${r.awaiting === 1 ? "" : "s"} waiting on you` : null, r.finders ? `${r.finders} finder${r.finders === 1 ? "" : "s"}${r.silent ? `, ${r.silent} silent 24h` : ""}` : null].filter(Boolean).join(" · ")}
+          tip={[r.short_id, `${r.causes} in the queue`, r.awaiting ? `${r.awaiting} card${r.awaiting === 1 ? "" : "s"} waiting on you` : null, r.finders ? `${r.finders} finder${r.finders === 1 ? "" : "s"}${r.silent ? `, ${r.silent} silent 24h` : ""}` : null].filter(Boolean).join(" · ")}
         />
       ))}
     </nav>
+    <EdgeArrows scroller={row} edges={edges} label="projects" waiting={waiting} />
+    </div>
   );
+}
+
+/** The cards waiting on the viewer in pills clipped past each edge of the
+ *  row (under the fade counts as clipped), so the arrow can carry them. */
+function useClippedWaiting(row: RefObject<HTMLElement | null>, edges: ScrollEdges, rows: unknown) {
+  const [waiting, setWaiting] = useState({ left: 0, right: 0 });
+  useEffect(() => {
+    const nav = row.current;
+    if (!nav) return;
+    const measure = () => {
+      const box = nav.getBoundingClientRect();
+      let left = 0, right = 0;
+      for (const pill of nav.querySelectorAll<HTMLElement>("[data-pill-awaiting]")) {
+        const n = Number(pill.dataset.pillAwaiting) || 0;
+        const r = pill.getBoundingClientRect();
+        if (r.right > box.right - 28) right += n;
+        else if (r.left < box.left + 28) left += n;
+      }
+      setWaiting((w) => (w.left === left && w.right === right ? w : { left, right }));
+    };
+    measure();
+    nav.addEventListener("scroll", measure, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    ro?.observe(nav);
+    return () => { nav.removeEventListener("scroll", measure); ro?.disconnect(); };
+  }, [row, edges.left, edges.right, rows]);
+  return waiting;
 }
 
 /** A pill is the line's name and one number: the cards waiting on the viewer
  *  in the ask color, else its open causes, quiet. A silent finder adds a dot
  *  in the warning ink. The tooltip spells out every figure. */
 function Pill({ active, onClick, label, count, awaiting = 0, silent, muted, tip }: { active: boolean; onClick: () => void; label: string; count: number; awaiting?: number; silent?: number; muted?: boolean; tip?: string }) {
+  // Its words never name a node of the map (Causes, Signals, a station), so a
+  // reader or a tool looking for the node never lands on a pill (LX1).
   return (
     <button
       type="button"
@@ -97,12 +131,13 @@ function Pill({ active, onClick, label, count, awaiting = 0, silent, muted, tip 
       title={tip}
       data-active={active ? "true" : undefined}
       data-line-project-pill
+      data-pill-awaiting={awaiting > 0 ? awaiting : undefined}
       className={cn("line-tab shrink-0 rounded-full pl-2.5 pr-2 py-1 text-[11px] whitespace-nowrap flex items-center gap-1.5", muted && !active && "italic")}
     >
       <span>{label}</span>
       {awaiting > 0
-        ? <span className="text-sol-yellow tabular-nums font-semibold" aria-label={`${awaiting} cards waiting on you, ${count} open causes`} data-line-pill-awaiting>{awaiting}</span>
-        : <span className="tabular-nums" data-zero={count === 0 ? "true" : undefined} aria-label={`${count} open causes`}>{count}</span>}
+        ? <span className="text-sol-yellow tabular-nums font-semibold" aria-label={`${awaiting} waiting on you, ${count} in the queue`} data-line-pill-awaiting>{awaiting}</span>
+        : <span className="tabular-nums" data-zero={count === 0 ? "true" : undefined} aria-label={`${count} in the queue`}>{count}</span>}
       {!!silent && <span className="line-silent-dot" role="img" aria-label={`${silent} silent finder${silent === 1 ? "" : "s"}`} data-line-pill-silent />}
     </button>
   );
@@ -144,9 +179,15 @@ export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect
               </td>
               {COLS.map((c) => <Cell key={c.key} value={r[c.key] as number} ask={c.key === "awaiting"} />)}
               <td className="py-2.5 pl-3 border-b border-sol-border/20 text-right tabular-nums whitespace-nowrap text-[11px]">
-                {r.finders === 0
-                  ? <span className="text-sol-text-dim opacity-60" title="No finders declared: cast line profile --publish in the project's repo">none declared</span>
-                  : <><span className="text-sol-text-muted">{r.finders}</span>{r.silent > 0 && <span className="text-sol-orange">, {r.silent} silent</span>}</>}
+                {/* What files here without a declaration reads as itself, so a busy source never shows as "none" (LX7). */}
+                {r.finders > 0 && <><span className="text-sol-text-muted">{r.finders}</span>{r.silent > 0 && <span className="text-sol-orange">, {r.silent} silent</span>}</>}
+                {r.undeclared.length > 0 && (
+                  <span className="text-sol-text-dim" title={`${r.undeclared.join(", ")} filed signals this week without a finder in the project's line profile. Declare one from the source's node on the map.`} data-line-rollup-undeclared>
+                    {r.finders > 0 && <span> · </span>}{r.undeclared.slice(0, 2).join(", ")}{r.undeclared.length > 2 && ` +${r.undeclared.length - 2}`}
+                    <span className="opacity-60">, not declared</span>
+                  </span>
+                )}
+                {r.finders === 0 && r.undeclared.length === 0 && <span className="text-sol-text-dim opacity-60" title="No finders declared: cast line profile --publish in the project's repo">none</span>}
               </td>
             </tr>
           ))}

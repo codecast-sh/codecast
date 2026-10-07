@@ -19,7 +19,7 @@ import { buildEvalResult, evalResultLines, repsFileProblem, unscoredSurfaces } f
 import type { EvalRepsFile } from "@platform/evals/contract";
 import { fmt } from "./colors.js";
 import { findLineProfile, formatLineProfile, LINE_PROFILE_REL_PATH, LineProfileError, loadLineProfile, starterLineProfile, type LineFinder, type ResolvedLineProfile } from "./lineProfile.js";
-import { runLineProfileEdit, type LineProfileEditReply, type PublishOutcome } from "./lineProfileEdit.js";
+import { removeLineFile, runLineProfileEdit, type LineProfileEditReply, type PublishOutcome } from "./lineProfileEdit.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { publishedRepoLine } from "./repoLine.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
@@ -129,6 +129,7 @@ export async function editThisLineProfile(deps: PublishDeps, edits: LineProfileE
       fs.mkdirSync(path.dirname(file), { recursive: true });
       atomicWriteFile(file, content, fs.existsSync(file) ? {} : { mode: 0o644 });
     },
+    remove: removeLineFile,
     ...(opts.publish ? {
       publish: async (r: string): Promise<PublishOutcome> => {
         try {
@@ -170,7 +171,7 @@ function reportEdit(reply: LineProfileEditReply, keys: string[], json?: boolean)
     if (key.startsWith("stations.")) {
       const id = key.slice("stations.".length);
       const l = reply.line;
-      console.log(!l?.changed ? `station ${id}  unchanged` : `station ${id}  ${l.stations.includes(id) ? "changed" : "unchanged"}  line ${l.graph_hash}${l.materialized ? `  (wrote the line out to ${path.dirname(l.file)})` : ""}`);
+      console.log(!l?.changed ? `station ${id}  unchanged` : `station ${id}  ${l.stations.includes(id) ? "changed" : "unchanged"}  line ${l.graph_hash}${l.materialized ? `  (wrote the line out to ${path.dirname(l.file)})` : l.removed ? `  (back to the shipped line; removed ${path.dirname(l.file)})` : ""}`);
     } else if (key.startsWith("finders.")) {
       const id = key.slice("finders.".length);
       const f = reply.profile.finders.find((x) => x.id === id);
@@ -179,11 +180,11 @@ function reportEdit(reply: LineProfileEditReply, keys: string[], json?: boolean)
       console.log(`${key} = ${valueText(getPath(reply.profile, key))}  (${reply.sources[key] ?? "default"})`);
     }
   }
-  const wrote = reply.line?.changed ? reply.line.file : reply.file;
-  if (!reply.changed) console.log(fmt.muted(`unchanged: ${wrote}`));
-  else if (!reply.published) console.log(fmt.muted(`wrote ${wrote}; not published`));
-  else if (reply.published.ok === true) console.log(fmt.muted(`wrote ${wrote}; published`));
-  else console.log(fmt.warning(`wrote ${wrote}; the publish failed: ${reply.published.detail ?? "no detail"}`));
+  const wrote = reply.line?.removed ? `removed ${path.dirname(reply.line.file)}` : `wrote ${reply.line?.changed ? reply.line.file : reply.file}`;
+  if (!reply.changed) console.log(fmt.muted(`unchanged: ${reply.line?.changed ? reply.line.file : reply.file}`));
+  else if (!reply.published) console.log(fmt.muted(`${wrote}; not published`));
+  else if (reply.published.ok === true) console.log(fmt.muted(`${wrote}; published`));
+  else console.log(fmt.warning(`${wrote}; the publish failed: ${reply.published.detail ?? "no detail"}`));
   for (const w of reply.warnings) console.log(fmt.warning(w));
 }
 

@@ -5,9 +5,58 @@
 .ltrace-body { container-type: inline-size; }
 .ltrace-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem; }
 .ltrace-map-col { order: -1; min-width: 0; }
-.ltrace-map { height: 300px; }
+.ltrace-map { height: 380px; }
 @container (min-width: 1080px) {
-  .ltrace-grid { grid-template-columns: minmax(26rem, 40rem) minmax(0, 1fr); gap: 2rem; max-width: 100rem; }
+  .ltrace-grid[data-full-map="true"] { grid-template-columns: minmax(26rem, 40rem) minmax(0, 1fr); gap: 2rem; max-width: 100rem; }
   .ltrace-map-col { order: 0; }
   .ltrace-map { position: sticky; top: 1.5rem; height: min(640px, calc(100vh - 9rem)); }
 }
+/* The whole map at full size, behind "Full size" (TraceMap). */
+.ltrace-map-box { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* The path strip: the nodes this item went through, at reading size. */
+/* Chips snap to their start (mandatory, so a scroll that lands mid-strip,
+   the current chip brought into view or an arrow's press, always settles
+   on a chip's start). */
+/* The arrows sit in the frame's gutter, outside the scroller, so no scroll
+   position (the end included, where snapping cannot place the first chip)
+   puts a chip under one: 22px arrow at 2px in, plus 8px, is the gutter. */
+.ltrace-strip-frame { --ltrace-arrow-room: 32px; padding-inline: var(--ltrace-arrow-room); }
+.ltrace-strip { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 2px 0; scroll-snap-type: x mandatory; }
+.ltrace-strip.line-edge-fade { --edge-fade: 20px; }
+.ltrace-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  padding: 3px 9px; border-radius: 9999px; font-size: 12px; white-space: nowrap;
+  color: var(--sol-text);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 85%, transparent);
+  background: color-mix(in srgb, var(--sol-card, var(--sol-bg)) 70%, transparent);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.ltrace-chip { scroll-snap-align: start; }
+/* A replaced run's step: it passed, and its change was thrown away. */
+.ltrace-chip[data-status="replaced"] { color: var(--sol-text-muted); }
+.ltrace-chip:hover, .ltrace-chip[data-focus="true"] { border-color: color-mix(in srgb, var(--sol-blue) 55%, var(--sol-border)); }
+.ltrace-chip[data-status="failed"] { color: var(--sol-red); }
+.ltrace-chip[data-status="current"] { color: var(--sol-blue); }
+.ltrace-chip[data-status="waiting"], .ltrace-chip[data-status="skipped"] { color: var(--sol-text-muted); border-style: dashed; }
+/* The chip the item is at now: ringed in the color its dot pulses. */
+.ltrace-chip[data-current="true"] { border-color: var(--sol-blue); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-blue) 22%, transparent); }
+/* The header's one action when the item waits on a card. */
+.ltrace-answer {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 7px; font-size: 12px; font-weight: 600; max-width: 100%;
+  color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-yellow) 40%, transparent);
+  transition: background-color 120ms ease;
+}
+.ltrace-answer:hover { background: color-mix(in srgb, var(--sol-yellow) 20%, transparent); }
+/* A step the header jumped to says it is the one. */
+[data-trace-flash="true"] { animation: ltrace-flash 1.4s ease-out; border-radius: 8px; }
+@keyframes ltrace-flash { from { background: color-mix(in srgb, var(--sol-yellow) 16%, transparent); } }
+@media (prefers-reduced-motion: reduce) { [data-trace-flash="true"] { animation: none; } }
+.ltrace-answer:disabled { opacity: 0.6; cursor: default; }
+/* The stall's second way out beside Retry: the same shape, neutral ink. */
+.ltrace-action {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 7px; font-size: 12px;
+  color: var(--sol-text-muted); border: 1px solid color-mix(in srgb, var(--sol-border) 85%, transparent);
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.ltrace-action:hover { color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-blue) 45%, var(--sol-border)); }

@@ -47,11 +47,17 @@ describe("offline boot auth", () => {
     expect(paintRead).toBeLessThan(firstAwait);
     // The session to restore is chosen before that preload, so the preload warms the
     // conversation the app opens on: a conversation the URL names wins, then this
-    // client's own last focus, then the server's.
+    // client's own last focus, then the server's; a remembered one only when the
+    // Assistant scope would list it.
+    const remembered = source.match(/const remembered = ([^;]+);/);
     const restore = source.match(/const restoreId = ([^;]+);/);
+    expect(remembered).not.toBeNull();
     expect(restore).not.toBeNull();
     expect(source.indexOf(restore![0])).toBeLessThan(hydrate);
-    expect(restore![1]).toMatch(/^linked !== undefined \? linked : ownId \?\? st\.clientState\?\.current_conversation_id$/);
+    expect(remembered![1]).toBe("ownId ?? st.clientState?.current_conversation_id");
+    expect(restore![1].replace(/\s+/g, " ")).toBe(
+      "linked !== undefined ? linked : remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null",
+    );
   });
 
   test("interaction-only conversation tools stay outside the blocking route graph", () => {

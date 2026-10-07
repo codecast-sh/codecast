@@ -190,7 +190,9 @@ export function rolesOnProject<R extends ScopedRole>(roles: R[], projectId: stri
  * The repo's line with station edits laid over it, the way the daemon will
  * write them, so a station shows its new text before the republish arrives.
  * A repo with no line yet starts from the shipped one, as the first edit's
- * write does. Returns the same object when there is nothing to lay over.
+ * write does, and a reset that leaves every station as shipped paints no
+ * line, as the daemon then removes the repo's copy. Returns the same object when
+ * there is nothing to lay over.
  */
 export function paintStationEdits(line: PublishedRepoLine | null | undefined, edits: LineStationEdit[], shipped: ShippedLine): PublishedRepoLine | null | undefined {
   if (edits.length === 0) return line;
@@ -202,6 +204,8 @@ export function paintStationEdits(line: PublishedRepoLine | null | undefined, ed
       nodes = editStation(nodes, station, patch);
     }
   }
+  // A reset that leaves every station as shipped: the daemon removes the repo's copy, so the project follows the shipped line again.
+  if (edits.some((e) => e.op === "reset_station") && nodes.length === shipped.nodes.length && Object.keys(stationDiffs(nodes, shipped)).length === 0) return null;
   return { ...(line ?? materializedShape(shipped)), nodes };
 }
 

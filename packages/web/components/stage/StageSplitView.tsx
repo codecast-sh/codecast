@@ -21,10 +21,12 @@ import { useInboxStore, useTrackedStore, type AppTab } from "../../store/inboxSt
 import {
   findBranch,
   stageGeometry,
+  stageWideCells,
   setBranchSizes,
   type StageHandleGeom,
   type StageNode,
 } from "../../store/stageSplit";
+import { StageRail } from "./StageRail";
 import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
 import { pathLabel } from "../../lib/pathLabel";
 import { browserPathLabel, isBrowserRoutePath, subscribeBrowserTitles } from "../../lib/browserPane";
@@ -115,6 +117,10 @@ function PaneStrip({ leafId, path, focused }: { leafId: string; path: string; fo
 // their slot as `false` — so when the tab splits, React keeps every element
 // beneath and the page is not remounted (the whole point of rendering a plain
 // tab through the stage).
+//
+// `rail`: the cell is folded beside a wide leaf (store.stageWide). It draws
+// the rail in its slot and keeps its page mounted but hidden, so the scroll
+// and drafts in it survive the fold; a click on the rail restores the split.
 const StageCell = memo(function StageCell({
   tabId,
   leafId,
@@ -126,19 +132,27 @@ const StageCell = memo(function StageCell({
   focused,
   isTabActive,
   solo,
+  rail,
 }: {
   tabId: string;
   leafId: string;
   path: string;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
+  /** CSS lengths: percents from the geometry, px and calc for a wide stage. */
+  left: string;
+  top: string;
+  width: string;
+  height: string;
   focused: boolean;
   isTabActive: boolean;
   solo: boolean;
+  rail: "left" | "right" | null;
 }) {
   const sessionId = paneSessionId(path);
+  const title = usePaneTitle(path);
+  const restore = useCallback(() => {
+    useInboxStore.getState().setStageWide(null);
+    stageFocus(leafId);
+  }, [leafId]);
   // Panes that draw their own 32px header get no PaneStrip stacked on top.
   const ownsHeader = isBrowserRoutePath(path);
   const leafNavigate = useCallback(
@@ -156,14 +170,18 @@ const StageCell = memo(function StageCell({
   // A session pane gets the same pane scope a route pane does, so a
   // conversation in a hidden tab or an unfocused split knows it does not own
   // the keyboard. No `navigate`: a link inside a conversation moves the tab.
-  const { ctxValue: sessionScope } = usePaneScope({ tabId, path, isActive: active, isVisible: isTabActive, leafId: paneLeafId });
+  const visible = isTabActive && !rail;
+  const { ctxValue: sessionScope } = usePaneScope({ tabId, path, isActive: active && !rail, isVisible: visible, leafId: paneLeafId });
   return (
     <div
       data-stage-leaf={leafId}
-      className={`stage-cell${!solo && focused ? " stage-cell--focused" : ""}`}
-      style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
-      onPointerDownCapture={solo ? undefined : handleFocus}
+      data-stage-folded={rail ?? undefined}
+      className={`stage-cell${!solo && focused && !rail ? " stage-cell--focused" : ""}`}
+      style={{ left, top, width, height }}
+      onPointerDownCapture={solo || rail ? undefined : handleFocus}
     >
+      {rail && <StageRail side={rail} title={title} path={path} onRestore={restore} />}
+      <div className={rail ? "hidden" : "h-full"}>
       {sessionId ? (
         <>
           {/* A conversation pane has no strip: its own header hosts close and
@@ -181,7 +199,7 @@ const StageCell = memo(function StageCell({
           {!solo && <PaneGrip leafId={leafId} path={path} />}
           <div className="h-full min-h-0">
             <ErrorBoundary name="StagePane" level="panel">
-              <RoutePane tabId={tabId} path={path} isActive={active} isVisible={isTabActive} navigate={navigate} leafId={paneLeafId} />
+              <RoutePane tabId={tabId} path={path} isActive={active && !rail} isVisible={visible} navigate={navigate} leafId={paneLeafId} />
             </ErrorBoundary>
           </div>
         </>
@@ -190,11 +208,12 @@ const StageCell = memo(function StageCell({
           {!solo && <PaneStrip leafId={leafId} path={path} focused={focused} />}
           <div className="flex-1 min-h-0">
             <ErrorBoundary name="StagePane" level="panel">
-              <RoutePane tabId={tabId} path={path} isActive={active} isVisible={isTabActive} navigate={navigate} leafId={paneLeafId} />
+              <RoutePane tabId={tabId} path={path} isActive={active && !rail} isVisible={visible} navigate={navigate} leafId={paneLeafId} />
             </ErrorBoundary>
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 });
@@ -311,28 +330,35 @@ export default memo(function StageSplitView({
   const effective = liveSizes ? setBranchSizes(layout, liveSizes.branchId, liveSizes.sizes) : layout;
   const geo = useMemo(() => stageGeometry(effective), [effective]);
   const solo = geo.leaves.length === 1;
+  // One leaf of this tab takes the width (store.stageWide): its siblings fold
+  // to rails and the seams go; the tree underneath is not touched.
+  const wideLeafId = useInboxStore((s) => s.stageWide && s.stageWide.tabId === tab.id ? s.stageWide.leafId : null);
+  const wide = useMemo(() => (wideLeafId ? stageWideCells(effective, wideLeafId) : null), [effective, wideLeafId]);
+  const cells = wide ?? geo.leaves.map((l) => ({ id: l.id, path: l.path, rail: null, style: { left: `${l.rect.left}%`, top: `${l.rect.top}%`, width: `${l.rect.width}%`, height: `${l.rect.height}%` } }));
 
   return (
     <div
       ref={containerRef}
       className={`relative h-full overflow-hidden${liveSizes ? " stage-resizing" : ""}`}
+      data-stage-wide={wide ? wideLeafId ?? undefined : undefined}
     >
-      {geo.leaves.map((l) => (
+      {cells.map((l) => (
         <StageCell
           key={l.id}
           tabId={tab.id}
           leafId={l.id}
           path={l.path}
-          left={l.rect.left}
-          top={l.rect.top}
-          width={l.rect.width}
-          height={l.rect.height}
+          left={l.style.left}
+          top={l.style.top}
+          width={l.style.width}
+          height={l.style.height}
           focused={tab.focusedLeafId === l.id}
           isTabActive={isTabActive}
           solo={solo}
+          rail={l.rail}
         />
       ))}
-      {geo.handles.map((h) => (
+      {!wide && geo.handles.map((h) => (
         <StageHandle
           key={`${h.branchId}:${h.index}`}
           handle={h}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildLineFlow, defaultLineKey, goalChip, groupBuild, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
+import { admissionHold, buildLineFlow, defaultLineKey, goalChip, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineAdmission, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
 
 const NOW = 1_800_000_000_000;
 
@@ -187,6 +187,57 @@ describe("buildLineFlow", () => {
     expect(failing.build.state).toMatchObject({ kind: "failing", why: "tests red" });
   });
 
+  it("admission names why nothing starts while causes wait (LE6): no role, the switch, the day's hands, the slots", () => {
+    const role = { id: "r1", handle: "aq-line", paused: false };
+    const adm = (over: Partial<LineAdmission>): LineAdmission => ({ role, on: true, slots: 2, busy: 0, hands: 0, handsCap: 6, ...over });
+    // Ground marked it ready a minute ago: the sweep has not had its turn yet.
+    const ready = (id: string) => cause(id, { readiness: "ready", goal_ref: "in-9:k", updated_at: NOW - 60_000 });
+    const why = (a: LineAdmission) => flow({ tasks: [ready("a")], admission: a }).causes.state;
+    expect(why(adm({ role: null }))).toMatchObject({ kind: "paused", why: "no role looks after this project, so nothing starts on its own" });
+    expect(why(adm({ role: { ...role, paused: true } }))).toMatchObject({ kind: "paused", why: "@aq-line is paused, so admission is held" });
+    expect(why(adm({ on: false }))).toMatchObject({ kind: "paused", why: "admission is off for @aq-line, so nothing starts on its own" });
+    expect(why(adm({ hands: 6 }))).toMatchObject({ kind: "paused", why: "@aq-line started its 6 sessions for today" });
+    expect(why(adm({ busy: 2 }))).toMatchObject({ kind: "paused", why: "all 2 slots are busy until a card is answered" });
+    expect(why(adm({}))).toMatchObject({ kind: "running", why: "1 queued; the next starts within two minutes" });
+    // An unknown count holds nothing: only what the sweep would see does.
+    expect(why(adm({ busy: null, hands: null }))).toMatchObject({ kind: "running" });
+    expect(admissionHold(adm({ busy: 2 }))?.short).toBe("2 of 2 slots busy");
+    // The role's switch on, codecast's sweep off (LINE_SWEEP_ON): the map says the
+    // sweep, not "on", and offers the top ready cause to start by hand.
+    const off = flow({ tasks: [ready("a")], admission: adm({ sweepOff: true }) }).causes;
+    expect(off.state).toMatchObject({ kind: "paused", why: "codecast's line sweep is off, so no line starts a cause on its own" });
+    expect(off.hold).toMatchObject({ short: "Sweep off", top: { task: { _id: "a" } } });
+    expect(off.hold?.long).toContain("lib/lineSweep.ts");
+    // The headline says it, and links the queue.
+    expect(lineHeadline(flow({ tasks: [cause("a"), cause("b")], admission: adm({ on: false }) }), NOW)[0]).toMatchObject({ text: "2 causes wait: admission is off for @aq-line, so nothing starts on its own", tone: "warn", station: "causes" });
+  });
+
+  // Round 10: "on at 5 slots, 0 busy" beside causes waiting 20h said nothing
+  // about why; the queue now names the real hold, or says it cannot find one.
+  it("admission on with a slot free names why nothing starts: none ready, or the sweep is not starting the ready ones", () => {
+    const role = { id: "r1", handle: "aq-line", paused: false };
+    const a: LineAdmission = { role, on: true, slots: 5, busy: 0, hands: 0, handsCap: 6 };
+    // None ready: ground left them needing context or never reached them.
+    const unready = flow({ tasks: [cause("a", { readiness: "needs_context", goal_ref: "in-9:k" }), cause("b"), cause("c")], admission: a });
+    expect(unready.causes.state).toMatchObject({ kind: "paused", why: "none is ready for the line: 1 needs context from a person, 2 are not grounded yet" });
+    expect(unready.causes.hold).toMatchObject({ short: "None ready", top: null });
+    // Ready for 20h, nothing started since: the sweep is not running, and the top one can start by hand.
+    const stuck = (over: Partial<LineCauseTask> = {}) => cause("a", { readiness: "ready", goal_ref: "in-9:k", updated_at: NOW - 20 * HOUR, ...over });
+    const stalled = flow({ tasks: [stuck(), cause("b")], admission: a });
+    expect(stalled.causes.hold).toMatchObject({ short: "No start in 20h", long: "Admission is on with 5 free slots and 1 cause ready, but nothing has started in 20h. The sweep that starts the top one every two minutes is not running; start it by hand" });
+    expect(stalled.causes.hold?.top?.task._id).toBe("a");
+    expect(lineHeadline(stalled, NOW)[0]).toMatchObject({ text: "2 causes wait: nothing has started in 20h, though 5 slots are free", station: "causes" });
+    // A run started ten minutes ago: the sweep is moving, so no stall.
+    expect(flow({ tasks: [stuck(), cause("z")], runs: [run("r1", { task_id: "z", created_at: NOW - 10 * 60_000 })], admission: a }).causes.hold).toBeNull();
+    // Assigned to someone else: the sweep never takes it.
+    expect(flow({ tasks: [stuck({ assignee: "user:x" })], admission: a }).causes.hold).toMatchObject({ short: "None ready" });
+  });
+
+  it("a failed last run in the headline opens its run", () => {
+    const f = flow({ tasks: [cause("a")], runs: [run("r1", { task_id: "a", status: "failed", updated_at: NOW - 4 * HOUR })] });
+    expect(lineHeadline(f, NOW).find((p) => p.tone === "fail")).toMatchObject({ text: "last run failed 4h ago", href: "/workflows/runs/r1" });
+  });
+
   it("throughput for the week", () => {
     const f = flow({
       tasks: [
@@ -280,21 +331,9 @@ describe("lineHeadline", () => {
   });
 });
 
-describe("groupBuild", () => {
+describe("build rows", () => {
   const live = (id: string, label: string) => run(id, { task_id: id, current_node_id: label, node_statuses: [{ node_id: label, status: "running", started_at: NOW - HOUR }] });
-  it("groups a step only when it holds two runs; a lone run carries its step as a chip", () => {
-    const f = flow({ tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [live("a", "implement"), live("b", "implement"), live("c", "verify")] });
-    const blocks = groupBuild(f.build.items);
-    expect(blocks.map((b) => [b.label, b.rows.map((r) => [r.run._id, r.chip, r.order])])).toEqual([
-      ["implement", [["a", null, 0], ["b", null, 1]]],
-      [null, [["c", "verify", 2]]],
-    ]);
-  });
-  it("places a line run on its five step stepper; other workflows have no place", () => {
-    const f = flow({ tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [{ ...live("a", "implement"), workflow_name: "line" }, { ...live("b", "card_write"), workflow_name: "line" }, { ...live("c", "implement"), workflow_name: "feature" }] });
-    expect(Object.fromEntries(f.build.items.map((b) => [b.run._id, b.stepIndex]))).toEqual({ a: 2, b: 4, c: null });
-  });
-  it("a run of a project's customized line keeps its steps and says which line it ran", () => {
+  it("a run of a project's customized line says which line it ran", () => {
     const projects = [{ _id: "p1", short_id: "pj-a", title: "Web" }];
     const f = flow({ projects, tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [
       { ...live("a", "implement"), workflow_name: "Line for Web", workflow_slug: "line-pj-a" },
@@ -302,9 +341,9 @@ describe("groupBuild", () => {
       { ...live("c", "implement"), workflow_name: "Other", workflow_slug: "line-pj-zz" },
     ] });
     const by = Object.fromEntries(f.build.items.map((b) => [b.run._id, b]));
-    expect([by.a.stepIndex, by.a.line]).toEqual([2, { kind: "customized", project: projects[0] }]);
-    expect([by.b.stepIndex, by.b.line]).toEqual([3, { kind: "shipped" }]);
-    expect([by.c.stepIndex, by.c.line]).toEqual([null, null]);
+    expect(by.a.line).toEqual({ kind: "customized", project: projects[0] });
+    expect(by.b.line).toEqual({ kind: "shipped" });
+    expect(by.c.line).toBeNull();
   });
 });
 
@@ -357,8 +396,10 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
     const fresh = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders, findersSince: NOW - DAY });
     expect(fresh.sense.items.find((s) => s.source === "union.guard")).toMatchObject({ newest: null, silent: false });
     expect(silentText(fresh.sense.items.find((s) => s.source === "union.guard")!, NOW)).toBe("nothing filed yet");
-    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any", fingerprint: "g" }] });
-    expect(loose.sense.items.find((s) => s.source === "person")?.undeclared).toBe(true);
+    const loose = flow({ signals: [signal("x", { source: "sentry" }), signal("y", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any", fingerprint: "g" }] });
+    expect(loose.sense.items.find((s) => s.source === "sentry")?.undeclared).toBe(true);
+    // People (cast signal add, the map's composer) and lessons are every line's sources (line-map.md LX2).
+    expect(loose.sense.items.find((s) => s.source === "person")?.undeclared).toBe(false);
   });
 
   it("the roll-up counts each line, busiest first, no project last", () => {

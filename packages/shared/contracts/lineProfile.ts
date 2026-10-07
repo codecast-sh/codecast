@@ -170,7 +170,7 @@ export function lineProfileNotes(profile: Pick<LineProfile, "commands" | "projec
   const notes: string[] = [];
   if (!profile.commands.prove) notes.push("no prove command: the prove station passes with a note");
   if (!profile.commands.eval) notes.push("no eval command: the eval station passes with a note");
-  if (!profile.commands.ship) notes.push("no ship command: the line's own merge step lands the change");
+  if (!profile.commands.ship) notes.push("no ship command: the ship station runs Ship, which opens a pull request and merges only under [line.merge] auto or the line's role's merge grant");
   if (!profile.project) notes.push("no project: signals filed here go to the workspace, not a project, unless --project names one");
   return notes;
 }

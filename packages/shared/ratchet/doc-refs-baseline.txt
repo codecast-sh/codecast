@@ -13,7 +13,6 @@ docs/architecture/evals-converge.md packages/evals/src/core/verdict.ts
 docs/architecture/evals-converge.md packages/evals/src/evalResult.ts
 docs/architecture/evals-converge.md packages/evals/src/stats.ts
 docs/architecture/evals-converge.md packages/shared/random/index.ts
-docs/architecture/evals-converge.md packages/web/components/evals/tokens.drift.test.ts
 docs/architecture/evals-converge.md scripts/ci/typecheck.sh
 docs/architecture/evals-home.md packages/convex/scripts/settle-eval.ts
 docs/architecture/evals-home.md packages/convex/scripts/suggest-eval.ts

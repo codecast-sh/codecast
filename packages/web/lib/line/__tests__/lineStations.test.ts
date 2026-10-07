@@ -131,4 +131,9 @@ describe("the repo's line (line-map.md LX5)", () => {
     expect(Object.keys(stationDiffs(back.nodes, SHIPPED_LINE))).toEqual(["verify"]);
     expect(paintStationEdits(edited, [], SHIPPED_LINE)).toBe(edited);
   });
+
+  test("resetting the last changed station paints no repo line, as the daemon removes the copy (LX5)", () => {
+    const edited = paintStationEdits(null, [{ op: "set_station", station: "prove", prompt: "x" }], SHIPPED_LINE)!;
+    expect(paintStationEdits(edited, [{ op: "reset_station", station: "prove" }], SHIPPED_LINE)).toBeNull();
+  });
 });

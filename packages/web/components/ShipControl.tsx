@@ -69,7 +69,9 @@ export function ShipControl({ target, size = "full" }: { target: ShipTargetRef; 
             type="button"
             disabled={live}
             data-ship-button
-            className={`inline-flex items-center gap-1.5 rounded border border-sol-green/50 bg-sol-green/10 font-medium text-sol-green transition-colors hover:bg-sol-green/20 disabled:cursor-default disabled:opacity-60 ${size === "compact" ? "h-6 px-2 text-xs" : "h-7 px-3 text-sm"}`}
+            // Compact sits in a row of header chips, so it takes their shape:
+            // a pill with a /10 tint and /30 border, not a heavier button.
+            className={`inline-flex items-center border bg-sol-green/10 text-sol-green transition-colors hover:bg-sol-green/20 disabled:cursor-default disabled:opacity-60 ${size === "compact" ? "gap-1 rounded-full border-sol-green/30 px-2 py-0.5 text-[10px]" : "h-7 gap-1.5 rounded border-sol-green/50 px-3 text-sm font-medium"}`}
             title={live ? "Shipping now" : "What Ship will do"}
           >
             <Rocket className={size === "compact" ? "h-3 w-3" : "h-3.5 w-3.5"} />
@@ -131,7 +133,7 @@ function ShipPlanView({ row, onShip, onCancel }: { row: ShipTargetRow | undefine
         }}
         data-ship-merge={plan.merge.will ? "merges" : "no-merge"}
       >
-        <span className="font-semibold">{plan.merge.will ? `Merges (${plan.merge.method}).` : plan.command ? "Lands through the ship command." : "Does not merge."}</span> {plan.merge.why}
+        <span className="font-semibold">{plan.merge.will ? (plan.merge.via === "role" ? "Merges." : `Merges (${plan.merge.method}).`) : plan.command ? "Lands through the ship command." : "Does not merge."}</span> {plan.merge.why}
       </div>
       </>}
       <div className="flex items-center justify-end gap-2 border-t border-sol-border px-4 py-2.5">

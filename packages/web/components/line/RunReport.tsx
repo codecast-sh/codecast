@@ -17,6 +17,7 @@ const TONE: Record<OutcomeTone, string> = {
   closed: "text-sol-text-muted",
   live: "text-sol-cyan",
   waiting: "text-sol-yellow",
+  stuck: "text-sol-orange",
   failed: "text-sol-red",
   calm: "text-sol-text",
 };

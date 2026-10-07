@@ -3,28 +3,38 @@
 // component paints it, the tests read it, and the keyboard walks it.
 //
 // Columns come from the map (lineMap `col`, the longest path from the left).
-// The path every cause takes runs along one lane in the middle. A branch sits
-// above it when it comes back into the line (plan, park, reopen) and below it
-// when it leaves the line (dissolve, drop, the ends), so a reader sees work
-// that returns above and work that exits below. Sources stack in their column.
-// A loop (an edge going back) arcs over the nodes it skips.
+// The path every cause takes runs along the top lane, right under the phase
+// names, so it is the first thing a reader meets. Branches sit under it: the
+// ones that come back into the line (plan, park, reopen) in the lane just
+// below, the ones that leave it (dissolve, drop, the ends) under those, and a
+// lane nothing uses closes up (LX2). Sources stack down from the path's lane.
+// A loop along the path arcs just over it; one that touches a lower lane arcs
+// under the nodes it skips, so no arc reaches up past the path.
 import { isMainStation } from "./runReport";
 import type { LineMap, MapEdge, MapNode } from "./lineMap";
 
-export const NODE_W = 112;
+export const NODE_W = 104;
 /** A step that only assembles the card, or a branch: narrower, so the path reads first. */
-export const NODE_W_SMALL = 84;
+export const NODE_W_SMALL = 98;
+/** A source or the expectations: a pill wide enough for a finder's name. */
+export const NODE_W_SOURCE = 136;
 export const NODE_H = 58;
 export const SOURCE_H = 44;
-const COL_GAP = 52;
+const COL_GAP = 44;
 /** Room under a node for its marks, in words. */
 const LANE_PITCH = 112;
 const SOURCE_PITCH = 54;
-const PAD_X = 28;
-const PAD_Y = 36;
+/** The first column starts past the map's 24px left gutter at every scale a
+ *  panel steps the map back to, down to LineMap's floor of 0.7. */
+const PAD_X = 35;
+/** Room between the stage names and the highest thing drawn under them, so
+ *  the main row sits about 48px under its stage's name (LX2). */
+const PAD_TOP = 14;
 /** A loop's arc clears the nodes under it by this much, and a second loop over the same span by this. */
 const ARC_CLEAR = 16;
 const ARC_STEP = 12;
+/** Room under a node for its one-line mark, which an arc under it must clear. */
+const MARK_ROOM = 22;
 
 export type NodeBox = { id: string; x: number; y: number; w: number; h: number; lane: number; col: number };
 export type EdgePath = { id: string; d: string; kind: MapEdge["kind"]; labelAt: { x: number; y: number } | null };
@@ -72,17 +82,22 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   for (const c of cols) {
     for (const n of map.nodes.filter((m) => m.col === c && !lane.has(m.id) && m.kind !== "source" && m.kind !== "expectations")) {
       // Follow a branch's own predecessor, so plan and its gate share a lane.
-      const pred = (into.get(n.id) ?? []).map((e) => lane.get(e.from)).find((l) => l != null && l !== 0);
-      const side = leaves(n.id) ? 1 : -1;
-      const tries = pred != null ? [pred, pred + Math.sign(pred), side, side * 2, -side, -side * 2, side * 3] : [side, side * 2, -side, -side * 2, side * 3];
-      const l = tries.find((t) => t !== 0 && free(n.col, t)) ?? side * 4;
+      // Returning branches take lane 1; leaving ones start at lane 2.
+      const first = leaves(n.id) ? 2 : 1;
+      const pred = (into.get(n.id) ?? []).map((e) => lane.get(e.from)).find((l) => l != null && l >= first);
+      const tries = [...(pred != null ? [pred, pred + 1] : []), first, first + 1, first + 2, 1, first + 3];
+      const l = tries.find((t) => t > 0 && free(n.col, t)) ?? first + 4;
       lane.set(n.id, l);
       take(n.col, l);
     }
   }
 
+  // A lane nothing uses closes up, so an empty branch lane leaves no gap.
+  const used = [...new Set(lane.values())].sort((a, b) => a - b);
+  for (const [id, l] of lane) lane.set(id, used.indexOf(l));
+
   // ── columns, left to right, each as wide as its widest node ──
-  const widthOf = (n: MapNode) => (isSmallNode(n) ? NODE_W_SMALL : NODE_W);
+  const widthOf = (n: MapNode) => (n.kind === "source" || n.kind === "expectations" ? NODE_W_SOURCE : isSmallNode(n) ? NODE_W_SMALL : NODE_W);
   const colW = new Map<number, number>();
   for (const n of map.nodes) colW.set(n.col, Math.max(colW.get(n.col) ?? 0, widthOf(n)));
   const colX = new Map<number, number>();
@@ -97,9 +112,11 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
     boxes.set(n.id, { id: n.id, x: colX.get(n.col)! + (colW.get(n.col)! - w) / 2, y: cy - h / 2, w, h, lane: l, col: n.col });
   };
   for (const n of map.nodes) if (lane.has(n.id)) place(n, yOfLane(lane.get(n.id)!), NODE_H, lane.get(n.id)!);
-  // Sources stack around the lane, in the order the map lists them.
+  // Sources stack down from the path's lane, in the order the map lists them,
+  // at most half a pitch above it, so the path stays near the top.
   const sources = map.nodes.filter((n) => n.kind === "source");
-  sources.forEach((n, i) => place(n, (i - (sources.length - 1) / 2) * SOURCE_PITCH, SOURCE_H, 0));
+  const above = Math.min(0.5, (sources.length - 1) / 2);
+  sources.forEach((n, i) => place(n, (i - above) * SOURCE_PITCH, SOURCE_H, 0));
   const exp = map.nodes.find((n) => n.kind === "expectations");
   if (exp) {
     const fed = map.edges.filter((e) => e.from === exp.id).map((e) => boxes.get(e.to)).filter((b): b is NodeBox => !!b);
@@ -109,63 +126,101 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
 
   // ── edges ──
   const paths = new Map<string, EdgePath>();
-  const all = [...boxes.values()];
-  const arcsOver = new Map<string, number>();
-  // Short loops first, so a long one rides over them.
-  const ordered = [...map.edges].sort((a, b) => span(a, boxes) - span(b, boxes));
-  for (const e of ordered) {
-    const a = boxes.get(e.from);
-    const b = boxes.get(e.to);
-    if (!a || !b) continue;
-    if (e.kind === "loop") {
-      // Over everything between the two ends that sits at or above them.
-      const lo = Math.min(a.x, b.x);
-      const hi = Math.max(a.x + a.w, b.x + b.w);
-      const under = all.filter((o) => o.id !== a.id && o.id !== b.id && o.x + o.w > lo && o.x < hi && o.y < Math.max(a.y, b.y) + 1);
-      const key = `${Math.round(lo)}`;
-      const nth = arcsOver.get(key) ?? 0;
-      arcsOver.set(key, nth + 1);
-      const top = Math.min(a.y, b.y, ...under.map((o) => o.y)) - ARC_CLEAR - nth * ARC_STEP;
-      const x1 = a.x + a.w * 0.5;
-      const x2 = b.x + b.w * 0.5;
-      const d = `M ${x1} ${a.y} C ${x1} ${top}, ${x2} ${top}, ${x2} ${b.y}`;
-      paths.set(e.id, { id: e.id, d, kind: e.kind, labelAt: { x: (x1 + x2) / 2, y: top + (Math.min(a.y, b.y) - top) * 0.25 } });
-      continue;
+  const routeEdges = () => {
+    const all = [...boxes.values()];
+    const arcsOver = new Map<string, number>();
+    // Short loops first, so a long one rides over them.
+    const ordered = [...map.edges].sort((a, b) => span(a, boxes) - span(b, boxes));
+    for (const e of ordered) {
+      const a = boxes.get(e.from);
+      const b = boxes.get(e.to);
+      if (!a || !b) continue;
+      if (e.kind === "loop" && (a.lane > 0 || b.lane > 0)) {
+        // Under everything between the two ends, clear of the marks under them.
+        const lo = Math.min(a.x, b.x);
+        const hi = Math.max(a.x + a.w, b.x + b.w);
+        const span = all.filter((o) => o.x + o.w > lo && o.x < hi && o.lane > 0 && o.lane <= Math.max(a.lane, b.lane));
+        const key = `u${Math.round(lo)}`;
+        const nth = arcsOver.get(key) ?? 0;
+        arcsOver.set(key, nth + 1);
+        const bottom = Math.max(a.y + a.h, b.y + b.h, ...span.map((o) => o.y + o.h)) + ARC_CLEAR + MARK_ROOM + nth * ARC_STEP;
+        const x1 = a.x + a.w * 0.5;
+        const x2 = b.x + b.w * 0.5;
+        const d = `M ${x1} ${a.y + a.h} C ${x1} ${bottom}, ${x2} ${bottom}, ${x2} ${b.y + b.h}`;
+        paths.set(e.id, { id: e.id, d, kind: e.kind, labelAt: { x: (x1 + x2) / 2, y: bottom - 4 } });
+        continue;
+      }
+      if (e.kind === "loop") {
+        // Over everything between the two ends that sits at or above them.
+        const lo = Math.min(a.x, b.x);
+        const hi = Math.max(a.x + a.w, b.x + b.w);
+        const under = all.filter((o) => o.id !== a.id && o.id !== b.id && o.x + o.w > lo && o.x < hi && o.y < Math.max(a.y, b.y) + 1);
+        const key = `${Math.round(lo)}`;
+        const nth = arcsOver.get(key) ?? 0;
+        arcsOver.set(key, nth + 1);
+        const top = Math.min(a.y, b.y, ...under.map((o) => o.y)) - ARC_CLEAR - nth * ARC_STEP;
+        const x1 = a.x + a.w * 0.5;
+        const x2 = b.x + b.w * 0.5;
+        const d = `M ${x1} ${a.y} C ${x1} ${top}, ${x2} ${top}, ${x2} ${b.y}`;
+        paths.set(e.id, { id: e.id, d, kind: e.kind, labelAt: { x: (x1 + x2) / 2, y: top + (Math.min(a.y, b.y) - top) * 0.25 } });
+        continue;
+      }
+      const x1 = a.x + a.w;
+      const y1 = a.y + a.h / 2;
+      const x2 = b.x;
+      const y2 = b.y + b.h / 2;
+      // A hop along one lane over a node in between bows under it.
+      const blocked = y1 === y2 && all.some((o) => o.id !== a.id && o.id !== b.id && o.x > x1 && o.x + o.w < x2 && Math.abs(o.y + o.h / 2 - y1) < 1);
+      const dx = Math.max(24, (x2 - x1) * 0.5);
+      const d = blocked
+        ? `M ${x1} ${y1} C ${x1 + dx} ${y1 + NODE_H * 1.15}, ${x2 - dx} ${y2 + NODE_H * 1.15}, ${x2} ${y2}`
+        : `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+      const labelAt = blocked ? { x: (x1 + x2) / 2, y: y1 + NODE_H * 0.86 } : { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
+      paths.set(e.id, { id: e.id, d, kind: e.kind, labelAt });
     }
-    const x1 = a.x + a.w;
-    const y1 = a.y + a.h / 2;
-    const x2 = b.x;
-    const y2 = b.y + b.h / 2;
-    // A hop along one lane over a node in between bows under it.
-    const blocked = y1 === y2 && all.some((o) => o.id !== a.id && o.id !== b.id && o.x > x1 && o.x + o.w < x2 && Math.abs(o.y + o.h / 2 - y1) < 1);
-    const dx = Math.max(24, (x2 - x1) * 0.5);
-    const d = blocked
-      ? `M ${x1} ${y1} C ${x1 + dx} ${y1 + NODE_H * 1.15}, ${x2 - dx} ${y2 + NODE_H * 1.15}, ${x2} ${y2}`
-      : `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
-    const labelAt = blocked ? { x: (x1 + x2) / 2, y: y1 + NODE_H * 0.86 } : { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
-    paths.set(e.id, { id: e.id, d, kind: e.kind, labelAt });
+  };
+  routeEdges();
+
+  // The sources take the height the arcs over the path leave free: a column
+  // of pills rises as high as the highest arc, so the last of them ("+2 more
+  // sources") stays inside the stage instead of hanging below it (LX2).
+  if (sources.length > 1) {
+    let arcs = Infinity;
+    for (const p of paths.values()) if (p.kind === "loop") arcs = Math.min(arcs, arcTop(p.d));
+    const top = Math.min(...sources.map((n) => boxes.get(n.id)!.y));
+    if (Number.isFinite(arcs) && arcs < top) {
+      const lift = top - arcs;
+      for (const n of sources) boxes.get(n.id)!.y -= lift;
+      if (exp) place(exp, boxes.get(exp.id)!.y + SOURCE_H / 2 - lift, SOURCE_H, 0);
+      paths.clear();
+      routeEdges();
+    }
   }
 
   // ── fit: everything, arcs included, starts at the padding ──
   let minY = Infinity;
   let maxY = -Infinity;
   for (const b of boxes.values()) { minY = Math.min(minY, b.y); maxY = Math.max(maxY, b.y + b.h); }
-  for (const p of paths.values()) if (p.kind === "loop") minY = Math.min(minY, arcTop(p.d));
+  // A loop's count label sits on its arc's peak, its glyphs above it.
+  for (const p of paths.values()) if (p.kind === "loop") { minY = Math.min(minY, arcTop(p.d), (p.labelAt?.y ?? Infinity) - 10); maxY = Math.max(maxY, arcBottom(p.d)); }
   if (!Number.isFinite(minY)) { minY = 0; maxY = 0; }
   // Marks under the lowest node, then the phase names along the top.
-  const shift = PAD_Y + 22 - minY;
+  const shift = PAD_TOP + 22 - minY;
   for (const b of boxes.values()) b.y += shift;
   for (const p of paths.values()) {
     p.d = shiftPath(p.d, shift);
     if (p.labelAt) p.labelAt = { x: p.labelAt.x, y: p.labelAt.y + shift };
   }
-  const height = maxY - minY + PAD_Y * 2 + 22 + 34;
+  // The stage is its content's box: the phase names over it, and under the
+  // lowest node or arc only the room its one-line mark needs, so the height
+  // left goes to the Now strip under the map (LX2).
+  const height = maxY - minY + PAD_TOP + 22 + MARK_ROOM + 14;
 
   // ── the phases a reader names, over the columns of their main nodes ──
   const phases: PhaseSpan[] = [];
   for (const n of map.nodes) {
     // A branch sits inside the phases around it; the phases read off the path.
-    if (!(n.main || n.kind === "source" || n.kind === "expectations" || n.kind === "end")) continue;
+    if (!(n.main || n.kind === "source" || n.kind === "expectations")) continue;
     const b = boxes.get(n.id)!;
     const last = phases[phases.length - 1];
     if (last && last.key === n.phase) { const right = Math.max(last.x + last.w, b.x + b.w); last.x = Math.min(last.x, b.x); last.w = right - last.x; continue; }
@@ -182,11 +237,16 @@ function span(e: MapEdge, boxes: Map<string, NodeBox>): number {
   return a && b ? Math.abs(a.x - b.x) : 0;
 }
 
-const arcTop = (d: string) => {
+/** The y a cubic's curve actually reaches at its parameter t (its control points reach further). */
+const cubicY = (n: number[], t: number) => (1 - t) ** 3 * n[1] + 3 * (1 - t) ** 2 * t * n[3] + 3 * (1 - t) * t ** 2 * n[5] + t ** 3 * n[7];
+/** The curve's own extremes, sampled: a loop's arc reaches about three
+ *  quarters of the way to its control points, and the room kept is the curve's. */
+const arcYs = (d: string) => {
   const nums = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
-  // M x y C cx1 cy1, cx2 cy2, x y: the control points' y is the arc's reach.
-  return Math.min(nums[1], nums[3], nums[5], nums[7]);
+  return Array.from({ length: 21 }, (_, i) => cubicY(nums, i / 20));
 };
+const arcTop = (d: string) => Math.min(...arcYs(d));
+const arcBottom = (d: string) => Math.max(...arcYs(d));
 
 function shiftPath(d: string, dy: number): string {
   let i = 0;
@@ -218,7 +278,7 @@ export function neighbor(layout: MapLayout, from: string, dir: MapDirection): st
     if (!ahead) continue;
     const along = dir === "left" || dir === "right" ? Math.abs(dx) : Math.abs(dy);
     const across = dir === "left" || dir === "right" ? Math.abs(dy) : Math.abs(dx);
-    const cost = along + across * 2.5;
+    const cost = along + across * 4;
     if (cost < bestCost) { bestCost = cost; best = b.id; }
   }
   return best;

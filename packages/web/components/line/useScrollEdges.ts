@@ -2,7 +2,8 @@
 // What a sideways scroller hides, for the line page's edge fades (line.css
 // .line-edge-fade): the flow of stations and the project pills both say
 // "there is more past this edge" the same way.
-import { useEffect, useState, type RefObject } from "react";
+import { useState, type RefObject } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export type ScrollEdges = { left: boolean; right: boolean };
 
@@ -14,7 +15,7 @@ function readEdges(el: HTMLElement): ScrollEdges {
  *  `remount` names what swaps the scroller's element, so the observers follow it. */
 export function useScrollEdges(ref: RefObject<HTMLElement | null>, remount: unknown = null): ScrollEdges {
   const [edges, setEdges] = useState<ScrollEdges>({ left: false, right: false });
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = ref.current;
     if (!el) return;
     const measure = () => {

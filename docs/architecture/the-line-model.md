@@ -76,6 +76,16 @@ Two kinds of context, used at two different moments.
   expectation it breaks; the words come from the line's own document
   (`expectations.lines`), and the id opens it on the project's Line tab.
 
+Not every finder is grounded in expectations. A finder that judges behavior
+is; a finder that watches a number or a check is grounded in that metric, and
+its signal's subject names the metric, guard or scenario instead of an
+expectation. On Union's line the AgentWatch judges (comms, match, call_eval),
+filed through the clusters finder, are expectation-grounded, and their cause
+belongs to the project holding the expectation the top finding cites, else
+Agent Quality. Guards, replies, eval reds and goal drift are metric-grounded.
+The rest file from events (invariants, errors, desk edits, escalations, a
+person's report) and cite neither.
+
 A project's expectations are one living document, each expectation stated
 plainly with the sources it came from (a call, a chat thread, a session, a
 task, a decision). A routine reads the team's new context every day and
@@ -107,12 +117,25 @@ have run) records none. Shapes and the parser: `shared/contracts/expectations.ts
 ## LM6. Changing the line
 
 The line's definition is its profile, its graph and its station prompts. It
-lives in the project's repo, versioned with the code, and is mirrored to the
-app so anyone can read it on the project's Line tab. Editing it in the app
-writes the change to the repo. Every run records which version it ran, so the
-Line tab shows what each version delivered: runs, shipped, revised, dropped,
-reopened, cost. A change to a station prompt is a prompt change like any
-other, and goes through the line with evals before and after.
+lives in the project's repo (`.codecast/line.toml` and `.codecast/line/`),
+versioned with the code, and is mirrored to the app so anyone can read it on
+the project's line map (line-map.md LX5). Editing a value on the map writes the
+change to the repo through the machine that published it, which checks it and
+republishes; a station's prompts are written out from the shipped line on the
+first change and removed again when a reset brings every station back to
+shipped. Every run records which version it ran, so the Line tab shows what
+each version delivered (runs, shipped, revised, dropped, stopped, reopened,
+cost), and each station's panel shows the versions in which that station
+changed. A change to a station prompt is a prompt change like any other: the
+editor offers to send it through the line, where eval scores it before and
+after when the project has an eval command, and the card says it is unscored
+when it has none. Anyone can also ask an agent for a change to any part of the
+line from the map; that files a cause in category `line` and the line runs it
+like any other change (LX6).
+
+Whether the line starts work on its own, and how many cards it may hold open
+at once, belong to the role whose area holds the project, not to the profile.
+Both are shown and edited where the queue is, on the Causes panel.
 
 ## LM7. Where people see it
 
@@ -120,15 +143,19 @@ The line shows up wherever its objects already appear, never only on a page of
 its own:
 
 - the task page tells a cause's story (signals, goal, expectation broken,
-  where it is, the card, every run);
+  where it is, the card, every run) and links to its trace;
 - task lists and boards show the status and the watch;
-- the decision queue holds the cards;
+- the decision queue holds the cards, and each card links to its cause's trace;
 - notifications reach the right person when a card waits, a change ships, or
   a watched cause reopens;
-- the run page reports one run;
-- the project page's Line tab shows the project's flow, sources, expectations,
-  stations and versions;
-- `/line` rolls every line up across the team.
+- the run page reports one run and links to the trace;
+- the project page's Line tab leads with the project's line map (its flow and
+  data, a panel per node where every value is read and edited, and the
+  composer), then its expectations and its versions;
+- `/line` shows the same map for one project at a time, with a switcher across
+  the team's lines and a roll-up that counts every line;
+- `/line/trace/<ref>` follows one thing (a signal, a fingerprint, a cause, a
+  run or a card) from where it was seen to its outcome.
 
 ## LM8. The working view, "done", and the measure
 
@@ -137,18 +164,33 @@ their count tracks traffic, not quality, and never shrinks to a working list.
 The working view of quality is therefore the project's causes, not its
 findings or the clusters that group them.
 
-- **Findings are signals.** Each one cites the expectation it breaks and the
-  evidence. Clusters group findings that look alike; they are the finder's
-  fingerprint, not a list anyone works.
+- **Findings are signals.** A judge's finding cites the expectation it breaks
+  as the signal's subject (LM5) and carries its evidence. Clusters group
+  findings that look alike; they are the finder's fingerprint, not a list
+  anyone works.
 - **Causes are the working view.** A cause is one root mechanism, with every
   signal it explains attached, the expectation it breaks, the goal it
   threatens, and its place on the line. This is the list people read and the
   line drains.
-- **A cause is done** when its fix has shipped and its watch has passed with
-  no signal of its own coming back. A cause the line could not reproduce, or
-  whose findings were the judge's own mistake, closes as dissolved; a judge's
-  mistake also becomes a freeze for that judge's evals, so it is fixed at the
-  judge rather than closed by hand.
+- **A cause is done** when its fix has shipped and its watch has ended with
+  no signal of its own coming back (LE12). A cause whose miss does not
+  reproduce at prove closes as dissolved at the dissolve station
+  (`line/dissolve.sh`).
+- **A judge's mistake becomes a freeze for that judge.** When prove finds the
+  findings were the judge's own mistake (the system behaved well and the judge
+  scored it wrong), it writes those moments to the run's files as
+  `judge-defects.json`, a list of `{judge, finding, sentence, name}`. The
+  dissolve station closes the cause saying the judge was wrong and prints
+  `{"dissolved": "judge_defect", "moments": n}` (else
+  `{"dissolved": "no_repro"}`); the runner keeps a station script's output
+  head on its node (`result_preview`), so that line is the run's
+  machine-readable record. For Union, `collect.py line` in the judge evals
+  directory (`~/.local/share/codecast/flowfactory/judge-evals`, hand-run) reads
+  every `judge-defects.json` under the repo's `cast-line` run directories,
+  fetches the logged judge call behind each finding (read-only), and adds each
+  as a miss moment to `moments.json`, once. The prove prompt does not ask for
+  `judge-defects.json` yet; that instruction is a prompt change and ships with
+  its own before and after evals (prompting.md P9).
 - **A judge needs the facts it is judging.** It cannot compare behavior with
   an expectation without the state of things at the moment it judges: what
   was delivered and what is still in flight, and the time. A finding that
@@ -156,17 +198,25 @@ findings or the clusters that group them.
   failing, not the system misbehaving.
 
 Three numbers say how quality is going, and none of them is the count of
-findings:
+findings. `packages/web/lib/line/lineMetrics.ts` computes all three from the
+store's signals, causes and runs over a window (`lineMetrics`):
 
-1. **Expectation breaks that reach people, per day**: the findings that break
-   an expectation and were not refuted (for Union, the trust-breaking issues
-   per day already on the scoreboard). This is the outcome.
-2. **Explained share**: of the new signals in a week, the share that attach to
-   a known cause rather than opening a new one. High means the cause list
-   explains what the judges see; low means quality is moving faster than the
-   line understands it.
-3. **Fixes that hold**: of causes shipped, the share whose watch ended quiet.
-   Low means the line ships changes that do not fix the cause.
+1. **Expectation breaks per day** (`expectationBreaks`): signals created in
+   the window whose subject is an expectation id, leaving out those whose
+   cause's latest line run dissolved as a judge mistake, divided by the
+   window's days. This is the outcome. It counts only expectation-grounded
+   finders (LM5); a metric-grounded finder's signal is not a break.
+2. **Explained share** (`explainedShare`): of the signals created in the
+   window, the share the attach step put on a cause it already had (attach
+   `fingerprint` or `judge`) rather than a new one (`new`). A signal a person
+   placed counts on neither side. High means the cause list explains what the
+   finders see; low means quality is moving faster than the line understands
+   it.
+3. **Fixes that hold** (`fixesThatHold`): of the watches that ended in the
+   window, the share that ended quiet (`quietWatchEnd`, the rule the map reads
+   "held" by) rather than with a signal that reopened the cause. Low means the
+   line ships changes that do not fix the cause.
 
-The board is healthy when the first falls, the second is high and the third
-holds; the number of open findings or clusters is not a goal.
+A window with nothing to count reports no share rather than zero. The board
+is healthy when the first falls, the second is high and the third holds; the
+number of open findings or clusters is not a goal.
