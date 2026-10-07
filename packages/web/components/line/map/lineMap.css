@@ -8,11 +8,12 @@
   --lmap-line: color-mix(in srgb, var(--sol-text-muted) 55%, transparent);
   --lmap-idle: color-mix(in srgb, var(--sol-border) 85%, transparent);
   position: relative;
+  display: flex;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
 }
-.lmap-canvas { position: relative; margin: 0 auto; }
+.lmap-canvas { position: relative; flex: 0 0 auto; margin: auto; }
 
 /* Phases, named over the path. */
 .lmap-phases { position: absolute; inset: 0 0 auto 0; height: 22px; pointer-events: none; }
@@ -108,7 +109,7 @@
   border-color: var(--lmap-belt);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--lmap-belt) 22%, transparent);
 }
-.lmap-node[data-kind="source"], .lmap-node[data-kind="expectations"] { border-radius: 9999px; padding: 5px 12px; justify-content: center; gap: 1px; }
+.lmap-node[data-kind="source"], .lmap-node[data-kind="expectations"], .lmap-node[data-kind="end"] { border-radius: 9999px; padding: 5px 12px; justify-content: center; gap: 1px; }
 .lmap-node[data-kind="expectations"] { border-style: dashed; }
 .lmap-node[data-kind="signals"], .lmap-node[data-kind="causes"] { background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sol-card, var(--sol-bg))); }
 .lmap-node[data-kind="end"] { border-radius: 9999px; padding-inline: 12px; }
@@ -283,3 +284,8 @@
 
 .lmap-panel-foot { flex: 0 0 auto; display: flex; gap: 14px; align-items: center; padding: 6px 16px; font-size: 11px; color: var(--sol-text-dim); border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
 .lmap-panel-foot span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* The legend is a reading aid for a wide map; a narrow one keeps the window switch and the settings. */
+.lmap-main { container: lmap-main / inline-size; }
+.lmap-legend > span { white-space: nowrap; }
+@container lmap-main (max-width: 760px) { .lmap-legend { display: none; } }

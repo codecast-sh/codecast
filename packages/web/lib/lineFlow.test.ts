@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildLineFlow, defaultLineKey, goalChip, groupBuild, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
+import { buildLineFlow, defaultLineKey, goalChip, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
 
 const NOW = 1_800_000_000_000;
 
@@ -280,21 +280,9 @@ describe("lineHeadline", () => {
   });
 });
 
-describe("groupBuild", () => {
+describe("build rows", () => {
   const live = (id: string, label: string) => run(id, { task_id: id, current_node_id: label, node_statuses: [{ node_id: label, status: "running", started_at: NOW - HOUR }] });
-  it("groups a step only when it holds two runs; a lone run carries its step as a chip", () => {
-    const f = flow({ tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [live("a", "implement"), live("b", "implement"), live("c", "verify")] });
-    const blocks = groupBuild(f.build.items);
-    expect(blocks.map((b) => [b.label, b.rows.map((r) => [r.run._id, r.chip, r.order])])).toEqual([
-      ["implement", [["a", null, 0], ["b", null, 1]]],
-      [null, [["c", "verify", 2]]],
-    ]);
-  });
-  it("places a line run on its five step stepper; other workflows have no place", () => {
-    const f = flow({ tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [{ ...live("a", "implement"), workflow_name: "line" }, { ...live("b", "card_write"), workflow_name: "line" }, { ...live("c", "implement"), workflow_name: "feature" }] });
-    expect(Object.fromEntries(f.build.items.map((b) => [b.run._id, b.stepIndex]))).toEqual({ a: 2, b: 4, c: null });
-  });
-  it("a run of a project's customized line keeps its steps and says which line it ran", () => {
+  it("a run of a project's customized line says which line it ran", () => {
     const projects = [{ _id: "p1", short_id: "pj-a", title: "Web" }];
     const f = flow({ projects, tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [
       { ...live("a", "implement"), workflow_name: "Line for Web", workflow_slug: "line-pj-a" },
@@ -302,9 +290,9 @@ describe("groupBuild", () => {
       { ...live("c", "implement"), workflow_name: "Other", workflow_slug: "line-pj-zz" },
     ] });
     const by = Object.fromEntries(f.build.items.map((b) => [b.run._id, b]));
-    expect([by.a.stepIndex, by.a.line]).toEqual([2, { kind: "customized", project: projects[0] }]);
-    expect([by.b.stepIndex, by.b.line]).toEqual([3, { kind: "shipped" }]);
-    expect([by.c.stepIndex, by.c.line]).toEqual([null, null]);
+    expect(by.a.line).toEqual({ kind: "customized", project: projects[0] });
+    expect(by.b.line).toEqual({ kind: "shipped" });
+    expect(by.c.line).toBeNull();
   });
 });
 

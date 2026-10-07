@@ -17,7 +17,7 @@
 import { CARD_GATE_NODE_ID, LINE_END_NODES, isLineRun, lineRunOutcome, verdictOfOption, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import type { LineFinderDecl } from "@codecast/shared/contracts/lineProfile";
-import { DAY, WEEK, ageShort, buildLineFlow, silentText, type LineCauseTask, type LineDecision, type LineFlowRun, type LineSignal } from "../lineFlow";
+import { DAY, WEEK, ageShort, buildLineFlow, quietWatchEnd, silentText, type LineCauseTask, type LineDecision, type LineFlowRun, type LineSignal } from "../lineFlow";
 import type { LineEdge, LineNode } from "./lineStations";
 import { choiceWords, isMainStation, phaseOfStation, runPath, type LinePhaseKey, type ReportRun, type StepState } from "./runReport";
 import { SHIPPED_LINE } from "./shippedLine.generated";
@@ -238,7 +238,7 @@ export function runVisits(run: MapRun, graph: LineGraph = SHIPPED_LINE, decision
   // Earlier rounds through a gate: one answered decision per visit.
   const gates = new Map<string, MapDecision[]>();
   for (const d of decisions) {
-    if (d.workflow_run_id !== run._id || !d.gate_node_id || d.status === "pending") continue;
+    if (d.workflow_run_id !== run._id || !d.gate_node_id || !rawAnswer(d)) continue;
     gates.set(d.gate_node_id, [...(gates.get(d.gate_node_id) ?? []), d]);
   }
   for (const [gate, asked] of gates) {
@@ -263,9 +263,15 @@ export function runVisits(run: MapRun, graph: LineGraph = SHIPPED_LINE, decision
   return path;
 }
 
+/** The answer a decision was given, as its option reads; null while unanswered
+ *  (pending, withdrawn, expired), which is no round through its gate. */
+export function rawAnswer(d: MapDecision): string | null {
+  return d.answer_text?.trim() || (d.answer_index != null ? d.options?.[d.answer_index]?.label : undefined) || null;
+}
+
 /** The station a gate's answer led to: the gate's edge whose option words match the answer. */
 function answerTarget(graph: LineGraph, gate: string, d: MapDecision): string | null {
-  const answer = d.answer_text ?? (d.answer_index != null ? d.options?.[d.answer_index]?.label : undefined);
+  const answer = rawAnswer(d);
   if (!answer) return null;
   const words = choiceWords(answer).toLowerCase();
   const verdict = verdictOfOption(answer);
@@ -308,6 +314,7 @@ const median = (values: number[]): number | null => {
 };
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const UNDECLARED = "Files signals, but the profile does not declare it";
 
 /** "24h", "7d", "30d": the window in the words its switch uses. */
 export function windowLabel(windowMs: number): string {
@@ -353,8 +360,16 @@ export function buildLineMap(input: LineMapInput): LineMap {
   for (const src of sources) {
     const node = add({ id: sourceNodeId(src.source), kind: "source", label: src.source, phase: "sense", col: 1, main: true, source: src.source, ...(src.finder ? { finder: src.finder } : {}) });
     if (src.silent) node.marks.push({ level: "warn", words: `Silent: ${silentText(src, now).replace(/^silent /, "nothing filed in ")}` });
-    else if (src.undeclared) node.marks.push({ level: "info", words: "Files signals, but the profile does not declare it" });
+    else if (src.undeclared) node.marks.push({ level: "info", words: UNDECLARED });
   }
+  // The sense column keeps a week; a wider window still draws every source
+  // that filed in it, so the sources add up to Signals.
+  for (const s of input.signals) {
+    if (!inWindow(s.created_at) || nodes.has(sourceNodeId(s.source))) continue;
+    const node = add({ id: sourceNodeId(s.source), kind: "source", label: s.source, phase: "sense", col: 1, main: true, source: s.source });
+    if (input.finders?.length) node.marks.push({ level: "info", words: UNDECLARED });
+  }
+  const sourceNames = [...nodes.values()].filter((n) => n.kind === "source").map((n) => n.source!);
   add({ id: SIGNALS_NODE, kind: "signals", label: "Signals", phase: "sense", col: 2, main: true });
   add({ id: CAUSES_NODE, kind: "causes", label: "Causes", phase: "admit", col: 3, main: true });
 
@@ -404,8 +419,8 @@ export function buildLineMap(input: LineMapInput): LineMap {
     e.count++;
     if (!e.items.some((x) => x.kind === item.kind && x.id === item.id)) e.items.push(item);
   };
-  if (nodes.has(EXPECTATIONS_NODE)) for (const s of sources) if (judged.has(s.source.toLowerCase())) edge(EXPECTATIONS_NODE, sourceNodeId(s.source));
-  for (const s of sources) edge(sourceNodeId(s.source), SIGNALS_NODE);
+  if (nodes.has(EXPECTATIONS_NODE)) for (const s of sourceNames) if (judged.has(s.toLowerCase())) edge(EXPECTATIONS_NODE, sourceNodeId(s));
+  for (const s of sourceNames) edge(sourceNodeId(s), SIGNALS_NODE);
   edge(SIGNALS_NODE, CAUSES_NODE);
   for (const e of graphEdges) edge(e.from, e.to, e.label);
 
@@ -483,8 +498,9 @@ export function buildLineMap(input: LineMapInput): LineMap {
     for (const t of input.tasks) {
       if (!t.cause) continue;
       for (const s of reopenedBy.get(t._id) ?? []) if (inWindow(s.created_at)) { cross(watchNode.id, endNodeId("reopened"), causeItem(t, s.created_at)); bump(nodes.get(endNodeId("reopened"))); }
-      // LE12: a watch that ended quiet stamps resolved_at.
-      if (inWindow(t.resolved_at) && (t.resolved_at ?? 0) >= (t.closed_at ?? 0)) { cross(watchNode.id, endNodeId("held"), causeItem(t, t.resolved_at!)); bump(nodes.get(endNodeId("held"))); }
+      // LE12: the watch ended quiet, swept or not yet.
+      const quiet = quietWatchEnd(t, now);
+      if (inWindow(quiet)) { cross(watchNode.id, endNodeId("held"), causeItem(t, quiet!)); bump(nodes.get(endNodeId("held"))); }
     }
   }
 
@@ -492,6 +508,11 @@ export function buildLineMap(input: LineMapInput): LineMap {
   for (const node of nodes.values()) {
     node.now.sort((a, b) => a.at - b.at);
     node.passed.sort((a, b) => b.at - a.at);
+    // Two ends mean the line did not deliver: a fix that came back, a run that
+    // ended with nothing landed. They mark like a failing station, so the map
+    // says so at a glance (LX2); held, dissolved and dropped are outcomes, not trouble.
+    if (node.end === "reopened" && node.through > 0) node.marks.push({ level: "warn", words: `${plural(node.through, "fix", "fixes")} came back during the watch in the last ${label}` });
+    if (node.end === "stopped" && node.through > 0) node.marks.push({ level: "warn", words: `${plural(node.through, "run")} stopped without a change in the last ${label}` });
     if (node.kind === "source" || node.kind === "end" || node.kind === "signals" || node.kind === "expectations") continue;
     const times = durations.get(node.id) ?? [];
     node.medianMs = median(times);
