@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, type RunOptions } from "./runner.js";
+import { runWorkflow, reportRunStopped, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, type RunOptions } from "./runner.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -827,6 +827,15 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     workState = "working";
     expect(await run()).toBe("completed");
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
+  }, 30000);
+
+  test("a runner stopped by a signal records its run as failed at the node it last reported", async () => {
+    await run();
+    calls.length = 0;
+    await reportRunStopped({ runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" } as RunOptions, "SIGINT");
+    const stop = calls.find(c => c.route === "/cli/workflow-runs/progress")!;
+    expect(stop.body).toMatchObject({ run_id: "run-1", run_status: "failed", node_status: "failed", fail_reason: expect.stringContaining("SIGINT") });
+    expect(typeof stop.body.node_id).toBe("string");
   }, 30000);
 
   test("a station that declared done is retired, so a later settle cannot file it under needs input", async () => {

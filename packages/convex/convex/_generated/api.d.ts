@@ -270,6 +270,7 @@ import type * as lib_viewWriters from "../lib/viewWriters.js";
 import type * as lib_wallet from "../lib/wallet.js";
 import type * as lib_whisk from "../lib/whisk.js";
 import type * as lib_workDomain from "../lib/workDomain.js";
+import type * as lineCause from "../lineCause.js";
 import type * as lineGround from "../lineGround.js";
 import type * as lineLearn from "../lineLearn.js";
 import type * as lineNotices from "../lineNotices.js";
@@ -697,6 +698,7 @@ declare const fullApi: ApiFromModules<{
   "lib/wallet": typeof lib_wallet;
   "lib/whisk": typeof lib_whisk;
   "lib/workDomain": typeof lib_workDomain;
+  lineCause: typeof lineCause;
   lineGround: typeof lineGround;
   lineLearn: typeof lineLearn;
   lineNotices: typeof lineNotices;

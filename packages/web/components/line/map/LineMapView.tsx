@@ -18,7 +18,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 import type { LineFlow, LineCauseTask, LineFlowRun, LineSignal, LineDecision } from "../../../lib/lineFlow";
-import { LINE_MAP_WINDOWS, buildLineMap, type LineGraph, type LineMapWindow, type MapDecision, type MapRun, type MapSignal } from "../../../lib/line/lineMap";
+import { LINE_MAP_WINDOWS, buildLineMap, type LineGraph, type LineMapWindow, type MapDecision, type MapNode, type MapRun, type MapSignal } from "../../../lib/line/lineMap";
 import { layoutLineMap, neighbor, type MapDirection } from "../../../lib/line/lineMapLayout";
 import { LINE_SETTINGS_NODE, lineMapSearch, lineTraceHref, readLineMapState, type LineMapState } from "../../../lib/line/lineMapUrl";
 import { buildLineTrace, resolveTraceRef, type TraceRows } from "../../../lib/line/lineTrace";
@@ -98,7 +98,13 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
   // The keyboard cursor: the open node, else where the viewer moved it, else
   // the first node holding work.
   const [cursor, setCursor] = useState<string | null>(null);
-  const firstBusy = map.nodes.find((n) => n.now.length > 0)?.id ?? map.nodes.find((n) => n.main && n.kind !== "source")?.id ?? null;
+  // The busiest node: where the map opens, and where the cursor starts.
+  const busiest = useMemo(() => {
+    let best: MapNode | null = null;
+    for (const n of map.nodes) if (n.now.length > 0 && (!best || n.now.length > best.now.length)) best = n;
+    return best?.id ?? null;
+  }, [map.nodes]);
+  const firstBusy = busiest ?? map.nodes.find((n) => n.main && n.kind !== "source")?.id ?? null;
   const focused = node?.id ?? (cursor && layout.boxes.has(cursor) ? cursor : firstBusy);
 
   const selectNode = useCallback((id: string) => { setCursor(id); set({ node: id }); }, [set]);
@@ -147,7 +153,8 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
             ))}
           </div>
           <span className="lmap-legend" aria-hidden>
-            <span><i />work that crossed, wider for more</span>
+            <span data-map-legend-nums title="A node's big number is what sits there now; the small words count what passed in the window"><b className="lmap-legend-num">48</b> here now, 6 passed in {state.window}</span>
+            <span title="Wider for more"><i />work that crossed</span>
             <span><i data-kind="loop" />sent back</span>
             <span><i data-kind="empty" />nothing yet</span>
           </span>
@@ -164,7 +171,7 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
               {trace ? <><b className="font-semibold">{trace.cause.title}</b><span className="text-sol-text-muted">: {trace.where.text}</span></> : <>No cause on this line matches {state.trace}.</>}
             </span>
             <span className="ml-auto shrink-0 flex items-center gap-3 text-[11px]">
-              {trace && <Link href={lineTraceHref(state.trace)} className="text-sol-blue hover:underline">the whole story</Link>}
+              {trace && <Link href={lineTraceHref(state.trace)} className="text-sol-blue hover:underline">full trace</Link>}
               <button type="button" onClick={() => set({ trace: null })} className="inline-flex items-center gap-1 text-sol-text-dim hover:text-sol-text" aria-label="Stop tracing">
                 <X className="w-3 h-3" />
               </button>
@@ -178,6 +185,7 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
           selectedNode={node?.id ?? null}
           selectedEdge={edge?.id ?? null}
           focusedNode={focused}
+          openAt={busiest}
           highlightPath={trace?.pathNodeIds ?? null}
           asks={asks}
           onSelectNode={selectNode}
@@ -186,7 +194,7 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
         <footer className="lmap-panel-foot" data-map-keys>
           <span><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap>nodes</span>
           <span><KeyCap size="xs">↵</KeyCap>open</span>
-          <span><KeyCap size="xs">Esc</KeyCap>{open ? "close" : state.trace ? "stop tracing" : "close"}</span>
+          {(open || state.trace) && <span><KeyCap size="xs">Esc</KeyCap>{open ? "close" : "stop tracing"}</span>}
           <span><KeyCap size="xs">w</KeyCap>window</span>
         </footer>
       </div>
@@ -201,7 +209,7 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
             </div>
             <p className="lmap-panel-what">Every value of the line at once. Each also shows on the node it shapes.</p>
           </div>
-          <div className="flex-1 min-h-0 flex flex-col"><LineSettingsPage project={projectId} embedded /></div>
+          <div className="flex-1 min-h-0 flex flex-col"><LineSettingsPage project={projectId} /></div>
         </aside>
       ) : open ? (
         <LineMapPanel
