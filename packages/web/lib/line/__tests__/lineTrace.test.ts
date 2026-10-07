@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { SHIPPED_LINE } from "../shippedLine.generated";
 import { buildLineMap } from "../lineMap";
-import { buildLineTrace, decisionAnswer, resolveTraceRef, type TraceRows } from "../lineTrace";
+import { buildLineTrace, decisionAnswer, resolveTraceRef, traceBlocks, type TraceRows } from "../lineTrace";
+const HOUR_MS = 3_600_000;
 import * as F from "./lineFixtures";
 
 const rows: TraceRows = F.rows;
@@ -194,4 +195,65 @@ test("decisionAnswer reads the option's words", () => {
   expect(decisionAnswer(F.decisionsA[0])).toBe("Revise");
   expect(decisionAnswer({ ...F.decisionsA[0], answer_text: "[S] Ship :: Land it" })).toBe("Ship");
   expect(decisionAnswer({ ...F.decisionsA[0], answer_index: undefined })).toBeNull();
+});
+
+describe("the finder's words and the goal, as a person reads them", () => {
+  test("the finding drops markdown's marks", () => {
+    const md = "## Finding\n**An intro reaches both people** (see `ex-1`, [cluster](https://x.test/c))";
+    const t = trace("sg-a1", { signals: F.rows.signals.map((s) => (s._id === "sig_a1" ? { ...s, detail_md: md } : s)) });
+    expect(t.steps[0].detail).toBe("An intro reaches both people (see ex-1, cluster)");
+  });
+
+  test("ground names the goal when the caller knows it, else keeps its ref", () => {
+    const r = resolveTraceRef("ct-102", rows)!;
+    expect(buildLineTrace(r, rows, { now: F.NOW, goalName: (g) => (g === "in-3" ? "Matching that lands" : null) }).steps.find((s) => s.stage === "ground")?.detail).toBe("Serves Matching that lands");
+    expect(buildLineTrace(r, rows, { now: F.NOW }).steps.find((s) => s.stage === "ground")?.detail).toBe("Serves in-3");
+  });
+});
+
+describe("AgentWatch findings as a person traces them (LX4)", () => {
+  const awMd = "**An intro reaches both people and says why they fit** (severity 7/10, ex-union-3)\n\nThe intro gave only titles and a vague overlap.\n\n16 findings in this AgentWatch cluster (match judge).";
+  test("the finding says what the finder saw, not the expectation it breaks again", () => {
+    const t = trace("ct-101", { signals: F.rows.signals.map((s) => (s._id === "sig_a1" ? { ...s, detail_md: awMd } : s)) });
+    expect(t.steps[0].detail).toBe("The intro gave only titles and a vague overlap.");
+    expect(t.focusSignalId).toBe("sig_a1");
+  });
+
+  test("the group names other causes the same fingerprint opened", () => {
+    const dup = { ...F.rows.signals.find((s) => s._id === "sig_a1")!, _id: "sig_dup", task_id: "task_b" };
+    const g = trace("ct-101", { signals: [...F.rows.signals, dup] }).steps[1];
+    expect(g.detail).toContain("The same finding also opened 1 other cause");
+    expect(g.links).toEqual([{ label: "Open ct-102", href: "/tasks/ct-102" }]);
+  });
+
+  test("a lone signal seen before says so in its headline, never 'only this signal'", () => {
+    const a1 = F.rows.signals.find((s) => s._id === "sig_a1")!;
+    const dup = { ...a1, _id: "sig_dup", task_id: "task_b" };
+    const others = F.rows.signals.filter((s) => s.task_id !== "task_a");
+    const g = trace("ct-101", { signals: [a1, ...others, dup] }).steps[1];
+    expect(g.title).toBe("Seen before: filed to 1 other cause too");
+    expect(g.detail).not.toContain("also opened");
+    expect(g.links).toEqual([{ label: "Open ct-102", href: "/tasks/ct-102" }]);
+  });
+
+  test("a lone signal nothing else saw is the only one so far", () => {
+    const a1 = F.rows.signals.find((s) => s._id === "sig_a1")!;
+    const g = trace("ct-101", { signals: [a1, ...F.rows.signals.filter((s) => s.task_id !== "task_a")] }).steps[1];
+    expect(g.title).toBe("Only this signal so far");
+  });
+});
+
+describe("traceBlocks", () => {
+  test("a card reads right after the run that wrote it, before a later run", () => {
+    const later = { ...F.runA, _id: "run_a2", status: "running" as const, gate_decision_short_id: undefined, gate_answer: undefined, created_at: F.NOW - HOUR_MS, updated_at: F.NOW, node_statuses: [F.n("ground", F.NOW - HOUR_MS, 3), F.n("analyze", F.NOW - HOUR_MS + 5 * F.MIN, 0, "running")] };
+    const t = trace("ct-101", { runs: [...F.rows.runs, later] });
+    const order = traceBlocks(t).map((b) => (b.kind === "run" ? `run:${b.runId}` : b.step.stage));
+    expect(order.slice(order.indexOf("run:run_a"), order.indexOf("run:run_a2") + 1)).toEqual(["run:run_a", "card", "card", "run:run_a2"]);
+  });
+
+  test("the recommendation's own period is not doubled", () => {
+    const d = { ...F.decisionsA[1], card: { headline: "x", recommend: { verdict: "ship", why: "every miss passes." } } };
+    const t = trace("ct-101", { decisions: [F.decisionsA[0], d] });
+    expect(t.steps.find((s) => s.id === "card:dec_a2")?.detail).toStartWith("Recommends ship: every miss passes. ");
+  });
 });
