@@ -24,7 +24,7 @@ export function ChangeComposer({ node, projectId }: { node: Pick<MapNode, "id" |
       <p className="lmap-empty">
         Ask for a change to {node.label} in your own words. The line files it as a cause against itself and runs it like any change: it proves the problem, edits the line in the repo and brings you a card.
       </p>
-      <code className="text-[11px] text-sol-text-muted break-all">cast signal add --source person --kind request --subject {subject} --title "What should change"</code>
+      <code className="text-[11px] text-sol-text-muted break-all">cast signal add --source person --kind request --fingerprint {subject} --subject {subject} --title "What should change"</code>
     </div>
   );
 }
