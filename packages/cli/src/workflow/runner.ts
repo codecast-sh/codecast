@@ -815,9 +815,12 @@ export function expandPromptVars(template: string, graph: WorkflowGraph, context
 
 // One $name as both expanders read it. `$human_message` is the gate note,
 // empty when there is none, so a script can test it without tripping on an
-// unset `$human.message` (which the shell would read as `$human`).
+// unset `$human.message` (which the shell would read as `$human`). A node's
+// `$<id>.output` reads empty for the same reason when the node left none (a
+// hand that never spawned).
 function contextVar(context: Record<string, string>, key: string): string | undefined {
   if (key === "human_message") return context["human.message"] ?? "";
+  if (key.endsWith(".output")) return lookupContextVar(context, key) ?? "";
   return lookupContextVar(context, key);
 }
 
