@@ -5,7 +5,7 @@
 // with everything else dimmed, loops drawn twice; beside it, the story step
 // by step. Hovering a step lights the node it happened at. Paints from the
 // store (useLineTrace); the words are lib/line/lineTrace's.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronRight } from "lucide-react";
@@ -17,6 +17,7 @@ import { buildLineMap, LINE_MAP_WINDOWS, type LineGraph, type LineMapWindow } fr
 import type { LineTrace, TraceRows } from "../../../lib/line/lineTrace";
 import { outcomeToneClass } from "../RunReport";
 import { LineMap } from "../map/LineMap";
+import { layoutLineMap } from "../../../lib/line/lineMapLayout";
 import { TraceStory } from "./TraceStory";
 import { useLineTrace } from "./useLineTrace";
 import "./trace.css";
@@ -45,7 +46,7 @@ export function LineTracePage({ refParam }: { refParam: string }) {
           <div className="max-w-[40rem] mx-auto px-5 py-16" data-trace-missing={ready ? "" : undefined}>
             {ready ? (
               <>
-                <h1 className="text-[17px] font-medium text-sol-text">Nothing on the line goes by {ref || "that name"}</h1>
+                <h1 className="text-[17px] font-medium text-sol-text">Nothing on the line matches {ref || "that ref"}</h1>
                 <p className="mt-2 text-[13px] leading-relaxed text-sol-text-muted">
                   A trace starts from a signal (sg-N), a fingerprint, a cause task (ct-N), a run or a card (sd-N). It reads what this workspace holds: the last two weeks of signals and the newest runs.
                 </p>
@@ -92,6 +93,9 @@ export function TraceHead({ trace, compact = false }: { trace: LineTrace; compac
   );
 }
 
+/** The smallest scale the map takes to fit: below it a node's words stop reading. */
+const MIN_ZOOM = 0.45;
+
 /** The smallest window that holds the whole trace, so every hop on its path counts on the map. */
 function windowFor(trace: LineTrace, now: number): LineMapWindow {
   const first = Math.min(...trace.steps.map((s) => s.at ?? Infinity), trace.cause.created_at ?? Infinity);
@@ -111,6 +115,24 @@ function TraceMap({ trace, rows, graph, project, now, focusNode, traceRef }: { t
     const scoped = projectId ? scopeLine(rows, projectId) : rows;
     return buildLineMap({ graph, finders: lp?.finders, findersSince: lp?.changed_at, signals: scoped.signals, tasks: scoped.tasks, runs: scoped.runs, decisions: rows.decisions, now, windowMs: LINE_MAP_WINDOWS[win] });
   }, [rows, projectId, graph, lp, now, win]);
+  const layout = useMemo(() => layoutLineMap(map), [map]);
+  // The whole line rarely fits the pane: it opens scaled to the pane's width
+  // (never so small a label cannot be read), and one click shows it full size.
+  const box = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    // Measured once now: a background tab may not deliver the observer's first call.
+    setWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const [full, setFull] = useState(false);
+  const fit = width > 0 && layout.width > 0 ? Math.min(1, Math.max(MIN_ZOOM, (width - 12) / layout.width)) : 1;
+  const zoom = full ? 1 : fit;
   const open = (node: string) => {
     if (!projectId) return;
     const q = new URLSearchParams({ tab: "line", node, trace: traceRef, ...(win !== "7d" ? { window: win } : {}) });
@@ -118,11 +140,18 @@ function TraceMap({ trace, rows, graph, project, now, focusNode, traceRef }: { t
   };
   return (
     <>
-      <div className="shrink-0 flex items-baseline gap-2 px-3 pt-2 text-[11px] text-sol-text-dim">
+      <div className="shrink-0 flex items-baseline gap-3 px-3 pt-2 pb-1 text-[11px] text-sol-text-dim">
         <span>Its path on {projectId ? "this project's line" : "the line"}</span>
         <span className="ml-auto">counts over the last {win}</span>
+        {fit < 1 && (
+          <button type="button" onClick={() => setFull((f) => !f)} className="hover:text-sol-text" data-trace-map-zoom={full ? "full" : "fit"}>
+            {full ? "Fit to the pane" : "Full size"}
+          </button>
+        )}
       </div>
-      <LineMap className="lmap-fill" map={map} highlightPath={trace.pathNodeIds} focusedNode={focusNode} onSelectNode={projectId ? open : undefined} />
+      <div ref={box} className="ltrace-map-box" style={{ "--ltrace-zoom": zoom } as CSSProperties}>
+        <LineMap className="lmap-fill" map={map} layout={layout} highlightPath={trace.pathNodeIds} focusedNode={focusNode} onSelectNode={projectId ? open : undefined} />
+      </div>
     </>
   );
 }
