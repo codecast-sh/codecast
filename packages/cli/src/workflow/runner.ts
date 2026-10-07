@@ -5,11 +5,13 @@ import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./ty
 import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition";
 import { planReadiness } from "../planReadiness.js";
 import { readCardFile } from "../cardFile.js";
+import { resultPreview } from "./chainWorkflow.js";
 import { spawnSync } from "../proc.js";
 import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
+import { claimRun, readCheckpoint, resumePoint, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -361,7 +363,8 @@ async function executeSessionNode(
   graph: WorkflowGraph,
   context: Record<string, string>,
   cwd: string,
-  options: RunOptions
+  options: RunOptions,
+  onSpawned?: () => void,
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -378,49 +381,28 @@ async function executeSessionNode(
     context["worktree"] = worktreeName;
     context["branch"] = `codecast/${worktreeName}`;
   }
-  const prompt = applyUnattended(buildNodePrompt(node, graph, context));
-  console.log(`${c.dim}  session: ${agent}${model ? `, model ${model}` : ""}${worktreeName ? `, worktree ${worktreeName}` : ""}${c.reset}`);
+  // A resumed run waits on the hand its runner left working (runResume.ts)
+  // rather than starting the station over; a hand that died with it does not
+  // count, and the station starts anew.
+  const left = options.resumed?.hand && options.resumed.node_id === node.id ? options.resumed.hand : null;
+  if (options.resumed) options.resumed.hand = null;
+  const leftRow = left ? ((await cliCall(options, "/cli/inbox", { session_ids: [left], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === left) : null;
+  const reattach = !!leftRow && (leftRow.is_live || leftRow.work_state === "done" || leftRow.work_state === "needs_input");
 
-  let gitRoot = cwd;
-  try {
-    const r = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-    if (r.status === 0 && r.stdout.trim()) gitRoot = r.stdout.trim();
-  } catch {}
-
-  const spawned = await cliCall(options, "/cli/spawn", {
-    prompt,
-    project_path: cwd,
-    git_root: gitRoot,
-    title: stationTitle(node, context),
-    // A station is the run's worker: nested under the run's own session, so
-    // it reads, answers cast send and shows on the run, and stays out of the
-    // inbox's top level. The task's blocker comment is what reaches a person.
-    ...(options.runSession ? { parent_session: options.runSession } : {}),
-    // With a definition the server folds its client in unless the node names one.
-    ...(node.definition && !node.agent ? {} : { agent_type: agent }),
-    ...(node.definition ? { definition: node.definition } : {}),
-    ...(model ? { model } : {}),
-    // An isolated hand must run on this machine: the verify station reads
-    // its worktree from here, and a hand placed elsewhere by device fallback
-    // would leave verify checking nothing.
-    ...(worktreeName ? { isolated: true, worktree_name: worktreeName, device: deviceId() } : {}),
-    // The review station is the task's reviewer, not the running role's hand
-    // (the-line.md L3): no spawner, so the server files it under no role, and
-    // review_for_task so it counts against the role's caps and its approve is
-    // the outside verdict the independence rule accepts.
-    ...(node.reviewer && context["task_id"]
-      ? { review_for_task: context["task_id"] }
-      : options.spawnerSession ? { spawner_session: options.spawnerSession } : {}),
-  });
-  if (!spawned?.conversation_id) {
-    console.log(`  ${c.red}✗ spawn failed${c.reset}`);
-    context["last_error"] = "spawn failed";
-    return "failure";
+  let hand: { conversationId: string; shortId: string };
+  if (reattach) {
+    hand = { conversationId: left!, shortId: context[`${node.id}.session_id`] || left!.slice(0, 7) };
+    console.log(`  ${c.green}waiting again on${c.reset} ${c.cyan}${hand.shortId}${c.reset}`);
+  } else {
+    const spawned = await spawnHand(node, graph, context, cwd, options, agent, model, worktreeName);
+    if (!spawned) return "failure";
+    hand = spawned;
+    context[`${node.id}.session_id`] = hand.shortId;
+    context[`${node.id}.conversation_id`] = hand.conversationId;
+    onSpawned?.();
+    console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${hand.shortId}${c.reset}`);
   }
-  const conversationId: string = spawned.conversation_id;
-  const shortId: string = spawned.short_id || conversationId.slice(0, 7);
-  context[`${node.id}.session_id`] = shortId;
-  console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${shortId}${c.reset}`);
+  const { conversationId, shortId } = hand;
 
   if (options.runId) {
     await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
@@ -503,6 +485,59 @@ async function executeSessionNode(
   context["last_error"] = `hand ${shortId} killed after ${Math.round(timeout / 60_000)}m at ${node.id}`;
   context["killed_hand"] = shortId;
   return "failure";
+}
+
+/** Start a station's hand through /cli/spawn, the way `cast spawn --unattended` starts one. */
+async function spawnHand(
+  node: WorkflowNode,
+  graph: WorkflowGraph,
+  context: Record<string, string>,
+  cwd: string,
+  options: RunOptions,
+  agent: string,
+  model: string | undefined,
+  worktreeName: string | undefined,
+): Promise<{ conversationId: string; shortId: string } | null> {
+  const prompt = applyUnattended(buildNodePrompt(node, graph, context));
+  console.log(`${c.dim}  session: ${agent}${model ? `, model ${model}` : ""}${worktreeName ? `, worktree ${worktreeName}` : ""}${c.reset}`);
+
+  let gitRoot = cwd;
+  try {
+    const r = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+    if (r.status === 0 && r.stdout.trim()) gitRoot = r.stdout.trim();
+  } catch {}
+
+  const spawned = await cliCall(options, "/cli/spawn", {
+    prompt,
+    project_path: cwd,
+    git_root: gitRoot,
+    title: stationTitle(node, context),
+    // A station is the run's worker: nested under the run's own session, so
+    // it reads, answers cast send and shows on the run, and stays out of the
+    // inbox's top level. The task's blocker comment is what reaches a person.
+    ...(options.runSession ? { parent_session: options.runSession } : {}),
+    // With a definition the server folds its client in unless the node names one.
+    ...(node.definition && !node.agent ? {} : { agent_type: agent }),
+    ...(node.definition ? { definition: node.definition } : {}),
+    ...(model ? { model } : {}),
+    // An isolated hand must run on this machine: the verify station reads
+    // its worktree from here, and a hand placed elsewhere by device fallback
+    // would leave verify checking nothing.
+    ...(worktreeName ? { isolated: true, worktree_name: worktreeName, device: deviceId() } : {}),
+    // The review station is the task's reviewer, not the running role's hand
+    // (the-line.md L3): no spawner, so the server files it under no role, and
+    // review_for_task so it counts against the role's caps and its approve is
+    // the outside verdict the independence rule accepts.
+    ...(node.reviewer && context["task_id"]
+      ? { review_for_task: context["task_id"] }
+      : options.spawnerSession ? { spawner_session: options.spawnerSession } : {}),
+  });
+  if (!spawned?.conversation_id) {
+    console.log(`  ${c.red}✗ spawn failed${c.reset}`);
+    context["last_error"] = "spawn failed";
+    return null;
+  }
+  return { conversationId: spawned.conversation_id, shortId: spawned.short_id || spawned.conversation_id.slice(0, 7) };
 }
 
 /** The fanin node a fanout's branches converge on, or null. */
@@ -693,17 +728,23 @@ async function executeRemoteHumanGate(
     .filter(e => e.label)
     .map((e) => ({ ...parseGateEdgeLabel(e.label!), target: e.to }));
   const payload = gatePayload(node, graph, context);
+  // A resumed run never asks again what its gate already asked: an answer
+  // that came while nothing drove the run is taken as given, and a gate
+  // still open is waited on, not posted twice (runResume.ts).
+  const resumed = options.resumed?.gate?.node_id === node.id ? options.resumed.gate : null;
+  if (options.resumed) options.resumed.gate = null;
+  const ask = (asked: typeof choices) => resumed?.response ? Promise.resolve(resumed.response)
+    : resumed?.open ? pollGate(options)
+    : reportGate(options, node.id, payload, asked);
 
-  console.log(`\n${c.bold}${c.magenta}  Human gate: ${node.label} (waiting for web response)${c.reset}`);
+  console.log(`\n${c.bold}${c.magenta}  Human gate: ${node.label} (${resumed?.response ? "answered while the run was down" : "waiting for web response"})${c.reset}`);
 
   if (choices.length === 0) {
-    const response = await reportGate(options, node.id, payload, [
-      { key: "ok", label: "Continue", target: "" },
-    ]);
+    const response = await ask([{ key: "ok", label: "Continue", target: "" }]);
     return response ? "success" : "failure";
   }
 
-  const response = await reportGate(options, node.id, payload, choices);
+  const response = await ask(choices);
   if (!response) return "failure";
 
   // The human's message is context for the next hand.
@@ -878,6 +919,10 @@ export interface RunOptions {
   runSession?: string;
   /** Settle poll for session nodes (tests shorten it). */
   pollIntervalMs?: number;
+  /** Continue this run row from where it stands instead of from start (runResume.ts). */
+  resume?: ResumeRow;
+  /** Set by runWorkflow on a resume: the gate and the hand the node it resumes at left open, each taken once. */
+  resumed?: Pick<ResumePoint, "node_id" | "gate" | "hand">;
 }
 
 // The task fields node prompts and edge conditions read. Loaded once at start
@@ -1139,8 +1184,48 @@ function getRetryTarget(nodeId: string, graph: WorkflowGraph): WorkflowNode | nu
   return null;
 }
 
+/** The node each unfinished run last reported, so a stopped runner can say where it stopped. */
+const lastReportedNode = new Map<string, string>();
+
+/**
+ * A runner stopped by a signal (Ctrl-C, a kill) records its run as failed at
+ * the node it was on, with why. Without this the run stays "running" for good:
+ * every surface shows a run in build that nothing is building, and the cause
+ * refuses a new run until it is forced.
+ */
+export async function reportRunStopped(options: RunOptions, signal: string): Promise<void> {
+  const node = options.runId ? lastReportedNode.get(options.runId) : undefined;
+  if (!node) return;
+  await reportProgress(options, {
+    current_node_id: node,
+    node_id: node,
+    node_status: "failed",
+    run_status: "failed",
+    fail_reason: `the runner was stopped (${signal}) at ${node}`,
+  });
+}
+
+/**
+ * A person's Ctrl-C stops the run: it is recorded failed where it stood. A
+ * SIGTERM or SIGHUP is the machine going away under the runner (a shutdown,
+ * a daemon restart, a closed pane), not a decision about the run, so the run
+ * stays live and is resumed where it stood (runResume.ts).
+ */
+export function stopRunOnSignals(options: RunOptions): void {
+  process.once("SIGINT", () => {
+    void reportRunStopped(options, "SIGINT").finally(() => process.exit(130));
+  });
+  process.once("SIGTERM", () => process.exit(143));
+  process.once("SIGHUP", () => process.exit(129));
+}
+
 async function reportProgress(options: RunOptions, payload: Record<string, any>): Promise<void> {
   if (!options.runId || !options.convexSiteUrl || !options.apiToken) return;
+  // A run that reported its end has nothing left to stop: forget it, so a late
+  // signal cannot mark a finished run failed.
+  const node = payload.current_node_id ?? payload.node_id;
+  if (payload.run_status === "completed" || payload.run_status === "failed") lastReportedNode.delete(options.runId);
+  else if (typeof node === "string") lastReportedNode.set(options.runId, node);
   const body = { api_token: options.apiToken, run_id: options.runId, ...payload };
   try {
     await fetch(`${options.convexSiteUrl}/cli/workflow-runs/progress`, {
@@ -1173,7 +1258,12 @@ async function reportGate(
   } catch {
     return null;
   }
+  return pollGate(options);
+}
 
+/** Wait on the run's open gate: its answer, or null when the run stops waiting. */
+async function pollGate(options: RunOptions): Promise<string | null> {
+  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
   for (let i = 0; i < 3600; i++) {
     await new Promise(r => setTimeout(r, 3000));
     try {
@@ -1247,7 +1337,39 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     console.error(`${c.red}✗ ${err.message}${c.reset}`);
     return "invalid";
   }
-  initialContext["run_dir"] = lineRunDir(cwd, runSlug(graph, initialContext, "run"));
+  // A run with no cause keeps its files under its own id, so a resume finds them.
+  initialContext["run_dir"] = lineRunDir(cwd, !initialContext["task_id"] && options.runId ? `${slugPart(graph.name)}-${slugPart(options.runId)}` : runSlug(graph, initialContext, "run"));
+
+  // One runner per run: a resume never drives a run a live runner holds.
+  const claim = options.runId && !options.dryRun ? claimRun(options.runId) : null;
+  if (claim && "heldBy" in claim) {
+    console.error(`${c.yellow}Run ${options.runId} is already driven by pid ${claim.heldBy} on this machine${c.reset}`);
+    return "invalid";
+  }
+  try {
+    return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes);
+  } finally {
+    claim?.release();
+  }
+}
+
+async function driveRun(
+  graph: WorkflowGraph,
+  options: RunOptions,
+  cwd: string,
+  initialContext: Record<string, string>,
+  startNode: WorkflowNode,
+  hash: string,
+  graphNodeHashes: (g: WorkflowGraph) => Array<{ id: string; h: string }>,
+): Promise<WorkflowRunOutcome> {
+  // Where a resumed run continues: its checkpoint on this machine, else what the row holds.
+  const resumeAt = options.resume && options.runId
+    ? resumePoint(graph, options.resume, readCheckpoint(initialContext["run_dir"], options.runId))
+    : null;
+  if (options.resume && !resumeAt) {
+    console.error(`${c.red}✗ cannot resume: the run stands at ${options.resume.current_node_id ?? "no node"}, which this graph does not have${c.reset}`);
+    return "invalid";
+  }
 
   // Expand $variables in the graph goal
   if (graph.goal) {
@@ -1265,7 +1387,37 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   // Per-run outcome record for goal gate checking (all completed nodes)
   const nodeOutcomes: Record<string, NodeOutcome> = {};
 
-  if (options.runId) {
+  if (resumeAt) {
+    // What the run learned before stays; what every run reads fresh (the
+    // task, the profile, the run's ids) is read again.
+    state.context = { ...resumeAt.context, ...initialContext };
+    state.visitCounts = resumeAt.visit_counts;
+    state.completed = resumeAt.completed;
+    state.currentNodeId = resumeAt.node_id;
+    Object.assign(nodeOutcomes, resumeAt.node_outcomes);
+    // A row-built resume has no context of its own: the shared worktree is
+    // named for the cause, so a station past an isolated one finds it again.
+    const isolated = state.completed.map((id) => graph.nodes.get(id)).find((n) => n?.isolated);
+    if (isolated && !state.context["worktree"]) {
+      state.context["worktree"] = runSlug(graph, state.context, isolated.id);
+      state.context["branch"] = `codecast/${state.context["worktree"]}`;
+    }
+    options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hand: resumeAt.hand };
+    console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
+  }
+
+  // The machine driving the run, so the run is resumed there when its runner
+  // dies (runResume.ts). Its own report: a server without the arg rejects it.
+  if (options.runId && !options.dryRun) {
+    await reportProgress(options, {
+      current_node_id: state.currentNodeId,
+      node_id: state.currentNodeId,
+      node_status: "running",
+      runner_device: deviceId(),
+    });
+  }
+
+  if (options.runId && !resumeAt) {
     await reportProgress(options, {
       current_node_id: startNode.id,
       node_id: startNode.id,
@@ -1287,7 +1439,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   if (graph.goal) console.log(`${c.dim}Goal: ${graph.goal}${c.reset}`);
   console.log();
 
-  let current: WorkflowNode = await runNodeLoop(startNode, graph, state, nodeOutcomes, cwd, options);
+  let current: WorkflowNode = await runNodeLoop(resumeAt ? graph.nodes.get(resumeAt.node_id)! : startNode, graph, state, nodeOutcomes, cwd, options);
 
   // ── Stage 6: Exit node reached — check goal gates ─────────────────────────
   // Fabro: goal gates are only checked when reaching the exit node.
@@ -1412,6 +1564,10 @@ async function runNodeLoop(
         node_status: "running",
       });
     }
+    const checkpoint = (next?: string) => {
+      if (options.runId && !options.dryRun) writeCheckpoint(state.context["run_dir"], options.runId, state, nodeOutcomes, next);
+    };
+    checkpoint();
 
     let outcome: NodeOutcome;
     const nodeStartedAt = Date.now();
@@ -1432,7 +1588,7 @@ async function runNodeLoop(
     } else if (current.type === "parallel_fanin") {
       outcome = "success";
     } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "session") {
-      outcome = await executeSessionNode(current, graph, state.context, cwd, options);
+      outcome = await executeSessionNode(current, graph, state.context, cwd, options, () => checkpoint());
     } else if (current.type === "agent" || current.type === "prompt") {
       const backend = current.backend || "builtin";
       if (backend !== "builtin") {
@@ -1453,6 +1609,9 @@ async function runNodeLoop(
         node_status: outcome === "failure" ? "failed" : "completed",
         outcome,
         session_id: state.context[`${current.id}.session_id`],
+        // A station script's own words (the dissolve station's JSON, a
+        // check's failure) are what its node shows; a session node has its session.
+        result_preview: current.type === "command" ? resultPreview(state.context[`${current.id}.output`] ?? "") : undefined,
       });
     }
 
@@ -1527,6 +1686,7 @@ async function runNodeLoop(
       break;
     }
 
+    checkpoint(next.id);
     console.log();
     current = next;
   }

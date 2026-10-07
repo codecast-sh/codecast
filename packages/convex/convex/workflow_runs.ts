@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation } from "./functions";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -271,11 +271,16 @@ async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<bo
 // learn the question is gone.
 export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = "Cancelled by user"): Promise<void> {
   if (run.status === "completed" || run.status === "failed") return;
-  if (run.gate_decision_id) {
-    const decision = await ctx.db.get(run.gate_decision_id);
-    if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
-  }
+  await withdrawOpenGate(ctx, run, now);
   await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
+}
+
+// A run that ends, however it ends, takes back the question it was waiting
+// on: no card stays in the queue, or its notice unread, for a run that is over.
+async function withdrawOpenGate(ctx: Ctx, run: any, now: number): Promise<void> {
+  if (!run.gate_decision_id) return;
+  const decision = await ctx.db.get(run.gate_decision_id);
+  if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
 }
 
 // A run created for a task logs into a session of its own, and nobody talks
@@ -825,6 +830,8 @@ export const updateProgress = mutation({
     graph_hash: v.optional(v.string()),
     // LE14: each station's own hash in that graph (parser.graphNodeHashes).
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))),
+    // The machine driving the run, sent when a runner takes it (runResume.ts).
+    runner_device: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -860,6 +867,7 @@ export const updateProgress = mutation({
       fail_reason: args.fail_reason,
       ...(args.graph_hash ? { graph_hash: args.graph_hash } : {}),
       ...(args.graph_nodes?.length ? { graph_nodes: args.graph_nodes } : {}),
+      ...(args.runner_device ? { runner_device: args.runner_device } : {}),
       updated_at: now,
     });
 
@@ -884,6 +892,11 @@ export const updateProgress = mutation({
         }
       }
     }
+
+    // A runner that reports its run over (a signal while it waits at a gate)
+    // leaves no open gate behind. The run is already patched past its pause,
+    // so the withdraw keeps this report's fail_reason.
+    if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, run, now);
 
     // Sync status to bound task/plan
     if (args.run_status) {
@@ -1157,6 +1170,49 @@ export const pollGateResponse = mutation({
   },
 });
 
+// The live runs a machine drives (runner_device), for its daemon's sweep:
+// one whose runner is gone there is resumed where it stands (cli runResume.ts).
+export const liveRunsForDevice = mutation({
+  args: { api_token: v.string(), device: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    const runs = [];
+    for (const status of ["running", "paused"] as const) {
+      const rows = await ctx.db.query("workflow_runs")
+        .withIndex("by_runner_device_status", (q) => q.eq("runner_device", args.device).eq("status", status))
+        .take(100);
+      runs.push(...rows.filter((r) => r.user_id === auth.userId).map((r) => ({ run_id: r._id, status: r.status, current_node_id: r.current_node_id ?? null, updated_at: r.updated_at })));
+    }
+    return { runs };
+  },
+});
+
+// The machine a run is resumed on: the one whose runner drove it, else (a run
+// from before runners named their machine) the one its last station ran on,
+// since an isolated station's worktree lives there.
+async function runMachine(ctx: Ctx, run: any): Promise<string | undefined> {
+  if (run.runner_device) return run.runner_device;
+  const withSession = [...(run.node_statuses ?? [])].reverse().find((n: any) => n.session_id);
+  if (!withSession) return undefined;
+  const conv = await findConversationByAnyRef(ctx, withSession.session_id, run.user_id);
+  return (conv as any)?.owner_device_id ?? undefined;
+}
+
+// A run whose runner died continues where it stands (cli runResume.ts): its
+// machine's daemon runs `cast workflow run-daemon`, which resumes a mid-run
+// row, keeping every station's work and every gate's answer. The run's owner
+// asks, like cancel.
+export async function resumeRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">): Promise<{ ok: true }> {
+  const run = await ctx.db.get(runId);
+  if (!run || !(await canReadRun(ctx, userId, run))) throw new ConvexError("Run not found");
+  if (!(await canCancelRun(ctx, userId, run))) throw new ConvexError("Only the run's owner can resume it");
+  if (run.status !== "running" && run.status !== "paused") throw new ConvexError(`The run is ${run.status}: nothing to resume`);
+  const now = Date.now();
+  await queueRunOnDaemon(ctx, run.user_id, run._id, { device: await runMachine(ctx, run), now });
+  await ctx.db.patch(run._id, { resume_requested_at: now, updated_at: now });
+  return { ok: true };
+}
 export const cancel = mutation({
   args: { id: v.id("workflow_runs") },
   handler: async (ctx, args) => {
