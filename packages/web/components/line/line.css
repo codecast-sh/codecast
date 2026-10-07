@@ -80,6 +80,24 @@
    scrolls back; the active one is scrolled to that start (LinePage). */
 .line-tabs { scroll-snap-type: x mandatory; scroll-padding-inline: 56px 16px; }
 .line-tabs > .line-tab { scroll-snap-align: start; }
+/* An arrow on a hidden edge (EdgeArrows): a small round button over the
+   fade, centered on the row's height. Its wrapper is position: relative. */
+.line-edge-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 4;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 9999px;
+  color: var(--sol-text-muted);
+  background: color-mix(in srgb, var(--sol-bg) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--sol-text) 8%, transparent);
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.line-edge-arrow:hover { color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-blue) 50%, var(--sol-border)); }
+/* An arrow with cards waiting past its edge carries their count, in the ask color. */
+.line-edge-arrow[data-waiting="true"] { width: auto; min-width: 22px; padding: 0 5px; gap: 2px; border-color: color-mix(in srgb, var(--sol-yellow) 55%, var(--sol-border)); }
+.line-edge-count { font-size: 10.5px; font-weight: 600; line-height: 1; color: var(--sol-yellow); font-variant-numeric: tabular-nums; }
+.line-edge-arrow[data-side="left"] { left: 2px; }
+.line-edge-arrow[data-side="right"] { right: 2px; }
 .line-scroll-quiet { scrollbar-width: none; }
 .line-scroll-quiet::-webkit-scrollbar { display: none; }
 /* After ship: Watching and Closed are two tracks on a wide floor; at 1600px

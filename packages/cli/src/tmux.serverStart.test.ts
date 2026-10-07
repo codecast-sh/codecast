@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseProcessTable } from "./processTable.js";
-import { refusedTmuxServerIsLive, startTmuxGuarded, startTmuxGuardedSync, startsTmuxServer, TmuxServerBusyError, tmuxNoStartFailure } from "./tmux.js";
+import { refusedTmuxServerIsLive, sessionServerPlan, startTmuxGuarded, startTmuxGuardedSync, startsTmuxServer, TmuxServerBusyError, tmuxNoStartFailure } from "./tmux.js";
 
 const REFUSED = "error connecting to /private/tmp/tmux-501/default (Connection refused)\n";
 const ABSENT = "error connecting to /private/tmp/tmux-501/default (No such file or directory)\n";
@@ -73,5 +73,15 @@ describe("starting a tmux session never replaces a live server", () => {
     expect(refusedTmuxServerIsLive([], {})).toBe(true);
     // A private socket cannot be matched to a process, so it keeps the plain start.
     expect(refusedTmuxServerIsLive(withServer, { TMUX_TMPDIR: "/tmp/private" })).toBe(false);
+  });
+});
+
+describe("a session's own server starts on the PATH every other tmux call uses", () => {
+  test("from launchd's PATH (the daemon's), the job names tmux by its full path and runs with the tool dirs", () => {
+    const plan = sessionServerPlan("ct-claude-pathcheck", ["new-session", "-d", "-s", "ct-claude-pathcheck"], { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: process.env.HOME });
+    expect(plan.argv[0]).toMatch(/\/tmux$/);
+    expect(plan.argv[0].startsWith("/")).toBe(true);
+    expect(plan.env.PATH!.split(":")).toContain("/opt/homebrew/bin");
+    expect(plan.env.PATH!.startsWith("/usr/bin:/bin:/usr/sbin:/sbin")).toBe(true);
   });
 });
