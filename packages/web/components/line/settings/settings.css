@@ -250,9 +250,5 @@
 }
 @keyframes lset-arrive-title { 0%, 30% { color: var(--sol-blue); } }
 
-/* The key hints need a keyboard: a narrow floor (a phone, a touch tablet) drops them. */
-@container line-floor (max-width: 760px) { .lset-footer { display: none; } }
-@media (pointer: coarse) { .lset-footer { display: none; } }
-
 /* Inside a station panel the timeout row ends the panel: no rule under it. */
 [data-station-panel] .lset-row { border-bottom: 0; padding-bottom: 0; }
