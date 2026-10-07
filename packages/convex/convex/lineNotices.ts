@@ -59,7 +59,32 @@ async function emit(ctx: any, type: "card_waiting" | "change_shipped" | "cause_r
 export async function noticeCardWaiting(ctx: any, task: any, holderUserId: Id<"users">, decisionShortId?: string, headline?: string) {
   const what = headline?.trim() ? `${headline.trim()} (${task.short_id})` : label(task);
   await emit(ctx, "card_waiting", task, [holderUserId], `has a change card waiting on your answer: ${what}`,
-    decisionShortId ? `/decisions/${decisionShortId}` : undefined);
+    decisionShortId ? cardLink(decisionShortId) : undefined);
+}
+
+const cardLink = (decisionShortId: string) => `/decisions/${decisionShortId}`;
+
+/**
+ * A card stops waiting the moment its decision settles, whoever settled it and
+ * wherever (answered on the web or the CLI, withdrawn with its run): its
+ * unread notice is marked read, so nobody is told a card waits that does not.
+ */
+export async function settleCardWaiting(ctx: any, decision: { short_id?: string; workflow_run_id?: unknown; asked_user_ids?: Id<"users">[]; holder?: { kind: string; id: string }; user_id?: Id<"users">; _creationTime: number }) {
+  if (!decision.workflow_run_id || !decision.short_id) return;
+  const link = cardLink(decision.short_id);
+  const holder = decision.holder?.kind === "user" ? ctx.db.normalizeId("users", decision.holder.id) : null;
+  const people = new Set([holder, decision.user_id, ...(decision.asked_user_ids ?? [])].filter(Boolean).map(String));
+  for (const person of people) {
+    const notes = await ctx.db
+      .query("notifications")
+      // The notice is written in the same transaction as the decision, stamped
+      // in whole ms while _creationTime carries a fraction: floor it.
+      .withIndex("by_recipient_created", (q: any) => q.eq("recipient_user_id", person).gte("created_at", Math.floor(decision._creationTime)))
+      .collect();
+    for (const note of notes) {
+      if (note.type === "card_waiting" && note.link === link && !note.read) await ctx.db.patch(note._id, { read: true });
+    }
+  }
 }
 
 /** The line landed the change for a cause (LE12). */

@@ -559,12 +559,8 @@ export function SessionCardView({
           {isUnread && !isActive && <UnreadDot />}
           {/* A stop is a small dot in the dot slot; its word follows the
               title in faint ink. The danger colour is said once, by the
-              Couldn't finish section, not by every row in it. */}
-          {liveness.asksOk && !liveness.stopped && (
-            <span data-sv-asks-ok className="flex-shrink-0 text-[12px] text-sol-orange" title="Your assistant is waiting for your OK. Open it to answer.">
-              Needs your OK
-            </span>
-          )}
+              Couldn't finish section, not by every row in it. A wait for an
+              OK says so after the title too, so the title keeps the room. */}
           {liveness.stopped && (
             <span data-sv-stopped-dot aria-hidden className={`flex-shrink-0 h-1.5 w-1.5 rounded-full ${NOTICE_DOT[liveness.stopped]}`} />
           )}
