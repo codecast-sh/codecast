@@ -16961,7 +16961,7 @@ work
   .option("--steps <lines>", stdinText("Acceptance criteria as ordered steps, one per line (replaces the list)"))
   .option("--criteria <lines>", stdinText("Acceptance criteria, one per line (replaces the list)"))
   .option("--goal-ref <ref>", "The goal the cause threatens: a metric ref (in-N:key) or project short id from cast goals, or none; '' clears")
-  .option("--category <kind>", "What kind of change it needs: code, prompt, ux, infra or data")
+  .option("--category <kind>", "What kind of change it needs: code, prompt, ux, infra, data, or line (the project's own line)")
   .option("--risk <level>", "How much review it needs: low, review or plan")
   .option("--readiness <state>", "Whether it can be worked as it stands: ready, needs_context or not_actionable")
   .option("--readiness-note <text>", "One line on why")
@@ -20859,6 +20859,13 @@ workflow
       return;
     }
 
+    // Stopped by a signal, the run is recorded as failed where it stood.
+    const { reportRunStopped } = await import("./workflow/runner.js");
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.once(signal, () => {
+        void reportRunStopped(runOpts, signal).finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
+      });
+    }
     const outcome = await runWorkflow(graph, runOpts);
     if (outcome !== "completed") process.exitCode = 1;
   });

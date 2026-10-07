@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { SHIPPED_LINE } from "../shippedLine.generated";
 import { buildLineMap } from "../lineMap";
-import { buildLineTrace, decisionAnswer, resolveTraceRef, type TraceRows } from "../lineTrace";
+import { buildLineTrace, decisionAnswer, resolveTraceRef, traceBlocks, tracePathChips, tracePathSummary, type TraceRows } from "../lineTrace";
+const HOUR_MS = 3_600_000;
 import * as F from "./lineFixtures";
 
 const rows: TraceRows = F.rows;
@@ -194,4 +195,98 @@ test("decisionAnswer reads the option's words", () => {
   expect(decisionAnswer(F.decisionsA[0])).toBe("Revise");
   expect(decisionAnswer({ ...F.decisionsA[0], answer_text: "[S] Ship :: Land it" })).toBe("Ship");
   expect(decisionAnswer({ ...F.decisionsA[0], answer_index: undefined })).toBeNull();
+});
+
+describe("the finder's words and the goal, as a person reads them", () => {
+  test("the finding drops markdown's marks", () => {
+    const md = "## Finding\n**An intro reaches both people** (see `ex-1`, [cluster](https://x.test/c))";
+    const t = trace("sg-a1", { signals: F.rows.signals.map((s) => (s._id === "sig_a1" ? { ...s, detail_md: md } : s)) });
+    expect(t.steps[0].detail).toBe("An intro reaches both people (see ex-1, cluster)");
+  });
+
+  test("ground names the goal when the caller knows it, else keeps its ref", () => {
+    const r = resolveTraceRef("ct-102", rows)!;
+    expect(buildLineTrace(r, rows, { now: F.NOW, goalName: (g) => (g === "in-3" ? "Matching that lands" : null) }).steps.find((s) => s.stage === "ground")?.detail).toBe("Serves Matching that lands");
+    expect(buildLineTrace(r, rows, { now: F.NOW }).steps.find((s) => s.stage === "ground")?.detail).toBe("Serves in-3");
+  });
+});
+
+describe("AgentWatch findings as a person traces them (LX4)", () => {
+  const awMd = "**An intro reaches both people and says why they fit** (severity 7/10, ex-union-3)\n\nThe intro gave only titles and a vague overlap.\n\n16 findings in this AgentWatch cluster (match judge).";
+  test("the finding says what the finder saw, not the expectation it breaks again", () => {
+    const t = trace("ct-101", { signals: F.rows.signals.map((s) => (s._id === "sig_a1" ? { ...s, detail_md: awMd } : s)) });
+    expect(t.steps[0].detail).toBe("The intro gave only titles and a vague overlap.");
+    expect(t.focusSignalId).toBe("sig_a1");
+  });
+
+  test("the group names other causes the same fingerprint opened", () => {
+    const dup = { ...F.rows.signals.find((s) => s._id === "sig_a1")!, _id: "sig_dup", task_id: "task_b" };
+    const g = trace("ct-101", { signals: [...F.rows.signals, dup] }).steps[1];
+    expect(g.detail).toContain("The same finding also opened 1 other cause");
+    expect(g.links).toEqual([{ label: "Intro email sent twice", href: "/line/trace/ct-102", ref: "ct-102" }]);
+  });
+
+  test("a lone signal seen before says so in its headline, never 'only this signal'", () => {
+    const a1 = F.rows.signals.find((s) => s._id === "sig_a1")!;
+    const dup = { ...a1, _id: "sig_dup", task_id: "task_b" };
+    const others = F.rows.signals.filter((s) => s.task_id !== "task_a");
+    const g = trace("ct-101", { signals: [a1, ...others, dup] }).steps[1];
+    expect(g.title).toBe("Seen before: filed to 1 other cause too");
+    expect(g.detail).not.toContain("also opened");
+    expect(g.links).toEqual([{ label: "Intro email sent twice", href: "/line/trace/ct-102", ref: "ct-102" }]);
+  });
+
+  test("a lone signal nothing else saw is the only one so far", () => {
+    const a1 = F.rows.signals.find((s) => s._id === "sig_a1")!;
+    const g = trace("ct-101", { signals: [a1, ...F.rows.signals.filter((s) => s.task_id !== "task_a")] }).steps[1];
+    expect(g.title).toBe("Only this signal so far");
+  });
+});
+
+describe("traceBlocks", () => {
+  test("a card reads right after the run that wrote it, before a later run", () => {
+    const later = { ...F.runA, _id: "run_a2", status: "running" as const, gate_decision_short_id: undefined, gate_answer: undefined, created_at: F.NOW - HOUR_MS, updated_at: F.NOW, node_statuses: [F.n("ground", F.NOW - HOUR_MS, 3), F.n("analyze", F.NOW - HOUR_MS + 5 * F.MIN, 0, "running")] };
+    const t = trace("ct-101", { runs: [...F.rows.runs, later] });
+    const order = traceBlocks(t).map((b) => (b.kind === "run" ? `run:${b.runId}` : b.step.stage));
+    expect(order.slice(order.indexOf("run:run_a"), order.indexOf("run:run_a2") + 1)).toEqual(["run:run_a", "card", "card", "run:run_a2"]);
+  });
+
+  test("the recommendation's own period is not doubled", () => {
+    const d = { ...F.decisionsA[1], card: { headline: "x", recommend: { verdict: "ship", why: "every miss passes." } } };
+    const t = trace("ct-101", { decisions: [F.decisionsA[0], d] });
+    expect(t.steps.find((s) => s.id === "card:dec_a2")?.detail).toStartWith("Recommends ship: every miss passes. ");
+  });
+});
+
+describe("the path strip and its summary", () => {
+  test("chips follow the path, each node once with how many times it went, the ends last", () => {
+    const t = trace("sg-a1");
+    const chips = tracePathChips(t);
+    const firsts = t.pathNodeIds.filter((id, i) => t.pathNodeIds.indexOf(id) === i);
+    expect(chips.map((c) => c.nodeId)).toEqual([...firsts.filter((id) => !id.startsWith("end:")), ...firsts.filter((id) => id.startsWith("end:"))]);
+    expect(chips[0]).toMatchObject({ label: "Expectations" });
+    expect(chips.find((c) => c.nodeId === "source:agentwatch")?.label).toBe("agentwatch");
+    expect(chips.find((c) => c.nodeId === "causes")?.label).toBe("Causes");
+    expect(chips.reduce((n, c) => n + c.times, 0)).toBe(t.pathNodeIds.length);
+    // A chip's status is its newest step's, as the story's dot shows it.
+    for (const c of chips) {
+      const step = [...t.steps].reverse().find((s) => s.nodeId === c.nodeId);
+      if (step) expect(c.status).toBe(step.status);
+    }
+  });
+
+  test("repeats collapse, in a row or across runs, and a stopped end reads as the line stopping it", () => {
+    const chips = tracePathChips({ pathNodeIds: ["causes", "prove", "prove", "end:stopped", "causes", "prove", "red"], pathLabels: { causes: "Causes", prove: "Prove", red: "Red", "end:stopped": "Stopped" }, steps: [] });
+    expect(chips.map((c) => `${c.label}x${c.times}`)).toEqual(["Causesx2", "Provex3", "Redx1", "Stoppedx1"]);
+    expect(chips.find((c) => c.nodeId === "end:stopped")?.status).toBe("failed");
+  });
+
+  test("the summary: when found, how many runs, where it stopped most", () => {
+    const t = trace("sg-a1");
+    expect(tracePathSummary(t)).toMatch(/^Found \w+ \d+, 1 run/);
+    const failed = (title: string, runId: string) => ({ id: `${runId}:${title}`, stage: "station" as const, title, at: 1, durationMs: null, status: "failed" as const, detail: "", links: [], artifacts: [], nodeId: title.toLowerCase(), runId });
+    const summary = tracePathSummary({ steps: [...t.steps, failed("Prove", "r2"), failed("Prove", "r3"), failed("Verify", "r3")] });
+    expect(summary).toContain("3 runs");
+    expect(summary).toContain("stopped twice at Prove");
+  });
 });

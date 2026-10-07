@@ -50,6 +50,12 @@ export function lineMapSearch(current: Search & { toString(): string }, patch: P
 /** One thing followed through the line (LX4). */
 export const lineTraceHref = (ref: string) => `/line/trace/${encodeURIComponent(ref)}`;
 
+/** The ref a /line/trace/<ref> segment names. The router may have decoded it
+ *  already, so a ref holding a bare "%" stays as it is rather than throwing. */
+export function traceRefOf(segment: string): string {
+  try { return decodeURIComponent(segment).trim(); } catch { return segment.trim(); }
+}
+
 /** Where a /line/settings link lands on the map: a station's panel, or the line's settings panel at the section. */
 export function settingsOnMap(search: Search): string {
   const q = new URLSearchParams();

@@ -33,7 +33,8 @@
 //               dissolves the cause with its evidence (LE8)
 //   implement, verify, green
 //               the change, the project's check command, the reproduction
-//               now passing
+//               now passing; a prompt change, or a change to the line itself
+//               (category line, line-map.md LX6), goes from verify to eval
 //   eval        the project's eval command (it picks what the branch owes),
 //               then `cast line eval-result` for the verdict (LP4); an eval
 //               that could not judge the change (exit 2: no scored reps on a
@@ -143,8 +144,8 @@ digraph line {
   dissolve -> exit
 
   implement -> verify    [condition="handoff = done"]
-  verify -> green        [condition="outcome = success and category != prompt"]
-  verify -> eval         [condition="outcome = success and category = prompt"]
+  verify -> green        [condition="outcome = success and category != prompt and category != line"]
+  verify -> eval         [condition="outcome = success and (category = prompt or category = line)"]
   verify -> implement    [condition="outcome = failure", label="checks failed"]
   green -> eval          [condition="outcome = success"]
   green -> implement     [condition="outcome = failure", label="still red"]
