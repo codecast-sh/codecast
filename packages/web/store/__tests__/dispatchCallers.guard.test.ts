@@ -18,9 +18,13 @@ describe("durable dispatch call-site guards", () => {
     expect(source).not.toContain('_dispatch("createSession"');
     expect(source).not.toContain('_dispatch("linkConversation"');
     expect(source).toContain("beginOptimisticSession");
-    expect(source).toContain("awaitConvexId");
     expect(source).toContain("linked_object");
-    expect(source).toContain("sendMessage(convexId, fullMessage, undefined, clientId)");
+    // The first message waits for the stub's create in the store, which
+    // resolves the stub through awaitConvexId before it sends.
+    expect(source).toContain("sendMessageWhenReady(sid, fullMessage, undefined, clientId)");
+    const store = await Bun.file(new URL("../inboxStore.ts", import.meta.url)).text();
+    const whenReady = store.slice(store.indexOf("clientId?: string) => {", store.indexOf("  sendMessageWhenReady: (convId")));
+    expect(whenReady.slice(0, whenReady.indexOf("\n  },\n"))).toContain("awaitConvexId(convId)");
   });
 
   test("standalone palette wires dispatch unconditionally", async () => {

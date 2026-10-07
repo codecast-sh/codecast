@@ -12,6 +12,7 @@ import { AppLoader } from "@/components/AppLoader";
 import { isDesktopShell } from "@/lib/desktop";
 import { track } from "@/lib/analytics";
 import { useLocalAuth } from "@/lib/localAuth";
+import { takeAuthReturn } from "@/lib/authReturn";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { useRouteMeta } from "./pageMeta";
 import { PhoneFrame } from "./productMocks";
@@ -144,6 +145,14 @@ export default function LandingPage() {
   // The root is the marketing site for every browser, signed in or not (the
   // nav offers "Open app"). Only the desktop shell never shows it: a build
   // that boots at the site root is routed on to the app or the sign-in here.
+  // Signed in again after a moment that only looked signed out: back to the
+  // page AuthGuard left (lib/authReturn), never the marketing page.
+  useWatchEffect(() => {
+    if (!localAuthed) return;
+    const back = takeAuthReturn();
+    if (back) router.replace(back);
+  }, [localAuthed, router]);
+
   useWatchEffect(() => {
     if (!isDesktopShell()) return;
     setDesktop(true);
@@ -315,7 +324,7 @@ export default function LandingPage() {
               </div>
               <p className="text-sm leading-relaxed" style={{ color: '#839496' }}>
                 Claude Code, Codex, Cursor, OpenCode and pi, on your laptop or a cloud host.
-                Bring your own subscriptions: Codecast never resells tokens.
+                Your coding agents run on your own subscriptions: Codecast never resells their tokens.
               </p>
             </div>
 

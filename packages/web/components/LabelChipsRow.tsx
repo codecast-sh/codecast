@@ -742,7 +742,7 @@ export function LabelChipsRow({
               setEmptyOpen(true);
             }
           }}
-          title={`${hiddenCount + zeroHiddenCount} more — view all labels & projects`}
+          title={`${hiddenCount + zeroHiddenCount} more: view all labels and projects`}
           // Outside the clip shell, so the shell can collapse to nothing and
           // the pill still paints and still takes clicks. flex-shrink-0 is what
           // holds its width while the shell (flex-1 min-w-0) gives way first —

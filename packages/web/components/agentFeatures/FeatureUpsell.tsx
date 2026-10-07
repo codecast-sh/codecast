@@ -14,7 +14,7 @@ import { useFeatureOffer } from "./useFeatureOffer";
 import { FeatureVignette } from "./FeatureVignette";
 import { featureIcon, featureTone } from "./featureLook";
 
-export function agentFeatureHref(slug: string): string {
+function agentFeatureHref(slug: string): string {
   return `/agent-features?feature=${encodeURIComponent(slug)}`;
 }
 

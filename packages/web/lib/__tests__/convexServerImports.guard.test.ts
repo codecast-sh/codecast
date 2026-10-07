@@ -25,7 +25,9 @@ const ALLOWLIST = join(import.meta.dir, "convexServerImports.allowlist.txt");
 /** How many files import a convex module that defines functions. May only fall. */
 const PIN = 0;
 
-const IMPORT_RE = /from\s+["']@codecast\/convex\/convex\/([^"']+)["']/g;
+// A type-only statement (`import type`, `export type`) is erased at build and
+// carries no code into the bundle, so it never counts.
+const IMPORT_RE = /\b(?:import|export)\s+(?!type\b)[^;]*?\bfrom\s+["']@codecast\/convex\/convex\/([^"']+)["']/g;
 /** `export const x = query({`, `= mutation({`, `= internalAction({`, `= httpAction(`. */
 const DEFINES_FN_RE = /\b(?:internal)?(?:[Qq]uery|[Mm]utation|[Aa]ction)\s*\(\s*\{/;
 
@@ -42,17 +44,19 @@ function convexModuleDefinesFunctions(spec: string): boolean {
   return defines;
 }
 
+function countServerImports(src: string): number {
+  let hits = 0;
+  for (const m of codeOnly(src).matchAll(IMPORT_RE)) if (convexModuleDefinesFunctions(m[1])) hits += 1;
+  return hits;
+}
+
 const result = checkRatchet({
   name: "web import of a convex module that defines functions",
   root: WEB,
   dirs: ["app", "components", "hooks", "lib", "store", "src"],
   ignoreDirs: ["__tests__"],
   exempt: (rel) => /\.test\.tsx?$/.test(rel),
-  count: (src) => {
-    let hits = 0;
-    for (const m of codeOnly(src).matchAll(IMPORT_RE)) if (convexModuleDefinesFunctions(m[1])) hits += 1;
-    return hits;
-  },
+  count: countServerImports,
   allowlist: ALLOWLIST,
   pin: PIN,
   fix: "Move the shared value into @codecast/shared/contracts and import it from there on both sides.",
@@ -65,6 +69,8 @@ describe("convex function modules stay out of the web bundle", () => {
     // A detector that answered "no" to everything would make the scan vacuous.
     expect(convexModuleDefinesFunctions("follow")).toBe(true);
     expect(convexModuleDefinesFunctions("wakeCost")).toBe(false);
+    expect(countServerImports(`import { FOLLOW_RENEW_MS } from "@codecast/convex/convex/follow";`)).toBe(1);
+    expect(countServerImports(`import type { WhiskReturnPath } from "@codecast/convex/convex/whisk";`)).toBe(0);
   });
 
   test("no web file imports one", () => {

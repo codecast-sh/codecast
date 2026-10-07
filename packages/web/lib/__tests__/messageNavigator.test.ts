@@ -499,6 +499,13 @@ describe("stickyPromptContent", () => {
     expect(stickyPromptContent(spawned)).toBeNull();
   });
 
+  it("drops a decision answer, tagged or legacy, and keeps a prompt that merely opens with the word", () => {
+    expect(stickyPromptContent('Decision: Approve\n<cast-decision id="d1" question="Set up the routine?"/>')).toBeNull();
+    expect(stickyPromptContent("Decision: Approve")).toBeNull();
+    const typed = "Decision: we go with the blue one.\nCan you update the note?";
+    expect(stickyPromptContent(typed)).not.toBeNull();
+  });
+
   it("drops a bare nudge", () => {
     expect(stickyPromptContent("continue")).toBeNull();
     expect(stickyPromptContent("go")).toBeNull();

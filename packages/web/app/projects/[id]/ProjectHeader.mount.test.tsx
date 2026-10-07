@@ -102,7 +102,7 @@ async function verifyProjectHeader() {
   mock.module("sonner", () => ({ toast: Object.assign((m: string) => calls.push(`toast:${m}`), { success: (m: string) => calls.push(`toast:${m}`), error: (m: string) => calls.push(`toast-error:${m}`) }) }));
 
   // Other surfaces' drawing: each says only that it is there.
-  const mark = (name: string) => (props: any) => React.createElement("div", { [`data-${name}`]: props?.projectId ?? "" });
+  const mark = (name: string) => function Mark(props: any) { return React.createElement("div", { [`data-${name}`]: props?.projectId ?? "" }); };
   const through = ({ children }: any) => children;
   mock.module("../../tasks/page", () => ({ TaskListContent: mark("task-list") }));
   mock.module("../../tasks/[id]/page", () => ({ TaskDetailContent: () => null }));

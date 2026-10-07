@@ -791,7 +791,8 @@ describe("link management", () => {
 describe("Slack mentions coming back", () => {
   // The mirror of the outbound rule: an id Slack sent becomes the handle that
   // person answers to here, and an unmapped person becomes a name that reads
-  // right and can never page a codecast teammate who shares it.
+  // right, links to them in Slack, and can never page a codecast teammate who
+  // shares it.
   function actionContext(over: Record<string, any[]> = {}) {
     const ctx = context(null, over);
     const queries: Record<string, any> = {
@@ -808,7 +809,7 @@ describe("Slack mentions coming back", () => {
     return ctx;
   }
 
-  test("a known id becomes the teammate's handle; an unmapped person becomes a plain name", async () => {
+  test("a known id becomes the teammate's handle; an unmapped person becomes their name, linked to Slack", async () => {
     const ctx = actionContext();
     await call(upsertSlackUser, ctx, {
       workspace_id: WS, slack_user_id: "UBOBBY", team_id: TEAM,
@@ -822,6 +823,6 @@ describe("Slack mentions coming back", () => {
     const link = await ctx.db.get(LINK);
     const text = "<@UBOBBY> and <@UERIN> take a look";
     const resolver = await buildInboundResolver(ctx, install, link, null, text);
-    expect(slackToMarkdown(text, resolver)).toBe("@bob and **@\u200bErin** take a look");
+    expect(slackToMarkdown(text, resolver)).toBe(`@bob and [@\u200bErin](https://slack.com/app_redirect?team=${WS}&channel=UERIN) take a look`);
   });
 });

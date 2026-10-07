@@ -378,7 +378,7 @@ describe("deleteFromCLI", () => {
   test("no match returns an error", async () => {
     const { ctx } = ctxWithAuth([{ ...existingRow }]);
     const result = await (deleteFromCLI as any)._handler(ctx, { api_token: "t", target: "nope" });
-    expect(result.error).toContain("No artifact matches");
+    expect(result.error).toContain("No page matches");
   });
 });
 

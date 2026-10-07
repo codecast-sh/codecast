@@ -25,7 +25,7 @@ type GitStateSession = {
 };
 
 /** The command that recreates a session's working tree, uncommitted work included, in a new worktree. */
-export function pickupCommand(shortId: string): string {
+function pickupCommand(shortId: string): string {
   return `cast ws acquire pickup-${shortId} --from ${shortId}`;
 }
 

@@ -808,10 +808,7 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   followOrgChannel: org((ctx) => `${ctx.args[2] ? "Followed" : "Unfollowed"} a channel for a role`),
   staffHeadOfPeople: org(() => "Staffed the Head of People"),
   hireExecutiveAssistant: org(() => "Hired an executive assistant"),
-  acceptAllOrgProposal: org(() => "Accepted an org proposal"),
-  decideOrgProposalAsk: org((ctx) => `${ctx.args[2] === "accept" ? "Accepted" : "Skipped"} an org proposal ask`),
   replyOnOrgProposal: org((ctx) => { const n = (ctx.args[1] as unknown[] | undefined)?.length ?? 0; return `Answered ${n === 1 ? "a change" : `${n} changes`} of an org proposal`; }),
-  decideOrgProposalChange: org((ctx) => `${ctx.args[1] === "accept" ? "Accepted" : "Skipped"} an org change`),
   withdrawOrgProposal: org(() => "Withdrew an org proposal"),
   undoOrgChange: org(() => "Undid an org change"),
   redoOrgChange: org(() => "Redid an org change"),
@@ -827,5 +824,4 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   resetOrg: { never: "machine control: a reset retires every role and its standing agents, which an undo cannot rewind" },
   provisionOrgRole: { never: "machine control: it starts the role's standing agent on a host" },
   requestOrgTemplateBind: { never: "machine control: the host's daemon runs the bind on a machine" },
-  sayOnOrgProposal: { never: "send: a reply in a proposal thread has reached the people and roles in it" },
 };

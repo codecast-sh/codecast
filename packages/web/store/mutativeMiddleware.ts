@@ -36,6 +36,7 @@ import type { Patch } from "mutative";
 import {
   CLIENT_SYNC_REGISTRY,
   REPLICATION_CLASSIFICATION,
+  REPLICATED_EPHEMERAL_KEYS,
 } from "./clientSyncRegistry";
 import { consumeViewNav, declareViewNav, noteViewNavApplied, recordNavEvent } from "./viewNav";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField } from "./gestureBridge";
@@ -399,7 +400,7 @@ export const UNDO_IGNORE_KEYS: ReadonlySet<string> = new Set([
   "currentUser",
   "pagination",
   "messages",
-  "sessionsProjection",
+  ...REPLICATED_EPHEMERAL_KEYS,
   "liveRooms",
   "liveInboxIdList",
   "teamInboxIdSnapshot",

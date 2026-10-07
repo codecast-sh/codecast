@@ -55,7 +55,9 @@ test("scenes cut on the wall clock every ten seconds", () => {
   assert.notEqual(sceneAt(T - (T % 10_000) + 10_000).name, a.name);
 });
 
-test("a share survives H.264 at half size inside a letterboxed composite", { skip: !hasFfmpeg && "ffmpeg not installed" }, () => {
+// Skipped without ffmpeg. `test.skip`, not the `{ skip }` option: bun's
+// node:test shim before 1.3.14 ignores the option and runs the body anyway.
+(hasFfmpeg ? test : test.skip)("a share survives H.264 at half size inside a letterboxed composite", () => {
   const dir = mkdtempSync(join(tmpdir(), "call-e2e-test-"));
   const screen = new Canvas(1920, 1080);
   paintScreen(screen, { nowMs: T, frame: 77, startedAtMs: T - 1000, label: "SCRATCH" });

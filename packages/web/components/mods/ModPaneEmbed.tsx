@@ -3,12 +3,13 @@
 // agent iterating on a mod shows the person each push land in the thread, and
 // the header's revision ticks as it does.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { DynamicIcon } from "lucide-react/dynamic";
 import type { ModSurface } from "@codecast/shared/contracts/mods";
 import { ModSurfaceView } from "./ModSurface";
 import { modNavigate } from "../../lib/mods/host";
 import { useModRows, useModRuntime } from "../../lib/mods/useMods";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export function ModPaneEmbed({ mod, pane, caption }: { mod: string; pane?: string; caption?: string }) {
   const rows = useModRows();
@@ -22,7 +23,7 @@ export function ModPaneEmbed({ mod, pane, caption }: { mod: string; pane?: strin
   // A new revision flashes the header for a moment: the push the person is watching for.
   const lastRev = useRef(row?.rev);
   const [fresh, setFresh] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (row?.rev === undefined) return;
     if (lastRev.current !== undefined && row.rev !== lastRev.current) {
       setFresh(true);

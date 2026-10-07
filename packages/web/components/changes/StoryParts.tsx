@@ -4,7 +4,6 @@
 // sessions behind it, and the line that says where its "why" came from.
 import { useRef, useState, type ReactNode } from "react";
 import { ChevronUp, CircleDashed, CornerUpLeft, Zap } from "lucide-react";
-import { leadSentences } from "@codecast/shared/changes";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { memberAvatarUrl } from "../../lib/liveEntities";
@@ -119,7 +118,7 @@ export type RiskLineItem = { code: string; text: string; tip: string };
  * risk (spec 4.4). A size note (`bulk`) comes after every real hazard, so a
  * row that shows two never drops a hazard for it. Empty when it has none.
  */
-export function riskLines(story: Pick<StoryRow, "risks" | "risk_lines">): RiskLineItem[] {
+function riskLines(story: Pick<StoryRow, "risks" | "risk_lines">): RiskLineItem[] {
   if (!story.risks.length) return [];
   const ordered = [...story.risks].sort((a, b) => Number(a.code === "bulk") - Number(b.code === "bulk"));
   const worded = ordered.flatMap((r) => {
@@ -133,7 +132,7 @@ export function riskLines(story: Pick<StoryRow, "risks" | "risk_lines">): RiskLi
 const LONG_PATH = /(?:[\w.@-]+\/){2,}([\w.@-]+)/g;
 
 /** Risk text with every long file path cut to its last segment; the full text is the line's tip. */
-export const shortPaths = (text: string) => text.replace(LONG_PATH, "$1");
+const shortPaths = (text: string) => text.replace(LONG_PATH, "$1");
 
 /** Risks a row shows before "+N more": the rest are in its open drawer. */
 const ROW_RISKS = 2;
@@ -170,30 +169,6 @@ export function RiskLine({ story, full = false, className = "" }: { story: Pick<
       </span>
     </span>
   );
-}
-
-/**
- * The opener of a card whose headline is already said above it (the day's
- * lead, the week's biggest story): a lede a step above the body, so the card
- * opens on it. One class, so the two cards cannot drift apart.
- */
-export const CARD_LEDE = "chg-ui mt-2.5 text-[17px] font-medium leading-[1.5] text-sol-text [overflow-wrap:anywhere]";
-
-/** A card's body text, and its dek under a shown headline. */
-export const CARD_BODY = "chg-ui text-[15px] leading-[1.6] text-sol-text/80 [overflow-wrap:anywhere]";
-
-/** Words of a story's body a card opens with when its headline is already said. */
-const OPENER_WORDS = 40;
-
-/**
- * What a card says under a headline the reader has already read: the first
- * sentences of the story's body, since its dek mostly paraphrases the
- * headline, and `rest` the body after them. A story with no body opens with
- * its dek.
- */
-export function storyOpener(story: Pick<StoryRow, "body" | "dek">): { text: string; rest: string } {
-  const body = story.body ? leadSentences(story.body, OPENER_WORDS) : null;
-  return body?.lead ? { text: body.lead, rest: body.rest } : { text: story.dek, rest: "" };
 }
 
 /** The main column when the filters match nothing: what they missed, and the way out. */
@@ -243,7 +218,7 @@ type WhyFacts = Pick<StoryRow, "why_source" | "conversation_ids" | "pr_ids" | "p
  * PR that existed and gave no reason; a story with neither had nowhere to
  * state one, so it says nothing.
  */
-export const hasProvenance = (story: WhyFacts) =>
+const hasProvenance = (story: WhyFacts) =>
   story.why_source !== "none" || story.conversation_ids.length > 0 || story.pr_ids.length > 0;
 
 /** Where the story's "why" came from: the page's trust mechanism (spec 4.4). */

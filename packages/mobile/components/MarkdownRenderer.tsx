@@ -151,7 +151,10 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
   const pattern = new RegExp(
     '(`[^`]+`|\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|\\[([^\\]]+)\\]\\(([^)]+)\\)'
     + `|(${URL_SOURCE})|@\\[([^\\]]+)\\]|@(\\w+)`
-    + `|\\b(${BARE_ID_SOURCE})\\b)`,
+    + `|\\b(${BARE_ID_SOURCE})\\b`
+    // A backslash escape (CommonMark): `\.` or `\*` is the character itself.
+    // Last, so no group number above moves; matched by its leading backslash.
+    + '|\\\\[!-/:-@\\[-`{-~])',
     'g',
   );
   let lastIndex = 0;
@@ -163,7 +166,9 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
       result.push(<RNText key={`${keyPrefix}t${key++}`}>{text.slice(lastIndex, match.index)}</RNText>);
     }
 
-    if (match[0].startsWith('`')) {
+    if (match[0].startsWith('\\')) {
+      result.push(<RNText key={`${keyPrefix}x${key++}`}>{match[0].slice(1)}</RNText>);
+    } else if (match[0].startsWith('`')) {
       const code = match[0].slice(1, -1);
       // `jx…`/`ct-…` in backticks is an object reference, not code — pill it
       // (web's EntityAwareCode does the same). The fallback keeps a non-entity

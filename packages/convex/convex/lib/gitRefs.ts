@@ -10,27 +10,30 @@
 // this git activity mean" is here, so the processors stay thin.
 
 import { Doc, Id } from "../_generated/dataModel";
-import { bareEntityIdRegex, inferEntityTypeFromShortId } from "@codecast/shared/entities";
+import { inferEntityTypeFromShortId, shortIdSource } from "@codecast/shared/entities";
 import { extractSessionTrailer } from "@codecast/shared/blame";
 import { isConversationOwner, isConversationTeamVisible } from "../privacy";
 
 type Db = { db: any };
 
+const GIT_SHORT_ID_RE = new RegExp(`\\b(?:${shortIdSource()})\\b`, "gi");
+
 /**
  * Every task short id in a piece of git text, lowercased and deduped, in the
  * order it appears.
  *
- * The scan comes from the shared mention vocabulary, so a branch
- * (`ct-123-fix-auth`, `feature/ct-123`), a commit message and a PR body are all
- * read the same way, and a newly registered short id prefix needs no change
- * here. Only task ids survive the filter: a PR body that mentions pl-88 links
- * its plan through the task, not directly.
+ * The scan comes from the shared short id registry, so a newly registered
+ * prefix needs no change here. Its boundary is `\b`, not prose's: a branch
+ * joins words with hyphens (`ct-123-fix-auth`, `wip/ct-4102-and-ct-88`), so a
+ * hyphen beside an id separates it here, where in prose it would make the id
+ * part of a word. Only task ids survive the filter: a PR body that mentions
+ * pl-88 links its plan through the task, not directly.
  */
 export function extractTaskShortIds(text: string | null | undefined): string[] {
   if (!text) return [];
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const match of text.match(bareEntityIdRegex()) ?? []) {
+  for (const match of text.match(GIT_SHORT_ID_RE) ?? []) {
     const id = match.toLowerCase();
     if (inferEntityTypeFromShortId(id) !== "task") continue;
     if (seen.has(id)) continue;

@@ -301,6 +301,7 @@ export function deriveSessionActivity(input: SessionActivityInput): SessionActiv
     recentlyUpdated,
     daemonAlive: input.daemonAlive,
     now: input.now,
+    agentType: input.agentType,
   });
 
   return { isIdle, isUnresponsive, lastRoleIsUser, recentlyUpdated };

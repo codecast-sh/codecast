@@ -10,7 +10,7 @@
 // line per day, and a week's summary sits where the timeline enters the
 // week. Filters, the work in progress and what is live stay in the header.
 import * as Accordion from "@radix-ui/react-accordion";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { isoWeekOf, weekDates, weekMonday } from "@codecast/shared/changes";
 import { normalizeRepository } from "@codecast/shared/contracts";
@@ -50,6 +50,7 @@ import { SummaryMedia } from "./SummaryMedia";
 import { buildTimeline, dayZoom, groupWeeks, weekFolds, weekTop, type TimelineDay, type TimelineWeek } from "./timelineModel";
 import { escapeStep, focusedCommitHref, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
 import { changesHref, clearFilters, hasFilters, useChangesUrlState, type Zoom } from "./useChangesUrlState";
+import { useMountEffect } from "../../hooks/useMountEffect";
 
 const releaseName = (r: { surface: string; version?: string; sha: string }) => `${r.surface} ${r.version ?? r.sha.slice(0, 7)}`;
 
@@ -222,13 +223,13 @@ function useReach(onReach: () => void) {
   const ref = useRef<HTMLDivElement>(null);
   const reach = useRef(onReach);
   reach.current = onReach;
-  useEffect(() => {
+  useMountEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && reach.current(), { rootMargin: "600px" });
     io.observe(el);
     return () => io.disconnect();
-  }, []);
+  });
   return ref;
 }
 
@@ -406,7 +407,7 @@ export function ChangesPage() {
 
   // A linked story lands on screen once its day has painted.
   const landed = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const key = url.story;
     if (!key || landed.current === key || !byKey.has(key)) return;
     landed.current = key;

@@ -100,7 +100,9 @@ export default function PlanSettingsPage() {
       ) : null}
 
       <SettingsSection title={WORDS.extraCredit} icon={Plus} description={WORDS.moreNote} padded>
-        <div className="flex flex-wrap gap-2">
+        {/* While top-ups are closed the tiles stay away: one line says why,
+            where greyed buttons beside live plan cards read as broken. */}
+        {!(billing.known && !billing.topup) && <div className="flex flex-wrap gap-2">
           {TOPUP_AMOUNTS_USD.map((usd) => {
             const { label, note } = topupLabel(usd, plan);
             return (
@@ -110,11 +112,9 @@ export default function PlanSettingsPage() {
               </Button>
             );
           })}
-        </div>
-        {/* Buttons that cannot work yet say why, right where they sit: a
-            greyed tile with no reason beside it reads as broken. */}
+        </div>}
         {billing.known && !billing.topup ? (
-          <p className="mt-2.5 text-xs text-sol-text-muted">
+          <p className="text-xs text-sol-text-muted">
             <SupportSentence words={WORDS.topupClosed} />
           </p>
         ) : null}

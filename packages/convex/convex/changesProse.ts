@@ -37,7 +37,7 @@ import {
 } from "@codecast/shared/changes";
 import { callModel, modelCost, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
 import { PROSE_MODEL } from "./lib/changesProseModel";
-import { teamVisibleInputs, teamVisibleMedia, type ChangesInputMode, type ChangesMedia } from "./lib/changesAccess";
+import { teamVisibleInputs, teamVisibleMedia, type ChangesInputMode, type ChangesMedia, type TeamVisibleInput } from "./lib/changesAccess";
 import { changesZone, markDayDirty } from "./lib/changesDirty";
 import { teamDayBounds } from "./lib/teamDay";
 import { normalizeRepository } from "./lib/gitRefs";
@@ -678,7 +678,7 @@ async function gatedSessions(
     const input = gate.get(String(id));
     // A session with no insight of its own (a subagent, or one still working) has no words to lend, but its screenshots and pages still show the work.
     if (!input || (!input.insight && !media.has(String(id)))) continue;
-    const guide = await sessionGuide(ctx, teamId, id, guidedTasks);
+    const guide = await sessionGuide(ctx, teamId, input, guidedTasks);
     out.push({
       conversation_id: input.conversation_id,
       mode: input.mode,
@@ -699,10 +699,9 @@ async function gatedSessions(
  * task in the team's workspace lends its guide, and each task's guide is told
  * once per story (`seen`).
  */
-async function sessionGuide(ctx: { db: any }, teamId: Id<"teams">, conversationId: Id<"conversations">, seen: Set<string>): Promise<string | undefined> {
-  const conv = await ctx.db.get(conversationId);
-  const ids = new Set(await linkedEntityIdsForConversation(ctx, conversationId, "task"));
-  if (conv?.active_task_id) ids.add(String(conv.active_task_id));
+async function sessionGuide(ctx: { db: any }, teamId: Id<"teams">, input: TeamVisibleInput, seen: Set<string>): Promise<string | undefined> {
+  const ids = new Set(await linkedEntityIdsForConversation(ctx, input.conversation_id, "task"));
+  if (input.active_task_id) ids.add(String(input.active_task_id));
   for (const raw of [...ids].slice(0, 10)) {
     if (seen.has(raw)) continue;
     const id = ctx.db.normalizeId("tasks", raw);

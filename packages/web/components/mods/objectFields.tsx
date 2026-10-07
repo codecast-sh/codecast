@@ -1,12 +1,13 @@
 // How a mod object's status and typed fields draw and edit: one place, so the
 // list, the board and the object page agree.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ModObjectField, ModObjectKind } from "@codecast/shared/contracts/mods";
 import { Switch } from "../ui/switch";
 import { EntityIdPill } from "../EntityIdPill";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { statusTone } from "../../lib/mods/objects";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export function StatusBadge({ kind, status }: { kind: Pick<ModObjectKind, "statuses">; status: string | undefined }) {
   if (!status) return null;
@@ -39,7 +40,7 @@ export function FieldValue({ field, value }: { field: ModObjectField; value: unk
 /** An editor for one typed field. Text commits on blur or Enter; choices commit at once. */
 export function FieldEditor({ field, value, onChange }: { field: ModObjectField; value: unknown; onChange: (v: unknown) => void }) {
   const [text, setText] = useState(value === undefined || value === null ? "" : String(value));
-  useEffect(() => setText(value === undefined || value === null ? "" : String(value)), [value]);
+  useWatchEffect(() => setText(value === undefined || value === null ? "" : String(value)), [value]);
   const input = "w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-[13px] text-sol-text outline-none hover:border-sol-border focus:border-sol-violet focus:bg-sol-bg";
   const commit = () => {
     const next = field.type === "number" ? (text.trim() === "" ? null : Number(text)) : text;

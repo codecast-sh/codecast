@@ -56,7 +56,6 @@ describe("change-feed write interceptor coverage", () => {
     "oauthConnectors.ts": "oauth connector state — untracked",
     "searchMirror.ts": "search mirror rows — untracked",
     "storyMode.ts": "story mode state — untracked",
-    "transcripts.ts": "call transcripts and segments — untracked",
   };
 
   test("only allowlisted files import raw mutation builders, and none of them writes a tracked table", () => {

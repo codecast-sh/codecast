@@ -1,10 +1,15 @@
 // Pure scroll-decision logic for ConversationView, extracted so it can be
-// unit-tested without a DOM. See conversationScroll.test.ts.
+// unit-tested without a DOM (settleTimelineItemAtOffset takes the scroller and
+// its rows as arguments, so a fake stands in). See conversationScroll.test.ts
+// and conversationScroll.settle.test.ts.
 //
 // Streaming follows the tail until the user deliberately scrolls away. Once
 // that intent latch is set, geometry must not override it: a row re-measure or
 // new chunk can make the viewport look "near bottom" without the reader asking
 // to be moved there.
+
+import { cssZoomOf } from "../lib/cssZoom";
+
 export function shouldFollowStreaming(userScrolled: boolean, openAtTop = false): boolean {
   // Unsigned share-link visitors start at the top of the transcript. End-follow
   // would pin them to the live tail as rows measure in, which is the authed
@@ -232,4 +237,150 @@ function densityJumpRow(
     return { scrollToId: id, expandKey: id };
   }
   return { scrollToId: id, expandKey: null };
+}
+
+// Scroll a virtualized timeline item to a fixed offset from the container top,
+// settling across re-measures: items above the target report estimated heights
+// until they actually render, so a single scrollToIndex lands off-target. The
+// retry loop first waits for the item's element to mount, nudges scrollTop
+// each frame until the offset holds, then keeps watching for `watchMs` —
+// freshly mounted markdown/images above re-measure for a couple of seconds
+// after the first convergence and would otherwise drag the target away.
+// `onSettled` fires once at the first convergence. The watch aborts the moment
+// the user scrolls, or the moment anything else moves the view (a scrollTop
+// that is not the one it last wrote while the content's height stood still:
+// a host landing on a card inside the row, a scrollbar drag), and starting a
+// new settle cancels the previous one. A re-measure above the row moves
+// scrollTop AND scrollHeight together, and that the watch still corrects.
+let activeItemSettleCancel: (() => void) | null = null;
+/** Stop the settle in flight, if any (a conversation switch: its watcher would correct against the new rows). */
+export function cancelActiveItemSettle() {
+  activeItemSettleCancel?.();
+}
+/** The next frame, or a short timer when the document is hidden: a
+ *  background tab runs no animation frames, and a jump opened there (a link
+ *  in a new tab, an agent's tab) must still land by the time it is seen. */
+export function nextFrame(fn: () => void): void {
+  if (typeof document !== "undefined" && document.hidden) { setTimeout(fn, 16); return; }
+  requestAnimationFrame(fn);
+}
+
+export function settleTimelineItemAtOffset(
+  container: HTMLElement,
+  virtualizer: { scrollToIndex: (index: number, opts: { align: "start" }) => void },
+  itemIndex: number,
+  offsetPx: number,
+  opts?: {
+    initialDelayMs?: number;
+    watchMs?: number;
+    onSettled?: () => void;
+    // Identity of the target row (its data-vkey — the stable message key).
+    // The index is a snapshot of ONE timeline: a same-session jump starts on
+    // the tail timeline, then the target-mode window replaces it and every
+    // index shifts, so an index-only settle pins whatever row inherited the
+    // number (measured: every decision-card jump landed the same six rows
+    // late). The key survives the swap; resolveIndex re-derives the index on
+    // the CURRENT timeline for the scrollToIndex that brings the row into
+    // the render window.
+    itemKey?: string;
+    resolveIndex?: () => number;
+  },
+) {
+  activeItemSettleCancel?.();
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    container.removeEventListener("wheel", cancel);
+    container.removeEventListener("touchstart", cancel);
+    if (activeItemSettleCancel === cancel) activeItemSettleCancel = null;
+  };
+  activeItemSettleCancel = cancel;
+  container.addEventListener("wheel", cancel, { passive: true });
+  container.addEventListener("touchstart", cancel, { passive: true });
+
+  const currentIndex = () => {
+    const i = opts?.resolveIndex ? opts.resolveIndex() : itemIndex;
+    return i >= 0 ? i : itemIndex;
+  };
+  const findEl = (idx: number) => {
+    if (opts?.itemKey) {
+      // With an identity, the index lookup is only a fallback — an index hit
+      // that isn't the keyed row is exactly the wrong-row pin this guards
+      // against, so verify before trusting it.
+      const byKey = container.querySelector(`[data-vkey="${CSS.escape(opts.itemKey)}"]`);
+      if (byKey) return byKey;
+      const byIndex = container.querySelector(`[data-index="${idx}"]`);
+      return byIndex?.getAttribute("data-vkey") === opts.itemKey ? byIndex : null;
+    }
+    return container.querySelector(`[data-index="${idx}"]`);
+  };
+  virtualizer.scrollToIndex(currentIndex(), { align: "start" });
+  // What the view looked like after the watch's last frame; a scrollTop that
+  // differs under an unchanged scrollHeight is someone else's scroll.
+  let lastTop = -1;
+  let lastHeight = -1;
+  const remember = () => {
+    lastTop = container.scrollTop;
+    lastHeight = container.scrollHeight;
+  };
+  const takenOver = () => lastTop >= 0 && container.scrollTop !== lastTop && container.scrollHeight === lastHeight;
+  const scrollElToOffset = (el: Element) => {
+    const elRect = el.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    // Rect deltas are screen px; scrollTop is layout px — divide by CSS zoom.
+    container.scrollTop += (elRect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
+    remember();
+  };
+  const watchMs = opts?.watchMs ?? 2500;
+  const start = performance.now();
+  let findAttempts = 0;
+  let settledFired = false;
+  const attempt = () => {
+    if (cancelled) return;
+    findAttempts++;
+    const idx = currentIndex();
+    const el = findEl(idx);
+    if (el) {
+      scrollElToOffset(el);
+      // Pin the DOM node, not the index: rows are keyed by stable message key,
+      // so the node survives re-renders, while data-index shifts whenever the
+      // loaded window grows (target mode pages in above the anchor).
+      let settleCount = 0;
+      const settle = () => {
+        if (cancelled) return;
+        settleCount++;
+        if (!el.isConnected) {
+          // The row unmounted (a window swap re-rendered the list). The jump
+          // isn't done — re-find the row by identity while time remains.
+          if (performance.now() - start < watchMs && findAttempts < 20) setTimeout(attempt, 100);
+          else cancel();
+          return;
+        }
+        if (takenOver()) {
+          cancel();
+          return;
+        }
+        const rect = el.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const off = (rect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
+        if (Math.abs(off) > 2) scrollElToOffset(el);
+        else remember();
+        // Remembered before onSettled runs: a host that scrolls from inside
+        // it is the next frame's takeover, never a drift to correct.
+        if (!settledFired && (Math.abs(off) <= 2 || settleCount >= 15)) {
+          settledFired = true;
+          opts?.onSettled?.();
+        }
+        if (performance.now() - start < watchMs) nextFrame(settle);
+        else cancel();
+      };
+      nextFrame(settle);
+    } else if (findAttempts < 20) {
+      virtualizer.scrollToIndex(idx, { align: "start" });
+      nextFrame(() => setTimeout(attempt, 100));
+    } else {
+      cancel();
+    }
+  };
+  setTimeout(attempt, opts?.initialDelayMs ?? 300);
 }

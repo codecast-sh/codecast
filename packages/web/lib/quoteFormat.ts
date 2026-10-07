@@ -189,8 +189,8 @@ export function appendToDraft(existing: string, addition: string): string {
 }
 
 // Wrap the user's plan annotations in directive framing for a plan rejection.
-// When you reject an ExitPlanMode plan, soft phrasing gets ignored — the agent
-// tends to re-present a barely-changed plan — so the feedback leads with a hard
+// When you reject an ExitPlanMode plan, soft phrasing gets ignored (the agent
+// tends to re-present a barely-changed plan), so the feedback leads with a hard
 // "not approved" and explicit rules. `feedback` is the compiled annotation batch
 // (already markdown blockquotes + notes); empty falls back to a generic request.
 export function formatPlanFeedback(feedback: string): string {
@@ -221,7 +221,7 @@ export function formatDocFeedback(
   const note = (extra || "").trim();
   const lines = [
     `Feedback on document "${title || "Untitled"}" (doc \`${docId}\`).`,
-    `To apply edits use \`cast doc edit ${docId} --old "text to find" --new "replacement"\` (or \`--title\` to rename) — this document lives in the database, not the filesystem; do not use file Read/Write/Edit.`,
+    `To apply edits use \`cast doc edit ${docId} --old "text to find" --new "replacement"\` (or \`--title\` to rename): this document lives in the database, not the filesystem; do not use file Read/Write/Edit.`,
     "",
     body || "Changes requested.",
   ];

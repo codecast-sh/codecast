@@ -75,11 +75,11 @@ describe("diff line comments ride the shared batch out to the agent", () => {
       messageId: "diff:tool_7:packages/web/x.ts",
       blockIndex: 42,
       quote: "packages/web/x.ts:42\nconst y = bar()",
-      body: "rename y — too vague",
+      body: "rename y, too vague",
       createdAt: 1,
     });
     expect(attachReviewToMessage(CONV, "")).toBe(
-      "> packages/web/x.ts:42\n> const y = bar()\n\nrename y — too vague",
+      "> packages/web/x.ts:42\n> const y = bar()\n\nrename y, too vague",
     );
     expect(useInboxStore.getState().reviewComments[CONV]).toBeUndefined(); // consumed
   });

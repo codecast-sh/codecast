@@ -83,7 +83,7 @@ export function KeyboardShortcutsPanel() {
         result.push({
           label: "Composer",
           accent: "bg-sol-violet",
-          rows: SEND_CHORDS.map((c) => ({ key: c.accel, description: c.label, parts: formatAcceleratorParts(c.accel) })),
+          rows: SEND_CHORDS.filter((c) => !c.surface || mode.shows(c.surface)).map((c) => ({ key: c.accel, description: c.label, parts: formatAcceleratorParts(c.accel) })),
         });
       }
     }

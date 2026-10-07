@@ -229,6 +229,10 @@ export type ConversationViewProps = {
    * (from useConversationMessages.isJumpingToTarget). Drives the
    * "Jumping to message..." indicator so mid-conversation jumps aren't silent. */
   isJumpingToTarget?: boolean;
+  /** The target's row has settled at the top of the view, once per request:
+   *  a host that lands on something inside that row (the org screen's card)
+   *  scrolls from here, and the view's own settle yields to that scroll. */
+  onTargetSettled?: (messageId: string, nonce: number | undefined) => void;
   isOwner?: boolean;
   // Anonymous share-link viewer: simplified defaults (condensed density, no AI
   // density modes). Distinct from !isOwner, which also covers signed-in teammates.

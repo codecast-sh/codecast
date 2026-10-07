@@ -18,7 +18,7 @@ import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { IssueLink } from "../../../components/tasks/IssueLink";
 import { useIssueSyncSources } from "../../../hooks/useSyncIssueSyncSources";
-import { AppLoader } from "../../../components/AppLoader";
+import { PaneLoader } from "../../../components/PaneLoader";
 import { TaskListContent } from "../page";
 import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentionQuery";
 import { useImageUpload } from "../../../hooks/useImageUpload";
@@ -502,7 +502,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
       // Full page redirects to the conversation (effect above); render the
       // loader during the swap. Inline keeps the list visible and offers a link.
       if (sessionForBadId && !isInline) {
-        return <AppLoader className="min-h-[16rem] h-full" />;
+        return <PaneLoader />;
       }
       return (
         <div className={`flex flex-col items-center justify-center h-full gap-3 text-center px-6 ${isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 bg-sol-bg" : ""}`}>
@@ -521,7 +521,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
         </div>
       );
     }
-    return <AppLoader className={isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
+    return <PaneLoader className={isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
   }
 
   const status = statusVisual(taskStatusOf(data as any, taskStatuses), taskStatuses);

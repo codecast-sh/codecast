@@ -15,7 +15,7 @@ const WIDE_ASPECT = 2;
  *  MD_IMAGE_COLLAPSED_HEIGHT, widened for strips). */
 type ImageSize = "auto" | "wide" | "small";
 
-export function imageSizeFromTitle(title?: string | null): ImageSize {
+function imageSizeFromTitle(title?: string | null): ImageSize {
   const hint = title?.trim().toLowerCase();
   if (hint === "wide" || hint === "full") return "wide";
   if (hint === "small") return "small";

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Link as LinkIcon, Link2, ArrowUpRight, Check, ChevronDown, ChevronRight, Columns2, Maximize2, MessageSquarePlus, Minimize2, MoreHorizontal } from "lucide-react";
@@ -19,6 +19,7 @@ import { ClaudeIcon } from "./BrandIcons";
 import { HeightGrip, savedGripHeight } from "./HeightGrip";
 import { KeyCap } from "./KeyCap";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 const api = _api as any;
 
@@ -230,7 +231,7 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
   notes?: ReturnType<typeof usePageNotes>;
 }) {
   const [copied, setCopied] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!copied) return;
     const t = setTimeout(() => setCopied(false), 1400);
     return () => clearTimeout(t);
@@ -294,7 +295,7 @@ export function FramelessPage({ title, href, actions, caption, height, stageRef,
   // anywhere outside the page puts it away again.
   const [controlsOpen, setControlsOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!controlsOpen) return;
     const onDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setControlsOpen(false);
@@ -389,7 +390,7 @@ const EMBED_FIT_MAX = 900;
  *  content is all absolutely positioned measures its body at a few pixels). */
 function useReportedHeight(frameRef: RefObject<HTMLIFrameElement | null>): number | null {
   const [height, setHeight] = useState<number | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const onMessage = (e: MessageEvent) => {
       const m = e.data as { type?: unknown; height?: unknown } | null;
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
@@ -657,7 +658,7 @@ function useLinkPreview(url: string): LinkPreviewRow | null | undefined {
   const request = useMutation(api.linkPreviews.request);
   const row = data as LinkPreviewRow | null | undefined;
   const stale = row !== undefined && linkPreviewStale(row, Date.now());
-  useEffect(() => {
+  useWatchEffect(() => {
     if (stale) void request({ url }).catch(() => {});
   }, [stale, url, request]);
   return row;

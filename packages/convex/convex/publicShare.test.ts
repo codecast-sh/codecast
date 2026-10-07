@@ -12,6 +12,7 @@ const UUID_B = "4c7c324f-3077-486a-a63c-65f188d18a0c";
 function fakeDb(rows: Array<Record<string, any>>, segments: Array<Record<string, any>> = []) {
   const byId = new Map(rows.map((r) => [r._id as string, r]));
   const patches: Array<{ id: string; patch: Record<string, unknown> }> = [];
+  const inserts: Array<{ table: string; row: Record<string, any> }> = [];
   const db = {
     normalizeId: (_table: string, id: string) => (byId.has(id) ? id : null),
     async get(id: string) {
@@ -20,6 +21,10 @@ function fakeDb(rows: Array<Record<string, any>>, segments: Array<Record<string,
     async patch(id: string, patch: Record<string, unknown>) {
       patches.push({ id, patch });
       byId.set(id, { ...byId.get(id), ...patch });
+    },
+    async insert(table: string, row: Record<string, any>) {
+      inserts.push({ table, row });
+      return `${table}_${inserts.length}`;
     },
     query(table: string) {
       const eqs: Record<string, unknown> = {};
@@ -39,16 +44,20 @@ function fakeDb(rows: Array<Record<string, any>>, segments: Array<Record<string,
       };
     },
   };
-  return { db, patches, byId };
+  return { db, patches, inserts, byId };
 }
 
 describe("claimShareToken", () => {
   test("turns the link on with a well-formed token and off with null", async () => {
-    const { db, byId } = fakeDb([{ _id: "t1" }]);
-    await claimShareToken({ db } as any, "tasks", byId.get("t1") as any, UUID_A);
+    const { db, byId, inserts } = fakeDb([{ _id: "t1" }]);
+    await claimShareToken({ db } as any, "tasks", byId.get("t1") as any, UUID_A, "u1" as any);
     expect(byId.get("t1")?.share_token).toBe(UUID_A);
-    await claimShareToken({ db } as any, "tasks", byId.get("t1") as any, null);
+    await claimShareToken({ db } as any, "tasks", byId.get("t1") as any, null, "u1" as any);
     expect(byId.get("t1")?.share_token).toBeUndefined();
+    expect(inserts.map((i) => [i.table, i.row.kind, i.row.actor_user_id])).toEqual([
+      ["authority_events", "share_link_minted", "u1"],
+      ["authority_events", "share_link_revoked", "u1"],
+    ]);
   });
 
   test("refuses a token another row already serves, so a link cannot be re-aimed", async () => {

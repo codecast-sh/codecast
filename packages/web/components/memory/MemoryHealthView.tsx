@@ -48,7 +48,7 @@ export function MemoryHealthView({ atlas, onOpen, onJumpToLine }: { atlas: Memor
           </Row>
         ))}
       </Card>
-      <Card title={`Index lines over ${MEMORY_INDEX_LINE_SOFT_MAX} characters`} count={h.longLines.length} about="Each long line spends budget that pushes later lines past the cut.">
+      <Card title={`Index lines over ${MEMORY_INDEX_LINE_SOFT_MAX} characters`} count={h.longLines.length} about="Each long line takes room that pushes later lines past the cut.">
         {h.longLines.map((l) => (
           <Row key={l.line} why={`${l.length} characters`}>
             {lineButton(l.line)}

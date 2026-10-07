@@ -79,6 +79,15 @@ export function pendingRowsUnsettled(pending?: Array<{ _isSettled?: boolean }>):
   return !!pending?.some((m) => !m._isSettled);
 }
 
+// Every conversation the person already sent into and is waiting to confirm:
+// a queued (Ctrl+Enter) send or an optimistic outbox entry.
+export function pendingSendIdsOf(state: {
+  sessionsWithQueuedMessages: ReadonlySet<string>;
+  pendingMessages?: Record<string, Array<{ _isFailed?: boolean }>>;
+}): Set<string> {
+  return new Set([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages ?? {})]);
+}
+
 // Conversation ids that currently have an unconfirmed outbound message.
 export function sessionsWithPendingSend(
   pendingMessages: Record<string, Array<{ _isFailed?: boolean }>>,
@@ -171,8 +180,7 @@ export function collectInboxOverlayDeps(
   }
   // The pending_send members: a queued (Ctrl+Enter) send and an optimistic
   // outbox entry are the same "the user already acted" signal.
-  const pendingSendIds = opts?.pendingSendIds
-    ?? new Set([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages ?? {})]);
+  const pendingSendIds = opts?.pendingSendIds ?? pendingSendIdsOf(state);
   return {
     now,
     focusedId: state.currentSessionId ?? null,

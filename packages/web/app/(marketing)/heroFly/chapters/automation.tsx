@@ -104,7 +104,7 @@ export function AutomationSurface({ now }: PartProps) {
 
   // The rows, the pinned state and the run panel each cross a change of phase as a dissolve with their height eased (FilmSwap), so a run landing in the trigger's history or a step turning green never reflows them in one frame. The countdown still ticks inside the settled rows.
   const rowsAt = (step: number) => triggerRows(now, wall, PHASES[step], fireIn, edits);
-  const trigger = (i: number) => (step: number) => {
+  const trigger = (i: number, step: number) => {
     const p = PHASES[step];
     const row = rowsAt(step)[i];
     const runs = triggerRuns(now, wall, p);
@@ -144,7 +144,7 @@ export function AutomationSurface({ now }: PartProps) {
         <div className="min-w-0">
           {rowsAt(PHASES.indexOf(phase)).map((row, i) => (
             <div key={row.task._id} data-hero-live="" {...fly(`auto/automation.row:${i}`)}>
-              <FilmSwap cues={PHASE_CUES} render={trigger(i)} />
+              <FilmSwap cues={PHASE_CUES} render={(step) => trigger(i, step)} />
             </div>
           ))}
           <div className="-mx-2 mt-1" {...fly("auto/automation.state")}>

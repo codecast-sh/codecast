@@ -11,6 +11,7 @@ import { useDebounce } from "./useDebounce";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { teamIdForPath } from "../lib/vault/scopeModel";
 import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
+import { mergeEntityRows } from "../lib/universalSearch";
 import { identityLine, identityRowOf } from "../lib/sessionIdentity";
 import { personifyAllNow } from "./usePersonifyAll";
 
@@ -236,12 +237,8 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
   ];
   if (inputs.length === previousMentionInputs.length && inputs.every((value, i) => value === previousMentionInputs[i])) return previousMentionItems;
   const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
-  const merged = (windowRows: Record<string, any>, storeRows: Record<string, any>) => {
-    const rows = new Map<string, any>();
-    for (const row of Object.values(windowRows)) if (row?._id) rows.set(String(row._id), row);
-    for (const row of Object.values(storeRows)) if (row?._id && row.title) rows.set(String(row._id), row);
-    return [...rows.values()].filter((row) => inScope(row, scope));
-  };
+  const merged = (windowRows: Record<string, any>, storeRows: Record<string, any>) =>
+    mergeEntityRows<any>(windowRows, storeRows).filter((row) => inScope(row, scope));
   const items: MentionItem[] = [
     ...(s.teamMembers || []).map((m) => {
       const handle = memberHandle(m) ?? undefined;

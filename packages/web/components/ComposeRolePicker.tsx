@@ -27,7 +27,7 @@ import { filterRoleRecipients, roleRecipients, type RoleRecipient } from "../lib
 const ALT_CAP = isMac ? "⌥" : "Alt";
 
 /** The chord that opens the picker: ⌥R. `code` so the mac Option dead key (®) never hides it. */
-export function isRolePickerChord(e: KeyboardEvent | React.KeyboardEvent): boolean {
+function isRolePickerChord(e: KeyboardEvent | React.KeyboardEvent): boolean {
   return e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyR";
 }
 

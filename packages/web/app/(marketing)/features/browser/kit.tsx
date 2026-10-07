@@ -17,7 +17,6 @@ export const INK = SOL.base03;
 export const MUTED = SOL.base00;
 export const DIM = SOL.base1;
 export const PAPER = SOL.base3;
-export const SAND = SOL.base2;
 
 export { useStillMode } from "../kit";
 

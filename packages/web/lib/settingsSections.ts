@@ -19,6 +19,7 @@ export type SettingsSectionId =
   | "calls"
   | "team"
   | "sync"
+  | "privacy"
   | "integrations"
   | "agents"
   | "agent-library"
@@ -44,6 +45,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/calls": "calls",
   "/settings/team": "team",
   "/settings/sync": "sync",
+  "/settings/privacy": "privacy",
   "/settings/integrations": "integrations",
   "/settings/integrations/github-app": "integrations",
   "/settings/agents": "agents",

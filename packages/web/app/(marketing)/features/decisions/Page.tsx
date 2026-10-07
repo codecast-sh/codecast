@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { InstallTabs } from "@/components/install-tabs";
 import { SOL } from "../../blog/blogChrome";
 import { FEATURE_DEEP_DIVES, featureHref } from "../catalog";
@@ -9,6 +9,7 @@ import { Hero } from "./Hero";
 import { Anatomy, Belongs, Clearing, Evidence, KeepTrue, Limits, Modes, Reference, Stacks, ThreeWays } from "./Sections";
 import { LINE } from "./mocks";
 import { Y } from "./kit";
+import { useMountEffect } from "../../../../hooks/useMountEffect";
 import "./decisions.css";
 
 const RELATED: { slug: string; why: string }[] = [
@@ -67,7 +68,7 @@ function Cta() {
 export default function DecisionsPage() {
   // ?static renders every element at rest (no entrance motion), for captures.
   const [still, setStill] = useState(false);
-  useEffect(() => { setStill(new URLSearchParams(window.location.search).has("static")); }, []);
+  useMountEffect(() => { setStill(new URLSearchParams(window.location.search).has("static")); });
   return (
     <main className="dq-root" data-static={still ? "" : undefined} style={{ backgroundColor: SOL.base3 }}>
       <Hero />

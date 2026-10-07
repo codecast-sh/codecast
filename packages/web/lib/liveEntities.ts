@@ -23,7 +23,7 @@
 // derived/enriched field for an entity that also lives in the store, route it
 // through these helpers.
 
-import { parseProposalChangeRef, parseRepoObjectId, type EntityType } from "@codecast/shared/entities";
+import { parseProposalChangeRef, parseReplayRef, parseRepoObjectId, type EntityType } from "@codecast/shared/entities";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import { roleAssigneeInfo, sameAssigneeInfo, type AssigneeInfo as ResolvedAssignee, type AssigneeRole } from "@codecast/shared/contracts/orgAssignee";
 
@@ -498,6 +498,7 @@ const TYPE_BY_COLLECTION: Array<[string, EntityType]> = [
   ["pullRequests", "pr"],
   ["commits", "commit"],
   ["opsSources", "source"],
+  ["opsReplays", "replay"],
 ];
 
 export function entityTypeInStore(state: any, convexId: string): EntityType | undefined {
@@ -543,6 +544,10 @@ export function findEntityInStore(
     case "source":
       // The workspace's product sources, as the Ops page last fed them.
       return lookup(state.opsSources, rawId);
+    case "replay":
+      // The workspace's recordings, as the Ops page last fed them. A moment
+      // (`rp-12@1:23`) names the replay's row.
+      return lookup(state.opsReplays, parseReplayRef(rawId)?.replay ?? rawId);
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

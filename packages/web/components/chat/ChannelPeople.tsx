@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -24,6 +24,7 @@ import { useSlackConnect } from "../../hooks/useSlackConnect";
 import { SlackLogo } from "../SlackLogo";
 import "./chat.css";
 import { isPerson } from "@codecast/shared/team/memberKind";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 // The people layer of a chat room: who a DM is with, who is inside a private
 // channel, and how someone new gets in. Three surfaces, one file, because they
@@ -131,7 +132,7 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
 
   // Read the Slack side whole when the panel opens; the server skips the call
   // when it read the channel moments ago, and the roster arrives on the link.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open || !link) return;
     let live = true;
     setSlackReadError(null);

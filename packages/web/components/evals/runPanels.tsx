@@ -15,7 +15,7 @@ import { RunFiles } from "./RunFiles";
 
 export type AnatomyTab = "calls" | "agent" | "guard" | "files";
 
-export const ANATOMY_TAB_WORDS: Record<AnatomyTab, string> = { calls: "Calls", agent: "Agent", guard: "Guard", files: "Files" };
+const ANATOMY_TAB_WORDS: Record<AnatomyTab, string> = { calls: "Calls", agent: "Agent", guard: "Guard", files: "Files" };
 
 /** The anatomy tabs a rep has: Calls when it made calls, Agent and Guard on agent routes, and always Files. */
 export function anatomyTabs(run: Pick<RunResponse, "run" | "calls" | "agents" | "guard">): AnatomyTab[] {

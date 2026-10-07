@@ -25,12 +25,20 @@ function body(html: string): HTMLElement {
 }
 const target = (href: string) => ({ href, title: `Task: ${href}` });
 
+// In running text the slot rides right after the pill as an inline float (CSS
+// drops it under the pill's line), so the band opens under that line inside
+// the paragraph and no text node is split.
 test("a pill's band opens under its paragraph, not at the end of the body", () => {
   const content = body(`<p>one</p><p>see <a class="entity-ref" href="/tasks/a">a</a> here</p><p>three</p>`);
   const pill = content.querySelector<HTMLElement>("a")!;
   host.toggleReveal("m1", target("/tasks/a"), pill);
-  const kids = Array.from(content.children).map((c) => c.tagName + (c.hasAttribute("data-reveal-slot") ? "[slot]" : ""));
-  expect(kids).toEqual(["P", "P", "DIV[slot]", "P"]);
+  const kids = Array.from(content.children).map((c) => c.tagName);
+  expect(kids).toEqual(["P", "P", "P"]);
+  const slot = content.querySelector("[data-reveal-slot]")!;
+  expect(slot.hasAttribute("data-reveal-inline")).toBe(true);
+  expect(slot.parentElement).toBe(pill.parentElement);
+  expect(pill.nextElementSibling).toBe(slot);
+  expect(slot.nextSibling?.textContent).toBe(" here");
   host.closeReveal();
   expect(content.querySelector("[data-reveal-slot]")).toBeNull();
 });
@@ -84,7 +92,7 @@ test("a recycled row re-places the slot under the reference, as a restored (not 
   host.reattachReveal("row", "/tasks/a", a2);
   const cur = host.currentReveal()!;
   expect(cur.slot.isConnected).toBe(true);
-  expect(cur.slot.previousElementSibling).toBe(a2.parentElement);
+  expect(cur.slot.previousElementSibling).toBe(a2);
   expect(cur.fresh).toBe(false);
   // A different host or href does nothing.
   host.reattachReveal("other", "/tasks/a", a2);

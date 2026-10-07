@@ -4,7 +4,7 @@ import { useActiveTeamFeature, useWorkspaceFeatureState } from '@/lib/teamFeatur
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
 import {
@@ -1087,6 +1087,15 @@ export default function InboxScreen() {
   const [chipsOpen, setChipsOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
+  // Another tab can open the sheet with words typed in (`?ask=`): the empty
+  // Routines list's examples do. The param is dropped once read, so the same
+  // example works again.
+  const ask = useLocalSearchParams<{ ask?: string }>().ask;
+  useEffect(() => {
+    if (!ask) return;
+    openNewSession(ask);
+    router.setParams({ ask: undefined });
+  }, [ask, openNewSession, router]);
   const isSearching = searchQuery.trim().length >= 2;
   // The org feature is per team, default off: the org button exists only
   // once the workspace is known to have it on.
@@ -1487,9 +1496,6 @@ export default function InboxScreen() {
         return [(
           <RNView key="empty" style={[styles.emptyInbox, { paddingHorizontal: Spacing.xl }]}>
             <AssistantIntro onStarter={(text) => openNewSession(text)} />
-            <TouchableOpacity style={styles.emptyStart} onPress={() => openNewSession()} activeOpacity={0.8} accessibilityRole="button">
-              <RNText style={styles.emptyStartText}>{words.newConversation}</RNText>
-            </TouchableOpacity>
           </RNView>
         )];
       }
@@ -1974,18 +1980,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     color: Theme.textMuted0,
-  },
-  emptyStart: {
-    marginTop: Spacing.lg,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: Theme.text,
-  },
-  emptyStartText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Theme.bg,
   },
   sectionHeader: {
     flexDirection: 'row',

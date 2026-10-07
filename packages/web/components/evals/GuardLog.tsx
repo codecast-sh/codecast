@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { GUARD_STATUSES, type GuardCounts, type GuardEntry, type GuardStatus } from "@codecast/shared/contracts/evalsApi";
 
-export const GUARD_WORDS: Record<GuardStatus, string> = {
+const GUARD_WORDS: Record<GuardStatus, string> = {
   SERVED: "answered from the frozen world",
   UNSERVED: "a read the frozen world did not capture",
   LIVE: "read the live workspace: not reproducible",

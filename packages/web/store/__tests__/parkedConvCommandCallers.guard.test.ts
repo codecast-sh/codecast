@@ -31,13 +31,14 @@ describe("parked convCommand caller policy", () => {
       source("../../components/GlobalSessionPanel.tsx"),
     ]);
 
-    expect(conversationView).toContain(
-      'if (isParkedDispatchError(err)) return;\n      if (prevPath)',
+    // Only a parked failure skips putting the old path back.
+    expect(conversationView).toMatch(
+      /if \(isParkedDispatchError\(err\)\) return;\n(?:\s*\/\/[^\n]*\n)*\s*if \(prevPath\)/,
     );
-    expect(sessionsPage).toContain(
-      'if (isParkedDispatchError(err)) return;',
-    );
-    expect(sessionsPage).toContain("toast.error(`Kill failed:");
+    // The sessions page kills through the shared gesture (the store's kill
+    // action and its undo), never a convCommand of its own.
+    expect(sessionsPage).toContain("killWithNotice(s.conversation_id)");
+    expect(sessionsPage).not.toContain('"killSession"');
     expect(globalPanel).toContain(
       'if (isParkedDispatchError(err)) return;',
     );
@@ -56,12 +57,15 @@ describe("parked convCommand caller policy", () => {
     for (const command of [
       "setPermissionMode",
       "rewindSession",
-      "sendEscapeToSession",
     ]) {
       expect(conversationView).toMatch(
         new RegExp(`convCommand\\([^\\n]+, "${command}"[^\\n]*\\)\\.catch\\(\\(err\\)`),
       );
     }
+    // Escape rides the store's sendEscape (it stamps the press time), which is
+    // the same convCommand, and the composer observes its rejection.
+    expect(conversationView).toMatch(/sendEscape\(conversationId\)\.catch\(\(err\)/);
+    expect(await source("../inboxStore.ts")).toMatch(/sendEscape: \(convId: string\) => get\(\)\.convCommand\(convId, "sendEscapeToSession"/);
     expect(conversationView).toContain(
       "Escape queued — it will send when the connection recovers",
     );

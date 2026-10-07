@@ -32,7 +32,9 @@ export function SettingsPanel({ children, className }: { children: React.ReactNo
 }
 
 interface SectionProps {
-  title: React.ReactNode;
+  /** Left out when the section is the page's only one, so its name would
+   *  only repeat the page's subtitle. */
+  title?: React.ReactNode;
   icon?: LucideIcon;
   /** One sentence under the header, for sections whose name isn't enough. */
   description?: React.ReactNode;
@@ -49,13 +51,13 @@ interface SectionProps {
 export function SettingsSection({ title, icon: Icon, description, actions, padded, overflowVisible, children, className }: SectionProps) {
   return (
     <section className={className}>
-      <div className="mb-2 flex items-center justify-between gap-4 px-1">
+      {(title || actions) && <div className="mb-2 flex items-center justify-between gap-4 px-1">
         <div className="flex items-center gap-2 min-w-0">
-          {Icon && <Icon data-cc-settings-icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />}
-          <h3 data-cc-settings-title className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-sol-text-muted">{title}</h3>
+          {Icon && title && <Icon data-cc-settings-icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />}
+          {title && <h3 data-cc-settings-title className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-sol-text-muted">{title}</h3>}
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
-      </div>
+      </div>}
       {description && (
         <p className="mb-2.5 -mt-1 max-w-prose px-1 text-xs leading-relaxed text-sol-text-muted">{description}</p>
       )}

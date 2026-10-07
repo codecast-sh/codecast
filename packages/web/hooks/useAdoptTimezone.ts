@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+
 import { useInboxStore } from "../store/inboxStore";
+import { useWatchEffect } from "./useWatchEffect";
 
 /**
  * Give a profile with no timezone the zone of the device it signs in on. A
@@ -8,7 +9,7 @@ import { useInboxStore } from "../store/inboxStore";
  */
 export function useAdoptTimezone(): void {
   const missing = useInboxStore((s) => !!s.currentUser?._id && !(s.currentUser as any).timezone);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!missing) return;
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (zone) useInboxStore.getState().adoptTimezone(zone);

@@ -49,7 +49,7 @@ function subjectsLine(answers: Answer[]): string {
  *  their subjects; every reject and note is its own row with its subject and
  *  words. A note on the whole proposal (a legacy item with no seqs) reads
  *  "On all of it"; no surface creates them any more. */
-export function answerRows(answers: Answer[]): BatchRow[] {
+function answerRows(answers: Answer[]): BatchRow[] {
   const folded = answers.filter((a) => a.proposal.verdict === "approve" && !a.body.trim() && a.proposal.seqs.length);
   const rows: BatchRow[] = folded.length ? [{ items: folded, verdict: "approve", label: ORG_REPLY_WORDS.approve.act, sentence: subjectsLine(folded) }] : [];
   for (const a of answers) {

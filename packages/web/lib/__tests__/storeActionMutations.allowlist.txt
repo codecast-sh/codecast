@@ -21,7 +21,6 @@ app/settings/sync/page.tsx 3
 app/settings/team/join/page.tsx 1
 app/team/activity/page.tsx 1
 app/triggers/[id]/page.tsx 1
-app/triggers/page.tsx 1
 app/workflows/page.tsx 3
 components/CollabComposer.tsx 1
 components/ConversationView.tsx 2

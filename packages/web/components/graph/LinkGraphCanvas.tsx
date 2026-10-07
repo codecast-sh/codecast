@@ -31,7 +31,7 @@ const MAX_NODE_SIZE = 12;
 
 /** The accent tokens a node may be colored with, in palette order. Accents
  *  only: a graph should read as the app's palette, not a chart library's. */
-export const GRAPH_ACCENTS: [token: string, fallback: string][] = [
+const GRAPH_ACCENTS: [token: string, fallback: string][] = [
   ["--sol-blue", "#268bd2"],
   ["--sol-cyan", "#2aa198"],
   ["--sol-green", "#859900"],

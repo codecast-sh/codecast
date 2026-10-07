@@ -31,6 +31,7 @@
     "./contracts/assistant": "./contracts/assistant.ts",
     "./contracts/ingest": "./contracts/ingest.ts",
     "./contracts/replay": "./contracts/replay.ts",
+    "./contracts/replayPlayer": "./contracts/replayPlayer.ts",
     "./contracts/appConnector": "./contracts/appConnector.ts",
     "./contracts/connectorReasons": "./contracts/connectorReasons.ts",
     "./contracts/codecastSignature": "./contracts/codecastSignature.ts",

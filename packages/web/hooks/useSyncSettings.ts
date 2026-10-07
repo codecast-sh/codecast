@@ -71,6 +71,7 @@ export function useSettingsData<Name extends SettingsDataName>(name: Name, teamI
 }
 
 export function useSyncSettings() {
-  // A constant list, so the hook order never changes between renders.
+  // A module constant, so the hook order never changes between renders.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   for (const name of HOST_FED) useSettingsFeed(name);
 }

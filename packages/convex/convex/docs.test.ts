@@ -27,6 +27,7 @@ function createWebUpdateCtx(
 ) {
   const rows = new Map(docs.map((doc) => [doc._id as string, doc]));
   const patches: Patch[] = [];
+  const inserts: Array<{ table: string; row: Record<string, unknown> }> = [];
   const ctx = {
     auth: {
       async getUserIdentity() {
@@ -40,6 +41,11 @@ function createWebUpdateCtx(
       async patch(id: string, patch: Record<string, unknown>) {
         patches.push({ id, patch });
         rows.set(id, { ...rows.get(id), ...patch });
+      },
+      // claimShareToken records every link change as an authority event.
+      async insert(table: string, row: Record<string, unknown>) {
+        inserts.push({ table, row });
+        return `${table}_${inserts.length}`;
       },
       // Just enough of the query builder for isTeamMember's
       // team_memberships.by_user_team lookup and claimShareToken's

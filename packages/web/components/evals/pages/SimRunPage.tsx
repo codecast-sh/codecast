@@ -3,7 +3,8 @@
 // from a terminal, which shows as minimal.json.tmp) it follows GET /changes
 // and re-reads the run, so the progress and then the minimal order land here.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useInterval } from "../../../hooks/useInterval";
 import type { ChangesResponse } from "@codecast/shared/contracts/evalsApi";
 import { EVALS_POLL } from "@platform/evals/client";
 import { useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
@@ -39,11 +40,7 @@ export function SimRunPage({ view }: { view: Extract<EvalsView, { view: "sim-run
   useEvalsChanges(live, onChanges);
 
   // minimal.json.tmp moves between job reports; re-read it on the same clock while on screen.
-  useEffect(() => {
-    if (!live || !visible) return;
-    const id = setInterval(reload, EVALS_POLL.intervalMs);
-    return () => clearInterval(id);
-  }, [live, visible, reload]);
+  useInterval(reload, EVALS_POLL.intervalMs, live && visible);
 
   const onShrink = useCallback(async () => {
     setShrink({ state: "starting" });

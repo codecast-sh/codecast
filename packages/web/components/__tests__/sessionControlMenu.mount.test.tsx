@@ -30,6 +30,7 @@ const storeState = {
   sessions: { conv1: { _id: "conv1", title: "Fix the auth race", agent_type: "claude_code", project_path: "/p", git_root: "/p" } } as Record<string, any>,
   conversations: {} as Record<string, any>,
   currentUser: { _id: "u1", default_models: {} },
+  clientState: { ui: {} } as Record<string, any>,
   machineRoster: [],
   getConvexId: (id: string) => id,
   requestNavigate: (id: string) => { calls.navigates.push(id); },
@@ -67,13 +68,16 @@ beforeAll(async () => {
   mock.module("../../hooks/useLiveSessionMeta", () => ({ useLiveSessionMeta: () => undefined }));
   mock.module("../../hooks/useSyncAgentDefinitions", () => ({ useAgentDefinitions: () => [] }));
   mock.module("../../lib/conversationProcessor", () => ({ formatModel: (m: string) => m }));
+  const realAgentActions = await import("../../lib/sessionAgentActions");
   mock.module("../../lib/sessionAgentActions", () => ({
+    ...realAgentActions,
     switchSessionAgent: (row: { _id: string }, t: string) => { calls.switches.push([row._id, t]); return Promise.resolve(); },
     forkSessionAsAgent: (row: { _id: string }, t: string) => { calls.forks.push([row._id, t]); return { sessionId: "fork-stub", ready: Promise.resolve("fork-real") }; },
   }));
   mock.module("sonner", () => ({ toast: { success: (m: string) => calls.toasts.push(["success", m]), error: (m: string) => calls.toasts.push(["error", m]) } }));
   // The chip tooltip is Radix plumbing the assertions never hover; render the chip bare.
-  mock.module("../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: { children: React.ReactNode }) => h(React.Fragment, null, children), KeyCap: ({ children }: any) => h("kbd", null, children) }));
+  const realShortcutsHelp = await import("../KeyboardShortcutsHelp");
+  mock.module("../KeyboardShortcutsHelp", () => ({ ...realShortcutsHelp, ShortcutTooltip: ({ children }: { children: React.ReactNode }) => h(React.Fragment, null, children), KeyCap: ({ children }: any) => h("kbd", null, children) }));
 
   ({ createRoot } = await import("react-dom/client"));
   menu = await import("../ui/dropdown-menu");
@@ -205,6 +209,8 @@ test("the hand-off step shows the chosen agent's models, takes a direction, and 
   expect(closes.length).toBe(1);
 
   // Back from the configuration returns to the agent list, and from there to the panel.
+  // Gemini has no model rail; it is offered once pinned (it is not a default pin).
+  storeState.currentUser = { ...storeState.currentUser, pinned_agents: ["claude_code", "codex", "gemini"] } as typeof storeState.currentUser;
   mount();
   openVerb("handoff");
   pickAgent("gemini");
@@ -214,6 +220,7 @@ test("the hand-off step shows the chosen agent's models, takes a direction, and 
   click(qa("[data-pick-step] button").find((b) => b.textContent?.trim() === "Back")!);
   expect(q("[data-pick-step]")).toBeNull();
   expect(q("[data-session-control-panel]")).toBeTruthy();
+  storeState.currentUser = { _id: "u1", default_models: {} };
 });
 
 test("a blank session and an agent with no model rail read their state on the identity line", () => {

@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs';
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 
 test('Code is reachable from the main rail and command menu', () => {
-  expect(read('components/Sidebar.tsx')).toMatch(/label="Code"\s+href="\/repo"/);
-  expect(read('components/CommandPalette.tsx')).toContain('label: "Code", path: "/repo"');
+  expect(read('components/sidebar/SidebarNav.tsx')).toMatch(/label=\{page\("\/repo", "Code"\)\}\s+href="\/repo"/);
+  expect(read('lib/navPages.ts')).toContain('label: "Code", path: "/repo"');
+  expect(read('components/CommandPalette.tsx')).toContain('palettePages');
   expect(read('components/CommandPalette.tsx')).toContain('<RepositoryPaletteItems');
 });
 

@@ -872,12 +872,14 @@ describe("the replica's live derivation is the server's", () => {
         open_tasks: [{ id: "bjmsej5ia", kind: "background" }], open_tasks_at: EPOCH - MIN,
       }],
     };
-    for (const [tasks, at, expected] of [
-      [tables.managed_sessions[0].open_tasks, EPOCH - MIN, "dormant"],
-      [tables.managed_sessions[0].open_tasks, EPOCH - 11 * MIN, "needs_input"],
-      [[], EPOCH - MIN, "needs_input"],
+    // The report's age does not lapse the vouch; the daemon's heartbeat does.
+    for (const [tasks, at, heartbeat, expected] of [
+      [tables.managed_sessions[0].open_tasks, EPOCH - MIN, EPOCH - 5_000, "dormant"],
+      [tables.managed_sessions[0].open_tasks, EPOCH - 11 * MIN, EPOCH - 5_000, "dormant"],
+      [tables.managed_sessions[0].open_tasks, EPOCH - MIN, EPOCH - 11 * MIN, "needs_input"],
+      [[], EPOCH - MIN, EPOCH - 5_000, "needs_input"],
     ] as const) {
-      const input = { ...tables, managed_sessions: [{ ...tables.managed_sessions[0], open_tasks: tasks, open_tasks_at: at }] };
+      const input = { ...tables, managed_sessions: [{ ...tables.managed_sessions[0], open_tasks: tasks, open_tasks_at: at, last_heartbeat: heartbeat }] };
       const { liveness } = await computeSessionsLiveness({ db: db(input) }, ME as any);
       const overlay = liveness.conversations_dormant;
       const cli = await computeInboxSessions({ db: db(input) }, ME as any, { show_all: true, projection: true });

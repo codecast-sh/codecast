@@ -5,7 +5,7 @@
 
 import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage } from "./conversationProcessor";
 import { cleanUserMessage, isBareNudge, isSpawnedTaskPrompt } from "../components/sessionMessage";
-import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
+import { isTurnInterruptionNotice, parseDecisionAnswer } from "@codecast/shared/contracts";
 
 // A slash command ("/model opus") and `!` bash mode are the human talking to
 // their client, not to the agent. Both are stored as tag soup
@@ -22,11 +22,12 @@ function isClientCommand(raw: string): boolean {
 // The text a sticky prompt header may show for a user message, or null when
 // the message is not the human's own ask: anything machinery delivered (a
 // trigger run, a cast send, a teammate broadcast), a spawned run's opening
-// briefing, a bare nudge, or a command aimed at the client. Every sticky
+// briefing, a bare nudge, a command aimed at the client, or a decision answer
+// (a tap on a card, stored as "Decision: <label>", tagged or legacy). Every sticky
 // source (timeline, cached user list, last-message fallback) must agree, so
 // they all go through here.
 export function stickyPromptContent(raw: string | null | undefined): string | null {
-  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw) || isTurnInterruptionNotice(raw)) return null;
+  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw) || isTurnInterruptionNotice(raw) || parseDecisionAnswer(raw)) return null;
   const display = cleanUserMessage(raw);
   return display && !isBareNudge(display) ? display : null;
 }

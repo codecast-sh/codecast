@@ -37,7 +37,7 @@ const READING: Components = { ...MD_COMPONENTS, h1: heading("h1"), h2: heading("
 type OutlineEntry = { depth: number; text: string; id: string };
 
 /** The headings of a markdown body, outside code fences, as the outline lists them. */
-export function outlineOf(markdown: string): OutlineEntry[] {
+function outlineOf(markdown: string): OutlineEntry[] {
   const out: OutlineEntry[] = [];
   let fenced = false;
   for (const line of markdown.split("\n")) {

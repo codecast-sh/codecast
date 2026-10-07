@@ -3,12 +3,13 @@
 // asks a mod to draw one surface and redraws it when the mod says so or when
 // the data it read changes.
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { ModNode, ModSurface } from "@codecast/shared/contracts/mods";
 import { useInboxStore, isConvexId } from "../../store/inboxStore";
 import { useSyncCollection } from "../../hooks/useSyncCollection";
 import { modHost, type ModRow, type ModRuntime } from "./host";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 const api = _api as any;
 
@@ -56,7 +57,7 @@ export function useModSurface(runtime: ModRuntime | undefined, surface: ModSurfa
   const seq = useRef(0);
   const status = runtime?.status;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!runtime || !surface) {
       setState((s) => ({ ...s, loading: false, status: runtime?.status ?? "missing" }));
       return;
@@ -93,7 +94,7 @@ export function useModSurface(runtime: ModRuntime | undefined, surface: ModSurfa
   }, [runtime, key, propsSig, status === "failed"]);
 
   // Gone for good (not just redrawn): the frame can drop this surface's handlers.
-  useEffect(() => () => runtime?.release(key), [runtime, key]);
+  useWatchEffect(() => () => runtime?.release(key), [runtime, key]);
 
   return { ...state, retry: runtime ? () => runtime.invalidate(key) : undefined };
 }

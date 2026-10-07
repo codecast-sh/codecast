@@ -3,7 +3,7 @@
 // kind's declaration: title, status, typed fields, body. Every edit is a store
 // action, so it shows at once and syncs behind.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { DynamicIcon } from "lucide-react/dynamic";
 import { objectStatusIsDone, type ModSurface } from "@codecast/shared/contracts/mods";
 import { useInboxStore } from "../../store/inboxStore";
@@ -14,6 +14,7 @@ import { useModHostVersion, useModRows } from "../../lib/mods/useMods";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ModSurfaceView } from "./ModSurface";
 import { FieldEditor } from "./objectFields";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export function ObjectPage({ id }: { id: string }) {
   useModRows();
@@ -25,8 +26,8 @@ export function ObjectPage({ id }: { id: string }) {
   const [title, setTitle] = useState(row?.title ?? "");
   const [editingBody, setEditingBody] = useState(false);
   const [body, setBody] = useState(row?.body ?? "");
-  useEffect(() => setTitle(row?.title ?? ""), [row?.title]);
-  useEffect(() => { if (!editingBody) setBody(row?.body ?? ""); }, [row?.body, editingBody]);
+  useWatchEffect(() => setTitle(row?.title ?? ""), [row?.title]);
+  useWatchEffect(() => { if (!editingBody) setBody(row?.body ?? ""); }, [row?.body, editingBody]);
   const runtime = kind ? modHost.byName(kind.mod) : undefined;
   const drawsPage = !!runtime?.hooks.some((h) => h.event === "ui.render" && (!h.matcher || h.matcher.object === kind?.prefix));
   const surface = useMemo<ModSurface | null>(() => (row && kind ? { kind: "object", id: kind.prefix, props: { object: row } } : null), [row, kind]);

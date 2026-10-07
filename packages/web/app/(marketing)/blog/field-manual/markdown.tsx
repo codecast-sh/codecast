@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import { Cmd, Code, Figure, H2, P, SOL, Terminal } from "../blogChrome";
 
 /** The anchor id of a section heading; the chapter rail links to the same ids. */
-export function sectionId(text: string): string {
+function sectionId(text: string): string {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")

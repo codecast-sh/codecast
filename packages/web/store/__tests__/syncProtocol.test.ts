@@ -109,14 +109,16 @@ describe("optional inbox timestamp echoes", () => {
     expect(table.pending["conversations:a:inbox_dismissed_at"]).toBeUndefined();
     expect(table.pending["conversations:a:inbox_stashed_at"]).toBeUndefined();
     expect(table.pending["conversations:a:inbox_pinned_at"]).toBeUndefined();
-    expect(table.pending["conversations:a:title"]).toEqual({ type: "field", value: null });
+    expect(table.pending["conversations:a:title"]).toMatchObject({ type: "field", value: null });
+    // The lock still holds, and notes the omitted server value it is hiding.
+    expect(table.pending["conversations:a:title"]!.seen).toEqual([undefined]);
     expect((table.table.a as any).title).toBeNull();
 
     const record = applySyncRecord("conversations", "a", incoming, pending);
     expect(record.pending["conversations:a:inbox_dismissed_at"]).toBeUndefined();
     expect(record.pending["conversations:a:inbox_stashed_at"]).toBeUndefined();
     expect(record.pending["conversations:a:inbox_pinned_at"]).toBeUndefined();
-    expect(record.pending["conversations:a:title"]).toEqual({ type: "field", value: null });
+    expect(record.pending["conversations:a:title"]).toMatchObject({ type: "field", value: null });
     expect(record.record.title).toBeNull();
   });
 });

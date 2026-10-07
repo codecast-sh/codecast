@@ -5,7 +5,7 @@
 // ever HTML except the Canvas element, which goes through the same sanitizer as
 // a cast-canvas block.
 
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, memo, useContext, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { DynamicIcon } from "lucide-react/dynamic";
 import { Button as UIButton } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -18,6 +18,7 @@ import { hydrateCharts } from "../../lib/castChart";
 import { formatRelativeTime } from "../../lib/conversationFormat";
 import { MOD_ELEMENTS, type ModNode } from "@codecast/shared/contracts/mods";
 import { isAppPath } from "../../lib/mods/host";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 type Fn = { $fn: string };
 type Invoke = (fn: string, args: unknown[]) => void;
@@ -181,7 +182,7 @@ function Field({ p, multiline }: { p: Record<string, any>; multiline?: boolean }
   // While the person types, the mod's echoes of earlier keystrokes would
   // overwrite newer ones: its value wins only when the field is not in use.
   const focused = useRef(false);
-  useEffect(() => { if (!focused.current) setValue(str(p.value)); }, [p.value]);
+  useWatchEffect(() => { if (!focused.current) setValue(str(p.value)); }, [p.value]);
   const onChange = useHandler(p.onChange);
   const onSubmit = useHandler(p.onSubmit);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -239,7 +240,7 @@ function Select({ p }: { p: Record<string, any> }) {
 function Toggle({ p }: { p: Record<string, any> }) {
   const onChange = useHandler(p.onChange);
   const [on, setOn] = useState(!!p.value);
-  useEffect(() => setOn(!!p.value), [p.value]);
+  useWatchEffect(() => setOn(!!p.value), [p.value]);
   return (
     <label className="inline-flex items-center gap-2 text-[13px] text-sol-text cursor-pointer">
       <Switch checked={on} onCheckedChange={(v: boolean) => { setOn(v); onChange?.(v); }} />
@@ -372,7 +373,7 @@ function Tabs({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
 function Chart({ p }: { p: Record<string, any> }) {
   const ref = useRef<HTMLDivElement>(null);
   const spec = useMemo(() => JSON.stringify(p.spec ?? {}), [p.spec]);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.innerHTML = "";

@@ -3,11 +3,12 @@
 // codecast's wider route table, and the connection to the daemon, which is
 // codecast's. The data never leaves memory (store/evalsStore.ts).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useConvex } from "convex/react";
 import type { EvalsRoutes } from "@codecast/shared/contracts/evalsApi";
 import { evalsHooks } from "@platform/evals/react";
 import { useEvalsStore } from "../../store/evalsStore";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 /** How long the shell waits before each automatic retry of a daemon that was live but slow to answer; the last step repeats. */
 export const EVALS_SLOW_RETRY_MS = [5_000, 15_000, 30_000] as const;
@@ -24,7 +25,7 @@ export function useEvalsConnection() {
   const connection = useEvalsStore((s) => s.connection);
   const reason = useEvalsStore((s) => s.unreachableReason);
   const connect = useEvalsStore((s) => s.connect);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (useEvalsStore.getState().connection === "idle") void connect(convex);
   }, [connect, convex]);
   const retry = useCallback(() => void connect(convex, { force: true }), [connect, convex]);
@@ -32,7 +33,7 @@ export function useEvalsConnection() {
   const slow = connection === "no-daemon" && reason === "daemon-slow";
   const [attempt, setAttempt] = useState(0);
   const [retryAt, setRetryAt] = useState<number | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (connection === "connected") setAttempt(0);
     if (!slow) {
       setRetryAt(null);

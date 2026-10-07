@@ -354,14 +354,14 @@ export function SidebarNavView({
             </svg>
           }
         />}
-        <NavSection
-          label={page("/pages", "Pages")}
+        {showsPage("/pages") && <NavSection
+          label="Pages"
           href="/pages"
           isActive={active.pages}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
           icon={<Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />
+        />}
       </div>
 
       {/* The Work window keeps the pinned rail and the Work group, the

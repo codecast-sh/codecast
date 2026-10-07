@@ -73,12 +73,12 @@ export const SURFACE_DEFS: SurfaceDef[] = [
   { id: "call-summary", title: "Call summary and action items", route: "call", model: CALL_MODEL, every: 2, seeds: 2, freezeNames: ["standup-short", "design-review", "incident-call"], privateFrom: 1, epochsAt: [5], story: "steady", staleness: "fresh", criteria: "Every action item has an owner who said it.", sources: ["packages/convex/convex/callSummary.ts"] },
   { id: "handoff", title: "Handoff brief", route: "call", model: CALL_MODEL, every: 2, seeds: 2, freezeNames: ["half-done-feature", "blocked-on-review", "research-dump"], privateFrom: 2, epochsAt: [8], story: "improving", staleness: "fresh", criteria: "The next session can continue without reading the thread.", sources: ["packages/convex/convex/handoff.ts"] },
   { id: "suggest", title: "Composer suggestions (anthropic branch)", route: "call", model: CALL_MODEL, every: 3, seeds: 2, freezeNames: ["after-error", "after-pr", "idle-session"], privateFrom: 3, epochsAt: [], story: "steady", staleness: "due", criteria: "Suggestions are the human's likely next message, in their voice.", sources: ["packages/convex/convex/suggest.ts"] },
-  { id: "route", title: "The semantic router: which role an unplaced request belongs to", route: "call", model: CALL_MODEL, every: 2, seeds: 2, freezeNames: ["billing-question", "infra-alert", "design-ask", "unclear"], privateFrom: 2, epochsAt: [4], story: "steady", staleness: "fresh", criteria: "Unclear requests go to the anchor, never a guessed role.", sources: ["packages/convex/convex/router.ts"] },
+  { id: "route", title: "The semantic router: which role an unplaced request belongs to", route: "call", model: CALL_MODEL, every: 2, seeds: 2, freezeNames: ["billing-question", "infra-alert", "design-ask", "unclear"], privateFrom: 2, epochsAt: [4], story: "steady", staleness: "fresh", criteria: "Unclear requests go to the workspace's agent, never a guessed role.", sources: ["packages/convex/convex/router.ts"] },
   { id: "changes-story", title: "Changes page: one story from its commits and gated sessions", route: "call", model: STRONG_MODEL, every: 2, seeds: 1, freezeNames: ["auth-rewrite-day", "tiny-fixes"], privateFrom: 2, epochsAt: [3], story: "steady", staleness: "fresh", criteria: "The story says what changed for a user, not which files moved.", sources: ["packages/convex/convex/changesProse.ts"] },
   { id: "changes-edition", title: "Changes page: a team day's edition from its stories", route: "call", model: STRONG_MODEL, every: 3, seeds: 1, freezeNames: ["busy-tuesday", "quiet-friday"], privateFrom: 2, epochsAt: [], story: "steady", staleness: "waiting", criteria: "The lead is the change that matters most to the team.", sources: ["packages/convex/convex/changesProse.ts"] },
   { id: "org-review", title: "Org analyzer review", route: "agent", model: OPUS_MODEL, every: 5, seeds: 1, freezeNames: ["union-base8", "codecast-base3"], privateFrom: 0, epochsAt: [3], story: "steady", staleness: "stale", criteria: "Each proposal names sessions that exist and a role that can own them.", sources: ["packages/cli/src/orgInitRun.ts"] },
   { id: "role-wake", title: "Role wake frame", route: "agent", model: STRONG_MODEL, every: 3, seeds: 1, freezeNames: ["infra-lead-morning", "chief-of-staff-noon", "growth-weekly"], privateFrom: 1, epochsAt: [4], story: "live-reads", staleness: "fresh", criteria: "The role acts on what changed since it last checked, and nothing else.", sources: ["packages/cli/src/orgRoutine.ts"] },
-  { id: "anchor-brief", title: "Anchor and role opening briefing", route: "agent", model: STRONG_MODEL, every: 4, seeds: 1, freezeNames: ["new-team", "busy-team"], privateFrom: 1, epochsAt: [], story: "steady", staleness: "blocked", criteria: "The briefing names who to talk to first and why.", sources: ["packages/cli/src/anchorBrief.ts"] },
+  { id: "anchor-brief", title: "Opening briefing for the workspace's agent and roles", route: "agent", model: STRONG_MODEL, every: 4, seeds: 1, freezeNames: ["new-team", "busy-team"], privateFrom: 1, epochsAt: [], story: "steady", staleness: "blocked", criteria: "The briefing names who to talk to first and why.", sources: ["packages/cli/src/anchorBrief.ts"] },
 ];
 
 export const SUBJECTS = [
@@ -89,7 +89,7 @@ export const SUBJECTS = [
   "settle: weigh the last assistant turn first",
   "web: inbox row density",
   "settle: one prompt for done and waiting",
-  "router: route unclear asks to the anchor",
+  "router: route unclear asks to the workspace agent",
   "handoff: lead with what is verified",
   "convex: index pending sends by client id",
   "ask: cite the line, flag reversals",
@@ -99,7 +99,7 @@ export const SUBJECTS = [
   "cli: cast check watcher QoS",
   "role wake: read since checked_at",
   "changes: story lede rules",
-  "anchor brief: who to talk to first",
+  "opening brief: who to talk to first",
   "web: palette search ranking",
   "suggest: voice from recent sends",
 ];
@@ -110,13 +110,13 @@ export const RECENT_SUBJECTS = [
   "call summary: quote the owner in each item",
   "evals: models table pins sonnet 4.6",
   "settle: done needs verified tests",
-  "anchor brief: lead with the blocker",
+  "opening brief: lead with the blocker",
   "call summary: merge duplicate owners",
   "cli: daemon restamp build id",
   "settle: drop the error-state rule",
   "evals: fixture for unresolvable errors",
   "handoff: name the open question",
-  "anchor brief: shorter who-to-ask list",
+  "opening brief: shorter who-to-ask list",
 ];
 export const SESSIONS = ["jx70x2y", "jx7c6zk", "jx7dhfh", "jx76e8h", "jx7appr", "jx768ah", "jx7k3m2", "jx7p9q1"];
 

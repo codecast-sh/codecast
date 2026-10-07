@@ -18,7 +18,7 @@
 // `getTokenCredential` is internal and answers only the adapters.
 
 import { v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { internal } from "./_generated/api";

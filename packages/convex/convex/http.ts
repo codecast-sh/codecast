@@ -17,7 +17,7 @@ import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
-import { REPLAY_CHUNK_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replaySign } from "./replaysHttp";
+import { REPLAY_CHUNK_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./replays";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
 import { handleFaceRequest } from "./callFace";
@@ -4699,6 +4699,7 @@ cliRoute("/cli/workflow-runs/get", async (ctx, body) => ctx.runMutation(api.work
 cliRoute("/cli/workflow-runs/progress", async (ctx, body) => ctx.runMutation(api.workflow_runs.updateProgress, body));
 cliRoute("/cli/workflow-runs/gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.pauseAtGate, body));
 cliRoute("/cli/workflow-runs/poll-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.pollGateResponse, body));
+cliRoute("/cli/workflow-runs/live-on-device", async (ctx, body) => ctx.runMutation(api.workflow_runs.liveRunsForDevice, body));
 cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(api.workflow_runs.setPrimarySession, body));
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
 cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
@@ -5016,6 +5017,8 @@ cliRoute("/cli/replays/import", async (ctx, body) => ctx.runAction(api.sources.p
 // A replay row that mirrors a vendor recording (a Sentry replay linked to an
 // issue, a listed PostHog one), imported the first time it is read.
 cliRoute("/cli/replays/import-linked", async (ctx, body) => ctx.runAction(api.sources.vendorReplay.importLinked, body));
+// A capability for the replay player (contracts/replayPlayer.ts): `cast replay snap` posts it to the frame renderer.
+cliRoute("/cli/replays/player-link", async (ctx, body) => ctx.runAction(api.replays.playerLink, body));
 cliRoute("/cli/replays/backfill", async (ctx, body) => ctx.runMutation(api.sources.replayBackfill.start, body));
 cliRoute("/cli/replays/backfill-stop", async (ctx, body) => ctx.runMutation(api.sources.replayBackfill.stop, body));
 
@@ -5040,6 +5043,7 @@ cliRoute("/cli/metrics/get", async (ctx, body) => ctx.runQuery(api.metrics.getWa
 cliRoute("/cli/metrics/create", async (ctx, body) => ctx.runMutation(api.metrics.createWatch, body));
 cliRoute("/cli/metrics/update", async (ctx, body) => ctx.runMutation(api.metrics.updateWatch, body));
 cliRoute("/cli/metrics/remove", async (ctx, body) => ctx.runMutation(api.metrics.removeWatch, body));
+cliRoute("/cli/metrics/backfill", async (ctx, body) => ctx.runMutation(api.metrics.loadHistory, body));
 cliRoute("/cli/metrics/query", async (ctx, body) => ctx.runAction(api.sources.posthog.query, body));
 cliRoute("/cli/connector/capabilities", async (ctx, body) => ctx.runQuery(api.sources.app.capabilities, body));
 cliRoute("/cli/connector/read", async (ctx, body) => ctx.runAction(api.sources.app.read, body));
@@ -5143,6 +5147,9 @@ for (const prefix of REPLAY_SIGN_PREFIXES) {
 // One chunk of a replay the reader may see: a 302 to a URL signed now.
 http.route({ path: REPLAY_CHUNK_PATH, method: "GET", handler: replayChunk });
 http.route({ path: REPLAY_CHUNK_PATH, method: "OPTIONS", handler: replayChunkPreflight });
+// The player page (replay.codecast.sh) trades its capability for the DOM capture's signed URLs.
+http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "GET", handler: replayPlayerManifest });
+http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "OPTIONS", handler: replayPlayerManifestPreflight });
 
 // One-click unsubscribe for the notification digest (emails/digest.ts). Lives
 // under /cli/ because Caddy forwards only that prefix to HTTP actions. GET

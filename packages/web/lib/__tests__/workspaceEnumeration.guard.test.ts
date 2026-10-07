@@ -39,7 +39,10 @@ const ALLOWED = new Map<string, string>([
   ["lib/taskActions.ts", "short_id LOOKUP for a write the server re-authorizes"],
   ["lib/recentVisits.ts", "id LOOKUP to render a title for an already-visited row"],
   ["components/CommandPalette.tsx", "id LOOKUP + parent picker scoped to the target's own workspace"],
-  ["app/tasks/[id]/page.tsx", "id LOOKUP + subtree of one already-authorized task"],
+  ["app/tasks/[id]/page.tsx", "short_id LOOKUP of the one task the address names"],
+  ["components/tasks/SubtasksSection.tsx", "subtree of one already-authorized task (its subtasks share its workspace)"],
+  ["store/undo/writers.ts", "id/short_id LOOKUP to name a task in an undo write the server re-authorizes"],
+  ["store/opsSlice.ts", "the slice that owns opsGroups, dropping a removed source's rows"],
   ["app/projects/[id]/page.tsx", "short id LOOKUP of the one project the address names (pj-…)"],
 ]);
 

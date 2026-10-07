@@ -31,7 +31,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
  * (cloudAgentProblemInfo: a card's, or a machine's block), with a limit's
  * reset counted down in the viewer's clock when the machine named it.
  */
-export function useUntilFixed(spec: CloudAgentProviderSpec, kind: CloudAgentSetupKind | undefined, resetsAt?: number): string {
+function useUntilFixed(spec: CloudAgentProviderSpec, kind: CloudAgentSetupKind | undefined, resetsAt?: number): string {
   const now = useCoarseNow(60_000);
   const until = ((kind && cloudAgentProblemInfo(kind)) || CLOUD_AGENT_SETUP_NEEDED).until(spec);
   return resetsAt && resetsAt > now ? `${until} (${formatResetPhrase(resetsAt, now)})` : until;

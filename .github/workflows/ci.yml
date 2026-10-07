@@ -133,9 +133,10 @@ jobs:
       # .codecast/check.toml points `cast check` at. cli's widens rootDir to the
       # repo root because it imports the convex generated api. web's also runs
       # the sim program (its app tsconfig excludes tests), and evals is its own
-      # program over its code plus the convex and cli files it imports.
-      - name: Typecheck (cli + web + sim + convex + evals)
-        run: bun run typecheck --filter=@codecast/cli --filter=@codecast/web --filter=@codecast/convex --filter=@codecast/evals
+      # program over its code plus the convex and cli files it imports, and
+      # playground is its shell plus its own Convex deployment's functions.
+      - name: Typecheck (cli + web + sim + convex + evals + playground)
+        run: bun run typecheck --filter=@codecast/cli --filter=@codecast/web --filter=@codecast/convex --filter=@codecast/evals --filter=@codecast/playground
 
   lint:
     needs: [code_paths]
@@ -546,15 +547,19 @@ jobs:
         run: >-
           bun test --isolate --timeout=60000
           src/browser/appIdentity.native.test.ts
+          src/browser/bridge/host.test.ts
           src/ccAccounts.background.test.ts
           src/ccKeychain.callers.test.ts
+          src/cloud/reach.test.ts
           src/daemon.process-terminal.e2e.test.ts
           src/desktopUpdate.test.ts
           src/disclaim.test.ts
           src/remote/device.async.test.ts
           src/resourceMonitor.parseEtime.test.ts
           src/resourceMonitor.test.ts
+          src/sim/sim.test.ts
           src/supervision.recovery.e2e.test.ts
+          src/tmuxSessionServer.e2e.test.ts
           src/workers/scanWatcher.test.ts
 
   # The one check to require on main. It runs whatever the gates did, so a

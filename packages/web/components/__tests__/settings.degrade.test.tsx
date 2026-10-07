@@ -34,6 +34,7 @@ const SECTIONS: Record<SettingsSectionId, true> = {
   calls: true,
   team: true,
   sync: true,
+  privacy: true,
   integrations: true,
   agents: true,
   "agent-library": true,

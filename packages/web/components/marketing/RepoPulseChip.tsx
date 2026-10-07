@@ -16,11 +16,12 @@ import { type RepoPulse, REPO_PULSE_URL, pulseWords } from "../../lib/repoPulse"
 // gray, through the same markup as a live answer, so the nav does not shift
 // when the numbers arrive. A first visit dims a typical answer instead.
 import Link from "next/link";
-import { useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { Star } from "lucide-react";
 import { usePublicRepoRead } from "@/lib/repoTransport";
 import { repoSessionsHref } from "@/lib/repoView";
 import { SITE_LINKS } from "@/lib/siteLinks";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 const INK = "#002b36";
 const MUTED = "#657b83";
@@ -75,7 +76,7 @@ const readStoredPulse = () => {
 // prerendered page hydrates with the stand-in and switches before paint.
 function useRememberedPulse(fresh: RepoPulse | undefined): RepoPulse | null {
   const stored = useSyncExternalStore(noSubscribe, readStoredPulse, () => null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!fresh) return;
     try {
       localStorage.setItem(PULSE_KEY, JSON.stringify(fresh));

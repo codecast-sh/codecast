@@ -39,14 +39,17 @@ try {
     useInboxStore.getState().setMachineRoster([stalled]);
   });
   assert.equal(label(), 'Sync status: sync stalled · 27 conversations');
-  assert.ok(document.querySelector('[style*="--sol-yellow"]'));
+  // The daemon's fault is in the label; the dot stays the browser's own colour,
+  // since the daemon chip beside it in the tray already marks the fault.
+  assert.ok(document.querySelector('[style*="--sol-green"]'));
+  assert.ok(!document.querySelector('[style*="--sol-yellow"]'));
   await act(async () => {
     const draining: MachineCandidate & DaemonDeviceRow = { ...row, pending_sync_count: 12,
       pending_sync_messages: 904, pending_sync_conversations: 12, oldest_pending_ms: 540000, sync_no_progress_ms: 20000 };
     useInboxStore.getState().setMachineRoster([draining]);
   });
   assert.equal(label(), 'Sync status: syncing · 904 messages');
-  assert.ok(document.querySelector('[style*="--sol-blue"]'));
+  assert.ok(document.querySelector('[style*="--sol-green"]'));
   await act(async () => { useInboxStore.getState().setMachineRoster([row]); });
   assert.equal(label(), 'Sync status: Up to date');
   assert.ok(document.querySelector('[style*="--sol-green"]'));

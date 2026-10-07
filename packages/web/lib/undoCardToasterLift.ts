@@ -3,8 +3,9 @@
 // it, so no toast (an error, the milestone tip, one that arrives while the
 // card is open) covers the card's rows or footer.
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import * as undoTimeline from "./undoTimelineOpen";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 const GAP_PX = 8;
 
@@ -33,7 +34,7 @@ export function cardToasterLift(
 export function useUndoCardToasterLift(): { bottom: number } | undefined {
   const open = useSyncExternalStore(undoTimeline.subscribe, () => undoTimeline.isOpen(), () => false);
   const [lift, setLift] = useState<number | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) { setLift(null); return; }
     let observer: ResizeObserver | null = null;
     let frame = 0;

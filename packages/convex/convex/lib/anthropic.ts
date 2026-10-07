@@ -19,6 +19,15 @@ export interface ModelUsage {
 export interface ModelReply {
   text: string;
   usage: ModelUsage;
+  /** Why the model stopped ("end_turn", "max_tokens", ...), as the API reported it. */
+  stop_reason?: string | null;
+}
+
+/** One call's outcome for a caller that pays for it: the reply, if any, and the usage the API reported, even for a call that failed. */
+export interface MeteredCall {
+  reply: ModelReply | null;
+  /** Null when the API reported none (no response, a timeout, an error without usage). */
+  usage: ModelUsage | null;
 }
 
 /**
@@ -64,13 +73,25 @@ export async function postMessages(req: SurfaceRequest, opts: { signal?: AbortSi
 // whose own tools read Messages replies the same way).
 export { replyText } from "@platform/assistant/messages";
 
-export async function callModel(args: Omit<SurfaceRequest, "model"> & {
+type CallArgs = Omit<SurfaceRequest, "model"> & {
   model?: string;
   label: string;
   /** Give up after this long, so a stalled call cannot outlive its caller. */
   timeout_ms?: number;
-}): Promise<ModelReply | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+};
+
+export async function callModel(args: CallArgs): Promise<ModelReply | null> {
+  return (await callModelMetered(args)).reply;
+}
+
+const usageOf = (data: any): ModelUsage | null =>
+  data?.usage && (typeof data.usage.input_tokens === "number" || typeof data.usage.output_tokens === "number")
+    ? { input_tokens: data.usage.input_tokens ?? 0, output_tokens: data.usage.output_tokens ?? 0 }
+    : null;
+
+/** callModel, keeping the usage of a call that failed when the API reported it, so a caller with a spend cap can bill it. */
+export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
+  if (!process.env.ANTHROPIC_API_KEY) return { reply: null, usage: null };
   const abort = new AbortController();
   const timer = args.timeout_ms ? setTimeout(() => abort.abort(), args.timeout_ms) : undefined;
   try {
@@ -87,27 +108,39 @@ export async function callModel(args: Omit<SurfaceRequest, "model"> & {
       },
       { signal: abort.signal },
     );
-    if (!response) return null;
+    if (!response) return { reply: null, usage: null };
     if (!response.ok) {
-      console.error(`${args.label} API error:`, response.status, (await response.text()).slice(0, 300));
-      return null;
+      const body = await response.text();
+      console.error(`${args.label} API error:`, response.status, body.slice(0, 300));
+      let usage: ModelUsage | null = null;
+      try {
+        usage = usageOf(JSON.parse(body));
+      } catch {}
+      return { reply: null, usage };
     }
     const data = await response.json();
     const text = replyText(data);
     if (!text) {
       console.error(`${args.label} empty reply:`, data.stop_reason, (data.content ?? []).map((b: any) => b?.type).join(","));
-      return null;
+      return { reply: null, usage: usageOf(data) };
     }
-    return {
-      text,
-      usage: { input_tokens: data.usage?.input_tokens ?? 0, output_tokens: data.usage?.output_tokens ?? 0 },
-    };
+    const usage = usageOf(data) ?? { input_tokens: 0, output_tokens: 0 };
+    return { reply: { text, usage, stop_reason: data.stop_reason ?? null }, usage };
   } catch (error) {
     console.error(`${args.label} failed:`, error);
-    return null;
+    return { reply: null, usage: null };
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * A conservative stand-in for a call whose usage the API never reported (a
+ * timeout, a dropped connection): its prompt as input tokens, counted at
+ * three characters a token, which overstates English text; no output.
+ */
+export function estimatedUsage(system: string | undefined, prompt: string): ModelUsage {
+  return { input_tokens: Math.ceil(((system ?? "").length + prompt.length) / 3), output_tokens: 0 };
 }
 
 /** Dollars for a usage on the cheap model. */

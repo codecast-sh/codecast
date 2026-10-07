@@ -29,7 +29,7 @@ export function useStillMode(): boolean {
 }
 
 /** Copies `text` and reports `copied` for a moment afterwards. */
-export function useCopy(text: string): { copied: boolean; copy: () => Promise<void> } {
+function useCopy(text: string): { copied: boolean; copy: () => Promise<void> } {
   const [copied, setCopied] = useState(false);
   return {
     copied,

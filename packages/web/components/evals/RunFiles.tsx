@@ -8,7 +8,7 @@ import { CodeBlock } from "../CodeBlock";
 
 const LANGUAGES: Record<string, string> = { json: "json", jsonl: "json", md: "markdown", ts: "typescript", log: "text", txt: "text", patch: "diff" };
 
-export const fileLanguage = (path: string) => LANGUAGES[path.split(".").pop() ?? ""] ?? "text";
+const fileLanguage = (path: string) => LANGUAGES[path.split(".").pop() ?? ""] ?? "text";
 
 /** Files under their folders, folders in path order, a folder's own files before its subfolders. */
 export function fileTree(files: readonly RunFileEntry[]): Array<{ dir: string; files: RunFileEntry[] }> {

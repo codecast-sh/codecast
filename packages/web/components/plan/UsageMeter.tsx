@@ -26,6 +26,8 @@ export function MeterBar({ fill, full, known, cap, used, className, minUsedPx }:
       aria-valuemin={0}
       aria-valuemax={cap}
       aria-valuenow={Math.min(used, cap)}
+      // Read as a share, never as the raw figure behind it.
+      aria-valuetext={known ? `${Math.round(Math.min(fill.used, 1) * 100)}% used` : undefined}
       data-cc-meter
       data-cc-meter-high={known && fill.used >= 0.8 ? "" : undefined}
       data-cc-meter-full={known && full ? "" : undefined}
@@ -48,6 +50,8 @@ function ShellUsageMeterBody() {
     <button
       type="button"
       data-cc-usage-meter
+      // The button's name is its words; the bar inside would add its value.
+      aria-label={meterShort(figures)}
       onClick={() => useInboxStore.getState().openSettingsModal("plan")}
       title={LANE_COPY.plan.title}
       className="mx-3 mt-2 flex flex-col gap-1.5 rounded-md px-2 py-2 text-left text-[11px] text-sol-text-dim transition-colors hover:bg-sol-bg-highlight/50 hover:text-sol-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan/50"

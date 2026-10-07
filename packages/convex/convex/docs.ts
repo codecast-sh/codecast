@@ -1585,26 +1585,26 @@ export const webMentionList = query({
     };
 
     if (args.workspace === "all") {
+      // The person's own rows first (tasks.webMentionList does the same):
+      // filled after the teams, two busy teams took every slot.
+      const userDocs = await ctx.db
+        .query("docs")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .order("desc")
+        .take(MAX_PER_TEAM);
+      for (const d of userDocs) pushUnique(d);
       const memberships = await ctx.db
         .query("team_memberships")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
         .collect();
       for (const m of memberships) {
+        if (docs.length >= MAX_TOTAL) break;
         const teamDocs = await ctx.db
           .query("docs")
           .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
           .order("desc")
           .take(MAX_PER_TEAM);
         for (const d of teamDocs) pushUnique(d);
-        if (docs.length >= MAX_TOTAL) break;
-      }
-      if (docs.length < MAX_TOTAL) {
-        const userDocs = await ctx.db
-          .query("docs")
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-          .order("desc")
-          .take(MAX_PER_TEAM);
-        for (const d of userDocs) pushUnique(d);
       }
     } else if (args.workspace === "team" && args.team_id) {
       const teamDocs = await ctx.db

@@ -8,6 +8,7 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { useModeWords, useSurface } from "../../lib/surfaces";
 
 // The pieces of the full inbox card (SessionCardView) that stand on their own:
 // each draws from the row and the few facts handed to it, and every gesture
@@ -206,7 +207,7 @@ export function CardStatusSignals({
               </span>
             )}
             {(hosted ? isWorking || isPendingWorking : (isWorking || isLive) && !isPendingWorking) && !isRowRestarting && !showBlockedBadge && (
-              <span className="relative flex h-2 w-2" title="Working">
+              <span data-sv-working-dot className="relative flex h-2 w-2" title="Working">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
               </span>
@@ -336,6 +337,8 @@ export function CardHoverToolbar({
   onOpenLabels?: (session: InboxSession) => void;
   onStash?: (id: string, e: React.MouseEvent) => void;
 }) {
+  const words = useModeWords();
+  const labels = useSurface("inbox.labelStrip");
   return (
         <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
@@ -351,6 +354,7 @@ export function CardHoverToolbar({
             ) : (
               <ShortcutTooltip label="Pin" action="session.pin" side="left">
                 <button
+                  aria-label="Pin"
                   onClick={(e) => { e.stopPropagation(); onPin(session._id, e); }}
                   className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta pointer-events-auto"
                 >
@@ -362,8 +366,9 @@ export function CardHoverToolbar({
           {/* Kill — the PRIMARY remove: done with it, clears to the Killed
               group and tears the (usually idle) agent down. Undoable. */}
           {onDismiss && (
-            <ShortcutTooltip label="Kill — done, tears the agent down" action="session.kill" side="left">
+            <ShortcutTooltip label={words.killTip} action="session.kill" side="left">
               <button
+                aria-label={words.kill}
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
                 className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors pointer-events-auto"
               >
@@ -371,21 +376,25 @@ export function CardHoverToolbar({
               </button>
             </ShortcutTooltip>
           )}
-          <ShortcutTooltip label="Label session" action="session.moveToBucket" side="left">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenLabels?.(session);
-              }}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors pointer-events-auto"
-            >
-              <Tag className="w-3.5 h-3.5" />
-            </button>
-          </ShortcutTooltip>
+          {labels && (
+            <ShortcutTooltip label="Label session" action="session.moveToBucket" side="left">
+              <button
+                aria-label="Label session"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenLabels?.(session);
+                }}
+                className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors pointer-events-auto"
+              >
+                <Tag className="w-3.5 h-3.5" />
+              </button>
+            </ShortcutTooltip>
+          )}
           {/* Stash — the SECONDARY remove: set aside, agent keeps running. */}
           {onStash && (
-            <ShortcutTooltip label="Stash — set aside, keeps running" action="session.stash" side="left">
+            <ShortcutTooltip label={words.stashTip} action="session.stash" side="left">
               <button
+                aria-label={words.stash}
                 onClick={(e) => { e.stopPropagation(); onStash(session._id, e); }}
                 className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors pointer-events-auto"
               >
@@ -467,7 +476,7 @@ export function UnreadDot() {
   return (
     <span
       className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-cyan"
-      title="Unread — this session moved since you last looked at it"
+      title="Unread: this moved since you last looked at it"
       aria-label="Unread"
     />
   );

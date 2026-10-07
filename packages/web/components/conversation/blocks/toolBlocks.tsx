@@ -27,6 +27,7 @@ import { isMarkdownFile, isPlanFile } from "../../../lib/markdownFiles";
 import { EntityIdPill } from "../../EntityIdPill";
 import { EntityObjectCard } from "../../EntityObjectCard";
 import { callFrameSeenRef } from "@codecast/shared/contracts";
+import { replayFrameSeenRef } from "@codecast/shared/contracts/replayPlayer";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE } from "../../messageMarkdown";
 import { FilePathLink } from "../../FilePathLink";
@@ -701,8 +702,10 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
 
   // A frame of a call the agent looked at syncs as the moment's reference,
   // never the picture (cli callFrameRefs.ts), and renders here as that frame
-  // under the call's own access rule, where an image would have been.
-  const seenFrame = callFrameSeenRef(result?.content);
+  // under the call's own access rule, where an image would have been. A frame
+  // of a replay (`cast replay snap`) does the same: the recorded page plays
+  // from that moment, under the replay's workspace rule.
+  const seenFrame = callFrameSeenRef(result?.content) ?? replayFrameSeenRef(result?.content);
   const getResultSummary = () => {
     if (!result) return null;
     if (result.is_error) return "(error)";
@@ -712,7 +715,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
       return result.content.includes("has been updated") ? "(ok)" : "";
     }
     if (isRead) {
-      // A frame of a call reads as the frame below, not as a file's lines.
+      // A frame of a call or a replay reads as the frame below, not as a file's lines.
       if (seenFrame) return null;
       const lines = result.content.split("\n").length;
       return `(${lines} lines)`;

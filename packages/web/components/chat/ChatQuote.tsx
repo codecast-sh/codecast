@@ -23,7 +23,7 @@ const isElement = (n: any) => n?.type === "element";
 const isBlankText = (n: any) => n?.type === "text" && !String(n.value ?? "").trim();
 const hastText = (n: any): string => (n?.type === "text" ? n.value ?? "" : (n?.children ?? []).map(hastText).join(""));
 
-export function quoteHead(node: any): QuoteHead | null {
+function quoteHead(node: any): QuoteHead | null {
   const first = (node?.children ?? []).find(isElement);
   if (first?.tagName !== "p") return null;
   const parts = (first.children ?? []).filter((c: any) => !isBlankText(c));

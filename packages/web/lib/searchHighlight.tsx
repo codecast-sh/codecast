@@ -32,7 +32,19 @@ export function highlightMatch(text: string, query: string): React.ReactNode {
   return <>{parts}</>;
 }
 
-/** The stretch of `content` that shows the most of the query (snippetAround). */
+/** Machine wrappers a message can carry (a session message, a reminder, a
+ *  command tag): a tag-shaped name, lower case, its attributes, or the cut
+ *  tail of one at either edge of a stored snippet. */
+const WRAPPER_TAG = /<\/?[a-z][a-z0-9]*(?:[-:_][a-z0-9]+)+(?:\s[^<>]*)?>|^[a-z0-9-]*(?:\s[a-z_]+="[^"]*")+\s*>|<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?$/g;
+
+/** A snippet as text a person reads: machine wrappers (`<session-message>`,
+ *  `<system-reminder>`) go, the words inside them stay. */
+export function stripSnippetMarkup(text: string): string {
+  return text.replace(WRAPPER_TAG, " ").replace(/\s{2,}/g, " ").trim();
+}
+
+/** The stretch of `content` that shows the most of the query (snippetAround),
+ *  without the machine wrappers around injected messages. */
 export function getSnippet(content: string, query: string, maxLen = 400): string {
-  return snippetAround(content, parseQueryTerms(query), maxLen);
+  return snippetAround(stripSnippetMarkup(content), parseQueryTerms(query), maxLen);
 }

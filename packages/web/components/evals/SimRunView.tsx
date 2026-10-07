@@ -3,7 +3,8 @@
 // shrink, the replay lines, and what errored on the way. Props only; the page
 // (pages/SimRunPage.tsx) loads the run and starts a shrink.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useInterval } from "../../hooks/useInterval";
 import { GitBranch, Pause, Play, Scissors } from "lucide-react";
 import type { SimFailureResult, SimRunResponse } from "@codecast/shared/contracts/evalsApi";
 import { evalsHref } from "./evalsPaths";
@@ -49,17 +50,16 @@ export function SimRunView({ data, shrink, onShrink, keysActive = true }: SimRun
   const [showKept, setShowKept] = useState(true);
   const last = timeline.count - 1;
 
-  useEffect(() => {
-    if (!playing) return;
-    const id = setInterval(() => {
+  useInterval(
+    () =>
       setPlayhead((p) => {
         const next = p === null ? 0 : p + 1;
         if (next >= last) setPlaying(false);
         return Math.min(next, last);
-      });
-    }, PLAY_STEP_MS);
-    return () => clearInterval(id);
-  }, [playing, last]);
+      }),
+    PLAY_STEP_MS,
+    playing,
+  );
 
   const move = (to: number) => {
     setPlaying(false);

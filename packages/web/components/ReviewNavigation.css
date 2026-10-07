@@ -120,7 +120,7 @@
   display: inline;
   font-style: normal;
 }
-/* A list of answers lets the rows grow (ProposalReplyBox, and the composer's
+/* A list of answers lets the rows grow (the composer's
    tray while it holds answers): the composer's strip caps a list of quotes at
    a few rows because the textarea needs the room, but answers are the reply
    being built, and a whole-proposal note cut mid row reads as lost. Past the

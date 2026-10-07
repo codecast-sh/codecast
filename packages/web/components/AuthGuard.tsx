@@ -1,7 +1,8 @@
 import { useRouter } from "next/navigation";
 import { AuthGuard as LocalFirstAuthGuard } from "@platform/auth/web";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { useLocalAuth } from "../lib/localAuth";
+import { AUTH_REFRESH_TOKEN_STORAGE_KEY, useLocalAuth } from "../lib/localAuth";
+import { noteAuthLeave } from "../lib/authReturn";
 import { oauthJustFailed } from "../lib/oauthReturn";
 import { AppLoader } from "./AppLoader";
 import { WELCOME_PATH, readLaneHint } from "./simple/laneBoot";
@@ -12,6 +13,18 @@ import { WELCOME_PATH, readLaneHint } from "./simple/laneBoot";
  *  people on the marketing page that way. The gate unmounts this the moment
  *  auth comes back, which cancels the leave. */
 const SIGNED_OUT_SETTLE_MS = 1500;
+/** While a refresh token is still stored the auth layer is mid-refresh, not
+ *  signed out (a definitive sign-out clears it), so the leave waits up to this
+ *  long for it to land. */
+const REFRESH_WAIT_MS = 15_000;
+
+function refreshPending(): boolean {
+  try {
+    return localStorage.getItem(AUTH_REFRESH_TOKEN_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
 
 function RedirectUnsignedIn({ to }: { to: string }) {
   const router = useRouter();
@@ -23,7 +36,19 @@ function RedirectUnsignedIn({ to }: { to: string }) {
     // A device last seen in hosted mode signs in again on /welcome, in the
     // family's look, never on the developer marketing page.
     const target = to === "/" && readLaneHint() === "simple" ? WELCOME_PATH : to;
-    const timer = window.setTimeout(() => router.push(target), SIGNED_OUT_SETTLE_MS);
+    const started = Date.now();
+    let timer = 0;
+    const settle = () => {
+      if (refreshPending() && Date.now() - started < REFRESH_WAIT_MS) {
+        timer = window.setTimeout(settle, SIGNED_OUT_SETTLE_MS);
+        return;
+      }
+      // Where the person was, so the landing page can send them back if
+      // auth returns (lib/authReturn).
+      noteAuthLeave(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+      router.push(target);
+    };
+    timer = window.setTimeout(settle, SIGNED_OUT_SETTLE_MS);
     return () => window.clearTimeout(timer);
   });
   return <AppLoader />;

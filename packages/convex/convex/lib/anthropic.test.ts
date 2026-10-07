@@ -14,9 +14,10 @@ const CASES: Array<{ args: Parameters<typeof callModel>[0]; request: SurfaceRequ
   },
   {
     args: { prompt: "Answer from the sessions.", system: "You answer questions.", max_tokens: 1500, model: "claude-sonnet-5-5", label: "b" },
-    request: { model: "claude-sonnet-5-5", system: "You answer questions.", prompt: "Answer from the sessions.", max_tokens: 1500, temperature: 0 },
+    // Sonnet 5.5 refuses any temperature, so callModel defaults it only for the cheap model.
+    request: { model: "claude-sonnet-5-5", system: "You answer questions.", prompt: "Answer from the sessions.", max_tokens: 1500 },
     golden:
-      '{"model":"claude-sonnet-5-5","max_tokens":1500,"temperature":0,"system":"You answer questions.","messages":[{"role":"user","content":"Answer from the sessions."}]}',
+      '{"model":"claude-sonnet-5-5","max_tokens":1500,"system":"You answer questions.","messages":[{"role":"user","content":"Answer from the sessions."}]}',
   },
   {
     args: { prompt: "Brief the next session.", system: "", max_tokens: 1200, temperature: 0.3, label: "c" },

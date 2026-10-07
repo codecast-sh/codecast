@@ -4,7 +4,7 @@
 // commits at once; the pure reducer in lib/undoWalk decides what the card
 // shows. The modifier is tracked with window key listeners, the way
 // useRecentSwitcher tracks Control: Meta on mac, Control elsewhere.
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { useEventListener } from "./useEventListener";
 import { subscribeShortcutUsed, useShortcutAction, useShortcuts } from "../shortcuts/ShortcutProvider";
 import { shortcutAllowedAt, type DispatchSource } from "@platform/keys";
@@ -16,6 +16,8 @@ import * as undoTimeline from "../lib/undoTimelineOpen";
 import { fireUndoHistoryMilestone } from "../lib/undoHistory";
 import { useUndoReach } from "./useUndoUnreachable";
 import { WALK_IDLE, createFieldUndoGuard, fieldHoldsText, isTextEditingControl, richEditorCanStep, richEditorOf, walk, walkTakesPinKey, walkTimer, walkView, type RichEditor, type WalkEvent, type WalkState } from "../lib/undoWalk";
+import { useWatchEffect } from "./useWatchEffect";
+import { useMountEffect } from "./useMountEffect";
 
 const CARD_SELECTOR = "[data-undo-timeline]";
 /** The shortcut context live while the card peeks or fades: it routes H to
@@ -174,7 +176,7 @@ export function useUndoWalk(): void {
   // A key the dispatcher handled (⌘K, j/k, ...) never reaches the window
   // listener below, so it is heard here: it ends the walk and has already
   // reached whoever owns it.
-  useEffect(() => subscribeShortcutUsed((action) => {
+  useWatchEffect(() => subscribeShortcutUsed((action) => {
     if (!WALK_ACTIONS.has(action)) feed({ type: "otherKey" });
   }), [feed]);
 
@@ -183,7 +185,7 @@ export function useUndoWalk(): void {
   // guards the dispatcher applies to the key (a modal, a key-owning region,
   // a keyboard owner like the terminal), so a press the browser would decline
   // takes nothing back in the desktop app either.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isElectron()) return;
     return bridge("onAppEditCommand")?.((dir) => {
       const focus = document.activeElement;
@@ -193,11 +195,11 @@ export function useUndoWalk(): void {
   }, [step]);
 
   // Esc, an opened row or the chord closed the card: the walk is over.
-  useEffect(() => undoTimeline.subscribe(() => {
+  useWatchEffect(() => undoTimeline.subscribe(() => {
     if (!undoTimeline.isOpen()) feed({ type: "closed" });
   }), [feed]);
 
-  useEffect(() => () => {
+  useWatchEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
     setContext(WALK_CONTEXT, false);
   }, [setContext]);
@@ -231,7 +233,7 @@ export function useUndoWalk(): void {
   // is not, as a value set from code is no edit of a plain field.
   const watched = useRef(new WeakSet<RichEditor>());
   const userEvent = useRef<Node | null>(null);
-  useEffect(() => {
+  useMountEffect(() => {
     const mark = (e: Event) => {
       const target = e.target instanceof Node ? e.target : null;
       userEvent.current = target;
@@ -240,7 +242,7 @@ export function useUndoWalk(): void {
     const kinds = ["keydown", "beforeinput", "paste", "cut", "drop"] as const;
     for (const k of kinds) window.addEventListener(k, mark, CAPTURE);
     return () => { for (const k of kinds) window.removeEventListener(k, mark, CAPTURE); };
-  }, []);
+  });
   useEventListener("focusin", (e: FocusEvent) => {
     const field = e.target;
     const editor = richEditorOf(field);
