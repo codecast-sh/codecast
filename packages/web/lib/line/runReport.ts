@@ -126,6 +126,7 @@ export const isMainStation = (id: string) => MAIN_PATH.has(id);
 /** Steps that only assemble the card: a run that passed them says so in the
  *  folded line, and the phase reads by its answer. */
 const ROUTINE = new Set(["card_draft", "card_write", "card"]);
+export const isRoutineStation = (id: string) => ROUTINE.has(id);
 
 const REVIEW_WORDS: Record<string, string> = { approve: "Review approved", changes: "Review asked for changes", reject: "Review rejected the change" };
 

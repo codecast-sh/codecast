@@ -58,7 +58,8 @@ function useComposerPresence(
 // Someone is typing: the same strip the team chat composer wears (faces,
 // "Ann is typing", dots) plus their words in muted italics, so two humans
 // steering one session see the overlap before both press send. Someone is
-// simply here: only for a share link guest, who has no face on the roster.
+// simply here: their faces, only for a share link guest, who has no face on
+// the roster.
 // A teammate's presence already shows as a face on the header and the card,
 // so on a team session the line stays empty until words appear.
 //
@@ -110,12 +111,10 @@ export function CollabPresenceBar({ present, showHere, boxed = false, joint }: {
                 {joint && joint.candidates.length > 0 && <SendTogether {...joint} />}
               </>
             ) : (
-              <>
-                <PresenceFacepile present={present} />
-                <span className="truncate">
-                  <b className="text-sol-text">{names}</b> {present.length > 1 ? "are" : "is"} here
-                </span>
-              </>
+              // Presence alone is faces, not a sentence: nothing to act on yet.
+              <span className="ml-auto" title={`${names} ${present.length > 1 ? "are" : "is"} here`}>
+                <PresenceFacepile present={present} size={18} />
+              </span>
             )}
           </div>
         )}
