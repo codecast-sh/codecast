@@ -23,6 +23,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
 import { stripMarkdown } from "../../lib/notificationText";
 import { useHostedMode, useModeWords, useSurface } from "../../lib/surfaces";
+import { HostedApprovalBody, HostedApprovalPlan, isHostedApproval } from "../conversation/HostedApprovalCard";
 import "./decisions.css";
 
 // The compact card: the queue's row, the task page's row. Question, who is
@@ -148,6 +149,11 @@ export function DecisionCompactCardView({
   const asked = `asked ${formatTimeAgo(decision.created_at, now)}`;
   const words = useModeWords();
   const hosted = useHostedMode();
+  // A hosted approval (a Yes and a Not now the engine wrote) reads here the
+  // way it does in its conversation: the whole plan, what Yes does, and the
+  // two answers (HostedApprovalBody). The plan is short by construction, so
+  // it is never clipped behind Read more.
+  const hostedApproval = hosted && pending && kind === "single" && !decision.card && isHostedApproval(decision.options);
   const taskRef = task?.short_id ?? decision.card?.cause.task;
   // A change card draws the head every surface does (ChangeCardHeadline):
   // the change, then one dim line with its cause and this row's facts, so the
@@ -278,7 +284,8 @@ export function DecisionCompactCardView({
             HTML and the visual is what the reader came for. */}
         {/* A change card's own line says what the context would: the
             question, then the change, then the proof, once each. */}
-        {decision.context_md && !decision.card && (
+        {hostedApproval && decision.context_md && <HostedApprovalPlan contextMd={decision.context_md} clamp={false} />}
+        {decision.context_md && !decision.card && !hostedApproval && (
           <CollapsibleBody
             className="mt-2"
             // Hosted mode clips the reasoning to about two lines, so four or
@@ -312,7 +319,17 @@ export function DecisionCompactCardView({
           <div className="mt-2 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
         )}
       </div>
-      {pending && !chipsInRow && !folded && (
+      {hostedApproval && !folded && (
+        <div className="px-4 pb-3">
+          <HostedApprovalBody
+            options={decision.options.map((o, index) => ({ label: o.label, description: o.description, index }))}
+            onPick={(index) => onAnswer({ index })}
+            keys={keys}
+            later={{ label: words.dismissAsk ?? "Later", title: words.dismissAskTip, onClick: onDismiss }}
+          />
+        </div>
+      )}
+      {pending && !chipsInRow && !folded && !hostedApproval && (
         <div className="px-4 pb-3">
           {kind === "single" ? (
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="compact" recommendation={rec} />

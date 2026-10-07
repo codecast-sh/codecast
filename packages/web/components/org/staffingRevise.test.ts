@@ -3,7 +3,7 @@
 // reader last looked. Run: bun test components/org/staffingRevise.test.ts
 import { describe, expect, test } from "bun:test";
 import { latestOrgRevisionAt } from "@codecast/shared/contracts/orgProposal";
-import { amendedMoves, proposalThread, revisedLine, revisedSince, revisionWord } from "./staffingRevise";
+import { proposalThread, revisedLine, revisedSince, revisionWord } from "./staffingRevise";
 import { proposalProgress } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL, ORG_STAFFING_FIXTURE_SESSION_PROPOSAL } from "./orgStaffingFixture";
 import { ORG_FIXTURE } from "./orgFixture";
@@ -34,19 +34,7 @@ describe("proposalThread", () => {
 
 describe("what a revise did", () => {
   const rows = ORG_STAFFING_FIXTURE_REVISED_PROPOSAL.changes;
-  test("an amend lists the fields that moved, old and new", () => {
-    // A limit is quiet (S23.2): a person never reads it, so its amend lists nothing.
-    expect(amendedMoves(rows.find((c) => c._id === "fixture-change-93")!)).toEqual([]);
-    expect(amendedMoves({
-      change: { kind: "role", name: "Growth lead", handle: "growth", charter: "Grows intros per day." },
-      revision: { kind: "amended", note: "x", at: 1, before: { kind: "role", name: "Growth lead", handle: "growth", charter: "Grows intros." } },
-    } as any)).toEqual([{ key: "charter", label: "charter", from: "Grows intros.", to: "Grows intros per day." }]);
-    expect(amendedMoves(rows.find((c) => c._id === "fixture-change-92")!)).toEqual([]);
-    // A scope amend speaks the row's words, not the raw key.
-    expect(amendedMoves({
-      change: { kind: "scope", handle: "product", add: ["Codecast: Agents & Clients"] },
-      revision: { kind: "amended", note: "x", at: 1, before: { kind: "scope", handle: "product", add: ["Codecast: Agents & Clients", "Codecast: Calls & Presence"] } },
-    })).toEqual([{ key: "add", label: "also looks after", from: "Codecast: Agents & Clients, Codecast: Calls & Presence", to: "Codecast: Agents & Clients" }]);
+  test("the revise, in the reader's words", () => {
     expect(revisionWord(rows.find((c) => c._id === "fixture-change-93")!.revision!)).toBe("Changed");
   });
   test("a removed change leaves the count", () => {

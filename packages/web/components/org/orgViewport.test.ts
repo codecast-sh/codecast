@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { bandOrigin, computeOrgViewport, hiddenRoots } from "./orgViewport";
+import { bandOrigin, computeOrgViewport, FIT_PAD, fitTarget, hiddenRoots, MIN_READABLE_ZOOM, panIntoView } from "./orgViewport";
+import { layoutGoals } from "./goalsLayout";
+import { UNION_GOALS_DATA, UNION_GOALS_TREE } from "./goalsFixture";
 import { layoutOrgTree, personNodeId } from "./orgLayout";
 import { ORG_FIXTURE } from "./orgFixture";
 
@@ -53,37 +55,114 @@ describe("computeOrgViewport", () => {
   });
 });
 
-describe("computeOrgViewport focus target", () => {
-  it("centres the target card in the free area at the current zoom, panning only", () => {
-    const me = nodes.find((n) => n.id === personNodeId("fixture-user-me"))!;
-    const vp = computeOrgViewport(nodes, 1600, 1000, 380, null, { id: me.id, zoom: 1.2 })!;
-    expect(vp.zoom).toBe(1.2);
-    expect(vp.whole).toBe(false);
-    const freeW = 1600 - 380 - 48;
-    const freeH = 1000 - 48;
-    expect(me.x * 1.2 + vp.x).toBeCloseTo(24 + (freeW - me.w * 1.2) / 2, 5);
-    expect(me.y * 1.2 + vp.y).toBeCloseTo(24 + (freeH - me.h * 1.2) / 2, 5);
+describe("fitTarget (the column a narrow pane fits first)", () => {
+  const everything = layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives, projects: UNION_GOALS_DATA.projects, people: "everyone" }, "mid").nodes;
+  const spine = everything.filter((n) => n.kind !== "owner");
+  const owners = everything.filter((n) => n.kind === "owner");
+  const right = (ns: readonly { x: number; w: number }[]) => Math.max(...ns.map((n) => n.x + n.w));
+
+  it("a wide pane fits both columns at the width they need", () => {
+    const vp = computeOrgViewport(everything, 1600, 1000, 0, null)!;
+    expect(vp.zoom).toBeGreaterThanOrEqual(MIN_READABLE_ZOOM);
+    expect(right(owners) * vp.zoom + vp.x).toBeLessThanOrEqual(1600 - FIT_PAD);
+    expect(Math.min(...spine.map((n) => n.x)) * vp.zoom + vp.x).toBeGreaterThanOrEqual(FIT_PAD);
   });
 
-  it("falls back to the fit when the target is not on the chart", () => {
-    const plain = computeOrgViewport(nodes, 1600, 1000, 0, null)!;
-    const missing = computeOrgViewport(nodes, 1600, 1000, 0, null, { id: "role:nope" })!;
-    expect(missing).toEqual(plain);
+  it("a 540px pane fits the outline at a readable zoom and leaves the owners to a pan", () => {
+    const fit = fitTarget(everything, 540 - FIT_PAD * 2, 800 - FIT_PAD * 2)!;
+    expect(fit.whole).toBe(false);
+    expect(fit.zoom).toBeGreaterThanOrEqual(MIN_READABLE_ZOOM);
+    expect(fit.rect.w).toBe(right(spine) - Math.min(...spine.map((n) => n.x)));
+    expect(fit.rect.w * fit.zoom).toBeLessThanOrEqual(540 - FIT_PAD * 2);
+    // The viewport starts at the outline's left edge, with the owners off to the right.
+    const vp = computeOrgViewport(everything, 540, 800, 0, null)!;
+    expect(vp.zoom).toBe(fit.zoom);
+    expect(Math.min(...spine.map((n) => n.x)) * vp.zoom + vp.x).toBeCloseTo(FIT_PAD, 5);
+    expect(right(owners) * vp.zoom + vp.x).toBeGreaterThan(540);
+    // The 12px labels on the cards never render under 11px.
+    expect(12 * vp.zoom).toBeGreaterThanOrEqual(11);
   });
 
-  it("a bottom inset (the phone sheet) keeps the focused card above it, centred in what is free", () => {
-    // A phone: 390 x 800 with the sheet covering the bottom 62%.
-    const me = nodes.find((n) => n.id === personNodeId("fixture-user-me"))!;
+  it("the people chart still fits its root tier, never the outline rule", () => {
+    const fit = fitTarget(nodes, 700 - FIT_PAD * 2, 500 - FIT_PAD * 2)!;
+    expect(fit.whole).toBe(false);
+    const roots = nodes.filter((n) => n.kind === "person" || n.kind === "role");
+    expect(fit.rect.w).toBe(right(roots) - Math.min(...roots.map((n) => n.x)));
+  });
+});
+
+describe("panIntoView (a focus pans by the least that shows the card)", () => {
+  const everything = layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives, projects: UNION_GOALS_DATA.projects, people: "everyone" }, "mid").nodes;
+  const free = { w: 540, h: 800 };
+  const fit = computeOrgViewport(everything, free.w, free.h, 0, null)!;
+  const at = { x: fit.x, y: fit.y, zoom: fit.zoom };
+  const spineLeft = Math.min(...everything.filter((n) => n.kind !== "owner").map((n) => n.x));
+  const treeLeft = Math.min(...everything.map((n) => n.x));
+  const treeRight = Math.max(...everything.map((n) => n.x + n.w));
+  const box = (id: string, vp: { x: number; y: number; zoom: number }) => {
+    const n = everything.find((b) => b.id === id)!;
+    return { left: n.x * vp.zoom + vp.x, right: (n.x + n.w) * vp.zoom + vp.x, top: n.y * vp.zoom + vp.y, bottom: (n.y + n.h) * vp.zoom + vp.y };
+  };
+
+  it("a card already fully in view does not move the map", () => {
+    const first = everything.find((n) => n.kind !== "owner" && box(n.id, at).bottom <= free.h)!;
+    expect(panIntoView(everything, first.id, at, free)).toBeNull();
+    // A card the chart does not draw asks for nothing either.
+    expect(panIntoView(everything, "goal:nope", at, free)).toBeNull();
+  });
+
+  it("a card off to the right pans just far enough to show it, and never re-centres", () => {
+    const owner = everything.find((n) => n.kind === "owner")!;
+    const vp = panIntoView(everything, owner.id, at, free)!;
+    expect(vp.zoom).toBe(at.zoom);
+    expect(vp.y).toBe(at.y);
+    const b = box(owner.id, vp);
+    expect(b.right).toBeCloseTo(free.w - FIT_PAD, 5);
+    // The tree is wider than the pane: its right edge is at or past the far pad, its left off to the left.
+    expect(treeRight * vp.zoom + vp.x).toBeGreaterThanOrEqual(free.w - FIT_PAD);
+    expect(treeLeft * vp.zoom + vp.x).toBeLessThanOrEqual(FIT_PAD);
+  });
+
+  it("a card below the fold pans down by the least, and keeps the outline's left edge", () => {
+    const low = [...everything].filter((n) => n.kind !== "owner").sort((a, b) => b.y - a.y)[0];
+    const vp = panIntoView(everything, low.id, at, free)!;
+    expect(vp.x).toBe(at.x);
+    expect(box(low.id, vp).bottom).toBeCloseTo(free.h - FIT_PAD, 5);
+    expect(spineLeft * vp.zoom + vp.x).toBeCloseTo(FIT_PAD, 5);
+  });
+
+  it("a tree wider than the pane never has its left edge right of the pad: the pan is clamped", () => {
+    // The viewer has dragged the picture far to the right; a focus on the first
+    // card (now off the left) lands it at the pad, not in the middle.
+    const dragged = { ...at, x: at.x + 400 };
+    const first = everything[0];
+    const vp = panIntoView(everything, first.id, dragged, free)!;
+    expect(treeLeft * vp.zoom + vp.x).toBeLessThanOrEqual(FIT_PAD + 1e-6);
+    expect(box(first.id, vp).left).toBeCloseTo(FIT_PAD, 5);
+    // Dragged the other way past the tree's end, a focus on the last owner
+    // brings the right edge back to the far pad and no further.
+    const last = [...everything].filter((n) => n.kind === "owner").sort((a, b) => b.y - a.y)[0];
+    const over = { ...at, x: at.x - (treeRight * at.zoom + at.x) - 300 };
+    const back = panIntoView(everything, last.id, over, free)!;
+    expect(treeRight * back.zoom + back.x).toBeGreaterThanOrEqual(free.w - FIT_PAD - 1e-6);
+  });
+
+  it("a tree that fits is never pushed out of the pane to show a card", () => {
+    // A wide pane: both columns fit; a drag left took the first cards off screen.
+    const wide = { w: 1600, h: 1000 };
+    const fitWide = computeOrgViewport(everything, wide.w, wide.h, 0, null)!;
+    const dragged = { x: fitWide.x - 600, y: fitWide.y, zoom: fitWide.zoom };
+    const first = everything[0];
+    const vp = panIntoView(everything, first.id, dragged, wide)!;
+    expect(treeLeft * vp.zoom + vp.x).toBeGreaterThanOrEqual(FIT_PAD - 1e-6);
+    expect(treeRight * vp.zoom + vp.x).toBeLessThanOrEqual(wide.w - FIT_PAD + 1e-6);
+  });
+
+  it("a bottom inset (the phone sheet) counts as covered: the card lands above it", () => {
     const sheet = Math.round(800 * 0.62);
-    const vp = computeOrgViewport(nodes, 390, 800, 0, null, { id: me.id, zoom: 0.92 }, sheet)!;
-    const top = me.y * 0.92 + vp.y;
-    const bottom = top + me.h * 0.92;
-    expect(bottom).toBeLessThanOrEqual(800 - sheet);
-    const freeH = 800 - sheet - 48;
-    expect(top).toBeCloseTo(24 + (freeH - me.h * 0.92) / 2, 5);
-    // Without the inset the same card lands under the sheet.
-    const under = computeOrgViewport(nodes, 390, 800, 0, null, { id: me.id, zoom: 0.92 })!;
-    expect(me.y * 0.92 + under.y + me.h * 0.92).toBeGreaterThan(800 - sheet);
+    const low = [...everything].filter((n) => n.kind !== "owner").sort((a, b) => b.y - a.y)[0];
+    const vp = panIntoView(everything, low.id, at, { w: 390, h: 800 - sheet })!;
+    expect(box(low.id, vp).bottom).toBeLessThanOrEqual(800 - sheet);
   });
 });
 

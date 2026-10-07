@@ -7,7 +7,7 @@ import { UsageError } from '@platform/evals/cli';
 import { readCut, readFrozenVerbs } from '../../served';
 import type { ReplayResult, SurfaceImpl } from '../../surface';
 import { buildBriefing, type OrgHashes, type OrgMode } from './build';
-import { freezeContext, gradeDir, gradeExisting, handlePool, loadGradeSets, snapshotsRoot, snapshotWorkspace, tryJson, wrongClosesOf, type GradeSets, type OrgGrade } from './grade';
+import { builtAt, freezeContext, gradeDir, gradeExisting, handlePool, loadGradeSets, snapshotsRoot, snapshotWorkspace, tryJson, wrongClosesOf, type GradeSets, type OrgGrade } from './grade';
 
 // org-review: the Head of People's analyzer run as an agent against a saved
 // workspace (a served dir under EVALS_HOME/snapshots/org-review). A replay
@@ -30,7 +30,7 @@ function gradeOf(out: ReplayResult, label?: GradeSets): OrgGrade {
   const x = out.extra as unknown as OrgExtra;
   const hit = graded.get(x);
   if (hit) return hit;
-  const g = gradeDir(x.runDir, { workspace: x.workspace, servedDir: x.servedDir, sets: label ?? loadGradeSets(x.workspace), pool: handlePool(x.workspace) });
+  const g = gradeDir(x.runDir, { workspace: x.workspace, servedDir: x.servedDir, sets: label ?? loadGradeSets(x.workspace), pool: handlePool(x.workspace, builtAt(x.runDir)) });
   graded.set(x, g);
   return g;
 }

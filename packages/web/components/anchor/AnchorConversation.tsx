@@ -1,14 +1,15 @@
 "use client";
 
-// A standing agent's live conversation, embedded. Used by the slide-over and
-// the proposal thread alike — the same store-fed conversation, the same
-// composer, so talking to the agent feels identical wherever you open it.
+// A standing agent's live conversation, embedded. The slide-over and the org
+// screen mount the same store-fed conversation and the same composer, so
+// talking to the agent feels identical wherever you open it.
 
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../ConversationDiffLayout";
 import type { ConversationData } from "../conversation/types";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { toast } from "sonner";
 import { HeadOfPeopleFace } from "./AnchorIdentity";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
@@ -19,19 +20,18 @@ import { HEAD_OF_PEOPLE_NAME } from "../org/orgStaffingTypes";
 import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME } from "@codecast/shared/contracts/orgLead";
 import { RoleFace } from "../org/RoleFace";
 import type { HireAssistantResult } from "../../store/orgSlice";
+import { findProposalCardMessage, type JumpRequest } from "../org/orgScreenModel";
 
-export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff }: {
+/** How many newer pages a time jump reads while looking for its card. */
+const FIND_PAGES_MAX = 4;
+
+export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff, jump }: {
   conversationId: string;
   hideHeader?: boolean;
   /** The staffing pane owns the send into a proposal's thread (S18). */
   onSendOverride?: ConversationDiffLayoutProps["onSendOverride"];
   composerNode?: React.ReactNode;
   autoFocusInput?: boolean;
-  /** A proposal's thread (org-staffing.md S19) is a standing session with a
-   *  history from before the proposal: the embed shows what was said from
-   *  `since` on, under the host's `leadNode` (the letter), and stops paging
-   *  older once the loaded window reaches back past it. */
-  since?: number;
   /** A standing session opens on its provisioning prompt: the seat's own
    *  system text, sent by the host as the first message. The scope page
    *  (scopes-and-feed.md F4.1) folds it away so the page opens on the agent
@@ -47,6 +47,13 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
   stickyPrompt?: ConversationDiffLayoutProps["stickyPrompt"];
   initialDensity?: ConversationDiffLayoutProps["initialDensity"];
   hideDiff?: boolean;
+  /** The host's scroll-to request (org-staffing.md S41): a message to land on,
+   *  or a timestamp to centre the window on when the message is not loaded,
+   *  with `find` naming the proposal whose card is then looked for in the
+   *  window. A new nonce is a new request, so the same card can be asked for
+   *  twice. A send ends the request: the person's own bubble lands on the
+   *  live tail, which the target window would never show. */
+  jump?: JumpRequest | null;
   /** The slide-over owns the workspace's agent by construction, so it seeds
    *  `is_own` before the row lands and the owner UI paints at once. A thread
    *  embedded elsewhere (the staffing pane's head of people, hosted by whoever
@@ -55,6 +62,9 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
 }) {
   useSeedOwnership(conversationId, seedOwnership);
 
+  // The request a send has ended; the host keeps its own until the next one.
+  const [endedNonce, setEndedNonce] = useState<number | null>(null);
+  const request = jump && jump.nonce !== endedNonce ? jump : null;
   const {
     conversation,
     hasMoreAbove,
@@ -66,18 +76,62 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
     jumpToStart,
     jumpToEnd,
     jumpToTimestamp,
-  } = useConversationMessages(conversationId);
+    targetMode,
+  } = useConversationMessages(conversationId, request?.messageId, undefined, undefined, request?.nonce);
+  // The thread settled on the request's row: the host lands on what it wanted
+  // inside it, once per nonce (the layout can settle the same target again
+  // when its window re-renders) and never for a request already replaced.
+  const requestRef = useRef(request);
+  requestRef.current = request;
+  const settledNonce = useRef<number | null>(null);
+  const onTargetSettled = useCallback((_messageId: string, nonce: number | undefined) => {
+    const r = requestRef.current;
+    if (!r || nonce !== r.nonce || settledNonce.current === r.nonce) return;
+    settledNonce.current = r.nonce;
+    r.onSettled?.();
+  }, []);
+
+  // A request with no message id lands on the time instead.
+  useWatchEffect(() => {
+    if (request && request.timestamp !== undefined && !request.messageId) jumpToTimestamp(request.timestamp);
+  }, [request?.nonce]);
+  // The card the request named, once its message is in the window the hook
+  // holds: the layout then lands on that row under the same nonce. The hook
+  // itself is not re-armed, which would start a second around-window read.
+  const found = useMemo(() => request?.find && !request.messageId ? findProposalCardMessage(conversation?.messages, request.find) : null, [conversation?.messages, request?.find, request?.messageId]);
+  const targetMessageId = request?.messageId ?? found ?? undefined;
+  // The window around the time landed without the card (the author wrote
+  // many rows between the proposal and its card): page newer, a few times,
+  // until it is in the window or the pages run out.
+  const pagedFor = useRef<{ nonce: number; pages: number }>({ nonce: -1, pages: 0 });
+  useWatchEffect(() => {
+    if (!request?.find || request.messageId || found || !conversation?.messages?.length || isLoadingNewer || !hasMoreBelow) return;
+    if (pagedFor.current.nonce !== request.nonce) pagedFor.current = { nonce: request.nonce, pages: 0 };
+    if (pagedFor.current.pages >= FIND_PAGES_MAX) return;
+    pagedFor.current.pages += 1;
+    loadNewer();
+  }, [request?.nonce, found, conversation?.messages?.length, isLoadingNewer, hasMoreBelow]);
+  // A message the person sends from here: leave the target window for the
+  // live tail, where the bubble and the reply land.
+  const pendingCount = useInboxStore((s) => s.pendingMessages[conversationId]?.length ?? 0);
+  const seenPending = useRef(pendingCount);
+  useWatchEffect(() => {
+    const grew = pendingCount > seenPending.current;
+    seenPending.current = pendingCount;
+    if (grew && request) { setEndedNonce(request.nonce); jumpToEnd(); }
+  }, [pendingCount]);
 
   const windowed = useMemo(() => {
     const c = conversation as WindowedConversation | null;
-    const cut = foldBootstrap ? bootstrapCut(c) : undefined;
-    return windowConversationSince(c, cut !== undefined && (since === undefined || cut > since) ? cut : since);
-  }, [conversation, since, foldBootstrap]);
+    return windowConversationSince(c, foldBootstrap ? bootstrapCut(c) : undefined);
+  }, [conversation, foldBootstrap]);
 
   if (!conversation || !windowed) return <CenteredNote>Loading conversation…</CenteredNote>;
 
   return (
-    <div className="h-full">
+    // The thread is live (new messages land) or a window around a target: a
+    // host or a check reads which from the root.
+    <div className="h-full" data-conv-target-mode={targetMode ? "target" : "live"}>
       <ConversationDiffLayout
         conversation={windowed.conversation as unknown as ConversationData}
         embedded
@@ -90,6 +144,9 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
         onJumpToStart={jumpToStart}
         onJumpToEnd={jumpToEnd}
         onJumpToTimestamp={jumpToTimestamp}
+        targetMessageId={targetMessageId}
+        targetNonce={request?.nonce}
+        onTargetSettled={onTargetSettled}
         isOwner={seedOwnership || !!(conversation as { is_own?: boolean }).is_own}
         showMessageInput
         hideHeader={hideHeader}

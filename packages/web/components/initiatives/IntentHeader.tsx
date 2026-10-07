@@ -8,7 +8,7 @@
 // place, the chip that opens a list, the chip that sets the target day, the
 // tab strip (the scope panel's own: data-scope-tab, an h-8 row, an underline
 // under the active one) and the tab that lives in the URL.
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, CalendarDays, type LucideIcon } from "lucide-react";
@@ -16,6 +16,7 @@ import { cn } from "../../lib/utils";
 import { FilterOptionList, type FilterOption } from "../FilterDropdown";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { INITIATIVE_ACCENT } from "../../lib/initiativeColors";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export const INTENT_HAIRLINE = "color-mix(in srgb, var(--sol-border) 22%, transparent)";
 
@@ -225,7 +226,7 @@ export function IntentTabs<K extends string>({ tabs, active, onTab, accent = INI
   // A strip wider than a phone keeps the active tab in view, so a tab opened
   // by a link (?tab=line) is never scrolled off the end.
   const activeRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const strip = activeRef.current?.parentElement;
     if (!strip) return;
     const reveal = () => {

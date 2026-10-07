@@ -14,7 +14,7 @@ describe("the tours registry", () => {
     const ids = TOURS.map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const t of TOURS) expect(AREAS.has(t.area)).toBe(true);
-    expect(tourById("org-page")?.title).toBe("The org page");
+    expect(tourById("org-role")?.title).toBe("A role's page");
     expect(tourById("nope")).toBeUndefined();
   });
 
@@ -46,16 +46,14 @@ describe("the tours registry", () => {
     }
   });
 
-  test("the org tours teach the product as it works today", () => {
+  test("the org tour teaches the role's page as it works today", () => {
     const org = TOURS.filter((t) => t.area === "org").map((t) => t.id);
-    expect(org).toEqual(["org-page", "org-role", "org-health", "org-hire", "org-proposal"]);
+    expect(org).toEqual(["org-role"]);
     const text = TOURS.filter((t) => t.area === "org").flatMap((t) => t.steps.map((s) => `${s.title} ${s.body}`)).join(" ");
-    for (const must of ["Head of People", "accept", "skip", "Needs you", "Reports to", "gallery", "Pause"]) expect(text).toContain(must);
+    for (const must of ["Reports to", "Pause"]) expect(text).toContain(must);
   });
 
   test("a route says where a tour runs", () => {
-    expect(tourById("org-page")!.route!.match("/org")).toBe(true);
-    expect(tourById("org-page")!.route!.match("/org/or-1")).toBe(false);
     expect(tourById("org-role")!.route!.match("/org/or-1")).toBe(true);
     expect(tourById("org-role")!.route!.match("/org")).toBe(false);
     expect(tourById("session")!.route!.match("/conversation/abc")).toBe(true);

@@ -118,12 +118,15 @@ describe("performSetProjectLead", () => {
 // An initiative's owner role gains every project of the initiative in one act
 // (initiatives-projects-role-page.md I1): the same scope write as naming a lead.
 describe("naming a lead takes over the project's sessions, with the person's one edit", () => {
-  // The fixture the review found missing: sessions of the host on the
-  // project's path, so the gesture has something to move.
-  const conv = (n: number) => ({ _id: `conversations_s${n}`, short_id: `jx7000${n}`, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title: `Growth work ${n}`, project_path: "/repo/growth", message_count: 3, last_message_role: "assistant", updated_at: Date.now() - 60_000, created_at: 1 });
+  // The fixture the review found missing: sessions of the host working on
+  // the project, so the gesture has something to move. Bound to a plan of the
+  // project (org-staffing.md S35): the folder decides nothing, the binding is
+  // what the rule reads.
+  const conv = (n: number) => ({ _id: `conversations_s${n}`, short_id: `jx7000${n}`, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title: `Growth work ${n}`, project_path: "/repo/growth", active_plan_id: "plans_growth", message_count: 3, last_message_role: "assistant", updated_at: Date.now() - 60_000, created_at: 1 });
   function withSessions() {
     const db: any = fixtures();
     Object.assign(db._tables.projects.find((p: any) => p._id === P), { project_path: "/repo/growth" });
+    db._tables.plans.push({ _id: "plans_growth", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-1", title: "Growth plan", status: "active", project_id: P, created_at: 1, updated_at: 1 });
     db._tables.conversations.push(conv(1), conv(2));
     for (const t of ["anchors", "session_decisions", "messages", "user_presence", "pending_messages", "devices", "docs"]) db._tables[t] ??= [];
     return db;

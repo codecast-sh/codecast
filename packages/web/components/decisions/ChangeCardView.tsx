@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, GitPullRequest, X } from "lucide-react";
 import { toast } from "sonner";
@@ -281,7 +281,7 @@ function outcomeLine(tone: string, head: string, tail: string, note?: string) {
 const seenCards = new Set<string>();
 function useFirstSight(key: string) {
   const [first] = useState(() => !seenCards.has(key));
-  useEffect(() => { seenCards.add(key); }, [key]);
+  useWatchEffect(() => { seenCards.add(key); }, [key]);
   return first;
 }
 
@@ -818,7 +818,7 @@ export function ChangeCardAnswer({
   // The line's selected answer, waiting for return. It lets go when the
   // cursor leaves the card.
   const [armed, setArmed] = useState<ChangeVerdict | "dismiss" | null>(null);
-  useEffect(() => { if (!keys) setArmed(null); }, [keys]);
+  useWatchEffect(() => { if (!keys) setArmed(null); }, [keys]);
   const recommended = decision.card?.recommend.verdict;
   const why = decision.card?.recommend.why;
   // Any failing check (the proof counts as one, cardChecks) leaves Ship the
@@ -1004,7 +1004,7 @@ export function ChangeCardAnswer({
  */
 function useFocusWithin(scope: RefObject<HTMLElement | null> | undefined, on: boolean) {
   const [inside, setInside] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!scope || !on) return;
     const read = () => {
       const root = scope.current;
@@ -1029,7 +1029,7 @@ function useFocusWithin(scope: RefObject<HTMLElement | null> | undefined, on: bo
 /** Whether an element has scrolled up out of view (above it, not below), for as long as `on` holds. */
 function useScrolledPast(ref: RefObject<HTMLElement | null>, on: boolean) {
   const [past, setPast] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = ref.current;
     if (!on || !el || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver(([e]) => {

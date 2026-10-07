@@ -1,6 +1,7 @@
 "use client";
 
 import { useAssistantConversationIds, useAssistantScope, useModeWords, useSurface } from "../../lib/surfaces";
+import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD } from "../../lib/hostedPage";
 import { AssistantScopeSwitch, MoreInEverything } from "../AssistantScopeSwitch";
 import { PageHeading } from "../PageHeading";
 import { useCallback, useMemo, useState } from "react";
@@ -20,7 +21,7 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { groupDecisions, stackDue, type DecisionGroup } from "../../lib/decisionGroups";
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
-import { isStackedAsk } from "../../lib/decisionQueue";
+import { answeredLabel, answerSaid, isStackedAsk, questionAsStatement } from "../../lib/decisionQueue";
 import { StackChecklist } from "./StackChecklist";
 import { QueueEmpty, type LastClosed } from "./QueueEmpty";
 import { cardOutcome, settledAgo } from "./ChangeCardView";
@@ -93,7 +94,13 @@ export function DecisionQueueList() {
     const d = answered.reduce<SessionDecisionItem | null>((m, x) => (inScope(x.conversation_id) && (x.resolved_at ?? 0) > (m?.resolved_at ?? 0) ? x : m), null);
     if (!d) return null;
     const outcome = d.card ? cardOutcome(d, "you", now) : null;
-    return { verdict: outcome?.verdict ?? "Answered", title: d.card?.change ?? d.question, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
+    if (outcome) return { verdict: outcome.verdict, title: d.card!.change, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
+    // Lead with what was answered, so "did I just let it do something?" is
+    // read off the line: "You said no: set up the routine "Take vitamins"".
+    const label = answeredLabel(d);
+    return label
+      ? { verdict: answerSaid(label), title: questionAsStatement(d.question), ago: settledAgo(d.resolved_at, now), href: decisionHref(d) }
+      : { verdict: "Answered", title: d.question, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
   }, [answered, now, inScope]);
   // "Waiting on you" counts what a person must answer. Rows a lead holds
   // under a grant stay pending in the inbox (a person may still answer first)
@@ -111,10 +118,13 @@ export function DecisionQueueList() {
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex items-center gap-3 flex-wrap mb-5">
+      <div className={`${HOSTED_PAGE_FRAME} ${HOSTED_PAGE_PAD} py-6`}>
+        <div className="flex items-center gap-x-3 gap-y-2 flex-wrap mb-5">
           <PageHeading title={words.questionsPage} />
-          <AssistantScopeSwitch label="Which approvals this lists" />
+          {/* Under the title on a phone, beside it from sm up. */}
+          <div className="order-last basis-full sm:order-none sm:basis-auto empty:hidden">
+            <AssistantScopeSwitch label="Which approvals this lists" hidden={outOfScope} />
+          </div>
           {/* A count of nothing says what the empty state below says better. */}
           {(mine > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
           {internals && <div className="ml-auto flex items-center gap-2 text-[11px]">

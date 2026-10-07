@@ -1,9 +1,9 @@
 // Mounts the health page in jsdom against the fixture health and checks it
 // as a person uses it: the week in one line, what waits on them (each card
 // saying its kind, who asks and the one thing to do), a role opened in the
-// drawer with what is stuck and the two what-ifs, the Head of People's conversation in
-// its own column, and the phone's list of role weeks. None of the load
-// model's words reach the page.
+// drawer with what is stuck and the two what-ifs, the way to the Head of
+// People's conversation on the org screen, and the phone's list of role
+// weeks. None of the load model's words reach the page.
 // Run: bun components/org/HealthBoard.mount.test.tsx
 import assert from "node:assert/strict";
 
@@ -18,16 +18,14 @@ async function verifyHealthBoard() {
   (dom.window as any).HTMLElement.prototype.scrollIntoView = () => {};
   const { mock } = await import("bun:test");
   const React = await import("react");
-  mock.module("../anchor/AnchorConversation", () => ({ AnchorConversation: ({ conversationId }: { conversationId: string }) => React.createElement("div", { "data-thread": conversationId }, "thread") }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { HealthBoard } = await import("./HealthBoard");
-  const { ORG_FIXTURE } = await import("./orgFixture");
+  const { ORG_FIXTURE_WITH_HEAD: headOfPeopleTree } = await import("./orgFixture");
   const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } = await import("./orgStaffingFixture");
   const { findHeadOfPeople } = await import("./staffingModel");
   const { roleFlows } = await import("./orgFlow");
-  const headOfPeopleTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-head", short_id: "or-9", handle: "head-of-people", name: "Head of People", standing: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" } }] };
   const now = ORG_STAFFING_FIXTURE_HEALTH.generated_at;
   const calls: string[] = [];
   const queue: any[] = [{ key: "decide:1", source: "decide", conversationId: "fixture-growth-conv", question: "Which plan names go on the pricing page?", options: [{ label: "Starter and Pro" }, { label: "Free, Pro, Team" }], blocking: true, createdAt: now - 3_600_000, decisionId: "sd-77" }];
@@ -49,7 +47,6 @@ async function verifyHealthBoard() {
     onTrigger: (id: string, verb: string) => calls.push(`trigger:${id}:${verb}`),
     onSetTriggerEvery: (id: string, ms: number) => calls.push(`every:${id}:${ms}`),
     onSendToRole: (conv: string, body: string) => calls.push(`send:${conv}:${body}`),
-    onResumeHeadOfPeople: (id: string) => calls.push(`resume:${id}`),
     onSetLimit: (id: string, perDay: number) => calls.push(`limit:${id}:${perDay}`),
     canEditRole: () => true,
   };
@@ -81,7 +78,7 @@ async function verifyHealthBoard() {
   assert.equal(calls.pop(), "open:fixture-growth-conv");
   const proposal = q('[data-needs-you-item="proposal"]')!;
   assert.match(proposal.textContent!, /org change.*Split growth.*\(6 changes to decide\)/);
-  await act(async () => (proposal.querySelector("[data-needs-you-open]") as HTMLButtonElement).click());
+  await act(async () => (proposal.querySelector('[data-needs-you-review="op-7"]') as HTMLButtonElement).click());
   assert.equal(calls.pop(), "pick:op-7");
 
   // ── nothing open until a card is clicked on the chart ──
@@ -124,18 +121,9 @@ async function verifyHealthBoard() {
   assert.match(calls.pop()!, /^send:fixture-head-conv:Propose moving about 50% of Head of Growth/);
   assert.ok(q("[data-what-if-sent]"));
   await render({ focusRoleId: null });
-
-  // ── the Head of People's conversation: its own column, full height, hideable ──
-  assert.equal(q("[data-head-column]")!.getAttribute("data-head-column"), "open");
-  assert.ok(q('[data-head-column] [data-thread="fixture-head-conv"]'));
-  await act(async () => q<HTMLButtonElement>("[data-head-column-close]")!.click());
-  assert.equal(q("[data-head-column]")!.getAttribute("data-head-column"), "closed");
-  await act(async () => q<HTMLButtonElement>('[data-head-column="closed"]')!.click());
-  const pausedTree = { ...headOfPeopleTree, roles: headOfPeopleTree.roles.map((r) => r.handle === "head-of-people" ? { ...r, status: "paused" as const } : r) };
-  await render({ tree: pausedTree, head: findHeadOfPeople(pausedTree) });
-  assert.match(q("[data-head-paused]")!.textContent!, /is paused: its triggers hold until you resume it\. Messages still reach it\./);
-  await act(async () => (Array.from(document.querySelectorAll("[data-head-paused] button")).find((b) => /Resume/.test(b.textContent!)) as HTMLButtonElement).click());
-  assert.equal(calls.pop(), "resume:fixture-role-head");
+  // The Head of People's conversation is the org screen's: nothing of it is drawn here.
+  assert.equal(q("[data-head-column]"), null);
+  assert.equal(q("[data-thread]"), null);
 
   // ── nothing waiting, and reads that failed ──
   await render({ queue: [], proposals: [] });
@@ -149,7 +137,7 @@ async function verifyHealthBoard() {
   await act(async () => q<HTMLButtonElement>("[data-health-error] button")!.click());
   assert.equal(calls.pop(), "retryHealth");
 
-  // ── the phone: one column, the conversation one tap away ──
+  // ── the phone: one column, the conversation one tap away on the org screen ──
   await render({ phone: true });
   assert.ok(q('[data-health-page="phone"]'));
   assert.equal(q("[data-health-map]"), null);
@@ -157,8 +145,8 @@ async function verifyHealthBoard() {
   assert.match(q('[data-role-week="growth"]')!.textContent!, /217in→12closed.*at its limit 4 of 7 days.*3 stuck/);
   await act(async () => q<HTMLButtonElement>('[data-flow-row="fixture-role-growth"]')!.click());
   assert.equal(calls.pop(), "focus:fixture-role-growth");
-  await act(async () => (Array.from(document.querySelectorAll("button")).find((b) => /Talk to Head of People/.test(b.textContent!)) as HTMLButtonElement).click());
-  assert.equal(calls.pop(), "open:fixture-head-conv");
+  assert.equal(q("[data-health-talk]")!.getAttribute("href"), "/org");
+  assert.match(q("[data-health-talk]")!.textContent!, /Talk to Head of People/);
 
   await act(async () => root.unmount());
   closeDomWindow(dom);

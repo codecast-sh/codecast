@@ -19,14 +19,36 @@ function boundsOf(nodes: readonly OrgViewportNode[]): Rect | null {
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
+/** The column a fit settles for when the whole tree is too small to read:
+ *  the root tier of the people chart, or the outline of the goals map (every
+ *  card but the owners column, which stays reachable by a pan or the People
+ *  filter). `whole` when the tree fits readably as it is. */
+export function fitTarget(
+  nodes: readonly OrgViewportNode[],
+  freeW: number,
+  freeH: number,
+  readableZoom = MIN_READABLE_ZOOM,
+): { rect: Rect; zoom: number; whole: boolean } | null {
+  const all = boundsOf(nodes);
+  if (!all) return null;
+  const zoom = Math.min(1, freeW / all.w, freeH / all.h);
+  if (zoom >= readableZoom) return { rect: all, zoom, whole: true };
+  const roots = boundsOf(nodes.filter((n) => ROOT_KINDS.has(n.kind)));
+  // Both columns of the goals map need the width at the readable floor; when
+  // they do not have it, the outline is what the fit shows first.
+  const spine = !roots && nodes.some((n) => n.kind === "owner") && all.w * readableZoom > freeW ? boundsOf(nodes.filter((n) => n.kind !== "owner")) : null;
+  const rect = roots ?? spine ?? all;
+  return { rect, zoom: Math.max(readableZoom, Math.min(1, freeW / rect.w)), whole: false };
+}
+
 /**
  * The viewport for a canvas of `width` x `height` with `panelWidth` covered on
  * the right (the desktop panel) and `panelHeight` covered at the bottom (the
  * phone sheet). The tree is anchored to the TOP of the free area, never centred
  * vertically: the root row belongs next to the toolbar. If the whole tree only
- * fits below MIN_READABLE_ZOOM, the root tier (people, roles, anchors) is
- * fitted instead, at readable size, centred on `focusId` when it is wider than
- * the free area.
+ * fits below `readableZoom`, one column is fitted instead (fitTarget), at
+ * readable size, starting from `focusId` when the row is wider than the free
+ * area.
  */
 export function computeOrgViewport(
   nodes: readonly OrgViewportNode[],
@@ -34,42 +56,21 @@ export function computeOrgViewport(
   height: number,
   panelWidth: number,
   focusId: string | null,
-  /** A card to bring to the centre of the free area (a focused ghost), at
-   *  the viewer's current zoom when given, else at the fitted one. The tree
-   *  is not refitted around it: only the pan changes. */
-  focusTarget?: { id: string; zoom?: number } | null,
   panelHeight = 0,
-  /** The least zoom the fit settles for before it shows the roots alone. The
+  /** The least zoom the fit settles for before it shows one column alone. The
    *  health map draws structure only, so it fits the whole tree smaller. */
   readableZoom = MIN_READABLE_ZOOM,
 ): { x: number; y: number; zoom: number; whole: boolean } | null {
-  const all = boundsOf(nodes);
-  if (!all || width <= 0 || height <= 0) return null;
+  if (width <= 0 || height <= 0) return null;
   const freeW = Math.max(120, width - panelWidth - FIT_PAD * 2);
   const freeH = Math.max(120, height - panelHeight - FIT_PAD * 2);
-  let zoom = Math.min(1, freeW / all.w, freeH / all.h);
-  const focus = focusTarget ? nodes.find((n) => n.id === focusTarget.id) : undefined;
-  if (focus) {
-    const z = focusTarget?.zoom ?? Math.max(zoom, readableZoom);
-    return {
-      x: FIT_PAD + (freeW - focus.w * z) / 2 - focus.x * z,
-      y: FIT_PAD + (freeH - focus.h * z) / 2 - focus.y * z,
-      zoom: z,
-      whole: false,
-    };
-  }
-  let target = all;
-  let whole = true;
-  if (zoom < readableZoom) {
-    const roots = boundsOf(nodes.filter((n) => ROOT_KINDS.has(n.kind))) ?? all;
-    target = roots;
-    whole = false;
-    zoom = Math.max(readableZoom, Math.min(1, freeW / roots.w));
-  }
-  const tw = target.w * zoom;
+  const fit = fitTarget(nodes, freeW, freeH, readableZoom);
+  if (!fit) return null;
+  const { rect: target, zoom, whole } = fit;
+  const all = boundsOf(nodes)!;
   let x: number;
-  if (tw <= freeW) {
-    x = FIT_PAD + (freeW - tw) / 2 - target.x * zoom;
+  if (all.w * zoom <= freeW) {
+    x = FIT_PAD + (freeW - all.w * zoom) / 2 - all.x * zoom;
   } else {
     // Wider than the free area: start from the left edge so as many roots as
     // possible show (the viewer sorts first), unless the focus node would then
@@ -82,6 +83,49 @@ export function computeOrgViewport(
   return { x, y, zoom, whole };
 }
 
+/** The pan along one axis that brings a span of `size` at `pos` into
+ *  `extent`, landing FIT_PAD inside the edge it was past (the near edge wins
+ *  when it cannot fit whole), then held to the tree: a tree longer than the
+ *  area never leaves a blank strip at its start or end, and a tree that fits
+ *  is never pushed out. Zero when the span is already inside. */
+function axisPan(pos: number, size: number, treePos: number, treeSize: number, extent: number): number {
+  if (pos >= 0 && pos + size <= extent) return 0;
+  let d = pos + size > extent ? extent - FIT_PAD - (pos + size) : 0;
+  if (pos + d < FIT_PAD) d = FIT_PAD - pos;
+  const t0 = treePos + d, t1 = treePos + treeSize + d;
+  if (treeSize > extent - FIT_PAD * 2) {
+    if (t0 > FIT_PAD) d += FIT_PAD - t0;
+    else if (t1 < extent - FIT_PAD) d += extent - FIT_PAD - t1;
+  } else if (t0 < FIT_PAD) d += FIT_PAD - t0;
+  else if (t1 > extent - FIT_PAD) d += extent - FIT_PAD - t1;
+  return d;
+}
+
+/**
+ * The viewport that shows the card `targetId` (a focused change, a hovered
+ * card, a link's node) at the viewer's zoom, moving as little as it can: a
+ * card already fully inside the free area (`free`: left of the panel, above
+ * the sheet) is left where it is, so a focus never re-centres what the
+ * person can see; one past an edge moves just far enough to land FIT_PAD
+ * inside it, on that axis alone. The pan is clamped to the tree (axisPan),
+ * so a tree wider than the pane never strands its left edge right of
+ * FIT_PAD with half the picture off screen. Null when nothing need move.
+ */
+export function panIntoView(
+  nodes: readonly OrgViewportNode[],
+  targetId: string,
+  vp: Viewport,
+  free: { w: number; h: number },
+): Viewport | null {
+  const n = nodes.find((b) => b.id === targetId);
+  const all = boundsOf(nodes);
+  if (!n || !all) return null;
+  const z = vp.zoom;
+  const dx = axisPan(n.x * z + vp.x, n.w * z, all.x * z + vp.x, all.w * z, free.w);
+  const dy = axisPan(n.y * z + vp.y, n.h * z, all.y * z + vp.y, all.h * z, free.h);
+  if (dx === 0 && dy === 0) return null;
+  return { x: vp.x + dx, y: vp.y + dy, zoom: z };
+}
 
 /**
  * Where a new layout's origin goes so the card the person is pointing at does

@@ -1,9 +1,7 @@
-// Mounts the Goals lens and the chart pane in jsdom (org-staffing.md S36):
-// the goal, project and owner cards wearing a proposal's ghost chrome, the two
-// openers (the card's Chart button, the header chip) reaching the stage's
-// split opener with the pane's address, and the pane itself: its lens from
-// the address, the proposal in its bar, and the thread's newest pointer
-// re-pointing it while it follows.
+// Mounts the Goals lens in jsdom (org-staffing.md S36): the goal, project
+// and owner cards wearing a proposal's ghost chrome, the header chip reaching
+// the stage's split opener with the org screen's address, and the map
+// lighting the change a card points at.
 // Run: bun test --timeout 120000 components/org/GoalsLens.mount.test.tsx
 import { test, expect, afterAll, mock } from "bun:test";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
@@ -53,8 +51,7 @@ const { GOALS_FIXTURE_CHANGES, GOALS_FIXTURE_DATA, ORG_GOALS_FIXTURE_PROPOSAL } 
 const { goalNodeId, layoutGoals, projectNodeId } = await import("./goalsLayout");
 const { roleNodeId, personNodeId } = await import("./orgLayout");
 const { GoalCard, GoalOwnerCard, GoalProjectCard, CompanyCard } = await import("./GoalsNodeCards");
-const { OrgChartChip, ProposalChartButton } = await import("./orgChartLink");
-const { OrgChartPane } = await import("./OrgChartPane");
+const { OrgChartChip } = await import("./orgChartLink");
 const { registerSplitOpener } = await import("../../lib/openIntent");
 
 const q = (sel: string, root: ParentNode = document) => root.querySelector(sel) as HTMLElement | null;
@@ -127,11 +124,10 @@ test("goal, project and owner cards wear the proposal's ghost chrome", async () 
   el.remove();
 });
 
-test("the card's Chart button and the header chip open the pane beside the conversation", async () => {
+test("the header chip opens the org screen's map beside the conversation", async () => {
   const opened: string[] = [];
   registerSplitOpener((path) => { opened.push(path); return true; });
-  // The conversation in view rides along as `s`; the view guard owns that
-  // field, so the button is read here with none in view and the chip names its own.
+  // The chip names its own conversation as `beside`.
   useInboxStore.setState({
     messages: { "conv-hop": [{ _id: "m1", role: "assistant", content: "Here is the first pass.\n\nop-7", timestamp: 1 }, { _id: "m2", role: "assistant", content: "Look at the owner: /org?proposal=op-8&focus=4", timestamp: 2 }], "conv-plain": [{ _id: "m3", role: "assistant", content: "I revised op-8 in passing.", timestamp: 3 }] },
   } as any);
@@ -140,7 +136,6 @@ test("the card's Chart button and the header chip open the pane beside the conve
   const root = createRoot(el);
   await act(async () => {
     root.render(h("div", null,
-      h(ProposalChartButton, { proposal: { short_id: "op-7" } }),
       h(OrgChartChip, { conversationId: "conv-hop" }),
       h("span", { "data-plain": true }, h(OrgChartChip, { conversationId: "conv-plain" })),
     ));
@@ -148,108 +143,11 @@ test("the card's Chart button and the header chip open the pane beside the conve
   // A thread that holds no pointer has no chip.
   expect(q("[data-plain]", el)!.children.length).toBe(0);
   expect(q("[data-org-chart-chip]", el)!.getAttribute("data-org-chart-chip")).toBe("op-8");
-  await act(async () => { q("[data-open-chart='op-7']", el)!.click(); });
-  await tick();
   await act(async () => { q("[data-org-chart-chip]", el)!.click(); });
   await tick();
-  expect(opened).toEqual(["/org?view=chart&proposal=op-7", "/org?view=chart&proposal=op-8&focus=4&s=conv-hop"]);
+  expect(opened).toEqual(["/org?proposal=op-8&focus=4&show=map&beside=conv-hop"]);
   await act(async () => { root.unmount(); });
   el.remove();
-});
-
-test("the pane reads its address, draws the proposal, and follows the thread's newest pointer", async () => {
-  useInboxStore.setState({
-    orgTree: ORG_FIXTURE,
-    orgProposals: { [ORG_GOALS_FIXTURE_PROPOSAL._id]: (({ changes: _c, ...row }) => row)(ORG_GOALS_FIXTURE_PROPOSAL) },
-    orgProposalChanges: Object.fromEntries(GOALS_FIXTURE_CHANGES.map((c) => [c._id, c])),
-    messages: { "conv-hop": [{ _id: "m1", role: "assistant", content: "op-8", timestamp: 1 }] },
-  } as any);
-  search = "view=chart&proposal=op-8&s=conv-hop";
-  const el = document.createElement("div");
-  document.body.appendChild(el);
-  const root = createRoot(el);
-  const render = () => act(async () => { root.render(h(OrgChartPane, { goalsData: GOALS_FIXTURE_DATA })); });
-  await render();
-  // The map opens on everything, with the proposal's changes drawn over it ("As proposed" is on).
-  expect(q("[data-org-chart-pane]", el)!.getAttribute("data-org-chart-pane")).toBe("everything");
-  expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("everything");
-  expect(q("[data-graph-changes]", el)!.getAttribute("data-graph-changes")).toBe("5");
-  expect(q("[data-map-proposed]", el)!.getAttribute("data-map-proposed")).toBe("on");
-  expect(q("[data-chart-proposal='op-8']", el)!.textContent).toContain("Name the goals the work already serves");
-  // Counted in cards: two of the five changes land on one goal.
-  expect(q("[data-proposal-meta]", el)!.getAttribute("data-proposal-meta")).toBe("4 to decide");
-  expect(q("[data-chart-follow]", el)!.getAttribute("data-chart-follow")).toBe("on");
-  // The pointer that was there when the pane opened moves nothing.
-  expect(replaced).toEqual([]);
-
-  // The agent points at one change: the pane re-points itself there.
-  await act(async () => {
-    useInboxStore.setState((s: any) => ({ messages: { ...s.messages, "conv-hop": [...s.messages["conv-hop"], { _id: "m2", role: "assistant", content: "The owner is the open question: /org?proposal=op-8&focus=4", timestamp: 2 }] } }));
-  });
-  expect(replaced).toEqual(["/org?view=chart&proposal=op-8&focus=4&s=conv-hop"]);
-  search = replaced[0].split("?")[1];
-  await render();
-  expect(q("[data-graph-focus]", el)!.getAttribute("data-graph-focus")).toBe("change:g-owner");
-
-  // The person picks the People filter: it holds, in the address, and the focus (a goal change, not on that chart) is dropped.
-  await act(async () => { q("[data-map-filter-pick='people']", el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&lens=people&s=conv-hop");
-  search = replaced.at(-1)!.split("?")[1];
-  await render();
-  expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("people");
-  // The overlay off: the company as it is, the proposal still named in the bar.
-  await act(async () => { q("[data-map-proposed]", el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&lens=people&proposed=0&s=conv-hop");
-  search = replaced.at(-1)!.split("?")[1];
-  await render();
-  expect(q("[data-graph-changes]", el)!.getAttribute("data-graph-changes")).toBe("0");
-  expect(q("[data-chart-proposal='op-8']", el)).not.toBeNull();
-  search = "view=chart&proposal=op-8&focus=4&lens=people&s=conv-hop";
-  await render();
-  // Follow off: a newer pointer no longer moves the pane.
-  await act(async () => { q("[data-chart-follow]", el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-8&focus=4&lens=people&s=conv-hop&follow=0");
-  search = replaced.at(-1)!.split("?")[1];
-  await render();
-  // A goal change in focus has no place on the reporting chart: the map shows everything for it.
-  expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("everything");
-  const before = replaced.length;
-  await act(async () => {
-    useInboxStore.setState((s: any) => ({ messages: { ...s.messages, "conv-hop": [...s.messages["conv-hop"], { _id: "m3", role: "assistant", content: "op-7", timestamp: 3 }] } }));
-  });
-  expect(replaced.length).toBe(before);
-  expect(q("[data-chart-follow]", el)!.getAttribute("data-chart-follow")).toBe("off");
-  // Follow on again lands on what the thread points at now.
-  await act(async () => { q("[data-chart-follow]", el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?view=chart&proposal=op-7&s=conv-hop");
-  await act(async () => { root.unmount(); });
-  el.remove();
-});
-
-test("the pane is read only: no reply box, no answer handlers, and the card hovered in the conversation lights its node without a pan", async () => {
-  useInboxStore.setState({
-    orgTree: ORG_FIXTURE,
-    orgProposals: { [ORG_GOALS_FIXTURE_PROPOSAL._id]: (({ changes: _c, ...row }) => row)(ORG_GOALS_FIXTURE_PROPOSAL) },
-    orgProposalChanges: Object.fromEntries(GOALS_FIXTURE_CHANGES.map((c) => [c._id, c])),
-    messages: { "conv-hop": [{ _id: "m1", role: "assistant", content: "op-8", timestamp: 1 }] },
-    reviewComments: {},
-  } as any);
-  for (const s of ["view=chart&proposal=op-8&s=conv-hop", "view=chart&proposal=op-8"]) {
-    search = s;
-    const el = document.createElement("div");
-    document.body.appendChild(el);
-    const root = createRoot(el);
-    await act(async () => { root.render(h(OrgChartPane, { goalsData: GOALS_FIXTURE_DATA })); });
-    expect(q("[data-chart-reply]", el)).toBeNull();
-    expect(q("[data-ghost-actions]", el)).toBeNull();
-    const graph = graphProps.at(-1)!;
-    expect(graph.ghostAnswers).toBeUndefined();
-    expect(graph.onEditAccept).toBeUndefined();
-    expect(graph.canDrag({ kind: "role" })).toBe(false);
-    expect(graph.view.sessionCards).toBe(false);
-    await act(async () => { root.unmount(); });
-    el.remove();
-  }
 });
 
 test("the map lights the change a card in the conversation points at, and pans only when it is off screen", async () => {

@@ -293,17 +293,17 @@ describe("the stamp a proposal's accept leaves on its change", () => {
     expect("batch" in first).toBe(false);
   });
 
-  test("a limit, a role's long text and its face never survive", () => {
+  test("a limit and a role's face never survive; its charter does (S39)", () => {
     expect(orgAppliedDiff([landed("budget", { before: { caps: { hands_per_day: 3 } }, after: { caps: { hands_per_day: 8 } } })])).toBeUndefined();
     const [hire] = orgAppliedDiff([landed("role", {
       before: { status: null },
       after: { status: "active", name: "Head of Growth", handle: "growth", avatar: "fox", charter: "Owns the funnel.", tenure: { kind: "standing" }, review_backend: "codex", caps: { tokens_per_day: 800_000 }, trust: "direct", reports_to: { kind: "user", user_id: "u1" }, scope: { project_ids: ["p1"], plan_ids: ["pl1"] } },
     })])!;
     expect(hire.before).toEqual({ status: null });
-    expect(hire.after).toEqual({ status: "active", name: "Head of Growth", trust: "direct", reports_to: { kind: "user", user_id: "u1" }, scope: { project_ids: ["p1"], plan_ids: ["pl1"] } });
+    expect(hire.after).toEqual({ status: "active", name: "Head of Growth", charter: "Owns the funnel.", trust: "direct", reports_to: { kind: "user", user_id: "u1" }, scope: { project_ids: ["p1"], plan_ids: ["pl1"] } });
     expect(hire.labels).toEqual({ u1: "Ashot", p1: "Website", pl1: "pl-7" });
-    expect(JSON.stringify(hire)).not.toMatch(/800000|caps|charter|Owns the funnel|avatar|tenure|codex|"handle"/);
-    for (const dropped of ["caps", "charter", "tenure", "avatar", "handle", "review_backend", "parent", "milestones", "questions", "decisions", "sources"]) expect(ORG_DIFF_FIELDS as readonly string[]).not.toContain(dropped);
+    expect(JSON.stringify(hire)).not.toMatch(/800000|caps|avatar|tenure|codex|"handle"/);
+    for (const dropped of ["caps", "tenure", "avatar", "handle", "review_backend", "parent", "milestones", "questions", "decisions", "sources"]) expect(ORG_DIFF_FIELDS as readonly string[]).not.toContain(dropped);
   });
 
   test("a goal's record arrives as what was added, in words, never as the whole lists", () => {

@@ -220,7 +220,7 @@ export function NextMilestoneChip({ milestone, now, counts, className }: { miles
 
 /** Who asked, decided or said it, read off the roster: the face when `by`
  *  names a person or a role here (an @handle, or a name), null when not. */
-export function useWho(): (by: string | undefined) => ReturnType<typeof resolveAssigneeInfo> {
+function useWho(): (by: string | undefined) => ReturnType<typeof resolveAssigneeInfo> {
   const { roles } = useOrgRoles();
   const roster = useTeamRosterIdentity();
   const s = useTrackedStore([(st) => st.currentUser?._id]);

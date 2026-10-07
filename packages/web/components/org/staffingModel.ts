@@ -1,19 +1,17 @@
-// The staffing pane's arithmetic (docs/architecture/org-staffing.md S5), pure
-// so the tests pin it without a DOM: which mode the pane is in, how far a
-// proposal is decided, the one line a change reads as, the company's flags
-// with the node each one points at, span of control per person, and the roles
-// that are bottlenecks. The pane renders these; it computes nothing itself.
+// The org screen's arithmetic (docs/architecture/org-staffing.md S5), pure
+// so the tests pin it without a DOM: how far a proposal is decided, the one
+// line a change reads as, the company's flags with the node each one points
+// at, span of control per person, and the roles that are bottlenecks. The
+// screen renders these; it computes nothing itself.
 import { AREA_STATUS_WORDS, type AreaStatus, type RoleArea } from "@codecast/shared/contracts/orgAreas";
 import type { QueueItem } from "../../lib/decisionQueue";
-import { ORG_SYNC_KINDS, PLAN_STATUS_CHANGES, PROJECT_STATUS_CHANGES, TASK_STATUS_CHANGES, describeTenure, editedOrgChange, isOrgChangeDecidable, isOrgQuietChange, orderOrgChanges, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { ORG_SYNC_KINDS, describeTenure, editedOrgChange, isOrgChangeDecidable, orderOrgChanges, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { CHECK_CADENCES, cadenceLabel } from "../../lib/cadence";
 export { CHECK_CADENCES, cadenceLabel };
 import type { OrgParentRef, OrgRole, OrgTree } from "./orgTypes";
 import { parentNodeId, resolveOrgParentRef } from "./orgLayout";
 import { CHANGE_KIND_META, kindLabel } from "./orgMeta";
-import type { OrgCreateRoleInput } from "../../store/orgSlice";
-import type { HireRoleInitial, HireRoleTouched } from "./HireRoleDialog";
 import {
   HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole,
   type HealthFlag,
@@ -26,9 +24,7 @@ import {
   type OrgProposalRow,
 } from "./orgStaffingTypes";
 
-// ---------------------------------------------------------------- mode
-
-export type StaffingMode = "proposal" | "health" | "no_head_of_people";
+// ---------------------------------------------------------------- the head of people
 
 /** The head of people, when hired: a live role with the reserved handle. */
 export function findHeadOfPeople(tree: OrgTree | null): OrgRole | null {
@@ -38,13 +34,6 @@ export function findHeadOfPeople(tree: OrgTree | null): OrgRole | null {
 /** Open proposals, newest first. */
 export function openProposals(rows: OrgProposalRow[]): OrgProposalRow[] {
   return rows.filter((p) => p.status === "open").sort((a, b) => b.created_at - a.created_at);
-}
-
-/** What the pane shows (S5): a proposal when one is open, else the health
- *  summary, else, with no head of people at all, the two hire buttons. */
-export function staffingMode(tree: OrgTree | null, proposal: OrgProposalRow | null): StaffingMode {
-  if (proposal) return "proposal";
-  return findHeadOfPeople(tree) ? "health" : "no_head_of_people";
 }
 
 // ---------------------------------------------------------------- a review in flight
@@ -535,58 +524,6 @@ export function tenureLine(t: OrgTenureSpec | null | undefined, tree?: OrgTree |
   return describeTenure(t, names);
 }
 
-// ---------------------------------------------------------------- inline edit
-
-export type ChangeField = { key: string; label: string; kind: "text" | "number" | "list" | "select"; value: string; options?: readonly string[] };
-
-/** The closed set a field picks from, when it has one: a record's status (S9). */
-function fieldOptions(kind: OrgChange["kind"], key: string): readonly string[] | undefined {
-  if (key !== "status") return undefined;
-  if (kind === "plan_status") return PLAN_STATUS_CHANGES;
-  if (kind === "task_status") return TASK_STATUS_CHANGES;
-  if (kind === "project_status") return PROJECT_STATUS_CHANGES;
-  return undefined;
-}
-
-/** The editable fields of a change, flattened one level ("config.region")
- *  so the inline form (S5: Edit on anything but a role) is one input per field.
- *  `kind` is not editable; a change stays what it is. A quiet kind (a limit,
- *  S23.2) has no fields: a person never reads it, so never edits it. */
-export function changeFields(change: OrgChange): ChangeField[] {
-  const out: ChangeField[] = [];
-  if (isOrgQuietChange(change)) return out;
-  const push = (key: string, v: unknown) => {
-    if (v === undefined || v === null) return;
-    if (Array.isArray(v)) out.push({ key, label: key.replace(/[._]/g, " "), kind: "list", value: v.map((x) => typeof x === "string" ? x : JSON.stringify(x)).join(", ") });
-    else if (typeof v === "number") out.push({ key, label: key.replace(/[._]/g, " "), kind: "number", value: String(v) });
-    else if (typeof v === "object") for (const [k, x] of Object.entries(v as Record<string, unknown>)) push(`${key}.${k}`, x);
-    else {
-      const options = fieldOptions(change.kind, key);
-      out.push({ key, label: key === "reason" ? "evidence" : key.replace(/[._]/g, " "), kind: options ? "select" : "text", value: String(v), ...(options ? { options } : {}) });
-    }
-  };
-  for (const [k, v] of Object.entries(change)) if (k !== "kind") push(k, v);
-  return out;
-}
-
-/** The edits a form produced, as the nested object `decide` takes: only the
- *  fields whose text changed, parsed back to their kind. Empty when nothing did. */
-export function changeEdits(change: OrgChange, fields: ChangeField[]): Record<string, unknown> {
-  const original = changeFields(change);
-  const edits: Record<string, unknown> = {};
-  for (const f of fields) {
-    const was = original.find((o) => o.key === f.key);
-    if (was && was.value === f.value) continue;
-    const value = f.kind === "number" ? Number(f.value) : f.kind === "list" ? f.value.split(",").map((s) => s.trim()).filter(Boolean) : f.value;
-    if (f.kind === "number" && Number.isNaN(value)) continue;
-    const path = f.key.split(".");
-    let cur: Record<string, unknown> = edits;
-    for (const p of path.slice(0, -1)) cur = (cur[p] ??= {}) as Record<string, unknown>;
-    cur[path[path.length - 1]] = value;
-  }
-  return edits;
-}
-
 /** The `?compose=` text a URL carries for the head of people's composer (a
  *  charter empty state links here with "draft a charter for X"), else null. */
 export function composeParam(search: string | null | undefined): string | null {
@@ -674,7 +611,7 @@ export function orgPreviewEnabled(search: string | null | undefined, dev: boolea
   }
 }
 
-// ---------------------------------------------------------------- the hire dialog as an edit form
+// ---------------------------------------------------------------- parent refs
 
 /**
  * A parent reference as a proposal writes one: "me" for the deciding person,
@@ -686,53 +623,6 @@ export function orgParentRefAsProposal(tree: OrgTree, ref: OrgParentRef | null |
   if (ref.kind === "user") return ref.user_id === meId ? "me" : ref.user_id;
   const role = tree.roles.find((r) => r._id === ref.role_id);
   return role ? `@${role.handle}` : ref.role_id;
-}
-
-/**
- * "Accept with edits" on a role change (S5): the hire dialog's output in the
- * proposal contract's shape. The dialog speaks in ids and parent refs
- * (`scope: { project_ids, plan_ids }`, `reports_to: OrgParentRef`); the
- * contract wants refs and a string (`scope: { projects, plans }`,
- * `reports_to: "@handle" | "me" | id`), and the server lays the edits over
- * the change as they are. Sending the dialog's shape raw left the role with
- * no scope and a reports_to the apply core could not read.
- */
-export function roleChangeEdits(input: Pick<OrgCreateRoleInput, "name" | "handle" | "charter" | "caps" | "scope" | "reports_to" | "leave_sessions"> & { tenure?: OrgTenureSpec; avatar?: string; touched?: HireRoleTouched }, tree: OrgTree, meId: string): Record<string, unknown> {
-  // Scope and parent ride along only when the person changed them: an
-  // untouched form must not overwrite a ref it could not resolve, or a
-  // parent the same proposal creates, with what it happened to display.
-  const touched = input.touched ?? { scope: true, reports_to: true };
-  const reports_to = touched.reports_to ? orgParentRefAsProposal(tree, input.reports_to, meId) : undefined;
-  return {
-    name: input.name,
-    handle: input.handle,
-    ...(input.charter ? { charter: input.charter } : {}),
-    ...(input.caps ? { caps: { ...input.caps } } : {}),
-    // Tenure and avatar (S10, S13) ride as the form hands them.
-    ...(input.tenure ? { tenure: input.tenure } : {}),
-    ...(input.avatar ? { avatar: input.avatar } : {}),
-    ...(touched.scope ? { scope: { projects: [...(input.scope?.project_ids ?? [])], plans: [...(input.scope?.plan_ids ?? [])] } } : {}),
-    ...(reports_to ? { reports_to } : {}),
-    // The person's one edit on the takeover (R1), from the form's checkbox.
-    ...(input.leave_sessions ? { leave_sessions: true } : {}),
-  };
-}
-
-/** The dialog's prefill for a role change, edits included, with the parent
- *  resolved against the tree. Undefined for any other kind. */
-export function roleChangeInitial(c: OrgProposalChange, tree: OrgTree): (HireRoleInitial & { tenure?: OrgTenureSpec; avatar?: string }) | undefined {
-  const ch = editedOrgChange(c.change, c.edits);
-  if (ch.kind !== "role") return undefined;
-  return {
-    name: ch.name,
-    handle: ch.handle.replace(/^@/, ""),
-    ...(ch.charter ? { charter: ch.charter } : {}),
-    ...(ch.caps ? { caps: ch.caps } : {}),
-    ...(ch.scope ? { scope: ch.scope } : {}),
-    ...(ch.tenure ? { tenure: ch.tenure } : {}),
-    ...(ch.avatar ? { avatar: ch.avatar } : {}),
-    reports_to: resolveOrgParentRef(tree, ch.reports_to),
-  };
 }
 
 // ---------------------------------------------------------------- where a proposal came from (S15)

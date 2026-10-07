@@ -1,5 +1,6 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
 import { assistantScopeOnly, restorableIn } from "../../lib/assistantScope";
+import { isHostedMode, useSurface } from "../../lib/surfaces";
 import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -385,6 +386,8 @@ export function QueuePageClient() {
   const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
   const scopeOnly = useInboxStore((s) => assistantScopeOnly(s.clientState.ui));
+  const hostedMode = useInboxStore(isHostedMode);
+  const fleetHome = useSurface("inbox.fleetHome");
   // What may open on its own: in the Assistant scope, only the assistant's.
   const restorable = useCallback((row: { agent_type?: string | null }) => restorableIn(scopeOnly, row), [scopeOnly]);
 
@@ -775,7 +778,7 @@ export function QueuePageClient() {
     <>
       {pendingInjectId && isConvexId(pendingInjectId) && <SessionPrewarm sessionId={pendingInjectId} />}
       {renderShowMine ? (
-        showFirstRun ? firstRun : inboxHome === "board" ? (
+        showFirstRun || !fleetHome ? firstRun : inboxHome === "board" ? (
           <ErrorBoundary name="FleetBoard" level="inline">
             <FleetBoard />
           </ErrorBoundary>
@@ -830,8 +833,10 @@ export function QueuePageClient() {
           actionLabel="Back to inbox"
           onAction={() => { setUnavailableId(null); handleBack(); }}
         />
-      ) : showFirstRun || (scopeOnly && !sortedSessions.some(restorable)) ? (
-        // Nothing of the assistant's to open: its start, with the composer.
+      ) : showFirstRun || hostedMode || (scopeOnly && !sortedSessions.some(restorable)) ? (
+        // Nothing of the assistant's to open, or nothing open in hosted mode
+        // (the last one was closed or archived): its start, with the first
+        // asks and the composer, never a blank pane.
         firstRun
       ) : sortedSessions.length > 0 ? (
         <div className="h-full" />

@@ -179,7 +179,7 @@ function RootAgentHead({ current, shown, onOpenFull }: { current: AnchorRow | nu
 }
 
 /** The header's pins, resolved against what the viewer can see. */
-export function useHeaderPins(): ResolvedPin[] {
+function useHeaderPins(): ResolvedPin[] {
   const anchors = useAnchors();
   const s = useTrackedStore([
     (st) => JSON.stringify(st.clientState.ui?.header_pins ?? null),

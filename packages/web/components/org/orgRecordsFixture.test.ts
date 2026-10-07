@@ -57,7 +57,7 @@ describe("the record proposal (op-901)", () => {
       expect((c.change as any).project).toBeUndefined();
       if (c.change.kind === "task_status") expect(c.change.plan).toBeUndefined();
     }
-    // A plan close always names its plan, so the helper keeps each as a plan group; the tasks are loose.
+    // A plan close always names its plan, so none is loose: the nine fold into one plans group; the tasks are loose.
     const groups = groupsOf(bare);
     expect(groups.filter((g) => g.kind === "project")).toHaveLength(0);
     expect(groups.find((g) => g.kind === "loose")?.seqs).toHaveLength(55);

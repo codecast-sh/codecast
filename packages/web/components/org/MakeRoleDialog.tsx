@@ -32,9 +32,9 @@ export function MakeRoleDialog({ conversationId, onClose }: { conversationId: st
       title="Make this a role"
       submitLabel="Name it"
       seat={offered.seat}
-      initial={{ name: offered.seat.title }}
+      initialName={offered.seat.title}
       initialProjects={home}
-      onCreate={({ touched: _touched, ...input }) => {
+      onCreate={(input) => {
         useInboxStore.getState().createOrgRole(input);
         toast.success(`${input.name} is now a role`, { description: "The session keeps running as it was." });
         onClose();

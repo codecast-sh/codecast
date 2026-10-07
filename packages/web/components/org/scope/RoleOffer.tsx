@@ -35,7 +35,7 @@ import { GOAL_TREE_FOCUS, companyReviewOf, deriveRoleOffer, offerTriggerOf, type
 
 /** The Head of People whose standing session this conversation is, or null:
  *  the row belongs to that one seat and renders nowhere else. */
-export function headOfPeopleSeat(tree: OrgTree | null, conversationId: string | null | undefined): OrgRole | null {
+function headOfPeopleSeat(tree: OrgTree | null, conversationId: string | null | undefined): OrgRole | null {
   if (!tree || !conversationId) return null;
   return tree.roles.find((r) => {
     if (!isHeadOfPeopleRole(r) || r.status === "retired") return false;

@@ -184,8 +184,8 @@ function fieldsOf(c: OrgChange, ctx: ChangeWordsCtx): Draft[] {
   const plan = (ref: string) => names?.plan?.(ref) ?? ref;
   const thing = (ref: string) => names?.project?.(ref) ?? names?.plan?.(ref) ?? ref;
   const goal = (ref: string) => names?.initiative?.(ref) ?? ref;
-  /** Who a role reports to: "you" for the reader, a role by name, anyone else as named. */
-  const parent = (ref: string | undefined): FieldText => (!ref || lc(ref) === "me" ? text("you") : ref.trim().startsWith("@") ? roleText(ref) : text(ref));
+  /** Who a role reports to: "you" for the reader, a role by name, anyone else as named. Each carries a ref, so a card can draw the face. */
+  const parent = (ref: string | undefined): FieldText => (!ref || lc(ref) === "me" ? text("you", { ref: { kind: "person", id: "me" } }) : ref.trim().startsWith("@") ? roleText(ref) : text(ref.trim(), { ref: { kind: "person", id: ref.trim() } }));
   /** A goal's or a project's owner: "@handle" a role, "me" the reader, else a person by name. */
   const owner = (ref: string | undefined, empty: string): FieldText => (!ref?.trim() ? none(empty) : parent(ref));
   const party = (raw: unknown): FieldText => {

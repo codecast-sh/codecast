@@ -1,16 +1,18 @@
-// The chart pane's address and the pointer a thread carries (org-staffing.md S36).
+// The pointer a thread carries toward the org screen (org-staffing.md S36, S41).
 // Run: bun test components/org/orgChartPointer.test.ts
 import { describe, expect, test } from "bun:test";
-import { chartPointerOfParams, chartPointerOfText, chartView, newestChartPointer, orgChartPath } from "./orgChartPointer";
+import { chartPointerOfParams, chartPointerOfText, newestChartPointer } from "./orgChartPointer";
 
-describe("the chart's address", () => {
-  test("round trips a pointer, the conversation it follows, and follow off", () => {
-    const path = orgChartPath({ proposal: "op-7", focus: "in-3", lens: "goals", session: "conv1", follow: false });
-    expect(path).toBe("/org?view=chart&proposal=op-7&focus=in-3&lens=goals&s=conv1&follow=0");
-    expect(chartPointerOfParams(new URLSearchParams(path.split("?")[1]))).toEqual({ proposal: "op-7", focus: "in-3", lens: "goals" });
+describe("the pointer an address carries", () => {
+  test("reads the proposal, the focus and the lens; the screen's own keys are not a pointer", () => {
+    expect(chartPointerOfParams(new URLSearchParams("proposal=op-7&focus=in-3&lens=goals&show=map&beside=conv1"))).toEqual({ proposal: "op-7", focus: "in-3", lens: "goals" });
   });
   test("ignores what is not a proposal or a lens", () => {
     expect(chartPointerOfParams(new URLSearchParams("proposal=ds-3&lens=sideways"))).toEqual({});
+  });
+  test("proposed=0 turns the overlay off; anything else leaves it on", () => {
+    expect(chartPointerOfParams(new URLSearchParams("proposal=op-1&proposed=0"))).toEqual({ proposal: "op-1", proposed: false });
+    expect(chartPointerOfParams(new URLSearchParams("proposal=op-1&proposed=1"))).toEqual({ proposal: "op-1" });
   });
 });
 
@@ -27,7 +29,7 @@ describe("the pointer a message carries", () => {
   });
   test("a link to the org page carries a focus and a lens, with or without a host", () => {
     expect(chartPointerOfText("Look at the owner: https://codecast.sh/org?proposal=op-12&focus=3")).toEqual({ proposal: "op-12", focus: "3" });
-    expect(chartPointerOfText("[the goal](/org?view=chart&proposal=op-12&focus=in-4&lens=goals).")).toEqual({ proposal: "op-12", focus: "in-4", lens: "goals" });
+    expect(chartPointerOfText("[the goal](/org?show=map&proposal=op-12&focus=in-4&lens=goals).")).toEqual({ proposal: "op-12", focus: "in-4", lens: "goals" });
   });
   test("the last pointer in a message wins", () => {
     expect(chartPointerOfText("op-3\n\nand then /org?proposal=op-4&focus=2")).toEqual({ proposal: "op-4", focus: "2" });
@@ -50,40 +52,5 @@ describe("the newest pointer in a thread", () => {
     expect(newestChartPointer(msgs.slice(0, 2))?.key).toBe("m1|op-1||");
     expect(newestChartPointer([])).toBeNull();
     expect(newestChartPointer(undefined)).toBeNull();
-  });
-});
-
-describe("what a pointer shows", () => {
-  const ctx = {
-    changes: [
-      { _id: "c1", seq: 1, status: "proposed", change: { kind: "role" as const } },
-      { _id: "c2", seq: 2, status: "proposed", change: { kind: "initiative" as const } },
-      { _id: "c3", seq: 3, status: "removed", change: { kind: "initiative_owner" as const } },
-    ],
-    initiatives: [{ _id: "g1", short_id: "in-4" }],
-    roles: [{ _id: "r1", handle: "growth", status: "active" }],
-  };
-  test("a change number focuses that change; the map shows everything unless a lens is named", () => {
-    expect(chartView({ proposal: "op-1", focus: "2" }, ctx)).toEqual({ lens: "everything", focus: { kind: "change", id: "c2" } });
-    expect(chartView({ proposal: "op-1", focus: "1" }, ctx)).toEqual({ lens: "everything", focus: { kind: "change", id: "c1" } });
-    expect(chartView({ proposal: "op-1", focus: "3" }, ctx).focus).toBeNull();
-  });
-  test("in-N is a goal, @handle a role; each keeps a named lens that draws it", () => {
-    expect(chartView({ focus: "IN-4", lens: "goals" }, ctx)).toEqual({ lens: "goals", focus: { kind: "node", id: "goal:g1" } });
-    expect(chartView({ focus: "@Growth", lens: "people" }, ctx)).toEqual({ lens: "people", focus: { kind: "node", id: "role:r1" } });
-  });
-  test("a named lens holds, except when the focus has no place on it: then the map shows everything", () => {
-    expect(chartView({}, ctx).lens).toBe("everything");
-    expect(chartView({ lens: "people" }, ctx).lens).toBe("people");
-    expect(chartView({ focus: "1", lens: "people" }, ctx).lens).toBe("people");
-    expect(chartView({ focus: "2", lens: "people" }, ctx).lens).toBe("everything");
-    expect(chartView({ focus: "1", lens: "goals" }, ctx).lens).toBe("everything");
-    expect(chartView({ focus: "IN-4", lens: "people" }, ctx).lens).toBe("everything");
-    expect(chartView({ focus: "@growth", lens: "goals" }, ctx).lens).toBe("everything");
-  });
-  test("proposed=0 turns the overlay off in the address, and the path carries it", () => {
-    expect(chartPointerOfParams(new URLSearchParams("proposal=op-1&proposed=0"))).toEqual({ proposal: "op-1", proposed: false });
-    expect(chartPointerOfParams(new URLSearchParams("proposal=op-1&proposed=1"))).toEqual({ proposal: "op-1" });
-    expect(orgChartPath({ proposal: "op-1", lens: "everything", proposed: false })).toBe("/org?view=chart&proposal=op-1&lens=everything&proposed=0");
   });
 });

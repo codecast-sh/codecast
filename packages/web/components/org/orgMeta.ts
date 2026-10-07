@@ -30,14 +30,6 @@ export function stateWords(counts: Partial<StateCounts>, max = 2): string[] {
   return out.slice(0, max);
 }
 
-/** The word on the button and the tab that open the staffing pane, said as
- *  what they open: the proposal waiting on the person when one is open,
- *  else how the company is doing (StaffingPane's health body). The first
- *  open guide names the same word, so the reader meets one name. */
-export function staffingPaneWord(hasOpenProposal: boolean): "Proposal" | "Health" {
-  return hasOpenProposal ? "Proposal" : "Health";
-}
-
 /** The board line of a standing agent: its pinned line, and the colour and
  *  word it is painted with. The agent's own declared status wins (the founder
  *  reads "Infra lead: needs input" from the lead, not from a tally of its

@@ -101,7 +101,7 @@ export function buildUpgradeSpec(i: UpdateSource & { instance: string; template_
       card.changes.length ? `\n${card.changes.map((l) => `- ${l}`).join("\n")}` : "",
       card.note ? `\n${card.note}` : "",
       card.changelogs.length ? `\n${back ? "What it undoes" : "What changed"}:\n\n${card.changelogs.map((c) => `### ${c.version}\n${c.text}`).join("\n\n")}` : "",
-      `\nAfter you accept, its machine moves it on the next host step (the role page's button, or cast org template bind ${i.instance}). The role's identity, caps and secrets are untouched; an update never widens what it may do.`,
+      `\nAfter you accept, its machine moves it on the next host step (the role page's button, or cast org template bind ${i.instance}). The role's identity, limits and secrets are untouched; an update never widens what it may do.`,
     ].filter(Boolean).join("\n"),
     changes: [{ kind: "upgrade", instance: i.instance, template: i.template_id, to: i.update_available, digest: i.update_digest }],
     asks: [{ title, why: back ? `${name} ${i.version} was withdrawn: ${i.update_rollback?.reason}.` : `${name} ${i.update_available} carries the publisher's latest lessons.`, effect: `${i.instance} runs ${i.update_available} after its next host step`, seqs: [1] }],

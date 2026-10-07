@@ -8,17 +8,14 @@
 // by its place on this page, a proposal by the org page that shows it.
 //
 // Paints from the store: the joining is companyModel (pure), over the same
-// goal outline the chart's Goals lens draws. An open proposal's changes are
-// drawn in place as the ledger's cards (org-staffing.md S39): one card per
-// subject, the sentence, the fields with what was there before, and the
-// person's answer. An answer fires nothing; it collects in the proposal's
-// batch (the author's thread, so an answer given here and one given in that
-// conversation are the same batch) and one send applies the approvals and
-// tells the agent in words.
+// goal outline the chart's Goals lens draws. An open proposal's goals and
+// projects are placed where they would sit, in the proposal's colour; the
+// proposal itself is a link to the org screen (org-staffing.md S41), where
+// its cards are answered.
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { INITIATIVE_STATUS_LABEL, metricReadings, metricTrends, milestoneCounts, nextMilestone } from "@codecast/shared/contracts/initiative";
-import { useInboxStore, type PlanItem, type ProjectItem } from "../../store/inboxStore";
+import { useInboxStore, type ProjectItem } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useBoardTasks, useInitiatives, useTasksBackfilled } from "../../hooks/useInitiatives";
 import { orgRolesSig } from "../../hooks/useOrgRoles";
@@ -32,26 +29,19 @@ import { cn } from "../../lib/utils";
 import { roleHref } from "../charter/charterMeta";
 import { EntityIdPill } from "../EntityIdPill";
 import { HealthChip, MetricTile, NextMilestoneChip, OwnerChip, StatusGlyph, TargetDate, shortDate } from "../initiatives/InitiativeAtoms";
-import { proposalAnswersOf } from "../../lib/reviewActions";
-import { useCardAnswer, useProposalBatch } from "../org/ProposalLedger";
-import { ProposalReplyBox, proposalBatchKey, type ProposalThreadKey } from "../org/ProposalReplyBox";
-import { Face, LEDGER_INKS, ProposalSubjectCard } from "../org/ProposalSubjectCard";
+import { Face } from "../org/ProposalSubjectCard";
 import { RoleFace } from "../org/RoleFace";
 import { GhostTag } from "../org/ghostChrome";
 import { CHIP_STATUS, GHOST } from "../org/orgMeta";
 import { joinProposals, type OrgProposalChange, type OrgProposalRow } from "../org/orgStaffingTypes";
-import { proposalSubjects, type SubjectCard, type SubjectLive } from "../org/proposalSubjects";
 import { openProposals, proposalWorkspace, sameWorkspace } from "../org/staffingModel";
-import { proposalThread } from "../org/staffingRevise";
 import type { OrgTree } from "../org/orgTypes";
-import { changeAnchor, companyDoc, flatGoals, goalAnchor, projectHref, proposalHref, tallyLine, type CompanyDoc, type CompanyProject, type DocChange, type DocGoal, type DocPerson, type DocProject, type DocRef, type DocRole } from "./companyModel";
+import { companyDoc, flatGoals, goalAnchor, projectHref, proposalHref, tallyLine, type CompanyDoc, type CompanyProject, type DocGoal, type DocPerson, type DocProject, type DocRef, type DocRole } from "./companyModel";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
 const SERIF = { fontFamily: "var(--font-serif)" } as const;
 const LINK = "no-underline hover:underline decoration-1 underline-offset-[3px]";
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.short_id ?? ""}|${p.owner_role_id ?? ""}|${p.updated_at}|${p.priority ?? ""}|${p.goal ?? ""}`;
-// A card's before reads a plan's name and status, nothing else.
-const planSig = (p: PlanItem) => `${p.title}|${p.short_id}|${p.status}`;
 
 /** What the document reads off the org tree: what a name lookup reads
  *  (orgRolesSig), each role's charter, and who the people are. Sessions,
@@ -66,30 +56,6 @@ function companyTreeSig(tree: OrgTree | null | undefined): string {
 }
 
 type ProposalLink = Pick<OrgProposalRow, "_id" | "short_id" | "title">;
-
-/** One open proposal on this page: its cards (proposalSubjects, one per
- *  subject), and where its answers collect. The key is the author's thread
- *  when it has one, so an answer given here and one given in that
- *  conversation are literally the same batch; a proposal with no agent to
- *  talk to collects under itself. */
-export type DocLedger = { proposal: OrgProposalRow; cards: SubjectCard[]; batchKey: string; thread: ProposalThreadKey };
-/** Every open proposal's ledger, and the card that holds each change, so a
- *  change the outline places is drawn as its card. */
-export type DocLedgers = { byProposal: ReadonlyMap<string, DocLedger>; byChange: ReadonlyMap<string, SubjectCard> };
-const NO_LEDGERS: DocLedgers = { byProposal: new Map(), byChange: new Map() };
-
-export function docLedgers(open: readonly OrgProposalRow[], live: SubjectLive | null, tree: OrgTree | null): DocLedgers {
-  const byProposal = new Map<string, DocLedger>();
-  const byChange = new Map<string, SubjectCard>();
-  for (const proposal of open) {
-    const cards = proposalSubjects(proposal.changes, live);
-    const thread = proposalThread(proposal, tree);
-    const key: ProposalThreadKey = thread ? { conversation_id: thread.conversationId } : null;
-    byProposal.set(proposal._id, { proposal, cards, batchKey: proposalBatchKey(proposal._id, key), thread: key });
-    for (const card of cards) for (const id of card.change_ids) byChange.set(id, card);
-  }
-  return { byProposal, byChange };
-}
 
 /** The layout the document's own width affords, never the window's: the page
  *  sits in a pane beside the sidebar and the session list. Narrow is one
@@ -131,7 +97,6 @@ export function CompanyDocument() {
   const tree = useMemo(() => useInboxStore.getState().orgTree, [treeSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const initiatives = useInitiatives();
   const projects = useWorkspaceCollection<ProjectItem>("projects", projectSig);
-  const plans = useWorkspaceCollection<PlanItem>("plans", planSig);
   const tasks = useBoardTasks();
   const tasksCounted = useTasksBackfilled();
   const roster = useTeamRosterIdentity();
@@ -147,22 +112,15 @@ export function CompanyDocument() {
   );
   const changes = useMemo<OrgProposalChange[]>(() => open.flatMap((p) => p.changes), [open]);
   const doc = useMemo(() => companyDoc({ tree, workspaceName: teamName, initiatives, projects: projects as CompanyProject[], roster, tasks, tasksCounted, changes, proposals: open }), [tree, teamName, initiatives, projects, roster, tasks, tasksCounted, changes, open]);
-  // What a card's before is read from: the same records the document already
-  // holds. Not useSubjectLive: that mounts the full tree feeder (sessions and
-  // live state), which nothing on this page draws. A task a change names
-  // reads by its ref (the board's rows carry no title).
-  const live = useMemo<SubjectLive | null>(() => (tree ? { tree, goals: initiatives, projects, plans, tasks: NO_TASKS } : null), [tree, initiatives, projects, plans]);
-  const ledgers = useMemo(() => (open.length ? docLedgers(open, live, tree) : NO_LEDGERS), [open, live, tree]);
 
   return (
     <>
       {open.map((p) => <ProposalFeed key={p._id} shortId={p.short_id} />)}
-      <CompanyDocumentView doc={doc} now={now} proposals={doc.waiting > 0 ? open : NO_PROPOSALS} ledgers={ledgers} />
+      <CompanyDocumentView doc={doc} now={now} proposals={doc.waiting > 0 ? open : NO_PROPOSALS} />
     </>
   );
 }
 const NO_PROPOSALS: ProposalLink[] = [];
-const NO_TASKS: SubjectLive["tasks"] = [];
 
 /** Scrolls to a part of the page; a compact contents list folds once it has been used. */
 const scrollTo = (id: string) => (e: React.MouseEvent) => {
@@ -179,7 +137,7 @@ function Name({ href, className, style, title, children, ...rest }: { href?: str
   return <Link href={href} {...look}>{children}</Link>;
 }
 
-export function CompanyDocumentView({ doc, now, proposals, ledgers = NO_LEDGERS }: { doc: CompanyDoc; now: number; proposals: readonly ProposalLink[]; ledgers?: DocLedgers }) {
+export function CompanyDocumentView({ doc, now, proposals }: { doc: CompanyDoc; now: number; proposals: readonly ProposalLink[] }) {
   const [ref, layout] = useCompanyLayout();
   const narrow = layout === "narrow";
   const showUnfiled = doc.unfiled.length > 0 || doc.tally.projects === 0;
@@ -225,7 +183,7 @@ export function CompanyDocumentView({ doc, now, proposals, ledgers = NO_LEDGERS 
           <Section id="goals" title="Goals" count={doc.tally.goals} delay={1}>
             {doc.goals.length === 0 ? (
               <Quiet>No goals yet. Set the first one on the <Link href="/goals" className={LINK} style={{ color: "var(--sol-text-secondary)" }}>goals page</Link>.</Quiet>
-            ) : doc.goals.map((g) => <Goal key={g.id} goal={g} now={now} narrow={narrow} ledgers={ledgers} />)}
+            ) : doc.goals.map((g) => <Goal key={g.id} goal={g} now={now} narrow={narrow} />)}
           </Section>
 
           {/* Only when something is loose: a section that says "none" reads as a problem to solve. */}
@@ -236,13 +194,10 @@ export function CompanyDocumentView({ doc, now, proposals, ledgers = NO_LEDGERS 
           )}
 
           <Section id="people" title="People and roles" count={doc.tally.people + doc.tally.roles} delay={3}>
-            <Changes changes={doc.staffing} ledgers={ledgers} className="mt-3" data-company-staffing={doc.staffing.length} />
-            {doc.roles.map((r) => <Role key={r.role._id} entry={r} ledgers={ledgers} />)}
+            {doc.roles.map((r) => <Role key={r.role._id} entry={r} />)}
             {doc.people.map((p) => <Person key={p.id} person={p} />)}
-            {doc.roles.length + doc.people.length + doc.staffing.length === 0 && <Quiet>Nobody here yet.</Quiet>}
+            {doc.roles.length + doc.people.length === 0 && <Quiet>Nobody here yet.</Quiet>}
           </Section>
-
-          {ledgers.byProposal.size > 0 && <Replies ledgers={ledgers} />}
         </article>
 
         {layout === "wide" && <Contents doc={doc} showUnfiled={showUnfiled} />}
@@ -298,19 +253,15 @@ const Quiet = ({ children }: { children: ReactNode }) => <p className="mt-3 ital
 
 // ---------------------------------------------------------------- goals
 
-function Goal({ goal, now, narrow, ledgers }: { goal: DocGoal; now: number; narrow: boolean; ledgers: DocLedgers }) {
+function Goal({ goal, now, narrow }: { goal: DocGoal; now: number; narrow: boolean }) {
   const top = goal.depth === 1;
   const refs = goal.refs.map((r, i) => (
     <span key={r.project.id}>{i > 0 && ", "}<Link href={projectHref(r.project.id)} className={LINK} style={{ color: "var(--sol-text-muted)" }} title={`Listed under ${r.under}`}>{r.project.title}</Link></span>
   ));
   const nearest = `listed under the ${goal.refs.length === 1 ? "goal" : "goals"} nearest the work.`;
-  // The heading above is the subject, so each card says "this goal": the one
-  // that sets the goal and every other change on it are one card.
-  const changes = goal.proposed ? [goal.proposed, ...goal.changes] : goal.changes;
   return (
     <section id={goalAnchor(goal.id)} className={cn("scroll-mt-6", top ? "mt-9 first-of-type:mt-5" : "mt-5")} data-company-goal={goal.short_id ?? goal.id} data-company-depth={goal.depth} data-company-goal-kind={goal.row ? "live" : goal.proposed ? "proposed" : "unknown"}>
       {goal.row ? <LiveGoalHead goal={goal} now={now} narrow={narrow} /> : <ProposedGoalHead goal={goal} />}
-      <Changes changes={changes} ledgers={ledgers} titled className="mt-2.5" data-company-goal-changes={changes.length} />
       {goal.projects.length > 0 && <ProjectList projects={goal.projects} now={now} narrow={narrow} className="mt-3" />}
       {/* A purpose over every project would repeat the whole list: past a few, the count says it and opens to the names. */}
       {goal.refs.length > REFS_NAMED ? (
@@ -323,7 +274,7 @@ function Goal({ goal, now, narrow, ledgers }: { goal: DocGoal; now: number; narr
       ) : null}
       {goal.goals.length > 0 && (
         <div className={cn("mt-1 border-l", narrow ? "ml-0.5 pl-3" : "ml-[3px] pl-5")} style={{ borderColor: HAIRLINE }} data-company-subgoals={goal.goals.length}>
-          {goal.goals.map((g) => <Goal key={g.id} goal={g} now={now} narrow={narrow} ledgers={ledgers} />)}
+          {goal.goals.map((g) => <Goal key={g.id} goal={g} now={now} narrow={narrow} />)}
         </div>
       )}
     </section>
@@ -385,9 +336,7 @@ function LiveGoalHead({ goal, now, narrow }: { goal: DocGoal; now: number; narro
 
 /** A goal a proposal sets, where it would sit: its name as the heading,
  *  opening the proposal that sets it, in the proposal's colour while it
- *  waits. What the change writes (its owner, its measures, its words) is the
- *  card under the heading. A goal a change names that nothing answers to is
- *  said as a warning. */
+ *  waits. A goal a change names that nothing answers to is said as a warning. */
 function ProposedGoalHead({ goal }: { goal: DocGoal }) {
   const Heading = goal.depth === 1 ? "h3" : "h4";
   const change = goal.proposed;
@@ -405,61 +354,6 @@ function ProposedGoalHead({ goal }: { goal: DocGoal }) {
     <Heading className={headingClass(goal.depth)} style={{ ...SERIF, color: waiting ? `color-mix(in srgb, ${CHIP_STATUS[row.status].color} 42%, var(--sol-text))` : "var(--sol-text)" }} data-company-goal-title data-company-goal-ghost={row.change_id}>
       <Name href={change.hrefs.proposal}>{goal.title}</Name>
     </Heading>
-  );
-}
-
-// ---------------------------------------------------------------- changes
-
-/** The cards that hold these changes, each once, in the order the outline
- *  meets them. `titled`: the heading above names the subject, so a card says
- *  "this goal", "this role"; a card that stands alone names it. */
-function Changes({ changes, ledgers, titled, className, ...rest }: { changes: readonly DocChange[]; ledgers: DocLedgers; titled?: boolean; className?: string } & Record<`data-${string}`, number | string | undefined>) {
-  const seen = new Set<string>();
-  const cards: { card: SubjectCard; ledger: DocLedger }[] = [];
-  for (const c of changes) {
-    const card = ledgers.byChange.get(c.row.change_id);
-    const ledger = card && ledgers.byProposal.get(card.proposal_id);
-    const key = card && `${card.proposal_id}:${card.key}`;
-    if (!card || !ledger || !key || seen.has(key)) continue;
-    seen.add(key);
-    cards.push({ card, ledger });
-  }
-  if (cards.length === 0) return null;
-  return (
-    <div className={cn("space-y-2", className)} {...rest}>
-      {cards.map(({ card, ledger }) => <Change key={card.key} card={card} ledger={ledger} titled={titled} />)}
-    </div>
-  );
-}
-
-/** One card in the document, with its answer read from and written to the
- *  proposal's batch. A thin rule in the proposal's colour marks it as the
- *  proposal's, not the record's; the card sizes itself by the column it sits
- *  in. Its place on the page is the lead change's anchor, where a name the
- *  proposal creates (a role to hire) links to. */
-function Change({ card, ledger, titled }: { card: SubjectCard; ledger: DocLedger; titled?: boolean }) {
-  const { proposal, cards, batchKey } = ledger;
-  const batch = useProposalBatch(proposal, batchKey);
-  const { answer, onAnswer } = useCardAnswer(proposal, batch.key, batch.comments, card, cards.indexOf(card) + 1);
-  const lead = card.changes[0] ?? card.riders[0] ?? card.carried[0];
-  return (
-    <div id={lead ? changeAnchor(lead._id) : undefined} className="scroll-mt-6 border-l-2 pl-3.5" style={{ borderColor: `color-mix(in srgb, ${GHOST.color} 45%, transparent)` }}>
-      <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? onAnswer : undefined} sentence={titled ? "this" : "named"} />
-    </div>
-  );
-}
-
-/** Where the answers go: one reply box per open proposal, at the foot of the
- *  document. Once any answer is pending the foot sticks to the bottom of the
- *  scroller, so Send stays in reach while the person answers down the
- *  outline; a box with nothing pending draws its one line hint, or nothing. */
-function Replies({ ledgers }: { ledgers: DocLedgers }) {
-  const list = [...ledgers.byProposal.values()];
-  const pending = useInboxStore((s) => list.some((l) => proposalAnswersOf(s.reviewComments[l.batchKey], l.proposal._id).length > 0));
-  return (
-    <div className={cn("mt-10 space-y-3", pending && "sticky bottom-0 bg-[var(--sol-bg)]", LEDGER_INKS)} data-company-replies={pending ? "pending" : "quiet"}>
-      {list.map((l) => <ProposalReplyBox key={l.proposal._id} proposal={l.proposal} changes={l.proposal.changes} batchKey={l.batchKey} thread={l.thread} />)}
-    </div>
   );
 }
 
@@ -523,7 +417,7 @@ const Goals = ({ goals }: { goals: readonly DocRef[] }) => (
   <>{goals.map((g) => (g.short_id ? <EntityIdPill key={g.id} type="initiative" id={g.short_id} label={g.title} /> : <Link key={g.id} href={initiativeHref({ _id: g.id, short_id: "" })} className={LINK} style={{ color: "var(--sol-text-secondary)" }}>{g.title}</Link>))}</>
 );
 
-function Role({ entry, ledgers }: { entry: DocRole; ledgers: DocLedgers }) {
+function Role({ entry }: { entry: DocRole }) {
   const { role } = entry;
   return (
     <div className="mt-5 flex gap-3" data-company-role={role.short_id}>
@@ -545,7 +439,6 @@ function Role({ entry, ledgers }: { entry: DocRole; ledgers: DocLedgers }) {
           {entry.goals.length > 0 && <Fact label="Owns"><Goals goals={entry.goals} /></Fact>}
           {entry.leads.length + entry.goals.length === 0 && <p className="text-[12px] italic" style={{ color: "var(--sol-text-dim)" }} data-company-role-idle>Owns no goal and leads no project</p>}
         </div>
-        <Changes changes={entry.changes} ledgers={ledgers} titled className="mt-2" />
       </div>
     </div>
   );

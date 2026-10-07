@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_BIG_PROPOSAL, ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import {
-  changeEdits,
-  changeFields,
   changeLine,
   changeNodeId,
   changeTenure,
@@ -22,9 +20,6 @@ import {
   recordsInLine,
   remainingChanges,
   resolveProposalAuthor,
-  roleChangeEdits,
-  roleChangeInitial,
-  staffingMode,
   syncEvidence,
   syncGroupSummary,
   tenureLine,
@@ -97,11 +92,6 @@ describe("proposal progress and grouping", () => {
     expect(syncEvidence(P.changes[0].change)).toBeNull();
     expect(sync.every((c) => isSyncChange(c.change))).toBe(true);
     expect(isSyncChange(P.changes[3].change)).toBe(false);
-    // The edit form offers the record's status as a closed set.
-    const fields = changeFields(plan.change);
-    expect(fields.find((f) => f.key === "status")).toMatchObject({ kind: "select", value: "done", options: ["done", "abandoned", "active"] });
-    expect(fields.find((f) => f.key === "reason")?.label).toBe("evidence");
-    expect(changeEdits(plan.change, fields.map((f) => f.key === "status" ? { ...f, value: "abandoned" } : f))).toEqual({ status: "abandoned" });
   });
 
   test("a role change carries its tenure (S10), edits laid over", () => {
@@ -114,11 +104,6 @@ describe("proposal progress and grouping", () => {
     expect(tenureLine(changeTenure({ ...P.changes[0], edits: { tenure: { kind: "program", ends: { date: Date.UTC(thisYear, 11, 1) }, then: "retire" } } }))).toBe("program · ends Dec 1, then retire");
     expect(changeTenure(P.changes[3])).toBeNull();
     expect(tenureLine(null)).toBe("");
-    // The hire dialog's prefill and its edits round trip tenure and avatar.
-    expect(roleChangeInitial(P.changes[1], ORG_FIXTURE)).toMatchObject({ tenure: { kind: "program", ends: { plan: "pl-88" }, then: "review" } });
-    const edits = roleChangeEdits({ name: "Content Lead", handle: "content", tenure: { kind: "standing" }, avatar: "avatar-03", touched: { scope: false, reports_to: false } }, ORG_FIXTURE, "fixture-user-me");
-    expect(edits).toMatchObject({ tenure: { kind: "standing" }, avatar: "avatar-03" });
-    expect(Object.keys(edits)).not.toContain("scope");
   });
 
   test("every kind reads as one line", () => {
@@ -147,31 +132,6 @@ describe("proposal progress and grouping", () => {
     expect(changeNodeId(P.changes[3].change, ORG_FIXTURE)).toBe("role:fixture-role-growth");
     expect(changeNodeId(P.changes[0].change, ORG_FIXTURE)).toBeNull();
     expect(changeNodeId(P.changes[2].change, ORG_FIXTURE)).toBeNull();
-  });
-});
-
-describe("pane mode", () => {
-  const withHead: OrgTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-head", short_id: "or-9", handle: "head-of-people", name: "Head of People" }] };
-
-  test("an open proposal wins over everything", () => {
-    expect(staffingMode(ORG_FIXTURE, P)).toBe("proposal");
-    expect(staffingMode(withHead, P)).toBe("proposal");
-  });
-
-  test("no proposal and a head of people shows the health summary", () => {
-    expect(findHeadOfPeople(withHead)?.short_id).toBe("or-9");
-    expect(staffingMode(withHead, null)).toBe("health");
-  });
-
-  test("no proposal and no head of people shows the hire buttons", () => {
-    expect(findHeadOfPeople(ORG_FIXTURE)).toBeNull();
-    expect(staffingMode(ORG_FIXTURE, null)).toBe("no_head_of_people");
-    expect(staffingMode(null, null)).toBe("no_head_of_people");
-  });
-
-  test("a retired head of people does not count", () => {
-    const retired: OrgTree = { ...withHead, roles: withHead.roles.map((r) => r.handle === "head-of-people" ? { ...r, status: "retired" as const } : r) };
-    expect(staffingMode(retired, null)).toBe("no_head_of_people");
   });
 });
 
@@ -310,54 +270,13 @@ describe("the ?compose= parameter", () => {
   });
 });
 
-describe("inline edit of a change", () => {
-  test("fields flatten one level and edits come back nested, only where changed; a limit has no fields", async () => {
-    const { changeEdits, changeFields } = await import("./staffingModel");
-    // A limit (S23.2) is never read, so never edited: no fields, no edits.
-    const budget = P.changes[3].change;
-    expect(changeFields(budget)).toEqual([]);
-    expect(changeEdits(budget, [])).toEqual({});
-    const hire = { kind: "hire" as const, handle: "growth", template: "growth", version: "1.2.0", digest: "sha", instance: "growth-1", project: "Growth", config: { region: "us" } };
-    const fields = changeFields(hire);
-    expect(fields.find((f) => f.key === "config.region")).toEqual({ key: "config.region", label: "config region", kind: "text", value: "us" });
-    expect(changeEdits(hire, fields)).toEqual({});
-    expect(changeEdits(hire, fields.map((f) => f.key === "config.region" ? { ...f, value: "eu" } : f))).toEqual({ config: { region: "eu" } });
-    const meta = P.changes[5].change;
-    const metaFields = changeFields(meta);
-    expect(metaFields.find((f) => f.key === "success_metrics")).toEqual({ key: "success_metrics", label: "success metrics", kind: "list", value: "organic signups per week, AI citation count" });
-    expect(changeEdits(meta, metaFields.map((f) => f.key === "success_metrics" ? { ...f, value: "signups, citations" } : f))).toEqual({ success_metrics: ["signups", "citations"] });
-  });
-});
-
-describe("the hire dialog as an edit form for a role change", () => {
-  test("the dialog's output round trips into the contract's shape and stays a valid change", async () => {
-    const { roleChangeEdits, roleChangeInitial, orgParentRefAsProposal } = await import("./staffingModel");
-    const { editedOrgChange, orgChangeError } = await import("@codecast/shared/contracts/orgProposal");
-    const change = { kind: "role" as const, name: "Head of Platform", handle: "platform", reports_to: "Samvit Jain", scope: { projects: ["Platform"] }, caps: { tokens_per_day: 400_000 } };
-    const row = { _id: "c1", proposal_id: "p", seq: 1, change, rationale: "r", evidence: [], status: "proposed" as const };
-    // The prefill resolves the proposal's parent against the tree and hands
-    // the scope refs through for the form to tick.
-    expect(roleChangeInitial(row, ORG_FIXTURE)).toEqual({ name: "Head of Platform", handle: "platform", caps: { tokens_per_day: 400_000 }, scope: { projects: ["Platform"] }, reports_to: { kind: "user", user_id: "fixture-user-sam" } });
-    // Edits already made ride into the prefill.
-    expect(roleChangeInitial({ ...row, edits: { name: "Platform Lead", reports_to: "@growth" } }, ORG_FIXTURE)).toMatchObject({ name: "Platform Lead", reports_to: { kind: "role", role_id: "fixture-role-growth" } });
-    // Submit: ids and parent refs become refs and a string.
-    const edits = roleChangeEdits({ name: "Platform Lead", handle: "platform-lead", charter: "Owns the platform.", caps: { hands_per_day: 4, wakes_per_day: 40, tokens_per_day: 800_000 }, scope: { project_ids: ["projects_abc"], plan_ids: ["plans_xyz"] }, reports_to: { kind: "role", role_id: "fixture-role-growth" } }, ORG_FIXTURE, "fixture-user-me");
-    expect(edits).toEqual({ name: "Platform Lead", handle: "platform-lead", charter: "Owns the platform.", caps: { hands_per_day: 4, wakes_per_day: 40, tokens_per_day: 800_000 }, scope: { projects: ["projects_abc"], plans: ["plans_xyz"] }, reports_to: "@growth" });
-    const merged = editedOrgChange(change, edits);
-    expect(orgChangeError(merged)).toBeNull();
-    expect(merged).toMatchObject({ kind: "role", scope: { projects: ["projects_abc"], plans: ["plans_xyz"] }, reports_to: "@growth" });
-    // The deciding person is "me"; another member is their id; a role with no live row is its id.
+describe("a parent reference as a proposal writes one", () => {
+  test("the deciding person is me; another member is their id; a role with no live row is its id", async () => {
+    const { orgParentRefAsProposal } = await import("./staffingModel");
     expect(orgParentRefAsProposal(ORG_FIXTURE, { kind: "user", user_id: "fixture-user-me" }, "fixture-user-me")).toBe("me");
     expect(orgParentRefAsProposal(ORG_FIXTURE, { kind: "user", user_id: "fixture-user-sam" }, "fixture-user-me")).toBe("fixture-user-sam");
+    expect(orgParentRefAsProposal(ORG_FIXTURE, { kind: "role", role_id: "fixture-role-growth" }, "fixture-user-me")).toBe("@growth");
     expect(orgParentRefAsProposal(ORG_FIXTURE, { kind: "role", role_id: "chg-9" }, "fixture-user-me")).toBe("chg-9");
-    expect(roleChangeInitial({ ...row, change: { kind: "retire", handle: "growth" } }, ORG_FIXTURE)).toBeUndefined();
-    // An untouched scope or parent is not sent: a ref the form could not
-    // resolve, or a parent the same proposal creates, survives as proposed.
-    const untouched = roleChangeEdits({ name: "Platform Lead", handle: "platform-lead", caps: { hands_per_day: 4, wakes_per_day: 40, tokens_per_day: 800_000 }, scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: "fixture-user-me" }, touched: { scope: false, reports_to: false } }, ORG_FIXTURE, "fixture-user-me");
-    expect(untouched).toEqual({ name: "Platform Lead", handle: "platform-lead", caps: { hands_per_day: 4, wakes_per_day: 40, tokens_per_day: 800_000 } });
-    expect(editedOrgChange(change, untouched)).toMatchObject({ scope: { projects: ["Platform"] }, reports_to: "Samvit Jain" });
-    const scopeOnly = roleChangeEdits({ name: "R", handle: "rr", scope: { project_ids: ["projects_abc"], plan_ids: [] }, reports_to: { kind: "user", user_id: "fixture-user-me" }, touched: { scope: true, reports_to: false } }, ORG_FIXTURE, "fixture-user-me");
-    expect(scopeOnly).toEqual({ name: "R", handle: "rr", scope: { projects: ["projects_abc"], plans: [] } });
   });
 });
 

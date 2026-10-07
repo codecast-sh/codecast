@@ -24,14 +24,14 @@ import { useInitiativeUpdates } from "../../hooks/useInitiatives";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { HealthChip, MetricReadingLine, MetricTile, NextMilestoneChip, UpdateLine } from "../initiatives/InitiativeAtoms";
 import { useZoomLevel } from "./orgZoom";
-import { Frame, GhostActions, GhostChips, Ports, StateBar, StateWords, type GhostActionHandlers } from "./OrgNodeCards";
+import { Frame, GhostChips, Ports, StateBar, StateWords } from "./OrgNodeCards";
 import { GhostTag } from "./ghostChrome";
 import { RoleFace } from "./RoleFace";
-import { CHANGE_KIND_WORD, CHIP_STATUS, GHOST, ORG_STATE_META, changeFrameStyle, ghostFrameStyle } from "./orgMeta";
-import { GOALS_SIZES, goalFocusedChange, type GoalGhost, type GoalOwner, type GoalsNode } from "./goalsLayout";
+import { CHIP_STATUS, GHOST, ORG_STATE_META, changeFrameStyle, ghostFrameStyle } from "./orgMeta";
+import { GOALS_SIZES, type GoalGhost, type GoalOwner, type GoalsNode } from "./goalsLayout";
 
 type Lit = { selected?: boolean; dim?: boolean };
-type GhostFocus = { focusChangeId?: string | null; onFocusChange?: (id: string) => void } & Pick<GhostActionHandlers, "answers" | "onAnswerChange" | "onEditChange">;
+type GhostFocus = { focusChangeId?: string | null; onFocusChange?: (id: string) => void };
 
 /** A card's frame under a change: the violet tint while proposed, the
  *  accepted outline once accepted, a warning when nothing answers to what it names. */
@@ -137,8 +137,6 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
   const now = useCoarseNow(60_000);
   const level = useZoomLevel();
   const ghost = proposed(g.ghost);
-  // The change this card is lit for; the answer strip draws only where a page passes answer handlers (the map never does).
-  const action = goalFocusedChange(data.focusChangeId, g.ghost, g.chips);
   const frame = { selected: data.selected, kind: g.ghost ? "goal-ghost" : "goal", accent: g.ghost ? GHOST.color : "var(--sol-cyan)" };
   const carried = rows.length + refs.length;
   // Far: the title and the health dot, large enough to read with the whole company on screen.
@@ -167,7 +165,6 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
   return (
     <Frame {...frame} className={cn("px-2.5 py-2 transition-opacity", data.dim && "opacity-45")} style={ghostFrame(g.ghost)}>
       <Ports />
-      {action && data.onAnswerChange && <GhostActions meta={action} word={CHANGE_KIND_WORD[action.kind]} data={{ chips: g.chips, answers: data.answers, onAnswerChange: data.onAnswerChange, onEditChange: data.onEditChange }} below />}
       {mission && <MissionKicker ghost={ghost} company={root?.name} />}
       <div className="flex min-w-0 items-start gap-2" title={g.ghost?.line}>
         <span className="mt-[1px] inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md" style={{ background: ghost ? "color-mix(in srgb, var(--sol-violet) 16%, transparent)" : "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: ghost ? GHOST.color : "var(--sol-cyan)" }}><Flag className="h-3 w-3" /></span>
@@ -213,12 +210,10 @@ export const GoalProjectCard = memo(function GoalProjectCard({ data }: NodeProps
   const ghost = proposed(p.ghost);
   // A row an `initiative_projects` change added decides on its own row; a new
   // goal's own project rows decide on the goal.
-  const action = p.ghost?.kind === "initiative_projects" ? goalFocusedChange(data.focusChangeId, p.ghost) : null;
   const far = level === "far";
   return (
     <Frame selected={data.selected} className={cn("px-2.5 flex flex-col justify-center !rounded-lg transition-opacity", data.dim && "opacity-45")} style={ghostFrame(p.ghost)} kind={p.ghost ? "project-ghost" : "project"} accent={p.ghost ? GHOST.color : "var(--sol-cyan)"}>
       <Ports />
-      {action && data.onAnswerChange && <GhostActions meta={action} word={CHANGE_KIND_WORD[action.kind]} data={{ answers: data.answers, onAnswerChange: data.onAnswerChange, onEditChange: data.onEditChange }} below />}
       <div className="flex min-w-0 items-center gap-2">
         <FolderClosed className={cn("shrink-0", far ? "h-4 w-4" : "h-3.5 w-3.5")} style={{ color: ghost ? GHOST.color : "var(--sol-text-muted)" }} />
         <span className={cn("min-w-0 flex-1 truncate font-medium", far ? "text-[15px] tracking-tight" : "text-[12px]")} style={{ color: "var(--sol-text)", opacity: ghost ? 0.9 : 1 }} title={p.ghost?.line ?? p.title} data-project-title>{p.title}</span>

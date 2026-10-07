@@ -438,9 +438,9 @@ export function addedRecordWords(before: OrgLogFields, after: OrgLogFields): Org
 // ── The stamp: what accepting one proposal change moved ─────────────────────────
 
 /** The fields a decided card may draw a before and after for. A limit is not
- *  a field a person reads (S23.2), a role's long text and its face stay in
- *  the log, and a goal's record lists arrive as what was added (`added`),
- *  never whole. */
+ *  a field a person reads (S23.2), a role's face stays in the log, a charter
+ *  rides along so a charter edit's card draws the real passages (S39), and a
+ *  goal's record lists arrive as what was added (`added`), never whole. */
 export const ORG_DIFF_FIELDS = [
   "status", "name", "charter", "reports_to", "scope", "trust", "authority", "instance", "upgrade", "standing_session", "routine",
   "owner_role_id", "project_id", "goal", "success_metrics", "priority", "non_goals", "risks", "projects",

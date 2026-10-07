@@ -61,7 +61,7 @@ export function InOutBars({ inn, out, days, width, height, limit }: { inn: numbe
 
 /** What a role's week comes to, in the words a person acts on. Each says
  *  something is off, and only that: a role that is fine says nothing here. */
-export function weekSignals(f: RoleFlow): { key: string; text: string; tone: string }[] {
+function weekSignals(f: RoleFlow): { key: string; text: string; tone: string }[] {
   const out: { key: string; text: string; tone: string }[] = [];
   if (f.status === "waiting_on_you") out.push({ key: "you", text: "waiting on you", tone: "var(--sol-orange)" });
   if (f.daysAtCap > 0) out.push({ key: "limit", text: `at its limit ${f.daysAtCap} of 7 days`, tone: FLOW_TONE.limit });

@@ -41,4 +41,11 @@ describe("the seat's provisioning prompt folds away (F4.1)", () => {
     expect(w.reachedStart).toBe(true);
     expect(windowConversationSince(conv, undefined)!.conversation).toBe(conv);
   });
+
+  test("a cut past the newest row keeps everything, reachedStart false", () => {
+    const conv = { messages: [boot, reply, later], loaded_start_index: 0 };
+    const w = windowConversationSince(conv, later.timestamp + 1)!;
+    expect(w.conversation).toBe(conv);
+    expect(w.reachedStart).toBe(false);
+  });
 });

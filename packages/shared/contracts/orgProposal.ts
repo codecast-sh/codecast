@@ -1092,14 +1092,16 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const seqs = (rows: AskRow[]) => rows.map((c) => c.seq).sort((a, b) => a - b);
   const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
   const out: OrgAsk[] = [];
-  // One ask per group (a project, a plan, or the records filed under none):
-  // the person settles a project's records together, and a group's line is
-  // its totals, never the list. A group of one reads as that change.
+  // One ask per group (a project, a plan, the plans settled on their own, or
+  // the records filed under none): the person settles a project's records
+  // together, and a group's line is its totals, never the list. A group of
+  // one reads as that change.
   for (const g of orgRecordGroups(records, names)) {
     const one = g.seqs.length === 1 ? records.find((c) => c.seq === g.seqs[0])! : null;
     const where = g.kind === "project" ? `in ${g.title ?? g.ref}` : g.kind === "plan" ? `under the plan ${g.title ?? g.ref}` : "filed under no project";
+    const plans = g.kind === "plans" ? `${g.totals.every((t) => t.act === "done" || t.act === "abandoned") ? "Close" : "Settle"} ${g.seqs.length} plans` : null;
     out.push({
-      title: one ? changeLine(one.change, { names, brief: true }) : `Settle ${n(g.seqs.length, "record", "records")} ${where}`,
+      title: one ? changeLine(one.change, { names, brief: true }) : plans ?? `Settle ${n(g.seqs.length, "record", "records")} ${where}`,
       why: one ? one.rationale?.trim() || (one.change as OrgRecordStatusChange).reason.trim() : "These plans, tasks and projects show as active, but the work on them is finished, was dropped, or never started.",
       effect: `${recordGroupTotalsLine(g)}. No work starts or stops.`,
       seqs: g.seqs,
@@ -1743,12 +1745,13 @@ export function applyProposalChanges<T extends OrgProposal>(proposal: T, answerT
 export type OrgRecordAct = "done" | "dropped" | "abandoned" | "reopened" | "backlog" | "paused";
 export type OrgRecordTotal = { noun: "project" | "plan" | "task"; act: OrgRecordAct; count: number };
 export type OrgRecordGroup = {
-  /** "project:<ref>", "plan:<ref>" or "loose". */
+  /** "project:<ref>", "plan:<ref>", "plans" or "loose". */
   key: string;
-  kind: "project" | "plan" | "loose";
+  /** "plans": the plans this proposal settles on their own (one status change each, no tasks under them), folded into one group so a long list of them never buries the projects. */
+  kind: "project" | "plan" | "plans" | "loose";
   /** The project's or plan's ref as the changes carry it (pr-N, pl-N, or a title). */
   ref?: string;
-  /** The project's or plan's title: from a change on that record in this proposal, else the reader's names; absent when neither knows it, and the ref stands. */
+  /** The project's or plan's title: from a change on that record in this proposal, else the reader's names; absent when neither knows it, and the ref stands. The plans group is titled "N plans". */
   title?: string;
   /** The changes in the group, ascending. */
   seqs: number[];
@@ -1799,13 +1802,22 @@ export function orgRecordGroups(changes: ReadonlyArray<{ seq: number; change: Or
     const k = `${recordNoun(row.change)}:${recordAct(row.change)}`;
     counts.get(key)!.set(k, (counts.get(key)!.get(k) ?? 0) + 1);
   }
+  const totalsOf = (c: Map<string, number>): OrgRecordTotal[] => RECORD_NOUNS.flatMap((noun) => RECORD_ACTS.flatMap((act) => { const n = c.get(`${noun}:${act}`); return n ? [{ noun, act, count: n }] : []; }));
   for (const [key, g] of groups) {
     g.seqs.sort((a, b) => a - b);
-    const c = counts.get(key)!;
-    g.totals = RECORD_NOUNS.flatMap((noun) => RECORD_ACTS.flatMap((act) => { const n = c.get(`${noun}:${act}`); return n ? [{ noun, act, count: n }] : []; }));
+    g.totals = totalsOf(counts.get(key)!);
   }
-  // The biggest group first, the loose records last, ties by first seq.
-  return [...groups.values()].sort((a, b) => (a.kind === "loose" ? 1 : 0) - (b.kind === "loose" ? 1 : 0) || b.seqs.length - a.seqs.length || a.seqs[0] - b.seqs[0]);
+  // Two or more plans settled on their own (each group one plan_status, no
+  // tasks) fold into one "N plans" group; a single one keeps its own name.
+  const alone = [...groups.values()].filter((g) => g.kind === "plan" && g.seqs.length === 1 && g.totals[0]?.noun === "plan");
+  if (alone.length > 1) {
+    const sum = new Map<string, number>();
+    for (const g of alone) { groups.delete(g.key); for (const [k, n] of counts.get(g.key)!) sum.set(k, (sum.get(k) ?? 0) + n); }
+    groups.set("plans", { key: "plans", kind: "plans", title: `${alone.length} plans`, seqs: alone.flatMap((g) => g.seqs).sort((a, b) => a - b), totals: totalsOf(sum) });
+  }
+  // The biggest group first, then the plans, the loose records last, ties by first seq.
+  const rank = (g: OrgRecordGroup) => (g.kind === "loose" ? 2 : g.kind === "plans" ? 1 : 0);
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b) || b.seqs.length - a.seqs.length || a.seqs[0] - b.seqs[0]);
 }
 
 /** "2 plans done, 11 tasks done and 3 tasks reopened": the group's one line, in the words the card uses for each act. */

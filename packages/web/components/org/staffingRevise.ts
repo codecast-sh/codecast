@@ -2,8 +2,7 @@ import { isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 // The conversation is part of the proposal (docs/architecture/org-staffing.md
 // S18): the pane reads the author's thread off the proposal, and reads what
 // the author's revise did to each change so the list shows it under the
-// reader. Pure helpers; the pane and ProposalThread render what they return.
-import { changeFields } from "./staffingModel";
+// reader. Pure helpers; the cards render what they return.
 import type { OrgRole, OrgTree } from "./orgTypes";
 import type { OrgChangeRevision, OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 
@@ -36,50 +35,6 @@ export function proposalThread(p: Pick<OrgProposalRow, "author" | "thread">, tre
   if (p.author.kind === "session") return { conversationId: p.author.id, shortId: p.author.short_id, name, named, role };
   if (role?.standing?.conversation_id) return { conversationId: role.standing.conversation_id, shortId: role.standing.short_id, name, named, role };
   return null;
-}
-
-/** One field the amend moved: its label, what it was, what it is now,
- *  both formatted for reading ("600,000"). */
-export type FieldMove = { key: string; label: string; from: string | null; to: string | null };
-
-/** A field's key as a reader says it: the last path segment, underscores
- *  as spaces, "per day" as "a day", the container ("caps") dropped. */
-export function moveLabel(key: string): string {
-  const last = key.split(".").pop() ?? key;
-  return MOVE_WORDS[last] ?? last.replace(/_/g, " ").replace(/\bper day\b/, "a day");
-}
-/** Keys whose raw name is not a word the reader was taught: the row's own
- *  words for a scope or a move change, and a reporting line. */
-const MOVE_WORDS: Record<string, string> = {
-  add: "also looks after",
-  scope_add: "also looks after",
-  remove: "stops looking after",
-  scope_remove: "stops looking after",
-  reports_to: "reports to",
-  every: "runs every",
-};
-const formatMoveValue = (v: string, kind: string): string => {
-  if (kind !== "number") return v;
-  const n = Number(v);
-  return Number.isFinite(n) ? n.toLocaleString("en-US") : v;
-};
-
-/** What an amend changed, field by field, from `revision.before` to the
- *  change as it reads now. Empty when the row carries no before (a removed
- *  or added row), or when nothing readable moved (a rationale-only amend). */
-export function amendedMoves(c: Pick<OrgProposalChange, "change" | "revision">): FieldMove[] {
-  const before = c.revision?.kind === "amended" ? c.revision.before : undefined;
-  if (!before) return [];
-  const was = new Map(changeFields(before).map((f) => [f.key, f]));
-  const now = new Map(changeFields(c.change).map((f) => [f.key, f]));
-  const out: FieldMove[] = [];
-  for (const [key, f] of now) {
-    const w = was.get(key);
-    if (!w) out.push({ key, label: moveLabel(key), from: null, to: formatMoveValue(f.value, f.kind) });
-    else if (w.value !== f.value) out.push({ key, label: moveLabel(key), from: formatMoveValue(w.value, w.kind), to: formatMoveValue(f.value, f.kind) });
-  }
-  for (const [key, w] of was) if (!now.has(key)) out.push({ key, label: moveLabel(key), from: formatMoveValue(w.value, w.kind), to: null });
-  return out;
 }
 
 /** The revise, in the reader's words: what happened and what the author said. */

@@ -22,13 +22,15 @@ import { useProposalAuthor } from "../../hooks/useProposalAuthor";
 
 const api = _api as any;
 
-export function ProposalAuthorPill({ author, onOpenSession, className, size = "sm" }: {
+export function ProposalAuthorPill({ author, onOpenSession, className, size = "sm", withHandle = true }: {
   author: OrgProposalAuthor;
   /** How a session author opens; the pane hands its own (the preview is a
    *  no-op there). Absent = the usual linked session navigation. */
   onOpenSession?: (conversationId: string) => void;
   className?: string;
   size?: "sm" | "md";
+  /** False leaves a role's @handle off: a card head beside the face and name has no room for it. */
+  withHandle?: boolean;
 }) {
   const view = useProposalAuthor(author);
   const openLinked = useOpenLinkedSession();
@@ -57,7 +59,7 @@ export function ProposalAuthorPill({ author, onOpenSession, className, size = "s
       <>
         <RoleAvatar avatar={view.avatar} size={size === "md" ? 18 : 15} />
         <span className="truncate font-medium">{view.name}</span>
-        {view.handle && <span className="shrink-0 hidden sm:inline" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>@{view.handle}</span>}
+        {withHandle && view.handle && <span className="shrink-0 hidden sm:inline" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>@{view.handle}</span>}
       </>
     );
     const style = { borderColor: "color-mix(in srgb, var(--sol-violet) 35%, transparent)", background: "color-mix(in srgb, var(--sol-violet) 8%, transparent)", color: "var(--sol-text)" };

@@ -32,6 +32,7 @@ export const ORG_GOALS_FIXTURE_PROPOSAL: OrgProposalRow = {
   short_id: "op-8",
   team_id: "fixture-team",
   author: { kind: "role", id: "fixture-role-head", name: "Head of People", short_id: "or-9" },
+  thread: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" },
   title: "Name the goals the work already serves",
   summary_md: "The projects point at two goals nobody wrote down, one goal has no owner, and one is not read against a number.",
   mode: "review",

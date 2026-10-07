@@ -52,7 +52,7 @@ export type OrgIntent =
   /** The role's line (the-line.md L2): the workflow slug its scope runs on.
    *  `from` is the slug the tree row held before, for a refusal to restore. */
   | { kind: "line"; id: string; role_id: string; slug: string; from?: string; at: number }
-  | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; edits?: Record<string, unknown>; /** The ask this verdict came from (decideOrgProposalAsk): a refusal of that call reverts these rows and no others. */ ask?: number; /** Set when the verdict came in a reply (replyOnOrgProposal, S39): a refusal of that call reverts every row of the reply and no others. */ via?: "reply"; /** The answer the reply stamps on the row beside the verdict (a rejection, an approval with words), and what the row held before, for a refusal to put back. */ reply?: OrgChangeReply; reply_from?: OrgChangeReply; at: number }
+  | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; /** The answer the reply stamps on the row beside the verdict (a rejection, an approval with words), and what the row held before, for a refusal to put back. */ reply?: OrgChangeReply; reply_from?: OrgChangeReply; at: number }
   /** A person's words on a change with no verdict (S39): the row keeps its
    *  status and gains the `reply` stamp. The server's own stamp (another
    *  `at`, or a `by`) is the echo. */
@@ -299,22 +299,6 @@ export type OrgSliceActions = {
    *  global by default. The seat row lands through the anchors feed; the
    *  result carries the role so the caller can say who came online. */
   hireExecutiveAssistant: (input: OrgHireAssistantInput) => Promise<HireAssistantResult | undefined>;
-  /** "Accept all remaining" (org-staffing.md S4): every proposed change flips
-   *  to accepted on the draft; dispatch runs orgProposals.acceptAll, which
-   *  applies them in order and echoes applied or failed per change. With
-   *  `kinds`, only changes of those kinds ("Accept group" on the records
-   *  card, S9); the server takes the same filter. `seen` is what the page
-   *  showed (see decideOrgProposalAsk). */
-  acceptAllOrgProposal: (proposalId: string, opts?: { kinds?: string[]; seen?: OrgVerdictSeen }) => void;
-  /** Accept or skip one ask (S19): every row the card held (`seen.seqs`)
-   *  that still waits flips on the draft, and one dispatch runs
-   *  orgProposals.decideAsk, which applies them in order through the accept
-   *  all core (or skips them) and echoes per change. `askIndex` is the
-   *  position the card had; `seen` says what the page had painted when it
-   *  was pressed (the latest revise and the card's seqs), and the server
-   *  refuses a verdict the author revised under the reader (S18). That
-   *  refusal is permanent, so dropRejectedOrgIntent puts every row back. */
-  decideOrgProposalAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, opts?: { leave_sessions?: boolean }) => void;
   /** A person's answers to a proposal's cards, sent together (S39): each
    *  item approves, rejects or writes on the changes of one card (`seqs`
    *  empty = the whole proposal). Approvals and rejections flip their rows on
@@ -326,12 +310,6 @@ export type OrgSliceActions = {
    *  (the optimistic bubble is added here, keyed by `say.client_id`). A
    *  refusal reverts every row of the reply (dropRejectedOrgIntent). */
   replyOnOrgProposal: (proposalId: string, items: OrgReplyInput[], seen: OrgVerdictSeen, opts?: OrgReplyOpts) => void;
-  /** Accept or skip one change (S5). Accept is optimistic: the row flips to
-   *  accepted and dispatch runs orgProposals.decide, which applies it and
-   *  echoes applied or failed. Edits ride along as the patch decide takes;
-   *  `seen` as for an ask (an amend keeps the row's id, so the id alone does
-   *  not say what the person read). */
-  decideOrgProposalChange: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>, seen?: OrgVerdictSeen) => void;
   /** Withdraw an open proposal (the replaced one, S4): optimistic on the
    *  list row; dispatch runs orgProposals.withdraw, whose author or admin
    *  gate is what allows a person to take it down. */
@@ -748,16 +726,13 @@ function applyRoleFields(role: OrgRole, fields: OrgUpdateRoleInput, keys: (keyof
  *  server's copy (no edits yet) gets them back too. */
 /** Flip every change of a proposal that still waits on a verdict and passes
  *  `match`, one intent each, so a refusal of the whole call puts every row
- *  back and a partial echo settles row by row. Accept all and an ask's
- *  verdict are the same gesture over a different set of rows. */
-function decideWaitingChanges(draft: OrgDraft, proposalId: string, to: "accepted" | "skipped", match: (c: OrgProposalChange) => boolean, ask?: number, reply?: (c: OrgProposalChange) => OrgChangeReply | undefined, now = Date.now()): void {
+ *  back and a partial echo settles row by row. */
+function decideWaitingChanges(draft: OrgDraft, proposalId: string, to: "accepted" | "skipped", match: (c: OrgProposalChange) => boolean, reply?: (c: OrgProposalChange) => OrgChangeReply | undefined, now = Date.now()): void {
   for (const c of Object.values(draft.orgProposalChanges)) {
     if (c.proposal_id !== proposalId || !isOrgChangeDecidable(c.status) || !match(c)) continue;
     const stamp = reply?.(c);
     const intent: OrgIntent = {
       kind: "decideChange", id: intentId(), change_id: c._id, proposal_id: proposalId, from: c.status, to, line: describeOrgChange(c.change),
-      ...(ask !== undefined ? { ask } : {}),
-      ...(reply ? { via: "reply" as const } : {}),
       ...(stamp ? { reply: stamp, ...(c.reply ? { reply_from: c.reply } : {}) } : {}),
       at: now,
     };
@@ -795,7 +770,6 @@ export function applyOrgChangeIntent(changes: Record<string, OrgProposalChange>,
   if (c.decided_by !== undefined || c.status === intent.to) return;
   c.status = intent.to;
   c.decided_at = intent.at;
-  if (intent.edits && Object.keys(intent.edits).length > 0) c.edits = intent.edits;
   if (intent.reply) c.reply = intent.reply;
 }
 
@@ -876,7 +850,6 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       if (!c || c.decided_by !== undefined) return;
       c.status = intent.from;
       delete c.decided_at;
-      if (intent.edits) c.edits = intent.edits;
       if (intent.reply) putReplyBack(c, intent.reply_from);
       return;
     }
@@ -949,7 +922,7 @@ export function rebuildOrgTreeFromServer(draft: Pick<OrgDraft, "orgTree" | "orgT
 export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expired"): string {
   const tail = reason === "refused" ? "was refused" : "did not reach the server after a minute";
   switch (intent.kind) {
-    case "decideChange": return `${intent.via === "reply" ? (intent.to === "skipped" ? "Rejecting" : "Approving") : intent.to === "skipped" ? "Skipping" : "Accepting"} "${intent.line}" ${tail}; the change is back to ${intent.from}.`;
+    case "decideChange": return `${intent.to === "skipped" ? "Rejecting" : "Approving"} "${intent.line}" ${tail}; the change is back to ${intent.from}.`;
     case "noteChange": return `Your note on "${intent.line}" ${tail}; say it again.`;
     case "noteProposal": return `Your note on ${intent.short_id} ${tail}; say it again.`;
     case "withdraw": return `Withdrawing ${intent.short_id} ${tail}; it is open again.`;
@@ -1068,11 +1041,8 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "retireOrgRole" && i.kind === "retireRole" && i.role_id === args[0]));
   for (const i of drops) { state.dropOrgIntent(i.id); notices.push(orgIntentNoticeText(i, "refused")); }
   const reverts = state.orgIntents.filter((i) =>
-    (action === "decideOrgProposalChange" && i.kind === "decideChange" && i.change_id === args[0]) ||
     (action === "withdrawOrgProposal" && i.kind === "withdraw" && i.proposal_id === args[0]) ||
-    (action === "acceptAllOrgProposal" && i.kind === "decideChange" && i.proposal_id === args[0]) ||
-    (action === "decideOrgProposalAsk" && i.kind === "decideChange" && i.proposal_id === args[0] && i.ask === args[1]) ||
-    (action === "replyOnOrgProposal" && ((i.kind === "decideChange" && i.via === "reply") || i.kind === "noteChange" || i.kind === "noteProposal") && i.proposal_id === args[0]) ||
+    (action === "replyOnOrgProposal" && (i.kind === "decideChange" || i.kind === "noteChange" || i.kind === "noteProposal") && i.proposal_id === args[0]) ||
     (action === "staffHeadOfPeople" && i.kind === "staff" && i.stub.client_id === (args[0] as OrgStaffInput | undefined)?.client_id) ||
     (action === "createOrgRole" && i.kind === "createRole" && i.stub.client_id === (args[0] as OrgCreateRoleInput | undefined)?.client_id) ||
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
@@ -1130,8 +1100,8 @@ export function bindOptimisticMessageWriter(fn: OptimisticMessageWriter): void {
 }
 
 /** The optimistic bubble for a reply the server sends into the proposal's
- *  thread (S39), so the words appear at once: the row sayOnOrgProposal
- *  seeds, written by the bound inboxStore writer and keyed by the client id
+ *  thread (S39), so the words appear at once: a pending row written by the
+ *  bound inboxStore writer and keyed by the client id
  *  the server's message carries, so the echo replaces it. Each line is the
  *  card's sentence (brief), the same words the server writes. The slice is
  *  spread into the store, so the draft holds the thread's rows at run time. */
@@ -1466,25 +1436,6 @@ export function createOrgSlice(): OrgSliceImpl {
     requestOrgTemplateBind: asyncAction(function (this: OrgDraft, _instanceKey: string, _secrets: Parameters<OrgServerVerbs<void>["requestOrgTemplateBind"]>[1], _deviceId?: string) {}),
     setOrgTemplateLearning: asyncAction(function (this: OrgDraft, _teamId: string | undefined, _enabled: boolean) {}),
 
-    // Every change the server would take (proposed or failed, S4) flips to
-    // accepted, one intent each, so a refusal of the whole call puts every
-    // row back and a partial echo settles row by row.
-    acceptAllOrgProposal: action(function (this: OrgDraft, proposalId: string, opts?: { kinds?: string[]; seen?: OrgVerdictSeen }) {
-      const kinds = opts?.kinds?.length ? new Set(opts.kinds) : null;
-      decideWaitingChanges(this, proposalId, "accepted", (c) => !kinds || kinds.has(c.change.kind));
-    }),
-
-    // The rows the card held, not the ask at that position today: a revise
-    // that landed between the paint and the press moves positions, and the
-    // server refuses the verdict, so the flip must mark what the person
-    // pressed and nothing else (the refusal puts exactly those back).
-    // `_opts` is the dispatch's, like `_seen` below: `leave_sessions` is the
-    // person's one edit on the accept (R1) and paints nothing here.
-    decideOrgProposalAsk: action(function (this: OrgDraft, proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, _opts?: { leave_sessions?: boolean }) {
-      const seqs = new Set(seen.seqs ?? []);
-      decideWaitingChanges(this, proposalId, verdict === "accept" ? "accepted" : "skipped", (c) => seqs.has(c.seq), askIndex);
-    }),
-
     // The draft flips the card's members (change_ids), not the seqs: riders
     // and carried rows decide with their card. `seen` and `leave_sessions`
     // are the dispatch's. A text on an approval rides as the row's stamp; a
@@ -1502,22 +1453,9 @@ export function createOrgSlice(): OrgSliceImpl {
         }
         const stamp = stampOf(item);
         if (item.verdict === "note") noteChanges(this, proposalId, (c) => ids.has(c._id), stamp);
-        else decideWaitingChanges(this, proposalId, item.verdict === "approve" ? "accepted" : "skipped", (c) => ids.has(c._id), undefined, (c) => (item.verdict === "reject" || stamp.text ? stamp : undefined), at);
+        else decideWaitingChanges(this, proposalId, item.verdict === "approve" ? "accepted" : "skipped", (c) => ids.has(c._id), (c) => (item.verdict === "reject" || stamp.text ? stamp : undefined), at);
       }
       if (opts?.say) sayInThread(this, proposalId, items, opts.say);
-    }),
-
-    // `_seen` is the dispatch's, not the draft's: the middleware sends every
-    // argument to the side effect, which hands it to orgProposals.decide.
-    decideOrgProposalChange: action(function (this: OrgDraft, changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>, _seen?: OrgVerdictSeen) {
-      const c = this.orgProposalChanges[changeId];
-      if (!c || !isOrgChangeDecidable(c.status)) return;
-      const intent: OrgIntent = {
-        kind: "decideChange", id: intentId(), change_id: changeId, proposal_id: c.proposal_id, from: c.status, to: verdict === "accept" ? "accepted" : "skipped",
-        line: describeOrgChange(c.change), ...(edits && Object.keys(edits).length > 0 ? { edits } : {}), at: Date.now(),
-      };
-      applyOrgChangeIntent(this.orgProposalChanges, intent);
-      pushIntent(this, intent);
     }),
 
     withdrawOrgProposal: action(function (this: OrgDraft, proposalId: string) {

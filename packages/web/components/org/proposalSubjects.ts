@@ -1,76 +1,30 @@
 // A proposal's changes as cards, one per subject (org-staffing.md S39): every
 // change to one goal, one project, one role or one record reads as one plain
-// sentence, a few field rows with what was there before, and the reasons.
-// Pure: no React, no store. Built on `proposalChangeRows`, the rows the chart
-// and the company document already draw from, so a ref is resolved once and a
-// card never disagrees with them about who or what a change names. The
-// sentences are the shared contract's (`changeClauses`); this file only says
-// which changes belong together and what each field read as before.
+// sentence, a few fields with what was there before, and the reasons. Pure:
+// no React, no store. The words come from the one translator
+// (orgChangeWords: changeWords, subjectWords, fieldMoves); this file is the
+// web adapter: which changes belong together, what each field read as before
+// (the live record while a change waits, the stamp once applied, nothing for
+// another workspace) and the faces drawn beside a value.
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import type { OrgAppliedDiffRow } from "@codecast/shared/contracts/orgChange";
+import { changeWords, fieldMoves, proposalTotals, recordTotalsWords, subjectWords, type ChangeField, type ChangeWordsCtx, type FieldRef, type FieldText } from "@codecast/shared/contracts/orgChangeWords";
 import {
-  andList, authorityWords, changeClauses, editedOrgChange, everyWords, isOrgChangeDecidable, isOrgQuietChange, quietChangeSentence,
-  type ChangeWords, type OrgAskNames, type OrgAuthorityGrant, type OrgChange, type OrgChangeReply, type OrgChangeStatus, type OrgEvidenceLink, type OrgPriority,
+  andList, editedOrgChange, isOrgChangeDecidable, isOrgQuietChange, orgRecordGroups, quietChangeSentence, recordAct,
+  type OrgAskNames, type OrgChange, type OrgChangeReply, type OrgChangeStatus, type OrgEvidenceLink, type OrgPriority, type OrgRecordGroup,
 } from "@codecast/shared/contracts/orgProposal";
-import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
-import { ownerRoleOf } from "../charter/charterMeta";
-import { ghostScopeNames, refMatches, refResolves, type OrgGhostOptions } from "./orgLayout";
+import { refMatches, refResolves, type OrgGhostOptions } from "./orgLayout";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import type { OrgParentRef, OrgRole, OrgTree } from "./orgTypes";
 import { partyFace, proposalChangeRows, treeOrder, type ProposalTreeFace, type ProposalTreeRow } from "./proposalTree";
 import { askNames } from "./staffingAsks";
-import { changeTenure, orderChanges, planCarriedTasks, syncEvidence, syncGroupSummary, tenureLine } from "./staffingModel";
-import { amendedMoves, revisionWord, type FieldMove } from "./staffingRevise";
+import { orderChanges, planCarriedTasks, syncEvidence, syncGroupSummary } from "./staffingModel";
+import { revisionWord } from "./staffingRevise";
 
 // ---------------------------------------------------------------- types
 
 export type SubjectKind = "goal" | "project" | "role" | "plan" | "task" | "projects" | "instance";
 export type SubjectStatus = "proposed" | "accepted" | "applied" | "skipped" | "failed" | "mixed";
-
-/** A value a field row draws. */
-export type FieldValue =
-  /** Words: a goal's sentence, a status, a routine, where a goal sits. `tail`
-   *  is a quiet ending drawn after them (", every week"), the way a measure's
-   *  ", target" is. */
-  | { kind: "text"; text: string; tail?: string }
-  /** A placeholder, drawn quiet and never struck: "not set", "at the top level", "nothing", "no project", "no number yet", "nobody". */
-  | { kind: "none"; text: string }
-  /** A person, a role, a goal, a record. */
-  | { kind: "face"; face: ProposalTreeFace; you?: boolean }
-  | { kind: "priority"; priority: OrgPriority }
-  /** Projects, plans, entries: running comma text. `summary` stands in for
-   *  the list until a press opens it ("9 projects, through the goals below"). */
-  | { kind: "names"; names: string[]; summary?: string }
-  /** One per line; a target reads as written, never parsed. */
-  | { kind: "measures"; measures: { name: string; target: string }[] };
-
-/**
- * set: a field with nothing to compare (a new record, a decided change with
- * no stamp, a workspace whose records are not in hand). change: before to
- * after. add / remove: a list gains or loses entries. clear: the value goes
- * away. same: the record already reads that way.
- *
- * A list row with a before holds the WHOLE list on each side, so before and
- * after read as a diff. With no before, `after` holds only the entries the
- * change adds (add) or takes away (remove).
- */
-export type FieldOp = "set" | "change" | "add" | "remove" | "clear" | "same";
-
-export type FieldRow = {
-  /** "priority", "parent", "metrics", "projects", "owner", "reports_to", "area", "starts_work", "routine", "session", "status", ... */
-  key: string;
-  /** Plain words that read aloud with the value: "Priority", "Sits", "Owned by". */
-  label: string;
-  op: FieldOp;
-  /** Null: nothing to compare. */
-  before: FieldValue | null;
-  /** A value that goes away reads as its placeholder with `op: "clear"`. Null
-   *  only where nothing follows at all: a retired role's own row. */
-  after: FieldValue | null;
-  /** The change that writes this row, and where it stands, so a card whose changes ended differently marks each group. */
-  seq: number;
-  status: OrgChangeStatus;
-};
 
 export type SubjectCard = {
   /** "goal:<id>", "project:<id>", "role:<handle>", "plan:<id or ref>", "task:<ref>", "projects:<change id>", "instance:<slug>". */
@@ -83,7 +37,7 @@ export type SubjectCard = {
   title: string;
   /** This proposal creates the subject. */
   isNew: boolean;
-  /** The goal this proposal sets as the purpose: its long rows are read in full. */
+  /** The goal this proposal sets as the purpose: its long fields are read in full. */
   purpose: boolean;
   /** A retirement, or a record being closed. */
   struck: boolean;
@@ -104,9 +58,12 @@ export type SubjectCard = {
   sentence: string;
   /** Where `title` sits in `sentence`, for emphasis. */
   subjectSpan: [number, number] | null;
-  /** The same sentence calling the subject "this goal", "this role": subjectSentence(card, "this"). */
+  /** The same sentence calling the subject "this goal", "this role". */
   sentenceThis: string;
-  rows: FieldRow[];
+  /** The fields, from the translator, each stamped with its change's seq. */
+  rows: ChangeField[];
+  /** A face beside a value, keyed `${seq}:${key}:${before|after}`. */
+  faces: Record<string, ProposalTreeFace>;
   /** Each drawn change's reason, in reading order, repeats dropped. */
   reasons: string[];
   /** Row evidence, plus the plain strings a role or a goal change carries, repeats dropped. */
@@ -114,14 +71,12 @@ export type SubjectCard = {
   /** "Under <parent goal>", "Reports to <parent>"; null when a row already says it or nothing is known. */
   sits: string | null;
   failed: { seq: number; note: string }[];
-  /** The person's latest answer that still stands (S39): a rejection's or a
-   *  note's words, or an approval that carried words. Null once the author
-   *  amended the change after it, or when nobody answered. */
+  /** The person's latest answer that still stands (S39). Null once the author amended the change after it. */
   reply: OrgChangeReply | null;
   /** What a change needs from, or gives to, another change of the proposal. */
   depends: string[];
-  /** What the author's revise did (S18). */
-  revisions: { seq: number; word: string; note: string; moves: FieldMove[] }[];
+  /** What the author's revise did (S18): the word, the note, and the fields it moved. */
+  revisions: { seq: number; word: string; note: string; fields: ChangeField[] }[];
 };
 
 /** The live records a before is read from. Null for a proposal of another workspace. */
@@ -140,61 +95,50 @@ export type SubjectOptions = {
   seqs?: ReadonlySet<number>;
 };
 
+/** One record of a group row, in the author's order. */
+export type RecordRow = {
+  seq: number;
+  change: OrgProposalChange;
+  sentence: string;
+  subjectSpan: [number, number] | null;
+  status: OrgChangeStatus;
+  reason: string;
+  /** The record is being closed (done, dropped, abandoned): drawn struck. */
+  closed: boolean;
+  failed?: string;
+};
+
+/** One collapsed row per orgRecordGroups entry: the title, the totals line, the rows behind it. */
+export type RecordGroupCard = {
+  key: string;
+  group: OrgRecordGroup;
+  title: string;
+  kindWord: "project" | "plan" | null;
+  totals: string;
+  rows: RecordRow[];
+  change_ids: string[];
+  seqs: number[];
+  status: SubjectStatus;
+  waiting: number;
+  failed: number;
+  reply: OrgChangeReply | null;
+};
+
 // ---------------------------------------------------------------- words
 
-/** What a field reads as when it holds nothing. */
-const NONE = { unset: "not set", top: "at the top level", nothing: "nothing", project: "no project", number: "no number yet", nobody: "nobody" } as const;
 const PURPOSE = "the purpose";
-
-const text = (t: string): FieldValue => ({ kind: "text", text: t.trim() });
-const none = (t: string): FieldValue => ({ kind: "none", text: t });
-const faceValue = (face: ProposalTreeFace): FieldValue => ({ kind: "face", face, ...(face.kind === "person" && face.me ? { you: true } : {}) });
-const namesValue = (names: readonly string[], empty: string): FieldValue => (names.length ? { kind: "names", names: [...names] } : none(empty));
-const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim()) : []);
 const bare = (handle: string) => handle.replace(/^@/, "").trim().toLowerCase();
-const statusWords = (status: string) => status.replace(/_/g, " ");
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const fullStop = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const dedupe = <T,>(items: readonly T[], keyOf: (t: T) => string): T[] => { const seen = new Set<string>(); return items.filter((t) => { const k = keyOf(t); if (seen.has(k)) return false; seen.add(k); return true; }); };
+const strings = (raw: unknown): string[] => (Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim()) : []);
 
-/** Two values that read the same: the record already holds what the change sets. */
-function valueKey(v: FieldValue): string {
-  switch (v.kind) {
-    case "text": return `t:${v.text.trim().toLowerCase()}${v.tail?.trim().toLowerCase() ?? ""}`;
-    case "none": return "none";
-    case "face": return `f:${v.face.kind}:${v.face.id}`;
-    case "priority": return `p:${v.priority}`;
-    case "names": return `n:${v.names.map((n) => n.trim().toLowerCase()).sort().join("\u0001")}`;
-    case "measures": return `m:${v.measures.map((m) => `${m.name.trim().toLowerCase()}=${m.target.trim().toLowerCase()}`).join("\u0001")}`;
-  }
-}
-
-const ORDINALS = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth"];
-const NUMBERS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
-
-/** A card's place in the list as a word: "First" to "Twelfth", then "13th". */
-export function ordinalWord(n: number): string {
-  if (n >= 1 && n <= ORDINALS.length) return ORDINALS[n - 1];
-  const tens = n % 100, ones = n % 10;
-  return `${n}${tens >= 11 && tens <= 13 ? "th" : ones === 1 ? "st" : ones === 2 ? "nd" : ones === 3 ? "rd" : "th"}`;
-}
-const numberWord = (n: number) => (n >= 1 && n <= NUMBERS.length ? NUMBERS[n - 1] : String(n));
-
-/** The single card's place line: "First of nine", "Ninth of ten", "13th of 14".
- *  A proposal of one card has no place to count: "The only change", or "The
- *  only entry" when that card holds several. Empty for a card the list does
- *  not hold. */
-export function placeWords(cards: readonly SubjectCard[], card: SubjectCard): string {
-  const at = cards.findIndex((c) => c.key === card.key);
-  if (at < 0) return "";
-  if (cards.length > 1) return `${ordinalWord(at + 1)} of ${numberWord(cards.length)}`;
-  return card.changes.length + card.carried.length > 1 ? "The only entry" : "The only change";
-}
+/** A value as the words a person reads (the field's data attribute). */
+export const fieldText = (v: FieldText | null): string | undefined => (v ? v.text + (v.tail ?? "") : undefined);
 
 // ---------------------------------------------------------------- keys and status
 
-const HANDLE_KINDS = new Set(["role", "move", "retire", "scope", "budget", "trust", "routine", "adopt", "authority", "hire"]);
+const HANDLE_KINDS = new Set(["role", "move", "retire", "scope", "budget", "trust", "routine", "adopt", "authority", "hire", "charter_edit"]);
 const KIND_ORDER: SubjectKind[] = ["goal", "project", "role", "plan", "task", "projects", "instance"];
 type NamedRow = { id: string; title: string; short_id?: string };
 
@@ -203,8 +147,7 @@ type NamedRow = { id: string; title: string; short_id?: string };
  * goal's shape and its projects are one goal, a project's fields and its
  * status one project. `row` is the change's tree row (null for a quiet
  * change, which draws none); `plans` resolves a plan ref to its live id so
- * `pl-12` and the plan's id name one subject. Not `orgChangeKey`: that one
- * includes the kind and has no key for a move, a scope or a routine.
+ * `pl-12` and the plan's id name one subject.
  */
 export function subjectKeyOf(row: Pick<ProposalTreeRow, "change_id" | "node"> | null, change: OrgChange, plans: readonly NamedRow[] = []): string {
   if (HANDLE_KINDS.has(change.kind)) return `role:${bare((change as { handle: string }).handle)}`;
@@ -243,10 +186,13 @@ export function changeReply(change: Pick<OrgProposalChange, "reply" | "revision"
   return change.revision && change.revision.at >= reply.at ? null : reply;
 }
 
+/** The latest answer that still stands across a set of rows. */
+const latestReply = (members: readonly OrgProposalChange[]): OrgChangeReply | null =>
+  members.map(changeReply).filter((r): r is OrgChangeReply => !!r).sort((a, b) => b.at - a.at)[0] ?? null;
+
 /** The card's status in words: "To decide", "2 to decide", "Noted" (a card
  *  the person wrote back on, still waiting on a revision), "Approved",
- *  "Rejected", "Failed", "1 of 2 approved". A card that landed in part says
- *  what was approved first: "1 of 2 approved, 1 failed". */
+ *  "Rejected", "Failed", "1 of 2 approved, 1 failed". */
 export function subjectStatusWords(card: SubjectCard): string {
   const members = membersOf(card);
   const n = (...statuses: OrgChangeStatus[]) => members.filter((m) => statuses.includes(m.status)).length;
@@ -270,10 +216,7 @@ export function subjectStatusWords(card: SubjectCard): string {
   }
 }
 
-/** The proposal's cards by where they stand: what a person counts down the
- *  list. A card with anything still to decide waits; a failed one is its own
- *  count (it waits on a retry); a card decided in parts counts as approved
- *  when any part was. */
+/** The proposal's cards by where they stand: what a person counts down the list. */
 export function subjectCounts(cards: readonly SubjectCard[]): { total: number; waiting: number; approved: number; rejected: number; failed: number } {
   const counts = { total: cards.length, waiting: 0, approved: 0, rejected: 0, failed: 0 };
   for (const card of cards) {
@@ -285,10 +228,23 @@ export function subjectCounts(cards: readonly SubjectCard[]): { total: number; w
   return counts;
 }
 
-/** The proposal's meta line: "9 to decide" while nothing is decided, "5 of 9
- *  to decide · 2 approved, 1 rejected, 1 failed" mid way, and the outcome once
- *  nothing waits: "9 approved", "7 approved, 2 rejected". Counts are cards. */
-export function proposalProgressWords(cards: readonly SubjectCard[]): string {
+/**
+ * The proposal's meta line. Cards: "9 to decide", "5 of 9 to decide · 2
+ * approved, 1 rejected, 1 failed", "7 approved, 2 rejected". A records
+ * proposal (`records`: its two or more record changes) counts the records
+ * themselves: "64 records to decide", "40 of 64 records to decide · 24
+ * approved", "62 applied, 2 rejected".
+ */
+export function proposalProgressWords(cards: readonly SubjectCard[], records?: readonly OrgProposalChange[]): string {
+  if (records && records.length > 1) {
+    const live = records.filter((c) => c.status !== "removed");
+    const n = (...statuses: OrgChangeStatus[]) => live.filter((c) => statuses.includes(c.status)).length;
+    const total = live.length, waiting = n("proposed");
+    if (total === 0) return "";
+    if (waiting === total) return `${total} records to decide`;
+    const decided = [n("applied") && `${n("applied")} applied`, n("accepted") && `${n("accepted")} approved`, n("skipped") && `${n("skipped")} rejected`, n("failed") && `${n("failed")} failed`].filter(Boolean).join(", ");
+    return waiting === 0 ? decided : `${waiting} of ${total} records to decide · ${decided}`;
+  }
   const c = subjectCounts(cards);
   if (c.total === 0) return "";
   if (c.waiting === c.total) return `${c.total} to decide`;
@@ -303,12 +259,6 @@ export function subjectOfSeq(cards: readonly SubjectCard[], seq: number): Subjec
   return cards.find((card) => membersOf(card).some((m) => m.seq === seq)) ?? null;
 }
 
-/** The card's sentence naming its subject, or calling it "this goal", "this
- *  role", for a card that titles its subject. */
-export function subjectSentence(card: SubjectCard, how: "named" | "this"): string {
-  return how === "this" ? card.sentenceThis : card.sentence;
-}
-
 /** The tasks a proposal's changes name: the ones it marks, and the ones a
  *  plan change closes with the plan. What the live read needs, never the
  *  whole task collection. */
@@ -317,15 +267,56 @@ export function namedTaskRefs(changes: readonly Pick<OrgProposalChange, "change"
   return [...new Set(refs.map((r) => r.trim()).filter(Boolean))];
 }
 
-// ---------------------------------------------------------------- the model
+// ---------------------------------------------------------------- record groups
 
-/** What a record's fields read as before a change: `get` answers undefined
- *  for a field with nothing to compare, null for one that held nothing. */
-type Was = { get: (field: string) => unknown; after: (field: string) => unknown; label: (id: string) => string | undefined; stamp: OrgAppliedDiffRow | null };
+const CLOSING_ACTS = new Set(["done", "dropped", "abandoned"]);
+
+/**
+ * A records proposal as group rows (org-staffing.md S9): one per
+ * orgRecordGroups entry, in its order (biggest first, loose last), each with
+ * its title, its totals line and its rows as sentences. A proposal whose
+ * records all fall in one loose group is "All N records" and that row carries
+ * the proposal's totals; a loose group among others is "Not under a project".
+ */
+export function recordGroupCards(changes: readonly OrgProposalChange[], names?: OrgAskNames): RecordGroupCard[] {
+  const live = changes.filter((c) => c.status !== "removed");
+  const bySeq = new Map(live.map((c) => [c.seq, c]));
+  const groups = orgRecordGroups(live, names);
+  const lone = groups.length === 1;
+  return groups.map((group) => {
+    const members = group.seqs.flatMap((seq) => { const c = bySeq.get(seq); return c ? [c] : []; });
+    const rows = members.map((c): RecordRow => {
+      const change = editedOrgChange(c.change, c.edits);
+      const w = changeWords(change, { names, seq: c.seq });
+      const closing = (change.kind === "task_status" || change.kind === "plan_status" || change.kind === "project_status") && CLOSING_ACTS.has(recordAct(change));
+      return { seq: c.seq, change: c, sentence: w.sentence, subjectSpan: w.subjectSpan, status: c.status, reason: w.reason ?? "", closed: closing, ...(c.status === "failed" ? { failed: c.applied_note?.trim() ?? "" } : {}) };
+    });
+    const title = group.kind === "loose" ? (lone ? `All ${members.length} records` : "Not under a project") : group.title ?? group.ref ?? group.key;
+    return {
+      key: `group:${group.key}`,
+      group,
+      title,
+      // "N plans" and "Not under a project" carry their own kind in the title.
+      kindWord: group.kind === "project" || group.kind === "plan" ? group.kind : null,
+      totals: lone ? proposalTotals(live, names).line ?? recordTotalsWords(group.totals) : recordTotalsWords(group.totals),
+      rows,
+      change_ids: orderChanges(members).map((c) => c._id),
+      seqs: [...group.seqs],
+      status: subjectStatus(members),
+      waiting: members.filter((c) => isOrgChangeDecidable(c.status)).length,
+      failed: members.filter((c) => c.status === "failed").length,
+      reply: latestReply(members),
+    };
+  });
+}
+
+// ---------------------------------------------------------------- the model
 
 const NOUN: Partial<Record<OrgChange["kind"], string>> = { role: "the role", initiative: "the goal", plan_status: "the plan", file: "the plan", task_status: "the task", project_status: "the project", upgrade: "the instance" };
 const THIS: Record<SubjectKind, string> = { goal: "this goal", project: "this project", role: "this role", plan: "this plan", task: "this task", projects: "these projects", instance: "this instance" };
 const PRIORITY_RANK: Record<string, number> = { p0: 0, p1: 1, p2: 2, p3: 3 };
+
+type Before = NonNullable<ChangeWordsCtx["before"]>;
 
 /**
  * One proposal's changes as cards. `changes` are the whole proposal's rows
@@ -351,8 +342,13 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
   // ---- names: the tree's, the workspace's records, and what this proposal itself creates.
   const setHere: NamedRow[] = goalRows.filter((r) => r.kind === "initiative").map((r) => ({ id: r.node.id, title: r.node.name }));
   const goals: NamedRow[] = [...setHere, ...(live?.goals ?? []).map((g) => ({ id: g._id, title: g.title, short_id: g.short_id }))];
-  const offered = new Map<string, string>();
-  for (const r of treeRows) if (r.kind === "adopt" && r.node.kind === "session" && !r.node.stub?.this_session && r.node.name !== "Offered session") offered.set(r.node.short_id, r.node.name);
+  // The sentence names an offered session only when it has a title of its own; a field names it as the tree row does ("Offered session").
+  const offered = new Map<string, string>(), seated = new Map<string, string>();
+  for (const r of treeRows) {
+    if (r.kind !== "adopt" || r.node.kind !== "session") continue;
+    seated.set(r.change_id, r.node.name);
+    if (!r.node.stub?.this_session && r.node.name !== "Offered session") offered.set(r.node.short_id, r.node.name);
+  }
   const base = askNames(tree, {
     projects, plans, goals,
     roles: all.map(edited).flatMap((ch) => (ch.kind === "role" ? [{ handle: ch.handle, name: ch.name }] : [])),
@@ -360,9 +356,8 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
   })!;
   // A goal named as a parent reads as "the purpose" when it is the one (the subject's own name is always passed in).
   const names: OrgAskNames = { ...base, initiative: (ref) => (purposeId !== null && goals.find((row) => refMatches(ref, row))?.id === purposeId ? PURPOSE : base.initiative?.(ref)) };
+  const fieldNames = (c: OrgProposalChange): OrgAskNames => (seated.has(c._id) ? { ...names, session: (ref) => offered.get(ref) ?? seated.get(c._id) } : names);
   const projectName = (ref: string) => names.project?.(ref) ?? ref;
-  const thingName = (ref: string) => names.project?.(ref) ?? names.plan?.(ref) ?? ref;
-  const under = (goalId: string | null, name: string) => `under ${goalId === purposeId ? PURPOSE : name}`;
 
   // ---- live records by the ref a change writes.
   const liveRole = (handle: string): OrgRole | undefined => tree?.roles.find((r) => r.status !== "retired" && bare(r.handle) === bare(handle));
@@ -370,230 +365,106 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
   const livePlan = (ref: string) => { const hit = plans.find((p) => refMatches(ref, p)); return hit ? live!.plans.find((p) => p._id === hit.id) : undefined; };
   const liveTask = (ref: string) => live?.tasks.find((t) => t._id === ref || t.short_id.toLowerCase() === ref.trim().toLowerCase());
   const liveGoal = (id: string) => live?.goals.find((g) => g._id === id);
-  const titleOfProject = (id: string, was?: Was) => live?.projects.find((p) => p._id === id)?.title ?? was?.label(id) ?? null;
-  const titleOfPlan = (id: string, was?: Was) => live?.plans.find((p) => p._id === id)?.title ?? was?.label(id) ?? null;
+  const partyName = (ref: OrgParentRef | null | undefined): string | undefined => (ref && tree ? partyFace(tree, ref)?.name : undefined);
+  const titleOf = (id: string) => live?.projects.find((p) => p._id === id)?.title ?? live?.plans.find((p) => p._id === id)?.title ?? liveGoal(id)?.title;
 
-  /** The stamp row that is the change's own before and after: the first whose
-   *  kind is the change's. A stamp can hold more (a goal change's evidence
-   *  lands as a sources-only `initiative_shape` row after it); those read as
-   *  what was added, never as a second diff. A stamp with no row of the kind
-   *  keeps its first row, as it always did. */
-  const ownStamp = (c: OrgProposalChange): OrgAppliedDiffRow | undefined => {
-    const rows = c.applied_diff ?? [];
-    return rows.find((r) => r.kind === edited(c).kind) ?? rows[0];
-  };
+  /** The stamp row that is the change's own before and after: the first whose kind is the change's, else the first. */
+  const ownStamp = (c: OrgProposalChange): OrgAppliedDiffRow | undefined => { const rows = c.applied_diff ?? []; return rows.find((r) => r.kind === edited(c).kind) ?? rows[0]; };
   /** The stamp rows beyond the change's own: what landing it added elsewhere. */
   const extraStamps = (c: OrgProposalChange): OrgAppliedDiffRow[] => { const own = ownStamp(c); return (c.applied_diff ?? []).filter((r) => r !== own); };
 
-  /** Which before a change's rows read (the table in the plan): the live
+  // ---- what a record read as before, by log field, with the names of the ids it holds.
+  const labelsOf = (ids: (string | undefined)[], name: (id: string) => string | undefined): Record<string, string> =>
+    Object.fromEntries(ids.flatMap((id) => { const n = id ? name(id) : undefined; return id && n ? [[id, n]] : []; }));
+  const projectBefore = (p: SubjectLive["projects"][number]): Before => ({
+    priority: p.priority ?? null, owner_role_id: p.owner_role_id ?? null, goal: p.goal ?? null, success_metrics: p.success_metrics ?? null, non_goals: p.non_goals ?? null, risks: p.risks ?? null, status: p.status,
+    labels: labelsOf([p.owner_role_id], (id) => tree?.roles.find((r) => r._id === id)?.name),
+  });
+  const planBefore = (p: SubjectLive["plans"][number]): Before => ({ status: p.status, project_id: p.project_id ?? null, labels: labelsOf([p.project_id], titleOf) });
+  const roleBefore = (r: OrgRole): Before => ({
+    reports_to: r.reports_to, scope: r.scope, trust: r.trust ?? null, authority: (r as { authority?: unknown }).authority ?? null, standing_session: r.standing ? { short_id: r.standing.short_id } : null, charter: r.charter ?? null,
+    labels: {
+      ...Object.fromEntries([...r.scope_names.projects, ...r.scope_names.plans].map((x) => [x.id, x.title])),
+      ...labelsOf([r.reports_to.kind === "user" ? r.reports_to.user_id : r.reports_to.role_id], () => partyName(r.reports_to)),
+    },
+  });
+  const goalBefore = (g: InitiativeRow): Before => ({
+    parent_initiative_id: g.parent_initiative_id ?? null, metrics: g.metrics ?? null, why: g.why ?? null, done_when: g.done_when ?? null, project_ids: g.project_ids ?? null, owner: g.owner ?? null,
+    labels: {
+      ...labelsOf([g.parent_initiative_id, ...(g.project_ids ?? [])], titleOf),
+      ...labelsOf([g.owner ? (g.owner.kind === "user" ? g.owner.user_id : g.owner.role_id) : undefined], () => partyName(g.owner as OrgParentRef)),
+    },
+  });
+
+  /** Which before a change's fields read (the table in the plan): the live
    *  record while it waits, the stamp once applied, nothing for a workspace
    *  whose records are not in hand. A rejected change wrote nothing, so the
-   *  live record is still its before: the card keeps the diff for a verdict
-   *  given in view (nothing jumps under the pointer) and folds it on the next
-   *  mount. */
-  const wasOf = (c: OrgProposalChange, record: object | null | undefined): Was | null => {
-    if (!live) return null;
-    if (c.status === "applied") {
-      const stamp = ownStamp(c);
-      if (!stamp) return null;
-      const before = stamp.before as Record<string, unknown>, after = stamp.after as Record<string, unknown>;
-      return { get: (f) => (f in before ? before[f] ?? null : undefined), after: (f) => after[f], label: (id) => stamp.labels[id], stamp };
+   *  live record is still its before. */
+  /** The names a stamp's ids read by: the stamp's own labels, else what the tree and the records know. */
+  const stampLabels = (stamp: OrgAppliedDiffRow): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const name = (id: unknown, lookup: (id: string) => string | undefined) => { if (typeof id === "string" && id && !out[id]) { const n = lookup(id); if (n) out[id] = n; } };
+    for (const side of [stamp.before, stamp.after] as Record<string, unknown>[]) {
+      for (const key of ["reports_to", "owner"]) { const r = side[key] as OrgParentRef | null | undefined; if (r && typeof r === "object") name(r.kind === "user" ? r.user_id : r.role_id, () => partyName(r)); }
+      name(side.owner_role_id, (id) => tree?.roles.find((r) => r._id === id)?.name);
+      for (const key of ["project_id", "parent_initiative_id"]) name(side[key], titleOf);
+      for (const id of [...strings(side.project_ids), ...strings((side.scope as { project_ids?: unknown } | null)?.project_ids), ...strings((side.scope as { plan_ids?: unknown } | null)?.plan_ids)]) name(id, titleOf);
     }
-    if (!record) return null;
-    const fields = record as Record<string, unknown>;
-    return { get: (f) => fields[f] ?? null, after: () => undefined, label: () => undefined, stamp: null };
+    return { ...out, ...stamp.labels };
   };
-
-  // ---- values a before is read as.
-  const party = (ref: unknown, was: Was): FieldValue => {
-    const r = ref as OrgParentRef | null;
-    if (!r) return none(NONE.nobody);
-    const face = tree ? partyFace(tree, r) : null;
-    const id = r.kind === "user" ? r.user_id : r.role_id;
-    return face && face.kind !== "unknown" ? faceValue(face) : was.label(id) ? text(was.label(id)!) : face ? faceValue(face) : none(NONE.nobody);
+  const wasOf = (c: OrgProposalChange, record: Before | undefined): Before | undefined => {
+    if (!live) return undefined;
+    if (c.status === "applied") { const stamp = ownStamp(c); return stamp ? { ...(stamp.before as Before), labels: stampLabels(stamp) } : undefined; }
+    return record;
   };
-  const lead = (roleId: unknown, was: Was): FieldValue => {
-    if (typeof roleId !== "string" || !roleId) return none(NONE.nobody);
-    const role = ownerRoleOf(tree?.roles, roleId);
-    return role && tree ? faceValue(partyFace(tree, { kind: "role", role_id: role._id })!) : was.label(roleId) ? text(was.label(roleId)!) : none(NONE.nobody);
-  };
-  const sitsValue = (goalId: unknown, was: Was): FieldValue => {
-    if (typeof goalId !== "string" || !goalId) return none(NONE.top);
-    const name = liveGoal(goalId)?.title ?? was.label(goalId);
-    return name ? text(under(goalId, name)) : none(NONE.top);
-  };
-  const measuresValue = (raw: unknown, empty: string): FieldValue => {
-    const list = Array.isArray(raw) ? raw.filter((m): m is { name: string; target: string } => !!m && typeof m.name === "string").map((m) => ({ name: m.name.trim(), target: String(m.target ?? "").trim() })) : [];
-    return list.length ? { kind: "measures", measures: list } : none(empty);
-  };
-  const wordsValue = (raw: unknown, empty: string): FieldValue => (typeof raw === "string" && raw.trim() ? text(raw) : none(empty));
-  const scopeTitles = (raw: unknown, was: Was): string[] => {
-    const scope = raw as { project_ids?: string[]; plan_ids?: string[] } | null;
-    return [...(scope?.project_ids ?? []).map((id) => titleOfProject(id, was)), ...(scope?.plan_ids ?? []).map((id) => titleOfPlan(id, was))].filter((t): t is string => !!t);
-  };
-
-  // ---- rows.
-  type Row = Omit<FieldRow, "seq" | "status">;
-  const setRow = (key: string, label: string, after: FieldValue): Row => ({ key, label, op: "set", before: null, after });
-  /** One value against what was there. `cleared`: the change takes the value away, and `after` is its placeholder. */
-  const valueRow = (c: OrgProposalChange, key: string, label: string, after: FieldValue, before: FieldValue | undefined, cleared = false): Row => {
-    if (before === undefined) return { key, label, op: cleared ? "clear" : "set", before: null, after };
-    // The record already reads that way. While the verdict's echo is on its
-    // way the live record may have moved first, so an accepted row shows the
-    // value alone and never "P0 to P0".
-    if (valueKey(before) === valueKey(after)) return c.status === "accepted" || c.status === "applied" ? { key, label, op: "set", before: null, after } : { key, label, op: "same", before, after };
-    return { key, label, op: cleared ? "clear" : "change", before, after };
-  };
-  /** A list that gains or loses entries (see FieldOp). `whole` is the list after, when a stamp holds it. */
-  const listRows = (c: OrgProposalChange, key: string, label: string, empty: string, added: readonly string[], removed: readonly string[], before: readonly string[] | undefined, whole?: readonly string[]): Row[] => {
-    const has = (list: readonly string[], name: string) => list.some((x) => x.trim().toLowerCase() === name.trim().toLowerCase());
-    if (before === undefined) return [
-      ...(added.length ? [{ key, label, op: "add" as const, before: null, after: namesValue(added, empty) }] : []),
-      ...(removed.length ? [{ key, label, op: "remove" as const, before: null, after: namesValue(removed, empty) }] : []),
-    ];
-    const after = whole ?? [...before.filter((x) => !has(removed, x)), ...added.filter((x) => !has(before, x))];
-    const gained = after.some((x) => !has(before, x)), lost = before.some((x) => !has(after, x));
-    const row = valueRow(c, key, label, namesValue(after, empty), namesValue(before, empty), after.length === 0);
-    return [row.op === "change" ? { ...row, op: gained && lost ? "change" : gained ? "add" : "remove" } : row];
-  };
-  /** A role's area after a change that adds to it or takes from it. */
-  const areaRows = (c: OrgProposalChange, handle: string, add: readonly string[] | undefined, remove: readonly string[] | undefined): Row[] => {
-    if (!add?.length && !remove?.length) return [];
-    const role = liveRole(handle);
-    const was = wasOf(c, role);
-    const raw = was?.get("scope");
-    const before = !was || raw === undefined ? undefined : was.stamp ? scopeTitles(raw, was) : [...role!.scope_names.projects, ...role!.scope_names.plans].map((x) => x.title);
-    const whole = was?.stamp && was.after("scope") !== undefined ? scopeTitles(was.after("scope"), was) : undefined;
-    return listRows(c, "area", "Looks after", NONE.nothing, (add ?? []).map(thingName), (remove ?? []).map(thingName), before, whole);
-  };
-  const before = (was: Was | null, field: string, read: (raw: unknown, was: Was) => FieldValue): FieldValue | undefined => {
-    const raw = was?.get(field);
-    return !was || raw === undefined ? undefined : read(raw, was);
-  };
-
-  const hasChildren = (goalId: string) => goalRows.some((r) => r.node.id !== goalId && r.parent?.id === goalId);
-
-  const rowsFor = (c: OrgProposalChange): Row[] => {
-    const ch = edited(c), row = rowOf.get(c._id);
+  const recordOf = (c: OrgProposalChange): Before | undefined => {
+    const ch = edited(c);
     switch (ch.kind) {
-      case "project_meta": {
-        const was = wasOf(c, liveProject(ch.project));
-        const list = (key: string, label: string, value: string[] | undefined) => (value == null ? [] : [valueRow(c, key, label, namesValue(strings(value), NONE.nothing), before(was, key, (raw) => namesValue(strings(raw), NONE.nothing)), value.length === 0)]);
-        return [
-          ...(ch.priority ? [valueRow(c, "priority", "Priority", { kind: "priority", priority: ch.priority }, before(was, "priority", (raw) => (typeof raw === "string" && raw in PRIORITY_RANK ? { kind: "priority", priority: raw as OrgPriority } : none(NONE.unset))))] : []),
-          ...(ch.owner ? [valueRow(c, "owner", "Led by", row?.owner ? faceValue(row.owner) : text(ch.owner), before(was, "owner_role_id", lead))] : []),
-          ...(ch.goal != null ? [valueRow(c, "goal", "Says", wordsValue(ch.goal, NONE.unset), before(was, "goal", (raw) => wordsValue(raw, NONE.unset)), !ch.goal.trim())] : []),
-          ...list("success_metrics", "Measured by", ch.success_metrics),
-          ...list("non_goals", "Leaves out", ch.non_goals),
-          ...list("risks", "Risks", ch.risks),
-        ];
-      }
-      case "project_status": case "plan_status": case "task_status": {
-        const record = ch.kind === "project_status" ? liveProject(ch.project) : ch.kind === "plan_status" ? livePlan(ch.plan) : liveTask(ch.task);
-        const status = valueRow(c, "status", "Status", text(statusWords(ch.status)), before(wasOf(c, record), "status", (raw) => wordsValue(typeof raw === "string" ? statusWords(raw) : raw, NONE.unset)));
-        const closes = (carriedBy.get(c._id) ?? []).map((t) => { const task = edited(t); return task.kind === "task_status" ? task.title?.trim() || liveTask(task.task)?.title || task.task : ""; }).filter(Boolean);
-        return closes.length ? [status, setRow("carried", "Closes with it", namesValue(closes, NONE.nothing))] : [status];
-      }
-      case "file": {
-        const was = wasOf(c, livePlan(ch.plan));
-        return [valueRow(c, "project", "Project", namesValue([projectName(ch.project)], NONE.project), before(was, "project_id", (raw, w) => namesValue(typeof raw === "string" && titleOfProject(raw, w) ? [titleOfProject(raw, w)!] : [], NONE.project)))];
-      }
-      case "role": {
-        const area = tree ? ghostScopeNames(ch.scope, tree, ghost) : null;
-        const looksAfter = area ? [...area.projects, ...area.plans].map((x) => x.title) : [...(ch.scope?.projects ?? []).map(projectName), ...(ch.scope?.plans ?? []).map((ref) => names.plan?.(ref) ?? ref)];
-        const stays = tenureLine(changeTenure(c), tree);
-        return [
-          setRow("handle", "Answers to", text(`@${bare(ch.handle)}`)),
-          setRow("area", "Looks after", namesValue(looksAfter, NONE.nothing)),
-          ...(ch.seat ? [setRow("session", "Session", text(ch.seat.title?.trim() || names.session?.(ch.seat.existing) || ch.seat.existing))] : []),
-          ...(stays ? [setRow("stays", "Stays", text(stays))] : []),
-        ];
-      }
-      case "move": {
-        const role = liveRole(ch.handle), was = wasOf(c, role);
-        // While the move waits, the tree row already knows where the role reports now (`from`, else where it stays).
-        const reported = !was ? undefined : was.stamp ? before(was, "reports_to", party) : row?.from ? faceValue(row.from) : party(role?.reports_to, was);
-        return [
-          ...(ch.reports_to ? [valueRow(c, "reports_to", "Reports to", row?.parent ? faceValue(row.parent) : text(ch.reports_to.trim().toLowerCase() === "me" ? "you" : ch.reports_to), reported)] : []),
-          ...areaRows(c, ch.handle, ch.scope_add, ch.scope_remove),
-        ];
-      }
-      case "scope": return areaRows(c, ch.handle, ch.add, ch.remove);
-      case "trust": {
-        const starts = (trust: unknown) => text(autonomyOn(typeof trust === "string" ? trust : null) ? "on its own, inside its area" : "when you start it");
-        return [valueRow(c, "starts_work", "Starts work", starts(ch.trust), before(wasOf(c, liveRole(ch.handle)), "trust", starts))];
-      }
-      case "routine": return [setRow("routine", "Runs", { kind: "text", text: ch.title.trim(), tail: `, ${everyWords(ch.every)}` })];
-      // A retirement: the role, struck, with nothing after it (the sentence says where its sessions go).
-      case "retire": return [{ key: "role", label: "Role", op: "clear", before: faceValue(roleFace(ch.handle, row ? [row] : [])), after: null }];
-      case "adopt": {
-        const role = liveRole(ch.handle), was = wasOf(c, role);
-        const seated = !was ? undefined : was.stamp
-          ? before(was, "standing_session", (raw) => wordsValue((raw as { short_id?: string } | null)?.short_id, NONE.unset))
-          : wordsValue(role?.standing?.conversation_id ? role.sessions.find((s) => s._id === role.standing!.conversation_id)?.title ?? role.standing.short_id : null, NONE.unset);
-        return [valueRow(c, "session", "Session", text(row?.node.name ?? ch.conversation), seated)];
-      }
-      case "authority": {
-        const may = (raw: unknown) => (Array.isArray(raw) && raw.length ? text(authorityWords(raw as OrgAuthorityGrant[])) : none(NONE.nothing));
-        return [valueRow(c, "may", "May", may(ch.authority), before(wasOf(c, liveRole(ch.handle)), "authority", may), ch.authority.length === 0)];
-      }
-      case "hire": return [setRow("hired", "Hired from", text(`${ch.template} (${ch.version})`)), setRow("leads", "Leads", namesValue([projectName(ch.project)], NONE.project))];
-      case "initiative": {
-        const id = row?.node.id ?? "";
-        const carriers = ch.projects.map(projectName);
-        const carried: FieldValue = carriers.length && hasChildren(id) ? { kind: "names", names: carriers, summary: `${plural(carriers.length, "project")}, through the goals below` } : namesValue(carriers, NONE.project);
-        return [
-          setRow("owner", "Owned by", row?.owner ? faceValue(row.owner) : ch.owner?.trim() ? text(ch.owner) : none(NONE.nobody)),
-          // The purpose is read through the goals under it; every other goal says when it has no number.
-          ...(ch.metrics?.length || id !== purposeId ? [setRow("metrics", "Measured by", measuresValue(ch.metrics, NONE.number))] : []),
-          setRow("projects", "Carried by", carried),
-          ...(ch.description?.trim() ? [setRow("says", "Says", text(ch.description))] : []),
-          ...(ch.why?.trim() ? [setRow("why", "Why it matters", text(ch.why))] : []),
-          ...(ch.done_when?.trim() ? [setRow("done_when", "Done when", text(ch.done_when))] : []),
-          ...(ch.milestones?.length ? [setRow("milestones", "Milestones", namesValue(ch.milestones.map((m) => m.title.trim()), NONE.nothing))] : []),
-          ...(ch.target_date ? [setRow("due", "Due", text(new Date(ch.target_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })))] : []),
-        ];
-      }
-      case "initiative_shape": {
-        const was = wasOf(c, row ? liveGoal(row.node.id) : null);
-        const parentId = row?.parent?.kind === "goal" ? row.parent.id : null;
-        // What an accept added to the record is the stamp's to say; while it waits, the change's own entries.
-        const added = (list: "milestones" | "questions" | "decisions", proposed: readonly string[] | undefined) => was?.stamp ? was.stamp.added?.[list] ?? [] : proposed ?? [];
-        const entries = (key: "milestones" | "questions" | "decisions", label: string, proposed: readonly string[] | undefined) => listRows(c, key, label, NONE.nothing, added(key, proposed).map((x) => x.trim()).filter(Boolean), [], undefined);
-        return [
-          ...(ch.parent !== undefined ? [valueRow(c, "parent", "Sits", ch.parent === null ? none(NONE.top) : text(under(parentId, row?.parent?.name ?? ch.parent)), before(was, "parent_initiative_id", sitsValue))] : []),
-          ...(ch.metrics !== undefined ? [valueRow(c, "metrics", "Measured by", measuresValue(ch.metrics, NONE.nothing), before(was, "metrics", (raw) => measuresValue(raw, NONE.nothing)), ch.metrics.length === 0)] : []),
-          ...(ch.why !== undefined ? [valueRow(c, "why", "Why it matters", wordsValue(ch.why, NONE.unset), before(was, "why", (raw) => wordsValue(raw, NONE.unset)), !ch.why.trim())] : []),
-          ...(ch.done_when !== undefined ? [valueRow(c, "done_when", "Done when", wordsValue(ch.done_when, NONE.unset), before(was, "done_when", (raw) => wordsValue(raw, NONE.unset)), !ch.done_when.trim())] : []),
-          ...entries("milestones", "Milestones", ch.milestones?.map((m) => m.title)),
-          ...entries("questions", "Open questions", ch.questions),
-          ...entries("decisions", "Decisions", ch.decisions),
-        ];
-      }
-      case "initiative_projects": {
-        const was = wasOf(c, row ? liveGoal(row.node.id) : null);
-        const titles = (raw: unknown, w: Was) => strings(raw).map((id) => titleOfProject(id, w)).filter((t): t is string => !!t);
-        const raw = was?.get("project_ids");
-        const whole = was?.stamp && was.after("project_ids") !== undefined ? titles(was.after("project_ids"), was) : undefined;
-        return listRows(c, "projects", "Carried by", NONE.project, ch.projects.map(projectName), [], !was || raw === undefined ? undefined : titles(raw, was), whole);
-      }
-      case "initiative_owner": {
-        const was = wasOf(c, row ? liveGoal(row.node.id) : null);
-        return [valueRow(c, "owner", "Owned by", row?.owner ? faceValue(row.owner) : ch.owner.trim() ? text(ch.owner) : none(NONE.nobody), before(was, "owner", party), !ch.owner.trim())];
-      }
-      case "projects": return ch.changes.map((x): Row => x.op === "create"
-        ? setRow("new", "Project", text(x.title))
-        : { key: "folds", label: "Folds into", op: "change", before: text(projectName(x.from)), after: text(projectName(x.into)) });
-      case "upgrade": return [setRow("version", "Version", text(`${ch.template} ${ch.to}`))];
-      // A limit is never a row (S23.2).
-      default: return [];
+      case "project_meta": case "project_status": { const p = liveProject(ch.project); return p && projectBefore(p); }
+      case "plan_status": case "file": { const p = livePlan(ch.plan); return p && planBefore(p); }
+      case "task_status": { const t = liveTask(ch.task); return t && { status: t.status }; }
+      case "move": case "scope": case "trust": case "adopt": case "authority": case "charter_edit": { const r = liveRole(ch.handle); return r && roleBefore(r); }
+      case "initiative_shape": case "initiative_projects": case "initiative_owner": { const row = rowOf.get(c._id); const g = row ? liveGoal(row.node.id) : undefined; return g && goalBefore(g); }
+      default: return undefined;
     }
+  };
+
+  // ---- faces beside a value.
+  const faceOfRef = (ref: FieldRef, c: OrgProposalChange): ProposalTreeFace | null => {
+    const row = rowOf.get(c._id);
+    switch (ref.kind) {
+      case "role": {
+        const role = tree?.roles.find((r) => r._id === ref.id || bare(r.handle) === bare(ref.id));
+        if (role && tree) return partyFace(tree, { kind: "role", role_id: role._id });
+        // A role this proposal creates: the tree row already knows its face.
+        const parent = row?.parent;
+        return parent?.kind === "role" && bare(parent.handle) === bare(ref.id) ? parent : null;
+      }
+      // A person by id, "me" (the reader), or the name a change was written with ("Cam").
+      case "person": {
+        if (!tree) return null;
+        const person = tree.people.find((p) => (ref.id === "me" ? p.is_me : p.user_id === ref.id || p.name.trim().toLowerCase() === ref.id.trim().toLowerCase()));
+        return person ? partyFace(tree, { kind: "user", user_id: person.user_id }) : null;
+      }
+      case "goal": { const g = goals.find((x) => refMatches(ref.id, x)); return g ? { kind: "goal", id: g.id, name: g.title } : null; }
+      case "project": { const p = refResolves(ref.id, projects); return p ? { kind: "record", record: "project", id: p.id, name: p.title } : null; }
+      case "plan": { const p = plans.find((x) => refMatches(ref.id, x)); return p ? { kind: "record", record: "plan", id: p.id, name: p.title } : null; }
+      default: return null;
+    }
+  };
+
+  // ---- the sentence's context: what to call the subject, and what a priority was.
+  const ctxFor = (c: OrgProposalChange, kind: SubjectKind, title: string, how: "named" | "this"): ChangeWordsCtx => {
+    const ch = edited(c), row = rowOf.get(c._id);
+    const purpose = ch.kind === "initiative" && !!row && row.node.id === purposeId;
+    const subject = how === "this" ? THIS[kind] : NOUN[ch.kind] && !purpose ? `${NOUN[ch.kind]} ${title}` : title;
+    const priority = ch.kind === "project_meta" ? wasOf(c, recordOf(c))?.priority : undefined;
+    return { names, subject, ...(purpose ? { purpose: true } : {}), ...(priority !== undefined ? { was: { priority: (priority as OrgPriority | null) ?? null } } : {}) };
   };
 
   // ---- grouping.
   const considered = opts.seqs ? all.filter((c) => opts.seqs!.has(c.seq)) : all;
   const nested = syncGroupSummary(considered).nested;
-  const carriedBy = new Map(Object.entries(nested));
   const carriedIds = new Set(Object.values(nested).flat().map((c) => c._id));
   type Group = { key: string; changes: OrgProposalChange[]; riders: OrgProposalChange[]; carried: OrgProposalChange[] };
   const groups = new Map<string, Group>();
@@ -606,24 +477,10 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
     group.carried.push(...(nested[c._id] ?? []));
   }
 
-  // ---- sentences.
-  const wordsFor = (c: OrgProposalChange, kind: SubjectKind, title: string, how: "named" | "this" | "it"): ChangeWords => {
-    const ch = edited(c), row = rowOf.get(c._id);
-    const purpose = ch.kind === "initiative" && !!row && row.node.id === purposeId;
-    // The subject is always handed over, so the sentence names it exactly as the card titles it.
-    const subject = how === "it" ? "it" : how === "this" ? THIS[kind] : NOUN[ch.kind] && !purpose ? `${NOUN[ch.kind]} ${title}` : title;
-    const priority = ch.kind === "project_meta" ? wasOf(c, liveProject(ch.project))?.get("priority") : undefined;
-    return { names, brief: true, subject, ...(purpose ? { purpose: true } : {}), ...(priority !== undefined ? { was: { priority: (priority as OrgPriority | null) ?? null } } : {}) };
-  };
   const sentenceOf = (group: Group, kind: SubjectKind, title: string, isNew: boolean, how: "named" | "this"): string => {
     const [first, ...rest] = group.changes;
     if (!first) return quietChangeSentence(edited(group.riders[0]), how === "this" ? capital(THIS[kind]) : title);
-    const clauses = [
-      ...changeClauses(edited(first), wordsFor(first, kind, title, how)),
-      // A card that creates its subject says so and stops: what rides along is in the rows.
-      ...(isNew ? [] : rest.flatMap((c) => changeClauses(edited(c), wordsFor(c, kind, title, "it")))),
-    ];
-    return fullStop(capital(clauses.length <= 3 ? andList(clauses) : `${clauses[0]} and ${clauses.length - 1} more changes`));
+    return subjectWords(edited(first), rest.map(edited), { ...ctxFor(first, kind, title, how), isNew }).sentence;
   };
 
   // ---- cards.
@@ -651,16 +508,15 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
         return { kind: "unknown", id: first._id, name };
       }
       case "task": {
-        // A change that names its task only by ref reads by the task's title when the store has it.
         const node = rows[0]?.node ?? { kind: "record" as const, record: "task" as const, id: (ch as { task: string }).task, name: (ch as { task: string }).task };
         return node.name === node.id ? { ...node, name: liveTask(node.id)?.title ?? node.name } : node;
       }
       default: return rows[0]?.node ?? { kind: "unknown", id: group.key, name: group.key };
     }
   };
-  const sitsOf = (group: Group, kind: SubjectKind, rows: FieldRow[]): string | null => {
+  const sitsOf = (group: Group, kind: SubjectKind, rows: ChangeField[]): string | null => {
     const first = group.changes[0] ?? group.riders[0], row = rowOf.get(first._id);
-    if (kind === "goal") return rows.some((r) => r.key === "parent") || row?.parent?.kind !== "goal" ? null : capital(under(row.parent.id, row.parent.name));
+    if (kind === "goal") return rows.some((r) => r.key === "parent") || row?.parent?.kind !== "goal" ? null : capital(`under ${row.parent.id === purposeId ? PURPOSE : row.parent.name}`);
     if (kind !== "role" || rows.some((r) => r.key === "reports_to")) return null;
     const role = liveRole((edited(first) as { handle: string }).handle);
     const parent = row?.kind === "role" ? row.parent : role && tree ? partyFace(tree, role.reports_to) : null;
@@ -677,13 +533,24 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
     const face = faceOf(group, kind);
     const title = face.name;
     const isNew = !!drawn[0] && creates(drawn[0]);
-    // What landing a change added beyond its own record (a goal's sources) is one names row after the change's own.
-    const sourcesRow = (c: OrgProposalChange): Row[] => {
-      const sources = c.status === "applied" ? [...new Set(extraStamps(c).flatMap((r) => (r.added?.sources ?? []).map((s) => s.trim()).filter(Boolean)))] : [];
-      return sources.length ? [{ key: "sources", label: "Sources added", op: "add", before: null, after: namesValue(sources, NONE.nothing) }] : [];
-    };
-    const rows = drawn.flatMap((c) => [...rowsFor(c), ...sourcesRow(c)].map((r): FieldRow => ({ ...r, seq: c.seq, status: c.status })));
-    const reply = members.map(changeReply).filter((r): r is OrgChangeReply => !!r).sort((a, b) => b.at - a.at)[0] ?? null;
+    const faces: Record<string, ProposalTreeFace> = {};
+    const rows = drawn.flatMap((c): ChangeField[] => {
+      const ch = edited(c);
+      const fields = changeWords(ch, { ...ctxFor(c, kind, title, "named"), names: fieldNames(c), before: wasOf(c, recordOf(c)), status: c.status, seq: c.seq }).fields;
+      for (const f of fields) for (const side of ["before", "after"] as const) {
+        const ref = f[side]?.ref;
+        const fc = ref && faceOfRef(ref, c);
+        if (fc) faces[`${c.seq}:${f.key}:${side}`] = fc;
+      }
+      // A plan close names the tasks it closes with it; what landing a change added beyond its own record (a goal's sources) is one list after the change's own.
+      const closes = (nested[c._id] ?? []).map((t) => { const task = edited(t); return task.kind === "task_status" ? task.title?.trim() || liveTask(task.task)?.title || task.task : ""; }).filter(Boolean);
+      const sources = c.status === "applied" ? [...new Set(extraStamps(c).flatMap((r) => strings(r.added?.sources)))] : [];
+      return [
+        ...fields,
+        ...(closes.length ? [{ key: "carried", label: "Closes with it", kind: "list" as const, op: "set" as const, before: null, after: { text: andList(closes), items: closes }, seq: c.seq }] : []),
+        ...(sources.length ? [{ key: "sources", label: "Sources added", kind: "list" as const, op: "add" as const, before: null, after: { text: andList(sources), items: sources }, seq: c.seq }] : []),
+      ];
+    });
     const sentence = sentenceOf(group, kind, title, isNew, "named");
     const at = title ? sentence.indexOf(title) : -1;
     const leadRow = drawn[0] ? rowOf.get(drawn[0]._id) : undefined;
@@ -709,6 +576,7 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
       subjectSpan: at >= 0 ? [at, at + title.length] : null,
       sentenceThis: sentenceOf(group, kind, title, isNew, "this"),
       rows,
+      faces,
       reasons: dedupe(drawn.map((c) => c.rationale?.trim() ?? "").filter(Boolean), (r) => r.toLowerCase()),
       // A record's `reason` ("shipped on main") is what the agent saw, not why: it reads as a source.
       evidence: dedupe(drawn.flatMap((c) => {
@@ -717,9 +585,12 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
       }), (e) => `${e.label}\u0001${e.href ?? ""}`),
       sits: sitsOf(group, kind, rows),
       failed: members.filter((c) => c.status === "failed").map((c) => ({ seq: c.seq, note: c.applied_note?.trim() ?? "" })),
-      reply,
+      reply: latestReply(members),
       depends: dedupe(drawn.map((c) => c.depends?.trim() ?? "").filter(Boolean), (d) => d),
-      revisions: drawn.filter((c) => c.revision).map((c) => ({ seq: c.seq, word: revisionWord(c.revision!), note: c.revision!.note, moves: amendedMoves(c) })),
+      revisions: drawn.filter((c) => c.revision).map((c) => ({
+        seq: c.seq, word: revisionWord(c.revision!), note: c.revision!.note,
+        fields: c.revision!.kind === "amended" && c.revision!.before ? fieldMoves(c.revision!.before, edited(c), { names, seq: c.seq }) : [],
+      })),
       parentKey: kind === "goal" ? (leadRow?.parent?.kind === "goal" ? `goal:${leadRow.parent.id}` : null) : kind === "role" && reportsTo?.kind === "role" ? `role:${bare(reportsTo.handle)}` : null,
       rank: kind === "project" ? PRIORITY_RANK[priority?.priority ?? (liveProject(face.id)?.priority as string)] ?? 9 : 0,
     };

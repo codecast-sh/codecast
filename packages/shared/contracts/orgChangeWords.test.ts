@@ -328,9 +328,8 @@ describe("recordTotalsWords and proposalTotals", () => {
       ["Infrastructure", "1 plan done, 6 tasks done and 2 tasks reopened"],
       ["Counterparty pitches", "1 plan done and 5 tasks done"],
       ["Networks", "1 plan reopened and 4 tasks reopened"],
-      // A plan with no project is its own group (orgRecordGroups), never loose.
-      ["pl-920", "1 plan abandoned"],
-      ["pl-921", "1 plan abandoned"],
+      // Plans with no project and no tasks under them fold into one group (orgRecordGroups), never loose.
+      ["2 plans", "2 plans abandoned"],
       ["loose", "2 tasks done, 3 tasks reopened and 1 task to the backlog"],
     ]);
     expect(recordTotalsWords(groups.flatMap((g) => g.totals), { nouns: false })).toBe("44 done, 15 reopened, 3 abandoned, 1 dropped and 1 to the backlog");

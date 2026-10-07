@@ -99,7 +99,8 @@ export type OrgRole = {
   charter_doc_id?: string;
   brief_doc_id?: string;
   trust?: "understand" | "decide" | "direct";
-  caps?: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
+  /** cards: the line's admission slots (LE6), open cards per answering person. */
+  caps?: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number; cards?: number };
   counters?: { day: string; hands: number; wakes: number; tokens: number };
   coalesce_ms?: number;
   review_backend?: string;

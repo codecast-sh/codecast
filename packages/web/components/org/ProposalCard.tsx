@@ -1,36 +1,28 @@
 "use client";
 // The body of a proposal card in a conversation (docs/architecture/org-staffing.md
 // S24, S39): the head of people writes `op-N` on its own line and the message
-// draws the proposal live as a ledger: the letter, then one entry per subject
-// (a plain sentence, the fields it moves with what was there before, the
-// reason, Approve, Reject and Reply), then a closing row with Chart, Approve
-// the rest, Reply and, once anything is answered, Send. The frame is the
-// shared object card (EntityObjectCard); these are the pieces it composes.
+// draws the proposal live: the letter's lead, a totals line, then one entry
+// per subject (or one row per record group), then the foot with Map and
+// Approve the rest. The frame is the shared object card (EntityObjectCard);
+// these are the pieces it composes.
 //
 // Store-fed like the org page: the row and its changes come from the
 // orgProposals and orgProposalChanges collections (useEntityResolution mounts
 // the feeder), the live records a before is read from through useSubjectLive.
 // An answer goes into this conversation's pending batch (the composer bridge
 // names it) and the send applies it; nothing is decided on a press.
-import React, { useMemo } from "react";
-import { Check } from "lucide-react";
+import React, { useMemo, useRef, useState } from "react";
 import { stripMarkdown } from "@codecast/shared/contracts/plainText";
+import { useOverflows } from "../../hooks/useOverflows";
 import { cn } from "../../lib/utils";
 import { ProposalAuthorPill } from "./ProposalAuthorPill";
-import { GhostTag, StatusPill } from "./ghostChrome";
-import { CHIP_STATUS, GHOST } from "./orgMeta";
-import { CHANGE_STATUS_META } from "./staffingModel";
 import { letterParts } from "./staffingAsks";
+import { openOrgChart } from "./orgChartLink";
+import { useOrgHover } from "./proposalContexts";
 import { proposalProgressWords } from "./proposalSubjects";
-import type { ProposalTreeRow } from "./proposalTree";
 import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
-import type { OrgTree } from "./orgTypes";
-import { Face, LEDGER_INKS } from "./ProposalSubjectCard";
-import { ProposalClosingRow, ProposalLoading, ProposalSubjectList, useProposalCards } from "./ProposalLedger";
-
-// The faces are drawn where the ledger entry lives, so a card never imports
-// this file back; they are exported from here as they always were.
-export { Face };
+import { LEDGER_INKS, LEDGER_STOP, LedgerWord } from "./ProposalSubjectCard";
+import { ProposalEntries, ProposalFoot, ProposalLoading, useProposalBatch, useProposalEntries } from "./ProposalLedger";
 
 // ---------------------------------------------------------------- the meta line
 
@@ -40,15 +32,15 @@ export function ProgressWords({ words }: { words: string }) {
   return <>{parts.map((part, i) => (i % 2 ? <span key={i} className="text-[color:var(--ink-red)]">{part}</span> : part))}</>;
 }
 
-/** Under the title: what waits or what happened, counted in the cards a
- *  person sees, and who proposed it. "9 to decide"; mid way "5 of 9 to decide
- *  · 2 approved, 1 rejected, 1 failed"; "7 approved, 2 rejected" once nothing
- *  waits. */
+/** Under the title: what waits or what happened, and who proposed it. Cards
+ *  are counted for a structure or goals proposal ("2 to decide", "1 of 2 to
+ *  decide · 1 approved", "2 approved"); records count the records ("64
+ *  records to decide", "62 applied, 2 rejected"). Before the changes land,
+ *  the row's own count. */
 export function ProposalMeta({ proposal, changes }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[] }) {
-  const cards = useProposalCards(proposal, changes);
+  const entries = useProposalEntries(proposal, changes);
   const total = proposal.counts?.total ?? 0;
-  // Before the changes land there is nothing to count but what the row says.
-  const words = proposal.status === "withdrawn" ? "withdrawn" : proposalProgressWords(cards) || (total ? `${total} ${total === 1 ? "change" : "changes"}` : "proposal");
+  const words = proposal.status === "withdrawn" ? "withdrawn" : proposalProgressWords(entries.cards, entries.records ? changes : undefined) || (total ? `${total} ${total === 1 ? "change" : "changes"}` : "proposal");
   const [count, decided] = words.split(" · ");
   return (
     <div className={cn("not-prose mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-snug text-[color:var(--ink-quiet)]", LEDGER_INKS)} data-proposal-meta={words}>
@@ -63,95 +55,80 @@ export function ProposalMeta({ proposal, changes }: { proposal: OrgProposalListR
       <span className="inline-flex min-w-0 items-center gap-1">
         {decided && <span aria-hidden className="mr-1">·</span>}
         <span>from</span>
-        <ProposalAuthorPill author={proposal.author} size="sm" />
+        <ProposalAuthorPill author={proposal.author} size="sm" withHandle={false} />
       </span>
     </div>
   );
 }
 
-// ---------------------------------------------------------------- the tree's node line
+// ---------------------------------------------------------------- the letter
 
-const tagStatus = (status: ProposalTreeRow["status"]) => (status === "failed" ? "failed" : status === "accepted" || status === "applied" ? status : status === "skipped" ? "skipped" : "proposed");
+const LETTER = "max-w-[70ch] text-[13.5px] leading-[1.6] text-[color:var(--sol-text-secondary)]";
 
-/** One node as the tree draws it: the face, the name in the ghost's frame
- *  while proposed, the row's tag, and the delta chip when the change is not
- *  an edge. A retire is hatched and struck; a record being closed is struck;
- *  a skipped row is struck and dim. */
-export function NodeLine({ row }: { row: ProposalTreeRow }) {
-  const status = tagStatus(row.status);
-  const proposed = row.status === "proposed" || row.status === "failed";
-  const retire = row.kind === "retire";
-  const struck = retire || !!row.closes || row.status === "skipped";
-  // A goal's unresolved owner is drawn on the owner, not on the goal.
-  const nodeUnresolved = row.unresolved && !row.owner;
-  // A goal row is a line of text under its parent, not a ghost card: the
-  // flag carries the proposed colour, so a tree of goals is not a wall of dashes.
-  const goal = row.node.kind === "goal";
-  const m = nodeUnresolved ? CHIP_STATUS.failed : CHIP_STATUS[row.status];
-  const name = row.node.name;
+/** The letter's lead, clamped to four lines (two on a tile), and "Read the
+ *  rest" when more follows or the lead overflows: pressed, the whole letter
+ *  reads in place and the frame never toggles. An open frame shows the whole
+ *  letter with no word. */
+function LetterLead({ proposal, compact, open, summary }: { proposal: OrgProposalListRow; compact?: boolean; open?: boolean; summary?: React.ReactNode }) {
+  const parts = useMemo(() => letterParts(proposal.summary_md), [proposal.summary_md]);
+  const lead = useMemo(() => stripMarkdown(parts.lead, { keepNewlines: true }), [parts.lead]);
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const lines = compact ? 2 : 4;
+  // 13.5px at 1.6 is about 21.6px a line; a pixel of slack for rounding.
+  const overflows = useOverflows(ref, lines * 22 + 1, [lead]);
+  if (!lead) return null;
+  const whole = summary ?? <p className="m-0 whitespace-pre-line">{stripMarkdown(proposal.summary_md, { keepNewlines: true })}</p>;
+  if (open) return <div className={cn("mb-3.5 mt-0.5", LETTER)} data-proposal-letter>{whole}</div>;
+  const more = !compact && (!!parts.rest.trim() || overflows);
   return (
-    <span className="flex min-w-0 items-center gap-1.5 [&>*:not(:first-child)]:shrink-0">
-      <span
-        className="inline-flex min-w-0 shrink items-center gap-1.5 rounded-md py-[2px] pl-[3px] pr-2"
-        style={{ border: proposed && !retire && !goal ? m.border : "1.5px solid transparent", background: retire ? GHOST.hatch : proposed && !goal ? GHOST.fill : "transparent" }}
-        title={row.line}
-        data-tree-node={row.node.kind}
-        data-tree-node-id={row.node.id}
-      >
-        <Face face={row.node} dim={proposed && !retire} />
-        <span className={cn("truncate text-[12px] font-medium leading-tight", struck && "line-through")} style={{ color: struck ? "var(--sol-text-dim)" : "var(--sol-text)", opacity: proposed && !retire && !goal ? 0.85 : 1 }}>{name}</span>
-        {row.node.kind === "role" && <span className="truncate text-[10px] text-sol-text-dim">@{row.node.handle}</span>}
-        {row.node.kind === "session" && <span className="truncate font-mono text-[10px] text-sol-text-dim">{row.node.short_id}</span>}
-        {row.node.kind === "goal" && row.node.short_id && <span className="truncate font-mono text-[10px] text-sol-text-dim">{row.node.short_id}</span>}
-      </span>
-      <GhostTag quiet={goal} label={nodeUnresolved ? "unknown" : row.tag} status={nodeUnresolved ? "failed" : status} tone={status !== "proposed" ? undefined : retire ? "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" : row.closes ? (row.closes === "done" ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))") : undefined} />
-      {row.status !== "proposed" && row.status !== "applied" && row.status !== "accepted" && <StatusPill status={row.status} />}
-      {(row.status === "applied" || row.status === "accepted") && (
-        <span className="inline-flex items-center gap-0.5 text-[10px] font-medium" style={{ color: CHANGE_STATUS_META[row.status].color }} data-tree-status={row.status}>
-          <Check className="h-3 w-3" /> {row.status}
+    <div className={cn("mt-0.5", compact ? "mb-2" : "mb-3", LETTER)} data-proposal-letter>
+      {expanded ? whole : <p ref={ref} className={cn("m-0 whitespace-pre-line", lines === 2 ? "line-clamp-2" : "line-clamp-4")}>{lead}</p>}
+      {(more || expanded) && (
+        <span className="block" {...LEDGER_STOP}>
+          <LedgerWord className="-ml-2 mt-0.5 h-6 text-[11px]" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded} data-letter-more={expanded ? "open" : "closed"}>{expanded ? "Read less" : "Read the rest"}</LedgerWord>
         </span>
       )}
-      {row.owner && (
-        <span className="inline-flex min-w-0 !shrink items-center gap-1 text-[10.5px] text-sol-text-dim" data-tree-owner={row.owner.id}>
-          <Face face={row.owner} size={14} />
-          <span className="truncate" style={row.unresolved ? { color: CHIP_STATUS.failed.color } : undefined}>{row.owner.name}</span>
-        </span>
-      )}
-      {row.chip && <span className="min-w-0 !shrink truncate text-[11px]" style={{ color: proposed ? GHOST.color : "var(--sol-text-muted)" }} data-tree-chip>{row.chip}</span>}
-    </span>
+    </div>
   );
 }
 
-// ---------------------------------------------------------------- the bodies
+// ---------------------------------------------------------------- the body
 
-/** The letter, the entries on hairlines, the closing row. */
-function LedgerBody({ proposal, changes, letter, limit, compact }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[]; letter: React.ReactNode; limit?: number; compact?: boolean }) {
-  const cards = useProposalCards(proposal, changes);
+/**
+ * The card's body: the letter's lead, the totals line, the entries, the
+ * foot. `compact` is a tile sharing a row with other cards: the lead and the
+ * totals only. `open` is the expanded frame: the whole letter. `onMap`
+ * opens the map beside the conversation; absent, the card opens the org
+ * screen itself, unless it already sits on it (the screen feeds the hover
+ * channel, so a card that can light the map needs no Map word).
+ */
+export function ProposalBody({ proposal, changes, open, compact, summary, onMap }: {
+  proposal: OrgProposalListRow;
+  changes: readonly OrgProposalChange[];
+  open?: boolean;
+  compact?: boolean;
+  /** The whole letter as the frame renders markdown; the stripped text stands in without it. */
+  summary?: React.ReactNode;
+  onMap?: () => void;
+}) {
+  const entries = useProposalEntries(proposal, changes);
+  const batch = useProposalBatch(proposal);
+  const onScreen = useOrgHover() !== null;
+  const map = onMap ?? (onScreen ? undefined : () => openOrgChart({ proposal: proposal.short_id }));
+  const readonly = !batch.key || proposal.status !== "open";
+  // One record group carries the proposal's totals itself.
+  const totals = entries.records && entries.groups.length === 1 ? null : entries.totals.line;
   return (
-    <div className={cn("not-prose min-w-0", LEDGER_INKS)} data-proposal-ledger={cards.length}>
-      {letter}
+    <div className={cn("not-prose min-w-0", LEDGER_INKS)} data-proposal-card={proposal.short_id} data-proposal-work={entries.work ?? undefined} data-proposal-readonly={readonly || undefined}>
+      <LetterLead proposal={proposal} compact={compact} open={open} summary={summary} />
       {changes.length === 0 ? <ProposalLoading /> : (
         <>
-          <ProposalSubjectList proposal={proposal} cards={cards} limit={limit} variant={compact ? "row" : "full"} />
-          <ProposalClosingRow proposal={proposal} cards={cards} />
+          {totals && <p className="m-0 mb-1.5 text-[12.5px] leading-[18px] text-[color:var(--sol-text-muted)] [text-wrap:pretty]" data-proposal-totals>{totals}</p>}
+          {!compact && <ProposalEntries proposal={proposal} changes={changes} entries={entries} batch={batch} />}
+          {!compact && <ProposalFoot proposal={proposal} entries={entries} batch={batch} onMap={map} />}
         </>
       )}
     </div>
   );
-}
-
-/** The collapsed card: the letter's lead, the first twelve entries, the
- *  closing row. Sharing a row with other cards it is a tile: three one line
- *  entries. */
-export function ProposalSnippet({ proposal, changes, compact }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[]; tree?: OrgTree | null; href?: string; compact: boolean }) {
-  const lead = useMemo(() => stripMarkdown(letterParts(proposal.summary_md).lead, { keepNewlines: true }), [proposal.summary_md]);
-  const letter = lead ? <p className={cn("m-0 mt-0.5 max-w-[70ch] whitespace-pre-line text-[color:var(--sol-text-secondary)]", compact ? "mb-2 line-clamp-2 text-[12px] leading-[1.5]" : "mb-3.5 line-clamp-4 text-[13px] leading-[1.6]")} data-proposal-letter>{lead}</p> : null;
-  return <LedgerBody proposal={proposal} changes={changes} letter={letter} limit={compact ? 3 : 12} compact={compact} />;
-}
-
-/** The expanded card: the whole letter and every entry. It differs from the
- *  collapsed one in nothing else. */
-export function ProposalDetail({ proposal, changes, summary }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[]; tree?: OrgTree | null; href?: string; summary: React.ReactNode }) {
-  const letter = summary ? <div className="mb-3.5 mt-0.5 max-w-[70ch] leading-[1.6] text-[color:var(--sol-text-secondary)]" data-proposal-letter>{summary}</div> : null;
-  return <LedgerBody proposal={proposal} changes={changes} letter={letter} />;
 }

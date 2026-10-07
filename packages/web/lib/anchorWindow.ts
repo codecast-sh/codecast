@@ -9,12 +9,12 @@ export type WindowedConversation = { messages?: Array<{ timestamp: number; role?
 /** The conversation from `since` on. `reachedStart` is true once a loaded
  *  message is older than the cut: everything the window can hold is here, so
  *  the view stops asking for older pages. The same object back when nothing
- *  is cut, so the view's memo holds. */
+ *  is cut, so the view's memo holds; a cut past the newest loaded row cuts
+ *  nothing either, and the view may still page older. */
 export function windowConversationSince<T extends WindowedConversation>(conversation: T | null | undefined, since: number | undefined): { conversation: T; reachedStart: boolean } | null {
   if (!conversation) return null;
   const messages = conversation.messages ?? [];
-  const cut = since === undefined ? 0 : messages.findIndex((m) => m.timestamp >= since);
-  const dropped = cut === -1 ? messages.length : cut;
+  const dropped = since === undefined ? 0 : Math.max(0, messages.findIndex((m) => m.timestamp >= since));
   if (dropped === 0) return { conversation, reachedStart: false };
   return { conversation: { ...conversation, messages: messages.slice(dropped), loaded_start_index: (conversation.loaded_start_index ?? 0) + dropped }, reachedStart: true };
 }

@@ -1,33 +1,31 @@
 "use client";
 // A proposal's ledger as the store holds it (docs/architecture/org-staffing.md
-// S39): the cards of one proposal with their answers in the composer's
-// pending batch, and the closing row under them. An answer fires nothing: it
-// waits in the batch the quote UI uses (`reviewComments[batchKey]`), and the
-// composer's send applies the approvals and tells the agent in words. The
-// conversation's card and the single change card (`op-55#3`) draw from here;
-// a host with no composer in reach hands the list a `batchKey` (the
-// proposal's thread, else `proposal:<id>`) and its own `onSend`.
+// S39): the entries of one proposal (subject cards, or group rows for a
+// records proposal) with their answers in the composer's pending batch, and
+// the foot under them. An answer fires nothing: it waits in the batch the
+// quote UI uses (`reviewComments[conversationId]`), and the composer's send
+// applies the approvals and tells the agent in words. The conversation's
+// card draws from here.
 //
 // Not named after its main export: `ProposalSubjects.tsx` and the model's
 // `proposalSubjects.ts` are one path on a disk that ignores case, and a
 // resolver then picks between them by extension.
-import React, { useMemo, useState } from "react";
-import Link from "next/link";
+import React, { useEffect, useMemo, useState } from "react";
 import { Check } from "lucide-react";
-import { isOrgChangeDecidable, ORG_REPLY_WORDS } from "@codecast/shared/contracts/orgProposal";
-import { entityRoute, proposalChangeRefId } from "../../lib/entityLinks";
+import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
+import { isOrgChangeDecidable, ORG_REPLY_WORDS, orgProposalWork, type OrgAskNames } from "@codecast/shared/contracts/orgProposal";
 import type { PendingComment, PendingProposalAnswer } from "../../lib/quoteFormat";
 import { answerProposalCard, pendingAnswerOf, proposalAnswersOf, type ProposalCardRef } from "../../lib/reviewActions";
 import { cn } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { useReviewComposer } from "../reviewContext";
-import { openOrgChart } from "./orgChartLink";
-import { OrgButton } from "./OrgButton";
 import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
 import { TakeoverEdit } from "./TakeoverEdit";
 import { useSubjectLive } from "./proposalHooks";
-import { placeWords, proposalProgressWords, proposalSubjects, subjectCounts, subjectOfSeq, type SubjectCard, type SubjectLive, type SubjectOptions } from "./proposalSubjects";
-import { LEDGER_HAIR, LEDGER_INKS, LEDGER_LINK, LEDGER_STOP, LedgerClosingRow, LedgerReplyField, LedgerWord, LedgerYou, ProposalSubjectCard, type SubjectAnswer } from "./ProposalSubjectCard";
+import { proposalProgressWords, proposalSubjects, recordGroupCards, type RecordGroupCard, type SubjectCard, type SubjectLive, type SubjectOptions } from "./proposalSubjects";
+import { askNames } from "./staffingAsks";
+import { RecordGroupRow } from "./RecordGroupRow";
+import { LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerClosingRow, LedgerWord, ProposalSubjectCard, type SubjectAnswer } from "./ProposalSubjectCard";
 
 type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply">;
 /** What a ref of the batch names a proposal by. */
@@ -44,11 +42,35 @@ function useCardInputs(proposal: Proposal | undefined, changes: readonly OrgProp
   return { live, opts };
 }
 
-/** One proposal's cards from the store: what the ledger draws, and what the
- *  frame's meta line and closing row count. */
-export function useProposalCards(proposal: Proposal | undefined, changes: readonly OrgProposalChange[]): SubjectCard[] {
+/** The proposal's entries as the card draws them: group rows for a records
+ *  proposal of two or more changes, subject cards for everything else; the
+ *  names the totals and groups are titled with; and the totals. */
+export type ProposalEntryModel = {
+  work: ReturnType<typeof orgProposalWork>;
+  /** Two or more record changes: the body is group rows. */
+  records: boolean;
+  cards: SubjectCard[];
+  groups: RecordGroupCard[];
+  names: OrgAskNames | undefined;
+  live: SubjectLive | null;
+  totals: { count: string; line: string | null };
+};
+
+export function useProposalEntries(proposal: Proposal | undefined, changes: readonly OrgProposalChange[]): ProposalEntryModel {
   const { live, opts } = useCardInputs(proposal, changes);
-  return useMemo(() => proposalSubjects(changes, live, opts), [changes, live, opts]);
+  return useMemo(() => {
+    const rows = changes.filter((c) => c.status !== "removed");
+    const work = orgProposalWork(rows);
+    const records = work === "records" && rows.length > 1;
+    const named = (xs: readonly { _id: string; title: string; short_id?: string }[]) => xs.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id }));
+    const names = askNames(live?.tree, live ? { projects: named(live.projects), plans: named(live.plans) } : undefined);
+    return {
+      work, records, names, live,
+      cards: records ? [] : proposalSubjects(changes, live, opts),
+      groups: records ? recordGroupCards(changes, names) : [],
+      totals: proposalTotals(rows, names),
+    };
+  }, [changes, live, opts]);
 }
 
 // ---------------------------------------------------------------- the batch
@@ -56,82 +78,54 @@ export function useProposalCards(proposal: Proposal | undefined, changes: readon
 export type ProposalBatch<K extends string | null = string | null> = { key: K; comments: readonly PendingComment[] | undefined; send?: () => void };
 
 /**
- * Where this proposal's answers collect, and how they go: the key a host
- * passes (its `onSend` sends them), else the conversation whose composer
- * is attached and can send (the bridge's `conversationId`; its `send`
- * presses that composer). With neither there is nowhere for an answer to
- * go, so the key is null and the ledger is read only: team chat drawing a
- * proposal, a guest or a non-owner reading a shared session, a view with no
- * input.
+ * Where this proposal's answers collect: the conversation whose composer is
+ * attached and can send (the bridge's `conversationId`). With none there is
+ * nowhere for an answer to go, so the key is null and the ledger is read
+ * only: team chat drawing a proposal, a guest or a non-owner reading a
+ * shared session, a view with no input.
  */
-export function useProposalBatch(proposal: Proposal, batchKey: string, onSend?: () => void): ProposalBatch<string>;
-export function useProposalBatch(proposal: Proposal, batchKey?: string, onSend?: () => void): ProposalBatch;
-export function useProposalBatch(_proposal: Proposal, batchKey?: string, onSend?: () => void): ProposalBatch {
+export function useProposalBatch(_proposal: Proposal): ProposalBatch {
   const composer = useReviewComposer();
-  const key = batchKey ?? (composer?.canSend && composer.conversationId ? composer.conversationId : null);
+  const key = composer?.canSend && composer.conversationId ? composer.conversationId : null;
   const comments = useInboxStore((s) => (key ? s.reviewComments[key] : undefined));
   // The composer's send goes only with its own batch.
-  const send = onSend ?? (key && composer?.conversationId === key ? composer?.send : undefined);
+  const send = key && composer?.conversationId === key ? composer?.send : undefined;
   return { key, comments, send };
 }
 
 /** A pending item of the batch as the card reads it. */
-export function answerOf(pending: (PendingComment & { proposal: PendingProposalAnswer }) | undefined): SubjectAnswer | null {
+function answerOf(pending: (PendingComment & { proposal: PendingProposalAnswer }) | undefined): SubjectAnswer | null {
   return pending ? { verdict: pending.proposal.verdict, ...(pending.body ? { text: pending.body } : {}), ...(pending.proposal.leave_sessions ? { leave_sessions: true } : {}) } : null;
 }
 
-/** The pending answer of one card, and the handler that puts, replaces or
- *  withdraws it; with no key (nowhere to send) there is no handler, and the
- *  card draws read only. `number` is the ordinal the person sees, for the tray. */
-export function useCardAnswer(proposal: Proposal, key: string, comments: readonly PendingComment[] | undefined, card: SubjectCard, number?: number): { answer: SubjectAnswer | null; onAnswer: (answer: SubjectAnswer | null) => void };
-export function useCardAnswer(proposal: Proposal, key: string | null, comments: readonly PendingComment[] | undefined, card: SubjectCard, number?: number): { answer: SubjectAnswer | null; onAnswer?: (answer: SubjectAnswer | null) => void };
-export function useCardAnswer(proposal: Proposal, key: string | null, comments: readonly PendingComment[] | undefined, card: SubjectCard, number?: number): { answer: SubjectAnswer | null; onAnswer?: (answer: SubjectAnswer | null) => void } {
-  const pending = pendingAnswerOf(comments, proposal._id, card.key);
-  const answer = useMemo(() => answerOf(pending), [pending]);
-  return { answer, ...(key ? { onAnswer: (a: SubjectAnswer | null) => answerProposalCard(key, cardRef(proposal, card, number), a) } : {}) };
-}
-
-/** The chart's answers (org-staffing.md S36, S39): a ghost strip answers the
- *  card that holds its change, in the same batch as every other surface. */
-export type GhostAnswers = {
-  /** Each change's pending answer, by change id: the answer of the card that
-   *  holds it, so a role stub and the chips riding on it read as one. */
-  byChange: Readonly<Record<string, SubjectAnswer>>;
-  /** Put, replace or withdraw the answer of the card that holds this change. */
-  onAnswer: (changeId: string, answer: SubjectAnswer | null) => void;
-};
+/** The latest revise over a set of rows, 0 when none. */
+const revisedAt = (members: readonly Pick<OrgProposalChange, "revision">[]) => Math.max(0, ...members.map((m) => m.revision?.at ?? 0));
 
 /**
- * The chart's ghosts read and write the batch through the cards: the same
- * `proposalSubjects` the ledger draws, numbered the same way, so the tray
- * names a ghost's answer as it names the card's ("Approve 3"), and the card
- * on the conversation shows pressed what the chart answered. Undefined with
- * nowhere to send (no proposal, no batch): the strips then draw read only.
+ * The pending answer of one entry, and the handler that puts, replaces or
+ * withdraws it; with no key (nowhere to send) there is no handler, and the
+ * entry draws read only. A revision landing while an answer is staged
+ * withdraws the item: the band disappears and the controls come back under
+ * "Revised since you last looked", so nothing stale reaches the send.
  */
-export function useGhostAnswers(proposal: Proposal | undefined, changes: readonly OrgProposalChange[], batchKey: string | null | undefined): GhostAnswers | undefined {
-  const cards = useProposalCards(proposal, changes);
-  const comments = useInboxStore((s) => (batchKey ? s.reviewComments[batchKey] : undefined));
-  return useMemo(() => {
-    if (!proposal || !batchKey) return undefined;
-    const byChange: Record<string, SubjectAnswer> = {};
-    const holder = new Map<string, { card: SubjectCard; number: number }>();
-    cards.forEach((card, i) => {
-      const answer = answerOf(pendingAnswerOf(comments, proposal._id, card.key));
-      for (const c of [...card.changes, ...card.carried, ...card.riders]) {
-        holder.set(c._id, { card, number: i + 1 });
-        if (answer) byChange[c._id] = answer;
-      }
-    });
-    return {
-      byChange,
-      onAnswer: (changeId, answer) => { const hit = holder.get(changeId); if (hit) answerProposalCard(batchKey, cardRef(proposal, hit.card, hit.number), answer); },
-    };
-  }, [proposal, batchKey, cards, comments]);
+function useEntryAnswer(key: string | null, comments: readonly PendingComment[] | undefined, ref: ProposalCardRef, members: readonly Pick<OrgProposalChange, "revision">[]): { answer: SubjectAnswer | null; onAnswer?: (answer: SubjectAnswer | null) => void; revised: boolean } {
+  const pending = pendingAnswerOf(comments, ref.proposal.id, ref.key);
+  const answer = useMemo(() => answerOf(pending), [pending]);
+  const stale = !!key && !!pending && revisedAt(members) > pending.createdAt;
+  // Withdrawn under the reader: the entry says so until they answer again.
+  const [revised, setRevised] = useState(false);
+  useEffect(() => { if (stale) { answerProposalCard(key!, ref, null); setRevised(true); } }, [stale]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (pending && !stale) setRevised(false); }, [pending, stale]);
+  return { answer: stale ? null : answer, revised, ...(key ? { onAnswer: (a: SubjectAnswer | null) => answerProposalCard(key, ref, a) } : {}) };
 }
 
-/** What a ref is built from: a card, or anything that holds changes the
- *  same way (the panel's ask, with its title as the sentence). */
-export type CardMembers = Pick<SubjectCard, "key" | "changes" | "carried" | "riders" | "change_ids" | "sentence">;
+/** The pending answer of one card (the subject card's entry). `number` is the ordinal the person sees, for the tray. */
+function useCardAnswer(proposal: Proposal, key: string | null, comments: readonly PendingComment[] | undefined, card: SubjectCard, number?: number): { answer: SubjectAnswer | null; onAnswer?: (answer: SubjectAnswer | null) => void; revised: boolean } {
+  return useEntryAnswer(key, comments, cardRef(proposal, card, number), [...card.changes, ...card.carried, ...card.riders]);
+}
+
+/** What a ref is built from: a card, or anything that holds changes the same way. */
+export type CardMembers = Pick<SubjectCard, "key" | "changes" | "carried" | "riders" | "change_ids" | "sentence"> & Partial<Pick<SubjectCard, "title">>;
 
 /**
  * The card as the batch names it: the proposal, the key, and what the answer
@@ -139,7 +133,7 @@ export type CardMembers = Pick<SubjectCard, "key" | "changes" | "carried" | "rid
  * in apply order (riders and carried rows included, so the server decides
  * the whole card); `seqs` is what the words name: the waiting changes the
  * card draws, or, for a card that draws none (a limit alone is its own
- * sentence), the ones it holds.
+ * sentence), the ones it holds. `subject` names the row in the tray.
  */
 export function cardRef(proposal: ProposalRef, card: CardMembers, number?: number): ProposalCardRef {
   const members = [...card.changes, ...card.carried, ...card.riders];
@@ -149,11 +143,21 @@ export function cardRef(proposal: ProposalRef, card: CardMembers, number?: numbe
   const ids = new Set(of.map((c) => c._id));
   const drawn = card.changes.filter((c) => ids.has(c._id));
   const seqs = (drawn.length ? drawn : of).map((c) => c.seq).sort((a, b) => a - b);
-  return { proposal: { id: proposal._id, short_id: proposal.short_id, title: proposal.title }, key: card.key, change_ids: card.change_ids.filter((id) => ids.has(id)), seqs, sentence: card.sentence, ...(number !== undefined ? { ordinal: number } : {}) };
+  return {
+    proposal: { id: proposal._id, short_id: proposal.short_id, title: proposal.title }, key: card.key, change_ids: card.change_ids.filter((id) => ids.has(id)), seqs, sentence: card.sentence,
+    ...(number !== undefined ? { ordinal: number } : {}), ...(card.title ? { subject: card.title } : {}),
+  };
 }
 
-/** The whole proposal as a card of the batch: a note on all of it (key ""). */
-const wholeRef = (proposal: ProposalRef): ProposalCardRef => ({ proposal: { id: proposal._id, short_id: proposal.short_id, title: proposal.title }, key: "", change_ids: [], seqs: [], sentence: proposal.title });
+/** A record group as the batch names it: the records that still wait, in
+ *  apply order (a group read after it was decided: all of them), its title as
+ *  the subject. So the send counts and names only what it will apply. */
+export function groupRef(proposal: ProposalRef, group: RecordGroupCard): ProposalCardRef {
+  const waits = group.rows.filter((r) => isOrgChangeDecidable(r.status));
+  const of = waits.length ? waits : group.rows;
+  const ids = new Set(of.map((r) => r.change._id));
+  return { proposal: { id: proposal._id, short_id: proposal.short_id, title: proposal.title }, key: group.key, change_ids: group.change_ids.filter((id) => ids.has(id)), seqs: of.map((r) => r.seq), sentence: group.title, subject: group.title };
+}
 
 /** The changes have not landed yet. */
 export const ProposalLoading = () => (
@@ -163,33 +167,58 @@ export const ProposalLoading = () => (
   </div>
 );
 
-// ---------------------------------------------------------------- the list
+// ---------------------------------------------------------------- focus
 
-/** A card with its answer read from and written to the batch; read only
- *  when there is no batch to write to, or the proposal was withdrawn.
- *  `number` is its place in the list for the tray; `ordinal` draws the
- *  number column. */
-function AnsweredCard({ proposal, batch, card, number, ...rest }: { proposal: Proposal; batch: ProposalBatch; card: SubjectCard; number?: number } & Omit<React.ComponentProps<typeof ProposalSubjectCard>, "card" | "answer" | "onAnswer">) {
-  const { answer, onAnswer } = useCardAnswer(proposal, batch.key, batch.comments, card, number);
-  return <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "withdrawn" ? undefined : onAnswer} {...rest} />;
+/** The store's focus (orgFocusChangeId) as a change of this proposal, else null. */
+function useFocusChange(changes: readonly OrgProposalChange[]): OrgProposalChange | null {
+  const id = useInboxStore((s) => s.orgFocusChangeId);
+  return useMemo(() => (id ? changes.find((c) => c._id === id) ?? null : null), [id, changes]);
 }
 
-/** The cards of one proposal, numbered down the list, each with its own
- *  Approve, Reject and Reply writing into the batch. */
-export function ProposalSubjectList({ proposal, cards, limit, variant = "full", layout, batchKey, className }: {
+// ---------------------------------------------------------------- the entries
+
+/** A card with its answer read from and written to the batch; read only when
+ *  there is no batch to write to, or the proposal is not open. */
+function AnsweredCard({ proposal, batch, card, number, focusId, ...rest }: { proposal: Proposal; batch: ProposalBatch; card: SubjectCard; number?: number; focusId: string | null } & Omit<React.ComponentProps<typeof ProposalSubjectCard>, "card" | "answer" | "onAnswer" | "focused">) {
+  const { answer, onAnswer, revised } = useCardAnswer(proposal, batch.key, batch.comments, card, number);
+  const focused = !!focusId && [...card.changes, ...card.carried, ...card.riders].some((c) => c._id === focusId);
+  return <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? onAnswer : undefined} focused={focused} revisedNew={revised || undefined} {...rest} />;
+}
+
+function AnsweredGroup({ proposal, batch, group, focus, lone, open, onOpen }: { proposal: Proposal; batch: ProposalBatch; group: RecordGroupCard; focus: OrgProposalChange | null; lone: boolean; open: boolean; onOpen: (v: boolean) => void }) {
+  const { answer, onAnswer, revised } = useEntryAnswer(batch.key, batch.comments, groupRef(proposal, group), group.rows.map((r) => r.change));
+  const focusSeq = focus && group.seqs.includes(focus.seq) ? focus.seq : null;
+  return <RecordGroupRow card={group} answer={answer} onAnswer={proposal.status === "open" ? onAnswer : undefined} open={open} onOpen={onOpen} lone={lone} focusSeq={focusSeq} revisedNew={revised || undefined} />;
+}
+
+/**
+ * The entries of one proposal: one group row per record group (a records
+ * proposal), else one subject card per subject, numbered when there are two
+ * or more, twelve at a time with "Show all N" past that.
+ */
+export function ProposalEntries({ proposal, changes, entries, batch, limit = 12, className }: {
   proposal: Proposal;
-  cards: readonly SubjectCard[];
-  /** Page size; "Show all N" past it. */
+  changes: readonly OrgProposalChange[];
+  entries: ProposalEntryModel;
+  batch: ProposalBatch;
+  /** Page size for subject cards; "Show all N" past it. */
   limit?: number;
-  variant?: "full" | "row";
-  layout?: "wide" | "narrow";
-  /** Where the answers collect when no composer is in reach. */
-  batchKey?: string;
   className?: string;
 }) {
   const [all, setAll] = useState(false);
-  const batch = useProposalBatch(proposal, batchKey);
-  const shown = limit != null && !all && cards.length > limit ? cards.slice(0, limit) : cards;
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const focus = useFocusChange(changes);
+  const setOpen = (key: string, v: boolean) => setOpenKeys((prev) => { const next = new Set(prev); if (v) next.add(key); else next.delete(key); return next; });
+  if (entries.records) {
+    const lone = entries.groups.length === 1;
+    return (
+      <div className={cn("not-prose min-w-0", LEDGER_INKS, className)} data-proposal-groups={entries.groups.length}>
+        {entries.groups.map((group) => <AnsweredGroup key={group.key} proposal={proposal} batch={batch} group={group} focus={focus} lone={lone} open={openKeys.has(group.key)} onOpen={(v) => setOpen(group.key, v)} />)}
+      </div>
+    );
+  }
+  const cards = entries.cards;
+  const shown = !all && cards.length > limit ? cards.slice(0, limit) : cards;
   // A proposal of one card: its Approve is the frame's one filled button, and there is nothing to number.
   const lone = cards.length === 1;
   return (
@@ -197,7 +226,7 @@ export function ProposalSubjectList({ proposal, cards, limit, variant = "full", 
       <ol className="m-0 list-none p-0">
         {shown.map((card, i) => (
           <li key={card.key} className="m-0 p-0">
-            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} variant={variant} layout={layout} {...(lone ? { lead: true, className: variant === "full" ? "border-t py-[14px]" : "border-t" } : { ordinal: i + 1 })} />
+            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} focusId={focus?._id ?? null} {...(lone ? { lead: true, className: "py-[14px]" } : { ordinal: i + 1 })} />
           </li>
         ))}
       </ol>
@@ -210,163 +239,80 @@ export function ProposalSubjectList({ proposal, cards, limit, variant = "full", 
   );
 }
 
-export type ProposalSubjectsProps = {
-  proposal: Proposal;
-  /** The whole proposal's rows. */
-  changes: readonly OrgProposalChange[];
-  /** A change's number: draw just the card that holds it, standing alone (`op-55#3`). */
-  only?: number;
-  /** Page size; "Show all N" past it. */
-  limit?: number;
-  variant?: "full" | "row";
-  layout?: "wide" | "narrow";
-  /** Where the proposal opens, for the single card's place line. Default: the org page with the change in focus. */
-  href?: string;
-  /** Where the answers collect when no composer is in reach. */
-  batchKey?: string;
-  className?: string;
-};
+// ---------------------------------------------------------------- the foot
+
+/** What the foot counts: every entry that can still be answered. */
+type Entry = { key: string; waiting: number; ref: ProposalCardRef };
 
 /**
- * The store wired ledger of one proposal. With `only`, the one card that
- * holds that change, standing alone: its place in the proposal, the entry,
- * and a filled Approve until it is pressed. The answer shows in the
- * composer's tray; there is no closing row.
+ * The foot of a proposal's ledger. Left: Map, when the card is not on the org
+ * screen (`onMap`). Right, while anything waits and a batch key exists:
+ * "Approve all N" while nothing is answered or decided, "Approve the rest"
+ * once something is (a quiet word; it stages an approve on every waiting
+ * entry with no answer, and pressed again withdraws only those). When
+ * nothing waits, what happened in words. Read only: one quiet line, once.
  */
-export function ProposalSubjects({ proposal, changes, only, limit, variant, layout, href, batchKey, className }: ProposalSubjectsProps) {
-  const { live, opts } = useCardInputs(proposal, changes);
-  const cards = useMemo(() => proposalSubjects(changes, live, opts), [changes, live, opts]);
-  const batch = useProposalBatch(proposal, batchKey);
-  const card = only != null ? subjectOfSeq(cards, only) : null;
-  // A change its author withdrew is in no card; it still reads as the sentence it was.
-  const withdrawn = only != null && !card ? changes.find((c) => c.seq === only && c.status === "removed") : undefined;
-  const withdrawnSentence = useMemo(
-    () => (withdrawn ? proposalSubjects(changes.map((c) => (c._id === withdrawn._id ? { ...c, status: "skipped" as const } : c)), live, { ...opts, seqs: new Set([withdrawn.seq]) })[0]?.sentence ?? null : null),
-    [withdrawn, changes, live, opts],
-  );
-  if (changes.length === 0) return <ProposalLoading />;
-  if (only == null) return <ProposalSubjectList proposal={proposal} cards={cards} limit={limit} variant={variant} layout={layout} batchKey={batchKey} className={className} />;
-
-  const title = (
-    <Link href={href ?? entityRoute("proposal", proposalChangeRefId(proposal.short_id, only)) ?? "#"} className={cn(LEDGER_LINK, "text-[color:var(--sol-text-muted)]")} {...LEDGER_STOP} data-subject-proposal>
-      {proposal.title}
-    </Link>
-  );
-  if (card) {
-    const at = cards.findIndex((c) => c.key === card.key);
-    return <AnsweredCard proposal={proposal} batch={batch} card={card} number={at >= 0 ? at + 1 : undefined} variant={variant} layout={layout} lead place={<>{placeWords(cards, card)} in {title}</>} className={className} />;
-  }
-  return (
-    <div className={cn("not-prose min-w-0 text-[12px] leading-[1.6] text-[color:var(--ink-quiet)]", LEDGER_INKS, className)} data-subject-missing={withdrawn ? "withdrawn" : "gone"}>
-      {withdrawn ? (
-        <>
-          {withdrawnSentence && <p className="m-0 text-[13.5px] leading-[20px] line-through decoration-1">{withdrawnSentence}</p>}
-          <p className="m-0 mt-1">Withdrawn by its author{withdrawn.revision?.note ? `: ${withdrawn.revision.note}` : "."} It was part of {title}.</p>
-        </>
-      ) : (
-        <p className="m-0">This change is no longer part of {title}.</p>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- the closing row
-
-/**
- * The foot of a proposal's ledger. Left: Chart. Right: "Approve the rest"
- * (an approve answer on every card that waits and has none; pressed again it
- * withdraws the ones it put), "Reply" (a note on the whole proposal, its
- * field above the row) and, once the batch holds any answer for this
- * proposal, the frame's one filled button, "Send N answers", which presses
- * the composer's send (or the host's `onSend`). When nothing waits, what
- * happened in words.
- */
-export function ProposalClosingRow({ proposal, cards, batchKey, onSend, takeover, sticky, className }: {
-  proposal: Proposal;
-  cards: readonly SubjectCard[];
-  /** Where the answers collect when no composer is in reach. */
-  batchKey?: string;
-  /** Sends the batch where no composer does. */
-  onSend?: () => void;
-  /** What "Approve the rest" would take over (R1): the phrase, and the
-   *  "leave them" box over the row, whose tick rides on the approvals it
-   *  puts as `leave_sessions`. */
+export function ProposalFoot({ proposal, entries, batch, onMap, takeover, className }: {
+  proposal: Proposal & Pick<OrgProposalListRow, "author">;
+  entries: ProposalEntryModel;
+  batch: ProposalBatch;
+  onMap?: () => void;
+  /** What "Approve the rest" would take over (R1): the phrase, and the "leave them" box over the row, whose tick rides on the approvals it puts as `leave_sessions`. */
   takeover?: { phrase: string } | null;
-  sticky?: boolean;
   className?: string;
 }) {
-  const batch = useProposalBatch(proposal, batchKey, onSend);
   const answers = proposalAnswersOf(batch.comments, proposal._id);
-  const whole = pendingAnswerOf(batch.comments, proposal._id, "");
-  const [fieldOpen, setFieldOpen] = useState(false);
-  // The cards "Approve the rest" put an answer on, so a second press takes back only those.
+  // The entries "Approve the rest" put an answer on, so a second press takes back only those.
   const [put, setPut] = useState<string[]>([]);
+  const [leaveLocal, setLeaveLocal] = useState(false);
   const withdrawn = proposal.status === "withdrawn";
-  const counts = subjectCounts(cards);
-  const open = counts.waiting + counts.failed;
+  const list: Entry[] = entries.records
+    ? entries.groups.map((g) => ({ key: g.key, waiting: g.waiting, ref: groupRef(proposal, g) }))
+    : entries.cards.map((c, i) => ({ key: c.key, waiting: c.waiting, ref: cardRef(proposal, c, i + 1) }));
+  const open = list.filter((e) => e.waiting > 0).length;
   const answered = new Set(answers.map((a) => a.proposal.card));
-  const rest = cards.filter((c) => c.waiting > 0 && !answered.has(c.key));
+  const rest = list.filter((e) => e.waiting > 0 && !answered.has(e.key));
   const putStill = put.filter((k) => answers.some((a) => a.proposal.card === k && a.proposal.verdict === "approve"));
   const pressed = putStill.length > 0;
-  // "Leave the sessions where they are": read from the approvals the row put
-  // once there are any, kept here only until there are (the card's rule).
-  const [leaveLocal, setLeaveLocal] = useState(false);
   const leave = pressed ? answers.some((a) => putStill.includes(a.proposal.card) && a.proposal.leave_sessions) : leaveLocal;
-  // Every write goes to the batch; with no batch (read only) there are no controls to write from.
-  const write = (card: ProposalCardRef, answer: Parameters<typeof answerProposalCard>[2]) => { if (batch.key) answerProposalCard(batch.key, card, answer); };
-  const approve = (tick: boolean) => ({ verdict: "approve" as const, ...(tick ? { leave_sessions: true } : {}) });
+  const write = (ref: ProposalCardRef, answer: SubjectAnswer | null) => { if (batch.key) answerProposalCard(batch.key, ref, answer); };
+  const approve = (tick: boolean): SubjectAnswer => ({ verdict: "approve", ...(tick ? { leave_sessions: true } : {}) });
   const approveRest = () => {
     if (pressed) {
-      for (const key of putStill) { const card = cards.find((c) => c.key === key); if (card) write(cardRef(proposal, card), null); }
+      for (const key of putStill) { const e = list.find((x) => x.key === key); if (e) write(e.ref, null); }
       setPut([]);
       return;
     }
-    for (const card of rest) write(cardRef(proposal, card, cards.indexOf(card) + 1), approve(leave));
-    setPut(rest.map((c) => c.key));
+    for (const e of rest) write(e.ref, approve(leave));
+    setPut(rest.map((e) => e.key));
   };
-  // The tick changed: the approvals the row put carry the new one.
   const onLeave = (v: boolean) => {
     setLeaveLocal(v);
-    for (const key of putStill) { const card = cards.find((c) => c.key === key); if (card) write(cardRef(proposal, card, cards.indexOf(card) + 1), approve(v)); }
+    for (const key of putStill) { const e = list.find((x) => x.key === key); if (e) write(e.ref, approve(v)); }
   };
-  // "Approve all 9" while nothing is answered or decided; "Approve the rest" once something is.
-  const restLabel = answers.length === 0 && counts.waiting === counts.total ? `${ORG_REPLY_WORDS.approve.act} all ${rest.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
-  const note = (text: string) => write(wholeRef(proposal), { verdict: "note", text });
-  // Leaving the field keeps the words; a note with none goes with it.
-  const closeField = () => { setFieldOpen(false); if (whole && !whole.body.trim()) write(wholeRef(proposal), null); };
-  // The pending words lead while they exist; after the send, the note the
-  // server stored on the proposal (`proposal.reply`, the whole-proposal note).
-  const stored = proposal.reply?.text?.trim() ? proposal.reply : null;
-  const words = whole?.body?.trim() ? { text: whole.body, verdict: whole.proposal.verdict } : stored ? { text: stored.text!, verdict: stored.verdict } : null;
+  const decided = list.some((e) => e.waiting === 0);
+  const restLabel = answers.length === 0 && !decided ? `${ORG_REPLY_WORDS.approve.act} all ${rest.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
   const answerable = !!batch.key && !withdrawn && proposal.status === "open" && open > 0;
-  const tick = takeover && answerable ? <TakeoverEdit className="mb-2.5" phrase={takeover.phrase} leave={leave} onLeave={onLeave} /> : null;
-  const field = fieldOpen && answerable
-    ? <LedgerReplyField value={whole?.body ?? ""} ask="Say something about the whole proposal" onChange={note} onClose={closeField} data-proposal-reply-field />
-    : words
-      ? <LedgerYou text={words.text} onEdit={answerable ? () => setFieldOpen(true) : undefined} data-proposal-you={words.verdict} />
-      : null;
+  const records = entries.records ? entries.groups.flatMap((g) => g.rows.map((r) => r.change)) : undefined;
+  const outcome = withdrawn ? "Withdrawn" : open === 0 ? proposalProgressWords(entries.cards, records) || "Nothing to decide" : undefined;
+  const who = proposal.author?.name ? `${proposal.author.name}'s` : "the author's";
   return (
-    <LedgerClosingRow
-      sticky={sticky}
-      className={className}
-      above={tick || field ? <>{tick}{field}</> : undefined}
-      left={<LedgerWord onClick={() => openOrgChart({ proposal: proposal.short_id })} aria-label="Show this proposal on the chart" title="Open the chart beside this conversation" data-open-chart={proposal.short_id}>Chart</LedgerWord>}
-      right={answerable ? (
-        <>
-          {/* A proposal of one card: its own Approve is the whole decision. */}
-          {counts.total > 1 && (rest.length > 0 || pressed) && (
-            <OrgButton size="sm" quiet aria-pressed={pressed} onClick={approveRest} data-approve-rest={rest.length}>
-              {pressed && <Check className="-ml-0.5 h-3 w-3" aria-hidden />}
-              {restLabel}
-            </OrgButton>
-          )}
-          <LedgerWord aria-expanded={fieldOpen} onClick={() => setFieldOpen((v) => !v)} data-proposal-reply>{ORG_REPLY_WORDS.note.act}</LedgerWord>
-          {answers.length > 0 && batch.send && (
-            <OrgButton primary size="sm" className="ml-1" onClick={batch.send} data-send-answers={answers.length}>Send {answers.length} {answers.length === 1 ? "answer" : "answers"}</OrgButton>
-          )}
-        </>
-      ) : undefined}
-      outcome={withdrawn ? "Withdrawn" : open === 0 ? proposalProgressWords(cards) || "Nothing to decide" : undefined}
-    />
+    <>
+      {!answerable && open > 0 && !withdrawn && proposal.status === "open" && (
+        <p className={cn("m-0 mt-2 text-[11px] leading-[18px] text-[color:var(--ink-quiet)]")} data-proposal-readonly-line>Open this in {who} thread to answer.</p>
+      )}
+      <LedgerClosingRow
+        className={cn("mt-2", className)}
+        above={takeover && answerable && (rest.length > 0 || pressed) && list.length > 1 ? <TakeoverEdit phrase={takeover.phrase} leave={leave} onLeave={onLeave} /> : undefined}
+        left={onMap ? <LedgerWord onClick={onMap} aria-label="Show this proposal on the map" title="Open the org map beside this conversation" data-open-map={proposal.short_id}>Map</LedgerWord> : undefined}
+        right={answerable && list.length > 1 && (rest.length > 0 || pressed) ? (
+          <LedgerWord className={cn("-mr-2", pressed && "text-[color:var(--ink-violet)]")} aria-pressed={pressed} onClick={approveRest} data-approve-rest={rest.length}>
+            {pressed && <Check className="-ml-0.5 mr-1 h-3 w-3" aria-hidden />}
+            {restLabel}
+          </LedgerWord>
+        ) : undefined}
+        outcome={outcome}
+      />
+    </>
   );
 }

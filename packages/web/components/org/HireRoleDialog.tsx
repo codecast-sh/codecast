@@ -14,8 +14,8 @@ import type { PlanItem, ProjectItem } from "../../store/inboxStore";
 import type { OrgCreateRoleInput } from "../../store/orgSlice";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { SelectBox } from "../ui/select-box";
-import { parentNodeId, parentRefOfNodeId, refMatches, refResolves } from "./orgLayout";
-import type { OrgParentRef, OrgTree } from "./orgTypes";
+import { parentNodeId, parentRefOfNodeId } from "./orgLayout";
+import type { OrgTree } from "./orgTypes";
 import { OrgTemplateHire } from "./orgTemplateHire";
 import { AVATAR_KEYS, avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_TENURE_THEN, seatSentence, type OrgRoleSeat, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
@@ -40,26 +40,12 @@ function proposeCharter(name: string, projects: Array<{ title: string; descripti
   return `${who} owns ${owns}.${activity} It keeps the plans and tasks in its area moving, reports what changed and why, and raises what needs a person with a recommendation.`;
 }
 
-/** Prefill for "Edit" on a proposed role (org-staffing.md S5): the analyzer's
- *  fields land in the form and the submit reads as accepting with edits.
- *  `scope` carries the proposal's refs (a short id, an id or a title each);
- *  the form resolves them against the workspace's projects and plans, so a
- *  ref nothing answers to is simply not ticked. `reports_to` is resolved by
- *  the caller against the tree (resolveOrgParentRef). */
-export type HireRoleInitial = { name?: string; handle?: string; charter?: string; scope?: { projects?: string[]; plans?: string[] }; reports_to?: OrgParentRef | null; tenure?: OrgTenureSpec; avatar?: string };
-
-/** What the person changed in the form, so an edit sends only that: a scope
- *  ref the form could not resolve, or a parent the same proposal creates (a
- *  ghost the select cannot list), survives an untouched submit as proposed. */
-export type HireRoleTouched = { scope: boolean; reports_to: boolean };
-export type HireRoleOutput = OrgCreateRoleInput & { touched: HireRoleTouched };
-
-export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role", initial, submitLabel = "Create and start", seat, initialMode = "manual" }: {
+export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role", initialName = "", submitLabel = "Create and start", seat, initialMode = "manual" }: {
   open: boolean;
   onClose: () => void;
   tree: OrgTree;
   meId: string;
-  onCreate: (input: HireRoleOutput) => void;
+  onCreate: (input: OrgCreateRoleInput) => void;
   /** "Add a lead" on a project page preselects that project. Passed as rows,
    *  not ids: the page may hold a project the workspace collection has not
    *  cached yet, and the preview and charter need its title and description. */
@@ -67,7 +53,8 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   /** The cwd the standing session starts in (the project's path when known). */
   projectPath?: string;
   title?: string;
-  initial?: HireRoleInitial;
+  /** The name the form opens with ("Make this a role" offers the session's title). */
+  initialName?: string;
   submitLabel?: string;
   /** "Make this a role" on a session (org-roles-run-work.md R2): the role is
    *  this session, so nothing new starts. The form says what naming changes,
@@ -80,41 +67,27 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   // The gallery wants room for its cards; the answers form and the manual form do not.
   const [templateStage, setTemplateStage] = useState<"gallery" | "form">("gallery");
   const wide = mode === "template" && templateStage === "gallery";
-  const [name, setName] = useState(initial?.name ?? "");
-  const [handle, setHandle] = useState(initial?.handle ?? "");
-  const [handleTouched, setHandleTouched] = useState(!!initial?.handle);
-  const [reportsTo, setReportsToState] = useState<string>(initial?.reports_to ? parentNodeId(initial.reports_to) : meId ? parentNodeId({ kind: "user", user_id: meId }) : "");
-  const [touched, setTouched] = useState<HireRoleTouched>({ scope: false, reports_to: false });
-  const setReportsTo = (v: string) => { setTouched((t) => ({ ...t, reports_to: true })); setReportsToState(v); };
-  const [charter, setCharter] = useState(initial?.charter ?? "");
-  const [charterTouched, setCharterTouched] = useState(!!initial?.charter);
+  const [name, setName] = useState(initialName);
+  const [handle, setHandle] = useState("");
+  const [handleTouched, setHandleTouched] = useState(false);
+  const [reportsTo, setReportsTo] = useState<string>(meId ? parentNodeId({ kind: "user", user_id: meId }) : "");
+  const [charter, setCharter] = useState("");
+  const [charterTouched, setCharterTouched] = useState(false);
   const wsProjects = useWorkspaceCollection<ProjectItem>("projects");
   const plans = useWorkspaceCollection<PlanItem>("plans");
-  // A proposal's project refs resolve the way the server resolves them (an
-  // exact id, short id or title, else a unique title substring); plans by
-  // pl-N or id. A ref nothing answers to is simply not ticked, and stays in
-  // the change unless the person touches the scope.
-  const [projectIds, setProjectIdsState] = useState<string[]>(() => {
-    const rows = wsProjects.map((p) => ({ id: p._id, title: p.title, short_id: (p as { short_id?: string }).short_id }));
-    const fromRefs = (initial?.scope?.projects ?? []).map((ref) => refResolves(ref, rows)?.id).filter((id): id is string => !!id);
-    return [...new Set([...initialProjects.map((p) => p._id), ...fromRefs])];
-  });
-  const [planIds, setPlanIdsState] = useState<string[]>(() => plans.filter((p) => (initial?.scope?.plans ?? []).some((ref) => refMatches(ref, { id: p._id, title: p.title, short_id: p.short_id }))).map((p) => p._id));
-  const setProjectIds = (v: string[]) => { setTouched((t) => ({ ...t, scope: true })); setProjectIdsState(v); };
-  const setPlanIds = (v: string[]) => { setTouched((t) => ({ ...t, scope: true })); setPlanIdsState(v); };
+  const [projectIds, setProjectIds] = useState<string[]>(() => initialProjects.map((p) => p._id));
+  const [planIds, setPlanIds] = useState<string[]>([]);
   // The face (S13): a chosen avatar key, else the default derived from the
   // handle so every role has one. `avatar` is undefined until the person picks.
-  const [avatar, setAvatar] = useState<string | undefined>(initial?.avatar);
+  const [avatar, setAvatar] = useState<string | undefined>(undefined);
   // Standing or program (S10). Standing by default; a program ends with a plan,
   // a project or a date, and then retires or comes up for review.
-  const initProgram = initial?.tenure?.kind === "program" ? initial.tenure : null;
-  const initEnds = initProgram?.ends as { plan?: string; project?: string; date?: number } | undefined;
-  const [tenureKind, setTenureKind] = useState<"standing" | "program">(initProgram ? "program" : "standing");
-  const [endKind, setEndKind] = useState<"plan" | "project" | "date">(initEnds?.plan ? "plan" : initEnds?.project ? "project" : initEnds?.date ? "date" : "plan");
-  const [endPlan, setEndPlan] = useState<string>(initEnds?.plan ?? "");
-  const [endProject, setEndProject] = useState<string>(initEnds?.project ?? "");
-  const [endDate, setEndDate] = useState<string>(initEnds?.date ? new Date(initEnds.date).toISOString().slice(0, 10) : "");
-  const [tenureThen, setTenureThen] = useState<"retire" | "review">(initProgram?.then ?? "retire");
+  const [tenureKind, setTenureKind] = useState<"standing" | "program">("standing");
+  const [endKind, setEndKind] = useState<"plan" | "project" | "date">("plan");
+  const [endPlan, setEndPlan] = useState<string>("");
+  const [endProject, setEndProject] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
+  const [tenureThen, setTenureThen] = useState<"retire" | "review">("retire");
   const [faceOpen, setFaceOpen] = useState(false);
   // Preset rows lead the list, then the rest of the workspace.
   const projects = useMemo(() => [...initialProjects, ...wsProjects.filter((p) => !initialProjects.some((q) => q._id === p._id))], [initialProjects, wsProjects]);
@@ -173,7 +146,6 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       host_user_id: meId,
       client_id: `orgrolestub-${Math.random().toString(36).slice(2)}`,
       ...(leaveSessions && takeover ? { leave_sessions: true } : {}),
-      touched,
     });
   };
   const toggle = (list: string[], set: (v: string[]) => void, id: string) => set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);

@@ -141,7 +141,7 @@ export function RolePlaybook({ playbook, narrative, now }: { playbook: Playbook;
       )}
       {budget.near && (
         <p className="px-2.5 text-[11px]" style={{ color: budget.over ? "var(--sol-yellow)" : "var(--sol-text-dim)" }} data-playbook-budget={budget.over ? "over" : "near"}>
-          Its brief is {briefBudgetWords(budget)}{budget.over ? ": over its budget, so it condenses at its next check" : ""}.
+          Its brief is {briefBudgetWords(budget)}{budget.over ? ": too long, so it condenses at its next check" : ""}.
         </p>
       )}
     </div>

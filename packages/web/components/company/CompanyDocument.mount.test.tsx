@@ -6,11 +6,10 @@
 // change and counts; the projects no goal carries; roles and people with what
 // they lead and own, every name a link; the contents list, beside the article
 // in a wide document and a line that opens in a narrower one; an open
-// proposal's changes drawn in place as the ledger's cards (one per subject,
-// under the heading that names it), each answered into the proposal's
-// thread batch and nothing decided until one send applies the approvals with
-// what that proposal showed; and the layout a narrow pane gets, chosen by
-// the document's own width.
+// proposal's goals and projects placed where they would sit, each proposed
+// name a link to the org screen where the proposal is answered (no card and
+// no reply box here); and the layout a narrow pane gets, chosen by the
+// document's own width.
 // Run: bun test components/company/CompanyDocument.mount.test.tsx
 import { test } from "bun:test";
 import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
@@ -47,19 +46,7 @@ async function verifyCompany() {
     orgProposalChanges: {} as Record<string, any>,
     currentSessionId: null,
     sessions: {},
-    // The pending batch the quote UI uses (store/inboxStore.ts), keyed by conversation.
     reviewComments: {} as Record<string, any[]>,
-    addReviewComment: (key: string, c: any) => { state.reviewComments = { ...state.reviewComments, [key]: [...(state.reviewComments[key] ?? []), c] }; },
-    commitReviewComment: (key: string, id: string, body: string) => { state.reviewComments = { ...state.reviewComments, [key]: (state.reviewComments[key] ?? []).map((c: any) => (c.id === id ? { ...c, body } : c)) }; },
-    removeReviewComment: (key: string, id: string) => { state.reviewComments = { ...state.reviewComments, [key]: (state.reviewComments[key] ?? []).filter((c: any) => c.id !== id) }; },
-    // What the slice's reply action does to the draft (store/orgSlice.ts): approvals land, rejections are skipped, a note decides nothing.
-    replyOnOrgProposal: (proposalId: string, items: { verdict: string; change_ids: string[]; seqs: number[]; text?: string }[], seen: { seqs: number[] }, opts?: { say?: { thread: string } }) => {
-      calls.push(`reply:${proposalId}:${items.map((i) => `${i.verdict}@${i.seqs.join(",")}${i.text ? `=${i.text}` : ""}`).join(";")}:${seen.seqs.join(",")}:${opts?.say?.thread ?? ""}`);
-      for (const item of items) for (const id of item.change_ids) {
-        if (item.verdict === "note") continue;
-        state.orgProposalChanges = { ...state.orgProposalChanges, [id]: { ...state.orgProposalChanges[id], status: item.verdict === "approve" ? "accepted" : "skipped" } };
-      }
-    },
   };
   const propose = () => {
     state.orgProposals = Object.fromEntries(fx.COMPANY_FIXTURE_PROPOSALS.map(({ changes: _changes, ...row }) => [row._id, row]));
@@ -105,15 +92,6 @@ async function verifyCompany() {
   let root = createRoot(document.getElementById("root")!);
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
   const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
-  const click = async (el: Element | null) => { assert.ok(el, "missing element"); await act(async () => { (el as HTMLElement).click(); }); };
-  // Typing into a controlled field: the native setter, then the input event React listens for.
-  const type = async (el: Element | null, text: string) => {
-    assert.ok(el, "missing field");
-    const set = Object.getOwnPropertyDescriptor((dom.window as any).HTMLTextAreaElement.prototype, "value")!.set!;
-    await act(async () => { set.call(el, text); el!.dispatchEvent(new (dom.window as any).Event("input", { bubbles: true })); });
-  };
-  const THREAD = "fixture-growth-conv";
-  const batch = () => (state.reviewComments[THREAD] ?? []) as { body: string; proposal: { id: string; card: string; verdict: string; seqs: number[]; ordinal?: number } }[];
   const mount = async () => {
     await act(async () => root.unmount());
     root = createRoot(document.getElementById("root")!);
@@ -237,7 +215,7 @@ async function verifyCompany() {
   assert.equal(q("[data-company-project='pr-6'] [data-company-project-counts]")!.textContent, "counting");
   env.counted = true;
 
-  // ── with the open proposals: every change in its place, as the ledger's card ──
+  // ── with the open proposals: every goal and project in its place; the proposal itself is a link to the org screen ──
   propose();
   await mount();
   assert.ok(calls.includes("feed:proposal:op-54") && calls.includes("feed:proposal:op-55"), "one feeder for each open proposal");
@@ -247,16 +225,11 @@ async function verifyCompany() {
   assert.equal(q("[data-company-proposals]")!.getAttribute("data-company-proposals"), "13");
   assert.deepEqual([...q("[data-company-proposals]")!.querySelectorAll("a")].map((a) => a.getAttribute("href")), ["/org?proposal=op-54", "/org?proposal=op-55"]);
   assert.equal(q("[data-company-tally]")!.textContent, "4 goals, 9 projects, 2 people, 2 roles", "nothing proposed is counted as held");
-  // One card per subject, each drawn once: ten goals of op-54, two roles of op-55.
-  const subjects = qa("[data-subject]").map((c) => c.getAttribute("data-subject"));
-  assert.equal(subjects.length, 12, subjects.join(" "));
-  assert.equal(new Set(subjects).size, 12, "a card holding two changes is drawn once");
-  assert.ok(qa("[data-subject]").every((c) => c.getAttribute("data-layout") === "auto"), "a card sizes itself by the column it sits in");
-  none(q("[data-subject] [data-ghost-tag]"), "no tag on a change: the card's words say it");
-  assert.equal(q("[data-company-replies]")!.getAttribute("data-company-replies"), "quiet", "nothing pending: the foot does not stick");
-  assert.equal(qa("[data-company-replies] [data-reply-hint]").length, 2, "each open proposal's reply box shows its one line hint");
-  none(q("[data-proposal-reply-box]"), "no answer yet, no box");
-  // The purpose it sets stands at the top as the heading, in the proposal's colour; the card under it says what the change writes.
+  // The changes are answered on the org screen: no card, no answer controls and no reply box here.
+  assert.equal(qa("[data-subject]").length, 0, "no cards in the document");
+  none(q("[data-subject-approve], [data-subject-reject], [data-subject-reply]"), "nothing to answer here");
+  none(q("[data-company-replies], [data-proposal-reply-box]"), "no reply box");
+  // The purpose it sets stands at the top as the heading, in the proposal's colour.
   const top = qa("[data-company-section='goals'] > [data-company-goal]");
   assert.equal(top.length, 1);
   assert.equal(top[0].getAttribute("data-company-goal-kind"), "proposed");
@@ -265,25 +238,13 @@ async function verifyCompany() {
   assert.equal(purposeHead.querySelector("a")!.getAttribute("href"), "/org?proposal=op-54", "a proposed goal's name opens the proposal that sets it");
   assert.equal(q("[data-company-purpose]")!.getAttribute("data-company-purpose"), "proposed", "the proposed purpose reads as proposed, not as missing");
   assert.equal(q("[data-company-purpose-line]")!.textContent, "Union is a curated relationship network that brokers high-value introductions. proposed");
-  const purpose = top[0].querySelector(":scope > [data-company-goal-changes='1'] [data-subject='goal:union-purpose']") as HTMLElement;
-  assert.equal(purpose.getAttribute("data-subject-status"), "proposed");
-  assert.equal(purpose.querySelector("[data-subject-sentence]")!.textContent, "Set this goal as the purpose.", "under its heading the card says this goal");
-  assert.equal(purpose.querySelector("[data-field='owner']")!.getAttribute("data-field-after"), "Ashot Petrosian");
-  assert.ok(purpose.querySelector("[data-field='owner'] [data-face='person']"), "the owner's face by the name");
-  assert.match(purpose.querySelector("[data-field='says']")!.textContent!, /^Union is a curated relationship network/);
-  assert.ok(purpose.querySelector("[data-subject-approve]") && purpose.querySelector("[data-subject-reject]") && purpose.querySelector("[data-subject-reply]"), "Approve, Reject and Reply");
-  none(purpose.querySelector("[data-subject-skip], [data-subject-accept]"), "Accept and Skip are gone");
-  assert.equal(document.getElementById("change-union-purpose")?.contains(purpose), true, "the card is the change's place on the page");
   assert.equal(q("[data-company-toc-goal]")!.textContent, "Broker high-value introductions that become real transactions");
   const under = top[0].querySelectorAll(":scope > [data-company-subgoals] > [data-company-goal]");
   assert.equal(under.length, 9);
-  // A proposed goal under its parent: the heading, then its owner and what it would be measured by, as the card's rows.
+  // A proposed goal under its parent: its heading, opening the proposal that sets it.
   assert.equal(under[0].getAttribute("data-company-depth"), "2");
   assert.equal(under[0].querySelector(":scope > h4[data-company-goal-ghost='union-revenue']")!.textContent, "Make revenue");
-  const revenue = under[0].querySelector(":scope > [data-company-goal-changes] [data-subject='goal:union-revenue']")!;
-  assert.equal(revenue.querySelector("[data-subject-sentence]")!.textContent, "Add this goal under the purpose.");
-  assert.equal(revenue.querySelector("[data-field='owner']")!.getAttribute("data-field-after"), "Samvit Ramadurgam");
-  assert.equal(revenue.querySelector("[data-field='metrics']")!.getAttribute("data-field-after"), "Fees collected, target The first dollar", "a target reads as written");
+  assert.equal(under[0].querySelector(":scope > h4 a")!.getAttribute("href"), "/org?proposal=op-54");
   const carried = top[0].querySelector(":scope > details[data-company-refs]")!;
   assert.match(carried.querySelector("summary")!.textContent!, /^Also carries 9 projects, listed under the goals nearest the work\.$/, "a purpose over every project counts them");
   assert.equal(carried.querySelectorAll("a[href^='/projects/']").length, 9, "and opens to each by name");
@@ -292,127 +253,19 @@ async function verifyCompany() {
   assert.equal(wouldCarry.getAttribute("data-company-project-ghost"), "proposed");
   assert.equal(wouldCarry.querySelector("[data-ghost-tag]")!.getAttribute("data-ghost-tag"), "proposed");
   none(q("[data-company-goal='in-2'] [data-company-project='pr-6'] [data-ghost-tag]"), "a project a live goal carries is filed");
-  // A live goal keeps its heading and wears its card under it, with what was there before read from the record.
+  // A live goal the proposal moves keeps its heading, under the purpose.
   const moved = q("[data-company-goal='in-2']")!;
   assert.equal(moved.getAttribute("data-company-depth"), "2");
   assert.equal(moved.getAttribute("data-company-goal-kind"), "live");
   assert.ok(moved.querySelector(":scope > header h4[data-company-goal-title] a[href='/goals/in-2']"), "the live heading stays");
-  const place = moved.querySelector(":scope > [data-company-goal-changes='1'] [data-subject='goal:union-in-2']") as HTMLElement;
-  assert.equal(place.getAttribute("data-change-ids"), "union-network");
-  assert.equal(place.querySelector("[data-subject-sentence]")!.textContent, "Move this goal under the purpose.");
-  const sits = place.querySelector("[data-field='parent']")!;
-  assert.equal(sits.getAttribute("data-field-op"), "change");
-  assert.equal(sits.getAttribute("data-field-before"), "at the top level");
-  assert.equal(sits.getAttribute("data-field-after"), "under the purpose", "a goal the proposal sets is the purpose");
-  none(place.querySelector("[data-ghost-tag]"), "no tag on the card");
   assert.ok(document.getElementById("goal-union-purpose"));
-  // Two changes to one goal are one card, in apply order, with a row for each field they move.
-  const proud = q("[data-company-goal='in-4'] > [data-company-goal-changes='2'] [data-subject='goal:union-in-4']")!;
-  assert.equal(proud.getAttribute("data-change-ids"), "union-quality-projects union-quality-shape");
-  assert.equal(proud.querySelector("[data-subject-sentence]")!.textContent, "Move this goal under the purpose, give it two measures and have Agent Quality carry it.");
-  assert.deepEqual([...proud.querySelectorAll("[data-field]")].map((f) => f.getAttribute("data-field")), ["parent", "metrics", "projects"]);
-  assert.equal(proud.querySelector("[data-field='projects']")!.getAttribute("data-field-after"), "Agent Quality");
-  assert.equal(qa("[data-company-goal='in-4'] [data-subject]").length, 1, "and is drawn once");
   // A project the proposal places is drawn under its goal, and is not listed again as carried by nothing.
   assert.equal(qa("[data-company-section='projects'] [data-company-project]").length, 0);
-
-  // Approve puts an answer in the proposal's thread batch and decides nothing: the card still waits, marked "on your next message".
-  calls.length = 0;
-  await click(revenue.querySelector("[data-subject-approve]"));
-  assert.equal(calls.filter((c) => c.startsWith("reply:")).length, 0, "nothing fires on a press");
-  assert.deepEqual(batch().map((c) => [c.proposal.card, c.proposal.verdict, c.proposal.seqs, c.proposal.ordinal]), [["goal:union-revenue", "approve", [2], 2]], "the batch is the author's thread, the item names the card by its number down the proposal");
-  await mount();
-  const pending = q("[data-subject='goal:union-revenue']")!;
-  assert.equal(pending.getAttribute("data-subject-answer"), "approve");
-  assert.equal(pending.getAttribute("data-subject-status"), "proposed", "a pending card never looks decided");
-  assert.equal(pending.querySelector("[data-subject-approve]")!.getAttribute("aria-pressed"), "true");
-  assert.equal(pending.querySelector("[data-subject-pending]")!.textContent, "on your next message");
-  none(pending.querySelector("[data-subject-state]"), "no state word while pending");
-  // Reject joins the batch the same way; its words go into the batch as they are typed (the fake store repaints only on a mount, so the field is opened again with Reply).
-  await click(q("[data-subject='goal:union-funnel'] [data-subject-reject]"));
-  assert.deepEqual(batch().map((c) => [c.proposal.card, c.proposal.verdict]), [["goal:union-revenue", "approve"], ["goal:union-funnel", "reject"]]);
-  await mount();
-  const funnel = q("[data-subject='goal:union-funnel']")!;
-  assert.equal(funnel.getAttribute("data-subject-answer"), "reject");
-  assert.equal(funnel.querySelector("[data-subject-reject]")!.getAttribute("aria-pressed"), "true");
-  await click(funnel.querySelector("[data-subject-reply]"));
-  const field = funnel.querySelector("[data-subject-reply-field='reject'] textarea");
-  assert.ok(field, "the field opens under the entry, writing the rejection's words");
-  await type(field, "Too early; the funnel is not the goal, revenue is.");
-  assert.deepEqual(batch().map((c) => [c.proposal.card, c.proposal.verdict, c.body]), [["goal:union-revenue", "approve", ""], ["goal:union-funnel", "reject", "Too early; the funnel is not the goal, revenue is."]]);
-  assert.ok(funnel.querySelector("[data-subject-reply-field] kbd"), "key hints as KeyCaps");
-  // The foot: once a proposal has answers pending, its reply box stands at the foot of the page, stuck to the bottom, with the rows and the one filled Send; the other proposal still shows its hint.
-  await mount();
-  assert.equal(q("[data-company-replies]")!.getAttribute("data-company-replies"), "pending");
-  const feet = qa("[data-company-replies] [data-proposal-reply-box]");
-  assert.equal(feet.length, 1, "only the proposal with answers pending");
-  assert.equal(feet[0].getAttribute("data-proposal-reply-box"), "2");
-  assert.equal(feet[0].querySelector("[data-send-answers]")!.getAttribute("data-send-answers"), "2");
-  assert.ok(feet[0].querySelector("textarea[data-proposal-reply-typed]"), "a reply to add, optional");
-  none(feet[0].querySelector("[data-reply-no-thread]"), "the proposal has a thread: the agent is told");
-  assert.equal(qa("[data-company-replies] [data-reply-hint]").length, 1);
-  // Send applies the answers through the reply action with what that proposal showed, told to the author's thread; the batch empties.
-  await click(feet[0].querySelector("[data-send-answers]"));
-  assert.deepEqual(calls.filter((c) => c.startsWith("reply:")), [`reply:fixture-union-goals-proposal:approve@2;reject@3=Too early; the funnel is not the goal, revenue is.:1,2,3,4,5,6,7,8,9,10,11:${THREAD}`]);
-  assert.equal(batch().length, 0);
-  await mount();
-  assert.equal(qa("[data-proposal-reply-box]").length, 0);
-  const accepted = q("[data-subject='goal:union-revenue']")!;
-  assert.equal(accepted.getAttribute("data-subject-status"), "accepted");
-  none(accepted.querySelector("[data-subject-approve]"), "decided: no controls");
-  assert.equal(accepted.querySelector("[data-subject-state]")!.textContent, "Approved");
-  none(q("[data-company-goal-ghost='union-revenue'] ~ [data-company-projects] [data-company-project='pr-9'] [data-ghost-tag]"), "an accepted goal's project is as good as filed");
-  // The rejected goal is not coming: the document draws nothing for it.
-  none(q("[data-subject='goal:union-funnel']"), "rejected: no card");
-  none(q("[data-company-goal-ghost='union-funnel']"), "rejected: no heading");
-  assert.equal(qa("[data-company-section='goals'] > [data-company-goal] > [data-company-subgoals] > [data-company-goal]").length, 8);
-
-  // Role changes draw in the people section as cards: a role to hire stands on its own and is named; a change on a live role sits under the role and says "this role".
-  const hire = q("[data-company-section='people'] > [data-company-staffing='1'] [data-subject='role:broker-outreach']")!;
-  assert.equal(hire.querySelector("[data-subject-sentence]")!.textContent, "Add the role Broker Outreach Lead, reporting to you.");
-  assert.equal(hire.querySelector("[data-subject-sentence] b")!.textContent, "Broker Outreach Lead", "the role's name is the one bold run");
-  assert.equal(document.getElementById("change-union-staff-outreach")?.contains(hire), true, "where a name the proposal creates links to");
-  assert.equal(hire.querySelector("[data-field='handle']")!.getAttribute("data-field-after"), "@broker-outreach");
-  assert.equal(hire.querySelector("[data-field='area']")!.getAttribute("data-field-after"), "Broker Outreach");
-  none(hire.querySelector(".truncate"), "nothing on a card is cut short");
-  none(hire.querySelector("[data-tree-node]"), "not the proposal card's framed node");
-  const area = q("[data-company-role='or-36'] [data-subject='role:agent-quality']")!;
-  assert.equal(area.querySelector("[data-subject-sentence]")!.textContent, "Have this role look after Callers & Call Management.");
-  assert.equal(area.querySelector("[data-field='area']")!.getAttribute("data-field-before"), "Agent Quality", "what it looks after today, from the tree");
-  assert.equal(area.querySelector("[data-field='area']")!.getAttribute("data-field-after"), "Agent Quality, Callers & Call Management");
-  // Its answer joins the same thread batch; seen is that proposal's own rows.
-  await click(hire.querySelector("[data-subject-approve]"));
-  assert.deepEqual(batch().map((c) => [c.proposal.id, c.proposal.card, c.proposal.verdict]), [["fixture-union-staff-proposal", "role:broker-outreach", "approve"]]);
-  await mount();
-  await click(q("[data-company-replies] [data-send-answers='1']"));
-  assert.ok(calls.includes(`reply:fixture-union-staff-proposal:approve@1:1,2:${THREAD}`), calls.join("\n"));
-
-  // Approving the purpose keeps its sentence in the header; it never reads as none written.
-  await mount();
-  await click(q("[data-subject='goal:union-purpose'] [data-subject-approve]"));
-  await mount();
-  await click(q("[data-company-replies] [data-send-answers='1']"));
-  await mount();
-  assert.equal(q("[data-company-purpose-line]")!.getAttribute("data-company-purpose-line"), "accepted");
-  assert.match(q("[data-company-purpose]")!.textContent!, /^Union is a curated relationship network.*accepted$/);
-  assert.equal(q("[data-subject='goal:union-purpose'] [data-subject-state]")!.textContent, "Approved");
-
-  // A change that only writes a goal's record joins the goal's card and says what it writes, in words.
-  state.orgProposalChanges = { ...state.orgProposalChanges, "record-only": { ...fx.COMPANY_FIXTURE_CHANGES[5], _id: "record-only", seq: 40, status: "proposed", change: { kind: "initiative_shape", initiative: "in-1", done_when: "Every active project names a lead for a month." } } };
-  await mount();
-  const record = q("[data-company-goal='in-1'] [data-subject='goal:union-in-1']")!;
-  assert.equal(record.getAttribute("data-change-ids"), "union-leads record-only");
-  assert.equal(record.querySelector("[data-subject-sentence]")!.textContent, "Move this goal under the purpose and record what done looks like on it.");
-  assert.equal(record.querySelector("[data-field='done_when']")!.getAttribute("data-field-after"), "Every active project names a lead for a month.");
-  assert.ok(record.querySelector("[data-subject-approve]"));
-  delete state.orgProposalChanges["record-only"];
+  // A role the proposal would hire is not drawn here: the people section holds the roles that exist.
+  assert.deepEqual(qa("[data-company-role]").map((r) => r.getAttribute("data-company-role")), ["or-35", "or-36"]);
 
   // ── a narrow pane: one column, the chips under the heading, a project's facts under its name ──
   env.width = 390;
-  await mount();
-  const phoneCard = q("[data-subject='goal:union-cost']")!;
-  assert.equal(phoneCard.getAttribute("data-layout"), "auto", "the card asks its own width for where the answers sit");
-  assert.ok(phoneCard.querySelector("[data-subject-verdicts] [data-subject-approve]"));
   state.orgProposals = {}; state.orgProposalChanges = {};
   await mount();
   assert.equal(q("[data-company-document]")!.getAttribute("data-company-layout"), "narrow");
@@ -450,6 +303,6 @@ async function verifyCompany() {
   await act(async () => root.unmount());
 }
 
-test("company document mount: the sections, a goal's chips, every name a link, proposals in place, a narrow pane", async () => {
+test("company document mount: the sections, a goal's chips, every name a link, proposals placed and linked, a narrow pane", async () => {
   await verifyCompany();
 }, 600_000);

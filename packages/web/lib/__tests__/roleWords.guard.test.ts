@@ -47,6 +47,21 @@ const ALLOWED: ReadonlyArray<[string, string]> = [
   // Team chat's hourly mention limit for agents: a rate, not a role's limit.
   ["packages/web/components/chat/ChatMessage.tsx", "hourly mention cap"],
   ["packages/web/lib/chatMentionWakes.ts", "over the hourly cap"],
+  ["packages/web/components/evals/__fixtures__/world/multiplayer.ts", "hourly wake caps hold"],
+  ["packages/web/components/evals/__fixtures__/world/multiplayer.ts", "under the mention caps"],
+  // The hosted assistant's paid plan: a month's allowance of use, billing, not a role's limit.
+  ["packages/web/components/simple/lane.ts", "month's allowance"],
+  ["packages/web/components/simple/lane.ts", "Allowance used"],
+  ["packages/web/components/simple/lane.ts", "plan's allowance"],
+  ["packages/web/components/simple/planWords.ts", "allowance each month"],
+  ["packages/web/components/settings/SettingsModal.tsx", "billing usage allowance"],
+  ["packages/web/lib/navPages.ts", "plan usage billing allowance"],
+  // A line's size budget: how many changed lines one change may hold.
+  ["packages/web/lib/lineSettings.ts", "Size budget"],
+  ["packages/web/lib/navPages.ts", "ship size bud"],
+  ["packages/web/lib/line/shippedLine.generated.ts", "size budget"],
+  // A sample request a person might give the assistant: a trip's money.
+  ["packages/web/components/simple/assistantPromise.ts", "rough budget"],
 ];
 // A command name (`cast cap`) is not the word.
 const COMMAND = /cast cap\b/g;

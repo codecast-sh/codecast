@@ -48,8 +48,6 @@ test("each filter is one lens on the same tree, read only, with no session stack
   expect(last().changes.length).toBe(UNION_GOALS_CHANGES.length);
   expect(last().view.sessionCards).toBe(false);
   expect(last().canDrag({ kind: "role" })).toBe(false);
-  expect(last().ghostAnswers).toBeUndefined();
-  expect(last().onEditAccept).toBeUndefined();
   expect(q("[data-org-map='everything'][data-org-map-proposed='on']", el)).not.toBeNull();
   // The overlay off: the company as it is.
   await render("everything", false);

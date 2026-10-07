@@ -123,9 +123,14 @@ describe("the panel answers who acts next (F4.3)", () => {
   test("the group order is the inbox's rendered order", () => {
     // GlobalSessionPanel renders its status sections top down as "who acts
     // next"; the panel must not restate that order differently.
-    const src = readFileSync(join(import.meta.dir, "../../components/GlobalSessionPanel.tsx"), "utf8");
-    const rendered = [...src.matchAll(/renderSection\("(Needs Input|Done|Working|Dormant)"/g)].map((m) => m[1].toLowerCase());
-    expect(rendered).toEqual(HAND_GROUPS.filter((g) => g.state !== "idle").map((g) => g.label.toLowerCase()));
+    // The status branch runs from Questions to the empty state; a section is
+    // labelled either literally or by its mode word (words.sectionX).
+    const file = readFileSync(join(import.meta.dir, "../../components/GlobalSessionPanel.tsx"), "utf8");
+    const src = file.slice(file.indexOf("renderSection(words.sectionQuestions"), file.indexOf("sortedSessions.length === 0"));
+    const STATE: Record<string, string> = { NeedsInput: "needs_input", Done: "done", Working: "working", Dormant: "dormant" };
+    const rendered = [...src.matchAll(/renderSection\((?:"(Needs Input|Done|Working|Dormant)"|words\.section(NeedsInput|Working|Dormant)\b)/g)]
+      .map((m) => STATE[(m[1] ?? m[2]).replace(" ", "")]);
+    expect(rendered).toEqual(HAND_GROUPS.filter((g) => g.state !== "idle").map((g) => g.state));
     expect(HAND_GROUPS[HAND_GROUPS.length - 1].state).toBe("idle");
   });
 

@@ -124,3 +124,11 @@ export const ORG_FIXTURE: OrgTree = {
 
 /** All fixture sessions, for tests that page through sessionsUnder. */
 export const ORG_FIXTURE_ALL_SESSIONS: OrgSession[] = [...mine, ...sams, ...growth];
+
+/** The tree with a Head of People seated, its standing conversation
+ *  `fixture-head-conv`: the org screen's preview tree and the mount tests'
+ *  head-of-people tree. */
+export const ORG_FIXTURE_WITH_HEAD: OrgTree = {
+  ...ORG_FIXTURE,
+  roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-head", short_id: "or-9", handle: "head-of-people", name: "Head of People", avatar: "owl", standing: { conversation_id: "fixture-head-conv", short_id: "jx7ch1f" } }],
+};

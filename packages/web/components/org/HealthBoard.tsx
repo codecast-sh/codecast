@@ -4,17 +4,16 @@
 // it against how much it closed, and what needs a person) and each line
 // carries the work flowing to it. What waits on the person runs as one row
 // above the chart; a role opens in a drawer under the chart with its week,
-// what is stuck, and the two levers a person has; the Head of People's
-// conversation is its own column. Every number comes from orgFlow.ts over
-// org.health; this file computes none.
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRightLeft, ExternalLink, MessageSquareText, PanelRightClose, PanelRightOpen, Sparkles, X } from "lucide-react";
+// what is stuck, and the two levers a person has. The Head of People's
+// conversation is the org screen's (S41); a proposal row links there. Every
+// number comes from orgFlow.ts over org.health; this file computes none.
+import { useMemo, useState, type ReactNode } from "react";
+import { ArrowRightLeft, ExternalLink, MessageSquareText, Sparkles, X } from "lucide-react";
 import Link from "next/link";
 import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { OrgButton } from "./OrgButton";
 import { RoleFace } from "./RoleFace";
-import { Composer } from "./StaffingPane";
 import { AreaDetail, AskRole, HealthNote, ReviewEndedLine, ReviewSessionLink } from "./healthParts";
 import { needsYou, type NeedsYouItem } from "./staffingModel";
 import { companyFlow, flowDays, moveAsk, projectCap, projectMove, type RoleFlow } from "./orgFlow";
@@ -51,14 +50,12 @@ export type HealthBoardProps = {
   onTrigger?: (taskId: string, verb: "pause" | "resume" | "runNow") => void;
   onSetTriggerEvery?: (taskId: string, intervalMs: number) => void;
   onSendToRole?: (conversationId: string, text: string) => void;
-  onResumeHeadOfPeople?: (roleId: string) => void;
   /** Set a role's daily limit, when the viewer may edit that role. */
   onSetLimit?: (roleId: string, perDay: number) => void;
   canEditRole?: (roleId: string) => boolean;
 };
 
 const BORDER = "color-mix(in srgb, var(--sol-border) 30%, transparent)";
-const HEAD_W = 400;
 /** The drawer's share of the map's height; the page hands the same number to the chart's fit. */
 export const HEALTH_DRAWER_FRACTION = 0.5;
 
@@ -67,21 +64,6 @@ export function HealthBoard(props: HealthBoardProps) {
   const days = flowDays(now);
   const items = useMemo(() => needsYou(tree, health, props.queue, props.proposals, null), [tree, health, props.queue, props.proposals]);
   const open = flows.find((f) => f.role._id === props.focusRoleId) ?? null;
-  // The board measures itself before the first paint: beside the app's own
-  // sidebars the page can be 1100px or 2400px, and the chart must keep room.
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    setWidth(el.getBoundingClientRect().width);
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [props.phone]);
-  const [chatChoice, setChatOpen] = useState<boolean | null>(null);
-  const chatOpen = chatChoice ?? (width === 0 || width >= 1260);
   const notes = (
     <>
       {props.reviewing && props.reviewSessionId && <ReviewSessionLink id={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
@@ -105,16 +87,16 @@ export function HealthBoard(props: HealthBoardProps) {
             </div>
           ))}
         </div>
-        {props.head?.standing?.conversation_id && (
-          <OrgButton className="mt-4 w-full" onClick={() => props.onOpenSession(props.head!.standing!.conversation_id!)}>
+        {props.head && (
+          <Link href="/org" className="mt-4 inline-flex w-full items-center justify-center gap-1.5 h-9 rounded-lg border text-[12.5px] font-medium no-underline hover:bg-sol-bg-highlight/60" style={{ borderColor: BORDER, color: "var(--sol-text)" }} data-health-talk>
             <MessageSquareText className="w-3.5 h-3.5" /> Talk to {props.head.name}
-          </OrgButton>
+          </Link>
         )}
       </div>
     );
   }
   return (
-    <div ref={rootRef} className="h-full flex min-h-0" data-health-page="desktop">
+    <div className="h-full flex min-h-0" data-health-page="desktop">
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
         <WaitingRow items={items} now={now} onAnswer={props.onAnswerDecision} onOpenSession={props.onOpenSession} onPickProposal={props.onPickProposal} onSend={props.onSendToRole} lead={<WeekLine flows={flows} days={days} />} />
         <div className="relative flex-1 min-h-0" data-health-map>
@@ -128,7 +110,6 @@ export function HealthBoard(props: HealthBoardProps) {
           )}
         </div>
       </div>
-      <HeadColumn head={props.head} open={chatOpen} onToggle={() => setChatOpen(!chatOpen)} onOpenSession={props.onOpenSession} onResume={props.onResumeHeadOfPeople} />
     </div>
   );
 }
@@ -204,7 +185,7 @@ function WaitingCard({ it, now, onAnswer, onOpenSession, onPickProposal, onSend,
       )}
       {it.kind === "blocked" && replying && <AskRole role={it.role} conversationId={it.conversationId} onSend={onSend} onOpenSession={onOpenSession} />}
       <div className="flex items-center gap-1">
-        {it.kind === "proposal" && <OrgButton size="sm" primary onClick={() => onPickProposal(it.proposal.short_id)} data-needs-you-open>Review the changes</OrgButton>}
+        {it.kind === "proposal" && <OrgButton size="sm" primary onClick={() => onPickProposal(it.proposal.short_id)} data-needs-you-open data-needs-you-review={it.proposal.short_id}>Review the changes</OrgButton>}
         {it.kind === "blocked" && !replying && onSend && <OrgButton size="sm" primary onClick={() => setReplying(true)} data-needs-you-reply>Reply</OrgButton>}
         {conv && (
           <button type="button" onClick={() => onOpenSession(conv)} className="inline-flex items-center gap-1 text-[11.5px] h-7 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-needs-you-open>
@@ -377,43 +358,5 @@ function MoveSide({ f, after, days, atCap }: { f: RoleFlow; after: number[]; day
         <span className="text-[10.5px] tabular-nums text-right" style={{ color: atCap > 0 ? FLOW_TONE.limit : "var(--sol-text-dim)" }}>{atCap}/7 days<br />at limit</span>
       </div>
     </div>
-  );
-}
-
-// ---------------------------------------------------------------- the Head of People's column
-
-function HeadColumn({ head, open, onToggle, onOpenSession, onResume }: { head: OrgRole | null; open: boolean; onToggle: () => void; onOpenSession: (id: string) => void; onResume?: (roleId: string) => void }) {
-  if (!head) return null;
-  const conv = head.standing?.conversation_id ?? null;
-  if (!open) {
-    return (
-      <button type="button" onClick={onToggle} className="shrink-0 w-11 border-l flex flex-col items-center gap-3 pt-3 hover:bg-sol-bg-highlight/40" style={{ borderColor: BORDER }} title={`Talk to ${head.name}`} data-head-column="closed">
-        <PanelRightOpen className="w-4 h-4" style={{ color: "var(--sol-text-dim)" }} />
-        <RoleFace role={head} size={24} />
-        <span className="text-[11px] font-medium [writing-mode:vertical-rl] rotate-180" style={{ color: "var(--sol-text-muted)" }}>Talk to {head.name}</span>
-      </button>
-    );
-  }
-  return (
-    <aside className="shrink-0 border-l flex flex-col min-h-0" style={{ width: HEAD_W, borderColor: BORDER, background: "color-mix(in srgb, var(--sol-bg-alt) 40%, var(--sol-bg))" }} data-head-column="open">
-      <div className="shrink-0 h-12 px-3 flex items-center gap-2.5 border-b" style={{ borderColor: BORDER }}>
-        <RoleFace role={head} size={26} />
-        <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-semibold truncate" style={{ color: "var(--sol-text)" }}>{head.name}</span>
-          <span className="block text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }} title={head.standing?.state_line ?? undefined}>{head.standing?.state_line || "Ask about anything on this page."}</span>
-        </span>
-        {conv && (
-          <button type="button" onClick={() => onOpenSession(conv)} className="shrink-0 inline-flex items-center gap-1 text-[11px] h-7 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} title="Open the full thread">
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
-        )}
-        <button type="button" onClick={onToggle} className="shrink-0 h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} title="Hide the conversation" data-head-column-close>
-          <PanelRightClose className="w-4 h-4" />
-        </button>
-      </div>
-      <div className="flex-1 min-h-0">
-        <Composer head={head} onOpenSession={onOpenSession} onResume={onResume} fill />
-      </div>
-    </aside>
   );
 }

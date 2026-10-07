@@ -31,12 +31,11 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
 import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutEdge, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget, ORG_SIZES, roleNodeId } from "./orgLayout";
 import { ClusterCard, HealthRoleCard, PersonCard, RoleCard, SessionCard, type HealthRoleNodeData } from "./OrgNodeCards";
-import { bandOrigin, computeOrgViewport, FIT_PAD, hiddenRoots } from "./orgViewport";
+import { bandOrigin, computeOrgViewport, FIT_PAD, hiddenRoots, panIntoView } from "./orgViewport";
 import { useZoomLevel, type ZoomLevel } from "./orgZoom";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
 import { GHOST, healthFlagsByNode } from "./orgMeta";
 import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
-import type { GhostAnswers } from "./ProposalLedger";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./OrgFlowEdges";
 import type { FlowMap, RoleFlow } from "./orgFlow";
@@ -50,9 +49,6 @@ import { GOALS_EDGE_TYPES, GOALS_NODE_TYPES, type GoalsEdgeData } from "./GoalsN
 const SPINE = { w: ORG_SIZES.healthRole.w, h: ORG_SIZES.healthRole.h };
 /** The health map fits its whole tree down to this zoom: cards and counts stay legible. */
 const FLOW_READABLE_ZOOM = 0.42;
-
-/** The goals lens fits its outline down to this zoom, then fits the width and pans down. */
-const GOALS_READABLE_ZOOM = 0.6;
 
 const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard, healthRole: HealthRoleCard, ...GOALS_NODE_TYPES };
 const ORG_EDGE_TYPES = { ...ORG_FLOW_EDGE_TYPES, ...GOALS_EDGE_TYPES };
@@ -113,12 +109,6 @@ export type OrgGraphProps = {
    *  canvas pans to its ghost and the card shows its action row. */
   focusChangeId?: string | null;
   onFocusChange?: (changeId: string | null) => void;
-  /** The proposal's pending answers by change and the write into their batch
-   *  (useGhostAnswers): a ghost's Approve, Reject and Reply. Absent: read only. */
-  ghostAnswers?: GhostAnswers;
-  /** Edit on a role change opens the hire dialog prefilled (the page owns
-   *  it); every other kind gets the inline form here on the canvas. */
-  onEditRoleChange?: (change: OrgProposalChange) => void;
   /** The lens (S36). `goals` draws the company's goals, the projects that
    *  carry them and who owns each, with the proposal's goal changes as ghosts. */
   lens?: OrgLens;
@@ -150,9 +140,6 @@ function titleOf(n: OrgLayoutNode): string {
 type GhostHandlers = {
   focusChangeId: string | null;
   onFocusChange: (changeId: string) => void;
-  answers?: GhostAnswers["byChange"];
-  onAnswerChange?: GhostAnswers["onAnswer"];
-  onEditChange: (changeId: string, at: { x: number; y: number }) => void;
 };
 
 /** A stable key for the flags on the chart: node, code and severity of each,
@@ -197,7 +184,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, ghostAnswers, onEditRoleChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -271,20 +258,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   const [hoverId, setHoverId] = useState<string | null>(null);
 
   const handlers = useMemo(() => ({ onToggleCollapse, onExpandCluster, onCollapseCluster }), [onToggleCollapse, onExpandCluster, onCollapseCluster]);
-  const changeById = useMemo(() => new Map((changes ?? []).map((c) => [c._id, c])), [changes]);
-  const ghostHandlers = useMemo<GhostHandlers>(() => ({
-    focusChangeId,
-    onFocusChange: (id) => onFocusChange?.(id),
-    answers: ghostAnswers?.byChange,
-    onAnswerChange: ghostAnswers ? (id, answer) => ghostAnswers.onAnswer(id, answer) : undefined,
-    // Edit on a role change opens the page's hire dialog; the chart has no form of its own.
-    onEditChange: (id) => {
-      const c = changeById.get(id);
-      if (!c) return;
-      onFocusChange?.(id);
-      if (c.change.kind === "role") onEditRoleChange?.(c);
-    },
-  }), [focusChangeId, onFocusChange, ghostAnswers, onEditRoleChange, changeById]);
+  const ghostHandlers = useMemo<GhostHandlers>(() => ({ focusChangeId, onFocusChange: (id) => onFocusChange?.(id) }), [focusChangeId, onFocusChange]);
   const flowNodes = useMemo(() => {
     if (goals) return goalsFlowNodes(goals, selectedId, ghostHandlers);
     const nodes = toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode);
@@ -331,7 +305,10 @@ function OrgGraphInner(props: OrgGraphProps) {
   // Flow's own measurement (which a hidden tab never delivers).
   const rootSig = goals ? `goals|${goals.nodes.length}` : rawLayout.nodes.filter((n) => n.y === 0).map((n) => n.id).join("|");
   const fitted = useRef<string | null>(null);
-  const readableZoom = goals ? GOALS_READABLE_ZOOM : flow ? FLOW_READABLE_ZOOM : undefined;
+  // The goals map keeps the default floor: its labels are 12px, and the fit
+  // never shows them under 11px. A pane too narrow for both columns fits the
+  // outline alone (orgViewport.fitTarget) and leaves the owners to a pan.
+  const readableZoom = flow ? FLOW_READABLE_ZOOM : undefined;
   const focusId = useMemo(() => layout.nodes.find((n) => n.kind === "person" && n.person.is_me)?.id ?? null, [layout]);
   // Which root cards sit past the free canvas' edges: drives the fades and the
   // "+N more" pills. A programmatic setViewport does not fire the viewport
@@ -348,7 +325,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   const fit = useCallback((animate: boolean): boolean => {
     const el = wrapRef.current;
     if (!el || el.clientWidth === 0) return false;
-    const vp = computeOrgViewport(boxes, el.clientWidth, el.clientHeight, panelWidth, focusId, null, el.clientHeight * panelHeightFraction, readableZoom);
+    const vp = computeOrgViewport(boxes, el.clientWidth, el.clientHeight, panelWidth, focusId, el.clientHeight * panelHeightFraction, readableZoom);
     if (!vp) return false;
     // Animated viewport moves ride frame timers, which a hidden tab never gets.
     const current = rf.getViewport();
@@ -407,27 +384,21 @@ function OrgGraphInner(props: OrgGraphProps) {
     return () => ro.disconnect();
   }, [fit, viewportReady]);
 
-  // The focus target pans to the centre of the free canvas (left of the
-  // panel, above the phone sheet) at the current zoom, and again when the
-  // panel opens or closes around it. A programmatic move, so the cue
-  // recomputes from the target viewport.
+  // The focus target (a hover from the conversation, a link, a strip click)
+  // pans only when its card is not fully in the free canvas (left of the
+  // panel, above the phone sheet), and then by the least that shows it, held
+  // to the tree's edges (orgViewport.panIntoView): a pointer moving down a
+  // list of cards never drags the map about, and a jump never strands half
+  // the tree off the pane. Re-runs when the panel opens or closes around it.
+  // A programmatic move, so the cue recomputes from the target viewport.
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!focusNodeId || !el || !viewportReady) return;
-    // A hover from the conversation lights the node and pans only when it is off screen, so a pointer moving down a list of cards never drags the map about.
-    if (focusTarget?.ifHidden) {
-      const n = boxes.find((b) => b.id === focusNodeId);
-      const cur = rf.getViewport();
-      if (n) {
-        const left = n.x * cur.zoom + cur.x, top = n.y * cur.zoom + cur.y, right = (n.x + n.w) * cur.zoom + cur.x, bottom = (n.y + n.h) * cur.zoom + cur.y;
-        if (left >= 0 && top >= 0 && right <= el.clientWidth - panelWidth && bottom <= el.clientHeight * (1 - panelHeightFraction)) return;
-      }
-    }
-    const vp = computeOrgViewport(boxes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction, readableZoom);
-    if (!vp) return;
+    const next = panIntoView(boxes, focusNodeId, rf.getViewport(), { w: el.clientWidth - panelWidth, h: el.clientHeight * (1 - panelHeightFraction) });
+    if (!next) return;
     userMoved.current = true;
-    rf.setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: document.hidden ? 0 : 280 });
-    recomputeCue({ x: vp.x, y: vp.y, zoom: vp.zoom });
+    rf.setViewport(next, { duration: document.hidden ? 0 : 280 });
+    recomputeCue(next);
   }, [focusNodeId, focusSeq, viewportReady, panelWidth, panelHeightFraction]);
 
   // Escape clears the selection unless the user is typing somewhere. Only

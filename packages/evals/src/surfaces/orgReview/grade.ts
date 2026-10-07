@@ -228,9 +228,13 @@ export const roleHandles = (d: any): string[] => [
  * Every handle a letter could wrongly remember, as grade.py's pool was: the
  * historical pool saved with the labels (every role any old round proposed,
  * every old served roster), every snapshot's roster, and every role a run of
- * this surface proposed for the workspace since.
+ * this surface proposed for the workspace up to `before` (a rep's own build
+ * time, hashes.json built_at). Runs built later are left out, so a rep grades
+ * the same on a rescore as it did on its day: a role some later rep proposed
+ * cannot turn a phrase in this rep's letter into a phantom handle after the
+ * fact (two 2026-10-06 reps flipped on `@reply-rate` that way on 2026-10-07).
  */
-export function handlePool(ws: string): Set<string> {
+export function handlePool(ws: string, before?: string): Set<string> {
   const pool = new Set<string>(tryJson(join(labelsDir(ws), 'handle-pool.json')) ?? []);
   const snaps = snapshotsRoot();
   if (existsSync(snaps)) {
@@ -240,15 +244,26 @@ export function handlePool(ws: string): Set<string> {
     }
   }
   const runs = homePaths().runs;
+  const cutoff = before ? Date.parse(before) : NaN;
   if (existsSync(runs)) {
     for (const name of readdirSync(runs)) {
       if (!name.startsWith(`${SURFACE}-`)) continue;
-      if (tryJson(join(runs, name, 'hashes.json'))?.workspace !== ws) continue;
+      const hashes = tryJson(join(runs, name, 'hashes.json'));
+      if (hashes?.workspace !== ws) continue;
+      // A run with no build time (an old round) is history and stays in; one built after this rep is left out.
+      const built = Date.parse(hashes?.built_at ?? '');
+      if (Number.isFinite(cutoff) && Number.isFinite(built) && built > cutoff) continue;
       for (const h of roleHandles(tryJson(join(runs, name, 'proposal.json')))) pool.add(h);
     }
   }
   return pool;
 }
+
+/** The moment a run dir's briefing was built (hashes.json built_at), the pool cutoff a rep grades with; undefined for an old round without one. */
+export const builtAt = (dir: string): string | undefined => {
+  const at = tryJson(join(dir, 'hashes.json'))?.built_at;
+  return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? at : undefined;
+};
 
 /** Which workspace holds each record id: every local snapshot and every workspace's labels, each read as its workspace's. */
 export function workspaceRecordOwners(): ReturnType<typeof recordOwners> {
@@ -349,6 +364,6 @@ export function gradeExisting(dir: string, label: GradeSets | undefined, freeze:
   const { workspace, servedDir } = freezeContext(freeze);
   const ran = tryJson(join(dir, 'hashes.json'))?.served;
   if (ran && !basename(servedDir).endsWith(String(ran))) console.error(`note: ${dir} ran on served "${ran}", graded against ${basename(servedDir)}`);
-  const g = gradeDir(dir, { workspace, servedDir, sets: label ?? loadGradeSets(workspace), pool: handlePool(workspace), frozenReads: true });
+  const g = gradeDir(dir, { workspace, servedDir, sets: label ?? loadGradeSets(workspace), pool: handlePool(workspace, builtAt(dir)), frozenReads: true });
   return scoreOf(g.gates, g.checks);
 }

@@ -10,7 +10,7 @@ import { servedReadKey } from '../../served';
 import { assembleProposals } from './assemble';
 import { buildBriefing, CHECK_SCRIPT } from './build';
 import { checkProposal } from './checkProposal';
-import { gradeAuto, refuseArchive, type GradeSets } from './grade';
+import { builtAt, gradeAuto, handlePool, refuseArchive, type GradeSets } from './grade';
 import { meta } from './meta';
 import { mergePresentation, parseRubric, parseVerdict, presentationRefusal, RUBRIC_DOC, runSnapshotDir } from './present';
 
@@ -171,6 +171,30 @@ describe('org-review, synthetic', () => {
       expect(run({ served: 'base3', workspace: 'union' })).toBe(join(snaps, 'union-base3'));
       // An old round that names no workspace and a served name two workspaces share is ambiguous.
       expect(run({ served: 'base3' })).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.CODECAST_EVALS_HOME;
+      else process.env.CODECAST_EVALS_HOME = prev;
+    }
+  });
+
+  test("the handle pool a rep grades with holds the roles of runs built up to its own build time, so a later rep's role cannot flip it on rescore", () => {
+    const home = tmp('org-pool-');
+    const prev = process.env.CODECAST_EVALS_HOME;
+    process.env.CODECAST_EVALS_HOME = home;
+    try {
+      const run = (name: string, built_at: string | undefined, handle: string) => {
+        const d = join(home, 'runs', `org-review-${name}`);
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, 'hashes.json'), JSON.stringify({ workspace: 'acme', ...(built_at ? { built_at } : {}) }));
+        writeFileSync(join(d, 'proposal.json'), JSON.stringify({ changes: [role(handle)] }));
+      };
+      run('early', '2026-10-06T22:00:00.000Z', 'growth');
+      run('late', '2026-10-07T07:00:00.000Z', 'reply-rate');
+      run('old-round', undefined, 'ops');
+      expect([...handlePool('acme', '2026-10-06T23:00:00.000Z')].sort()).toEqual(['growth', 'ops']);
+      expect([...handlePool('acme')].sort()).toEqual(['growth', 'ops', 'reply-rate']);
+      expect(builtAt(join(home, 'runs', 'org-review-early'))).toBe('2026-10-06T22:00:00.000Z');
+      expect(builtAt(join(home, 'runs', 'org-review-old-round'))).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.CODECAST_EVALS_HOME;
       else process.env.CODECAST_EVALS_HOME = prev;

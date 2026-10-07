@@ -17,17 +17,20 @@ export function QueueEmpty({ last, title, lede, children }: {
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-24 gap-3 text-center" data-queue-empty>
-      <div className="text-2xl text-sol-text">{title}</div>
+      <div className="text-2xl text-sol-text" data-queue-empty-title>{title}</div>
       <div className="text-sm text-sol-text-muted max-w-md">{lede}</div>
-      {children}
       {last && (
         // The line keeps inside the screen at any width: only the title gives way.
-        <Link href={last.href} title={last.title} className="mt-3 inline-flex w-full max-w-md justify-center items-baseline gap-1.5 px-4 text-[12px] text-sol-text-dim hover:text-sol-text transition-colors" data-queue-last-closed>
-          <span className="shrink-0 text-sol-text-muted">{last.verdict}:</span>
-          <span className="min-w-0 truncate">{last.title}</span>
-          {last.ago && <span className="shrink-0">· {last.ago}</span>}
+        // One muted run with single spaces: "You said yes: set up the routine
+        // “Bins” · just now". Only the title part gives way at a narrow width.
+        <Link href={last.href} title={last.title} className="mt-3 inline-flex w-full max-w-md justify-center items-baseline px-4 text-[12px] text-sol-text-dim hover:text-sol-text transition-colors" data-queue-last-closed>
+          <span className="min-w-0 truncate">{`${last.verdict}: ${last.title}`}</span>
+          {last.ago && <span className="shrink-0 whitespace-pre">{` · ${last.ago}`}</span>}
         </Link>
       )}
+      {/* The scope's overflow comes last: the empty state, what was just
+          answered here, then where more lives. */}
+      {children}
     </div>
   );
 }

@@ -1136,6 +1136,34 @@ describe("record groups (S9, revised)", () => {
     expect(orgRecordGroups([row(1, { kind: "plan_status", plan: "pl-3", status: "done", reason: "r", title: "pl-3" })])[0]).toEqual({ key: "plan:pl-3", kind: "plan", ref: "pl-3", seqs: [1], totals: [{ noun: "plan", act: "done", count: 1 }] });
     expect(orgRecordGroups([])).toEqual([]);
   });
+  test("plans settled on their own fold into one N plans group after the projects and plans and before loose; a plan with tasks under it, or one alone, keeps its name", () => {
+    const plan = (seq: number, ref: string, status: string, project?: string) => row(seq, { kind: "plan_status", plan: ref, status, reason: "r", title: `Plan ${seq}`, ...(project ? { project } : {}) });
+    const rows = [
+      plan(1, "pl-1", "done"), plan(2, "pl-2", "abandoned"), plan(3, "pl-3", "active"),
+      plan(4, "pl-4", "done"), row(5, { kind: "task_status", task: "ct-5", status: "done", reason: "r", plan: "pl-4" }),
+      plan(6, "pl-6", "done", "pr-1"),
+      row(7, { kind: "task_status", task: "ct-7", status: "dropped", reason: "r" }),
+    ];
+    const groups = orgRecordGroups(rows);
+    expect(groups.map((g) => [g.key, g.kind, g.title, g.seqs])).toEqual([
+      ["plan:pl-4", "plan", "Plan 4", [4, 5]],
+      ["project:pr-1", "project", undefined, [6]],
+      ["plans", "plans", "3 plans", [1, 2, 3]],
+      ["loose", "loose", undefined, [7]],
+    ]);
+    expect(recordGroupTotalsLine(groups[2])).toBe("1 plan done, 1 plan abandoned and 1 plan reopened");
+    // The asks: a close reads as Close, a mix as Settle; the effect is the totals.
+    const asks = deriveAsks(rows as any);
+    expect(asks.map((a) => [a.title, a.effect, a.seqs])).toEqual([
+      ["Settle 2 records under the plan Plan 4", "1 plan done and 1 task done. No work starts or stops.", [4, 5]],
+      ["Mark the plan Plan 6 as done", "1 plan done. No work starts or stops.", [6]],
+      ["Settle 3 plans", "1 plan done, 1 plan abandoned and 1 plan reopened. No work starts or stops.", [1, 2, 3]],
+      ["Mark the task ct-7 as dropped", "1 task dropped. No work starts or stops.", [7]],
+    ]);
+    expect(deriveAsks(rows.slice(0, 2) as any)[0].title).toBe("Close 2 plans");
+    // One plan on its own is still its own group, named by the plan.
+    expect(orgRecordGroups([plan(1, "pl-1", "done")]).map((g) => [g.kind, g.title])).toEqual([["plan", "Plan 1"]]);
+  });
   test("the asks of a record proposal are its groups, with the totals as the effect", () => {
     const asks = deriveAsks([
       { seq: 1, change: { kind: "task_status", task: "ct-1", status: "done", reason: "r", project: "pr-1" } },

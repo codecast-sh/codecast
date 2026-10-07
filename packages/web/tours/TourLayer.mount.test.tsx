@@ -1,22 +1,23 @@
 // The spotlight (tours/TourLayer.tsx) mounted in jsdom against a page of
-// anchors: a step opens the panel it points at, an optional step with no
-// target is skipped and left out of the count, the keys move and close, the
-// "do it now" button clicks its control, finishing and dismissing write the
-// seen record, and a tour started off its page goes there first.
+// anchors: a step shows over its target, an optional step with no target is
+// skipped and left out of the count, the keys move and close, the "do it
+// now" button clicks its control, finishing and dismissing write the seen
+// record, and a tour started off its page goes there first.
 // Run: bun tours/TourLayer.mount.test.tsx
 import assert from "node:assert/strict";
 import { closeDomWindow } from "../test-helpers/domGlobals";
 
 const pushes: string[] = [];
-let pathname = "/org";
+let pathname = "/org/or-1";
 
 async function run() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM(`<!doctype html><html><body>
-    <div data-org-node="me">me</div>
-    <button data-org-health-open aria-pressed="false">Health</button>
-    <button data-org-hire-gallery>Hire</button>
-    <div id="root"></div></body></html>`, { url: "https://local.codecast.sh/org", pretendToBeVisual: true });
+    <div data-scope-head>card</div>
+    <button data-scope-tab="triggers">Triggers</button>
+    <div data-scope-actions>pause</div>
+    <div data-scope-conversation="c1">ask</div>
+    <div id="root"></div></body></html>`, { url: "https://local.codecast.sh/org/or-1", pretendToBeVisual: true });
   for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "MouseEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
     Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
   }
@@ -44,15 +45,9 @@ async function run() {
   const { isTourSeen, tourSeenId } = await import("./seen");
   const { tourById } = await import("./registry");
 
-  // Health opens its panel when clicked: the page's own behaviour, stubbed.
-  const health = document.querySelector<HTMLButtonElement>("[data-org-health-open]")!;
-  health.addEventListener("click", () => {
-    health.setAttribute("aria-pressed", "true");
-    const page = document.createElement("div");
-    page.setAttribute("data-health-page", "desktop");
-    page.innerHTML = '<section data-needs-you="empty">needs you</section><div data-health-map><span data-week-signal>stuck</span></div><div data-head-column="open">head</div>';
-    document.body.appendChild(page);
-  });
+  // The triggers tab opens its panel when clicked: the page's own behaviour, stubbed.
+  const tab = document.querySelector<HTMLButtonElement>('[data-scope-tab="triggers"]')!;
+  tab.addEventListener("click", () => tab.setAttribute("aria-selected", "true"));
 
   const root = createRoot(document.getElementById("root")!);
   const render = () => act(async () => root.render(React.createElement(TourLayer)));
@@ -65,76 +60,70 @@ async function run() {
   await render();
   assert.equal(q("[data-tour-open]"), null, "nothing runs until started");
 
-  // ── the org page tour: head and role are absent, so they are skipped and
-  //    left out of the count; the proposals step falls back to Health ──
-  assert.equal(startTour("org-page", { replay: true }), true);
+  // ── the role page tour: reports-to is absent, so it is skipped and left
+  //    out of the count; the triggers step's button clicks the tab ──
+  assert.equal(startTour("org-role", { replay: true }), true);
   assert.equal(startTour("nope"), false);
   await render(); await settle();
-  assert.equal(q("[data-tour-open]")!.getAttribute("data-tour-open"), "org-page");
-  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "chart");
+  assert.equal(q("[data-tour-open]")!.getAttribute("data-tour-open"), "org-role");
+  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "card");
   assert.equal(q("[data-tour-count]")!.textContent, "1 of 4");
   assert.ok(q("[data-tour-ring]"), "the target has a ring");
   assert.equal(q("[data-tour-back]"), null, "no Back on the first step");
   await key("ArrowRight");
   await settle(1100);
-  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "proposals", "head and role were skipped");
+  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "triggers", "reports-to was skipped");
   assert.equal(q("[data-tour-count]")!.textContent, "2 of 4");
-  assert.equal(q("[data-tour-action]"), null, "the proposals step has no button of its own");
   await key("ArrowLeft");
   await settle(1100);
-  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "chart", "back skips them too");
+  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "card", "back skips it too");
   await key("ArrowRight"); await settle(1100);
-  await key("ArrowRight"); await settle();
-  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "health");
   // The step's own button clicks the control and moves on.
   const action = q<HTMLButtonElement>("[data-tour-action]")!;
-  assert.equal(action.textContent, "Open Health");
+  assert.equal(action.textContent, "Open Triggers");
   await act(async () => action.click());
   await settle();
-  assert.equal(health.getAttribute("aria-pressed"), "true", "Health was opened");
-  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "hire");
+  assert.equal(tab.getAttribute("aria-selected"), "true", "the tab was opened");
+  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "pause");
+  assert.equal(q("[data-tour-action]"), null, "the pause step has no button of its own");
+  await key("ArrowRight"); await settle();
+  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "ask");
   assert.equal(q("[data-tour-next]")!.textContent, "Done", "the last step says Done");
   await act(async () => q<HTMLButtonElement>("[data-tour-next]")!.click());
   await settle();
   assert.equal(q("[data-tour-open]"), null, "Done closes");
-  assert.ok(useInboxStore.getState().clientState.tips?.completed?.includes(tourSeenId("org-page")), "finished is recorded");
-  assert.ok(isTourSeen(tourById("org-page")!, useInboxStore.getState().clientState));
+  assert.ok(useInboxStore.getState().clientState.tips?.completed?.includes(tourSeenId("org-role")), "finished is recorded");
+  assert.ok(isTourSeen(tourById("org-role")!, useInboxStore.getState().clientState));
 
-  // ── the health tour: its first step opens the panel itself ──
-  document.querySelector("[data-health-page]")?.remove();
-  health.setAttribute("aria-pressed", "false");
-  startTour("org-health", { replay: true });
+  // ── Escape dismisses and records a skip; a later finish upgrades it ──
+  store.updateClientTips({ completed: [], dismissed: [] });
+  startTour("org-role", { replay: true });
   await render(); await settle(300);
-  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "needs-you");
-  assert.ok(document.querySelector("[data-health-page]"), "prepare clicked Health");
-  assert.equal(q("[data-tour-count]")!.textContent, "1 of 4");
-  // Escape dismisses and records a skip; a later finish upgrades it.
+  assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "card");
   await key("Escape");
   await settle();
   assert.equal(q("[data-tour-open]"), null);
   const tips = useInboxStore.getState().clientState.tips!;
-  assert.ok(tips.dismissed?.includes(tourSeenId("org-health")));
-  assert.ok(!tips.completed?.includes(tourSeenId("org-health")));
+  assert.ok(tips.dismissed?.includes(tourSeenId("org-role")));
+  assert.ok(!tips.completed?.includes(tourSeenId("org-role")));
 
   // ── a step whose target never comes and is not optional: the card still
   //    shows, centred, and says so ──
   // (The page shows one of the tour's controls, so the page gate opens.)
-  const ask = document.createElement("div");
-  ask.setAttribute("data-scope-conversation", "c1");
-  document.body.appendChild(ask);
+  const head = document.querySelector("[data-scope-head]")!;
+  head.remove();
   startTour("org-role", { replay: true });
-  pathname = "/org/or-1";
   await render(); await settle(2200);
   assert.equal(q("[data-tour-step]")!.getAttribute("data-tour-step"), "card");
   assert.ok(q("[data-tour-missing]"), "says the control is not on this screen");
   assert.equal(q("[data-tour-ring]"), null);
   endTour("skipped");
-  ask.remove();
+  document.body.prepend(head);
   await render();
 
   // ── a tour started off its page goes there first ──
   pathname = "/inbox";
-  startTour("org-hire", { replay: true });
+  startTour("org-role", { replay: true });
   await render(); await settle();
   assert.deepEqual(pushes, ["/org"]);
   endTour("skipped");

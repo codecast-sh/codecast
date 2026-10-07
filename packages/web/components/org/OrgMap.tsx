@@ -48,7 +48,7 @@ export type OrgMapProps = {
   className?: string;
 };
 
-export const MAP_FILTERS: { filter: MapFilter; label: string; title: string; icon: typeof Users }[] = [
+const MAP_FILTERS: { filter: MapFilter; label: string; title: string; icon: typeof Users }[] = [
   { filter: "everything", label: "Everything", title: "The mission, its goals and projects, and everyone beside them", icon: MapGlyph },
   { filter: "goals", label: "Goals", title: "The goals and the projects that carry them, alone", icon: Flag },
   { filter: "people", label: "People", title: "Who reports to whom", icon: Users },

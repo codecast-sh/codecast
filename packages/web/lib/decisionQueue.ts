@@ -37,7 +37,8 @@
 // text heuristic. Those all fail the same way — the moment the ranking is
 // wrong once, the founder stops trusting the order, and an untrusted queue is
 // worse than a list, because a list at least admits it is unsorted.
-import { BLOCKED_BANNER_KINDS, isStackedAsk } from "@codecast/shared/contracts";
+import { BLOCKED_BANNER_KINDS, isHostedAgentType, isStackedAsk } from "@codecast/shared/contracts";
+import { APPROVAL_ANSWERS } from "@codecast/shared/contracts/assistant";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
@@ -365,6 +366,12 @@ export function sessionHasOpenQuestion(
   resolutions?: QuestionResolutions,
 ): boolean {
   if (s.inbox_killed_at) return false;
+  // A hosted conversation never parks in a terminal. Its approval is always a
+  // decision row (awaitingOkIds is the one home for "waits on your OK"), and
+  // its permission_blocked status flips before that row lands and lags after
+  // it is answered, so reading the status here listed an answered approval
+  // as a "permission prompt" still waiting.
+  if (isHostedAgentType(s.agent_type)) return false;
   // An infrastructure park is not a decision. A session sitting on a usage
   // limit, an expired login, a dropped connection or a dead API request is
   // blocked on plumbing, not on a judgment call — the inbox already badges
@@ -391,4 +398,61 @@ export function pendingDecisionConvIds(
   return ids;
 }
 
+const awaitingOkMemo = new WeakMap<object, Set<string>>();
 
+/** Conversations waiting on an answer to a pending decision row. Hosted mode
+ *  reads "waits on your OK" from this one home (the inbox fold, the row's
+ *  word, the composer, the bell), never from agent_status, which flips before
+ *  the row arrives and after it is answered. Memoized on the collection, so
+ *  every card can ask in a render without a scan each. */
+/** The label a decision row was answered with (APPROVAL_ANSWERS for a
+ *  hosted approval), or undefined while it is open. */
+export function answeredLabel(d: Pick<SessionDecisionItem, "status" | "answer_index" | "options"> | null | undefined): string | undefined {
+  if (d?.status !== "answered" || typeof d.answer_index !== "number") return undefined;
+  const label = d.options?.[d.answer_index]?.label;
+  return typeof label === "string" ? label : undefined;
+}
+
+/** What the person answered, said back to them: "You said yes" for an
+ *  approval's stored labels, else the option they picked. */
+export function answerSaid(label: string): string {
+  if (label === APPROVAL_ANSWERS.approve) return "You said yes";
+  if (label === APPROVAL_ANSWERS.decline) return "You said no";
+  if (label === APPROVAL_ANSWERS.always) return "You said always allow";
+  return `You chose \u201c${label}\u201d`;
+}
+
+/** A question read back as the thing it asked about, for a line that leads
+ *  with the answer: 'Set up the routine "X"?' reads 'set up the routine “X”'.
+ *  The first letter drops its capital only when it begins an ordinary word. */
+export function questionAsStatement(question: string): string {
+  // Curly quotes, as the rest of hosted mode's words set a name.
+  const q = question.trim().replace(/\?+$/, "").replace(/"([^"]*)"/g, "\u201c$1\u201d");
+  return /^[A-Z][a-z]/.test(q) ? q[0].toLowerCase() + q.slice(1) : q;
+}
+
+/** Whether the person said no to one of this conversation's approvals after
+ *  `since` (their last message): the composer then invites a change rather
+ *  than a new chore. Given `now`, only a no from the last DECLINE_HINT_MS. */
+export function hostedDeclinedSince(decisions: Record<string, SessionDecisionItem> | undefined, conversationId: string, since: number, now?: number): boolean {
+  for (const d of Object.values(decisions ?? {})) {
+    const at = d.resolved_at ?? 0;
+    if (d.conversation_id === conversationId && at >= since && (now === undefined || now - at < DECLINE_HINT_MS) && answeredLabel(d) === APPROVAL_ANSWERS.decline) return true;
+  }
+  return false;
+}
+
+/** How long after a no the composer invites a change ("Tell me what to
+ *  change"). Past it a revisit reads as an ordinary answered conversation,
+ *  not as an ask still pending. */
+export const DECLINE_HINT_MS = 10 * 60_000;
+
+export function awaitingOkIds(decisions: Record<string, SessionDecisionItem> | undefined): Set<string> {
+  if (!decisions) return new Set();
+  let ids = awaitingOkMemo.get(decisions);
+  if (!ids) {
+    ids = pendingDecisionConvIds(decisions);
+    awaitingOkMemo.set(decisions, ids);
+  }
+  return ids;
+}

@@ -199,6 +199,8 @@ apply (`ds-N`) keeps working for stacks already created.
 
 ## S5. The org page: ghosts and the staffing pane
 
+(Retired 2026-10-07 by S41: the staffing pane, its asks column and the ghost answer strips are gone; the ghosts themselves are the map's proposal marks, S40. Kept as history.)
+
 Ghosts. Open proposal changes render on the chart merged into the layout:
 
 - role: a ghost node under its proposed parent (a thin violet outline over a soft violet tint, 55% opacity, the role's handle, scope chips, the word "proposed").
@@ -597,6 +599,8 @@ the revise that refused the verdict is always among them), with one toast in
 the server's words. Nothing is applied.
 
 ## S19. A proposal is a conversation with three asks, not a letter with 157 rows
+
+(The asks column beside the thread and the phone's asks sheet were retired 2026-10-07 by S41; the asks live on as the record groups and subject cards inside the conversation's card.)
 
 Written 2026-09-17 after the founder read the pane with S17 and S18 in and
 said it was still overwhelming, and asked for the conversation to lead. He is
@@ -1442,28 +1446,28 @@ the same word in both places.
 A proposed change is a ghost, an accepted one is drawn solid until the store
 carries it, an applied or skipped one draws nothing. An owner nothing answers
 to is a warning tag on the goal, never a dropped change. A click on a ghost
-focuses its change, the way a role ghost's does, and the focused change wears
-the Approve, Reject, Reply, Edit strip role ghosts wear (`GhostActions`, one
-component). Goal rows sit tight, so the strip waits for the focus and the
-layout keeps one row free under the focused card for it
-(`GOALS_SIZES.actionRow`, plus `answerRow` once the change is answered, for
-the line of words under the strip).
+focuses its change, the way a role ghost's does: the chip is pressed and the
+conversation's card for it lights. The map carries no answer controls; a
+change is answered on its card in the conversation (S41).
 
 ### The chart beside a conversation
 
-`/org?view=chart` is the chart alone: no page header, no staffing pane, the
-lens toggle and the proposal's name in one slim bar. It is an ordinary route,
-so the stage hosts it as a pane beside a conversation (`openBeside`, the one
-reused target pane, opened unfocused so the conversation stays primary). It
-opens from a proposal card ("Chart") and from the session header (a chip that
+The map beside a conversation is the org screen itself (S41) with `?beside=`:
+`openOrgChart` (`components/org/orgChartLink.tsx`) opens
+`orgScreenPath({ show: "map", beside: session })`, and the screen draws the
+map alone when the pane sits beside the Head of People's own thread. It is an
+ordinary route, so the stage hosts it as a pane beside a conversation
+(`openIn("split", …)`, the one reused target pane, opened unfocused so the
+conversation stays primary). It
+opens from a proposal card ("Map") and from the session header (a chip that
 appears when the thread holds a proposal). On a dev build `preview=1` draws
 the fixture org, as it does on the org page.
 
 Its address is its whole state: `proposal=op-N` draws that proposal's ghosts,
 `focus=` pans to one thing (a change by its number in the proposal, a goal by
 `in-N`, a role by `@handle`), `lens=` picks the lens (absent, the lens the
-focus or the proposal's changes call for), and `s=<conversation>` names the
-conversation it follows.
+focus or the proposal's changes call for), and `beside=<conversation>` names
+the conversation it follows.
 
 **How the agent drives it.** The pane follows the thread it was opened from:
 it reads that conversation's messages from the store and points itself at the
@@ -1582,9 +1586,9 @@ A limit is never a row or a number on a card (S23.2): it rides with its role's c
 
 **The `reply` stamp.** The change row keeps what the person said: `org_proposal_changes.reply: { verdict: "approve" | "reject" | "note", text?, at, by? }`, read while `reply.at` is later than the row's last revision. So the card says the state in words after a reload and on another device: Approved (cyan while it lands, green once applied), Rejected and then the words, Noted and then the words with "waiting for a revision", Failed with the note and Retry. When the author amends a change the person wrote back on, the card reads as revised and can be answered again. The server's status names stay `accepted` and `skipped` under the words a person reads; "Skip" and "Accept" appear nowhere a person can read.
 
-**Where no composer is in reach.** The org page panel with the thread column closed, `/company`, and a proposal a person posted have no conversation composer, so `ProposalReplyBox` (`components/org/ProposalReplyBox.tsx`) draws the same tray rows, a small reply field and the one send. Its batch key is the proposal's thread conversation id, so an answer given on the org page and one given in the Head of People's thread are the same batch; with no thread the key is `proposal:<id>`, the verdicts apply and nobody is told, and the box says so in one quiet line. Its send carries `say` to the mutation, which builds the reply text from the rows and sends it into the proposal's thread through the path `performSayInThread` uses, so the agent still receives one message. The org page's panel takes the same answers on the cards of each ask; a closed ask's Approve puts one answer over the ask's seqs. The org page preview keeps its own handlers.
+**Where no composer is in reach.** (Superseded by S41: every answer is given on a card in the Head of People's conversation on the org screen, and a proposal from another thread answers from the strip into that conversation's batch.) The org page panel with the thread column closed, `/company`, and a proposal a person posted have no conversation composer, so `ProposalReplyBox` (`components/org/ProposalReplyBox.tsx`) draws the same tray rows, a small reply field and the one send. Its batch key is the proposal's thread conversation id, so an answer given on the org page and one given in the Head of People's thread are the same batch; with no thread the key is `proposal:<id>`, the verdicts apply and nobody is told, and the box says so in one quiet line. Its send carries `say` to the mutation, which builds the reply text from the rows and sends it into the proposal's thread through the path `performSayInThread` uses, so the agent still receives one message. The org page's panel takes the same answers on the cards of each ask; a closed ask's Approve puts one answer over the ask's seqs. The org page preview keeps its own handlers.
 
-**One component, four places.** `ProposalSubjectCard` is callback driven and reads no store: it takes this card's pending answer and an `onAnswer` callback, and each host keys them to its batch. The hosts: the proposal card in a conversation (the letter's lead, the cards on hairlines, then a closing row with Chart on the left and "Approve the rest", Reply and, once the batch holds an answer for this proposal, "Send N answers" on the right; when nothing waits, the outcome in words, "7 approved, 2 rejected"), the org page's panel (the cards of each ask; a proposal with one ask draws them straight under the title), `/company`, and the chart's ghost strip, which reaches the same batch through `useGhostAnswers` (`ProposalLedger.tsx`): a change's answer is the answer of the card that holds it, numbered as the ledger numbers it, so a ghost answered on the chart shows pressed on the card and in one tray row. `answerProposalCard` keeps one answer per change across every surface: putting a card's answer withdraws any other card's answer over the same changes (the panel's ask over a card inside it, the chart's ghost over the ledger's card). `useSubjectLive` (`proposalHooks.ts`) is the one place the live records a card compares against are gathered.
+**One component, four places.** (Superseded by S41: one place, the card in the conversation.) `ProposalSubjectCard` is callback driven and reads no store: it takes this card's pending answer and an `onAnswer` callback, and each host keys them to its batch. The hosts: the proposal card in a conversation (the letter's lead, the cards on hairlines, then a closing row with Chart on the left and "Approve the rest", Reply and, once the batch holds an answer for this proposal, "Send N answers" on the right; when nothing waits, the outcome in words, "7 approved, 2 rejected"), the org page's panel (the cards of each ask; a proposal with one ask draws them straight under the title), `/company`, and the chart's ghost strip, which reaches the same batch through `useGhostAnswers` (`ProposalLedger.tsx`): a change's answer is the answer of the card that holds it, numbered as the ledger numbers it, so a ghost answered on the chart shows pressed on the card and in one tray row. `answerProposalCard` keeps one answer per change across every surface: putting a card's answer withdraws any other card's answer over the same changes (the panel's ask over a card inside it, the chart's ghost over the ledger's card). `useSubjectLive` (`proposalHooks.ts`) is the one place the live records a card compares against are gathered.
 
 **One change, by its number: `op-N#seq`.** A change's number is its `seq`: given at create, kept through an amend and a remove, never reused, and printed by `cast org propose` and `cast org apply` as `#n` beside each change. The ref is the grammar the server already used (`findChange`, and its error lines), now parsed in one place (`parseProposalChangeRef`, `shared/entities`). It types as a proposal. In a sentence it is the proposal's pill with the number after its title, and it opens the org page with that change in focus (`/org?proposal=op-N&focus=n`; `#` in a URL is a fragment, so the link never carries it). Alone on its line it draws the card of the subject that holds that change, with every other change to the same subject: a second unit of verdict would leave riders behind, and a change that only makes sense beside its sibling reads cold. That card has no frame around it and no list: a line saying where it sits ("First of nine in" and the proposal's title as a link), the card and its controls; the answer shows in the composer's tray, and there is no closing row. A number the proposal does not have, a removed change and a proposal the reader may not see each draw one quiet line. The Head of People's prompt teaches the form in one sentence (`head-of-people-prompt.md`, "Talk it through"); the number it writes is the one `cast org propose` printed, never the change's place in the spec it posted, because the parser may fold two spec rows into one.
 
@@ -1614,8 +1618,8 @@ top one, a goal that other goals feed, is the mission.
 
 **One component.** `OrgMap` (`components/org/OrgMap.tsx`) draws the map
 and keeps nothing but its own selection: the page that mounts it (the org
-screen, beside the Head of People's conversation; the chart pane
-`/org?view=chart`) passes the tree, the goals, the open proposal with its
+screen, beside the Head of People's conversation, or beside another
+conversation under `?beside=`) passes the tree, the goals, the open proposal with its
 changes, the filter, whether the proposal is overlaid, and the change a card
 in the conversation is pointing at. It is read only: nothing on the map
 decides a change; answers happen on the cards in the conversation.
@@ -1662,3 +1666,21 @@ and pans always. Whichever happened last wins.
 the foot (answers live in the conversation), the action strip on goal and
 project cards, and the owners column that pulled each owner down level with
 the first thing it owned.
+
+## S41. The org screen: one conversation, one map, one way to answer
+
+Written 2026-10-07. This section replaces S5 (the staffing pane and the ghost strips), the asks column of S19, the "Where no composer is in reach" and "One component, four places" parts of S39, and the chart pane of S36. Those sections stay as the record of how the surfaces got here; what they describe is gone from the tree. S40 describes the map itself.
+
+**Why.** By October the org page drew a proposal on nine surfaces, offered eight ways to approve (one of them, Edit, applied at once), turned a change into words in six places, and listed no open proposals at all. The Head of People's conversation was mounted only behind a `?proposal=` link, in a narrow panel column, cut to the messages after the proposal. A person opening the page could not see what waited on them, could not read what was proposed, and could not tell whether pressing Approve applied anything.
+
+**One screen.** `/org` is `OrgScreen` (`components/org/OrgPage.tsx`): the Head of People's standing conversation on the left, the whole thread, live, through the same `AnchorConversation` a session uses (bootstrap and working turns folded, no sticky prompt, opening at the live tail), and the map (S40, `OrgMap`, read only) on the right. The header is the name, the mission (the one root goal with children, `missionOf`) and three controls: Health, Add a role, and a menu with History, Words and the gallery. With no Head of People the left column is the hire card and one "Propose an org now" line, the one home of that call to action. The column's states, in priority order: refused, error, loading, no head, not started, preview, live; the head row and the strip paint from the org tree at once, and the column seeds the conversation row the moment it knows the id so a cold open never sits on "Loading conversation". Wide (980px and up) the conversation fills (at least 560px) and the map takes 40%, capped; under that the two stack behind a Conversation | Map switch. When the screen is a leaf in a stage split, its sibling panes fold to a rail while it is open and come back when it leaves, so the conversation has room to read a card. Opened beside a conversation from a card's Map word or the session header chip (`openOrgChart`, `/org?show=map&beside=<conversation>`), the map column follows the newest `op-N` pointer that conversation writes, with a Following toggle to hold it still; beside the Head of People's own thread only the map draws. `?view=health` keeps the health page (`HealthPage.tsx`); it no longer embeds the conversation.
+
+**Open proposals at the top.** One line above the thread says how many proposals wait and how many changes they hold, with the answers staged so far when there are any; the proposal the person came for is a breadcrumb on that line. The line opens to the rows (`OpenProposalsStrip.tsx`, rows from `orgScreenModel.stripRows`), oldest first so they match the order of the cards in the thread: face, title, a short count ("64 records", "9 priorities") and the staged count; the full totals sentence and the age sit in the row's title. A row scrolls the thread to the message that draws the card (`findProposalCardMessage`: `op-N` alone on a line, by an agent), or to the proposal's time while that message is not loaded, and the list closes. A proposal written on another thread has no card here, so its row expands the card in place, capped and scrolling, under a composer bridge keyed to this conversation: its answers join this batch and the send passes `say`, so the author's thread is told. A `?proposal=` the rows do not hold draws one line: where it is (with Switch), or that it cannot be read.
+
+**One card, in the conversation.** An `op-N` on its own line draws the proposal (`ProposalCard.tsx`, `ProposalLedger.tsx`): the letter's lead (Read the rest), one totals sentence from `proposalTotals` ("64 records: 42 done, 16 reopened, 4 abandoned, 1 dropped and 1 to the backlog", "9 project priorities", "4 changes: 1 session named as a role and 3 plans filed"), then the entries. A records proposal draws one collapsed row per record group (`RecordGroupRow.tsx`; the groups are the contract's `orgRecordGroups`, one ask each: by project, then plan, then every one-change plan close folded into "N plans", then the loose rest): the title, its totals line, and Approve, Reject and Reply; opened, it lists its rows by `#seq`, one plain sentence each, twenty at a time. Everything else draws one subject card per subject (S39, `ProposalSubjectCard.tsx`): the sentence, the fields that move with what was there and what replaces it, names with faces, the reasons. A charter edit draws each passage as an inline diff (removed struck on a red wash, added on a green wash, untouched sentences as a quiet gap), never two full texts; any text longer than two lines clamps with "show all"; a revision the author made draws the same field diff. Three type sizes in the card area. Hovering or focusing an entry lights its node on the map (`OrgHoverContext`); `?proposal=op-N&focus=n` scrolls to the card once the thread's jump has settled and marks the entry holding change `n` (`orgFocusChangeId`). An `op-N#seq` ref anywhere is a link to that.
+
+**One way to answer, staged until the send.** Approve, Reject and Reply live only on the entries in the conversation. Pressing one applies nothing: the controls are replaced by a band (`StagedBand.tsx`), "Approved. Applies when you send." ("Rejected." and "Replied.": "Sent when you send."), with Undo, and the answer joins the conversation's batch (`reviewComments`, S39). The tray above the composer says what the batch does, "3 changes will apply when you send, and 2 answers go with them", and the send button reads "Send and apply 3" (or "Send 2 answers"); `batchSendWords` (`lib/reviewActions.ts`) is the one place that counting lives. One send carries the answers and the typed words in one message (`orgProposals.reply`); the cards then read the server's stamps (Approved, applying; Applied; Rejected; Failed with Retry). "Approve the rest" at the card's foot stages every entry that still waits. There is no Send on a card, no reply box, no Edit, no panel, and no strip of buttons on the map.
+
+**One translator.** `packages/shared/contracts/orgChangeWords.ts` is the one way a change becomes words: `changeWords(change, ctx)` gives the sentence (the brief clause set of `orgProposal.ts`, capitalised), the terse line the journal and the CLI print, the chip the map draws, and the fields with before, after and a passage diff; `subjectWords` joins a subject's changes into one sentence, `fieldMoves` says what an amend moved, `proposalTotals` writes the totals sentence. The web adds only what it alone knows: the live record a waiting card compares against, and faces (`proposalSubjects.ts`). `staffingModel.changeFields`, `staffingRevise.amendedMoves`, `proposalSubjects.rowsFor` and `orgMeta.chipLine`'s body went into it.
+
+**What was deleted.** The staffing pane and the scope panel, the proposal thread embed with its `since` cut, every `ProposalReplyBox`, the `/company` proposal cards, the ghost answer strips and Edit on chart nodes, the chart pane (`/org?view=chart`), the single-change card, accept-with-edits on the web, the `decide`, `acceptAll` and `decideAsk` store actions (the server mutations stay for the CLI routes), and the org tours that pointed at those surfaces.

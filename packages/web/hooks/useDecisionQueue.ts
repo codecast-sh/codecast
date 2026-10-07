@@ -102,6 +102,48 @@ function forgetBlocked(conversationId: string): void {
   blockedSince.delete(conversationId);
 }
 
+/** The queue from store state, pure: authored rows first, then sessions
+ *  parked on a terminal question or permission prompt that no authored row
+ *  covers (sessionHasOpenQuestion, which leaves hosted conversations to
+ *  their decision rows). */
+export function buildDecisionQueue(
+  decisions: Record<string, any>,
+  sessions: Record<string, any>,
+  resolutions: Record<string, { at: number; message_count: number }> | undefined,
+  meId: string | undefined,
+): QueueItem[] {
+  const mine = filterInboxScope(sessions, "mine", meId);
+  const items = decisionQueueItems(decisions, sessions, isStackedAsk);
+
+  // A session that has an authored decision open is already represented;
+  // its AUQ row would be the same interruption counted twice.
+  const authored = new Set(items.map((i) => i.conversationId));
+
+  for (const row of Object.values(mine) as any[]) {
+    if (authored.has(row._id)) continue;
+    // questionResolutions: answered/dismissed HERE — same predicate the rail
+    // section renders with, so the queue and the rail agree in every render.
+    if (!sessionHasOpenQuestion(row, resolutions)) {
+      // No longer asking — forget the stamp so a future question is timed
+      // from when it actually appeared, not from this tab's first boot.
+      forgetBlocked(row._id);
+      continue;
+    }
+    items.push({
+      key: `ask:${row._id}`,
+      source: row.awaiting_input ? "ask" : "permission",
+      conversationId: row._id,
+      session: row,
+      // Filled in by the card once the conversation's messages load.
+      question: row.title || "Waiting on you",
+      options: [],
+      blocking: true,
+      createdAt: blockedSinceFor(row._id, row.updated_at),
+    });
+  }
+  return sortQueue(items);
+}
+
 export function useDecisionQueue(): QueueItem[] {
   const s = useTrackedStore([
     (st: any) => decisionsWakeSig(st.sessionDecisions),
@@ -110,39 +152,10 @@ export function useDecisionQueue(): QueueItem[] {
     (st: any) => st.currentUser?._id,
   ]);
 
-  return useMemo(() => {
-    const meId = s.currentUser?._id;
-    const mine = filterInboxScope(s.sessions, "mine", meId);
-    const items = decisionQueueItems(s.sessionDecisions, s.sessions, isStackedAsk);
-
-    // A session that has an authored decision open is already represented;
-    // its AUQ row would be the same interruption counted twice.
-    const authored = new Set(items.map((i) => i.conversationId));
-
-    for (const row of Object.values(mine) as any[]) {
-      if (authored.has(row._id)) continue;
-      // questionResolutions: answered/dismissed HERE — same predicate the rail
-      // section renders with, so the queue and the rail agree in every render.
-      if (!sessionHasOpenQuestion(row, s.questionResolutions)) {
-        // No longer asking — forget the stamp so a future question is timed
-        // from when it actually appeared, not from this tab's first boot.
-        forgetBlocked(row._id);
-        continue;
-      }
-      items.push({
-        key: `ask:${row._id}`,
-        source: row.awaiting_input ? "ask" : "permission",
-        conversationId: row._id,
-        session: row,
-        // Filled in by the card once the conversation's messages load.
-        question: row.title || "Waiting on you",
-        options: [],
-        blocking: true,
-        createdAt: blockedSinceFor(row._id, row.updated_at),
-      });
-    }
-    return sortQueue(items);
-  }, [s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id]);
+  return useMemo(
+    () => buildDecisionQueue(s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id),
+    [s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id],
+  );
 }
 
 /** The queue in hosted mode's scope (lib/assistantScope): only the

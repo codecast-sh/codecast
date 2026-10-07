@@ -1,6 +1,6 @@
 // What the org canvas says about the tree read, as one pure decision so the
 // page cannot paint an empty chart for a read that failed. The health read
-// already tells a failure apart from "no flags" (StaffingPane FlagList); this
+// already tells a failure apart from "no flags" (the health flag list); this
 // is the same honesty for org.tree.
 //
 //   missing  the function is not deployed on this backend

@@ -4,7 +4,7 @@ import { ROLE_WAKE_DIR, STANDING_READS } from '../roleWake/meta';
 
 export const meta: SurfaceMeta = {
   id: 'anchor-brief',
-  title: 'Anchor and role opening briefing',
+  title: "Opening briefing for the workspace's agent and roles",
   route: 'agent',
   // A freeze runs on the production session's model when its capture could read one (replay.ts).
   model: AGENT_MODEL,

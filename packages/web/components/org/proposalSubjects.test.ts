@@ -1,19 +1,21 @@
 // A proposal's changes as cards, one per subject (org-staffing.md S39): which
 // changes belong together, the one sentence each card reads as, what every
 // field read as before (the live record while a change waits, the stamp once
-// it is applied, nothing for a skip or another workspace), and the order a
-// verdict on a card is sent in. The rows are synthetic and shaped like the two
-// proposals the design was drawn against: nine project priorities, and a goal
-// tree with one purpose.
+// it is applied, nothing for a skip or another workspace), the order a
+// verdict on a card is sent in, and a records proposal as group rows. The
+// fields come from the one translator (orgChangeWords); this file pins the
+// web adapter: the befores it hands over, the faces, the grouping.
 // Run: bun test components/org/proposalSubjects.test.ts
 import { describe, expect, test } from "bun:test";
 import type { OrgAppliedDiffRow } from "@codecast/shared/contracts/orgChange";
+import { changeWords, type ChangeField, type FieldText } from "@codecast/shared/contracts/orgChangeWords";
 import { ORG_FIXTURE } from "./orgFixture";
+import { ORG_RECORDS_FIXTURE_LIVE, ORG_RECORDS_FIXTURE_PROPOSAL, ORG_RECORDS_FIXTURE_PROPOSAL_BARE, ORG_RECORDS_FIXTURE_PROPOSAL_SENT, ORG_RECORDS_FIXTURE_TREE } from "./orgRecordsFixture";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import { askNames } from "./staffingAsks";
 import {
-  changeReply, namedTaskRefs, ordinalWord, placeWords, proposalProgressWords, proposalSubjects, subjectCounts, subjectKeyOf, subjectOfSeq, subjectSentence, subjectStatus, subjectStatusWords,
-  type FieldRow, type FieldValue, type SubjectCard, type SubjectLive,
+  changeReply, namedTaskRefs, proposalProgressWords, proposalSubjects, recordGroupCards, subjectCounts, subjectKeyOf, subjectOfSeq, subjectStatus, subjectStatusWords,
+  type SubjectCard, type SubjectLive,
 } from "./proposalSubjects";
 
 const ME = "fixture-user-me";
@@ -83,18 +85,15 @@ const one = (changes: OrgProposalChange[], live: SubjectLive | null = LIVE): Sub
   expect(cards).toHaveLength(1);
   return cards[0];
 };
-const rowOf = (card: SubjectCard, key: string, op?: FieldRow["op"]): FieldRow => card.rows.find((r) => r.key === key && (!op || r.op === op))!;
+const rowOf = (card: SubjectCard, key: string, op?: ChangeField["op"]): ChangeField => card.rows.find((r) => r.key === key && (!op || r.op === op))!;
 /** A value as the words a person reads. */
-const read = (v: FieldValue | null): string | null => {
+const read = (v: FieldText | null): string | null => {
   if (!v) return null;
-  switch (v.kind) {
-    case "text": return v.text + (v.tail ?? "");
-    case "none": return v.text;
-    case "face": return v.you ? "you" : v.face.name;
-    case "priority": return v.priority;
-    case "names": return v.summary ?? v.names.join(", ");
-    case "measures": return v.measures.map((m) => `${m.name}, target ${m.target}`).join("; ");
-  }
+  if (v.none) return v.text;
+  if (v.priority) return v.priority;
+  if (v.items) return v.items.join(", ");
+  if (v.measures) return v.measures.map((m) => `${m.name}, target ${m.target}`).join("; ");
+  return v.text + (v.tail ?? "");
 };
 const diff = (card: SubjectCard, key: string) => { const r = rowOf(card, key); return [r.op, read(r.before), read(r.after)]; };
 const stamp = (kind: string, before: Record<string, unknown>, after: Record<string, unknown>, extra: Partial<OrgAppliedDiffRow> = {}): OrgAppliedDiffRow[] =>
@@ -128,7 +127,7 @@ describe("grouping", () => {
     expect(cards[0]).toMatchObject({ isNew: true, key: "goal:g1" });
   });
 
-  test("a role with its session, routine and limit is one card, the limit riding unseen", () => {
+  test("a role with its session, routine and limit is one card, the limit riding unseen; the fields come from the translator, stamped by seq", () => {
     const card = one([
       change("limit", 1, { kind: "budget", handle: "platform", caps: { tokens_per_day: 800_000 } }),
       change("routine", 2, { kind: "routine", handle: "platform", title: "Weekly platform review", prompt: "Review", every: "7d" }),
@@ -143,28 +142,46 @@ describe("grouping", () => {
     expect(card.change_ids).toEqual(["role", "limit", "trust", "adopt", "routine"]);
     expect(card.sentence).toBe("Add the role Head of Platform, reporting to you.");
     expect(card.sentence.slice(...card.subjectSpan!)).toBe("Head of Platform");
-    expect(card.rows.map((r) => [r.key, r.label, r.op, read(r.after), r.seq])).toEqual([
-      ["handle", "Answers to", "set", "@platform", 4],
-      ["area", "Looks after", "set", "Platform", 4],
-      ["routine", "Runs", "set", "Weekly platform review, every week", 2],
-      ["session", "Session", "set", "Offered session", 3],
-      ["starts_work", "Starts work", "set", "on its own, inside its area", 5],
+    expect(card.rows.map((r) => [r.key, r.label, r.kind, r.op, read(r.after), r.seq])).toEqual([
+      ["reports_to", "Reports to", "ref", "set", "you", 4],
+      ["looks_after", "Looks after", "list", "set", "Platform", 4],
+      ["routine", "Runs", "text", "set", "Weekly platform review, every week", 2],
+      ["session", "Session", "text", "set", "Offered session", 3],
+      ["starts_work", "Starts work", "text", "set", "on its own, inside its area", 5],
     ]);
     // The cadence is a quiet tail on the routine's name, the way ", target" is on a measure.
-    expect(rowOf(card, "routine").after).toEqual({ kind: "text", text: "Weekly platform review", tail: ", every week" });
-    expect(card.sits).toBe("Reports to you");
+    expect(rowOf(card, "routine").after).toEqual({ text: "Weekly platform review", tail: ", every week" });
+    // The field says where it reports, so the line under the sentence does not.
+    expect(card.sits).toBeNull();
     expect(JSON.stringify(card.rows) + card.sentence + card.reasons.join(" ")).not.toMatch(/800|tokens|wakes|caps|why limit/);
   });
 
-  test("roles read parents first: a new lead comes before the role moved under it", () => {
+  test("roles read parents first: a new lead comes before the role moved under it, and its face is the one the proposal creates", () => {
     const cards = cardsOf([
       change("move", 1, { kind: "move", handle: "growth", reports_to: "@platform" }),
       change("role", 2, { kind: "role", name: "Head of Platform", handle: "platform", reports_to: "me" }),
     ]);
     expect(cards.map((c) => c.key)).toEqual(["role:platform", "role:growth"]);
     expect(cards[1].sentence).toBe("Have Head of Growth report to Head of Platform.");
-    expect(diff(cards[1], "reports_to")).toEqual(["change", "you", "Head of Platform"]);
+    // The sentence says "you"; the field says who.
+    expect(diff(cards[1], "reports_to")).toEqual(["change", "Ashot Petrosian", "Head of Platform"]);
+    expect(cards[1].faces["1:reports_to:before"]).toMatchObject({ kind: "person", me: true });
+    expect(cards[1].faces["1:reports_to:after"]).toMatchObject({ kind: "role", handle: "platform" });
     expect(cards[1].sits).toBeNull();
+    // "you" is the reader's own face.
+    expect(cards[0].faces["2:reports_to:after"]).toMatchObject({ kind: "person", me: true, name: "Ashot Petrosian" });
+  });
+
+  test("a parent written as a person's name draws that person's face from the tree; a name the tree does not hold draws none", () => {
+    const cards = cardsOf([
+      change("a", 1, { kind: "role", name: "Ops", handle: "ops", reports_to: "Samvit Jain" }),
+      change("b", 2, { kind: "role", name: "Desk", handle: "desk", reports_to: "Cam" }),
+    ]);
+    const ops = cards.find((c) => c.key === "role:ops")!, desk = cards.find((c) => c.key === "role:desk")!;
+    expect(read(rowOf(ops, "reports_to").after)).toBe("Samvit Jain");
+    expect(ops.faces["1:reports_to:after"]).toMatchObject({ kind: "person", name: "Samvit Jain", me: false });
+    expect(read(rowOf(desk, "reports_to").after)).toBe("Cam");
+    expect(desk.faces["2:reports_to:after"]).toBeUndefined();
   });
 
   test("kinds come in one order: goals, projects, roles, plans, tasks", () => {
@@ -228,15 +245,25 @@ describe("grouping", () => {
     expect(JSON.stringify(card)).not.toMatch(/"sentence":"[^"]*800/);
   });
 
-  test("subjectKeyOf: everything on a handle is one role; a plan by ref or id is one plan", () => {
+  test("subjectKeyOf: everything on a handle is one role, a charter edit included; a plan by ref or id is one plan", () => {
     expect(subjectKeyOf(null, { kind: "budget", handle: "@Growth", caps: {} })).toBe("role:growth");
     expect(subjectKeyOf(null, { kind: "routine", handle: "growth", title: "t", prompt: "p", every: "1d" })).toBe("role:growth");
+    expect(subjectKeyOf(null, { kind: "charter_edit", handle: "@Growth", edits: [{ op: "add", line: "x" }] })).toBe("role:growth");
     const plans = [{ id: "fixture-plan-seo", title: "SEO", short_id: "pl-88" }];
     expect(subjectKeyOf(null, { kind: "file", plan: "PL-88", project: "x" }, plans)).toBe("plan:fixture-plan-seo");
     expect(subjectKeyOf(null, { kind: "plan_status", plan: "pl-12", status: "done", reason: "r" })).toBe("plan:pl-12");
     expect(subjectKeyOf(null, { kind: "task_status", task: "CT-9", status: "done", reason: "r" })).toBe("task:ct-9");
     expect(subjectKeyOf(null, { kind: "upgrade", instance: "Growth-Pack", template: "growth", to: "2", digest: "d" })).toBe("instance:growth-pack");
     expect(subjectKeyOf({ change_id: "c9", node: { kind: "unknown", id: "c9", name: "" } }, { kind: "projects", changes: [{ op: "create", title: "A" }] })).toBe("projects:c9");
+  });
+
+  test("a charter edit is the role's card: one passage field per edit, keyed charter_edit:<i>", () => {
+    const card = one([change("e", 1, { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "Old line.", after: "New line." }, { op: "add", line: "Posts the digest." }] })]);
+    expect(card.key).toBe("role:growth");
+    expect(card.rows.map((r) => [r.key, r.label, r.kind, r.op, r.diff?.map((p) => p.kind)])).toEqual([
+      ["charter_edit:0", "Charter", "passage", "change", ["removed", "added"]],
+      ["charter_edit:1", "Charter", "passage", "add", ["added"]],
+    ]);
   });
 
   test("subjectOfSeq: a drawn change, one that rides along, and nothing for a removed or unknown number", () => {
@@ -262,8 +289,7 @@ describe("sentences", () => {
     expect(cards[0].sentence.slice(...cards[0].subjectSpan!)).toBe("Infrastructure");
     expect(cards[2].sentence).toBe("Raise Private Network to a high priority.");
     expect(cards[8].sentence).toBe("Make Ideas a low priority.");
-    expect(subjectSentence(cards[2], "this")).toBe("Raise this project to a high priority.");
-    expect(subjectSentence(cards[2], "named")).toBe(cards[2].sentence);
+    expect(cards[2].sentenceThis).toBe("Raise this project to a high priority.");
     // Nothing to compare against in another workspace: it reads as a first priority.
     expect(cardsOf(RANKING, null).find((c) => c.title === "Private Network")!.sentence).toBe("Make Private Network a high priority.");
   });
@@ -289,9 +315,9 @@ describe("sentences", () => {
     expect(one([change("a", 1, { kind: "task_status", task: "ct-9", status: "open", reason: "still going", title: "Remove the pilot" })]).sentence).toBe("Reopen the task Remove the pilot.");
     const retire = one([change("a", 1, { kind: "retire", handle: "growth" })]);
     expect(retire).toMatchObject({ sentence: "Retire Head of Growth. Its sessions go back to their owners.", struck: true, sits: "Reports to you" });
-    // The role itself is the one row, struck, with nothing after it.
-    expect(retire.rows.map((r) => [r.key, r.label, r.op, read(r.before), r.after])).toEqual([["role", "Role", "clear", "Head of Growth", null]]);
-    expect(rowOf(retire, "role").before).toMatchObject({ kind: "face", face: { kind: "role", handle: "growth" } });
+    // The role itself is the one row, struck, with nothing after it, and its face beside it.
+    expect(retire.rows.map((r) => [r.key, r.label, r.kind, r.op, read(r.before), r.after])).toEqual([["role", "Role", "ref", "clear", "Head of Growth", null]]);
+    expect(retire.faces["1:role:before"]).toMatchObject({ kind: "role", handle: "growth" });
     expect(one([change("a", 1, { kind: "trust", handle: "growth", trust: "understand" })]).sentence).toBe("Have Head of Growth ask before it starts work.");
     expect(one([change("a", 1, { kind: "routine", handle: "growth", title: "Weekly review", prompt: "p", every: "7d" })]).sentence).toBe("Have Head of Growth run Weekly review every week.");
     expect(one([change("a", 1, { kind: "scope", handle: "growth", add: ["pr-11"], remove: ["pl-88"] })]).sentence).toBe("Have Head of Growth look after Platform and have it stop looking after SEO and AI citations.");
@@ -313,17 +339,18 @@ describe("rows with nothing to compare", () => {
     expect(made.title).toBe("2 projects");
     expect(made.subjectSpan).toBeNull();
     expect(made.sentence).toBe("Create the project Billing and fold the project Ideas into Platform.");
-    expect(made.rows.map((r) => [r.key, r.label, r.op, read(r.before), read(r.after)])).toEqual([["new", "Project", "set", null, "Billing"], ["folds", "Folds into", "change", "Ideas", "Platform"]]);
+    // The sentence names the project made; the fold is the one field.
+    expect(made.rows.map((r) => [r.key, r.label, r.op, read(r.before), read(r.after)])).toEqual([["folds:1", "Folds into", "change", "Ideas", "Platform"]]);
   });
 
   test("no label is a word a person was never taught", () => {
     const labels = [...cardsOf(TREE), ...cardsOf(RANKING), ...cardsOf([
-      change("a", 1, { kind: "role", name: "Head of Platform", handle: "platform", scope: { projects: ["Platform"] }, tenure: { kind: "standing" }, seat: { existing: "jx7b88a", title: "Market growth mandate" } }),
+      change("a", 1, { kind: "role", name: "Head of Platform", handle: "platform", scope: { projects: ["Platform"] }, tenure: { kind: "standing" }, seat: { existing: "jx7b88a", title: "Market growth mandate" }, charter: "Keeps the platform green." }),
       change("b", 2, { kind: "move", handle: "growth", reports_to: "@platform", scope_add: ["Platform"] }),
       change("c", 3, { kind: "plan_status", plan: "pl-88", status: "done", reason: "r" }),
     ])].flatMap((card) => card.rows.map((r) => r.label));
-    expect(new Set(labels)).toEqual(new Set(["Owned by", "Measured by", "Carried by", "Says", "Sits", "Priority", "Answers to", "Looks after", "Session", "Stays", "Reports to", "Status"]));
-    expect(labels.join(" ")).not.toMatch(/scope|charter|limit|seq|proposal|initiative|_/i);
+    expect(new Set(labels)).toEqual(new Set(["Owned by", "Measured by", "Carried by", "Says", "Sits", "Priority", "Reports to", "Looks after", "Session", "Charter", "Status"]));
+    expect(labels.join(" ")).not.toMatch(/scope|charter_edit|limit|seq|proposal|initiative|_/i);
   });
 });
 
@@ -336,16 +363,15 @@ describe("the purpose", () => {
     expect(revenue.sentence).toBe("Add the goal Make revenue under the purpose.");
     expect(revenue.sits).toBe("Under the purpose");
     expect(network.sentence).toBe("Move Win the private network under the purpose.");
-    expect(diff(network, "parent")).toEqual(["change", "at the top level", "under the purpose"]);
+    expect(diff(network, "parent")).toEqual(["change", "at the top level", "the purpose"]);
   });
 
-  test("a goal with goals below it does not list its projects; every other list is running text", () => {
+  test("a goal's projects are one list; the purpose is read through its goals, with no number of its own", () => {
     const [purpose, revenue] = cardsOf(TREE);
     const carried = rowOf(purpose, "projects");
-    expect(carried.after).toMatchObject({ kind: "names", summary: "9 projects, through the goals below" });
-    expect((carried.after as { names: string[] }).names).toHaveLength(9);
-    expect(rowOf(revenue, "projects").after).toEqual({ kind: "names", names: ["People & Deals"] });
-    // The purpose is read through its goals: no "no number yet" on it.
+    expect(carried.kind).toBe("list");
+    expect(carried.after?.items).toHaveLength(9);
+    expect(rowOf(revenue, "projects").after).toMatchObject({ items: ["People & Deals"] });
     expect(purpose.rows.map((r) => r.key)).toEqual(["owner", "projects", "says"]);
   });
 
@@ -377,8 +403,8 @@ describe("rows of a new goal", () => {
       ["says", "Says", "set", null, "First on the list."],
     ]);
     expect(revenue.evidence).toEqual([{ label: "Core focuses in #team" }]);
-    expect(rowOf(fundraise, "metrics").after).toEqual({ kind: "none", text: "no number yet" });
-    expect(rowOf(fundraise, "owner").after).toMatchObject({ kind: "face", you: true });
+    expect(rowOf(fundraise, "metrics").after).toEqual({ text: "no number yet", none: true });
+    expect(read(rowOf(fundraise, "owner").after)).toBe("you");
     const loose = one([change("a", 1, { kind: "initiative", title: "Alpha", description: "d", projects: ["Ideas"], metrics: [{ name: "Reply rate", target: "1% higher (Cameron)" }], why: "It pays", done_when: "Paid", milestones: [{ title: "Beta open" }] })]);
     expect(read(rowOf(loose, "metrics").after)).toBe("Reply rate, target 1% higher (Cameron)");
     expect(loose.rows.map((r) => r.label)).toEqual(["Owned by", "Measured by", "Carried by", "Says", "Why it matters", "Done when", "Milestones"]);
@@ -393,17 +419,20 @@ describe("which before a row shows", () => {
     expect(rowOf(cards[0], "priority").label).toBe("Priority");
     expect(diff(cards[2], "priority")).toEqual(["change", "p2", "p1"]);
     const meta = one([change("m", 1, { kind: "project_meta", project: "pr-3", owner: "@growth", goal: "Close two fees", success_metrics: ["Fees"], non_goals: [], risks: ["One client"] })]);
-    expect(meta.rows.map((r) => [r.key, r.label, r.op, read(r.before), read(r.after)])).toEqual([
-      ["owner", "Led by", "same", "Head of Growth", "Head of Growth"],
-      ["goal", "Says", "change", "Close the first fee", "Close two fees"],
-      ["success_metrics", "Measured by", "change", "nothing", "Fees"],
-      ["non_goals", "Leaves out", "same", "nothing", "nothing"],
-      ["risks", "Risks", "change", "nothing", "One client"],
+    expect(meta.rows.map((r) => [r.key, r.label, r.kind, r.op, read(r.before), read(r.after)])).toEqual([
+      ["owner", "Led by", "ref", "same", "Head of Growth", "Head of Growth"],
+      ["goal", "Says", "passage", "change", "Close the first fee", "Close two fees"],
+      ["success_metrics", "Measured by", "list", "change", "nothing", "Fees"],
+      ["non_goals", "Leaves out", "list", "same", "nothing", "nothing"],
+      ["risks", "Risks", "list", "change", "nothing", "One client"],
     ]);
+    // A goal with a before is a passage diff, never two texts.
+    expect(rowOf(meta, "goal").diff?.map((p) => p.kind)).toEqual(["removed", "added"]);
     expect(meta.title).toBe("People & Deals");
     expect(meta.sentence).toBe("Make Head of Growth the lead of People & Deals and write down what it is for, how it is measured, what it leaves out and its risks.");
     const lead = one([change("m", 1, { kind: "project_meta", project: "Infrastructure", owner: "@growth", priority: "p1" })]);
     expect(diff(lead, "owner")).toEqual(["change", "nobody", "Head of Growth"]);
+    expect(lead.faces["1:owner:after"]).toMatchObject({ kind: "role", handle: "growth" });
     expect(lead.sentence).toBe("Make Infrastructure a high priority and make Head of Growth its lead.");
   });
 
@@ -417,38 +446,38 @@ describe("which before a row shows", () => {
   test("while a change waits, the live record: a role", () => {
     expect(diff(one([change("a", 1, { kind: "trust", handle: "growth", trust: "direct" })]), "starts_work")).toEqual(["change", "when you start it", "on its own, inside its area"]);
     expect(diff(one([change("a", 1, { kind: "trust", handle: "growth", trust: "understand" })]), "starts_work")).toEqual(["same", "when you start it", "when you start it"]);
-    expect(diff(one([change("a", 1, { kind: "scope", handle: "growth", add: ["Platform"] })]), "area")).toEqual(["add", "Growth, SEO and AI citations", "Growth, SEO and AI citations, Platform"]);
-    expect(diff(one([change("a", 1, { kind: "scope", handle: "growth", add: ["Platform"], remove: ["pr-4"] })]), "area")).toEqual(["change", "Growth, SEO and AI citations", "SEO and AI citations, Platform"]);
-    expect(diff(one([change("a", 1, { kind: "scope", handle: "growth", remove: ["pr-4", "pl-88"] })]), "area")).toEqual(["clear", "Growth, SEO and AI citations", "nothing"]);
+    expect(diff(one([change("a", 1, { kind: "scope", handle: "growth", add: ["Platform"] })]), "looks_after")).toEqual(["add", "Growth, SEO and AI citations", "Growth, SEO and AI citations, Platform"]);
+    expect(diff(one([change("a", 1, { kind: "scope", handle: "growth", add: ["Platform"], remove: ["pr-4"] })]), "looks_after")).toEqual(["change", "Growth, SEO and AI citations", "SEO and AI citations, Platform"]);
+    expect(diff(one([change("a", 1, { kind: "scope", handle: "growth", remove: ["pr-4", "pl-88"] })]), "looks_after")).toEqual(["clear", "Growth, SEO and AI citations", "nothing"]);
     expect(diff(one([change("a", 1, { kind: "adopt", handle: "growth", conversation: "jx7abcd" })]), "session")).toEqual(["change", "jx7gr0w", "Offered session"]);
     const may = one([change("a", 1, { kind: "authority", handle: "growth", authority: [{ id: "ads", kind: "spend", label: "Google Ads", limit: { usd_per_month: 500 } }] })]);
     expect(diff(may, "may")).toEqual(["change", "nothing", "spend (Google Ads, up to $500 a month)"]);
     expect(rowOf(may, "may").label).toBe("May");
     const move = one([change("a", 1, { kind: "move", handle: "growth", reports_to: "Samvit Jain", scope_add: ["Platform"] })]);
-    expect(diff(move, "reports_to")).toEqual(["change", "you", "Samvit Jain"]);
-    expect(diff(move, "area")).toEqual(["add", "Growth, SEO and AI citations", "Growth, SEO and AI citations, Platform"]);
+    expect(diff(move, "reports_to")).toEqual(["change", "Ashot Petrosian", "Samvit Jain"]);
+    expect(diff(move, "looks_after")).toEqual(["add", "Growth, SEO and AI citations", "Growth, SEO and AI citations, Platform"]);
   });
 
   test("while a change waits, the live record: a goal", () => {
     const shaped = one([change("a", 1, { kind: "initiative_shape", initiative: "in-6", parent: null, metrics: [], why: "It pays more", done_when: "Paid twice", milestones: [{ title: "Beta open" }], questions: ["Who signs?"], decisions: ["Fee is 2%"], sources: ["#team, Sep 23"] })]);
-    expect(shaped.rows.map((r) => [r.key, r.label, r.op, read(r.before), read(r.after)])).toEqual([
-      ["parent", "Sits", "change", "under Old parent", "at the top level"],
-      ["metrics", "Measured by", "clear", "Replies, target 5%", "nothing"],
-      ["why", "Why it matters", "change", "It pays", "It pays more"],
-      ["done_when", "Done when", "change", "not set", "Paid twice"],
-      ["milestones", "Milestones", "add", null, "Beta open"],
-      ["questions", "Open questions", "add", null, "Who signs?"],
-      ["decisions", "Decisions", "add", null, "Fee is 2%"],
+    expect(shaped.rows.map((r) => [r.key, r.label, r.kind, r.op, read(r.before), read(r.after)])).toEqual([
+      ["parent", "Sits", "ref", "change", "Old parent", "at the top level"],
+      ["metrics", "Measured by", "measures", "clear", "Replies, target 5%", "nothing"],
+      ["why", "Why it matters", "passage", "change", "It pays", "It pays more"],
+      ["done_when", "Done when", "text", "change", "not set", "Paid twice"],
+      ["milestones", "Milestones", "list", "add", null, "Beta open"],
+      ["questions", "Open questions", "list", "add", null, "Who signs?"],
+      ["decisions", "Decisions", "list", "add", null, "Fee is 2%"],
     ]);
     expect(shaped.evidence).toEqual([{ label: "#team, Sep 23" }]);
     const proud = cardsOf(TREE)[4];
     expect(proud.rows.map((r) => [r.key, r.op, read(r.before), read(r.after), r.seq])).toEqual([
-      ["parent", "change", "at the top level", "under the purpose", 9],
+      ["parent", "change", "at the top level", "the purpose", 9],
       ["metrics", "change", "nothing", "Trust breaks per day, target 0; Comms score, target 0.9 or higher", 9],
       ["projects", "add", "no project", "Agent Quality", 10],
     ]);
     expect(diff(one([change("a", 1, { kind: "initiative_projects", initiative: "in-2", projects: ["Agent Quality", "Private Network"] })]), "projects")).toEqual(["add", "Private Network", "Private Network, Agent Quality"]);
-    expect(diff(one([change("a", 1, { kind: "initiative_owner", initiative: "in-2", owner: "@growth" })]), "owner")).toEqual(["change", "you", "Head of Growth"]);
+    expect(diff(one([change("a", 1, { kind: "initiative_owner", initiative: "in-2", owner: "@growth" })]), "owner")).toEqual(["change", "Ashot Petrosian", "Head of Growth"]);
     expect(diff(one([change("a", 1, { kind: "initiative_owner", initiative: "in-1", owner: "" })]), "owner")).toEqual(["clear", "Head of Growth", "nobody"]);
     expect(diff(one([change("a", 1, { kind: "initiative_owner", initiative: "in-4", owner: "me" })]), "owner")).toEqual(["change", "nobody", "you"]);
   });
@@ -478,20 +507,20 @@ describe("which before a row shows", () => {
     expect(diff(first, "priority")).toEqual(["change", "not set", "p0"]);
   });
 
-  test("once applied, the stamp names ids by the live record, else by its own labels", () => {
+  test("once applied, the stamp names ids by its own labels, else by what the tree and the records know", () => {
     const lead = one([change("m", 1, { kind: "project_meta", project: "People & Deals", owner: "@growth" }, "applied", { applied_diff: stamp("project_meta", { owner_role_id: "role-gone" }, { owner_role_id: "fixture-role-growth" }, { labels: { "role-gone": "Content Lead" } }) })]);
     expect(diff(lead, "owner")).toEqual(["change", "Content Lead", "Head of Growth"]);
     const move = one([change("a", 1, { kind: "move", handle: "growth", reports_to: "Samvit Jain", scope_add: ["Platform"] }, "applied", {
       applied_diff: stamp("move", { reports_to: { kind: "user", user_id: ME }, scope: { project_ids: ["fixture-project-growth"], plan_ids: [] } }, { reports_to: { kind: "user", user_id: SAM }, scope: { project_ids: ["fixture-project-growth", "p-gone"], plan_ids: [] } }, { labels: { "p-gone": "Platform (archived)" } }),
     })]);
-    expect(diff(move, "reports_to")).toEqual(["change", "you", "Samvit Jain"]);
-    expect(diff(move, "area")).toEqual(["add", "Growth", "Growth, Platform (archived)"]);
+    expect(diff(move, "reports_to")).toEqual(["change", "Ashot Petrosian", "Samvit Jain"]);
+    expect(diff(move, "looks_after")).toEqual(["add", "Growth", "Growth, Platform"]);
     const goalStamp = stamp("initiative_shape", { parent_initiative_id: null, metrics: null }, { parent_initiative_id: "g-new", metrics: [{ key: "t", name: "Trust breaks per day", target: "0" }] }, { labels: { "g-new": "Broker introductions" }, added: { milestones: ["Beta open"] } });
     const shaped = one([change("a", 1, { kind: "initiative_shape", initiative: "in-4", parent: "Broker introductions", metrics: [{ name: "Trust breaks per day", target: "0" }], milestones: [{ title: "Beta open" }, { title: "Already there" }] }, "applied", { applied_diff: goalStamp })]);
     expect(shaped.rows.map((r) => [r.key, r.op, read(r.before), read(r.after)])).toEqual([
-      ["parent", "change", "at the top level", "under Broker introductions"],
+      ["parent", "change", "at the top level", "Broker introductions"],
       ["metrics", "change", "nothing", "Trust breaks per day, target 0"],
-      ["milestones", "add", null, "Beta open"],
+      ["milestones", "add", null, "Beta open, Already there"],
     ]);
     const carried = one([change("a", 1, { kind: "initiative_projects", initiative: "in-2", projects: ["Agent Quality"] }, "applied", { applied_diff: stamp("initiative_projects", { project_ids: ["p-network"] }, { project_ids: ["p-network", "p-quality"] }) })]);
     expect(diff(carried, "projects")).toEqual(["add", "Private Network", "Private Network, Agent Quality"]);
@@ -534,7 +563,7 @@ describe("which before a row shows", () => {
     expect(diff(one([RANKING[3]], null), "priority")).toEqual(["set", null, "p1"]);
     // No before for a list either: the row holds what the change adds, and what it takes away.
     const scope = one([change("a", 1, { kind: "scope", handle: "growth", add: ["Platform"], remove: ["Growth"] })], null);
-    expect(scope.rows.map((r) => [r.key, r.op, read(r.before), read(r.after)])).toEqual([["area", "add", null, "Platform"], ["area", "remove", null, "Growth"]]);
+    expect(scope.rows.map((r) => [r.key, r.op, read(r.before), read(r.after)])).toEqual([["looks_after", "add", null, "Platform"], ["looks_after:remove", "remove", null, "Growth"]]);
     expect(diff(one([change("a", 1, { kind: "initiative_projects", initiative: "in-2", projects: ["Agent Quality"] }, "skipped")]), "projects")).toEqual(["add", "Private Network", "Private Network, Agent Quality"]);
     // Records the tree does not hold (a cold store) read the same way.
     expect(diff(one([RANKING[3]], { ...LIVE, projects: [] }), "priority")).toEqual(["set", null, "p1"]);
@@ -552,7 +581,7 @@ describe("status", () => {
     expect(subjectStatus([member("skipped")])).toBe("skipped");
   });
 
-  test("the card's words, and each row keeps its own change's status on a card that ended differently", () => {
+  test("the card's words, and each row keeps its own change's seq on a card that ended differently", () => {
     const pair = (a: OrgProposalChange["status"], b: OrgProposalChange["status"]) => cardsOf([{ ...TREE[5], status: a }, { ...TREE[4], status: b }, TREE[0]])[1];
     expect(subjectStatusWords(pair("proposed", "proposed"))).toBe("2 to decide");
     expect(subjectStatusWords(pair("applied", "applied"))).toBe("Approved");
@@ -565,7 +594,7 @@ describe("status", () => {
     expect(subjectStatusWords(pair("skipped", "proposed"))).toBe("1 of 2 rejected");
     const mixed = pair("applied", "proposed");
     expect(mixed).toMatchObject({ status: "mixed", waiting: 1 });
-    expect(mixed.rows.map((r) => [r.key, r.seq, r.status])).toEqual([["parent", 9, "applied"], ["metrics", 9, "applied"], ["projects", 10, "proposed"]]);
+    expect(mixed.rows.map((r) => [r.key, r.seq])).toEqual([["parent", 9], ["metrics", 9], ["projects", 10]]);
     expect(subjectStatusWords(cardsOf(RANKING)[0])).toBe("To decide");
   });
 
@@ -606,23 +635,18 @@ describe("status", () => {
     expect(proposalProgressWords(cardsOf(TREE))).toBe("5 to decide");
   });
 
-  test("ordinals are words up to twelfth, and a card's place counts cards", () => {
-    expect([1, 2, 3, 9, 12].map(ordinalWord)).toEqual(["First", "Second", "Third", "Ninth", "Twelfth"]);
-    expect([13, 21, 22, 23, 111].map(ordinalWord)).toEqual(["13th", "21st", "22nd", "23rd", "111th"]);
-    const cards = cardsOf(RANKING);
-    expect(placeWords(cards, cards[0])).toBe("First of nine");
-    expect(placeWords(cards, cards[8])).toBe("Ninth of nine");
-    expect(placeWords(cards.slice(0, 1), cards[0])).toBe("The only change");
-    // One card holding several changes is the proposal's only entry, not its only change.
-    expect(placeWords(cardsOf([TREE[5], TREE[4]]), cardsOf([TREE[5], TREE[4]])[0])).toBe("The only entry");
-    expect(placeWords(cards.slice(0, 2), cards[5])).toBe("");
-    const many = Array.from({ length: 14 }, (_, i) => ({ ...cards[0], key: `k${i}` }));
-    expect(placeWords(many, many[12])).toBe("13th of 14");
+  test("a records proposal counts its records, with the noun", () => {
+    expect(proposalProgressWords([], ORG_RECORDS_FIXTURE_PROPOSAL.changes)).toBe("64 records to decide");
+    expect(proposalProgressWords([], ORG_RECORDS_FIXTURE_PROPOSAL_SENT.changes)).toBe("15 of 64 records to decide · 30 applied, 8 approved, 9 rejected, 2 failed");
+    const done = ORG_RECORDS_FIXTURE_PROPOSAL.changes.map((c, i) => ({ ...c, status: i < 62 ? ("applied" as const) : ("skipped" as const) }));
+    expect(proposalProgressWords([], done)).toBe("62 applied, 2 rejected");
+    // One record is a card, counted as cards are.
+    expect(proposalProgressWords(cardsOf([ORG_RECORDS_FIXTURE_PROPOSAL.changes[0]]), [ORG_RECORDS_FIXTURE_PROPOSAL.changes[0]])).toBe("1 to decide");
   });
 });
 
 describe("what a card carries beside its rows", () => {
-  test("evidence, what a change depends on, and what a revise did", () => {
+  test("evidence, what a change depends on, and what a revise moved, field by field", () => {
     const card = one([
       change("a", 1, { kind: "trust", handle: "growth", trust: "direct" }, "proposed", { evidence: [{ label: "3 decisions waiting", href: "/decisions" }], depends: "needs the role first", revision: { kind: "amended", note: "was the other way", at: 5, before: { kind: "trust", handle: "growth", trust: "understand" } } }),
       change("b", 2, { kind: "routine", handle: "growth", title: "Weekly review", prompt: "p", every: "7d" }, "proposed", { evidence: [{ label: "3 decisions waiting", href: "/decisions" }], rationale: "why a" }),
@@ -632,6 +656,66 @@ describe("what a card carries beside its rows", () => {
     expect(card.depends).toEqual(["needs the role first"]);
     expect(card.revisions).toHaveLength(1);
     expect(card.revisions[0]).toMatchObject({ seq: 1, word: "Changed", note: "was the other way" });
+    expect(card.revisions[0].fields.map((f) => [f.key, f.op, read(f.before), read(f.after)])).toEqual([["starts_work", "change", "when you start it", "on its own, inside its area"]]);
+  });
+});
+
+describe("record groups", () => {
+  const names = askNames(ORG_RECORDS_FIXTURE_TREE);
+  test("one row per group in the helper's order, titled and totalled, with the records behind it as sentences", () => {
+    const groups = recordGroupCards(ORG_RECORDS_FIXTURE_PROPOSAL.changes, names);
+    expect(groups.map((g) => [g.key, g.title, g.kindWord, g.rows.length, g.totals])).toEqual([
+      ["group:project:pr-901", "Matching Engine & Funnel", "project", 20, "1 plan done, 2 plans abandoned, 14 tasks done and 3 tasks reopened"],
+      ["group:project:pr-902", "Callers & Call Management", "project", 18, "2 plans done, 1 plan abandoned, 12 tasks done, 1 task dropped and 2 tasks reopened"],
+      ["group:project:pr-903", "Infrastructure", "project", 9, "1 plan done, 6 tasks done and 2 tasks reopened"],
+      ["group:plan:pl-911", "Counterparty pitches", "plan", 6, "1 plan done and 5 tasks done"],
+      ["group:plan:pl-912", "Networks", "plan", 5, "1 plan reopened and 4 tasks reopened"],
+      ["group:loose", "Not under a project", null, 6, "2 tasks done, 3 tasks reopened and 1 task to the backlog"],
+    ]);
+    const first = groups[0];
+    expect(first.seqs).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+    expect(first.change_ids).toHaveLength(20);
+    expect(first).toMatchObject({ status: "proposed", waiting: 20, failed: 0, reply: null });
+    // Each row reads as the translator's sentence, with the record's title as its span, and says whether it closes the record.
+    const row = first.rows[3];
+    expect(row.sentence).toBe(changeWords(ORG_RECORDS_FIXTURE_PROPOSAL.changes[3].change, { names }).sentence);
+    expect(row.sentence.slice(...row.subjectSpan!)).toBe("Task 1: Rank the matching queue by counterparty fit");
+    expect(row).toMatchObject({ seq: 4, status: "proposed", closed: true });
+    expect(row.reason.length).toBeGreaterThan(0);
+    expect(first.rows.filter((r) => !r.closed).map((r) => r.seq)).toEqual([18, 19, 20]);
+  });
+
+  test("the bare twin: the nine plans closed on their own fold into one N plans row with no kind word, the tasks loose; a proposal of one group is All N records with the proposal's totals", () => {
+    const bare = recordGroupCards(ORG_RECORDS_FIXTURE_PROPOSAL_BARE.changes, names);
+    expect(bare.map((g) => [g.key, g.title, g.kindWord, g.rows.length])).toEqual([["group:plans", "9 plans", null, 9], ["group:loose", "Not under a project", null, 55]]);
+    expect(bare[0].totals).toBe("5 plans done, 3 plans abandoned and 1 plan reopened");
+    expect(bare.at(-1)).toMatchObject({ title: "Not under a project", kindWord: null });
+    expect(bare.at(-1)!.rows).toHaveLength(55);
+    const tasksOnly = ORG_RECORDS_FIXTURE_PROPOSAL_BARE.changes.filter((c) => c.change.kind === "task_status");
+    const lone = recordGroupCards(tasksOnly, names);
+    expect(lone).toHaveLength(1);
+    expect(lone[0]).toMatchObject({ key: "group:loose", title: "All 55 records", kindWord: null, totals: "55 records: 39 done, 14 reopened, 1 dropped and 1 to the backlog." });
+  });
+
+  test("the sent twin: each group's status, its failures and its stored words", () => {
+    const sent = recordGroupCards(ORG_RECORDS_FIXTURE_PROPOSAL_SENT.changes, names);
+    expect(sent.map((g) => [g.title, g.status, g.waiting, g.failed, g.reply?.text ?? null])).toEqual([
+      ["Matching Engine & Funnel", "applied", 0, 0, null],
+      ["Callers & Call Management", "accepted", 0, 0, null],
+      ["Infrastructure", "skipped", 0, 0, "Not yet"],
+      ["Counterparty pitches", "failed", 6, 2, null],
+      ["Networks", "proposed", 5, 0, null],
+      ["Not under a project", "proposed", 6, 0, null],
+    ]);
+    expect(sent[3].rows.slice(0, 2).map((r) => r.failed)).toEqual(["pl-911 is already done", "pl-911 is already done"]);
+    expect(sent[3].rows[2].failed).toBeUndefined();
+  });
+
+  test("a record proposal's cards still read with the fixture's live records", () => {
+    const cards = proposalSubjects(ORG_RECORDS_FIXTURE_PROPOSAL.changes.slice(0, 1), ORG_RECORDS_FIXTURE_LIVE);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].kind).toBe("plan");
+    expect(diff(cards[0], "status")).toEqual(["set", null, "done"]);
   });
 });
 
