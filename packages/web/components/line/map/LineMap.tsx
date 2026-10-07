@@ -160,7 +160,7 @@ function MapNodeView({ node: n, style, asks, selected, focused, on, visits, wind
 }) {
   const tone = nodeTone(n, asks);
   const here = asks > 0 ? asks : n.now.length;
-  const compact = n.kind === "source" || n.kind === "expectations";
+  const compact = n.kind === "source" || n.kind === "expectations" || n.kind === "end";
   const mark = n.marks[0];
   const label = `${n.label}: ${here} ${asks > 0 ? "waiting on you" : "here now"}, ${n.through} through in ${windowLabel}${n.marks.length ? `. ${n.marks.map((m) => m.words).join(". ")}` : ""}`;
   return (
