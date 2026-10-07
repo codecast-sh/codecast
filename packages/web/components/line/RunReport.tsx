@@ -51,6 +51,13 @@ const STEP_MARK: Record<StepState, { icon: typeof Check; cls: string }> = {
   noted: { icon: Hand, cls: "text-sol-text-dim" },
 };
 
+/** A station's state as its mark: the same check, cross, spinner and pause every run path draws. */
+export function StepMark({ state, className }: { state: StepState; className?: string }) {
+  const mark = STEP_MARK[state];
+  const Icon = mark.icon;
+  return <Icon className={cn("w-3.5 h-3.5 shrink-0", mark.cls, className)} aria-hidden />;
+}
+
 /** The path a run took, phase by phase: each station's result in one line and
  *  the session that did it; the stations it did not reach fold per phase. */
 export function RunPathView({ phases, ended }: { phases: ReportPhase[]; ended: boolean }) {
