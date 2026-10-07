@@ -64,6 +64,7 @@ import { ALLOW_SCOPES, toolsFor, type ToolsForOptions } from "./tools";
 import { normalizeTimezone } from "../lib/teamDay";
 import { decisionAnswerOf, pendingInput, turnsIn, type Input, type Turn } from "./input";
 import { closeProviderIncident, noteProviderFault } from "./incidents";
+import { titleAfterHostedAnswer } from "../titleGeneration";
 import {
   isStorableRow,
   loadHistory,
@@ -979,6 +980,7 @@ export const finish = internalMutation({
     if (args.model) await closeProviderIncident(ctx, args.model);
     await endTurn(ctx, turn, { ...common, status: "done", reason: "done" });
     await setWorkState(ctx, turn.conversation_id, args.asks_person ? "idle" : "done");
+    if (conversation) await titleAfterHostedAnswer(ctx, conversation);
     await afterTurn(ctx, turn);
     return null;
   },

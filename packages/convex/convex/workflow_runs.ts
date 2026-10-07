@@ -271,11 +271,16 @@ async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<bo
 // learn the question is gone.
 export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = "Cancelled by user"): Promise<void> {
   if (run.status === "completed" || run.status === "failed") return;
-  if (run.gate_decision_id) {
-    const decision = await ctx.db.get(run.gate_decision_id);
-    if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
-  }
+  await withdrawOpenGate(ctx, run, now);
   await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
+}
+
+// A run that ends, however it ends, takes back the question it was waiting
+// on: no card stays in the queue, or its notice unread, for a run that is over.
+async function withdrawOpenGate(ctx: Ctx, run: any, now: number): Promise<void> {
+  if (!run.gate_decision_id) return;
+  const decision = await ctx.db.get(run.gate_decision_id);
+  if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
 }
 
 // A run created for a task logs into a session of its own, and nobody talks
@@ -884,6 +889,11 @@ export const updateProgress = mutation({
         }
       }
     }
+
+    // A runner that reports its run over (a signal while it waits at a gate)
+    // leaves no open gate behind. The run is already patched past its pause,
+    // so the withdraw keeps this report's fail_reason.
+    if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, run, now);
 
     // Sync status to bound task/plan
     if (args.run_status) {
