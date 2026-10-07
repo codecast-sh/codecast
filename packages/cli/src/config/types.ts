@@ -210,7 +210,8 @@ export interface Config extends CloudSessionSyncSettings {
   // Each new agent session gets its own tmux server, started as its own launchd
   // job, so macOS schedules it as its own group and a busy session cannot starve
   // the rest. Sessions already running stay where they are and move on their
-  // next restart. macOS only; absent = every session shares the default server.
+  // next restart. macOS only, on by default; false keeps every session on the
+  // shared server.
   tmux_server_per_session?: boolean;
 
   // --- Fleet cap (daemon.ts, hibernation.ts) ---

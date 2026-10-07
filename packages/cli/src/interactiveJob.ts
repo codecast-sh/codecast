@@ -16,6 +16,8 @@ import * as path from "node:path";
 import { spawnSync } from "./proc.js";
 import { LAUNCHD_LABEL_ENV, startLaunchdJob } from "./launchdJob.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
+import { acquireFileSlot } from "./lockFile.js";
+import { defaultConfigDir } from "./config/configDir.js";
 
 /** Priority a process gets when nothing clamps it (the Interactive band starts here). */
 const UNCLAMPED_PRIORITY = 31;
@@ -36,6 +38,24 @@ export function priorityClamped(): boolean {
 export async function runAsInteractiveJob(command: string[], opts: { cwd?: string; stdin?: string } = {}): Promise<number> {
   const runHere = () => spawnSync(command[0]!, command.slice(1), { stdio: "inherit", cwd: opts.cwd }).status ?? 1;
   if (process.platform !== "darwin" || process.env[LAUNCHD_LABEL_ENV]) return runHere();
+  // Each job is a scheduling group of its own, so it competes with every agent
+  // session as an equal; a cap on how many run at once keeps a burst of them
+  // from crowding the sessions out.
+  const release = await acquireFileSlot(path.join(defaultConfigDir(), "interactive-jobs"), MAX_INTERACTIVE_JOBS, {
+    describe: "Interactive job slots",
+    onWait: () => process.stderr.write(`queued: all ${MAX_INTERACTIVE_JOBS} Interactive job slots are in use on this machine; starting when one frees\n`),
+  });
+  try {
+    return await runJob(command, opts, runHere);
+  } finally {
+    release();
+  }
+}
+
+/** How many commands may run as Interactive jobs at once on this machine (CAST_INTERACTIVE_JOBS_MAX overrides). */
+export const MAX_INTERACTIVE_JOBS = Math.max(1, parseInt(process.env.CAST_INTERACTIVE_JOBS_MAX ?? "", 10) || 8);
+
+async function runJob(command: string[], opts: { cwd?: string; stdin?: string }, runHere: () => number): Promise<number> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-interactive-"));
   const label = `sh.codecast.interactive.${process.pid}`;
   const logPath = path.join(dir, "out.log");

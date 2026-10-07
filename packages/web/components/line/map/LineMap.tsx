@@ -13,6 +13,9 @@ import { memo, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import type { LineMap as LineMapModel, MapEdge, MapNode } from "../../../lib/line/lineMap";
 import { edgeWidth, layoutLineMap, pathEdges, type MapLayout } from "../../../lib/line/lineMapLayout";
 import { cn } from "../../../lib/utils";
+import { EdgeArrows } from "../EdgeArrows";
+import { edgeAttrs, useScrollEdges } from "../useScrollEdges";
+import "../line.css";
 import "./lineMap.css";
 
 export type LineMapProps = {
@@ -24,6 +27,9 @@ export type LineMapProps = {
   /** The keyboard cursor, when it is not on the selected node. */
   focusedNode?: string | null;
   highlightPath?: readonly string[] | null;
+  /** The node the map opens on: scrolled into view on first paint, a little
+   *  left of center so the line past it shows too (the busiest node, LX2). */
+  openAt?: string | null;
   /** Cards waiting on a person at the decide gate: the node asks. */
   asks?: number;
   onSelectNode?: (id: string) => void;
@@ -34,7 +40,7 @@ export type LineMapProps = {
 const nodeSel = (id: string) => `[data-map-node="${id.replace(/"/g, '\\"')}"]`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-export const LineMap = memo(function LineMap({ map, layout: given, selectedNode, selectedEdge, focusedNode, highlightPath, asks = 0, onSelectNode, onSelectEdge, className }: LineMapProps) {
+export const LineMap = memo(function LineMap({ map, layout: given, selectedNode, selectedEdge, focusedNode, highlightPath, openAt, asks = 0, onSelectNode, onSelectEdge, className }: LineMapProps) {
   const layout = useMemo(() => given ?? layoutLineMap(map), [given, map]);
   const maxCount = useMemo(() => Math.max(0, ...map.edges.map((e) => e.count)), [map.edges]);
   const byId = useMemo(() => new Map(map.nodes.map((n) => [n.id, n])), [map.nodes]);
@@ -47,12 +53,39 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
     return v;
   }, [highlightPath]);
 
-  // Keep the selected or focused node in view as it moves.
   const scroller = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(scroller);
+  // On open, the busiest node in view with room on both sides; once only, so
+  // the viewer's own scrolling is never undone. A selection or a trace scrolls
+  // by its own effect below.
+  const placed = useRef(false);
+  useEffect(() => {
+    const el = scroller.current;
+    if (placed.current || !el || !openAt) return;
+    placed.current = true;
+    if (selectedNode || highlightPath?.length || el.scrollLeft > 0) return;
+    const node = el.querySelector<HTMLElement>(nodeSel(openAt));
+    if (!node) return;
+    const box = el.getBoundingClientRect();
+    const r = node.getBoundingClientRect();
+    el.scrollTo({ left: el.scrollLeft + (r.left + r.width / 2) - (box.left + box.width * 0.42), top: 0 });
+  }, [openAt, selectedNode, highlightPath]);
+  // Keep the selected or focused node in view as it moves, and again when the
+  // map's column narrows (a panel opening beside it), so the node a panel
+  // describes is never the one hidden behind its edge (LX3).
   const target = focusedNode ?? selectedNode ?? null;
   useEffect(() => {
-    if (!target) return;
-    scroller.current?.querySelector<HTMLElement>(nodeSel(target))?.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    const el = scroller.current;
+    if (!target || !el) return;
+    keepInView(el, target, "smooth");
+    if (typeof ResizeObserver === "undefined") return;
+    let w = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth < w) keepInView(el, target, "auto");
+      w = el.clientWidth;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [target]);
   // A trace scrolls to where its path starts.
   const first = highlightPath?.[0];
@@ -62,7 +95,8 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
   }, [first]);
 
   return (
-    <div ref={scroller} className={cn("lmap-scroll", className)} data-line-map data-tracing={tracing ? "true" : undefined}>
+    <div className={cn("lmap-frame", className)} data-line-map data-tracing={tracing ? "true" : undefined}>
+    <div ref={scroller} className="lmap-scroll line-edge-fade" {...edgeAttrs(edges)}>
       <div className="lmap-canvas" style={{ width: layout.width, height: layout.height }}>
         <div className="lmap-phases" aria-hidden>
           {layout.phases.map((p) => (
@@ -126,8 +160,27 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
         })}
       </div>
     </div>
+    <EdgeArrows scroller={scroller} edges={edges} label="the line" />
+    </div>
   );
 });
+
+/** Scroll `el` the least that shows node `id` whole, clear of the faded
+ *  edges. Rects and scrollTo, not scrollIntoView, so the page never moves. */
+function keepInView(el: HTMLElement, id: string, behavior: ScrollBehavior) {
+  const node = el.querySelector<HTMLElement>(nodeSel(id));
+  if (!node) return;
+  const box = el.getBoundingClientRect();
+  const r = node.getBoundingClientRect();
+  const clear = Math.min(64, box.width / 6);
+  let dx = 0;
+  if (r.left < box.left + clear) dx = r.left - box.left - clear;
+  else if (r.right > box.right - clear) dx = r.right - box.right + clear;
+  let dy = 0;
+  if (r.top < box.top + 8) dy = r.top - box.top - 8;
+  else if (r.bottom > box.bottom - 8) dy = r.bottom - box.bottom + 8;
+  if (dx || dy) el.scrollTo({ left: el.scrollLeft + dx, top: el.scrollTop + dy, behavior });
+}
 
 /** An edge in words, for its tooltip: where it goes and how many crossed. */
 export function edgeWords(e: MapEdge, byId: Map<string, MapNode>): string {
@@ -135,6 +188,15 @@ export function edgeWords(e: MapEdge, byId: Map<string, MapNode>): string {
   const to = byId.get(e.to)?.label ?? e.to;
   const how = e.kind === "loop" ? "back to" : "to";
   return `${from} ${how} ${to}${e.label ? `, when ${e.label.toLowerCase()}` : ""}: ${e.count === 0 ? "nothing crossed" : `${plural(e.count, "crossing")}`}`;
+}
+
+/** What the window's count means at a node: signals are filed, causes are
+ *  new, an end is where runs ended, and a station is passed through. */
+export function throughWord(n: Pick<MapNode, "kind">): string {
+  if (n.kind === "source" || n.kind === "signals" || n.kind === "expectations") return "filed";
+  if (n.kind === "causes") return "new";
+  if (n.kind === "end") return "ended";
+  return "passed";
 }
 
 /** How a node is doing at a glance: what its lamp shows. */
@@ -160,9 +222,11 @@ function MapNodeView({ node: n, style, asks, selected, focused, on, visits, wind
 }) {
   const tone = nodeTone(n, asks);
   const here = asks > 0 ? asks : n.now.length;
-  const compact = n.kind === "source" || n.kind === "expectations";
+  const compact = n.kind === "source" || n.kind === "expectations" || n.kind === "end";
   const mark = n.marks[0];
-  const label = `${n.label}: ${here} ${asks > 0 ? "waiting on you" : "here now"}, ${n.through} through in ${windowLabel}${n.marks.length ? `. ${n.marks.map((m) => m.words).join(". ")}` : ""}`;
+  const passed = `${n.through} ${throughWord(n)}`;
+  const empty = here === 0 && n.through === 0;
+  const label = `${n.label}: ${empty ? "empty" : `${here > 0 ? `${here} ${asks > 0 ? "waiting on you" : "here now"}, ` : ""}${passed} in the last ${windowLabel}`}${n.marks.length ? `. ${n.marks.map((m) => m.words).join(". ")}` : ""}`;
   return (
     <>
       <button
@@ -182,24 +246,31 @@ function MapNodeView({ node: n, style, asks, selected, focused, on, visits, wind
         data-focused={focused ? "true" : undefined}
         data-on={on ? "true" : undefined}
         data-compact={compact ? "true" : undefined}
+        data-empty={empty ? "true" : undefined}
       >
         <span className="lmap-node-head">
           <span className="lmap-lamp" data-tone={tone} />
           <span className="lmap-node-label">{n.label}</span>
           {visits > 1 && <span className="lmap-visits" title={`${visits} visits on this path`}>x{visits}</span>}
         </span>
-        {compact ? (
-          <span className="lmap-node-nums">
-            <span className="lmap-through" data-zero={n.through === 0 ? "true" : undefined}><b>{n.through}</b> in {windowLabel}</span>
-          </span>
-        ) : (
-          <span className="lmap-node-nums">
-            <span className="lmap-here" data-zero={here === 0 ? "true" : undefined} data-ask={asks > 0 ? "true" : undefined}>
-              <b>{here}</b>{asks > 0 ? " ask" : n.kind === "end" ? "" : " here"}
-            </span>
-            <span className="lmap-through" data-zero={n.through === 0 ? "true" : undefined} title={`${n.through} through in the last ${windowLabel}`}>{n.through}</span>
-          </span>
-        )}
+        {/* One reading per node: what is here now as the big number (only when
+            something is), what passed in the window as small labeled words,
+            and an empty node says so instead of drawing zeros (LX2). */}
+        <span className="lmap-node-nums">
+          {empty ? (
+            <span className="lmap-empty-word">empty</span>
+          ) : (
+            <>
+              {!compact && here > 0 && (
+                <span className="lmap-here" data-ask={asks > 0 ? "true" : undefined}>
+                  {/* With a count beside it the big number stands alone (the legend names it). */}
+                  <b>{here}</b>{asks > 0 ? " ask" : n.through > 0 ? "" : " here"}
+                </span>
+              )}
+              {n.through > 0 && <span className="lmap-through">{passed}</span>}
+            </>
+          )}
+        </span>
       </button>
       {mark && (
         <span

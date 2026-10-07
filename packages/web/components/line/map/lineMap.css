@@ -3,16 +3,24 @@
    orange ages or starves, red fails, violet is rework (a loop back). Nodes
    stay neutral so the trouble is what the eye finds. */
 
-.lmap-scroll {
+/* The frame holds the scroller and its edge arrows (EdgeArrows). */
+.lmap-frame { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.lmap-frame > .lmap-scroll { flex: 1 1 auto; min-height: 0; }
+.lmap-frame {
   --lmap-belt: var(--sol-blue);
   --lmap-line: color-mix(in srgb, var(--sol-text-muted) 55%, transparent);
   --lmap-idle: color-mix(in srgb, var(--sol-border) 85%, transparent);
+}
+.lmap-scroll {
   position: relative;
+  display: flex;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
 }
-.lmap-canvas { position: relative; margin: 0 auto; }
+/* Top-aligned: the line starts under the bar, never centered into the floor's middle. */
+.lmap-canvas { position: relative; flex: 0 0 auto; margin: 0 auto; align-self: flex-start; }
+.lmap-scroll.line-edge-fade { --edge-fade: 48px; }
 
 /* Phases, named over the path. */
 .lmap-phases { position: absolute; inset: 0 0 auto 0; height: 22px; pointer-events: none; }
@@ -108,7 +116,7 @@
   border-color: var(--lmap-belt);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--lmap-belt) 22%, transparent);
 }
-.lmap-node[data-kind="source"], .lmap-node[data-kind="expectations"] { border-radius: 9999px; padding: 5px 12px; justify-content: center; gap: 1px; }
+.lmap-node[data-kind="source"], .lmap-node[data-kind="expectations"], .lmap-node[data-kind="end"] { border-radius: 9999px; padding: 5px 12px; justify-content: center; gap: 1px; }
 .lmap-node[data-kind="expectations"] { border-style: dashed; }
 .lmap-node[data-kind="signals"], .lmap-node[data-kind="causes"] { background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sol-card, var(--sol-bg))); }
 .lmap-node[data-kind="end"] { border-radius: 9999px; padding-inline: 12px; }
@@ -129,18 +137,22 @@
   color: var(--sol-bg);
   background: var(--lmap-belt);
 }
-.lmap-node-nums { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; }
+.lmap-node-nums { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; min-height: 15px; }
 .lmap-here { font-size: 10.5px; color: var(--sol-text-muted); white-space: nowrap; }
 .lmap-here b { font-size: 17px; font-weight: 700; color: var(--sol-text); letter-spacing: -0.03em; margin-right: 1px; }
-.lmap-here[data-zero="true"] b { font-weight: 400; color: var(--sol-text-dim); opacity: 0.6; }
-.lmap-here[data-zero="true"] { color: var(--sol-text-dim); }
 .lmap-here[data-ask="true"], .lmap-here[data-ask="true"] b { color: var(--sol-yellow); }
 .lmap-through { font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; }
-.lmap-through b { color: var(--sol-text-muted); font-weight: 600; }
-.lmap-through[data-zero="true"] { opacity: 0.55; }
+.lmap-node:not([data-compact]) .lmap-here + .lmap-through { margin-left: auto; }
 .lmap-node[data-compact="true"] .lmap-node-nums { justify-content: flex-start; }
-/* The through count wears an arrow so it reads as passing, not resting. */
-.lmap-node:not([data-compact]) .lmap-through::before { content: "\2192 "; opacity: 0.7; }
+.lmap-empty-word { font-size: 10.5px; color: var(--sol-text-dim); opacity: 0.7; font-style: italic; }
+.lmap-node[data-empty="true"]:not([data-selected]) .lmap-node-label { color: var(--sol-text-muted); }
+/* Work stuck or piling up (a warn mark): the count and the node's edge take
+   the warning ink, so the map shows where work is stuck, not only what is
+   selected (LX3). A failing node takes red the same way. */
+.lmap-node[data-tone="warn"]:not([data-selected]) { border-color: color-mix(in srgb, var(--sol-orange) 50%, var(--sol-border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-orange) 10%, transparent); }
+.lmap-node[data-tone="warn"] .lmap-here b { color: var(--sol-orange); }
+.lmap-node[data-tone="fail"]:not([data-selected]) { border-color: color-mix(in srgb, var(--sol-red) 50%, var(--sol-border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 10%, transparent); }
+.lmap-node[data-tone="fail"] .lmap-here b { color: var(--sol-red); }
 
 .lmap-lamp { width: 6px; height: 6px; border-radius: 9999px; flex-shrink: 0; background: color-mix(in srgb, var(--sol-text-dim) 50%, transparent); }
 .lmap-lamp[data-tone="live"] { background: var(--lmap-belt); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lmap-belt) 18%, transparent); }
@@ -196,9 +208,10 @@
 .lmap-windows button[aria-pressed="true"] { background: color-mix(in srgb, var(--sol-text) 8%, transparent); color: var(--sol-text); }
 .lmap-legend { display: inline-flex; align-items: center; gap: 12px; font-size: 10.5px; color: var(--sol-text-dim); }
 .lmap-legend i { display: inline-block; width: 18px; height: 0; border-top: 3px solid color-mix(in srgb, var(--lmap-belt, var(--sol-blue)) 42%, var(--sol-text-muted)); vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+.lmap-legend-num { font-size: 12px; font-weight: 700; color: var(--sol-text-muted); margin-right: 3px; }
 .lmap-legend i[data-kind="loop"] { border-top-color: color-mix(in srgb, var(--sol-violet) 55%, transparent); }
 .lmap-legend i[data-kind="empty"] { border-top: 1px dashed var(--sol-border); }
-.lmap-scroll.lmap-fill { flex: 1 1 auto; min-height: 0; }
+.lmap-frame.lmap-fill { flex: 1 1 auto; min-height: 0; }
 .lmap-note { margin: 2px 16px 6px; font-size: 11.5px; color: var(--sol-text-muted); }
 .lmap-note code { color: var(--sol-text); }
 .lmap-trace-bar {
@@ -283,3 +296,9 @@
 
 .lmap-panel-foot { flex: 0 0 auto; display: flex; gap: 14px; align-items: center; padding: 6px 16px; font-size: 11px; color: var(--sol-text-dim); border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
 .lmap-panel-foot span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* The legend is a reading aid for a wide map; a narrow one keeps the window switch and the settings. */
+.lmap-main { container: lmap-main / inline-size; }
+.lmap-legend > span { white-space: nowrap; }
+@container lmap-main (max-width: 1040px) { .lmap-legend > span:nth-child(n + 3) { display: none; } }
+@container lmap-main (max-width: 760px) { .lmap-legend { display: none; } }

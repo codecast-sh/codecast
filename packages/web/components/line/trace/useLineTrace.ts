@@ -17,8 +17,9 @@ import type { LineProject } from "../../../lib/lineFlow";
 import { useProjectStations } from "../settings/LineStations";
 import { buildLineTrace, resolveTraceRef, type LineTrace, type TraceRows, type TraceTask } from "../../../lib/line/lineTrace";
 import type { LineGraph, MapDecision, MapRun, MapSignal } from "../../../lib/line/lineMap";
+import { useGoalChip } from "../../../hooks/useGoalChip";
 import { useCauseRuns } from "../RunReport";
-import { useLineFloor } from "../useLineFloor";
+import { useLineFloor, useProjectWorkspace } from "../useLineFloor";
 
 const byId = <T extends { _id: string }>(...lists: ReadonlyArray<ReadonlyArray<T>>): T[] => {
   const out = new Map<string, T>();
@@ -40,8 +41,29 @@ export type LineTraceState = {
   now: number;
 };
 
+/** The cause a task ref names, wherever the store holds it: a cause in
+ *  another team's workspace is not in the active floor. One scan per change
+ *  of the tasks collection, cached by its ref. */
+type HeldTask = { _id: string; short_id?: string; workspace?: string | null; team_id?: string | null; project_id?: string | null };
+const heldCache = new WeakMap<object, Map<string, HeldTask | null>>();
+function heldTask(tasks: Record<string, HeldTask> | undefined, ref: string): HeldTask | null {
+  const key = ref.trim();
+  if (!tasks || !key) return null;
+  let byRef = heldCache.get(tasks);
+  if (!byRef) { byRef = new Map(); heldCache.set(tasks, byRef); }
+  if (byRef.has(key)) return byRef.get(key)!;
+  let hit: HeldTask | null = tasks[key] ?? null;
+  if (!hit && /^ct-/i.test(key)) for (const id in tasks) if (tasks[id]?.short_id === key) { hit = tasks[id]; break; }
+  byRef.set(key, hit);
+  return hit;
+}
+
 export function useLineTrace(ref: string): LineTraceState {
-  const { now, lineRows, projects } = useLineFloor();
+  // A cause in another workspace reads the floor where it lives (as a
+  // project's Line tab does), so every cause the viewer can open traces.
+  const held = useInboxStore((s) => heldTask(s.tasks as unknown as Record<string, HeldTask>, ref));
+  const elsewhere = useProjectWorkspace(held);
+  const { now, lineRows, projects } = useLineFloor(elsewhere ? held?.project_id ?? null : undefined, elsewhere);
   const { ready } = useSyncSignals();
 
   // The floor's rows first: most refs resolve there.
@@ -84,6 +106,9 @@ export function useLineTrace(ref: string): LineTraceState {
   const stations = useProjectStations(projectId ?? "");
   const graph = useMemo<LineGraph | null>(() => (projectId ? { nodes: stations.nodes, edges: stations.edges } : null), [projectId, stations.nodes, stations.edges]);
 
+  // The goal the cause serves, by name (a project or a goal), never its id.
+  const goal = useGoalChip(cause?.goal_ref);
+
   // Who answered a card, by name: a teammate, or you.
   const people = useInboxStore((s) => s.teamMembers);
   const meId = useInboxStore((s) => s.currentUser?._id ?? null);
@@ -93,6 +118,7 @@ export function useLineTrace(ref: string): LineTraceState {
     if (!resolved) return null;
     return buildLineTrace(resolved, rows, {
       now, graph,
+      goalName: (g) => (g === cause?.goal_ref && goal.kind !== "unknown" ? goal.label : null),
       answeredBy: (d) => {
         const by = (d as { answered_by?: { kind: string; id: string } }).answered_by;
         if (!by || by.kind !== "user") return null;
@@ -100,7 +126,7 @@ export function useLineTrace(ref: string): LineTraceState {
         return (people ?? []).find((m: { _id: string; name?: string }) => String(m._id) === by.id)?.name ?? null;
       },
     });
-  }, [ref, rows, cause, lonelyRun, detail, now, graph, people, meId]);
+  }, [ref, rows, cause, lonelyRun, detail, now, graph, people, meId, goal]);
 
   return { trace, rows, graph, project, ready, now };
 }

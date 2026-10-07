@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
-import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, editKey, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineValue, lineWriteGate } from "./lineSettings";
+import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, editKey, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineEditStatus, lineValue, lineWriteGate } from "./lineSettings";
 
 const field = (key: string) => LINE_FIELDS.find((f) => f.key === key)!;
 
@@ -108,6 +108,20 @@ describe("editOutcome", () => {
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: false, detail: "no project" } }) })).toMatchObject({ state: "saved", note: expect.stringMatching(/republish failed: no project/) });
     // A daemon that republishes after it answers: written, and the row follows.
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: "pending" } }) })).toEqual({ state: "saved" });
+  });
+});
+
+describe("lineEditStatus", () => {
+  const row = (result: object) => ({ _id: "r1", requested_at: 1_000, executed_at: 1_300, command_id: "c1", result: JSON.stringify(result), error: null, edits: [{ op: "set" as const, key: "watch_days", value: 8 }] });
+  test("the machine's own republish lands before it answers: the edit is saved, not still republishing", () => {
+    expect(lineEditStatus(row({ changed: true, published: { ok: true } }), profile({ published_at: 1_200 }), 2_000).state).toBe("saved");
+  });
+  test("a copy published before the request does not carry the edit", () => {
+    expect(lineEditStatus(row({ changed: true, published: { ok: true } }), profile({ published_at: 900 }), 2_000).state).toBe("publishing");
+  });
+  test("a republish still pending waits for a copy stamped after the answer", () => {
+    expect(lineEditStatus(row({ changed: true, published: { ok: "pending" } }), profile({ published_at: 1_200 }), 2_000).state).toBe("publishing");
+    expect(lineEditStatus(row({ changed: true, published: { ok: "pending" } }), profile({ published_at: 1_400 }), 2_000).state).toBe("saved");
   });
 });
 
