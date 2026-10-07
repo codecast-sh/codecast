@@ -167,11 +167,14 @@ const SESSION_SERVER_START_MS = 20_000;
 
 type SessionServerPlan = { socket: string; socketPath: string; label: string; plistPath: string; logPath: string; argv: string[]; env: Record<string, string | undefined> };
 
-function sessionServerPlan(session: string, args: string[], env: TmuxEnv): SessionServerPlan {
+export function sessionServerPlan(session: string, args: string[], env: TmuxEnv): SessionServerPlan {
   const socket = sessionSocketName(session);
   const dir = path.join(defaultConfigDir(), "tmux-servers");
   fs.mkdirSync(dir, { recursive: true });
-  const jobEnv = { ...env };
+  // The PATH every other tmux call runs on. The daemon's own is launchd's
+  // (/usr/bin:/bin:...), which holds no tmux: a job naming a bare "tmux" fails
+  // at exec with nothing in its log, and the session never answers.
+  const jobEnv: TmuxEnv = { ...env, PATH: [env.PATH, ENRICHED_PATH].filter(Boolean).join(":") };
   delete jobEnv.TMUX;
   delete jobEnv.TMUX_PANE;
   return {
@@ -180,7 +183,7 @@ function sessionServerPlan(session: string, args: string[], env: TmuxEnv): Sessi
     label: `sh.codecast.tmux.${session}`,
     plistPath: path.join(dir, `${session}.plist`),
     logPath: path.join(dir, `${session}.log`),
-    argv: [tmuxBinary(env), "-L", socket, ...withoutGlobals(args)],
+    argv: [tmuxBinary(jobEnv), "-L", socket, ...withoutGlobals(args)],
     env: jobEnv,
   };
 }
