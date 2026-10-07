@@ -1,11 +1,12 @@
 // The shell's three addresses (SPEC "Open an app link"):
-//   /                 home
+//   /[?make]          home, with the maker focused on ?make
 //   /<slug>[?room]    an app on its live version, the room open with ?room
 //   /<slug>/v/<n>     an app on version n, viewing the past
 // Slugs always carry a hyphenated tail (convex/lib/slugs), so no slug can
 // shadow a route the shell might add later.
 import { useSyncExternalStore } from "react";
 import { isSlug } from "../../convex/lib/slugs";
+import type { AppLink } from "../../runtime/protocol";
 
 export type Route =
   | { kind: "home" }
@@ -23,10 +24,21 @@ export function parseRoute(pathname: string, search: string): Route {
   return { kind: "missing" };
 }
 
+export const MAKE_PARAM = "make";
+export const makeUrl = `/?${MAKE_PARAM}`;
 export const appUrl = (slug: string) => `/${slug}`;
 export const roomUrl = (slug: string) => `/${slug}?room`;
 export const versionUrl = (slug: string, n: number) => `/${slug}/v/${n}`;
 export const absolute = (path: string) => new URL(path, location.origin).href;
+
+/** What an app's SDK is told about its own links (runtime/protocol AppLink). */
+export const appLink = (slug: string, name: string): AppLink => ({ name, link: absolute(appUrl(slug)), room: absolute(roomUrl(slug)) });
+
+/** Whether a click on an in-app link should move in place: a plain primary
+ *  click. Modified clicks keep the browser's meaning (a new tab, a window). */
+export function isPlainClick(e: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; defaultPrevented: boolean }): boolean {
+  return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.defaultPrevented;
+}
 
 const CHANGE = "clayground:navigate";
 

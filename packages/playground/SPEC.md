@@ -46,8 +46,11 @@ read as "simple, fast, fun, and real software", in that order.
 ### Land on the home page
 - One big input: "Make something". Submitting creates an app and starts the
   first build; the visitor lands in the room watching it build.
-- Below: a gallery of live apps (most active recently), each a live thumbnail
-  or a still, its name, how many people changed it, and who is in it now.
+- Below: a gallery of apps, those with people in them first (the most people
+  first), then the most recently active. Each shows a still of its live
+  version (taken once, by the first screen that showed it), the live app
+  itself while hovered or busy, its name, what last changed it, and who is
+  in it now.
 - A few starter ideas as one-tap prompts.
 
 ### Open an app link `/<slug>`
@@ -125,7 +128,9 @@ read as "simple, fast, fun, and real software", in that order.
   counts (versions, contributors), last_activity_at, budget usage.
 - `versions`: app_id, number, parent_number, files manifest (path → storage id
   or inline text + hash), summary, request message id, author visitor, kind
-  (build | restore | fork | seed), created_at. Immutable.
+  (build | restore | fork | seed), created_at, and once taken, its still (a
+  gallery image in storage, the one field set after the insert). Immutable
+  otherwise.
 - `messages`: app_id, visitor_id or "builder", body, kind (chat | request |
   build card | system note), element reference, build state for cards.
 - `builds`: app_id, request message, status (queued | building | live |
@@ -141,7 +146,11 @@ visitor id alone.
 
 ### Build queue and the builder agent
 - One build at a time per app, FIFO, each based on the live version at the
-  moment it starts (so builds never conflict). The queue is visible.
+  moment it starts, and committed only on top of that version: if a restore
+  lands meanwhile, the build starts again from the new live version (once;
+  a second move fails it with a reason), so builds never conflict. A
+  restore names the live version it was chosen against and is refused if
+  another went live since. The queue is visible.
 - The builder is a Convex action using `runAssistant` with file tools over a
   draft of the base version's files: `list_files`, `read_file`, `write_file`,
   `edit_file` (exact string replace), `delete_file`, and `finish(summary)`.
@@ -157,7 +166,9 @@ visitor id alone.
   deadline per build; per-app and global daily budgets.
 - Triage: a cheap fast model call classifies a room message as change request
   or chat unless the composer forced it. Prompts live in one file, readable.
-- First build of a new app starts from a minimal seed template.
+- First build of a new app starts from a minimal seed template. Under a
+  first request the seed is v0, scaffolding nobody sees or restores, so the
+  maker's first build is v1.
 
 ### Runtime (how an app version runs)
 - An app version is a set of static files: `index.html` plus ES modules
@@ -177,11 +188,19 @@ visitor id alone.
   app.
 - **Runtime SDK** (`/run/sdk`, imported by apps as `playground`): real-time
   multiplayer data and presence that just work:
-  - `useCollection(name)` → live array of docs + `insert/update/remove`,
-  - `useShared(key, initial)` → a live shared value (like useState for everyone),
+  - `useCollection(name, { where? })` → live array of the newest docs
+    (matching `where`), a `ready` flag, `insert/update/remove`, and
+    `removeWhere(where)` for bulk clears,
+  - `useShared(key, initial)` → a live shared value (like useState for
+    everyone) and a `ready` flag,
+  - `useMine(key, initial)` → a value private to the current visitor in this
+    app, kept across reloads, readable only through their runtime token,
   - `usePresence()` → who is in the app now (character faces, names),
     plus `setMyState(obj)` for cursors/game state,
-  - `me` → the current visitor's id, name, avatar URL.
+  - `me` → the current visitor's id, name, avatar URL,
+  - `app` → the app's name, clean link and room link, from the shell.
+  A write the backend refuses (rate, size, caps) rejects with a readable
+  message and is reported to the room as an app error.
   The SDK talks to the playground Convex deployment directly over WebSocket
   (ConvexClient) using the visitor credentials the shell hands it via
   postMessage on load. Writes are stamped server-side with the visitor id.
@@ -192,12 +211,30 @@ visitor id alone.
   later; nothing in the shell may assume more about the runtime than this.
 
 ### Safety and limits (v1)
+- Becoming a visitor costs a small proof of work over the new secret's hash,
+  harder while the deployment sees a flood of newcomers, so per-visitor
+  limits cost a script real CPU. No rate limit counts everyone together: a
+  shared counter is one an abuser can spend for everyone.
 - Rate limits per visitor and per app for messages, builds and data writes.
-- Daily budget per app and a global kill switch for builds.
+- Daily build budgets per visitor, per app and overall (the overall one is
+  the circuit breaker), and a global kill switch for builds. Running builds
+  and pending triage calls hold their ceiling against the budgets until
+  their real cost is charged.
+- Fork data copies count against a daily copy budget, overall and per
+  forker; past it a fork starts with no data and its room says so.
 - The builder's system prompt refuses phishing, credential collection,
-  malware and hate; the room can report an app (stores a flag; no admin UI).
+  malware and hate, and treats only the request as an instruction: room
+  chat, element markup, file contents and history are quoted context. The
+  room can report an app from the link menu (stores a flag; no admin UI).
 - Size caps: files per version, bytes per file, data docs per app, doc size.
-- No secrets ever reach app code.
+- No secrets ever reach app code. App code holds a runtime token that opens
+  only that app's data, for the version on screen, for 30 minutes (the shell
+  renews it). Apps may reach any site (fetching public APIs is a feature), so
+  a token is built to be worth little once it leaves.
+- Link unfurlers asking for an app link get that app's preview
+  (`/og/<slug>`); whatever serves the shell routes them by user agent
+  (`convex/lib/unfurl` `unfurlSlug`, used by the Vite dev and preview
+  servers).
 
 ## Quality bar
 

@@ -4,7 +4,7 @@ import { MAX_FILE_BYTES, MAX_FILES_PER_VERSION, VERSION_SUMMARY_MAX } from "./li
 import { IMPORT_MAP, SDK_SPECIFIER } from "./runtime";
 import { seedFiles } from "./seed";
 import { transpile } from "./transpile";
-import { cleanSummary, nextVersionNumber, parseVersionNumber } from "./versions";
+import { cleanSummary, nextVersionNumber, parseVersionNumber, versionSaid } from "./versions";
 
 describe("version numbering", () => {
   test("numbers run 1..n with no gaps", () => {
@@ -127,5 +127,17 @@ describe("seed version", () => {
     const html = files.find((f) => f.path === ENTRY_PATH)!.text;
     expect(html).toContain("<title>Frog &quot;choir&quot; &lt;3</title>");
     expect(files.find((f) => f.path === "src/App.jsx")!.text).toContain(`const NAME = "Frog \\"choir\\" <3";`);
+  });
+});
+
+describe("versionSaid", () => {
+  test("says what a version did, never a bare number for a build", () => {
+    expect(versionSaid({ kind: "build", summary: "Turns the background blue", parent_number: 3 }, null)).toBe("turns the background blue");
+    expect(versionSaid({ kind: "build", summary: "SVG frogs sing", parent_number: 3 }, null)).toBe("SVG frogs sing");
+    expect(versionSaid({ kind: "build", summary: "Makes a frog choir", parent_number: null }, null)).toBe("made it");
+    expect(versionSaid({ kind: "build", summary: "Makes a frog choir" }, null)).toBe("made it");
+    expect(versionSaid({ kind: "restore", summary: "Undid v7: Turns it blue", undid: 7, source: { version: 6 } }, null)).toBe("undid v7: Turns it blue");
+    expect(versionSaid({ kind: "restore", summary: "Turns it blue", undid: null, source: { version: 3 } }, null)).toBe("brought back v3");
+    expect(versionSaid({ kind: "fork", summary: "x" }, "Night Sky")).toBe("forked it from Night Sky");
   });
 });

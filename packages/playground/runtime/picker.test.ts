@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clip, selectorFor, type SelectorNode } from "./picker";
+import { selectorFor, type SelectorNode } from "./picker";
 
 /** A tiny element tree: tag(id?) with children. */
 function el(tagName: string, id = "", children: SelectorNode[] = []): SelectorNode {
@@ -30,9 +30,4 @@ describe("selectorFor", () => {
     el("html", "", [el("body", "", [el("div", "1:weird", [leaf])])]);
     expect(selectorFor(leaf)).toBe("html > body > div > span");
   });
-});
-
-test("clip marks a cut and leaves short text alone", () => {
-  expect(clip("abcdef", 4)).toBe("abc…");
-  expect(clip("abc", 4)).toBe("abc");
 });

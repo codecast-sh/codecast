@@ -1,11 +1,11 @@
-.face { position: relative; flex: none; display: inline-grid; place-items: center; background: var(--cream); }
+.face {
+  position: relative; flex: none; display: inline-grid; place-items: center; border-radius: 30%;
+  background: var(--sunk); box-shadow: 0 0 0 1px rgba(43, 37, 32, .06);
+}
 .face img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
-.thin { border: var(--line-thin); }
-.mid { border: var(--line); }
-.thick { border: var(--line-thick); }
-.letter { font-weight: 800; line-height: 1; color: var(--ink); }
+.letter { font-weight: 600; line-height: 1; color: var(--ink-2); }
 .typing {
-  position: absolute; top: -9px; right: -11px; display: grid; place-items: center;
-  background: var(--paper); border: var(--line-thin); border-radius: var(--r-sm); padding: 3px 4px; line-height: 0;
-  animation: arrive var(--t-arrive) var(--squish);
+  position: absolute; top: -5px; right: -6px; height: 14px; padding: 0 3px; display: grid; place-items: center;
+  background: var(--surface); border-radius: var(--r-pill); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line);
+  color: var(--ink-3); animation: global(fade-in) var(--t-quick) var(--ease-out);
 }

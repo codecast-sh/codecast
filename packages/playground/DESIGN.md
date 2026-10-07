@@ -3,63 +3,74 @@
 This is the visual and verbal identity of the playground, and the build spec
 for every surface. `SPEC.md` says what the product does; this file says how it
 looks, moves and talks. When the two disagree on behavior, SPEC wins; on
-looks, this file wins. The reference mockup is `design/arcade.html`; where this
-document and the mockup differ, this document is right (the mockup's room
-stream is too cramped, and its headline treatment is retired).
+looks, this file wins. The reference mockup is `design/v2-warm.html`; where
+this document and the mockup differ, this document is right.
 
 ## 1. The idea
 
-**Software is clay, and the animals are the players.** Every surface is a
-chunky toy: a thick ink outline, a flat fill, and a hard offset shadow that
-squashes flat when you press it. Poking someone else's app should feel like
-squishing a toy, never like risking damage to software.
+**A warm, quiet workbench where the app is the only loud thing.** The chrome
+is paper, hairlines and soft depth, set in a plain, highly legible sans. It
+recedes so whatever people built is the brightest, most colorful thing on
+screen. A room is a working surface people stay in for an hour, so it is
+dense, calm and easy to scan.
+
+Playfulness comes in three small doses and nowhere else: the animal faces,
+warmth in the copy, and one good moment when a change goes live.
 
 Four rules decide every tradeoff:
 
 1. **The app is the hero.** On the clean link, Clayground owns one small
-   yellow capsule and nothing else. The app is full-bleed and never tinted,
-   framed or dimmed, except to mark "you are looking at the past".
-2. **The crowd is the invitation.** Faces come first, everywhere: on gallery
-   cards, in the capsule, on every message, on every version. A link reads as
-   "Pocket and six others are in here".
-3. **A change is a small show.** The build card narrates out loud and
-   everyone watches it. Going live is the one celebrated moment.
-4. **Breaking things is safe.** Undo is big and on every live card; every
-   version is a bead you can step back to. Nothing ever disappears.
+   capsule and nothing else. The app is full-bleed and never tinted, framed
+   or dimmed, except to mark "you are looking at the past".
+2. **Faces carry the life.** The chrome is neutral; the 24 animal faces are
+   almost the only color in it. They appear on every message, every build
+   card, in the capsule, on the timeline and in the gallery.
+3. **State reads at a glance.** Every color has one job (4.1). A glance at
+   the room says what is live, what is building, what is waiting and what
+   failed, in words and in one consistent mark: **the build line**, a 2px
+   line on top of a build card that grows while Clay works, completes and
+   turns green when it goes live, or stops where it stopped when it fails.
+4. **One celebration.** Going live is the only moment that moves for joy.
+   Everything else moves only to show work in progress or to follow a
+   person's hand.
 
 ## 2. Name
 
-**Clayground.** Software as clay people shape together in public. One word that
-says playful, shared and changeable, and rhymes with what it replaces.
-Domain: `clayground.fun` is available ($2.57 first year, renews $31.41,
-checked 2026-10-06 with the Porkbun checker). `clayground.app` is taken.
+**Clayground.** Software as clay that people shape together in public. The
+name survives the calmer look because Clay is the builder: the product's
+character is the thing doing the shaping, and the room is where everyone
+watches it. Domain: `clayground.fun` is available ($2.57 first year, renews
+$31.41, checked 2026-10-06 with the Porkbun checker). `clayground.app` is
+taken.
 
-- Wordmark: "Clayground" in Bagel Fat One, ink, preceded by **the blob**: a
-  tomato squircle with two ink eyes (see 6.1). Never write it "ClayGround" or
-  "clayground" in prose.
-- **The builder is Clay.** The agent that makes changes appears in the room
-  as Clay, with the blob as its face. "Clay is building v15", "Clay couldn't
-  finish this one". It is a character like the animals, never "the AI" or
-  "the assistant".
+- Wordmark: the blob (22px) followed by "Clayground" in the voice face
+  (4.2) at 20px/700, ink. Never write it "ClayGround" or "clayground" in
+  prose.
+- **The builder is Clay.** The agent appears in the room as Clay, with the
+  blob as its face: a persimmon squircle (radius 38%) with two dark-brown
+  `#2b1a12` eyes (each 13% wide, 22% tall, radius 3px, top 38%, inset 30%
+  from each side). "Clay is building v15", "Clay couldn't finish this one".
+  Clay is a character like the animals, never "the AI" or "the assistant".
 
 ## 3. Voice and copy rules
 
 Talk like a friend holding the controller out to you: short, warm, a little
-cheeky, always concrete.
+cheeky, always concrete. The warmth lives in the words, so the chrome does
+not have to shout.
 
 - **Verbs over nouns.** "Change it", "Make it", "Fork from here", "Back to
   live", "Be Pocket". Never "Submit", "Request", "Confirm", "Proceed".
 - **Name people by their character.** "Juniper asked", "Pocket restored v12".
   Never "a user", "someone", "you have", except for the person reading:
   "You're viewing v12, nobody else is".
-- **Versions are `v14`.** Lowercase v, no space, always in the display font
-  when it stands alone.
-- **Sentence case everywhere.** No ALL CAPS strings in the DOM (the display
-  font is already loud). No letterspaced uppercase labels.
+- **Versions are `v14`.** Lowercase v, no space. Standing alone (card titles,
+  peek, collapsed rows) it is set in the voice face.
+- **Sentence case everywhere.** No ALL CAPS strings, no letterspaced
+  uppercase labels.
 - **No emdashes, no exclamation marks**, no trailing ellipses in labels.
 - **Errors say what happened and what to do**, in one line each:
-  "Clay couldn't finish this one. It ran out of time on a big change." + "Try
-  again". Never show a stack trace by default.
+  "Clay ran out of time on a big change. Smaller steps usually land." +
+  "Try again". Never show a stack trace by default.
 - **Numbers are human.** "7 here", "38 people changed it", "2nd in line",
   "0:11" for a running build, "6 min ago" for history.
 
@@ -67,28 +78,45 @@ Canonical strings (use these exactly):
 
 | Where | String |
 |---|---|
-| Home input placeholder | `Make something` (rotating examples typed in after 1.2s idle: "a guestbook where every visitor plants a tiny planet", "a frog choir, one note per person", ...) |
+| Home input placeholder | `Make something`, then after 1.2s idle an example every 3.2s, each fading in whole ("a guestbook where every visitor plants a tiny planet", "a frog choir, one note per person", ...), until the person taps or types in the field |
 | Home submit | `Make it` |
+| Home lede | `Describe an app and Clay builds it in seconds. Anyone with the link can change it by chatting, and everyone sees it change.` |
 | Starter row label | `Or start with` |
-| Gallery heading | `Busy right now` |
+| Home feed heading | `Right now` |
+| Gallery heading | `Busy right now` when anyone is in an app, else `Made recently` |
 | Capsule button | `Change it` |
-| First-visit hint | `{N} people are in here. Open the room to watch them or change the app.` |
+| First-visit hint | 2+ here: `{N} people are in here. Open the room to watch them or change the app.` · alone: `Anyone with this link can change this app. Say what you'd change.` |
 | Composer modes | `Auto` · `Change it` · `Just chat` |
-| Composer placeholder | Auto: `Say anything, or ask for a change` · Change it: `What should change?` · Just chat: `Say something` |
-| Composer hint (Change it) | `Goes live for everyone` |
-| Queued card | `2nd in line` (ordinal) |
-| Building card | `Building v15` |
+| Composer placeholder | Auto: `Say anything, or ask for a change` · Change it: `What should change?` · Just chat: `Say something` (beside the folded mode chip on narrow screens, Auto is `Say anything`) |
+| Composer hint | Auto: `Clay decides whether it's a change or just chat` · Change it: `Goes live for everyone` · Just chat: `Clay stays out of it` |
+| Queued row | `Starting` (nothing ahead of it) or `2nd in line` (ordinal, counting the build running ahead) |
+| Sheet peek | `Building v15` · `0:06` · {current step} · `v15 going live` · then `v15 is live` · {summary} · `Undo` |
+| Capsule callout | {what was said}, then `Starting` / `2nd in line` / `Building v15` / `v15 going live` with the asker's face and name, then `v15 is live` · {summary} · `Try it {what to do}` · `Undo` · `Open` |
+| Opening narration line | `Thinking about {the request, verb first, six words}` ("Thinking about making the bass frog wobble whenever…") |
+| What a version did (feed rows, gallery card meta) | `{name} {what it did}`: a first build `made it`, any other build its summary from its first word in lower case (`Tango turns the scoreboard gold`), a restore `undid v14: {summary}` or `brought back v12`, a fork `forked it from {app}`, a starter `started it`. Never a bare version number |
+| Feed row | `{name} {what it did}` over `{app} · 2 min ago`, or `{app} · live now` for the live version within 5 min |
+| Building card | `Building v15`; once live on the server and on its way to the screen, `v15 going live` |
 | Live card | `v15 is live` |
+| Live card meta | `Built in 0:24 · 2 files changed` |
 | Failed card | `Didn't make it` |
-| Live card actions | `See it` · `Undo` |
-| Viewing pill | `You're viewing v12, nobody else is` + `Back to live` |
-| Peek actions | `View` · `Restore` · `Fork from here` |
-| Fork modal | title `Fork v12`, button `Fork it` |
+| Live card actions | `See it` · `Undo`; on the maker's own first version, `Copy link` (then `Copied`) · `See it`, under the line `Anyone with the link can change it. Send it to a friend.` |
+| Room header while Clay makes the first version | `Making` (spinner); a first build that failed leaves `Not made yet` |
+| First build column | `{name} asked for` · {the request} · Clay's steps · `Clay is making it · 0:24`, then `Going live` |
+| Viewing pill / past bar | `v12` + its summary; under it `Looking only. Nobody else is looking. Make it live or fork it to use it.` (`Peak is looking too`, `Peak and Juniper are looking too`, `3 others are looking too`); then `Make v12 live` · `Fork from here` · `Back to live` |
+| Sheet past row (phone) | `You're viewing v12, nobody else is` · `You and Peak are viewing v12` · `You, Peak and Juniper are viewing v12` · `You and 3 others are viewing v12` |
+| What making a version live does (peek line, Make live tooltip) | `Everyone sees v3. Takes out v4 to v6: {v6's summary}` (`Takes out v6: …` for one) |
+| Peek actions | `View` · `Make v12 live` · `Fork from here` |
+| A version's summary (folded rows, peek, timeline labels) | a build its summary; a restore with its verb: `Undid v7: {summary}` or `Brought back v3: {summary}` |
+| Forks of a version (peek, fork modal) | `Iris forked this into {fork}` (`You` for the reader, `, and 2 more`); in the modal followed by `. Join it, or make your own.` |
+| Fork modal | title `Fork v12`, lede `A new app with v12's code and a copy of today's data. Its own room, its own link.`, button `Fork it` |
+| Room header while viewing | `Viewing v12` · `v14 is live` |
 | Fork note in source room | `{name} forked v12 into {fork name}` |
 | Lineage line | `forked from {app} v12` |
 | Picker title | `Who are you today?` |
 | Picker buttons | `Surprise me` · `Be {name}` |
-| New version toast (clean link) | `v15 is live · {name}: {summary}` |
+| New version toast (clean link) | `v15 is live · {name}: {summary}`; a restore: `v8 is live · {name} undid v7: {v7's summary}` or `{name} brought back v3: {v3's summary}` |
+| Restore card | `v8 is live` · `Peak undid Ziggy's v7` (`your v7`, or `v7` when it was their own; `You` for the reader) + v7's summary · `See it` · `Bring back v7` (after a bring-back: `Undo`) |
+| Origin row | `{name} made {app}` + their first request, or `{name} forked {app} from {source} v3` + `Same code, a copy of the data. Change anything.` |
 
 ## 4. Tokens
 
@@ -99,270 +127,455 @@ All tokens live in `src/styles/tokens.css` as CSS custom properties on
 
 ```css
 :root {
-  /* core */
-  --butter: #ffd84a;        /* brand, presence, "you" */
-  --butter-deep: #f7c21b;   /* stripes on the building header, pressed butter */
-  --ink: #1d1631;           /* every outline, every shadow, body text */
-  --ink-soft: #4a4160;      /* secondary text on light surfaces */
-  --ink-faint: rgba(29, 22, 49, 0.13); /* dot grid, hairlines inside cards */
-  --paper: #fffdf6;         /* cards, inputs, bubbles */
-  --cream: #fff7e0;         /* panels (room, picker right side, composer) */
+  /* neutrals: warm paper, never pure white or neutral gray */
+  --paper: #f7f3ec;        /* page, room panel, timeline dock, composer */
+  --surface: #fffdf9;      /* cards, inputs, popovers, capsule, toast */
+  --sunk: #efe9df;         /* chips, tracks, segmented control, hover fill */
+  --line: #e5ddd0;         /* hairlines */
+  --line-2: #d4c9b8;       /* input borders, dividers that must read, ticks */
+  --ink: #2b2520;          /* text, ink buttons, the viewing frame */
+  --ink-2: #665c53;        /* secondary text */
+  --ink-3: #776b60;        /* meta, timestamps, hints, placeholder */
 
-  /* meaning (each color means exactly one thing) */
-  --tomato: #ff5b3a;        /* make it happen: Make it, send in Change it mode, primary CTAs */
-  --tomato-soft: #ffd6cc;   /* failed card header */
-  --mint: #2fd6a0;          /* live: live dot, live card, live bead, Restore */
-  --pool: #3b7bff;          /* fork and lineage only */
-  --bubble: #ff9fd2;        /* the past: viewing pill, viewing outline */
-  --sky: #9fe3ff;           /* written files, decorative */
+  /* persimmon: Clay, and the actions that start Clay's work */
+  --accent: #c4491f;
+  --accent-hover: #ad3f1a;
+  --accent-soft: #f7e2d6;
+
+  /* live: used small, as a dot, a label, a tick or a 2px line; never a fill */
+  --live: #277548;
+  --live-soft: #e3f0e6;
+  --live-line: #bfdcc8;    /* the live card's hairline */
+  --live-fold: #a8cdb4;    /* the bar on a collapsed live row */
 
   /* overlays */
-  --scrim: rgba(29, 22, 49, 0.45);
+  --scrim: rgba(43, 37, 32, .32);
+  --glass: rgba(255, 253, 249, .94);   /* capsule, toast, badges over the app */
+  --shadow-tint: 70, 45, 20;           /* rgb of every shadow */
 }
 ```
 
 Color laws:
 
-- **One meaning per accent.** Mint is only live. Pool is only fork/lineage.
-  Bubble is only "you are viewing a past version". Tomato is only the action
-  that makes something happen (and, softened, its failure). Butter is the
-  brand and presence. If a new element needs a color, it gets ink, paper or
-  cream.
-- **Text on accents:** ink on butter, mint, sky, bubble, tomato-soft (all pass
-  AA). Paper on tomato or pool only at 18px+ bold or in the display font
-  (large-text AA); smaller labels on tomato and pool use ink.
-- **Butter as a page** only on home, the 404, and the picker scrim area. The
-  room is cream; the app area is the app.
+- **One job per color.** Persimmon is Clay: Clay's face, the build line and
+  spinner while building, and the buttons that start work (`Make it`,
+  `Make v12 live` on the past bar, `Try again`, and send in Change it mode). Green is only live.
+  Ink marks "the past" (viewing frame and pill) and is the neutral primary
+  (`Change it` in the capsule, send in Auto mode). Everything else is paper,
+  surface, sunk, line and ink grades. If a new element seems to need a color,
+  it gets a neutral.
+- **Failure has no color of its own.** A failed card says so in words, keeps
+  its persimmon build line frozen where the build stopped, and shows an ink
+  `!` glyph. Red would compete with persimmon and shout.
+- **Never a colored fill** behind text larger than a chip, except the
+  persimmon and ink buttons. No colored card headers, no colored panels.
+- **Contrast:** every text color passes AA (4.5:1) on paper, surface and sunk:
+  ink-3 is 4.7:1 on paper and 4.3:1 on sunk, so quiet chrome stays legible
+  for an hour, and green text (`--live`) is 5.1:1 on paper. White on
+  persimmon passes AA at 13px/600+. The home input's rotating example is the
+  one lighter text: ink-3 mixed 80% into surface, 3.4:1 at 21px.
 
 ### 4.2 Type
 
 Load from Google Fonts in `index.html` with `preconnect` and `display=swap`:
-`Bagel+Fat+One`, `Gabarito:wght@500;600;700;800;900`, `Martian+Mono:wght@500;700`.
+`family=Commissioner:wght@400..700&family=Recursive:wght,CASL,MONO@400..800,0..1,0..1`.
 
 ```css
 :root {
-  --display: "Bagel Fat One", "Gabarito", sans-serif; /* one weight: 400 */
-  --ui: "Gabarito", system-ui, sans-serif;
-  --mono: "Martian Mono", ui-monospace, monospace;
+  --ui: "Commissioner", system-ui, sans-serif;
+  --voice: "Recursive", var(--ui);              /* with .voice settings */
+  --mono: "Recursive", ui-monospace, monospace; /* with .mono settings */
 }
+.voice { font-family: var(--voice); font-variation-settings: "CASL" 1, "MONO" 0; }
+.mono  { font-family: var(--mono);  font-variation-settings: "CASL" 0, "MONO" 1; }
 ```
 
-| Token | Font | Size / line-height | Weight | Use |
+- **Commissioner** carries all interface text: chat, buttons, meta, inputs.
+  Body `font-feature-settings: "tnum" 0`; tabular figures (`"tnum" 1`) on
+  timers, counts in the capsule and the timeline labels.
+- **Recursive, casual axis on** is the voice: the wordmark, app names,
+  version labels, card titles, ordinals and headings. It is never used for
+  chat, summaries or anything longer than six words.
+- **Recursive, mono axis on** is only for things that are literally code or
+  addresses: file chips, element chips, URLs, the running timer, keycaps.
+
+| Token | Face | Size / line-height | Weight | Use |
 |---|---|---|---|---|
-| `--t-hero` | display | 104 / 0.88, tracking -2px | 400 | home headline (56 on mobile) |
-| `--t-h1` | display | 44 / 1 | 400 | home section heads, 404 |
-| `--t-h2` | display | 30 / 1 | 400 | live card version number, picker title (40 there) |
-| `--t-h3` | display | 24 / 1 | 400 | room header app name, peek version (26) |
-| `--t-state` | display | 17 / 1 | 400 | build card state ("Building v15"), queue ordinal |
-| `--t-input-lg` | ui | 26 / 1.2 | 600 | home input |
-| `--t-title` | ui | 20 / 1.1 | 900 | gallery card name |
-| `--t-body` | ui | 15 / 1.4 | 500 | chat text, card summaries (600) |
-| `--t-label` | ui | 13 / 1.3 | 800 | names in chat, buttons sm, chips |
-| `--t-meta` | ui | 12 / 1.3 | 600 | timestamps, counts, `--ink-soft` |
-| `--t-mono` | mono | 11 / 1.5 | 700 | element chips, file chips, URLs, timer |
+| `--t-hero` | voice | 46 / 1.05, tracking -.02em | 700 | home headline (34 on mobile), the one display line on the page |
+| `--t-h1` | voice | 24 / 1.1 | 700 | home section heads, 404 title (32 there) |
+| `--t-h2` | voice | 20 / 1.1 | 700 | peek version number, fork modal title, picker title (24 there) |
+| `--t-h3` | voice | 18 / 1.2 | 700 | room header app name, wordmark (20) |
+| `--t-card` | voice | 14.5 / 1.2 | 650 | build card titles, collapsed version label (13), ordinals (12) |
+| `--t-input-lg` | ui | 21 / 1.3 | 500 | home input |
+| `--t-lede` | ui | 18 / 1.5 | 400 | home lede |
+| `--t-body` | ui | 14 / 1.45 | 400 | chat text, summaries (550 on the live card), narration (13.5) |
+| `--t-name` | ui | 13.5 / 1.3 | 650 | names in chat, gallery card names (15) |
+| `--t-label` | ui | 13 / 1.2 | 600 | buttons, chips, mode switch (12.5), capsule |
+| `--t-meta` | ui | 12 / 1.35 | 400 | timestamps, counts, hints, `--ink-3` |
+| `--t-mono` | mono | 11.5 / 1.4 | 500 | element and file chips, URLs, timer, keycaps (10.5) |
 
-Rules: the display font is never used below 17px or for more than five
-words. Chat and summaries are always Gabarito so long, arbitrary text stays
-readable. Mono is only for things that are literally code or addresses.
+Body text color is `--ink`, `-webkit-font-smoothing: antialiased`,
+`text-rendering: optimizeLegibility`.
 
-### 4.3 Space, radius, line, shadow
+### 4.3 Space, radius, line, elevation
 
 ```css
 :root {
-  /* 4px base */
+  /* 4px base; 2px steps allowed inside dense rows */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px;
-  --s6: 24px; --s8: 32px; --s11: 44px; --s15: 60px;
+  --s6: 24px; --s8: 32px; --s12: 48px; --s16: 64px;
 
-  --r-xs: 8px;    /* file and element chips, keycaps */
-  --r-sm: 12px;   /* small buttons, icon buttons, 30px faces */
-  --r-md: 16px;   /* buttons, inputs, bubbles, queue rows */
-  --r-lg: 20px;   /* build cards, composer field */
-  --r-xl: 24px;   /* gallery cards, peek */
-  --r-2xl: 34px;  /* modals, home maker bar */
+  --r-xs: 5px;    /* keycaps, ordinals */
+  --r-sm: 6px;    /* element and file chips, segmented options */
+  --r-md: 10px;   /* buttons (8 at 30px tall), queued and collapsed rows, faces 28-32 */
+  --r-lg: 14px;   /* build cards, gallery tiles, peek, callout */
+  --r-xl: 18px;   /* home maker bar, modals */
   --r-pill: 999px;
 
-  --line-thin: 2px solid var(--ink);   /* chips, faces <= 24px, keycaps */
-  --line: 2.5px solid var(--ink);      /* default: buttons, bubbles, cards in the room */
-  --line-thick: 3px solid var(--ink);  /* gallery cards, build cards, capsule */
-  --line-heavy: 4px solid var(--ink);  /* modals, room panel edge, home maker bar */
+  --hair: 1px solid var(--line);
+  --hair-2: 1px solid var(--line-2);
 
-  --pop-xs: 2px 2px 0 var(--ink);
-  --pop-sm: 3px 3px 0 var(--ink);
-  --pop: 5px 5px 0 var(--ink);
-  --pop-lg: 8px 8px 0 var(--ink);
-  --pop-xl: 12px 12px 0 var(--ink);
+  --shadow-sm: 0 1px 2px rgba(var(--shadow-tint), .06), 0 0 0 1px rgba(var(--shadow-tint), .02);
+  --shadow-md: 0 8px 24px -10px rgba(var(--shadow-tint), .22), 0 2px 5px rgba(var(--shadow-tint), .06);
+  --shadow-lg: 0 24px 60px -18px rgba(var(--shadow-tint), .35), 0 4px 10px rgba(var(--shadow-tint), .08);
 }
 ```
 
-- **Shadows are always hard, offset down-right, ink, no blur.** No soft
-  shadows anywhere in the chrome (an app's own content may do whatever it
-  wants).
-- Shadow size scales with the object: chips `--pop-xs`, buttons `--pop-sm`,
-  cards and capsule `--pop`, maker bar `--pop-lg`, modals `--pop-xl`.
-- **Faces are squircles** with radius 35% of their size and an ink border:
-  48px+ faces `--line-thick`, 30 to 40px `--line`, 24px and below are
-  circles with `--line-thin`. Stacked faces overlap by a third of their width
-  and each gets `--pop-xs`.
-- Focus ring (all interactive elements): `box-shadow: 0 0 0 3px var(--paper),
-  0 0 0 6px var(--ink)`, shown on `:focus-visible` only.
+- **Edges are hairlines,** drawn as `box-shadow: inset 0 0 0 1px` (or an
+  outer `0 0 0 1px` on floating things) so they never change layout. No
+  borders thicker than 1px anywhere in the chrome, except the 1.5px tick
+  outlines and the viewing frame (2px ink with a 2px light line inside).
+- **Elevation has three steps and means height above the app:**
+  `--shadow-sm` for things resting in a panel (build cards, tiles, chips that
+  are buttons), `--shadow-md` for things floating over the app (capsule,
+  toast, callout, viewing pill, maker bar), `--shadow-lg` for popovers and
+  modals. Shadows are always soft and warm-tinted; never hard or offset.
+- **Faces** are squircles, radius 30% of their size (16→5px, 20→6px,
+  24→7px, 28→8px, 32→9px, 58→17px), with a `0 0 0 1px rgba(43,37,32,.06)`
+  edge. Stacked faces overlap by 7px with a 2px ring in the color behind
+  them (`--ring`), and `+N` follows in 12px/600 ink-2.
+- **Focus ring** (all interactive elements, `:focus-visible` only):
+  `box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink-2)`. Inputs use
+  their own focus state (6.3 composer). Where an ink ring already means
+  "selected" (a timeline mark, the picker's animals), focus is instead a 2px
+  persimmon outline outside the selection ring (offset 3px on a mark, 6px on
+  an animal), so the one Enter will choose never looks like the one chosen.
+- **Icons:** 16px stroke icons, `stroke-width: 1.7`, round caps and joins,
+  `currentColor`; 13px with 2px stroke inside dense rows.
 
 ### 4.4 Motion
 
 ```css
 :root {
-  --squish: cubic-bezier(.34, 1.56, .64, 1); /* overshoot: things arriving, landing, popping */
-  --glide: cubic-bezier(.2, .8, .2, 1);       /* things moving or leaving */
+  --ease-out: cubic-bezier(.2, .8, .2, 1);   /* moving, settling, leaving */
+  --ease-pop: cubic-bezier(.3, 1.35, .6, 1); /* the celebration and toasts only */
   --t-press: 120ms;
-  --t-quick: 180ms;
-  --t-move: 260ms;
-  --t-arrive: 360ms;
+  --t-quick: 150ms;
+  --t-move: 250ms;
+  --t-arrive: 320ms;
 }
 ```
 
 Principles:
 
-1. **Press squashes.** Every button: hover `translate(-1px,-1px)` and shadow
-   grows by 1px over `--t-press`; active `translate(Npx,Npx)` where N is its
-   shadow offset, shadow to `0 0 0`. Instant down, `--t-press` back up.
-2. **Arrivals overshoot, departures glide.** Anything appearing uses
-   `--squish` over `--t-arrive` from `translateY(12px) scale(.96)` and
-   opacity 0. Anything leaving uses `--glide` over `--t-quick`, opacity to 0
-   and `scale(.98)`.
-3. **One celebration.** When a version goes live: the live card pops
-   (scale .9 to 1, `--squish`, `--t-arrive`), its mint header flashes a ring
-   (`box-shadow 0 0 0 0 → 0 0 0 14px` mint fading, 700ms), the live bead
-   does the same, and the capsule's faces do a single 4px hop staggered 40ms
-   apart. Nothing else in the product celebrates.
-4. **Work is visible.** While building: the card header's diagonal stripes
-   march (`background-position` 28px per 1s, linear, infinite), the spinner
-   orbits (1.2s linear), the current narration line has a blinking caret
-   (1s `steps(1)`).
-5. **The app never jumps.** A new live version cross-fades: preload the new
-   iframe hidden, when it fires `load` (or 4s max) fade it in over 280ms
-   `--glide` on top of the old one, then remove the old one.
-6. **Idle life is rare.** Only the blob logo wobbles (4s loop) and the home
-   crowd faces bob (3.2s loop). No other ambient animation.
+1. **Quiet by default.** Hover is a fill change (`--sunk`) over `--t-quick`.
+   Press is `translateY(1px)` instant down, `--t-press` back. Things that
+   appear fade and rise 6px over `--t-arrive` `--ease-out`; things that
+   leave fade over `--t-quick`. No overshoot outside the celebration.
+2. **Work is visible.** While building: the build line grows (its width
+   follows elapsed time against a 30s expectation, easing toward 90% and
+   never reaching 100% until live; width transitions 600ms `--ease-out`),
+   the spinner turns (13px ring, 2px, accent on accent-soft, 900ms linear),
+   the current narration line's 7px persimmon dot breathes (scale .6 and
+   opacity .5 at the midpoint, 1.4s ease-in-out), and a 1.5px ink caret
+   blinks after its text (1s `steps(1)`). New narration lines fade up 6px
+   over `--t-quick`.
+3. **One celebration.** When a version goes live, in this order:
+   - the build line finishes to 100% over 250ms `--ease-out` and crossfades
+     from persimmon to green over 200ms; it stays on the live card;
+   - the card lands: from `translateY(8px) scale(.97)` and opacity 0 to rest
+     over 550ms `--ease-pop` (when the building card turns into the live
+     card in place, it only scales from .985);
+   - a green ring breathes out from the card: `box-shadow 0 0 0 0
+     rgba(45,134,83,.35)` to `0 0 0 14px rgba(45,134,83,0)` over 1.4s
+     ease-out, starting at 200ms;
+   - where the change landed lights up: Clay names the element its change
+     is about when it finishes, and the app draws a soft `--live` ring
+     around it (the picker's ring, 2px with a light inner line and a 7px
+     halo at 26%, up to 6 matches on screen), scaling in from 1.06 and gone
+     after 1.2s. Only when there is no such element on screen does the app
+     column's edge glow green instead (`inset 0 0 0 2px --live` plus a 48px
+     inner glow at 22%, held 200ms, fading over 1.4s);
+   - the live dot in the room header pings once (ring 3px to 10px, fading,
+     600ms);
+   - the faces in the room header stack and the capsule hop: `translateY(-4px)`
+     at 40% of a 500ms `--ease-pop` keyframe, staggered 50ms;
+   - on the clean link, the capsule's callout turns into the live callout
+     (6.2) where the asker is watching; only a landing it could not show
+     gets the toast, after 400ms.
+   Nothing else in the product celebrates.
+4. **The app never jumps.** A new live version cross-fades: preload the new
+   iframe hidden; when its SDK says it has painted (rendered, every live
+   query it reads answered, two frames drawn; or after 4s) fade it in over
+   280ms `--ease-out` on top of the old one, and remove the old one only
+   once the fade is done.
+5. **Following the hand.** Drags (capsule, room resize, sheet) track the
+   pointer 1:1 with no easing; releases settle over `--t-move` `--ease-out`.
+6. **Idle life is rare.** The only ambient motion is the home input's
+   examples fading in, one every 3.2s, until the person reaches for the
+   field. Nothing else idles.
 7. **Reduced motion** (`prefers-reduced-motion: reduce`): remove every
-   infinite animation (stripes become static, caret static, wobble/bob off),
-   replace transforms with 150ms opacity fades, keep the iframe cross-fade at
-   150ms.
+   infinite animation (spinner becomes a static three-quarter ring, the
+   breathing dot and caret are static), replace transforms with 150ms opacity
+   fades, the celebration becomes the green line plus a 150ms fade, and the
+   iframe cross-fade runs at 150ms. Every keyframe that moves (`arrive`,
+   `hop`, the dock, the room's slide and sheet, popover and toast drops, a
+   card's landing) has an opacity-only twin under `reduce`, in base.css or
+   its module, and `keyframes.test.ts` fails a moving keyframe without one.
+   Scrolling the stream (the new pill, a toast's reveal) jumps instead of
+   gliding.
 
 ### 4.5 Layers
 
-`z-index`: app frame 0 · viewing outline 10 · picker overlay 15 · timeline
-dock 20 · room panel 30 · capsule 40 · popovers (peek, menus) 50 · modals 60
-· toasts 70. Popovers render in a portal at the body so a scroll container
-never clips them.
+`z-index`: app frame 0 · viewing frame 10 · picker overlay 15 · timeline
+dock 20 · room panel 30 · capsule and callout 40 · popovers (peek, menus) 50
+· modals 60 · toasts 70. Popovers render in a portal at the body so a scroll
+container never clips them.
+
+### 4.6 Keyboard and screen readers
+
+- **Layers own focus.** Opening the room puts the cursor in the composer (on
+  a phone, focus goes to the sheet, so no keyboard pops up); closing it
+  returns focus to the capsule's Change it. A popover takes focus on open
+  (a timeline peek, which opens on its mark's focus, waits for Tab), cycles
+  Tab inside, moves through a menu with ↑/↓, and gives focus back to its
+  trigger on Esc or close; triggers say `aria-haspopup` and `aria-expanded`.
+  A modal does the same and makes the page behind it `inert`.
+- **Names stay clean.** Tooltips describe their control (`aria-describedby`),
+  never name it, and KeyCaps inside a control are hidden from it; the
+  control declares its shortcut with `aria-keyshortcuts` (`/`, `T`,
+  `Meta+1`, the track's arrows).
+- **The room's log is news only.** `role="log"` wraps the rows and nothing
+  else: the typing row and the loading dots sit outside it, it is busy while
+  an older page loads, and a message reads "Pearl, 11 min ago: …" once, with
+  the visual name and time hidden. A card changing state in place is said
+  once by the stream's status line.
+- **Everything a pointer can do, a key can:** a clamped request is a toggle
+  button, the room's resize handle is a focusable separator (←/→ by 20px,
+  Home or Enter back to 420), name suggestions are pressed toggles, and the
+  app's frame is titled "{App}, v12, live" or "…, looking only".
 
 ## 5. Shared pieces
 
 Build these once in `src/ui/` and use them everywhere.
 
-- **`<Face avatar size ring? typing? title>`**: an `<img>` of
-  `AVATAR_URLS[key]` (imported from `packages/web/lib/orgAvatars.tsx`, never
-  copied) inside a squircle per 4.3. `typing` adds a small paper bubble with
-  three hopping dots at the top right (dots: 1.2s loop, 150ms stagger).
-  `title` is `"{name} the {AVATAR_LABELS[key]}"`.
-- **`<FaceStack people max=4>`**: overlapping faces, then an ink pill `+N` in
-  butter text.
-- **`<Button variant size>`**: variants `paper` (default), `make` (tomato),
-  `live` (mint), `fork` (pool), `ink` (ink fill, butter text); sizes `sm`
-  (13px, padding 6/12, `--r-sm`, `--pop-xs`), `md` (16px, 10/18, `--r-md`,
-  `--pop-sm`), `lg` (display 26px, 0/34, height 64, `--line-heavy`, `--pop`).
-- **`<Chip>`**: pill, `--line`, 15px/700, `--pop-xs`, padding 7/16, an
-  optional 12px rounded-square color dot.
-- **`<ElementChip ref>`**: butter fill, `--line-thin`, `--r-xs`, mono 11/700,
-  a 9px dashed square glyph, then `tag · text` (text truncated to 28 chars
-  with an ellipsis character). Hovering it outlines the element in the app
-  when the app is on the same version.
-- **`<FileChip path written?>`**: mono 11/700, `--line-thin`, `--r-xs`,
-  cream fill; written files sky fill.
-- **`<LiveDot>`**: 10px mint circle with a 2px ink border and a pulsing mint
-  ring (1.6s loop).
+- **`<Face avatar size typing? title>`**: an `<img>` of `AVATAR_URLS[key]`
+  (imported from `packages/web/lib/orgAvatars.tsx`, never copied) in a
+  squircle per 4.3. Sizes 16, 20, 24, 28, 32, 58. `typing` adds a 14px
+  surface bubble with three 3px ink-3 dots at its top right. `title` is
+  `"{name} the {AVATAR_LABELS[key]}"`. If the image fails: `--sunk` fill and
+  the first letter of the name, 600 weight, ink-2; never a broken image.
+- **`<FaceStack people max=4 ring>`**: overlapping faces per 4.3, then `+N`.
+- **`<Button variant size>`**: height 30 (sm, 13px/600, padding 0 12,
+  radius 8) or 36 (md, 14px/600, padding 0 16, radius 10); `lg` is 48 tall,
+  16px/600, padding 0 22, radius 12 (home only). Variants:
+  `quiet` (surface, `inset 0 0 0 1px --line-2`, hover sunk), `text` (no
+  fill, ink-2, hover sunk and ink), `ink` (ink fill, surface text), `accent`
+  (persimmon fill, white text, hover accent-hover). Icons sit 6px from the
+  label.
+- **`<IconButton>`**: 30px square, radius 8, ink-2, hover sunk and ink.
+- **`<Segmented options>`**: sunk track, 2px padding, radius 8; options 24px
+  tall, padding 0 10, 12.5px/600 ink-2; the selected option is surface with
+  `--shadow-sm` and a 1px line ring, ink text.
+- **`<ElementChip ref>`**: 22px tall, radius `--r-sm`, sunk fill, ink-2,
+  `--t-mono`; a 9px dashed square glyph (1.3px dashed ink-3, radius 2), then
+  `tag · text` with text truncated to 28 characters with an ellipsis
+  character. Hovering it outlines the element in the app when the app is on
+  the same version.
+- **`<FileChip path written?>`**: 22px tall, radius `--r-sm`, `--t-mono`.
+  Read files: sunk, ink-2. Written files: surface with a `--line-2` ring, ink
+  text, and a 5px persimmon dot before the name.
+- **`<LiveDot>`**: 7px green circle with a 3px `--live-soft` ring. Static;
+  it pings only during the celebration.
+- **`<BuildLine progress state>`**: the 2px line along the top edge of a
+  build card, radius `0 2px 2px 0`; persimmon while building, green and full
+  when live, persimmon at 45% opacity and frozen when failed.
+- **`<Spinner>`**: 13px ring per 4.4.2.
+- **`<Blob size>`**: Clay's face per section 2. Sizes 16, 22, 28, 44.
 - **Keys**: import `KeyCap` from `packages/web/components/KeyCap.tsx` and
-  always render it inside `<span class="keys">`. `.keys kbd` restyles it to
-  Clayground: paper fill, `2px solid var(--ink)` with a 4px bottom border,
-  `--r-xs`, `font: 700 11px var(--mono) !important` (KeyCap inlines its font,
-  so `!important` is required here and nowhere else). Every keyboard hint in
-  the product is a KeyCap.
+  always render it inside `<span class="keys">`. `.keys kbd` restyles it:
+  18px tall, min-width 18, padding 0 4, radius `--r-xs`, surface fill,
+  `inset 0 0 0 1px --line-2, inset 0 -1.5px 0 --line-2`, ink-2,
+  `font: 500 10.5px/1 var(--mono) !important` with the mono variation
+  settings (KeyCap inlines its font, so `!important` is required here and
+  nowhere else). On ink or persimmon fills, `.on-dark kbd` uses
+  `rgba(255,255,255,.14)` with a `.22` white ring and white text at 85%.
+  Every keyboard hint in the product is a KeyCap.
 
 ## 6. Surfaces
 
 ### 6.1 Home `/`
 
-Butter page with the dot grid (`radial-gradient(var(--ink-faint) 1.6px,
-transparent 1.8px) 0 0 / 22px 22px`) and three soft color fields (paper at
-top left, bubble at top right, mint at mid left; flat circles at 35 to 55%
-opacity, no blur). Content column 1200px max, 44px side padding.
+Someone who lands here should be typing within seconds, so the maker bar is
+the first thing they can act on, and the gallery right under it shows what
+people really made.
 
-1. **Top bar** (height 88): wordmark left (blob 46px + "Clayground" display
-   34). Right: the **you chip** (paper pill, `--line`, `--pop-sm`, 36px
-   face, name 800, "that's you" 500 ink-soft), opens the picker.
-2. **Hero:** headline "Make a thing. Pass it around." in `--t-hero`, ink,
-   one color, two lines, left aligned. To its right (300px), the **crowd**:
-   three 92px faces of animals currently active across Clayground, tilted
-   -8/0/6 degrees, bobbing, with an ink speech tag in butter text "anyone can
-   change it".
-3. **Maker bar:** butter fill, `--line-heavy`, `--r-2xl`, `--pop-lg`, 14px
-   padding; inside, a paper input (`--line`, `--r-lg`, `--t-input-lg`,
-   tomato blinking caret) and the `lg` `make` button "Make it". Enter submits.
-   Submit pops the bar (press squash) and navigates to the new room
-   immediately (the app row is created optimistically; see 6.10 for the
-   first-build state).
-4. **Starters:** "Or start with" + four chips with colored dots. One tap fills
-   the input and submits.
-5. **Gallery** "Busy right now" (h1) with a right-aligned meta line
-   (`LiveDot` + "41 people building in 12 apps"). Grid: 3 columns
-   (1.35fr 1fr 1fr), 26px gap, the first card spans two rows. Each card:
-   paper, `--line-thick`, `--r-xl`, `--pop`; hover lifts `translate(-3px,-4px)
-   rotate(-.6deg)` with `--pop-lg` over 250ms `--squish`.
-   - Thumbnail (min 168px, ink bottom border): the app's still image if one
-     exists, else a live iframe of the live version at 25% scale,
-     `pointer-events: none`, mounted only while in the viewport, at most six
-     live at once.
-   - Top-left badge: paper pill with `LiveDot` and "7 here".
-   - Foot: name (`--t-title`), meta "38 people changed it · v14", and when
-     forked, a pool line "forked from Haiku Wall". Right: `FaceStack` of who
-     is in it now (max 3).
-   - The whole card links to the clean link `/<slug>`.
-6. Footer: none. The gallery is the end of the page.
+Paper page with two soft warm glows (`radial-gradient(900px 420px at 78%
+-8%, rgba(214,120,70,.14), transparent 70%)` and `radial-gradient(700px
+380px at -5% 30%, rgba(222,190,120,.16), transparent 70%)`), no pattern.
+Content column 1200px max, 64px side padding (24 on mobile).
+
+1. **Top bar** (height 76): wordmark left. Right: the **you chip** (surface,
+   `--shadow-sm` plus line ring, radius 12, padding 4/12/4/4, 28px face, name
+   13/600, "that's you" 13/500 ink-3), opens the picker.
+2. **Hero** (padding 32 top, 16 bottom; grid `1fr 380px`, gap 48, aligned to
+   the top). The left column holds, in order:
+   - the headline "Make a thing. Pass it around." in `--t-hero`, ink, on one
+     line at desktop widths;
+   - the lede in `--t-lede` ink-2, 560px max, 12px under it, 24px above the
+     bar;
+   - the **maker bar**: surface, `--r-xl`, `--shadow-md` plus line ring,
+     padding 10/10/10/22; inside, the input (`--t-input-lg`, a 2px persimmon
+     caret) and the `lg` `accent` button "Make it" with a KeyCap ↵. On a
+     device with a mouse it has focus on arrival; on touch it waits for a tap,
+     so no keyboard covers the page. The placeholder is an ink-3 line over
+     the field: "Make something", then the examples (section 3), each fading
+     in whole over 400ms. Enter submits; with the field empty, `Make it` or
+     Enter makes the example on show. Submit navigates to the new room
+     immediately (6.10 for the first build);
+   - **starters** (14px under the bar): "Or start with" 13/400 ink-3, then up
+     to four 30px pills (surface, line ring, 13/500 ink-2; hover ink with a
+     `--line-2` ring) that wrap with the label. One tap fills the input and
+     submits. An idea whose kind of app the gallery already shows (a pixel
+     wall when there is one) is left out, so newcomers join that app rather
+     than make a copy.
+
+   The right column is the **Right now** feed: a surface card (`--shadow-sm`,
+   line ring, `--r-lg`), heading "Right now" 12/600 ink-3 with a `LiveDot`,
+   then the 5 latest versions across Clayground, one per person per app (their
+   latest), as rows separated by hairlines: a 24px face, then two lines, what
+   they did (13/400 ink-2, name 600 ink, one line with an ellipsis; section 3)
+   and the app and when (12 ink-3, app 600 ink-2; "live now" in green 600 for
+   the live version within 5 min). Hover sunk. New rows slide in at the top
+   over `--t-arrive`. Each row links to the app. Below 1024px the hero is one
+   column and the feed follows the starters.
+3. **Gallery**, 48px under the hero. Heading in the UI face, 20/650, "Busy
+   right now" when anyone is in an app, else "Made recently", with a
+   right-aligned meta line (`LiveDot` + "41 people building in 12 apps",
+   13/400 ink-2) while anyone is. Apps with people in them come first, the
+   most people first, then the most recently active. Grid: 3 equal columns,
+   rows 236px, 18px gap; only when the first app has people in it, the
+   columns go 1.4fr 1fr 1fr and that app's tile spans two rows. Each tile:
+   surface, `--r-lg`, `--shadow-sm` plus line ring, overflow hidden; hover
+   lifts 3px and takes `--shadow-md` with a `--line-2` ring over 250ms
+   `--ease-out`.
+   - **Picture** (fills the tile above its foot). Every app is shown as an
+     800x800 page scaled to cover the picture from its top left corner, so a
+     wide tile shows the page's top and the tall big tile the whole page,
+     always at a legible size. It is the version's **still** (below) at once,
+     with no layout shift; the faint 28px blob on sunk shows only while the
+     image downloads, or when no still exists yet. The **live app** takes
+     over, fading in over the still once it has painted, while the tile is
+     hovered or focused, while people are in it, or while it has no still,
+     in at most six tiles at once (two on a phone, with data saver, or on a
+     4-core device), hovered first, then page order. The live app is a watch
+     preview: it shows its real data and cannot write. Each app keeps its own
+     look; the chrome never tints it.
+   - **Stills.** A version's still is that 800x800 page as an image, drawn by
+     the app itself (the runtime renders its own document, fonts inlined)
+     and kept in storage, set once. The asker's screen takes it out of sight
+     as soon as their version lands; a gallery preview of a version without
+     one takes it otherwise. It is also the link preview's image (7).
+   - Over the picture's bottom left, when people are in it: a 28px glass pill,
+     `--shadow-sm`, `LiveDot`, their 20px faces (max 3) and "7 here" 12/600.
+   - Foot (top hairline, padding 11/14/12): name in `--t-name` at 15px, then
+     one line saying what made the live version (section 3): the author's
+     16px face, "Tango turns the scoreboard gold" (12.5/400 ink-2, name 600
+     ink, ellipsis) and the time right-aligned (12.5 ink-3, "6 min ago").
+   - Left out: an app whose first version Clay has not made yet, and a fork
+     nobody has changed past its v1 unless someone is in it.
+   - The whole tile links to the clean link `/<slug>`.
+4. Footer: none. The gallery is the end of the page.
 
 ### 6.2 Clean app link `/<slug>`
 
 The app iframe fills the viewport, edge to edge, no shell background
-visible. The shell adds exactly two things:
+visible. The shell adds exactly two things.
 
 **The capsule** (presence affordance), default bottom-right, 20px from both
 edges:
 
-- Butter, `--line-thick`, radius 22, `--pop`, padding 7/7/7/6, gap 10.
-- Left to right: a **grip** (2x3 ink dots, 14x28, `cursor: grab`), a
-  `FaceStack` (30px faces, max 4, the most recent speaker first, a typing
-  bubble on anyone typing), a **timeline** icon button (opens the timeline
-  dock alone, see 6.6), and the **"Change it"** button (ink fill, butter text,
-  radius 15, a speech glyph, `KeyCap` "/").
+- Glass (`--glass`, `backdrop-filter: blur(10px)`), radius 16,
+  `--shadow-md` plus a `rgba(var(--shadow-tint), .08)` ring, padding 5, gap 4.
+- Left to right: a **grip** (2x3 dots, 3px, `--line-2`, 12x24,
+  `cursor: grab`); the **people** button (radius 11, padding 3/9/3/4, hover
+  sunk): a `FaceStack` (24px faces, max 4, the most recent speaker first, a
+  typing bubble on anyone typing) and "7 here" 13/600 tabular; on desktop a
+  1x20 hairline and a **timeline** icon button (opens the timeline dock
+  alone, 6.6; tooltip "Timeline" with a KeyCap `T`, and `T` anywhere outside
+  an input toggles it); and **Change it** (`ink` button, 32px tall, radius 11, padding 0 8 0 11, a
+  speech icon, a KeyCap "/" on dark).
 - `/` anywhere (when focus is not in an input) opens the room with the
   composer focused.
-- **Drag:** the grip moves it; on release it snaps to the nearest of the four
-  corners (260ms `--squish`). Dragging past a side edge by 40px **tucks** it:
-  it becomes a 36px-wide tab flush against that edge showing one face and
-  the count, at the same vertical position. Click the tab to untuck. Position
-  and tucked state persist per device in `localStorage`
+- While the timeline dock is open alone, a capsule in a bottom corner sits
+  20px above the dock, never on it.
+- **Drag:** the grip moves it 1:1; on release it settles to the nearest of the
+  four corners over `--t-move` `--ease-out`. Dragging past a side edge by
+  40px **tucks** it: a 36px-wide glass tab flush against that edge showing one
+  face and the count, at the same vertical position. Click the tab to untuck.
+  Position and tucked state persist per device in `localStorage`
   (`clayground.capsule`).
 - The capsule never moves itself. If the app needs that corner, people drag
   it; the first-visit hint tells them they can.
 
-**The new-version toast**, top center, 16px from the top: ink pill, paper
-text 14/700, a 24px face of the asker, "v15 is live · Juniper: planets orbit
-now". Arrives with `--squish`, stays 4s (pauses on hover), leaves with
-`--glide`. Click opens the room scrolled to that live card. Shown only for
+**The change callout**, in the callout slot 12px above the capsule, follows
+one message through its whole life, as one element that changes in place
+rather than a new callout per state: what a friend said, then (once it is a
+request) its build, then the landing. Surface, `--r-lg`, `--shadow-md` plus
+ring, 268px, padding 11/12, the `BuildLine` along its top. Head row: the
+state glyph and title in the voice face 13.5/650 (spinner + `Starting`,
+blob + `2nd in line`, spinner + `Building v16`, green check + `v16 going
+live`), and on the right the asker's 16px face, their name (`You` for the
+reader) and while building the timer, 12 ink-3. Second line: the line Clay
+is on (the opening line, a thinking summary, the plan, a step) in 12.5 ink-2
+on one line. When the version is on screen it finishes in place: the line
+completes green, the head reads `v16 is live` ("is live" in green), line two
+is the summary in 13.5/550 ink (two lines), then `Try it {what to do}` when
+Clay gave one (12.5 ink-2, "Try it" 600 ink), then `Undo` (quiet sm) and
+`Open` (text sm). It stays 5s of time on screen (hover holds it) and is the
+clean link's celebration. A failed build shows `!` + `Didn't make it` and
+the reason, for the same 5s.
+
+**The new-version toast** is for a landing the callout could not show: the
+capsule tucked, the first-visit hint up, or the slot showing something
+else. Top center, 16px from the top: glass, radius 12, `--shadow-md` plus
+ring, padding 6/14/6/6, 13.5/500 ink, one line: the asker's 24px face, "v15
+is live" in green 650, " · Juniper:" in ink 600, the summary in ink-2, then
+`Undo` (or `Bring back v7` after an undo) as a text button. Drops in from
+-10px over 500ms `--ease-pop`, stays 4s (pauses on hover), fades over
+`--t-quick`. Click opens the room scrolled to that live card. Shown only for
 versions that go live while you are here.
 
-**First-visit hint** (only the first time a device opens any app with 2+
-people present): a paper callout above the capsule, `--line`, `--pop-sm`,
-240px max, rotated -1deg: the hint string plus a second line "Drag it
-anywhere. `/` opens the room." It goes away on any click, on drag, or after
-10s, and never returns.
+**What friends say** while the room is closed: the people button carries a
+small ink count badge (16px, pill, 10.5/600 surface text, a 2px glass ring,
+top-right) of messages from others since the capsule appeared, until the
+room opens. The latest one shows for 5s in the callout slot 12px above the
+capsule (taking the slot from a change in flight meanwhile, never from a
+landing): one line,
+glass, `--r-md`, padding 7/14/7/7, the speaker's 20px face, their name
+13/600, the text 13/400 ink-2 with an ellipsis, 360px max. Hover holds it,
+and its time counts only while the page is visible, so a friend in another
+tab still reads it. Clicking opens the room scrolled to that message. Your
+own messages, change requests and a message Clay is still sorting never
+count (a friend's request shows here and then becomes its change callout).
+No stacking, no sound.
+
+**First-visit hint** (only the first time a device opens any app, whoever
+is there, so a newcomer alone learns anyone can change it): a surface callout 12px above the capsule, `--r-lg`,
+`--shadow-md` plus ring, 260px max, padding 11/12: the hint string in 13/500
+and a second line "Drag it anywhere. `/` opens the room." in 12.5 ink-2 (on
+a touch or narrow screen, "Drag it out of the way."). It
+goes away on any click, on drag, or after 10s, and never returns.
 
 `/<slug>?room` opens with the room open. `/<slug>/v/<n>` opens the clean
 link on version n in viewing mode (6.7).
@@ -372,351 +585,522 @@ link on version n in viewing mode (6.7).
 Layout when open: the room panel docks on the right; **the app column
 shrinks** to the remaining width (the app stays fully interactive and is
 never covered). The timeline dock sits at the bottom of the app column
-(6.6). The capsule hides while the room is open (its job is done by the room
-header).
+(6.6). The capsule hides while the room is open (the room header does its
+job).
 
-**Panel:** cream, left edge `--line-heavy`. Width default 420px, min 340px,
-max min(640px, 50vw), persisted. A **resize handle** straddles the left edge:
-14x58 paper pill, `--line`, `--r-xs`, `cursor: col-resize`; double-click
-resets to 420. Open: slides in 24px with fade, 320ms `--squish`; close:
-`--glide` 180ms. `Esc` closes when focus is in the room and no popover is
-open.
+**Panel:** paper, left edge `--hair-2`. Width default 420px, min 340px, max
+min(640px, 50vw), persisted. A **resize handle** straddles the left edge:
+5x44, radius 3, `--line-2`, `cursor: col-resize`, widening to 7px on hover;
+double-click resets to 420. Open: slides in 16px with a fade over
+`--t-arrive` `--ease-out`; close: fade over `--t-quick`. `Esc` closes when
+focus is in the room and no popover is open.
 
-**Header** (butter, bottom `--line`, padding 16/18/14):
+**Header** (paper, bottom `--hair`, padding 14/14/12/18):
 
-- App name in `--t-h3`, truncate with an ellipsis.
-- Sub line 13/700: `LiveDot` live, a `v14` ink chip (mono 11, butter
-  text, radius 7), "7 here", and when forked, "forked from Haiku Wall v3" as
-  a pool link.
-- Right: `FaceStack` (click opens a popover listing everyone here: face,
-  name, "typing" or "viewing v12" when relevant, you first), a **copy link**
-  icon button opening a menu with three rows (App link, Room link, This
-  version: each with its URL in mono and a "Copied" swap for 1.5s), the
-  you chip as a 36px face button (opens the picker), and close.
+- Top row: the app name in `--t-h3`, truncated with an ellipsis; then the
+  `FaceStack` (24px, ring paper, hover sunk; click opens a popover listing
+  everyone here: face, name, "typing" or "viewing v12" when relevant, you
+  first); a **copy link** icon button opening a menu with three rows (App
+  link, Room link, This version: each with its URL in mono and a "Copied"
+  swap for 1.5s); the you chip as a 28px face button (opens the picker); and
+  close.
+- Sub row, 6px under, 12.5/400 ink-2 with 3px ink-3 dot separators:
+  `LiveDot` + "Live v14" (green 600); while you view the past, "Viewing v12"
+  (ink 600), a dot, then `LiveDot` + "v14 is live"; or while Clay makes the first version
+  a spinner + "Making" (600 ink-2), "7 here", and when forked, "forked from
+  Night Sky v3" as an underlined link (underline `--line-2`, offset 3px).
+  Right-aligned at its end, a quiet way home for whoever arrived on a shared
+  link: the 16px blob and "Make your own", linking to home with the maker
+  focused. The app's maker, and anyone who has changed it, never see it.
+- The link menu ends, under a hairline, with "Report this app" ("Flags it
+  for a person to check"), which turns to "Reported" once sent.
+- After the `FaceStack`, inside the same button, the others' names in
+  12.5/400 ink-2 ("Peak", "Peak, Juniper"), or "3 others" at three or more.
+  A 1x20 hairline sits before the you button, so you never read as one of
+  the others. In the people popover, someone viewing the past reads
+  "viewing v3 · **Look with Peak**", a button that shows you that version.
+- **Below 1024px** the header is one row: the app name (17px), `LiveDot` and
+  "v14" in green 600, the others' `FaceStack` (max 2), copy link, you, close.
+  "Make your own" moves into the link menu, above Report.
 
-**Stream** (flex 1, scrolls, padding 16, gap 12):
+**Stream** (flex 1, scrolls, padding 6 top 10 bottom; rows run full width
+with 18px side padding, cards inset 14px):
 
 - Sticks to the bottom while you are within 80px of it. If you scroll up and
-  new items arrive, a butter pill "3 new" appears above the composer; click
-  scrolls down (`--glide` 260ms).
-- Contains, in time order: chat messages (6.4), build cards (6.5), system
+  new items arrive, an ink pill "3 new" (12.5/600 surface text, 28px tall,
+  `--shadow-md`) appears centered 10px above the composer; click scrolls down
+  over `--t-move` `--ease-out`.
+- Contains, in time order, each version where it landed (a live build card
+  at its build's finish, so version numbers always read upward after a
+  restore or a rebased build; chat, queued, building and failed cards where
+  they were said): chat messages (6.4), build cards (6.5), system
   notes, and the typing row at the end.
-- **System notes:** centered, 12/700 ink-soft, max 85% width, a 16px icon
-  left of the text: pool dot for forks, mint dot for restores, blob for Clay
-  notes. No join or leave notes ever.
-- **Empty room** (no messages yet): centered blob (64px), "It's quiet in
-  here." (`--t-state`), "Say what you'd change. Clay builds it and everyone
-  sees it." (13/600 ink-soft), and three chips with change ideas written for
-  this app by the builder at v1 ("make it dark", "add a sound", ...); a tap
-  puts the idea in the composer in Change it mode, not sent.
+- **Origin row**, first in the scroll once the room's beginning is loaded,
+  pinned to the top while everything else stays anchored to the bottom: the
+  maker's 28px face (or the blob), "{name} made {app}" 13.5/400 ink-2 with
+  names 600 ink and the time 12 ink-3, then their first request quoted (or
+  v1's summary) in 13/400 ink-2, two lines max. A fork says "{name} forked
+  {app} from {source v3}" (the source a link) and "Same code, a copy of the
+  data. Change anything."
+- **System notes:** centered, padding 8/18, 12.5/400 ink-3 with names 600
+  ink-2, a 13px icon before the text: green restore arrow for restores, a fork
+  glyph in ink-2 for forks, a 16px blob for Clay notes. No join or leave notes
+  ever.
+- **Empty room** (no messages yet): centered, a 44px blob, "It's quiet in
+  here." (`--t-card` at 16px), "Say what you'd change. Clay builds it and
+  everyone sees it." (13/400 ink-2), and three starter pills (as on home) with
+  change ideas the builder wrote for this app at v1 ("make it dark", "add a
+  sound", ...); a tap puts the idea in the composer in Change it mode, not
+  sent.
 
-**Typing row** (last item in the stream, 13/700 ink-soft): faces (24px) +
+**Typing row** (last item, padding 6/18/2, 12.5/400 ink-3): 16px faces +
 "Pebble is typing", "Pebble and Juniper are typing", or "3 people are
-typing", followed by three hopping dots.
+typing", then three 4px ink-3 dots hopping 3px (1.2s, 150ms stagger).
 
-**Composer** (cream, top `--line`, padding 12/14/14):
+**Composer** (paper, top `--hair`, padding 10/14/12):
 
-- **Mode switch:** a segmented control, `--line`, `--r-sm`, 13/800: `Auto`
-  (selected by default; paper with ink inset when on), `Change it` (tomato
-  when on, ink text), `Just chat` (ink when on, butter text). Shortcuts:
-  `Ctrl/Cmd+1`, `2`, `3` while the composer has focus, shown as KeyCaps in
-  each segment's tooltip. Mode persists per app per device.
-- **Row:** the **pick button** (46px, butter, `--line`, `--r-md`, `--pop-xs`,
-  a dashed square with a cursor), the **field** (paper, `--line`, `--r-md`,
-  15/600, grows to 6 lines then scrolls, shows an `ElementChip` above the
-  text when an element is attached, with an x to remove), and **send**
-  (52px, `--line`, `--r-md`, `--pop-sm`, an up arrow; fill follows the mode:
-  Auto ink, Change it tomato, Just chat paper).
-- Under the row, only in Change it mode: "Goes live for everyone" 12/600
-  ink-soft.
+- **Mode switch** (`Segmented`, 8px above the field): `Auto` (default),
+  `Change it`, `Just chat`. Shortcuts `Ctrl/Cmd+1`, `2`, `3` while the
+  composer has focus, shown as KeyCaps in each option's tooltip. Mode persists
+  per app per device.
+- **Field:** surface, radius 12, `inset 0 0 0 1px --line-2`, padding 6, a
+  row of: the **pick button** (30px icon button, a dashed square with a
+  cursor), the text (14/400, padding 4/4/5, grows to 6 lines then scrolls; an
+  `ElementChip` with an x sits above the text when an element is attached),
+  and **send** (32px, radius 9, an up arrow at stroke 2.1; ink in Auto,
+  persimmon in Change it, quiet in Just chat; disabled at 40% opacity when
+  empty). Focus: ring becomes ink-3 plus `0 0 0 3px rgba(196,73,31,.1)`.
+- **Hint row** (7px under, 12/400 ink-3): the mode's hint on the left; on the
+  right the next mode's shortcut as a KeyCap pair and its name (in Auto:
+  `⌘ 2 Change it`).
+- **Below 1024px** the mode folds into the field: a 30px sunk pill after the
+  pick button with the mode's name and a chevron (persimmon on accent-soft in
+  Change it), opening a menu of the three modes, each with its hint. There is
+  no segmented control and no hint row.
+- **Ideas for newcomers:** while the field is empty and this visitor has not
+  sent anything in this app, a row sits 8px above the field: "Try" 12 ink-3
+  and up to three of the app's ideas as chips, one line, scrolling sideways
+  with a fade at the right. A tap fills the field in Change it mode, unsent.
+  Gone after the first send.
 - Enter sends, Shift+Enter is a newline. Sent text appears immediately
   (optimistic) at 60% opacity until the server echoes it.
-- **Limits:** rate limited: a tomato-soft strip above the field "Slow down a
-  little. Try again in 20s" with a live countdown, send disabled. Daily
-  build budget spent: Change it mode disabled with "This app has used
-  today's building budget. Chat still works, and changes are back tomorrow."
-  Auto still sends, as chat.
+- **Limits:** rate limited: a sunk strip above the field, 12.5/500 ink-2,
+  "Slow down a little. Try again in 20s" with a live countdown, send
+  disabled. Daily build budget spent: the Change it option is disabled with a
+  tooltip "This app has used today's building budget. Chat still works, and
+  changes are back tomorrow." Auto still sends, as chat.
 
 **Point and talk (picking):** the pick button toggles picking. While on:
 
-- The pick button is pressed (inset, no shadow) and the app column gets a
-  butter top banner, 36px: "Click anything in the app" + `KeyCap Esc` "to
-  cancel".
-- The SDK draws the hover highlight inside the app: `3px dashed var(--butter)`
-  outline at 4px offset with marching dashes, and a tag above it (butter,
-  `--line-thin`, mono 11) reading `tag · text`. (The SDK receives these
-  token values from the shell so the look matches.)
-- Click attaches the reference to the composer and ends picking. `Esc` or
-  the pick button again cancels.
+- The pick button shows pressed (sunk fill, ink icon), and the app column
+  gets a 36px glass banner across its top edge (bottom hairline, 13/500 ink):
+  "Click anything in the app" + KeyCap `Esc` "to cancel" in ink-3.
+- The SDK draws the hover highlight inside the app: a `2px solid #c4491f`
+  outline at 3px offset with a `0 0 0 6px rgba(196,73,31,.12)` halo, and a
+  tag above it (ink fill, white `--t-mono`, radius 5, padding 2/6) reading
+  `tag · text`. (The SDK receives these values from the shell so the look
+  matches.)
+- Click attaches the reference to the composer and ends picking. `Esc` or the
+  pick button again cancels.
 
 ### 6.4 Chat messages
 
-- **Others:** 30px face at left, then a column: name 13/800 + time 12/600
-  ink-soft ("now", "2m", "4:12"), then the bubble: paper, `--line`, radius
-  `4px 16px 16px 16px`, padding 8/12, 15/500, max width 100% of the column.
-  Long words break (`overflow-wrap: anywhere`); URLs become links
-  (underlined, ink).
-- **You:** right aligned, no face or name, butter bubble, radius
-  `16px 4px 16px 16px`.
+Messages are rows, not bubbles. A room scrolled for an hour reads like a log.
+
+- **Every message:** grid `28px 1fr`, column gap 10, padding 6/18. The 28px
+  face spans both lines (2px top offset). Line one: name `--t-name` + time
+  12/400 ink-3 ("now", "2m", "4:12"). Line two: text `--t-body`. Hover tints
+  the row `rgba(239,233,223,.55)`. Long words break (`overflow-wrap:
+  anywhere`); URLs become links (ink, underline `--line-2`).
+- **You:** the same row, with "you" in 12/500 ink-3 after your name. Your
+  messages are never right-aligned or filled.
 - **Grouping:** consecutive messages from the same person within 2 minutes
-  drop the face and name and sit 4px apart.
-- **Same-name disambiguation:** when two people here share a name, the
-  name is followed by their animal in ink-soft ("Pocket the otter"); the face
-  always shows, even in grouped runs.
-- **Element reference:** an `ElementChip` under the bubble.
-- **Change requests do not render as a chat bubble.** A message the builder
+  drop the face and name line and sit 1px apart.
+- **Same-name disambiguation:** when two people here share a name, the name
+  is followed by their animal in ink-3 ("Pocket the otter"), and grouped
+  runs keep the face.
+- **Element reference:** an `ElementChip` 5px under the text.
+- **Change requests do not render as a message.** A message the builder
   takes as a change (forced or triaged) renders as its build card, which
   carries the asker's face, name and words. In Auto mode, your message first
-  appears as a normal bubble and, when triage returns "change", morphs into
-  the queued card in place (`--t-move`, `--squish`): one item, never two.
-- **Clay's messages** (when the builder speaks outside a card, such as an
-  explanation after a failed build) use the blob face and the name "Clay",
-  with a cream bubble.
+  appears as a normal row and, when triage returns "change", turns into the
+  queued row in place (`--t-move`, `--ease-out`): one item, never two.
+- **Clay's messages** (when the builder speaks outside a card, such as a
+  follow-up after a failed build) use the 28px blob and the name "Clay".
 
 ### 6.5 Build cards
 
-All build cards: paper, `--line-thick`, `--r-lg`, `--pop-sm`, overflow
-hidden. Header row: padding 10/12, bottom `--line`, a state title in
-`--t-state`, and on the right the asker's 24px face + name + one fact (12/700
-ink-soft). Body padding 10/14/12. Everyone sees the same card update live.
+All build cards share one shell: surface, `--r-lg`, `--shadow-sm` plus an
+`inset 0 0 0 1px --line` ring, margin 6/14, overflow hidden, the
+`BuildLine` along the top. Head row: padding 10/12/0/14, the title in
+`--t-card` with its state glyph, and on the right the asker's 20px face +
+name + one fact (12/400 ink-3). Body: padding 8/14/12. Everyone sees the
+same card update live.
 
-**Queued.** No header row: a single dashed row, `2.5px dashed var(--ink)`,
-`--r-md`, cream at 50%, padding 8/12: an ordinal chip (ink fill, butter
-display 15, radius 10: "2nd"), the asker's face, and the request in 14/600
-truncated to one line (full text in the title tooltip). It updates its
-ordinal live and morphs into the building card when its turn comes.
+**Queued.** Not a card: one row, margin 4/14, padding 8/10, radius `--r-md`,
+`1px dashed --line-2`, 13.5/400: an ordinal (`--t-card` 12px, ink-2 on sunk,
+padding 5/7, radius `--r-xs`: "2nd", counting the build running ahead;
+with nothing ahead it is a spinner and "Starting", never "1st"), the asker's 20px face, the request on
+one line with an ellipsis (full text in the title tooltip), and right-aligned
+meta 12 ink-3 (the asker's name, or "You, in line"). It updates its ordinal
+live and becomes the building card in place when its turn comes.
 
-**Building.** Header: butter/butter-deep diagonal stripes marching, a 26px
-orbiting spinner (paper disc with a tomato dot), "Building v15", right:
-asker + elapsed timer in mono ("0:11"). Body:
+**Building.** Title: spinner + "Building v15" (green check + "v15 going
+live" while the live version is on its way to the screen); right: asker + the timer
+(`--t-mono`, ink-2, "0:11"). Body:
 
-- The request in 15/700 (clamped to 3 lines, click to expand).
-- **Narration:** a list, 14/500, 6px gap, each line with a 9px mint
-  rounded-square check; the current line is 800 weight with a butter square
-  that wobbles and a blinking ink caret after its text. Show the last 4
-  lines; earlier ones fold into a "+3 earlier steps" toggle. New lines fade
-  up 6px over `--t-quick`.
-- **Files touched:** `FileChip`s, written files sky with a small pencil
-  glyph, read files cream. Max 2 rows, then "+4 more".
-- **Meter:** 12px tall, `--line`, pill, cream track; the fill is tomato
-  stripes marching and its width follows elapsed time against a 30s
-  expectation, easing toward 90% and never reaching 100% until live.
+- The request, 13.5/400 ink-2, with a 2px `--line` left rule and 10px left
+  padding, clamped to 3 lines (click to expand), 10px gap below.
+- **Clay's plan**, the first thing Clay says ("I'll make the bass frog
+  wobble whenever anyone croaks"), as the card's lede under the request: 16px
+  blob, then 13.5/400 ink, two lines. It stays while the steps scroll.
+- **Narration:** a list, 13.5/400 ink-2, 5px gap. Steps are short and verb
+  first ("Wobble on note pick"); a file's path is its chip, never part of
+  the line, and further changes to the same file fold into its step, which
+  takes the newer words. What Clay is doing this moment (the opening line,
+  a thinking summary, "Reading App.jsx") stands as the current line until
+  the next one arrives. Done lines carry a 13px
+  ink-3 check and one line each (full text in the tooltip); the current line
+  is ink at 400, up to 3 lines, marked by the breathing persimmon dot and
+  the blinking caret rather than by weight. Show the last 4 lines; earlier ones fold into a
+  "{N} earlier steps" toggle (12.5 ink-3) above them.
+- **Files touched:** `FileChip`s, 5px gap, max 2 rows, then "+4 more".
+- The `BuildLine` carries progress; there is no other meter.
 
-**Live.** Header: mint, "v15" in `--t-h2` followed by "is live" in 17px
-display, right: asker. Body: the one-line summary in 15/600, then actions:
-`See it` (paper sm: scrolls nothing, it returns you to live if you are
-viewing the past and flashes a mint inset outline around the app column for
-600ms), `Undo` (paper sm: restores the version before this one as a new
-version and posts the restore note; it shows "Undoing" with a spinner until
-that version is live), and a copy-version-link icon button. Arrives with the
-celebration (4.4.3).
+**Live.** Ring `inset 0 0 0 1px --live-line`, the `BuildLine` full and
+green. Title: "v15" in ink then "is live" in green. Body: the asker's request
+as on building but clamped to two lines (tap to expand), 6px gap, so who
+asked for what stays in their words; the one-line summary in 14/550 ink, then
+actions 10px below, with the meta "Built in 0:24 · 2 files changed" (12 ink-3)
+at the right of the row beside the link button: `See it` (quiet sm: returns you to live if you are viewing
+the past, and flashes a 3px green inset outline around the app column for
+600ms), `Undo` (quiet sm with a restore icon: restores the version before
+this one as a new version, which the room shows as a restore card; it shows a spinner and
+"Undoing" until that version is live), a spacer, and a copy-version-link icon
+button. Arrives with the celebration (4.4.3).
+
+**The maker's first version** is the moment to pass it around: on the live
+card of the first version Clay made for the person reading (they asked for
+it), a line "Anyone with the link can change it. Send it to a friend." (13.5
+ink-2) sits above the actions, and the actions lead with `Copy link` (ink sm,
+a link icon), which copies the app link and reads "Copied" with a check for
+1.5s, then `See it`. The copy-version icon is left out; there is no Undo on a
+first version.
 
 **Superseded live cards collapse.** When a newer version goes live, every
-older live card collapses (`--t-move`, `--glide`) to a single 36px row: a
-6px mint left bar, "v14" in 17px display, the summary truncated, the asker's
-24px face, and a `See it` text button that opens that version in viewing
-mode. Undo is offered only on the current live version's card; older
+older live card collapses (`--t-move`, `--ease-out`) to one row, margin 2/14,
+padding 7/10/7/12, radius `--r-md`, 13/400 ink-2, hover and focus sunk. The
+whole row is a button that opens that version in viewing mode: a 3x16
+`--live-fold` bar, "v14" in `--t-card` 13px ink, the summary truncated (it
+gets the width), the asker's 20px face, and trailing meta 12 ink-3 "Peak ·
+6m", which turns to "See it" (600) on hover or focus in the same cell, so
+the row never reflows. The rows read as a log. Its tooltip is the summary, then "{name} asked: {request}". Undo is offered only on the current live version's card; older
 versions are restored from the timeline.
 
-**Failed.** Header: tomato-soft, a tomato circle with an ink "!" glyph,
-"Didn't make it", right: asker. Body: one plain line of why (from the build
-error, rewritten for people: "It ran out of time on a big change", "The
-code it wrote didn't run, twice"), then `Try again` (make sm, re-queues the
-same request) and `Edit` (paper sm, puts the request in the composer). A
-"Details" toggle reveals the raw error in mono 11 on cream, max 8 lines.
+**Failed.** The `BuildLine` stays where it stopped, persimmon at 45%. Title:
+a 14px ink-2 circle with an `!`, then "Didn't make it" in ink; right: asker +
+time. Body: the request (as on building), one plain line of why, written for
+people ("Clay ran out of time on a big change. Smaller steps usually land.",
+"The code it wrote didn't run, twice."), then `Try again` (accent sm,
+re-queues the same request), `Edit` (quiet sm, puts the request in the
+composer), and right-aligned a "Details" text toggle that reveals the raw
+error in `--t-mono` on sunk, radius `--r-sm`, padding 8/10, max 8 lines.
+When Clay has a useful follow-up, it posts it as a Clay message right after
+the card.
 
-**Restore and fork events** are system notes, not cards: "Pocket restored
-v12 as v16" (mint dot), "Raccoon forked v12 into Moon Party" (pool dot, the
-fork name links to it).
+**Restores are versions too.** While a restore is live it is a compact
+live card: the same shell and green line, "v8 is live" with the time on the
+right, then the restorer's 20px face and "Peak undid Ziggy's v7" in 14/550,
+the undone version's summary under it in 13.5/400 ink-2, and actions `See
+it` and `Bring back v7` (after a bring-back, `Undo`), so a friend reverses
+it in one click. A restore undoes the live version when it brings back
+exactly what that version was built on; any other restore brought back an
+older one. Once superseded it folds like any version, with a 13px ink-3
+restore glyph after its number and its summary said with its verb: "Undid
+v7: {summary}" or "Brought back v3: {summary}", never as a fresh change by
+whoever restored it. The folded row of the version you are viewing takes the
+timeline's viewing treatment (sunk fill, ink bar, "Viewing" in ink 600) and
+turns "See it" into "Back to live". **Forks** stay a system note: "Raccoon forked v12
+into Moon Party" (the fork name links to it).
 
 ### 6.6 Timeline
 
 **Where it lives.** A dock at the bottom of the app column, full width of
-that column, 76px tall, paper with a top `--line`. It is open whenever the
+that column, 68px tall, paper with a top `--hair-2`. It is open whenever the
 room is open, and the capsule's timeline button opens it alone over the clean
-link (the app shrinks by 76px; close with its x or `Esc`). On mobile it lives
+link (the app shrinks by 68px; close with its x or `Esc`). On mobile it lives
 inside the sheet (6.11).
 
-**Header row** (left, 13/800): "14 versions", then ink-soft "since Sunday".
-Right: `KeyCap ←` `KeyCap →` "to step".
+**Layout**, padding 0/16/0/20, gap 20: a 112px label ("15 versions" 13/650,
+"since Sunday" 12 ink-3), the track (flex 1), and the keys (KeyCaps ← → "to
+step", and `esc` "back to live", which holds its place hidden while you are
+on live so viewing never moves the rail, 12 ink-3; then the x when
+opened alone).
 
-**Beads.** A 3px ink string across the dock with one bead per version, evenly
-spaced at least 22px apart; when they do not fit, the strip scrolls
-horizontally with 24px fade masks at both ends and keeps the live bead in
-view on open.
+**Track.** A 1px `--line-2` line across the middle, one mark per version,
+evenly spaced. When marks would sit closer than 18px, the strip scrolls
+horizontally with 24px fade masks at both ends and keeps the live mark in view
+on open.
 
-- Normal bead: 18px circle, `--line`, fill cycling butter, bubble, sky,
-  cream by version number (decorative only, never meaning).
-- **Live bead:** 30px, mint, its number in mono 9/700 inside.
-- **Building bead:** after the live bead, a 22px dashed-outline empty circle
-  with the spinner inside (only while a build runs).
-- **Restore bead:** diagonal ink-on-cream stripes (it repeats an earlier
-  version).
-- **Fork bead** (a version someone forked from): a 9px pool dot at its top
-  right.
-- **Focused/hovered bead:** grows to 28px over `--t-quick` `--squish`, lifts
-  2px, gets the focus ring, and shows the asker's 18px face above it.
-- **Viewing bead** (the one you are viewing): bubble fill and ring.
+- **Faces when they fit.** When each version has 30px or more, every mark is
+  the asker's 20px face (radius 6) at 70% opacity and 30% desaturated, with
+  its number under it (11.5 ink-3, tabular). Below 30px, marks are 9px
+  surface circles with a 1.5px ink-3 ring and the face appears only on hover
+  or focus. A restore shows its restorer's face with a 12px surface badge holding a
+  restore glyph at its bottom right (the ring-in-ring mark in dot mode).
+- **Live:** a 13px green dot with a 4px `--live-soft` ring (in face mode, the
+  face at full color with a 2px green ring); the label "v15 live" in green
+  600.
+- **Building:** after the live mark, a 15px dashed persimmon circle (1.5px),
+  empty, only while a build runs.
+- **Restore:** a ring-in-ring mark (surface, ink-3 at 1.5px, gap, ink-3 again).
+- **Fork:** a version someone forked from carries two 1x6 ink-3 strokes above
+  its mark.
+- **Viewing** (the one you are viewing): ink, 13px, with a 4px paper gap and a
+  1.5px ink ring; its label ink 600. In face mode the face gets the same ring.
+- **Friends in the past:** everyone else viewing a past version shows as a
+  16px `FaceStack` (max 3, ring paper) just above that mark, gone when they
+  return to live; the line sits 30px down a 60px rail to make room.
+- **Hover or focus:** the face shows at full color and the peek opens; hover
+  also scales the mark 1.3 over `--t-quick`, and focus draws the persimmon
+  outline (4.3). Labels sit 48px down the 64px rail, clear of both rings.
+- **Fork lineage:** a fork's track starts with a link back on the line, the
+  fork glyph and "from {source} v3" (12 ink-3, ink on hover), on paper.
 
-**Peek.** Hover (after 120ms) or keyboard focus on a bead opens the peek
-popover above it (portal, flips below if clipped): 280px, paper, `--line`,
-`--r-xl`, `--pop`, padding 12, with a pointer. Content: "v12" in 26px
-display + 24px face + "Bandit · 6 min ago"; the summary 14/700; the request
-in 13/500 ink-soft, quoted, 2 lines max; actions `View` (paper sm), `Restore`
-(live sm), `Fork from here` (fork sm). On the live version, View and Restore
-are replaced by "This is live".
+**Moving through time.** A click on a mark, ←/→, Home/End, or a press dragged
+along the rail shows that version at once (the mark under the pointer as it
+moves). The shell keeps the versions either side of the one on screen, and
+the one the peek points at, loaded out of sight, so each step is a cross-fade
+rather than a load. Going to a version closes the peek; the past bar (6.7)
+is the caption for what you see, and the peek reopens only on the next
+hover. Entering the past adds one history entry; steps inside it replace it,
+so Back leaves the past in one press.
 
-**Keyboard** (when the strip has focus): ←/→ move focus one bead and show
-its peek; Enter views it; `Esc` returns to live; Home/End jump to v1 and
-live.
+**Peek.** Hover (after 120ms) or tabbing onto a mark opens the peek
+above it (portal, flips below if clipped): 320px, surface, `--r-lg`,
+`--shadow-lg` plus line ring, padding 14, a 12px rotated-square pointer.
+Content: "v12" in `--t-h2` + 20px face + "Bandit · 6 min ago" (12.5 ink-3);
+the summary 14/600; the request in 13/400 ink-2, quoted, 2 lines max; when
+forked, "Inky forked this into Moon Party" 12.5 ink-2 with the fork glyph,
+the fork a link (and on a fork's v1, "Forked from Night Sky v3", linked);
+on a past version, what making it live does, 12.5 ink-2: "Everyone sees v3.
+Takes out v4 to v6: {v6's summary}"; actions on one line, never wrapping:
+`View` (ink sm, the primary), `Make v12 live` (quiet sm), `Fork from here`
+(quiet sm with the fork icon). On the live version, View and Make live are
+replaced by "This is live" in green 600.
+
+**Keyboard** (when the track has focus): ←/→ show the version before or
+after; `Esc` returns to live; Home/End jump to v1 and live. Tab from a
+peeked mark goes into the peek; Esc there returns to the mark with the peek
+closed, so the next Tab leaves the track.
 
 ### 6.7 Viewing a past version
 
 Viewing is private to you. When you view v12:
 
 - The app column swaps to v12 with the same cross-fade as a new version.
-- A 4px bubble inset outline frames the app column.
-- **The viewing pill**, top center of the app column, 16px down: bubble fill,
-  `--line`, pill, `--pop-sm`, 15/800: "You're viewing v12, nobody else is"
-  followed by a paper `Back to live` sm button (radius pill). `Esc` also goes
-  back.
+- An inset frame outlines the app column: 2px ink with a 2px light line
+  (`--past-frame`) inside it, so it reads on dark apps and light ones.
+- **The past is looking only.** The frame of any version that is not live
+  holds a watch token: the app shows the data everyone shares and writes
+  none of it. A write it tries is refused softly (the SDK throws a
+  `LookingOnly` error the app may catch, never reported as an app error),
+  and the past bar's second line lights up once (a 16% light fill, fading
+  over 600ms) to say why nothing happened.
+- **The past bar**, while the timeline dock is open: a 48px ink strip of its
+  own on top of the dock, full width of the app column, which shrinks for
+  it, so the past never covers the app's own controls. Padding 0/12/0/20.
+  Left, two lines: "v12" (voice 14/650) and the version's summary
+  (13.5/500, one line, ellipsis), then "Looking only. Nobody else is
+  looking. Make it live or fork it to use it." (12, surface at 68%), with
+  the 16px faces of others viewing it first. Right: `Make v12 live` (accent
+  sm; its tooltip says what it takes out), `Fork from here` (a ghost on ink:
+  transparent, a 28% white ring) and a surface `Back to live`. `Esc` also
+  goes back.
+- **The viewing pill**, when the dock is closed: the same content floating
+  centered 76px up, above the capsule, radius `--r-lg`, `--shadow-md`.
 - The room keeps showing the live conversation; your presence shows "viewing
   v12" in the header popover.
-- `/<slug>/v/<n>` lands here directly, same treatment, with the capsule
-  present (its Change it opens the room on live).
+- `/<slug>/v/<n>` lands here directly with the timeline dock open (whoever
+  was sent a version link is there for its history), same treatment, with
+  the capsule present above the bar (its Change it opens the room on live).
+- The room header says "Viewing v12 · v14 is live".
+- **Below 1024px** the pill keeps only `Back to live`: with the room
+  closed it docks at the bottom center, 76px up (above the capsule); with the
+  room open the sheet says it instead (its peek row, or a sunk row under the
+  header at half and full), with a `Back to live` text button.
 
 ### 6.8 Fork flow
 
-1. `Fork from here` opens the fork modal: 440px, cream, `--line-heavy`,
-   `--r-2xl`, `--pop-xl`, over the scrim. Title "Fork v12" (`--t-h2`). A line
-   in 15/500: "A new app with v12's code and a copy of its data. Its own
-   room, its own link." A name field (paper, `--line`, `--r-md`, 20/700),
-   prefilled "{App name}, {your name}'s take" (cut to 40 chars) and fully
-   selected. Buttons: `Fork it` (fork md) and `Cancel` (paper md). Enter
-   submits.
-2. On submit, the button shows a spinner and the modal stays until the new
-   app exists (usually under a second), then navigates to
-   `/<newslug>?room`. The modal leaves with `--glide`.
-3. The new room opens with a **lineage card** at the top of its stream: pool
-   fill, `--line-thick`, `--r-lg`, paper text 15/800 "Forked from Tiny
-   Planets v12" with a link arrow, and below in 13/600 "Same code, a copy of
-   the data. Change anything." The header sub line carries the same lineage
+1. `Fork from here` opens the fork modal over the scrim: 440px, surface,
+   `--r-xl`, `--shadow-lg`, padding 24. Title "Fork v12" (`--t-h2`). A line in
+   14/400 ink-2: "A new app with v12's code and a copy of today's data. Its
+   own room, its own link." When v12 was forked already, a sunk row (radius
+   10, padding 8/10, 13 ink-2) names the latest fork as a link: "Iris forked
+   this into Tally, take two. Join it, or make your own." A name field (surface, `--line-2` ring, radius 10,
+   44px tall, 16/500), prefilled "{App name}, {your name}'s take" (cut to 40
+   characters) and fully selected. Buttons right-aligned: `Cancel` (quiet md)
+   and `Fork it` (ink md). Enter submits.
+2. On submit, the button shows a spinner and the modal stays until the new app
+   exists (usually under a second), then navigates to `/<newslug>?room`. The
+   modal fades over `--t-quick`.
+3. The new room opens with its **origin row** (6.3) saying where it came
+   from, the source a link back. The header sub row carries the same lineage
    link.
-4. The source room gets the system note with a pool dot.
+4. The source room gets the system note.
 
 ### 6.9 Character picker
 
-Opened from any you chip or face button for yourself. Modal on desktop:
-1020px, cream, `--line-heavy`, `--r-2xl`, `--pop-xl`, over the scrim, two
-columns.
+Opened from any you chip or your own face button. Modal on desktop over the
+scrim: 880px, surface, `--r-xl`, `--shadow-lg`, two columns.
 
-**Left (360px, tomato, right `--line-heavy`, centered, paper text):**
+**Left (320px, paper, right `--hair`, padding 28, centered):**
 
-- "Who are you today?" in 40px display.
-- The current face at 188px, radius 56, `--line-heavy` 5px, `--pop-lg`,
-  wobbling gently (2.6s loop).
-- **Name field:** paper, `--line`, `--r-md`, 26px display, ink text, with a
-  counter "6 / 24" in mono 11 ink-soft at its right (24 is
-  `CHARACTER_NAME_MAX`); next to it a 54px butter **dice** button that picks a
-  random name from this animal's six (`CHARACTER_NAMES[avatar]`). Names are
-  cleaned with `cleanCharacterName` on save.
-- **Name suggestions:** this animal's six names as paper `sm` chips; the
-  current one butter.
-- Footnote 13/600: "Everyone sees this face next to what you say and what
-  you change."
+- "Who are you today?" in `--t-h2` at 24px.
+- The current face at 140px (radius 30%), `--shadow-md`.
+- **Name field:** surface, `--line-2` ring, radius 10, 44px tall, 18px voice
+  700, with a counter "6 / 24" in `--t-mono` ink-3 at its right (24 is
+  `CHARACTER_NAME_MAX`); next to it a 44px quiet **dice** icon button that
+  picks a random name from this animal's six (`CHARACTER_NAMES[avatar]`).
+  Names are cleaned with `cleanCharacterName` on save.
+- **Name suggestions:** this animal's six names as 28px pills (surface, line
+  ring, 12.5/500 ink-2); the current one ink-filled with surface text.
+- Footnote 12.5/400 ink-3: "Everyone sees this face next to what you say and
+  what you change."
 
-**Right (padding 32):**
+**Right (padding 28):**
 
-- "24 animals" in 30px display, and right-aligned 13/700 a legend: a mint
-  badge "here" "someone in this room has it".
-- **Grid:** 8 columns, 80px faces, 14px gap, `--line-thick`, `--pop-sm`;
-  hover lifts 2px; the selected face gets the focus-ring treatment and a
-  slight -3deg tilt. Faces worn in this room carry a mint pill badge at the
-  top right with the count ("2 here", mono 10/700). The animal's label shows
-  in a tooltip and as `aria-label`.
+- "24 animals" 15/650, and right-aligned 12.5 ink-3 a legend: a green 7px dot
+  "someone here has it".
+- **Grid:** 6 columns, 64px faces, 12px gap; hover lifts 2px over
+  `--t-quick`; the selected face gets a 2px surface gap and a 2px ink ring.
+  Faces worn in this room carry a 7px green dot with a 2px surface ring at the
+  top right, and the tooltip reads "{animal} · 2 here". The animal's label is
+  the tooltip and `aria-label`.
 - **Keyboard:** arrows move across the grid, Enter selects, `Esc` closes;
-  show these as KeyCaps under the grid in 12/600 ink-soft.
-- Footer row: "Names can repeat. Faces tell you apart." (13/600 ink-soft),
-  `Surprise me` (paper md: random animal and one of its names), and the
-  primary `Be {name}` (make md in the display font, updates live as you
-  type).
-- Selecting a new animal swaps the big face with a pop (scale .9 to 1,
-  `--squish`) and, if the name is still one of the previous animal's six
-  defaults, swaps the name to a default of the new animal.
+  shown as KeyCaps under the grid in 12 ink-3.
+- Footer row (top `--hair`, padding top 16): "Names can repeat. Faces tell
+  you apart." (12.5 ink-3), `Surprise me` (quiet md: random animal and one of
+  its names), and the primary `Be {name}` (ink md, updates live as you type).
+- Selecting a new animal crossfades the big face over `--t-move`, and, if the
+  name is still one of the previous animal's six defaults, swaps the name to a
+  default of the new animal.
 
 **First arrival:** no picker. A visitor gets `defaultCharacterFor` silently,
-and the first time, a 4s toast (6.2 style) says "You're Pocket the raccoon.
-Change" with "Change" opening the picker.
+and the first time, a 4s toast (6.2 style) says "You're Pocket the raccoon."
+with a `Change` text button that opens the picker.
 
 ### 6.10 Empty, loading and error states
 
-- **First build of a new app:** the app column shows butter with the dot
-  grid, the blob at 96px gently squashing (scale 1/0.92 vertical, 1.2s), and
-  below it in `--t-state` "Clay is shaping v1", with the current narration
-  line in 14/600 under it. The room is open with the building card. When v1
-  goes live it cross-fades in with the celebration.
+- **While Clay builds** (the first build of a new app included): the live
+  version stays in the app column, visible and usable; nothing covers it. The
+  room carries the building card. With the room closed, a surface callout
+  sits 12px above the capsule (where the first-visit hint goes): 268px,
+  `--r-lg`, `--shadow-md` plus ring, padding 11/12; a spinner, "Building v16"
+  in `--t-card` 13.5px, the timer right-aligned in mono ink-3, then the
+  current narration line in 12.5 ink-2, and the `BuildLine` along its top.
+  Clicking it opens the room on the card. A tucked capsule shows a spinner
+  under its count. The new version cross-fades in with the celebration.
+- **The very first build** (an app made from the home page): the request
+  arrives with a starter under it, v0, scaffolding nobody sees, so the
+  first thing Clay builds is v1, the timeline reads "No versions yet", and
+  the room header says "Making". Until v1 lands, the app column is paper
+  with the `BuildLine` across its top and, in a 560px column centered on
+  it: the asker's 20px face and "{name} asked for" (13.5 ink-2, name 600
+  ink), their request in 500 26px ink (21 on a phone, up to 5 lines), Clay's
+  plan and steps exactly as on the build card, and "Clay is making it · 0:24"
+  (12.5 ink-3, the 16px blob), which reads "Going live" as v1 lands. The
+  card in the stream keeps to its title, timer and the request, since the
+  column already narrates. When v1 is on screen the column fades out over
+  320ms on top of it. A first build that fails leaves the starter showing.
 - **App loading** (clean link, iframe not loaded yet): nothing for the first
-  400ms (cached versions usually beat it), then the same butter dot grid with
-  the blob, no text.
+  400ms (cached versions usually beat it), then plain paper with a 28px blob
+  at 50% opacity, no text.
 - **App runtime error** (the SDK reports `error`/`unhandledrejection` from
-  inside the app): a 10px tomato dot appears on the capsule's timeline button
-  and the room gets a Clay note "The app hit an error: {message}" with a
-  `Fix it` button that fills the composer with "Fix this error: {message}" in
-  Change it mode. At most one note per version.
-- **Unknown app** (404): butter page, blob at 120px looking down (eyes shifted
-  down 3px), "No app lives here" (h1), "Want to make one?" and the maker bar.
-- **Reconnecting:** an ink pill at the top center of the shell, paper text
-  13/800, "Reconnecting" with the three hopping dots; pending messages stay at
-  60% opacity with a small clock. Disappears on reconnect without fanfare.
-- **Image or avatar failing to load:** the face squircle shows its cream fill
-  and the first letter of the name in 800 weight; never a broken image icon.
-- **Empty gallery:** a single dashed card "Nothing's busy yet. Make the first
-  thing." pointing at the maker bar.
+  inside the app): a 7px persimmon dot appears on the capsule's timeline
+  button and the room gets a Clay note "The app hit an error: {message}" with
+  a `Fix it` text button that fills the composer with "Fix this error:
+  {message}" in Change it mode. At most one note per version.
+- **Unknown app** (404): the home page's paper and glows, a 64px blob with
+  its eyes shifted down 3px, "No app lives here" (`--t-h1` at 32px), "Want to
+  make one?" 15 ink-2, and the maker bar.
+- **Reconnecting:** an ink pill at the top center of the shell, 28px,
+  12.5/600 surface text, "Reconnecting" with the three dots; pending messages
+  stay at 60% opacity with a 12px clock glyph. Disappears on reconnect without
+  fanfare.
+- **Empty gallery:** a single tile with a dashed `--line-2` edge, "Nothing's
+  busy yet. Make the first thing." 14 ink-2, centered.
 
 ### 6.11 Mobile (viewport below 768px; 768 to 1023 uses mobile room with desktop home)
 
-- **Tap targets** are at least 44px. Hover states become press states.
-- **Home:** hero 56px on 3 lines, crowd hidden, maker bar stacks the field
-  over a full-width "Make it", starters scroll horizontally, gallery is one
-  column with 4:3 thumbnails.
+- **Tap targets** are at least 44px. Hover states become press states (sunk
+  fill on press).
+- **Home:** headline 34px on 2 lines, the Right now feed moves under the
+  starters and shows 3 rows, the maker bar stacks the field over a full-width "Make
+  it", starters scroll horizontally, the gallery is one column with 4:3
+  thumbnails.
 - **Clean link:** the capsule sits bottom-right 12px in, faces max 3, "Change
   it" without the KeyCap; dragging snaps to the four corners and tucking works
-  on left and right edges. The toast spans the width minus 24px.
-- **Room = bottom sheet** over the app (the app stays visible and usable
-  above it): cream, top `--line-heavy`, top radius 28, a 44x5 ink grab
-  handle. Three detents: **peek** 132px (the latest card or message and the
-  composer), **half** 55vh, **full** 92vh. Drag between detents with velocity
-  (a flick moves one detent), 320ms `--squish`. Opening from the capsule goes
-  to half; focusing the composer goes to full; the keyboard pushes the sheet,
-  never covers the composer (`visualViewport`).
-- **Timeline** on mobile is a horizontal bead strip inside the sheet, between
-  the stream and the composer, at half and full detents; tapping a bead opens
-  the peek as a small card above the strip.
-- **Picking:** starting a pick collapses the sheet to peek; the banner sits
-  at the top of the app; a tap picks.
-- **Picker and fork** become full-screen sheets: picker left column becomes a
-  top block (face 120px, name field, suggestions), the grid is 4 columns of
-  64px faces, the footer buttons are sticky at the bottom.
+  on left and right edges. The toast spans the width minus 24px and truncates
+  the summary.
+- **Room = bottom sheet** over the app (the app stays visible and usable above
+  it): paper, top radius 20, `--shadow-lg`, a 36x4 `--line-2` grab handle.
+  Three detents: **peek** 132px (the latest card or message and the composer),
+  **half** 55vh, **full** 92vh. Drag 1:1 between detents with velocity (a
+  flick moves one detent), settling over 320ms `--ease-out`; a swipe down
+  from the peek closes. A tap on the handle or the peek row goes to half.
+  The keyboard pushes the sheet and never covers the composer
+  (`visualViewport`).
+- **One rule for the detents: when the point is the app, the sheet gets out
+  of its way.** See it, View, Back to live, Undo and Restore drop the sheet
+  to peek and put the keyboard away; so does sending your own change, so it
+  lands in view. Opening from the capsule, and focusing the composer from the
+  peek, go to half, which keeps the app in view above the keyboard. Only a
+  drag up, or scrolling back through the stream by hand, goes to full.
+- **The peek row** (between the handle and the composer, 13.5/400, one line,
+  ellipsis), in this order: viewing the past ("You're viewing v12, nobody
+  else is" + `Back to live`); a change on its way (spinner, "Building v15" in
+  `--t-card`, the timer in mono ink-3, the current step in ink-2; or the
+  blob and "2nd in line" with the request) with the `BuildLine` along the
+  sheet's top edge; the latest build if it is the live version (a green
+  check, "v15" + "is live" in green, the summary, an `Undo` text button, the
+  green line); a failed build ("!" + "Didn't make it" + why); else the latest
+  message (face, name 650, text) or system note.
+- **Timeline** on mobile is a horizontal strip inside the sheet, between the
+  stream and the composer, at the full detent only (the capsule has no
+  timeline button on a phone), always in face mode
+  (scrolling); tapping a face opens the peek as a small card above the strip.
+- **Picking:** starting a pick collapses the sheet to peek; the banner sits at
+  the top of the app; a tap picks.
+- **Picker and fork** become full-screen sheets: the picker's left column
+  becomes a top block (face 96px, name field, suggestions), the grid is 4
+  columns of 64px faces, and the footer buttons are sticky at the bottom.
 
 ## 7. Link unfurls (Open Graph)
 
-The OG image is 1200x630: butter with the dot grid, the app's still (or the
-blob if none) in a paper frame with `--line-heavy` and `--pop-lg` on the
-left two thirds, and on the right the app name in display 64, "38 people
-changed it · v14", and up to five faces of recent changers. Title: the app
-name. Description: the latest version summary.
+Until the composed image below exists, the link preview's `og:image` is the
+live version's still itself (6.1), with `summary_large_image`.
+
+The OG image is 1200x630: paper with the home page's glows, the app's still
+(or a 120px blob on surface if none) in a surface frame with radius 20 and
+`--shadow-lg` on the left 60%, and on the right the app name in voice 700
+56px ink, "38 people changed it · v14" in 24px ink-2, and up to five 56px
+faces of recent changers. Title: the app name. Description: the latest
+version summary. `theme-color` is `#f7f3ec`; the favicon is the blob.
 
 ## 8. Building it in React
 
 - Plain CSS: `src/styles/tokens.css` (section 4), `src/styles/base.css`
-  (reset, body font, focus ring, reduced-motion rules, `.keys`), and one CSS
-  module per component. No Tailwind in the playground.
-- Motion: CSS transitions and keyframes for everything listed here; the
-  only JS-driven motion is the sheet drag, the capsule drag/snap and the
-  iframe cross-fade, all with the tokens above.
+  (reset, body font and smoothing, `.voice` and `.mono`, focus ring,
+  reduced-motion rules, `.keys`), and one CSS module per component. No
+  Tailwind in the playground.
+- Motion: CSS transitions and keyframes for everything listed here; the only
+  JS-driven motion is the sheet drag, the capsule drag and settle, the build
+  line's progress and the iframe cross-fade, all with the tokens above.
 - Shared parts in `src/ui/` (section 5). Surfaces in `src/surfaces/`
-  (`Home`, `AppPage`, `Room`, `Stream`, `BuildCard`, `Composer`, `Timeline`,
-  `Peek`, `ViewingPill`, `ForkModal`, `CharacterPicker`, `Capsule`, `Toast`).
+  (`Home`, `AppPage`, `Room`, `RoomHeader`, `Stream`, `ChatMessage`,
+  `BuildCard`, `Composer`, `Timeline`, `ViewingPill`, `ForkModal`,
+  `CharacterPicker`, `Capsule`, `NotFound`).
 - Every color, radius, shadow, duration and easing comes from a token. A
   number in a component's CSS that is not a token is either a one-off layout
   measure listed in this document or a bug.

@@ -1,6 +1,9 @@
 // Versions: immutable snapshots of an app's files, numbered 1..n per app.
-// Appending one is the only way the live version moves, and the only writer
-// is commitVersion, so numbering, counts and the live pointer cannot drift.
+// An app made from a request starts on v0, the starter: scaffolding for
+// Clay's first build, never shown as a version, so the maker's first build
+// is v1. Appending one is the only way the live
+// version moves, and the only writer is commitVersion, so numbering, counts
+// and the live pointer cannot drift.
 import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -9,7 +12,7 @@ import { byteLength, contentTypeFor, fileSetProblems, manifestHash, needsTranspi
 import { sha256Hex } from "./lib/identity";
 import { TIMELINE_MAX } from "./lib/limits";
 import { transpile } from "./lib/transpile";
-import { cleanSummary, nextVersionNumber, type VersionKind } from "./lib/versions";
+import { cleanSummary, nextVersionNumber, restoreSummary, undoneBy, type VersionKind } from "./lib/versions";
 import { takeRate } from "./limits";
 import { appBySlug, postSystemNote, requireApp } from "./model";
 import { publicVisitors, requireVisitor, type PublicVisitor } from "./visitors";
@@ -24,6 +27,11 @@ export type VersionMeta = {
   parent_number?: number;
   request_message_id?: Id<"messages">;
   source?: { app_id: Id<"apps">; version: number };
+  undid?: number;
+  spotlight?: string;
+  try_it?: string;
+  /** The starter under a first build: v0, never shown. */
+  scaffold?: boolean;
 };
 
 type FileRow = { path: string; hash: string; served_hash?: string };
@@ -47,7 +55,8 @@ async function commitVersion(
   files: FileRow[],
   stats: { bytes: number; files_hash: string },
 ): Promise<{ version_id: Id<"versions">; number: number }> {
-  const number = nextVersionNumber(app.version_count);
+  const number = meta.scaffold ? 0 : nextVersionNumber(app.version_count);
+  const parent_number = meta.parent_number ?? (app.version_count > 0 ? app.live_version : undefined);
   const now = Date.now();
   const firstByAuthor = !(await ctx.db
     .query("versions")
@@ -56,12 +65,15 @@ async function commitVersion(
   const version_id = await ctx.db.insert("versions", {
     app_id: app._id,
     number,
-    ...(app.version_count > 0 ? { parent_number: meta.parent_number ?? app.live_version } : {}),
+    ...(parent_number !== undefined ? { parent_number } : {}),
     kind: meta.kind,
     summary: cleanSummary(meta.summary),
     author_id: meta.author_id,
     ...(meta.request_message_id ? { request_message_id: meta.request_message_id } : {}),
     ...(meta.source ? { source: meta.source } : {}),
+    ...(meta.undid ? { undid: meta.undid } : {}),
+    ...(meta.spotlight ? { spotlight: meta.spotlight } : {}),
+    ...(meta.try_it ? { try_it: meta.try_it } : {}),
     file_count: files.length,
     bytes: stats.bytes,
     files_hash: stats.files_hash,
@@ -120,6 +132,12 @@ export async function versionByNumber(ctx: QueryCtx, appId: Id<"apps">, number: 
     .unique();
 }
 
+/** A version people can see, view, restore or fork from: any but v0. */
+export async function shownVersion(ctx: QueryCtx, appId: Id<"apps">, number: number): Promise<Doc<"versions"> | null> {
+  const row = await versionByNumber(ctx, appId, number);
+  return row && row.number > 0 ? row : null;
+}
+
 /** A version as the timeline shows it: no file contents. */
 export type TimelineEntry = {
   number: number;
@@ -129,36 +147,51 @@ export type TimelineEntry = {
   author: PublicVisitor | null;
   request_message_id: Id<"messages"> | null;
   source: { app_id: Id<"apps">; version: number } | null;
+  /** restore: the version it undid, or null when it brought an older one back. */
+  undid: number | null;
+  /** build: the element its change is about, and what to try. */
+  spotlight: string | null;
+  try_it: string | null;
   file_count: number;
   created_at: number;
-  /** How many apps were forked from this version. */
-  fork_count: number;
+  /** The apps forked from this version, oldest first, each with who forked it. */
+  forks: ForkOf[];
 };
 
-/** Forks of `appId`, counted by the version each one came from. */
-async function forkCounts(ctx: QueryCtx, appId: Id<"apps">): Promise<Map<number, number>> {
+export type ForkOf = { slug: string; name: string; by: PublicVisitor | null };
+
+/** Forks of `appId`, grouped by the version each one came from. */
+async function forksByVersion(ctx: QueryCtx, appId: Id<"apps">): Promise<Map<number, ForkOf[]>> {
   const forks = await ctx.db
     .query("apps")
     .withIndex("by_forked_from", (q) => q.eq("forked_from.app_id", appId))
     .take(TIMELINE_MAX);
-  const counts = new Map<number, number>();
-  for (const f of forks) counts.set(f.forked_from!.version, (counts.get(f.forked_from!.version) ?? 0) + 1);
-  return counts;
+  const people = await publicVisitors(ctx, forks.map((f) => f.created_by));
+  const by = new Map<number, ForkOf[]>();
+  for (const f of forks) {
+    const n = f.forked_from!.version;
+    by.set(n, [...(by.get(n) ?? []), { slug: f.slug, name: f.name, by: people.get(f.created_by) ?? null }]);
+  }
+  return by;
 }
 
 async function timelineEntries(ctx: QueryCtx, appId: Id<"apps">, rows: Doc<"versions">[]): Promise<TimelineEntry[]> {
-  const [people, forks] = await Promise.all([publicVisitors(ctx, rows.map((r) => r.author_id)), forkCounts(ctx, appId)]);
-  return rows.map((r) => ({
+  const [people, forks] = await Promise.all([publicVisitors(ctx, rows.map((r) => r.author_id)), forksByVersion(ctx, appId)]);
+  return rows.filter((r) => r.number > 0).map((r) => ({
     number: r.number,
-    parent_number: r.parent_number ?? null,
+    // A first build's parent is the starter, which nobody goes back to.
+    parent_number: r.parent_number || null,
     kind: r.kind,
     summary: r.summary,
     author: people.get(r.author_id) ?? null,
     request_message_id: r.request_message_id ?? null,
     source: r.source ?? null,
+    undid: r.undid ?? null,
+    spotlight: r.spotlight ?? null,
+    try_it: r.try_it ?? null,
     file_count: r.file_count,
     created_at: r.created_at,
-    fork_count: forks.get(r.number) ?? 0,
+    forks: forks.get(r.number) ?? [],
   }));
 }
 
@@ -181,33 +214,45 @@ export const get = query({
   args: { ...visitorArgs, app_id: v.id("apps"), number: v.number() },
   handler: async (ctx, args): Promise<TimelineEntry | null> => {
     await requireVisitor(ctx, args);
-    const row = await versionByNumber(ctx, args.app_id, args.number);
+    const row = await shownVersion(ctx, args.app_id, args.number);
     return row ? (await timelineEntries(ctx, args.app_id, [row]))[0] : null;
   },
 });
 
 /** Restore: a new live version holding version `number`'s files, announced
- *  in the room. Nothing rewinds; the versions in between stay on the timeline. */
+ *  in the room. Nothing rewinds; the versions in between stay on the timeline.
+ *  `expected_live` is the live version the person was looking at when they
+ *  chose: if anything went live since, the restore is refused rather than
+ *  silently undoing it too, which also makes a double Undo a no-op. */
 export const restore = mutation({
-  args: { ...visitorArgs, app_id: v.id("apps"), number: v.number() },
+  args: { ...visitorArgs, app_id: v.id("apps"), number: v.number(), expected_live: v.number() },
   handler: async (ctx, args): Promise<{ number: number }> => {
     const visitor = await requireVisitor(ctx, args);
     const app = await requireApp(ctx, args.app_id);
+    if (app.live_version !== args.expected_live) fail("invalid", `The app changed: v${app.live_version} is live now. Look again before you restore.`);
     if (args.number === app.live_version) fail("invalid", `v${args.number} is already live.`);
-    const from = (await versionByNumber(ctx, app._id, args.number)) ?? fail("not_found", `v${args.number} does not exist.`);
+    const from = (await shownVersion(ctx, app._id, args.number)) ?? fail("not_found", `v${args.number} does not exist.`);
+    const live = await versionByNumber(ctx, app._id, app.live_version);
+    const undone = live && undoneBy(live, from.number) !== null ? live : null;
     await takeRate(ctx, "restore", visitor._id);
     await takeRate(ctx, "appRestore", app._id);
     const { number } = await appendCopiedVersion(
       ctx,
       app,
-      { kind: "restore", summary: from.summary, author_id: visitor._id, source: { app_id: app._id, version: from.number } },
+      {
+        kind: "restore",
+        summary: restoreSummary(undone, from),
+        author_id: visitor._id,
+        source: { app_id: app._id, version: from.number },
+        ...(undone ? { undid: undone.number } : {}),
+      },
       from,
     );
     await postSystemNote(
       ctx,
       app._id,
-      { type: "restore", visitor_id: visitor._id, from_version: from.number, version: number },
-      `v${from.number} restored as v${number}`,
+      { type: "restore", visitor_id: visitor._id, from_version: from.number, version: number, ...(undone ? { undid: undone.number } : {}) },
+      undone ? `v${undone.number} undone as v${number}` : `v${from.number} brought back as v${number}`,
     );
     return { number };
   },

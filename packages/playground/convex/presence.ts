@@ -5,13 +5,13 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { HERE_MAX } from "./lib/limits";
 import { PRESENCE, heartbeatPatch, isTyping, presenceCutoff } from "./lib/presence";
+import { takeRate } from "./limits";
 import { requireApp } from "./model";
 import { publicVisitors, requireVisitor, type PublicVisitor } from "./visitors";
 import { visitorArgs } from "./validators";
 
-/** A visitor's seen_at is a coarse "last around", written at most this often. */
-const VISITOR_SEEN_WRITE_MS = 5 * 60_000;
 const PRUNE_BATCH = 200;
 
 export function presenceRow(ctx: QueryCtx, appId: Id<"apps">, visitorId: Id<"visitors">) {
@@ -21,12 +21,14 @@ export function presenceRow(ctx: QueryCtx, appId: Id<"apps">, visitorId: Id<"vis
     .unique();
 }
 
-/** The presence rows of an app still inside the stale window, earliest arrival first. */
+/** The presence rows of an app still inside the stale window, earliest
+ *  arrival first: the HERE_MAX most recently seen. */
 export async function hereRows(ctx: QueryCtx, appId: Id<"apps">, now = Date.now()): Promise<Doc<"presence">[]> {
   const rows = await ctx.db
     .query("presence")
     .withIndex("by_app_seen", (q) => q.eq("app_id", appId).gt("last_seen", presenceCutoff(now)))
-    .collect();
+    .order("desc")
+    .take(HERE_MAX);
   return rows.sort((a, b) => a.joined_at - b.joined_at);
 }
 
@@ -65,13 +67,14 @@ export const heartbeat = mutation({
     const now = Date.now();
     const viewing = args.viewing_version ?? null;
     const row = await presenceRow(ctx, args.app_id, visitor._id);
+    const patch = row && heartbeatPatch(row, viewing, now);
+    // Only beats that write count: an idle room's beats stay free.
+    if (!row || patch) await takeRate(ctx, "presence", visitor._id);
     if (!row) {
       await insertPresence(ctx, args.app_id, visitor._id, now, { viewing_version: viewing });
-    } else {
-      const patch = heartbeatPatch(row, viewing, now);
-      if (patch) await ctx.db.patch(row._id, row.last_seen > presenceCutoff(now) ? patch : { ...patch, joined_at: now });
+    } else if (patch) {
+      await ctx.db.patch(row._id, row.last_seen > presenceCutoff(now) ? patch : { ...patch, joined_at: now });
     }
-    if (now - visitor.seen_at >= VISITOR_SEEN_WRITE_MS) await ctx.db.patch(visitor._id, { seen_at: now });
     return null;
   },
 });
@@ -83,7 +86,10 @@ export const setTyping = mutation({
     const visitor = await requireVisitor(ctx, args);
     if (args.typing) {
       const row = await presenceRow(ctx, args.app_id, visitor._id);
-      if (row) await ctx.db.patch(row._id, { typing_until: Date.now() + PRESENCE.typingMs });
+      if (row) {
+        await takeRate(ctx, "presence", visitor._id);
+        await ctx.db.patch(row._id, { typing_until: Date.now() + PRESENCE.typingMs });
+      }
     } else {
       await stopTyping(ctx, args.app_id, visitor._id);
     }
@@ -101,10 +107,11 @@ export const leave = mutation({
   },
 });
 
+/** Who is here, without when they last beat: a beat that only renews
+ *  someone's place re-runs this query to the same answer, so nobody's page
+ *  wakes for it. */
 export type HereEntry = {
   visitor: PublicVisitor;
-  joined_at: number;
-  last_seen: number;
   /** Compare with your clock: typing until then unless a later write says otherwise. */
   typing_until: number;
   viewing_version: number | null;
@@ -120,7 +127,7 @@ export const here = query({
     return rows.flatMap((r) => {
       const visitor = people.get(r.visitor_id);
       return visitor
-        ? [{ visitor, joined_at: r.joined_at, last_seen: r.last_seen, typing_until: r.typing_until, viewing_version: r.viewing_version }]
+        ? [{ visitor, typing_until: r.typing_until, viewing_version: r.viewing_version }]
         : [];
     });
   },

@@ -1,11 +1,13 @@
-/* Reset, body font, focus ring, shared keyframes, reduced motion, .keys. */
+/* Reset, body font, type faces, focus ring, shared keyframes, reduced motion, .keys. */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
 body {
-  font: 500 15px/1.4 var(--ui);
+  font: var(--t-body);
+  font-feature-settings: "tnum" 0;
   color: var(--ink);
-  background: var(--butter);
+  background: var(--paper);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   -webkit-tap-highlight-color: transparent;
 }
 button, input, textarea { font: inherit; color: inherit; }
@@ -14,49 +16,53 @@ a { color: inherit; }
 img { display: block; }
 :focus { outline: none; }
 :focus-visible { box-shadow: var(--focus); }
+/* Text fields sit inside wrappers that ring on :focus-within. */
+input:focus-visible, textarea:focus-visible { box-shadow: none; }
+::placeholder { color: var(--ink-3); opacity: 1; }
+::selection { background: var(--accent-soft); color: var(--ink); }
 
-.keys { display: inline-flex; align-items: center; gap: var(--s1); }
+.voice { font-family: var(--voice); font-variation-settings: var(--voice-axes); }
+.mono { font-family: var(--mono); font-variation-settings: var(--mono-axes); }
+.tnum { font-feature-settings: "tnum" 1; }
+
+.keys { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
 .keys kbd {
-  background: var(--paper) !important;
-  color: var(--ink) !important;
-  border: var(--line-thin) !important;
-  border-bottom-width: 4px !important;
-  border-radius: var(--r-xs) !important;
-  font: 700 11px var(--mono) !important;
-  padding: 1px 6px;
-  min-width: 22px;
-  height: auto;
-  line-height: 1.5;
-  display: inline-block;
-  text-align: center;
+  display: inline-grid !important; place-items: center; min-width: 18px; height: 18px !important; padding: 0 4px !important;
+  border: 0 !important; border-radius: var(--r-xs) !important; background: var(--surface) !important;
+  box-shadow: inset 0 0 0 1px var(--line-2), inset 0 -1.5px 0 var(--line-2) !important;
+  color: var(--ink-2) !important; font: 500 10.5px/1 var(--mono) !important;
+  font-variation-settings: var(--mono-axes) !important;
+}
+.keys .label { margin-left: 3px; }
+.on-dark .keys kbd {
+  background: rgba(255, 255, 255, .14) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22) !important;
+  color: rgba(255, 255, 255, .85) !important;
 }
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-@keyframes arrive { from { opacity: 0; transform: translateY(12px) scale(.96); } }
-@keyframes pop { from { transform: scale(.9); } }
-@keyframes wobble {
-  0%, 100% { transform: rotate(0) scale(1); }
-  30% { transform: rotate(-4deg) scale(1.03, .97); }
-  60% { transform: rotate(3deg) scale(.98, 1.02); }
-}
-@keyframes bob { 50% { translate: 0 -8px; } }
+/* Arrive: fade and rise 6px. Leave: fade. */
+@keyframes arrive { from { opacity: 0; transform: translateY(6px); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes breathe { 50% { transform: scale(.6); opacity: .5; } }
 @keyframes blink { 50% { opacity: 0; } }
-@keyframes march { to { background-position: 28px 0; } }
-@keyframes orbit { to { transform: rotate(360deg); } }
-@keyframes hop { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-4px); } }
-@keyframes ring-mint { from { box-shadow: 0 0 0 0 var(--mint); } to { box-shadow: 0 0 0 14px transparent; } }
-@keyframes pulse-ring { from { box-shadow: 0 0 0 0 var(--mint); } to { box-shadow: 0 0 0 7px transparent; } }
-@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } }
+@keyframes hop { 40% { transform: translateY(-4px); } }
 
+/* Reduced motion: nothing slides, hops or scales; what arrives fades in, at
+   150ms, once (DESIGN 4.4.7). Every keyframe that moves has a twin here, or
+   in its module's own reduce block (keyframes.test.ts checks). */
 @media (prefers-reduced-motion: reduce) {
+  @keyframes arrive { from { opacity: 0; } }
+  @keyframes spin { to { opacity: 1; } }
+  @keyframes breathe { 50% { opacity: .5; } }
+  @keyframes hop { 40% { opacity: 1; } }
   *, *::before, *::after {
-    animation-iteration-count: 1 !important;
     animation-duration: 150ms !important;
+    animation-iteration-count: 1 !important;
+    animation-timing-function: linear !important;
     transition-duration: 150ms !important;
-    transition-property: opacity !important;
   }
 }
-/* Text fields sit inside styled wrappers that ring on :focus-within; a field
-   that stands alone sets its own ring. */
-input:focus-visible, textarea:focus-visible { box-shadow: none; }

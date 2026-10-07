@@ -1,37 +1,46 @@
-.wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.stream { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--s4); }
-.items { display: flex; flex-direction: column; gap: var(--s3); min-height: 100%; justify-content: flex-end; }
-.items > [data-flash] { animation: ring-mint 900ms var(--glide); }
-.more { display: grid; place-items: center; padding: var(--s2); }
+.wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; container: stream / size; }
+.stream { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 6px 0 10px; }
+.items { display: flex; flex-direction: column; min-height: 100%; justify-content: flex-end; }
+.log { display: flex; flex-direction: column; }
+.log > [data-flash] { animation: reveal 900ms var(--ease-out); }
+@keyframes reveal { from { outline: 2px solid var(--line-2); outline-offset: -1px; } to { outline: 2px solid transparent; outline-offset: -1px; } }
+.more { display: grid; place-items: center; padding: var(--s2); color: var(--ink-3); }
 
 .newPill {
-  position: absolute; bottom: var(--s3); left: 50%; translate: -50% 0; z-index: 2;
-  background: var(--butter); border: var(--line); border-radius: var(--r-pill); box-shadow: var(--pop-xs);
-  padding: 4px 14px; font: 800 13px var(--ui); animation: arrive var(--t-arrive) var(--squish);
+  position: absolute; bottom: 10px; left: 50%; translate: -50% 0; z-index: 2; height: 28px; padding: 0 12px;
+  border-radius: var(--r-pill); background: var(--ink); color: var(--surface); box-shadow: var(--shadow-md);
+  font: 600 12.5px/1 var(--ui); font-feature-settings: "tnum" 1; animation: global(arrive) var(--t-arrive) var(--ease-out);
 }
 
-.typing { display: flex; align-items: center; gap: var(--s2); font: 700 13px var(--ui); color: var(--ink-soft); animation: fade-up var(--t-quick) var(--glide); }
-.typingFaces { display: inline-flex; }
-.typingFaces > span + span { margin-left: -8px; }
-
-.empty { margin: auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--s2); padding: var(--s6) var(--s2); }
-.quiet { font: 400 17px/1 var(--display); margin-top: var(--s3); }
-.emptyHint { font: 600 13px/1.4 var(--ui); color: var(--ink-soft); max-width: 280px; }
-.ideas { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s2); margin-top: var(--s3); }
-.ideas > button { font-size: 13px; padding: 5px 12px; }
-
-.lineage {
-  display: flex; flex-direction: column; gap: 4px; text-decoration: none;
-  background: var(--pool); color: var(--paper); border: var(--line-thick); border-radius: var(--r-lg);
-  box-shadow: var(--pop-sm); padding: 12px 14px; transition: transform var(--t-press), box-shadow var(--t-press);
+.typing {
+  display: flex; align-items: center; gap: 8px; padding: 6px 18px 2px; font: 400 12.5px/1.3 var(--ui); color: var(--ink-3);
+  animation: global(arrive) var(--t-quick) var(--ease-out);
 }
-.lineage:hover { transform: translate(-1px, -1px); box-shadow: var(--pop); }
-.lineage b { font: 800 15px var(--ui); display: flex; align-items: center; gap: 6px; }
-.lineage b svg { width: 16px; height: 16px; }
-.lineage span { font: 600 13px var(--ui); }
+.typingFaces { --ring: var(--paper); display: inline-flex; }
+.typingFaces > span { box-shadow: 0 0 0 2px var(--paper); }
+.typingFaces > span + span { margin-left: -5px; }
 
-.latest {
-  flex: none; display: flex; align-items: center; gap: var(--s2); padding: 2px 16px 8px;
-  font: 600 14px var(--ui); white-space: nowrap; overflow: hidden;
+.empty { margin: auto 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: var(--s6) 18px; }
+.quiet { margin-top: var(--s3); font: 650 16px/1.2 var(--voice); font-variation-settings: var(--voice-axes); }
+.emptyHint { max-width: 280px; font: 400 13px/1.45 var(--ui); color: var(--ink-2); }
+.ideas { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: var(--s3); }
+/* A short stream (the sheet at half) keeps the words and ideas, not the blob. */
+@container stream (max-height: 280px) {
+  .empty { padding-top: var(--s3); padding-bottom: var(--s3); }
+  .empty > :first-child { display: none; }
+  .quiet { margin-top: 0; }
 }
-.latest span { overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); }
+
+/* The origin pins to the top of the scroll; everything after it stays
+   anchored to the bottom. */
+.origin {
+  display: grid; grid-template-columns: 28px 1fr; column-gap: 10px; row-gap: 1px; align-items: start;
+  margin-bottom: auto; padding: 10px 18px 14px;
+}
+.origin > :first-child { grid-row: span 2; margin-top: 1px; }
+.originHead { font: 400 13.5px/1.35 var(--ui); color: var(--ink-2); }
+.originHead b { font-weight: 600; color: var(--ink); }
+.originWhen { margin-left: 6px; font: var(--t-meta); color: var(--ink-3); }
+.originLink { color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.originLink:hover { text-decoration-color: var(--ink-3); }
+.originDetail { font: 400 13px/1.4 var(--ui); color: var(--ink-2); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

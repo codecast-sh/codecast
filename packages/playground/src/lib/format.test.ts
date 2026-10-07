@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { ago, chatTime, clock, ordinal, plural, truncate } from "./format";
+import { ago, chatTime, clock, forkName, ordinal, plural } from "./format";
+import { clipLine, clipText } from "../../convex/lib/text";
 
 const NOW = new Date("2026-10-06T16:00:00").getTime();
 const MIN = 60_000;
@@ -32,7 +33,16 @@ describe("format", () => {
     expect(plural(1, "person", "people")).toBe("1 person");
     expect(plural(7, "person", "people")).toBe("7 people");
     expect(plural(2, "version")).toBe("2 versions");
-    expect(truncate("Wave hello to everyone", 10)).toBe("Wave hell…");
-    expect(truncate("short", 10)).toBe("short");
+    expect(clipText("Wave hello to everyone", 10)).toBe("Wave hell…");
+    expect(clipText("Wave  hello", 6)).toBe("Wave…");
+    expect(clipText("short", 10)).toBe("short");
+    expect(clipLine("  two\n  lines ", 20)).toBe("two lines");
+  });
+
+  test("a fork's suggested name", () => {
+    expect(forkName("Guestbook", "Flicker", 40)).toBe("Guestbook, Flicker's take");
+    expect(forkName("Guestbook, Flicker's take", "Flicker", 40)).toBe("Guestbook, Flicker's take");
+    expect(forkName("Guestbook, Reed's take", "Flicker", 40)).toBe("Guestbook, Flicker's take");
+    expect(forkName("A very long app name about tiny planets", "Juniper", 40)).toBe("A very long app name, Juniper's take");
   });
 });

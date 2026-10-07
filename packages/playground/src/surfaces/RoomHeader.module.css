@@ -1,32 +1,72 @@
-.head {
-  display: flex; align-items: center; gap: var(--s3); padding: 16px 18px 14px;
-  background: var(--butter); border-bottom: var(--line); flex: none;
+.head { flex: none; padding: 14px 14px 12px 18px; background: var(--paper); border-bottom: var(--hair); }
+.compact { padding: 8px 10px 8px 18px; }
+.compact .name { font-size: 17px; }
+.compactLive { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font: 600 12.5px/1 var(--ui); color: var(--live); font-feature-settings: "tnum" 1; }
+.compact .name { flex: 0 1 auto; }
+.compact .stack { margin-right: 0; }
+.top { display: flex; align-items: center; gap: var(--s2); }
+.name {
+  flex: 1; min-width: 0; font: var(--t-h3); font-variation-settings: var(--voice-axes);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.compact { padding: 6px 14px 12px; }
-.titleCol { flex: 1; min-width: 0; }
-.name { font: 400 24px/1.1 var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; font: 700 13px var(--ui); }
-.ver { font: 700 11px/1.5 var(--mono); background: var(--ink); color: var(--butter); padding: 1px 7px; border-radius: 7px; }
-.lineage { color: var(--pool); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 2px; }
-.tools { display: flex; align-items: center; gap: var(--s2); flex: none; }
-.stack { display: inline-flex; padding: 2px; border-radius: var(--r-sm); margin-right: 4px; }
-.you { border-radius: var(--r-sm); transition: transform var(--t-press); }
-.you:hover { transform: translate(-1px, -1px) rotate(-4deg); }
+.stack {
+  --ring: var(--paper); display: inline-flex; align-items: center; gap: 7px; min-width: 0; padding: 3px 6px 3px 3px; border-radius: var(--r-md);
+  transition: background var(--t-quick);
+}
+.names { min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12.5px/1 var(--ui); color: var(--ink-2); }
+.divider { flex: none; width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
+.stack:hover { background: var(--sunk); --ring: var(--sunk); }
+.you { display: inline-flex; border-radius: 9px; padding: 1px; transition: transform var(--t-press); }
+.you:active { transform: translateY(1px); transition-duration: 0s; }
+.sub { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; font: 400 12.5px/1.3 var(--ui); color: var(--ink-2); }
+.sep { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.ver { color: var(--live); font-weight: 600; margin-left: -2px; }
+.making { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
+.tnum { font-feature-settings: "tnum" 1; }
+.lineage { color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.lineage:hover { color: var(--ink); text-decoration-color: var(--ink-3); }
 
-.people { list-style: none; display: flex; flex-direction: column; gap: var(--s2); max-height: 320px; overflow: auto; }
-.people li { display: flex; align-items: center; gap: var(--s2); font: 700 14px var(--ui); }
-.you2 { font: 600 12px var(--ui); color: var(--ink-soft); }
-.status { margin-left: auto; font: 600 12px var(--ui); color: var(--ink-soft); }
+.people { list-style: none; display: flex; flex-direction: column; max-height: 320px; overflow: auto; }
+.people li { display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 8px; font: 600 13px var(--ui); }
+.you2 { font: var(--t-meta); color: var(--ink-3); }
+.status { margin-left: auto; font: var(--t-meta); color: var(--ink-3); }
+.lookWith {
+  margin: 0 -6px 0 auto; padding: 4px 6px; border-radius: var(--r-sm); font: var(--t-meta); color: var(--ink-3);
+  transition: background var(--t-quick), color var(--t-quick);
+}
+.lookLabel { color: var(--ink-2); font-weight: 600; }
+.lookWith:hover { background: var(--sunk); color: var(--ink-2); }
+.lookWith:hover .lookLabel { color: var(--ink); }
 
-.links { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.links { list-style: none; display: flex; flex-direction: column; }
 .links button {
-  width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
-  border: var(--line); border-radius: var(--r-md); background: var(--cream);
-  transition: transform var(--t-press), box-shadow var(--t-press);
+  width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px;
+  transition: background var(--t-quick);
 }
-.links button:hover { background: var(--butter); box-shadow: var(--pop-xs); transform: translate(-1px, -1px); }
-.links b { font: 800 13px var(--ui); }
-.links code { font: 700 11px var(--mono); color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 1023px) {
-  .name { font-size: 20px; }
+.links button:hover { background: var(--sunk); }
+.links b { font: var(--t-label); }
+.copied { color: var(--live); }
+.links code {
+  font: var(--t-mono); font-variation-settings: var(--mono-axes); color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+.home {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2);
+  border-radius: var(--r-sm); padding: 2px 4px; margin-right: -4px; transition: color var(--t-quick), background var(--t-quick);
+}
+.home:hover { color: var(--ink); background: var(--sunk); }
+
+.report { margin-top: 4px; padding-top: 4px; border-top: var(--hair); }
+.report button { gap: 2px; }
+.report span { font: var(--t-meta); color: var(--ink-3); }
+.report button:disabled { cursor: default; }
+.report button:disabled:hover { background: none; }
+.makeRow { margin-top: 4px; padding-top: 4px; border-top: var(--hair); }
+.makeLink {
+  display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 8px; font: var(--t-label); text-decoration: none;
+  transition: background var(--t-quick);
+}
+.makeLink:hover { background: var(--sunk); }
+/* You are in the past: said in ink, as the viewing frame and pill are. */
+.viewingV { font-weight: 600; color: var(--ink); }

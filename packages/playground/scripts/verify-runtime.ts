@@ -15,20 +15,14 @@ import type { Id } from "../convex/_generated/dataModel";
 import { MAX_DATA_DOC_BYTES } from "../convex/lib/limits";
 import { livePath, versionPath } from "../convex/lib/runPaths";
 import { SDK_PATH } from "../convex/lib/runtime";
+import { RUNTIME_TOKEN_TTL_MS, runtimeTokenForSecret } from "../convex/lib/identity";
 import { PROTOCOL, initFor } from "../runtime/protocol";
+import { mintVisitor } from "../src/lib/mint";
+import { CLOUD, ROOT, SITE, check, failed } from "./lib/harness";
 
-const ROOT = join(import.meta.dir, "..");
-const env = await Bun.file(join(ROOT, ".env.local")).text();
-const CLOUD = /^CONVEX_URL=(\S+)/m.exec(env)![1];
-const SITE = CLOUD.replace(/\.convex\.cloud$/, ".convex.site");
 const HARNESS_PORT = 5319;
 
 const client = new ConvexHttpClient(CLOUD);
-let failures = 0;
-function check(name: string, ok: boolean, detail?: unknown) {
-  if (!ok) failures++;
-  console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok || detail === undefined ? "" : `: ${JSON.stringify(detail)}`}`);
-}
 
 async function refusal(run: () => Promise<unknown>): Promise<string | null> {
   try {
@@ -43,10 +37,9 @@ const get = (path: string, headers: Record<string, string> = {}) => fetch(SITE +
 
 // ---- Two visitors, one app --------------------------------------------------
 
-const a = await client.mutation(api.visitors.register, {});
-const b = await client.mutation(api.visitors.register, {});
-const credsA = { visitor_id: a.visitor_id, secret: a.secret };
-const credsB = { visitor_id: b.visitor_id, secret: b.secret };
+const register = (args: { secret: string; nonce: number }) => client.mutation(api.visitors.register, args);
+const credsA = await mintVisitor(register);
+const credsB = await mintVisitor(register);
 const app = await client.mutation(api.apps.create, { ...credsA, name: "Runtime check" });
 const other = await client.mutation(api.apps.create, { ...credsA, name: "Other app" });
 console.log(`app ${app.slug} (${app.app_id})`);
@@ -104,30 +97,33 @@ console.log(`app ${app.slug} (${app.app_id})`);
 // ---- Data layer ---------------------------------------------------------------
 
 const appId = app.app_id as Id<"apps">;
-const tokenA = (await initFor(credsA, appId, a.visitor, {} as never)).token;
-const tokenB = (await initFor(credsB, appId, b.visitor, {} as never)).token;
-const rtA = { visitor_id: a.visitor_id, app_id: appId, token: tokenA };
-const rtB = { visitor_id: b.visitor_id, app_id: appId, token: tokenB };
+const [meA, meB] = await Promise.all([credsA, credsB].map(async (c) => (await client.query(api.visitors.me, c))!.visitor));
+const tokenA = await runtimeTokenForSecret(credsA.secret, appId, 1);
+const tokenB = await runtimeTokenForSecret(credsB.secret, appId, 1);
+const rtA = { visitor_id: credsA.visitor_id, app_id: appId, token: tokenA };
+const rtB = { visitor_id: credsB.visitor_id, app_id: appId, token: tokenB };
 
 {
   check("a token from another app is refused", (await refusal(() => client.query(api.runtime.me, { ...rtA, app_id: other.app_id }))) === "unauthorized");
   check("another visitor's token is refused", (await refusal(() => client.query(api.runtime.me, { ...rtA, token: tokenB }))) === "unauthorized");
-  check("the visitor secret is not a runtime token", (await refusal(() => client.query(api.runtime.me, { ...rtA, token: a.secret }))) === "unauthorized");
-  check("me is the token's visitor", (await client.query(api.runtime.me, rtA)).id === a.visitor_id);
+  check("the visitor secret is not a runtime token", (await refusal(() => client.query(api.runtime.me, { ...rtA, token: credsA.secret }))) === "unauthorized");
+  const expired = await runtimeTokenForSecret(credsA.secret, appId, 1, Date.now() - RUNTIME_TOKEN_TTL_MS - 1_000);
+  check("an expired token is refused", (await refusal(() => client.query(api.runtime.me, { ...rtA, token: expired }))) === "unauthorized");
+  check("me is the token's visitor", (await client.query(api.runtime.me, rtA)).id === credsA.visitor_id);
 
   const id = await client.mutation(api.runtime.insert, { ...rtA, collection: "guestbook", value: { text: "hi", _by: "forged" } });
   await client.mutation(api.runtime.insert, { ...rtB, collection: "guestbook", value: { text: "hello" } });
   let docs = await client.query(api.runtime.list, { ...rtB, collection: "guestbook" });
-  check("docs list oldest first with their authors stamped by the server", docs.length === 2 && docs[0]._by?.id === a.visitor_id && docs[1]._by?.id === b.visitor_id && docs[0].text === "hi", docs);
+  check("docs list oldest first with their authors stamped by the server", docs.length === 2 && docs[0]._by?.id === credsA.visitor_id && docs[1]._by?.id === credsB.visitor_id && docs[0].text === "hi", docs);
 
   await client.mutation(api.runtime.update, { ...rtB, id, patch: { likes: 1 } });
   docs = await client.query(api.runtime.list, { ...rtA, collection: "guestbook" });
-  check("update merges and keeps the author", docs[0].likes === 1 && docs[0].text === "hi" && docs[0]._by?.id === a.visitor_id);
+  check("update merges and keeps the author", docs[0].likes === 1 && docs[0].text === "hi" && docs[0]._by?.id === credsA.visitor_id);
 
   const big = { s: "x".repeat(MAX_DATA_DOC_BYTES) };
   check("an oversized doc is refused", (await refusal(() => client.mutation(api.runtime.insert, { ...rtA, collection: "guestbook", value: big }))) === "invalid");
   check("a bad collection name is refused", (await refusal(() => client.query(api.runtime.list, { ...rtA, collection: "~shared" }))) === "invalid");
-  const foreign = await client.mutation(api.runtime.insert, { ...rtA, app_id: other.app_id, token: (await initFor(credsA, other.app_id, a.visitor, {} as never)).token, collection: "x", value: {} });
+  const foreign = await client.mutation(api.runtime.insert, { ...rtA, app_id: other.app_id, token: await runtimeTokenForSecret(credsA.secret, other.app_id, 1), collection: "x", value: {} });
   check("another app's doc cannot be touched", (await refusal(() => client.mutation(api.runtime.remove, { ...rtA, id: foreign }))) === "not_found");
 
   await client.mutation(api.runtime.remove, { ...rtA, id });
@@ -139,15 +135,27 @@ const rtB = { visitor_id: b.visitor_id, app_id: appId, token: tokenB };
   check("a write against a stale rev is refused with the current value", first.ok && !stale.ok && stale.value === 1 && stale.rev === 1, { first, stale });
   const retry = await client.mutation(api.runtime.setShared, { ...rtB, key: "waves", value: 2, base_rev: 1 });
   const shared = await client.query(api.runtime.shared, { ...rtA, key: "waves" });
-  check("the retried updater lands: two waves, none lost", retry.ok && shared?.value === 2 && shared.by?.id === b.visitor_id, shared);
+  check("the retried updater lands: two waves, none lost", retry.ok && shared?.value === 2 && shared.by?.id === credsB.visitor_id, shared);
+
+  for (const round of [1, 2, 2]) await client.mutation(api.runtime.insert, { ...rtA, collection: "strokes", value: { round } });
+  const scoped = await client.query(api.runtime.list, { ...rtA, collection: "strokes", where: { round: 2 } });
+  check("a where read returns only matching docs", scoped.length === 2 && scoped.every((d) => d.round === 2), scoped);
+  const cleared = await client.mutation(api.runtime.removeWhere, { ...rtB, collection: "strokes", where: { round: 2 } });
+  const left = await client.query(api.runtime.list, { ...rtA, collection: "strokes" });
+  check("removeWhere deletes the matching docs in one write", cleared.removed === 2 && !cleared.more && left.length === 1 && left[0].round === 1, { cleared, left });
+
+  await client.mutation(api.runtime.setShared, { ...rtA, key: "word", mine: true, value: "otter" });
+  const mineA = await client.query(api.runtime.shared, { ...rtA, key: "word", mine: true });
+  const mineB = await client.query(api.runtime.shared, { ...rtB, key: "word", mine: true });
+  check("a private value reads back for its owner only", mineA?.value === "otter" && mineB === null, { mineA, mineB });
 
   await client.mutation(api.runtime.setState, { ...rtA, state: { x: 0.5 } });
   const people = await client.query(api.runtime.people, rtB);
-  check("presence state is shared", people.some((p) => p.visitor.id === a.visitor_id && p.state?.x === 0.5), people);
+  check("presence state is shared", people.some((p) => p.visitor.id === credsA.visitor_id && p.state?.x === 0.5), people);
 }
 
-console.log(failures ? `\n${failures} failed` : "\nall runtime checks passed");
-if (failures) process.exit(1);
+console.log(failed() ? `\n${failed()} failed` : "\nall runtime checks passed");
+if (failed()) process.exit(1);
 
 // ---- Stand-in shell for the browser check ------------------------------------
 
@@ -156,7 +164,14 @@ if (process.argv.includes("--serve")) {
   const avatarDir = join(ROOT, "../web/components/org/avatars");
   const dataUrl = async (k: string) => `data:image/webp;base64,${Buffer.from(await Bun.file(join(avatarDir, `${k}.webp`)).arrayBuffer()).toString("base64")}`;
   const avatars = Object.fromEntries(await Promise.all(AVATAR_KEYS.map(async (k) => [k, await dataUrl(k)])));
-  const init = await initFor(credsA, fresh.app_id, a.visitor, avatars as never);
+  const init = await initFor({
+    creds: credsA,
+    appId: fresh.app_id,
+    version: 1,
+    visitor: meA,
+    avatars: avatars as never,
+    app: { name: "Browser check", link: `http://localhost:${HARNESS_PORT}/`, room: `http://localhost:${HARNESS_PORT}/?room` },
+  });
   const page = `<!doctype html><meta charset="utf-8"><title>Runtime harness</title>
 <style>body{margin:0}iframe{border:0;width:100vw;height:100vh;display:block}</style>
 <iframe src="${SITE}${versionPath(fresh.slug, 1)}"></iframe>
@@ -174,5 +189,5 @@ if (process.argv.includes("--serve")) {
 </script>`;
   Bun.serve({ port: HARNESS_PORT, fetch: () => new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8" } }) });
   console.log(`\nstand-in shell: http://localhost:${HARNESS_PORT}/  (app ${fresh.slug}, ${fresh.app_id})`);
-  console.log(`verify data with: visitor ${a.visitor_id}, token ${init.token}`);
+  console.log(`verify data with: visitor ${credsA.visitor_id}, token ${init.token}`);
 }

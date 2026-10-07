@@ -2,16 +2,18 @@
 // model run, and how it ended. run.ts feeds it a job and reports the result;
 // tests drive it with scripted model turns.
 import { defineTool, runAssistant, Type, type RunAssistantOptions, type RunResult } from "@platform/agent";
-import { BUILD_CEILING_USD, BUILD_DEADLINE_MS, BUILD_FINISH_ATTEMPTS } from "../lib/limits";
-import { BUILDER_MODEL, BUILDER_SYSTEM, finishProblems } from "../prompts";
+import { BUILD_CEILING_USD, BUILD_DEADLINE_MS, BUILD_FINISH_ATTEMPTS, SPOTLIGHT_MAX, TRY_MAX } from "../lib/limits";
+import { clipLine } from "../lib/text";
+import { BUILDER_EFFORT, BUILDER_MODEL, BUILDER_SYSTEM, finishProblems } from "../prompts";
 import { Draft, DraftError, draftProblems } from "./draft";
-import { Narration, stepLine, type Outcome } from "./rules";
+import { clayModel, type Effort } from "./model";
+import { Narration, fileName, stepLine, thinkingLine, type Outcome } from "./rules";
 
 const about = Type.Optional(Type.String({ description: "A few plain words for the people watching, e.g. \"Adding a reset button\"." }));
 
 /** The agent's file tools over `draft`. finish and decline settle `outcome`
  *  and end the run. */
-function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outcome) => void, changed: () => void) {
+function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outcome) => void, changed: () => void, checked: (ms: number) => void) {
   let finishTries = 0;
   // A tool's mistake goes back to the model as its error; anything else is a bug.
   const step = (fn: () => string) => {
@@ -40,7 +42,7 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
       risk: "read",
       run: async ({ path }) =>
         step(() => {
-          narration.say(`Looking at ${path}`);
+          narration.now(`Reading ${fileName(path)}`);
           return draft.read(path);
         }),
     }),
@@ -53,7 +55,7 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
         step(() => {
           const verb = draft.has(path) ? "Rewriting" : "Creating";
           const out = draft.write(path, content);
-          narration.say(stepLine(verb, path, about));
+          narration.change(path, stepLine(verb, path, about));
           return out;
         }),
     }),
@@ -72,7 +74,7 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
       run: async ({ path, old_text, new_text, all, about }) =>
         step(() => {
           const out = draft.edit(path, old_text, new_text, all);
-          narration.say(stepLine("Editing", path, about));
+          narration.change(path, stepLine("Editing", path, about));
           return out;
         }),
     }),
@@ -84,7 +86,7 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
       run: async ({ path, about }) =>
         step(() => {
           const out = draft.remove(path);
-          narration.say(stepLine("Removing", path, about));
+          narration.change(path, stepLine("Removing", path, about));
           return out;
         }),
     }),
@@ -93,7 +95,21 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
       description:
         "Checks the draft and, when it passes, puts it live for everyone. Call it alone, after your edits, with a one-line summary of what changed.",
       parameters: Type.Object({
-        summary: Type.String({ description: "Present tense, for people: \"Adds a reset button under the score\"." }),
+        summary: Type.String({ description: "Present tense, for people: \"Adds a reset button under the score\". On a first build, what the app is: \"A shared grocery list for the flat\"." }),
+        name: Type.Optional(
+          Type.String({ description: "A new app's first build only: the app's name, as its own title shows it (\"Flat groceries\")." }),
+        ),
+        spotlight: Type.Optional(
+          Type.String({
+            description:
+              "A CSS selector for the one element on screen this change is about, as your code renders it (\"#score\", \".bass-frog\"), so the room sees where it landed. Leave it out when the change has no single place.",
+          }),
+        ),
+        try: Type.Optional(
+          Type.String({
+            description: "When people only notice the change by doing something, a few words telling them what to do: \"Tap any note\". Leave it out otherwise.",
+          }),
+        ),
         ideas: Type.Optional(
           Type.Array(Type.String(), {
             description: "Three short changes people might ask for next, a few words each, specific to this app: \"make the frogs harmonize\".",
@@ -101,9 +117,11 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
         ),
       }),
       risk: "write",
-      run: async ({ summary, ideas }) => {
+      run: async ({ summary, name, ideas, spotlight, try: tryIt }) => {
         if (!draft.changed()) throw new Error("Nothing has changed yet. Make the change first, or call decline if you will not.");
+        const start = Date.now();
         const problems = draftProblems(draft.snapshot());
+        checked(Date.now() - start);
         if (problems.length) {
           finishTries++;
           const left = BUILD_FINISH_ATTEMPTS - finishTries;
@@ -113,7 +131,9 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
           throw new Error(finishProblems(problems, left));
         }
         narration.say("Checked, going live");
-        settle({ kind: "finished", summary, ...(ideas?.length ? { ideas } : {}) });
+        const where = clipLine(spotlight ?? "", SPOTLIGHT_MAX);
+        const tryLine = clipLine(tryIt ?? "", TRY_MAX).replace(/[.!]+$/, "");
+        settle({ kind: "finished", summary, ...(name ? { name } : {}), ...(ideas?.length ? { ideas } : {}), ...(where ? { spotlight: where } : {}), ...(tryLine ? { try: tryLine } : {}) });
         return "Accepted. It is going live now.";
       },
     }),
@@ -135,12 +155,6 @@ function stoppedOutcome(result: RunResult): Outcome {
   return { kind: "stopped", reason: result.reason, ...(result.error ? { error: result.error } : {}) };
 }
 
-/** The newest line of a streamed model message, for the card. */
-function lastLine(text: string): string {
-  const lines = text.trim().split("\n").filter(Boolean);
-  return lines[lines.length - 1] ?? "";
-}
-
 export type AgentRun = {
   draft: Draft;
   narration: Narration;
@@ -151,23 +165,34 @@ export type AgentRun = {
   /** Aborting stops the run; the run aborts it itself once a tool settles. */
   controller: AbortController;
   model?: RunAssistantOptions["model"];
+  /** How hard Clay thinks; a change's by default. */
+  effort?: Effort;
   apiKeys?: RunAssistantOptions["apiKeys"];
   sessionId?: string;
 };
 
 /** Run Clay on the draft until finish or decline settles it, or the run
  *  stops (time, money, an error). The draft holds the result. */
-export async function runBuilder(run: AgentRun): Promise<{ outcome: Outcome; costUsd: number }> {
+export async function runBuilder(run: AgentRun): Promise<{ outcome: Outcome; costUsd: number; checkMs: number }> {
   let outcome: Outcome | null = null;
+  let checkMs = 0;
   const settle = (o: Outcome) => {
     outcome ??= o;
     run.controller.abort();
   };
   const result = await runAssistant({
-    model: run.model ?? BUILDER_MODEL,
+    model:
+      run.model ??
+      clayModel(BUILDER_MODEL, {
+        effort: run.effort ?? BUILDER_EFFORT.change,
+        onThinking: (summary) => {
+          run.narration.now(thinkingLine(summary));
+          run.onStep();
+        },
+      }),
     system: BUILDER_SYSTEM,
     history: [{ role: "user", content: run.prompt }],
-    tools: builderTools(run.draft, run.narration, settle, run.onStep),
+    tools: builderTools(run.draft, run.narration, settle, run.onStep, (ms) => (checkMs += ms)),
     gate: () => "allow",
     ceilingUsd: BUILD_CEILING_USD,
     deadlineMs: BUILD_DEADLINE_MS,
@@ -175,9 +200,9 @@ export async function runBuilder(run: AgentRun): Promise<{ outcome: Outcome; cos
     signal: run.controller.signal,
     ...(run.sessionId ? { sessionId: run.sessionId } : {}),
     onText: (text, { messageUuid }) => {
-      run.narration.stream(messageUuid, lastLine(text));
+      run.narration.stream(messageUuid, text);
       run.onStep();
     },
   });
-  return { outcome: (outcome as Outcome | null) ?? stoppedOutcome(result), costUsd: result.costUsd };
+  return { outcome: (outcome as Outcome | null) ?? stoppedOutcome(result), costUsd: result.costUsd, checkMs };
 }

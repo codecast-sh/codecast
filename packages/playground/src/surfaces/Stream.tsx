@@ -1,30 +1,42 @@
 // The room's stream (DESIGN 6.3, 6.4): chat, build cards and notes in time
 // order, sticking to the bottom while you are near it, with a "3 new" pill
-// when you are not, older pages loading as you scroll up.
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+// when you are not, older pages loading as you scroll up. A version sits
+// where it landed, not where it was asked for, so the versions read in
+// order top to bottom.
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MessageView } from "../../convex/messages";
 import { useIdentity } from "../lib/identity";
+import { inLandingOrder } from "../lib/streamOrder";
+import { nameFor, restoreSaid } from "../lib/versionCopy";
+import { chatTime } from "../lib/format";
 import { useNow } from "../lib/useNow";
+import { useReducedMotion } from "../lib/useMedia";
 import { Blob } from "../ui/Blob";
-import { Chip } from "../ui/Chips";
 import { Dots } from "../ui/Dots";
 import { Face } from "../ui/Face";
-import { ArrowRightIcon } from "../ui/icons";
-import { appUrl, navigate } from "../lib/router";
-import { useAppState } from "./appState";
-import { BuildCard, WaitingCard } from "./BuildCard";
+import { appUrl } from "../lib/router";
+import { Link } from "../ui/Link";
+import { useAppState, useHereState, useStream } from "./appState";
+import { BuildCard, RestoreCard, WaitingCard } from "./BuildCard";
+import { IdeaChips } from "./IdeaChips";
 import { ChatMessage, SystemNote } from "./ChatMessage";
 import s from "./Stream.module.css";
 
 const GROUP_MS = 2 * 60_000;
 const STICK_PX = 80;
 const LOAD_MORE_PX = 160;
+/** A scroll this soon after a wheel or touch is the reader's own. */
+const HAND_MS = 250;
 
-export function Stream({ latestOnly = false }: { latestOnly?: boolean }) {
-  const { stream, here, reveal, setReveal } = useAppState();
+/** `onBrowse`: the reader scrolled back into history by hand. */
+export const Stream = memo(function Stream({ onBrowse }: { onBrowse?: () => void }) {
+  const { reveal, setReveal } = useAppState();
+  const stream = useStream();
+  const here = useHereState();
   const { me } = useIdentity();
   const now = useNow(30_000);
-  const items = stream.messages;
+  const behavior = useReducedMotion() ? "auto" : "smooth";
+  const items = useMemo(() => inLandingOrder(stream.messages), [stream.messages]);
 
   // Two people here sharing a name get their animal after it.
   const sharedNames = useMemo(() => {
@@ -36,11 +48,14 @@ export function Stream({ latestOnly = false }: { latestOnly?: boolean }) {
   }, [here.people, stream.messages]);
 
   const scroller = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
   const [unseen, setUnseen] = useState(0);
   const lastId = useRef<string | null>(null);
   const firstId = useRef<string | null>(null);
   const heightBefore = useRef(0);
+  const lastTop = useRef(0);
+  const handAt = useRef(0);
 
   // Keep the view where the reader left it as items arrive at either end.
   useLayoutEffect(() => {
@@ -66,22 +81,25 @@ export function Stream({ latestOnly = false }: { latestOnly?: boolean }) {
     heightBefore.current = el.scrollHeight;
   });
 
-  // The typing row and growing build cards keep a bottom-stuck view stuck.
+  // The typing row and growing build cards keep a bottom-stuck view stuck:
+  // any row that grows grows the list.
   useEffect(() => {
     const el = scroller.current;
-    if (!el) return;
+    if (!el || !list.current) return;
     const ro = new ResizeObserver(() => {
       if (atBottom.current) el.scrollTop = el.scrollHeight;
       heightBefore.current = el.scrollHeight;
     });
-    for (const child of Array.from(el.children)) ro.observe(child);
+    ro.observe(list.current);
     return () => ro.disconnect();
-  });
+  }, []);
 
   const onScroll = () => {
     const el = scroller.current!;
     atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX;
     if (atBottom.current) setUnseen(0);
+    if (onBrowse && el.scrollTop < lastTop.current && performance.now() - handAt.current < HAND_MS) onBrowse();
+    lastTop.current = el.scrollTop;
     if (el.scrollTop < LOAD_MORE_PX && stream.status === "CanLoadMore") {
       heightBefore.current = el.scrollHeight;
       stream.loadMore();
@@ -89,7 +107,7 @@ export function Stream({ latestOnly = false }: { latestOnly?: boolean }) {
   };
 
   const toBottom = () => {
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
+    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior });
     setUnseen(0);
   };
 
@@ -98,26 +116,35 @@ export function Stream({ latestOnly = false }: { latestOnly?: boolean }) {
     if (!reveal) return;
     const el = scroller.current?.querySelector<HTMLElement>(`[data-id="${reveal}"]`);
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.scrollIntoView({ block: "center", behavior });
     el.dataset.flash = "1";
     setTimeout(() => delete el.dataset.flash, 900);
     setReveal(null);
-  }, [reveal, items, setReveal]);
-
-  if (latestOnly) return <LatestLine item={items.at(-1)} />;
+  }, [reveal, items, setReveal, behavior]);
 
   const loading = stream.status === "LoadingFirstPage";
   const exhausted = stream.status === "Exhausted";
   return (
     <div className={s.wrap}>
-      <div className={s.stream} ref={scroller} onScroll={onScroll} role="log" aria-live="polite">
-        <div className={s.items}>
-          {exhausted && <LineageCard />}
+      <BuildStatus />
+      <div
+        className={s.stream}
+        ref={scroller}
+        onScroll={onScroll}
+        onWheel={() => (handAt.current = performance.now())}
+        onTouchMove={() => (handAt.current = performance.now())}
+      >
+        <div className={s.items} ref={list}>
+          {exhausted && <OriginRow />}
           {!loading && items.length === 0 && <EmptyRoom />}
-          {stream.status === "LoadingMore" && <div className={s.more}><Dots /></div>}
-          {items.map((m, i) => (
-            <Fragment key={m.id}>{renderItem(m, items[i - 1], now, me.id, sharedNames)}</Fragment>
-          ))}
+          {stream.status === "LoadingMore" && <div className={s.more} aria-hidden><Dots /></div>}
+          {/* Only new rows are news: older pages arrive while it is busy,
+              and the typing row sits outside it. */}
+          <div className={s.log} role="log" aria-label="Room messages" aria-relevant="additions" aria-busy={stream.status === "LoadingMore" || loading}>
+            {items.map((m, i) => (
+              <Fragment key={m.id}>{renderItem(m, items[i - 1], now, me.id, sharedNames)}</Fragment>
+            ))}
+          </div>
           <TypingRow />
         </div>
       </div>
@@ -128,12 +155,33 @@ export function Stream({ latestOnly = false }: { latestOnly?: boolean }) {
       )}
     </div>
   );
+});
+
+/** What Clay is doing, said once per change for screen readers. The log
+ *  announces new rows; a card changing state in place is said here. The
+ *  latest row that moves the app, restores included, decides it. */
+function BuildStatus() {
+  const { app, versionByNumber } = useAppState();
+  const { messages } = useStream();
+  const { me } = useIdentity();
+  const latest = messages.findLast((m) => m.build || m.note?.type === "restore");
+  const b = latest?.build;
+  const note = latest?.note?.type === "restore" ? latest.note : null;
+  const text =
+    note ? `v${note.version} is live. ${restoreSaid(note, versionByNumber, me.id)}`
+    : !b ? ""
+    : b.status === "queued" ? "A change is in line"
+    : b.status === "building" ? `Clay is building v${b.result_version ?? app.version_count + 1}`
+    : b.status === "live" ? `v${b.result_version} is live`
+    : `Didn't make it. ${b.error ?? ""}`;
+  return <p className="sr-only" role="status">{text}</p>;
 }
 
 const itemKey = (m: MessageView) => m.id;
 const mine = (m: MessageView, meId: string) => m.author?.id === meId;
 
 function renderItem(m: MessageView, p: MessageView | undefined, now: number, meId: string, sharedNames: Set<string>) {
+  if (m.note?.type === "restore") return <RestoreCard m={m} note={m.note} />;
   if (m.kind === "system") return <SystemNote m={m} />;
   if (m.build) return <BuildCard m={m} b={m.build} />;
   if (m.kind === "request") return <WaitingCard m={m} />;
@@ -144,16 +192,16 @@ function renderItem(m: MessageView, p: MessageView | undefined, now: number, meI
 }
 
 function TypingRow() {
-  const { here } = useAppState();
+  const here = useHereState();
   const t = here.typers;
   if (t.length === 0) return null;
   const text =
     t.length === 1 ? `${t[0].name} is typing` : t.length === 2 ? `${t[0].name} and ${t[1].name} are typing` : `${t.length} people are typing`;
   return (
-    <div className={s.typing}>
+    <div className={s.typing} aria-hidden>
       <span className={s.typingFaces}>
         {t.slice(0, 3).map((p) => (
-          <Face key={p.id} person={p} size={24} />
+          <Face key={p.id} person={p} size={16} />
         ))}
       </span>
       {text}
@@ -162,66 +210,48 @@ function TypingRow() {
   );
 }
 
-/** Until Clay has written ideas for this app. */
-const STARTER_IDEAS = ["make it dark", "add a sound when someone clicks", "add a scoreboard"];
-
 function EmptyRoom() {
-  const { app, composer } = useAppState();
-  const ideas = app.ideas.length ? app.ideas : STARTER_IDEAS;
   return (
     <div className={s.empty}>
-      <Blob size={64} wobble />
+      <Blob size={44} />
       <p className={s.quiet}>It's quiet in here.</p>
       <p className={s.emptyHint}>Say what you'd change. Clay builds it and everyone sees it.</p>
-      <div className={s.ideas}>
-        {ideas.map((idea) => (
-          <Chip
-            key={idea}
-            onClick={() => {
-              composer.setMode("change");
-              composer.setText(idea);
-              composer.focus();
-            }}
-          >
-            {idea}
-          </Chip>
-        ))}
-      </div>
+      <IdeaChips className={s.ideas} />
     </div>
   );
 }
 
-/** At the top of a fork's stream: where it came from (DESIGN 6.8). */
-function LineageCard() {
-  const { app } = useAppState();
+/** The top of every room: who made the app, when, and what it started as,
+ *  or for a fork, where it came from (DESIGN 6.8). It sits at the top of the
+ *  scroll while the log stays anchored to the bottom. */
+function OriginRow() {
+  const { app, timeline } = useAppState();
+  const { me } = useIdentity();
+  const { messages } = useStream();
+  const now = useNow(60_000);
   const from = app.forked_from;
-  if (!from) return null;
+  const by = app.created_by;
+  // A made app's first words are its maker's first request, in their words;
+  // the starter under it is only scaffolding, so it never speaks for them.
+  // While Clay makes it, the card below already says what they asked.
+  const firstAsk = timeline?.find((v) => v.kind === "build")?.request_message_id;
+  const said = from ? null : (firstAsk && messages.find((m) => m.id === firstAsk)?.body);
+  const firstShown = timeline?.find((v) => v.kind !== "seed");
+  const detail = from ? "Same code, a copy of the data. Change anything." : (said ?? firstShown?.summary);
   return (
-    <a className={s.lineage} href={appUrl(from.slug)} onClick={(e) => {
-      e.preventDefault();
-      navigate(appUrl(from.slug));
-    }}>
-      <b>
-        Forked from {from.name} v{from.version} <ArrowRightIcon />
-      </b>
-      <span>Same code, a copy of the data. Change anything.</span>
-    </a>
-  );
-}
-
-/** The sheet at its peek: one line for the latest thing that happened. */
-function LatestLine({ item: m }: { item: MessageView | undefined }) {
-  if (!m) return <p className={s.latest}>It's quiet in here.</p>;
-  if (m.note?.type === "error") return <p className={s.latest}><Blob size={20} /> The app hit an error</p>;
-  const b = m.build;
-  const text = b
-    ? b.status === "live" ? `v${b.result_version} is live` : b.status === "failed" ? "Didn't make it" : b.status === "building" ? "Clay is building" : `In line: ${m.body}`
-    : m.body;
-  return (
-    <p className={s.latest}>
-      {m.author ? <Face person={m.author} size={24} /> : <Blob size={20} />}
-      <b>{m.author?.name ?? "Clay"}</b>
-      <span>{text}</span>
-    </p>
+    <div className={s.origin}>
+      {by ? <Face person={by} size={28} /> : <Blob size={28} />}
+      <p className={s.originHead}>
+        <b>{by ? nameFor(by, me.id) : "Clay"}</b> {from ? "forked" : "made"} <b>{app.name}</b>
+        {from && (
+          <>
+            {" "}from{" "}
+            <Link className={s.originLink} to={appUrl(from.slug)}>{from.name} v{from.version}</Link>
+          </>
+        )}
+        <time className={s.originWhen}>{chatTime(app.created_at, now)}</time>
+      </p>
+      {detail && <p className={s.originDetail}>{said ? <q>{detail}</q> : detail}</p>}
+    </div>
   );
 }

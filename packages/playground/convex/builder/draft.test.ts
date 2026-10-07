@@ -56,7 +56,7 @@ describe("draftProblems", () => {
 
   test("a syntax error names the file", () => {
     const d = seed();
-    d.edit("src/App.jsx", "<main className=\"stage\">", "<main className=\"stage\"");
+    d.edit("src/App.jsx", "<main>", "<main");
     const problems = draftProblems(d.snapshot());
     expect(problems.length).toBe(1);
     expect(problems[0]).toStartWith("src/App.jsx:");

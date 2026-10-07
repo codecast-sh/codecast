@@ -48,6 +48,14 @@ export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-export function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+/** A fork's suggested name, "{app}, {you}'s take", within `max` characters.
+ *  A fork of a fork keeps one "take", and a long app name gives way on a word
+ *  boundary rather than cutting your name. */
+export function forkName(app: string, you: string, max: number): string {
+  const take = `, ${you}'s take`;
+  let base = app.replace(/, [^,]+'s take$/, "");
+  if (base.length + take.length > max) {
+    base = base.slice(0, Math.max(0, max - take.length)).replace(/[\s,]+\S*$/, "") || base.slice(0, max - take.length);
+  }
+  return `${base}${take}`.slice(0, max);
 }

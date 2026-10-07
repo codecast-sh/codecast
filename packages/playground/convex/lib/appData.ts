@@ -2,12 +2,19 @@
 // names, document values, shared values and presence state. App code is
 // untrusted, so every value is checked here before it reaches the database,
 // and each check says what is wrong in words an app author can act on.
-import { DATA_NAME_MAX, MAX_DATA_DEPTH, MAX_DATA_DOC_BYTES, MAX_PRESENCE_STATE_BYTES } from "./limits";
+import { DATA_NAME_MAX, DATA_WHERE_FIELDS_MAX, MAX_DATA_DEPTH, MAX_DATA_DOC_BYTES, MAX_PRESENCE_STATE_BYTES } from "./limits";
 import { byteLength } from "./files";
 
 /** useShared values live in this collection, one doc per key. App
  *  collection names cannot start with "~", so it never collides. */
 export const SHARED_COLLECTION = "~shared";
+/** useMine values: one doc per visitor per key, keyed "<visitor id>:<key>"
+ *  by the server from the caller's token, so no app can read another
+ *  person's. */
+export const MINE_COLLECTION = "~mine";
+
+/** A read's or removeWhere's filter: top-level fields equal to these values. */
+export type Where = Record<string, string | number | boolean | null>;
 
 /** Fields the SDK adds to every doc it hands an app; never stored. */
 export const RESERVED_FIELDS = ["_id", "_by", "_at"] as const;
@@ -73,4 +80,24 @@ export function checkShared(value: unknown): Checked<unknown> {
 export function checkPresenceState(value: unknown): Checked<Record<string, unknown>> {
   if (!isPlainObject(value)) return { ok: false, problem: "presence state must be a plain object" };
   return checkJson(value, MAX_PRESENCE_STATE_BYTES, "presence state");
+}
+
+/** A `where`: a plain object of up to DATA_WHERE_FIELDS_MAX plain field
+ *  names, each matched against a string, number, boolean or null. */
+export function checkWhere(where: unknown): Checked<Where> {
+  if (!isPlainObject(where)) return { ok: false, problem: "where must be a plain object, like { round: 3 }" };
+  const entries = Object.entries(where);
+  if (entries.length > DATA_WHERE_FIELDS_MAX) return { ok: false, problem: `where matches at most ${DATA_WHERE_FIELDS_MAX} fields` };
+  for (const [k, v] of entries) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(k)) return { ok: false, problem: `where: "${k}" is not a field name it can match` };
+    if (!(v === null || ["string", "boolean"].includes(typeof v) || (typeof v === "number" && Number.isFinite(v)))) {
+      return { ok: false, problem: `where: ${k} must be a string, number, boolean or null` };
+    }
+  }
+  return { ok: true, value: where as Where, size: 0 };
+}
+
+/** Whether a doc matches a `where`, the way the server filters. */
+export function matchesWhere(doc: Record<string, unknown>, where: Where | null | undefined): boolean {
+  return !where || Object.entries(where).every(([k, v]) => doc[k] === v);
 }

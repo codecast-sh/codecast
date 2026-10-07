@@ -6,11 +6,11 @@ import s from "./NotFound.module.css";
 export function NotFound() {
   return (
     <div className={s.page}>
-      <Blob size={120} down />
+      <Blob size={64} down />
       <h1 className={s.title}>No app lives here</h1>
       <p className={s.sub}>Want to make one?</p>
       <div className={s.maker}>
-        <MakerBar />
+        <MakerBar autoFocus />
       </div>
     </div>
   );

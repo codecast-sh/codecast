@@ -9,25 +9,42 @@ import type { MessageView } from "../../convex/messages";
 import { errorData } from "../lib/errors";
 import { useIdentity } from "../lib/identity";
 import { ElementChip } from "../ui/Chips";
-import { ArrowUpIcon, PickIcon } from "../ui/icons";
-import { Keys, MOD } from "../ui/Keys";
+import { useDesktop } from "../lib/useMedia";
+import { ArrowUpIcon, CheckIcon, ChevronDownIcon, PickIcon } from "../ui/icons";
+import { Keys, MOD, MOD_ARIA } from "../ui/Keys";
+import { Popover } from "../ui/Popover";
+import { Segmented } from "../ui/Segmented";
 import { useToast } from "../ui/Toast";
-import { freshFocus, useAppState, type Mode } from "./appState";
+import { load, save } from "../lib/storage";
+import { freshFocus, useAppState, useComposer, useStream, type Mode } from "./appState";
+import { IdeaChips } from "./IdeaChips";
 import s from "./Composer.module.css";
 
-const MODES: { mode: Mode; label: string; placeholder: string }[] = [
-  { mode: "auto", label: "Auto", placeholder: "Say anything, or ask for a change" },
-  { mode: "change", label: "Change it", placeholder: "What should change?" },
-  { mode: "chat", label: "Just chat", placeholder: "Say something" },
+/** `short`: the placeholder beside the folded mode chip, one line on a phone. */
+const MODES: { mode: Mode; label: string; placeholder: string; short: string; hint: string }[] = [
+  { mode: "auto", label: "Auto", placeholder: "Say anything, or ask for a change", short: "Say anything", hint: "Clay decides whether it's a change or just chat" },
+  { mode: "change", label: "Change it", placeholder: "What should change?", short: "What should change?", hint: "Goes live for everyone" },
+  { mode: "chat", label: "Just chat", placeholder: "Say something", short: "Say something", hint: "Clay stays out of it" },
 ];
 
 const TYPING_EVERY_MS = 3_000;
 const MAX_LINES = 6;
 
+/** `compact`: the phone sheet's peek. Below desktop the mode folds into a
+ *  chip in the field, and the placeholder carries the hint. */
 export function Composer({ compact = false, onFocus }: { compact?: boolean; onFocus?: () => void }) {
-  const { app, composer, picking, setPicking } = useAppState();
+  const { app, picking, setPicking } = useAppState();
+  const folded = !useDesktop();
+  const composer = useComposer();
   const { creds, me } = useIdentity();
   const toast = useToast();
+  const stream = useStream();
+  // A newcomer's first contribution shouldn't start from a blank field:
+  // until they send something here, Clay's ideas sit above it.
+  const sentKey = `clayground.sent.${app.id}.${me.id}`;
+  const [sent, setSent] = useState(() => load(sentKey, false));
+  const newcomer = !sent && !stream.messages.some((m) => m.author?.id === me.id);
+  const ideas = !compact && newcomer && !composer.text && stream.messages.length > 0;
   const field = useRef<HTMLTextAreaElement>(null);
   const [retryAt, setRetryAt] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -90,6 +107,7 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
 
   // Change it can't build while budgets are spent or building is paused.
   const paused = composer.mode === "change" ? app.builds_paused : null;
+  const pick = (m: Mode) => !(m === "change" && app.builds_paused) && composer.setMode(m);
   const blocked = waiting || !!paused;
 
   const submit = async () => {
@@ -99,6 +117,10 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
     composer.setText("");
     composer.setElement(null);
     lastTyping.current = 0;
+    if (!sent) {
+      setSent(true);
+      save(sentKey, true);
+    }
     try {
       await send({ ...creds, app_id: app.id, body, mode: composer.mode, ...(element ? { element } : {}) });
     } catch (err) {
@@ -118,39 +140,45 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
       void submit();
     } else if ((e.metaKey || e.ctrlKey) && ["1", "2", "3"].includes(e.key)) {
       e.preventDefault();
-      composer.setMode(MODES[Number(e.key) - 1].mode);
+      pick(MODES[Number(e.key) - 1].mode);
     }
   };
 
-  const current = MODES.find((m) => m.mode === composer.mode)!;
+  const index = MODES.findIndex((m) => m.mode === composer.mode);
+  const current = MODES[index];
+  const next = MODES[(index + 1) % MODES.length];
   const seconds = Math.ceil((retryAt - now) / 1000);
 
   return (
     <div className={`${s.composer} ${compact ? s.compact : ""}`}>
-      {!compact && (
-        <div className={s.modes} role="radiogroup" aria-label="What this message is">
-          {MODES.map((m, i) => (
-            <button
-              key={m.mode}
-              role="radio"
-              aria-checked={composer.mode === m.mode}
-              className={`${s.mode} ${s[m.mode]} ${composer.mode === m.mode ? s.on : ""}`}
-              onClick={() => composer.setMode(m.mode)}
-            >
-              {m.label}
-              <span className={s.tip} role="tooltip">
-                <Keys keys={[MOD, String(i + 1)]} />
-              </span>
-            </button>
-          ))}
+      {!folded && (
+        <div className={s.modes}>
+          <Segmented
+            label="What this message is"
+            value={composer.mode}
+            onChange={pick}
+            options={MODES.map((m, i) => ({
+              value: m.mode,
+              label: m.label,
+              disabled: m.mode === "change" && !!app.builds_paused,
+              tip: m.mode === "change" && app.builds_paused ? app.builds_paused : <Keys keys={[MOD, String(i + 1)]} />,
+              keyshortcuts: `${MOD_ARIA}+${i + 1}`,
+            }))}
+          />
+        </div>
+      )}
+      {ideas && (
+        <div className={s.ideas}>
+          <span>Try</span>
+          <IdeaChips className={s.ideaRow} />
         </div>
       )}
       {waiting ? (
         <p className={s.limit} role="status">Slow down a little. Try again in {seconds}s</p>
-      ) : paused && !compact ? (
+      ) : paused ? (
         <p className={s.limit} role="status">{paused}</p>
       ) : null}
-      <div className={s.row}>
+      <div className={s.field}>
         <button
           className={`${s.pick} ${picking ? s.picking : ""}`}
           onClick={() => setPicking(!picking)}
@@ -160,13 +188,14 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
         >
           <PickIcon />
         </button>
-        <div className={s.field}>
+        {folded && <ModeChip mode={composer.mode} paused={app.builds_paused} onPick={pick} />}
+        <div className={s.text}>
           {composer.element && <ElementChip element={composer.element} onRemove={() => composer.setElement(null)} />}
           <textarea
             ref={field}
             rows={1}
             value={composer.text}
-            placeholder={current.placeholder}
+            placeholder={folded ? current.short : current.placeholder}
             aria-label={current.placeholder}
             onChange={(e) => {
               composer.setText(e.target.value);
@@ -181,7 +210,62 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
           <ArrowUpIcon />
         </button>
       </div>
-      {composer.mode === "change" && !compact && !paused && <p className={s.hint}>Goes live for everyone</p>}
+      {!folded && (
+        <p className={s.hint}>
+          <span>{current.hint}</span>
+          <span className={s.nextMode}>
+            <Keys keys={[MOD, String(MODES.indexOf(next) + 1)]}>{next.label}</Keys>
+          </span>
+        </p>
+      )}
     </div>
+  );
+}
+
+/** The mode, folded into the field on narrow screens: a chip that opens the
+ *  three modes, each with what it does. */
+function ModeChip({ mode, paused, onPick }: { mode: Mode; paused: string | null; onPick: (m: Mode) => void }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const current = MODES.find((m) => m.mode === mode)!;
+  return (
+    <>
+      <button
+        className={`${s.chip} ${s[`chip_${mode}`]}`}
+        onClick={(e) => setAnchor(anchor ? null : e.currentTarget)}
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        aria-label={`Mode: ${current.label}. Change mode`}
+      >
+        {current.label}
+        <ChevronDownIcon />
+      </button>
+      {anchor && (
+        <Popover anchor={anchor} place="above" align="start" width={280} onClose={() => setAnchor(null)} label="Mode" role="menu">
+          <ul className={s.modeMenu} role="none">
+            {MODES.map((m) => {
+              const off = m.mode === "change" && !!paused;
+              return (
+                <li key={m.mode} role="none">
+                  <button
+                    role="menuitemradio"
+                    data-autofocus={m.mode === mode || undefined}
+                    aria-checked={m.mode === mode}
+                    disabled={off}
+                    onClick={() => {
+                      onPick(m.mode);
+                      setAnchor(null);
+                    }}
+                  >
+                    <b>{m.label}</b>
+                    <span>{off ? paused : m.hint}</span>
+                    {m.mode === mode && <CheckIcon />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </Popover>
+      )}
+    </>
   );
 }

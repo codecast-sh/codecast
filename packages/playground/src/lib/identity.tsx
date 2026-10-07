@@ -1,5 +1,6 @@
-// Who is using this browser (SPEC "Identity"). The first visit mints a visitor
-// and keeps its id and secret in localStorage; every call carries both. The
+// Who is using this browser (SPEC "Identity"). The first visit makes a secret,
+// proves a little work over it (convex/lib/proof) and registers it, then
+// keeps the id and secret in localStorage; every call carries both. The
 // character comes from the backend (defaultCharacterFor until chosen), and a
 // change shows at once through an optimistic update of `me`.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -8,6 +9,7 @@ import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex
 import { api } from "../../convex/_generated/api";
 import type { PublicVisitor, VisitorCredentials } from "../../convex/visitors";
 import { convex } from "./convex";
+import { mintVisitor } from "./mint";
 import { load, save } from "./storage";
 
 const CREDS_KEY = "clayground.visitor";
@@ -43,9 +45,9 @@ const IdentityContext = createContext<Identity | null>(null);
 let registering: Promise<VisitorCredentials> | null = null;
 
 function register(): Promise<VisitorCredentials> {
-  registering ??= convex.mutation(api.visitors.register, {}).then(({ visitor_id, secret }) => {
-    save(CREDS_KEY, { visitor_id, secret }, credsStore);
-    return { visitor_id, secret };
+  registering ??= mintVisitor((args) => convex.mutation(api.visitors.register, args)).then((creds) => {
+    save(CREDS_KEY, creds, credsStore);
+    return creds;
   });
   return registering;
 }

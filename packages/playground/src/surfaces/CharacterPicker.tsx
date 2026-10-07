@@ -1,12 +1,11 @@
 // "Who are you today?" (DESIGN 6.9): any of the 24 animals and a name. Opened
 // from any you chip; the change shows everywhere at once (optimistic `me`).
-import { createContext, useCallback, useContext, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { CHARACTER_NAMES, CHARACTER_NAME_MAX, characterNameFor, cleanCharacterName } from "@codecast/shared/contracts/sessionCharacter";
 import { AVATAR_KEYS, AVATAR_LABELS, AVATAR_URLS, type AvatarKey } from "../lib/avatars";
 import { useIdentity } from "../lib/identity";
 import { useDesktop } from "../lib/useMedia";
-import { Button } from "../ui/Button";
-import { Chip } from "../ui/Chips";
+import { Button, IconButton } from "../ui/Button";
 import type { Person } from "../ui/Face";
 import { DiceIcon } from "../ui/icons";
 import { Keys } from "../ui/Keys";
@@ -42,6 +41,7 @@ function CharacterPicker({ here, onClose }: { here: Person[]; onClose: () => voi
   const [popKey, setPopKey] = useState(0);
   const grid = useRef<HTMLDivElement>(null);
   const cols = desktop ? 6 : 4;
+  const countId = useId();
 
   const worn = new Map<AvatarKey, number>();
   for (const p of here) if (p.id !== me.id) worn.set(p.avatar, (worn.get(p.avatar) ?? 0) + 1);
@@ -88,26 +88,27 @@ function CharacterPicker({ here, onClose }: { here: Person[]; onClose: () => voi
           <img src={AVATAR_URLS[avatar]} alt={AVATAR_LABELS[avatar]} />
         </span>
         <div className={s.nameRow}>
-          <label className={s.nameField}>
-            <span className="sr-only">Name</span>
+          <div className={s.nameField}>
             <input
+              aria-label="Name"
+              aria-describedby={countId}
               value={name}
               maxLength={CHARACTER_NAME_MAX}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && save()}
               spellCheck={false}
             />
-            <span className={s.count}>{name.length} / {CHARACTER_NAME_MAX}</span>
-          </label>
-          <button className={s.dice} onClick={() => setName(pick(CHARACTER_NAMES[avatar], name))} aria-label="Roll a name" title="Roll a name">
+            <span className={s.count} id={countId}>{name.length} / {CHARACTER_NAME_MAX}</span>
+          </div>
+          <IconButton label="Roll a name" size={44} className={s.dice} onClick={() => setName(pick(CHARACTER_NAMES[avatar], name))}>
             <DiceIcon />
-          </button>
+          </IconButton>
         </div>
         <div className={s.suggest}>
           {CHARACTER_NAMES[avatar].map((n) => (
-            <Chip key={n} className={`${s.suggestion} ${n === name.trim() ? s.current : ""}`} onClick={() => setName(n)}>
+            <button key={n} className={`${s.suggestion} ${n === name.trim() ? s.current : ""}`} aria-pressed={n === name.trim()} onClick={() => setName(n)}>
               {n}
-            </Chip>
+            </button>
           ))}
         </div>
         <p className={s.footnote}>Everyone sees this face next to what you say and what you change.</p>
@@ -118,27 +119,31 @@ function CharacterPicker({ here, onClose }: { here: Person[]; onClose: () => voi
           <h3 className={s.zooTitle}>24 animals</h3>
           {worn.size > 0 && (
             <span className={s.legend}>
-              <span className={s.badge}>here</span> someone in this room has it
+              <i className={s.wornDot} /> someone here has it
             </span>
           )}
         </div>
-        <div className={s.zoo} ref={grid} onKeyDown={onGridKey} role="listbox" aria-label="Animals">
-          {AVATAR_KEYS.map((k) => (
-            <button
-              key={k}
-              data-key={k}
-              role="option"
-              aria-selected={k === avatar}
-              aria-label={AVATAR_LABELS[k]}
-              title={AVATAR_LABELS[k]}
-              tabIndex={k === avatar ? 0 : -1}
-              className={`${s.animal} ${k === avatar ? s.selected : ""}`}
-              onClick={() => choose(k)}
-            >
-              <img src={AVATAR_URLS[k]} alt="" draggable={false} />
-              {worn.has(k) && <span className={s.badge}>{worn.get(k)} here</span>}
-            </button>
-          ))}
+        <div className={s.zoo} ref={grid} onKeyDown={onGridKey} role="listbox" aria-label="Animals" aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Enter">
+          {AVATAR_KEYS.map((k) => {
+            const count = worn.get(k);
+            const label = count ? `${AVATAR_LABELS[k]} · ${count} here` : AVATAR_LABELS[k];
+            return (
+              <button
+                key={k}
+                data-key={k}
+                role="option"
+                aria-selected={k === avatar}
+                aria-label={label}
+                title={label}
+                tabIndex={k === avatar ? 0 : -1}
+                className={`${s.animal} ${k === avatar ? s.selected : ""}`}
+                onClick={() => choose(k)}
+              >
+                <img src={AVATAR_URLS[k]} alt="" draggable={false} />
+                {count && <i className={s.wornDot} />}
+              </button>
+            );
+          })}
         </div>
         {desktop && (
           <p className={s.keys}>
@@ -149,8 +154,8 @@ function CharacterPicker({ here, onClose }: { here: Person[]; onClose: () => voi
         )}
         <div className={s.foot}>
           <p className={s.repeat}>Names can repeat. Faces tell you apart.</p>
-          <Button onClick={surprise}>Surprise me</Button>
-          <Button variant="make" className={s.be} onClick={save}>
+          <Button size="md" onClick={surprise}>Surprise me</Button>
+          <Button size="md" variant="ink" className={s.be} onClick={save}>
             Be {finalName}
           </Button>
         </div>

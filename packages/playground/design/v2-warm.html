@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clayground v2 · Warm</title>
+<meta name="viewport" content="width=1520">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Commissioner:wght@400..700&family=Recursive:slnt,wght,CASL,CRSV,MONO@-15..0,300..800,0..1,0..1,0..1&family=Fredoka:wght@500;600&display=swap" rel="stylesheet">
+<style>
+/* ---------- Tokens ---------- */
+:root {
+  /* neutrals: warm paper, never pure white or grey */
+  --paper: #f7f3ec;        /* panels, docks, page */
+  --surface: #fffdf9;      /* cards, inputs, popovers */
+  --sunk: #efe9df;         /* chips, tracks, pressed */
+  --line: #e5ddd0;         /* hairlines */
+  --line-2: #d4c9b8;       /* input borders, dividers that must read */
+  --ink: #2b2520;          /* text, ink buttons */
+  --ink-2: #665c53;        /* secondary text */
+  --ink-3: #988c80;        /* meta, timestamps */
+
+  /* the one accent: persimmon, for the action that makes something happen */
+  --accent: #c4491f;
+  --accent-hover: #ad3f1a;
+  --accent-soft: #f7e2d6;
+
+  /* state, used small: a dot, a label, a thin bar */
+  --live: #2d8653;
+  --live-soft: #e3f0e6;
+
+  --shadow-sm: 0 1px 2px rgba(70, 45, 20, .06), 0 0 0 1px rgba(70, 45, 20, .02);
+  --shadow-md: 0 8px 24px -10px rgba(70, 45, 20, .22), 0 2px 5px rgba(70, 45, 20, .06);
+  --shadow-lg: 0 24px 60px -18px rgba(70, 45, 20, .35), 0 4px 10px rgba(70, 45, 20, .08);
+
+  --ui: "Commissioner", system-ui, sans-serif;
+  --voice: "Recursive", var(--ui);                 /* casual axis on: names, versions, headings */
+  --mono: "Recursive", ui-monospace, monospace;    /* MONO axis on: files, elements, timers, urls */
+
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 18px;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-pop: cubic-bezier(.3, 1.35, .6, 1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font: 500 14px/1.45 var(--ui);
+  color: var(--ink);
+  background: #ebe5da;
+  -webkit-font-smoothing: antialiased;
+}
+img { display: block; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+
+.voice { font-family: var(--voice); font-variation-settings: "CASL" 1, "MONO" 0; }
+.mono { font-family: var(--mono); font-variation-settings: "CASL" 0, "MONO" 1; font-size: 11.5px; letter-spacing: 0; }
+
+/* ---------- Board (presentation only) ---------- */
+.board { width: 1520px; margin: 0 auto; padding: 56px 40px 96px; }
+.intro { display: grid; grid-template-columns: 1fr auto; gap: 40px; align-items: end; margin-bottom: 44px; }
+.intro h1 { font: 700 34px/1.1 var(--voice); font-variation-settings: "CASL" 1; letter-spacing: -.01em; }
+.intro p { color: var(--ink-2); max-width: 620px; margin-top: 10px; font-size: 15px; }
+.swatches { display: flex; gap: 10px; }
+.sw { width: 86px; }
+.sw i { display: block; height: 46px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+.sw b { display: block; font-size: 12px; font-weight: 600; margin-top: 6px; }
+.sw span { font-size: 11px; color: var(--ink-3); }
+.type-row { display: flex; gap: 28px; margin-top: 18px; color: var(--ink-2); font-size: 13px; }
+.type-row strong { color: var(--ink); font-weight: 600; }
+
+.frame-label { display: flex; align-items: baseline; gap: 12px; margin: 48px 0 12px; }
+.frame-label h2 { font: 650 16px/1.2 var(--ui); }
+.frame-label span { color: var(--ink-2); font-size: 13px; }
+
+.browser { width: 1440px; border-radius: 12px; overflow: hidden; background: var(--surface); box-shadow: var(--shadow-lg); }
+.chrome { height: 38px; display: flex; align-items: center; gap: 14px; padding: 0 14px; background: #e9e3d8; border-bottom: 1px solid #ddd4c6; }
+.lights { display: flex; gap: 7px; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: #d3c8b8; }
+.url { flex: 0 1 460px; margin: 0 auto; height: 24px; border-radius: 7px; background: #f6f2ea; display: flex; align-items: center; justify-content: center; color: var(--ink-2); }
+.viewport { position: relative; height: 900px; display: flex; overflow: hidden; }
+.viewport.short { height: 720px; }
+
+/* ---------- Shared pieces ---------- */
+.face { border-radius: 30%; object-fit: cover; flex: none; box-shadow: 0 0 0 1px rgba(43, 37, 32, .06); }
+.f16 { width: 16px; height: 16px; border-radius: 5px; }
+.f20 { width: 20px; height: 20px; border-radius: 6px; }
+.f24 { width: 24px; height: 24px; border-radius: 7px; }
+.f28 { width: 28px; height: 28px; border-radius: 8px; }
+.f32 { width: 32px; height: 32px; border-radius: 9px; }
+.stack { display: flex; align-items: center; }
+.stack .face { box-shadow: 0 0 0 2px var(--ring, var(--surface)); }
+.stack .face + .face { margin-left: -7px; }
+.stack .more { margin-left: 5px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex: none; box-shadow: 0 0 0 3px var(--live-soft); }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; font-weight: 600; font-size: 13px; transition: background .15s, transform .12s; }
+.btn:active { transform: translateY(1px); }
+.btn-quiet { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+.btn-quiet:hover { background: var(--sunk); }
+.btn-text { padding: 0 6px; color: var(--ink-2); }
+.btn-text:hover { color: var(--ink); background: var(--sunk); }
+.btn-ink { background: var(--ink); color: var(--surface); }
+.btn-accent { background: var(--accent); color: #fff; }
+.btn-accent:hover { background: var(--accent-hover); }
+.icon-btn { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--ink-2); }
+.icon-btn:hover { background: var(--sunk); color: var(--ink); }
+svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+.keys { display: inline-flex; gap: 3px; vertical-align: middle; }
+.keys kbd { min-width: 18px; height: 18px; padding: 0 4px; display: inline-grid; place-items: center; border-radius: 5px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2), inset 0 -1.5px 0 var(--line-2); font: 500 10.5px/1 var(--mono); font-variation-settings: "MONO" 1; color: var(--ink-2); }
+.on-ink kbd { background: rgba(255,255,255,.12); box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); color: rgba(255,255,255,.8); }
+
+.el-chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--r-sm); background: var(--sunk); color: var(--ink-2); }
+.el-chip::before { content: ""; width: 9px; height: 9px; border: 1.3px dashed var(--ink-3); border-radius: 2px; }
+.file-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: var(--r-sm); background: var(--sunk); color: var(--ink-2); }
+.file-chip.w { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink); }
+.file-chip.w::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+
+.spinner { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .9s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Clay, the builder: the blob kept from v1, small and calm */
+.blob { width: 22px; height: 22px; border-radius: 38%; background: var(--accent); position: relative; flex: none; }
+.blob::before, .blob::after { content: ""; position: absolute; top: 38%; width: 13%; height: 22%; border-radius: 3px; background: #2b1a12; }
+.blob::before { left: 30%; } .blob::after { right: 30%; }
+
+/* ---------- The hosted app: Tiny Planets (its own look, not ours) ---------- */
+.app { position: relative; flex: 1; min-width: 0; overflow: hidden; font-family: "Fredoka", sans-serif; color: #eef0ff;
+  background:
+    radial-gradient(1.2px 1.2px at 12% 18%, #fff8 50%, transparent 51%),
+    radial-gradient(1px 1px at 72% 12%, #fff9 50%, transparent 51%),
+    radial-gradient(1.4px 1.4px at 86% 64%, #fff7 50%, transparent 51%),
+    radial-gradient(1px 1px at 30% 80%, #fff6 50%, transparent 51%),
+    radial-gradient(1px 1px at 55% 30%, #fff5 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 8% 60%, #fff6 50%, transparent 51%),
+    radial-gradient(1px 1px at 92% 30%, #fff8 50%, transparent 51%),
+    radial-gradient(ellipse at 52% 52%, #2d3473 0%, #191d47 45%, #0f1129 100%);
+}
+.app-head { position: absolute; top: 34px; left: 40px; right: 40px; display: flex; justify-content: space-between; align-items: flex-start; }
+.app-head h3 { font-weight: 600; font-size: 34px; letter-spacing: -.01em; }
+.app-head p { color: #b8bde8; font-size: 16px; font-weight: 500; margin-top: 2px; }
+.app-btn { background: #8ce8c6; color: #102a22; font-weight: 600; font-size: 16px; padding: 11px 20px; border-radius: 999px; box-shadow: 0 6px 20px -6px #8ce8c6aa; }
+.app-count { position: absolute; left: 40px; bottom: 30px; color: #9aa0d6; font-size: 15px; font-weight: 500; }
+.sys { position: absolute; left: 50%; top: 52%; width: 0; height: 0; }
+.orbit { position: absolute; border: 1px solid rgba(190, 200, 255, .13); border-radius: 50%; transform: translate(-50%, -50%); }
+.sun { position: absolute; width: 96px; height: 96px; border-radius: 50%; transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 38% 35%, #fff2b8, #ffc75a 45%, #ff9442 100%); box-shadow: 0 0 60px 10px #ff9a4a55; }
+.planet { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.planet i { display: block; border-radius: 50%; }
+.planet b { font-weight: 500; font-size: 12.5px; padding: 2px 9px; border-radius: 999px; background: rgba(16, 18, 45, .72); color: #eef0ff; white-space: nowrap; backdrop-filter: blur(4px); }
+.app.v11 .planet b { background: none; color: #6d73a8; }   /* the past: labels before v14 fixed them */
+.app.v11 .orbit { border-color: rgba(190, 200, 255, .05); }
+.moon { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #d9dcf5; top: -4px; right: -10px; }
+
+/* ---------- Room (desktop side panel) ---------- */
+.room { width: 412px; flex: none; position: relative; display: flex; flex-direction: column; background: var(--paper); border-left: 1px solid var(--line-2); }
+.resize { position: absolute; left: -3px; top: 50%; width: 5px; height: 44px; margin-top: -22px; border-radius: 3px; background: var(--line-2); opacity: .9; cursor: col-resize; z-index: 2; }
+
+.rh { padding: 14px 14px 12px 18px; border-bottom: 1px solid var(--line); background: var(--paper); }
+.rh-top { display: flex; align-items: center; gap: 8px; }
+.rh-title { flex: 1; min-width: 0; font: 700 18px/1.2 var(--voice); font-variation-settings: "CASL" 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rh-top .stack { --ring: var(--paper); margin-right: 4px; padding: 3px 6px 3px 3px; border-radius: 10px; }
+.rh-top .stack:hover { background: var(--sunk); }
+.rh-sub { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12.5px; color: var(--ink-2); }
+.rh-sub .sep { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-3); }
+.rh-sub a { color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.ver-tag { color: var(--live); font-weight: 600; }
+
+.stream { flex: 1; overflow: hidden; padding: 6px 0 10px; display: flex; flex-direction: column; justify-content: flex-end; }
+
+.note { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 18px; color: var(--ink-3); font-size: 12.5px; }
+.note svg.i { width: 13px; height: 13px; color: var(--live); }
+.note b { color: var(--ink-2); font-weight: 600; }
+
+.msg { display: grid; grid-template-columns: 28px 1fr; column-gap: 10px; padding: 6px 18px; }
+.msg:hover { background: rgba(239, 233, 223, .55); }
+.msg .face { grid-row: span 2; margin-top: 2px; }
+.who { display: flex; align-items: baseline; gap: 7px; }
+.who b { font-weight: 650; font-size: 13.5px; }
+.who time { color: var(--ink-3); font-size: 12px; }
+.who .you { color: var(--ink-3); font-weight: 500; font-size: 12px; }
+.body { color: var(--ink); font-size: 14px; }
+.body .el-chip { margin-top: 5px; }
+.msg.cont { padding-top: 1px; }
+.msg.cont .who { display: none; }
+
+/* Build cards share one shell */
+.card { margin: 6px 14px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--line); overflow: hidden; position: relative; }
+.card-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 0 14px; }
+.card-title { flex: 1; font: 650 14.5px/1.2 var(--voice); font-variation-settings: "CASL" 1; display: flex; align-items: center; gap: 8px; }
+.card-who { display: flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
+.card-body { padding: 8px 14px 12px; }
+.request { color: var(--ink-2); font-size: 13.5px; border-left: 2px solid var(--line); padding-left: 10px; margin-bottom: 10px; }
+
+/* building */
+.card.building .meter { position: absolute; left: 0; top: 0; height: 2px; width: 64%; background: var(--accent); border-radius: 0 2px 2px 0; transition: width .6s var(--ease-out); }
+.timer { color: var(--ink-2); }
+.steps { list-style: none; display: grid; gap: 5px; margin-bottom: 10px; }
+.steps li { display: grid; grid-template-columns: 14px 1fr; gap: 8px; align-items: start; font-size: 13.5px; color: var(--ink-2); }
+.steps li svg.i { width: 13px; height: 13px; margin-top: 3px; color: var(--ink-3); stroke-width: 2; }
+.steps li.now { color: var(--ink); font-weight: 600; }
+.steps li.now .pulse { width: 7px; height: 7px; margin: 6px 0 0 3px; border-radius: 50%; background: var(--accent); animation: breathe 1.4s ease-in-out infinite; }
+.steps .earlier { color: var(--ink-3); font-size: 12.5px; }
+.caret { display: inline-block; width: 1.5px; height: 14px; background: var(--ink); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes breathe { 50% { transform: scale(.6); opacity: .5; } }
+.files { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* live: the one celebrated moment */
+.card.live { box-shadow: var(--shadow-sm), inset 0 0 0 1px #bfdcc8; }
+.card.live .card-head { padding-top: 11px; }
+.card.live .card-title { color: var(--live); }
+.card.live .card-title .num { color: var(--ink); }
+.card.live .summary { font-size: 14px; color: var(--ink); font-weight: 550; }
+.card.live .meta { color: var(--ink-3); font-size: 12px; margin-top: 4px; }
+.actions { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.actions .grow { flex: 1; }
+.burst { position: absolute; left: 22px; top: 18px; width: 0; height: 0; pointer-events: none; }
+.burst i { position: absolute; width: 5px; height: 5px; border-radius: 2px; opacity: 0; }
+.celebrate { animation: land .55s var(--ease-pop) both, glow 1.4s ease-out .2s both; }
+.celebrate .burst i { animation: fly .9s var(--ease-out) .15s both; }
+@keyframes land { from { transform: translateY(8px) scale(.97); opacity: 0; } }
+@keyframes glow { 0% { box-shadow: 0 0 0 0 rgba(45,134,83,.35), var(--shadow-sm), inset 0 0 0 1px #bfdcc8; } 100% { box-shadow: 0 0 0 14px rgba(45,134,83,0), var(--shadow-sm), inset 0 0 0 1px #bfdcc8; } }
+@keyframes fly { 0% { opacity: 1; transform: translate(0,0) rotate(0); } 100% { opacity: 0; transform: translate(var(--x), var(--y)) rotate(160deg); } }
+.hop .face { animation: hop .5s var(--ease-pop) both; }
+.hop .face:nth-child(2) { animation-delay: .05s; } .hop .face:nth-child(3) { animation-delay: .1s; } .hop .face:nth-child(4) { animation-delay: .15s; }
+@keyframes hop { 40% { transform: translateY(-4px); } }
+
+/* superseded live versions collapse to one row */
+.past { display: flex; align-items: center; gap: 9px; margin: 2px 14px; padding: 7px 10px 7px 12px; border-radius: var(--r-md); color: var(--ink-2); font-size: 13px; }
+.past:hover { background: var(--sunk); }
+.past .v { font: 650 13px/1 var(--voice); font-variation-settings: "CASL" 1; color: var(--ink); }
+.past .s { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.past .bar { width: 3px; height: 16px; border-radius: 2px; background: #a8cdb4; }
+
+/* queued */
+.queued { display: flex; align-items: center; gap: 9px; margin: 4px 14px; padding: 8px 10px; border-radius: var(--r-md); border: 1px dashed var(--line-2); font-size: 13.5px; }
+.ord { font: 650 12px/1 var(--voice); font-variation-settings: "CASL" 1; color: var(--ink-2); background: var(--sunk); padding: 5px 7px; border-radius: 6px; }
+.queued .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queued .m { color: var(--ink-3); font-size: 12px; }
+
+.typing { display: flex; align-items: center; gap: 8px; padding: 6px 18px 2px; color: var(--ink-3); font-size: 12.5px; }
+.dots { display: inline-flex; gap: 3px; }
+.dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--ink-3); animation: dot 1.2s infinite; }
+.dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes dot { 30% { transform: translateY(-3px); opacity: .5; } }
+
+/* composer */
+.composer { padding: 10px 14px 12px; border-top: 1px solid var(--line); background: var(--paper); }
+.modes { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--sunk); margin-bottom: 8px; }
+.modes button { height: 24px; padding: 0 10px; border-radius: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.modes button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line); }
+.field { display: flex; align-items: flex-end; gap: 6px; padding: 6px; border-radius: 12px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+.field:focus-within, .field.focus { box-shadow: inset 0 0 0 1px var(--ink-3), 0 0 0 3px rgba(196, 73, 31, .1); }
+.field .text { flex: 1; padding: 4px 4px 5px; min-height: 30px; }
+.field .text .el-chip { margin-bottom: 5px; }
+.send { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--ink); color: var(--surface); flex: none; }
+.send svg.i { stroke-width: 2.1; }
+.hint { display: flex; justify-content: space-between; margin-top: 7px; color: var(--ink-3); font-size: 12px; }
+
+/* ---------- Timeline dock ---------- */
+.col { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.col .app { flex: 1; }
+.dock { height: 68px; flex: none; display: flex; align-items: center; gap: 20px; padding: 0 16px 0 20px; background: var(--paper); border-top: 1px solid var(--line-2); position: relative; }
+.dock-label { width: 112px; flex: none; }
+.dock-label b { display: block; font-size: 13px; font-weight: 650; }
+.dock-label span { color: var(--ink-3); font-size: 12px; }
+.track { flex: 1; position: relative; height: 40px; }
+.track::before { content: ""; position: absolute; left: 0; right: 0; top: 20px; height: 1px; background: var(--line-2); }
+.tick { position: absolute; top: 20px; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+.tick:hover { transform: scale(1.3); }
+.tick.restore { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--ink-3), inset 0 0 0 3.5px var(--surface), inset 0 0 0 6px var(--ink-3); }
+.tick.fork::after { content: ""; position: absolute; top: -9px; left: 2px; width: 1px; height: 6px; background: var(--ink-3); box-shadow: 3px 0 0 var(--ink-3); }
+.tick.live { width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; background: var(--live); box-shadow: 0 0 0 4px var(--live-soft); }
+.tick.building { width: 15px; height: 15px; margin: -7.5px 0 0 -7.5px; background: var(--paper); box-shadow: none; border: 1.5px dashed var(--accent); }
+.tick.viewing { width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; background: var(--ink); box-shadow: 0 0 0 4px var(--paper), 0 0 0 5.5px var(--ink); }
+.tick-label { position: absolute; top: 0; transform: translateX(-50%); font-size: 11.5px; white-space: nowrap; color: var(--ink-3); }
+.tick-label.live { color: var(--live); font-weight: 600; }
+.tick-label.dark { color: var(--ink); font-weight: 600; }
+.tick-face { position: absolute; top: 30px; transform: translateX(-50%); }
+.dock-keys { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 12px; flex: none; }
+
+.peek { position: absolute; bottom: 58px; width: 296px; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-lg), 0 0 0 1px var(--line); padding: 14px; z-index: 5; font-family: var(--ui); color: var(--ink); }
+.peek::after { content: ""; position: absolute; bottom: -6px; left: 50%; width: 12px; height: 12px; margin-left: -6px; background: var(--surface); transform: rotate(45deg); box-shadow: 1px 1px 0 var(--line); }
+.peek-top { display: flex; align-items: center; gap: 8px; }
+.peek-top .v { font: 700 20px/1 var(--voice); font-variation-settings: "CASL" 1; margin-right: 4px; }
+.peek-top span { color: var(--ink-3); font-size: 12.5px; }
+.peek .summary { font-weight: 600; font-size: 14px; margin-top: 10px; }
+.peek .req { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
+.peek .actions { margin-top: 12px; }
+
+.viewing-frame { position: absolute; inset: 0; box-shadow: inset 0 0 0 3px rgba(43, 37, 32, .55); pointer-events: none; z-index: 3; }
+.viewing-pill { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 12px; padding: 5px 5px 5px 16px; border-radius: 999px; background: var(--ink); color: var(--surface); font-size: 13.5px; font-weight: 600; box-shadow: var(--shadow-md); font-family: var(--ui); white-space: nowrap; }
+.viewing-pill .btn { height: 28px; border-radius: 999px; background: var(--surface); color: var(--ink); }
+
+/* ---------- Clean link: capsule and toast ---------- */
+.capsule { position: absolute; right: 20px; bottom: 20px; z-index: 6; display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: 16px; background: rgba(255, 253, 249, .94); backdrop-filter: blur(10px); box-shadow: var(--shadow-md), 0 0 0 1px rgba(70, 45, 20, .08); font-family: var(--ui); color: var(--ink); }
+.grip { width: 12px; height: 24px; display: grid; grid-template-columns: repeat(2, 3px); gap: 3px; align-content: center; justify-content: center; cursor: grab; }
+.grip i { width: 3px; height: 3px; border-radius: 50%; background: var(--line-2); }
+.capsule .people { display: flex; align-items: center; gap: 8px; padding: 3px 9px 3px 4px; border-radius: 11px; font-size: 13px; font-weight: 600; }
+.capsule .people:hover { background: var(--sunk); }
+.capsule .people .stack { --ring: var(--surface); }
+.capsule .divider { width: 1px; height: 20px; background: var(--line); margin: 0 2px; }
+.capsule .btn-ink { height: 32px; border-radius: 11px; padding: 0 8px 0 11px; gap: 8px; }
+
+.toast { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 10px; padding: 6px 14px 6px 6px; border-radius: 12px; background: rgba(255, 253, 249, .96); box-shadow: var(--shadow-md), 0 0 0 1px rgba(70, 45, 20, .08); font: 500 13.5px/1.2 var(--ui); color: var(--ink); white-space: nowrap; animation: drop .5s var(--ease-pop) .4s both; }
+.toast .v { color: var(--live); font-weight: 650; }
+.toast .s { color: var(--ink-2); }
+@keyframes drop { from { opacity: 0; transform: translate(-50%, -10px); } }
+
+.callout { position: absolute; right: 20px; bottom: 76px; z-index: 6; width: 268px; padding: 11px 12px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-md), 0 0 0 1px rgba(70,45,20,.08); font-family: var(--ui); color: var(--ink); }
+.callout .top { display: flex; align-items: center; gap: 8px; font: 650 13.5px/1.2 var(--voice); font-variation-settings: "CASL" 1; }
+.callout .top .mono { margin-left: auto; color: var(--ink-3); font-family: var(--mono); }
+.callout p { color: var(--ink-2); font-size: 12.5px; margin-top: 5px; }
+
+/* ---------- Home ---------- */
+.home { width: 100%; height: auto; display: block; background:
+  radial-gradient(900px 420px at 78% -8%, rgba(214, 120, 70, .14), transparent 70%),
+  radial-gradient(700px 380px at -5% 30%, rgba(222, 190, 120, .16), transparent 70%),
+  var(--paper); padding: 0 64px 72px; }
+.topbar { height: 76px; display: flex; align-items: center; justify-content: space-between; }
+.mark { display: flex; align-items: center; gap: 10px; font: 700 20px/1 var(--voice); font-variation-settings: "CASL" 1; }
+.you-chip { display: flex; align-items: center; gap: 9px; padding: 4px 12px 4px 4px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line); font-size: 13px; font-weight: 600; }
+.you-chip span { color: var(--ink-3); font-weight: 500; }
+
+.hero { display: grid; grid-template-columns: 1fr 380px; gap: 48px; align-items: end; padding: 64px 0 30px; }
+.hero h1 { font: 700 76px/.98 var(--voice); font-variation-settings: "CASL" 1; letter-spacing: -.025em; }
+.hero p { margin-top: 18px; font-size: 18px; line-height: 1.5; color: var(--ink-2); max-width: 560px; }
+.crowd { padding-bottom: 10px; }
+.crowd-faces { display: flex; gap: 10px; margin-bottom: 14px; }
+.crowd-faces img { width: 58px; height: 58px; border-radius: 17px; box-shadow: var(--shadow-md); }
+.crowd-faces img:nth-child(1) { transform: rotate(-5deg); } .crowd-faces img:nth-child(3) { transform: rotate(4deg) translateY(-6px); }
+.crowd-faces img:nth-child(2) { animation: bob 3.4s ease-in-out infinite; }
+@keyframes bob { 50% { transform: translateY(-4px); } }
+.crowd p { margin: 0; font-size: 14px; color: var(--ink-2); }
+.crowd p b { color: var(--ink); font-weight: 600; }
+
+.maker { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 22px; border-radius: var(--r-xl); background: var(--surface); box-shadow: var(--shadow-md), 0 0 0 1px var(--line); }
+.maker .input { flex: 1; font-size: 21px; font-weight: 500; color: var(--ink-3); }
+.maker .input em { font-style: normal; color: var(--ink); }
+.maker .caret { background: var(--accent); height: 22px; width: 2px; vertical-align: -3px; }
+.maker .btn-accent { height: 48px; padding: 0 22px; border-radius: 12px; font-size: 16px; gap: 10px; }
+.maker .btn-accent .keys kbd { background: rgba(255,255,255,.16); box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); color: #fff; }
+.starters { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--ink-3); font-size: 13px; }
+.starters button { height: 30px; padding: 0 12px; border-radius: 999px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); color: var(--ink-2); font-size: 13px; font-weight: 500; }
+.starters button:hover { color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
+
+.gal-head { display: flex; align-items: baseline; justify-content: space-between; margin: 60px 0 16px; }
+.gal-head h2 { font: 700 24px/1 var(--voice); font-variation-settings: "CASL" 1; }
+.gal-head span { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
+.grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; grid-auto-rows: 236px; gap: 18px; }
+.tile { display: flex; flex-direction: column; border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line); overflow: hidden; transition: transform .25s var(--ease-out), box-shadow .25s; }
+.tile:hover { transform: translateY(-3px); box-shadow: var(--shadow-md), 0 0 0 1px var(--line-2); }
+.tile.big { grid-row: span 2; }
+.thumb { flex: 1; position: relative; overflow: hidden; }
+.here { position: absolute; top: 10px; left: 10px; display: flex; align-items: center; gap: 7px; height: 24px; padding: 0 9px; border-radius: 999px; background: rgba(255,253,249,.92); font-size: 12px; font-weight: 600; box-shadow: var(--shadow-sm); }
+.tile-foot { display: flex; align-items: center; gap: 12px; padding: 11px 14px 12px; border-top: 1px solid var(--line); }
+.tile-foot .t { flex: 1; min-width: 0; }
+.tile-foot b { display: block; font-weight: 650; font-size: 15px; }
+.tile-foot span { color: var(--ink-3); font-size: 12.5px; }
+.tile-foot .fork { color: var(--ink-2); }
+
+/* gallery thumbnails: each app keeps its own look */
+.mini-planets { position: absolute; inset: 0; transform: scale(.62); transform-origin: 0 0; width: 161%; height: 161%; }
+.frogs { background: #cfe8b8; display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; padding: 26px 22px; align-content: center; }
+.frogs i { aspect-ratio: 1; border-radius: 50% 50% 44% 44%; background: #5aa35a; position: relative; }
+.frogs i::before, .frogs i::after { content: ""; position: absolute; top: 18%; width: 22%; height: 22%; border-radius: 50%; background: #fff; box-shadow: inset 2px 1px 0 2px #213; }
+.frogs i::before { left: 18%; } .frogs i::after { right: 18%; }
+.frogs i.sing { background: #f0b03c; transform: translateY(-4px); }
+.haiku { background: #f3ead8; padding: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font: italic 500 12px/1.5 Georgia, serif; color: #5b4630; }
+.haiku p { background: #fffaf0; padding: 10px 12px; border-radius: 4px; box-shadow: 0 1px 2px #0001; }
+.pixels { background:
+  conic-gradient(from 90deg at 1px 1px, transparent 25%, #0000000d 0) 0 0 / 14px 14px,
+  linear-gradient(135deg, #ffd6e0 0 20%, #b5e3ff 20% 45%, #fff3b0 45% 62%, #c8f2c2 62% 80%, #ffc9a8 80%); }
+.snails { background: #e8efe3; padding: 22px 20px; display: grid; gap: 12px; align-content: center; }
+.snails div { height: 22px; border-bottom: 1px dashed #9db191; position: relative; }
+.snails i { position: absolute; bottom: 2px; width: 22px; height: 14px; border-radius: 9px 9px 3px 3px; background: #c9824a; }
+.moonparty { background: radial-gradient(circle at 70% 30%, #f7f2d6 0 34px, transparent 35px), linear-gradient(180deg, #3b2a6b, #1d1640); }
+.moonparty::after { content: "party at the moon, bring snacks"; position: absolute; left: 20px; bottom: 18px; font: 600 15px "Fredoka", sans-serif; color: #e9e1ff; }
+.weather { background: linear-gradient(180deg, #a9d8f5, #e8f4fb); }
+.weather::before { content: "21°"; position: absolute; left: 22px; top: 44px; font: 600 54px/1 "Fredoka", sans-serif; color: #fff; text-shadow: 0 2px 10px #5aa0d066; }
+.weather::after { content: ""; position: absolute; right: 30px; top: 40px; width: 80px; height: 34px; border-radius: 20px; background: #fff; box-shadow: -24px 10px 0 -4px #fff; }
+
+.notes { margin-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; color: var(--ink-2); font-size: 13.5px; max-width: 1440px; }
+.notes b { color: var(--ink); font-weight: 650; display: block; margin-bottom: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: opacity .15s !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- SVG icon sprite -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path d="M7 9a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.7.7M9 7a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.7-.7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-up" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></symbol>
+  <symbol id="i-pick" viewBox="0 0 16 16"><path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M2.5 10v2.5a1 1 0 0 0 1 1H6"/><path d="M8.5 8.5l5 1.8-2.2.9-.9 2.2z"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16"><path d="M5.5 4L2.5 7l3 3"/><path d="M2.5 7h7a4 4 0 0 1 0 8H8"/></symbol>
+  <symbol id="i-restore" viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9L2.5 5.7"/><path d="M2.5 2.5v3.2h3.2"/></symbol>
+  <symbol id="i-time" viewBox="0 0 16 16"><path d="M2 8h12"/><circle cx="4.5" cy="8" r="1.5"/><circle cx="9" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z"/></symbol>
+  <symbol id="i-fork" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="11.5" cy="3.5" r="1.5"/><circle cx="8" cy="12.5" r="1.5"/><path d="M4.5 5v1.5a2 2 0 0 0 2 2h3a2 2 0 0 0 2-2V5M8 8.5V11"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></symbol>
+</svg>
+
+<!-- The hosted app, cloned into every frame. It keeps its own look; Clayground adds nothing to it. -->
+<template id="planets">
+  <div class="app-head">
+    <div><h3>Tiny Planets</h3><p>Plant a planet. Leave a note on someone's.</p></div>
+    <span class="app-btn">Plant yours</span>
+  </div>
+  <div class="sys">
+    <div class="orbit" style="width:300px;height:220px"></div>
+    <div class="orbit" style="width:520px;height:380px"></div>
+    <div class="orbit" style="width:760px;height:540px"></div>
+    <div class="sun"></div>
+    <div class="planet" style="left:-150px;top:-10px"><i style="width:34px;height:34px;background:radial-gradient(circle at 35% 30%,#ffb1c8,#d94f86)"></i><b>Juniper's moon</b></div>
+    <div class="planet" style="left:130px;top:-90px"><i style="width:26px;height:26px;background:radial-gradient(circle at 35% 30%,#9ff0d8,#2e9d84)"></i><b>Pebble</b></div>
+    <div class="planet" style="left:250px;top:110px"><i style="width:46px;height:46px;background:radial-gradient(circle at 35% 30%,#c9b6ff,#6a4fd6)"></i><b>Sage's ring world</b></div>
+    <div class="planet" style="left:-280px;top:150px"><i style="width:30px;height:30px;background:radial-gradient(circle at 35% 30%,#ffe2a1,#d99a2b)"></i><b>Mango</b></div>
+    <div class="planet" style="left:-330px;top:-150px"><i style="width:22px;height:22px;background:radial-gradient(circle at 35% 30%,#a8d8ff,#3f7fd1)"></i><b>Tide</b></div>
+    <div class="planet" style="left:360px;top:-190px"><i style="width:38px;height:38px;background:radial-gradient(circle at 35% 30%,#ffc3a0,#d4683a);position:relative"></i><b>Bandit's rock</b></div>
+    <div class="planet" style="left:40px;top:205px"><i style="width:20px;height:20px;background:radial-gradient(circle at 35% 30%,#e9f5a8,#8fae2b)"></i><b>Kip</b></div>
+    <div class="planet" style="left:-60px;top:-215px"><i style="width:18px;height:18px;background:radial-gradient(circle at 35% 30%,#f9d0ff,#b45ccf)"></i><b>Fig</b></div>
+  </div>
+  <div class="app-count">23 planets · 61 notes</div>
+</template>
+
+<main class="board">
+
+  <section class="intro">
+    <div>
+      <h1>Clayground v2 · Warm</h1>
+      <p>Paper, hairlines and soft depth. The hosted app and the animal faces bring the color; the chrome is quiet, dense and legible enough to sit in for an hour. Persimmon marks the action that makes something happen, green marks what is live, and the one loud moment is a version going live.</p>
+      <div class="type-row">
+        <span><strong>Commissioner</strong> 400 to 700: interface, chat, buttons</span>
+        <span><strong class="voice">Recursive Casual</strong> 650 to 700: app names, versions, headings</span>
+        <span><strong class="mono" style="font-size:13px">Recursive Mono</strong>: files, elements, timers, links</span>
+      </div>
+    </div>
+    <div class="swatches">
+      <div class="sw"><i style="background:#f7f3ec"></i><b>Paper</b><span>#f7f3ec</span></div>
+      <div class="sw"><i style="background:#fffdf9"></i><b>Surface</b><span>#fffdf9</span></div>
+      <div class="sw"><i style="background:#e5ddd0"></i><b>Line</b><span>#e5ddd0</span></div>
+      <div class="sw"><i style="background:#2b2520"></i><b>Ink</b><span>#2b2520</span></div>
+      <div class="sw"><i style="background:#c4491f"></i><b>Persimmon</b><span>#c4491f</span></div>
+      <div class="sw"><i style="background:#2d8653"></i><b>Live</b><span>#2d8653</span></div>
+    </div>
+  </section>
+
+  <!-- ============ 1. Room open beside the app ============ -->
+  <div class="frame-label"><h2>Room open</h2><span>The app keeps full width minus the panel and stays interactive. v14 just went live; Bandit's change is building; yours is next.</span></div>
+  <div class="browser">
+    <div class="chrome"><div class="lights"><i></i><i></i><i></i></div><div class="url mono">clayground.fun/tiny-planets?room</div></div>
+    <div class="viewport">
+      <div class="col">
+        <div class="app" data-app></div>
+        <div class="dock">
+          <div class="dock-label"><b>15 versions</b><span>since Sunday</span></div>
+          <div class="track">
+            <span class="tick" style="left:2%"></span>
+            <span class="tick" style="left:9%"></span>
+            <span class="tick" style="left:16%"></span>
+            <span class="tick fork" style="left:23%"></span>
+            <span class="tick" style="left:30%"></span>
+            <span class="tick" style="left:37%"></span>
+            <span class="tick" style="left:44%"></span>
+            <span class="tick" style="left:51%"></span>
+            <span class="tick" style="left:58%"></span>
+            <span class="tick" style="left:65%"></span>
+            <span class="tick" style="left:72%"></span>
+            <span class="tick restore" style="left:79%"></span>
+            <span class="tick" style="left:86%"></span>
+            <span class="tick-label live" style="left:93%">v14 live</span><span class="tick live" style="left:93%"></span>
+            <span class="tick building" style="left:99%"></span>
+          </div>
+          <div class="dock-keys"><span class="keys"><kbd>←</kbd><kbd>→</kbd></span> to step</div>
+        </div>
+      </div>
+
+      <aside class="room" aria-label="Room">
+        <span class="resize" aria-label="Resize the room"></span>
+        <header class="rh">
+          <div class="rh-top">
+            <div class="rh-title">Tiny Planets</div>
+            <div class="stack hop">
+              <img class="face f24" src="../../web/components/org/avatars/raccoon.webp" alt="">
+              <img class="face f24" src="../../web/components/org/avatars/fox.webp" alt="">
+              <img class="face f24" src="../../web/components/org/avatars/owl.webp" alt="">
+              <img class="face f24" src="../../web/components/org/avatars/otter.webp" alt="">
+              <span class="more">+3</span>
+            </div>
+            <button class="icon-btn" title="Copy a link"><svg class="i"><use href="#i-link"/></svg></button>
+            <button class="icon-btn" title="Kip the koala, that's you" style="width:auto;padding:0 3px"><img class="face f24" src="../../web/components/org/avatars/koala.webp" alt=""></button>
+            <button class="icon-btn" title="Close"><svg class="i"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="rh-sub">
+            <span class="live-dot"></span><span class="ver-tag">Live v14</span>
+            <span class="sep"></span><span>7 here</span>
+            <span class="sep"></span><a href="#">forked from Night Sky v3</a>
+          </div>
+        </header>
+
+        <div class="stream">
+          <div class="note"><svg class="i"><use href="#i-restore"/></svg><span><b>Tide</b> restored v11 as v12 · 41 min</span></div>
+
+          <div class="past"><span class="bar"></span><span class="v">v13</span><span class="s">Planets glow softly while someone is looking at them</span><img class="face f20" src="../../web/components/org/avatars/toucan.webp" alt="Mango"><button class="btn btn-text" style="height:24px">See it</button></div>
+
+          <div class="msg">
+            <img class="face f28" src="../../web/components/org/avatars/owl.webp" alt="">
+            <div class="who"><b>Sage</b><time>12 min</time></div>
+            <div class="body">Love the glow. The names are hard to read on the dark planets though</div>
+          </div>
+          <div class="msg">
+            <img class="face f28" src="../../web/components/org/avatars/fox.webp" alt="">
+            <div class="who"><b>Juniper</b><time>11 min</time></div>
+            <div class="body">agreed, mine basically disappears<br><span class="el-chip mono">b · Juniper's moon</span></div>
+          </div>
+
+          <article class="card live celebrate">
+            <div class="burst">
+              <i style="--x:-22px;--y:-14px;background:#2d8653"></i>
+              <i style="--x:-8px;--y:-24px;background:#c4491f"></i>
+              <i style="--x:12px;--y:-22px;background:#e2b13c"></i>
+              <i style="--x:26px;--y:-8px;background:#2d8653"></i>
+              <i style="--x:-26px;--y:6px;background:#e2b13c"></i>
+            </div>
+            <div class="card-head">
+              <div class="card-title"><span class="live-dot"></span><span><span class="num">v14</span> is live</span></div>
+              <div class="card-who"><img class="face f20" src="../../web/components/org/avatars/owl.webp" alt="">Sage · just now</div>
+            </div>
+            <div class="card-body">
+              <div class="summary">Planet names sit on a soft label now, so they read on any color.</div>
+              <div class="meta">Built in 0:24 · 2 files changed</div>
+              <div class="actions">
+                <button class="btn btn-quiet"><svg class="i"><use href="#i-eye"/></svg>See it</button>
+                <button class="btn btn-quiet"><svg class="i"><use href="#i-undo"/></svg>Undo</button>
+                <span class="grow"></span>
+                <button class="icon-btn" title="Copy link to v14"><svg class="i"><use href="#i-link"/></svg></button>
+              </div>
+            </div>
+          </article>
+
+          <div class="msg">
+            <img class="face f28" src="../../web/components/org/avatars/otter.webp" alt="">
+            <div class="who"><b>Pebble</b><time>now</time></div>
+            <div class="body">oh that's so much better</div>
+          </div>
+
+          <article class="card building">
+            <span class="meter"></span>
+            <div class="card-head">
+              <div class="card-title"><span class="spinner"></span>Building v15</div>
+              <div class="card-who"><img class="face f20" src="../../web/components/org/avatars/raccoon.webp" alt="">Bandit · <span class="mono timer">0:11</span></div>
+            </div>
+            <div class="card-body">
+              <div class="request">Make every planet slowly orbit the sun, newer planets a little faster</div>
+              <ul class="steps">
+                <li><span></span><span class="earlier">2 earlier steps</span></li>
+                <li><svg class="i"><use href="#i-check"/></svg><span>Added an orbit loop that moves each planet along its ring</span></li>
+                <li class="now"><span class="pulse"></span><span>Scaling speed by when each planet was planted<span class="caret"></span></span></li>
+              </ul>
+              <div class="files">
+                <span class="file-chip w mono">app.jsx</span>
+                <span class="file-chip w mono">orbits.js</span>
+                <span class="file-chip mono">planets.js</span>
+              </div>
+            </div>
+          </article>
+
+          <div class="queued">
+            <span class="ord">2nd</span>
+            <img class="face f20" src="../../web/components/org/avatars/koala.webp" alt="">
+            <span class="t" title="Give planets with 3 or more notes a little moon">Give planets with 3 or more notes a little moon</span>
+            <span class="m">You, in line</span>
+          </div>
+
+
+          <div class="typing">
+            <img class="face f16" src="../../web/components/org/avatars/fox.webp" alt="">
+            <span>Juniper is typing</span><span class="dots"><i></i><i></i><i></i></span>
+          </div>
+        </div>
+
+        <footer class="composer">
+          <div class="modes" role="group" aria-label="Message mode">
+            <button aria-pressed="true">Auto</button>
+            <button aria-pressed="false">Change it</button>
+            <button aria-pressed="false">Just chat</button>
+          </div>
+          <div class="field focus">
+            <button class="icon-btn" title="Point at something in the app"><svg class="i"><use href="#i-pick"/></svg></button>
+            <div class="text">
+              <span class="el-chip mono">span · Plant yours <svg class="i" style="width:11px;height:11px;margin-left:2px"><use href="#i-x"/></svg></span><br>
+              make this bounce a little when someone new arrives<span class="caret"></span>
+            </div>
+            <button class="send" title="Send"><svg class="i"><use href="#i-up"/></svg></button>
+          </div>
+          <div class="hint"><span>Clay decides whether it's a change or just chat</span><span><span class="keys"><kbd>⌘</kbd><kbd>2</kbd></span> Change it</span></div>
+        </footer>
+      </aside>
+    </div>
+  </div>
+  <div class="notes">
+    <div><b>Messages are rows, not bubbles.</b>Face, name, time, text. Hover tints the row. Grouped runs drop the face. A room scrolled for an hour reads like a log, not a toy box.</div>
+    <div><b>Build cards are the only cards.</b>White on paper with a hairline. Building shows a 2px persimmon meter along its top edge, the last steps, and touched files. Older live versions fold to one row.</div>
+    <div><b>The one moment.</b>A live card lands with a small lift, a green ring that fades out over 1.4s, five flecks from the dot, and the header faces hop once. Nothing else in the product celebrates.</div>
+  </div>
+
+  <!-- ============ 2. Clean link ============ -->
+  <div class="frame-label"><h2>Clean link</h2><span>The app is the whole page. One capsule, bottom right, draggable to any corner or tucked to an edge. A toast when a version lands while you are here.</span></div>
+  <div class="browser">
+    <div class="chrome"><div class="lights"><i></i><i></i><i></i></div><div class="url mono">clayground.fun/tiny-planets</div></div>
+    <div class="viewport short">
+      <div class="app" data-app></div>
+      <div class="toast">
+        <img class="face f24" src="../../web/components/org/avatars/raccoon.webp" alt="">
+        <span><span class="v">v15 is live</span> · Bandit: <span class="s">planets orbit the sun now</span></span>
+      </div>
+      <div class="callout">
+        <div class="top"><span class="spinner"></span>Building v16<span class="mono">0:06</span></div>
+        <p>Adding a small moon to busy planets</p>
+      </div>
+      <div class="capsule">
+        <span class="grip" title="Drag"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        <button class="people" title="7 here">
+          <span class="stack">
+            <img class="face f24" src="../../web/components/org/avatars/raccoon.webp" alt="">
+            <img class="face f24" src="../../web/components/org/avatars/fox.webp" alt="">
+            <img class="face f24" src="../../web/components/org/avatars/owl.webp" alt="">
+          </span>7 here
+        </button>
+        <span class="divider"></span>
+        <button class="icon-btn" title="Timeline"><svg class="i"><use href="#i-time"/></svg></button>
+        <button class="btn btn-ink"><svg class="i"><use href="#i-chat"/></svg>Change it<span class="keys on-ink"><kbd>/</kbd></span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 3. Timeline and the past ============ -->
+  <div class="frame-label"><h2>Timeline, viewing the past</h2><span>Opened from the capsule over the clean link. Hovering v11 peeks it; viewing it frames the app and says so, for you only.</span></div>
+  <div class="browser">
+    <div class="chrome"><div class="lights"><i></i><i></i><i></i></div><div class="url mono">clayground.fun/tiny-planets/v/11</div></div>
+    <div class="viewport short">
+      <div class="col">
+        <div class="app v11" data-app></div>
+        <div class="viewing-frame" style="bottom:68px"></div>
+        <div class="viewing-pill">You're viewing v11, nobody else is<button class="btn">Back to live</button></div>
+        <div class="dock">
+          <div class="dock-label"><b>15 versions</b><span>since Sunday</span></div>
+          <div class="track">
+            <span class="tick" style="left:2%"></span>
+            <span class="tick" style="left:9%"></span>
+            <span class="tick" style="left:16%"></span>
+            <span class="tick fork" style="left:23%"></span>
+            <span class="tick" style="left:30%"></span>
+            <span class="tick" style="left:37%"></span>
+            <span class="tick" style="left:44%"></span>
+            <span class="tick" style="left:51%"></span>
+            <span class="tick" style="left:58%"></span>
+            <span class="tick" style="left:65%"></span>
+            <span class="tick-label dark" style="left:72%">v11</span><span class="tick viewing" style="left:72%"></span>
+            <span class="tick restore" style="left:79%" title="v12 restored v11"></span>
+            <span class="tick" style="left:86%"></span>
+            <span class="tick" style="left:93%"></span>
+            <span class="tick-label live" style="left:99%">v15 live</span><span class="tick live" style="left:99%"></span>
+
+            <div class="peek" style="left:calc(72% - 148px)">
+              <div class="peek-top"><span class="v">v11</span><img class="face f20" src="../../web/components/org/avatars/raccoon.webp" alt=""><span>Bandit · 2 h ago</span></div>
+              <div class="summary">Every planet shows its owner's name underneath</div>
+              <div class="req">"put our names on the planets so we know whose is whose"</div>
+              <div class="actions">
+                <button class="btn btn-quiet"><svg class="i"><use href="#i-eye"/></svg>Viewing</button>
+                <button class="btn btn-accent"><svg class="i"><use href="#i-restore"/></svg>Restore</button>
+                <button class="btn btn-text"><svg class="i"><use href="#i-fork"/></svg>Fork from here</button>
+              </div>
+            </div>
+          </div>
+          <div class="dock-keys"><span class="keys"><kbd>←</kbd><kbd>→</kbd></span> to step <span class="keys"><kbd>esc</kbd></span> back to live <button class="icon-btn"><svg class="i"><use href="#i-x"/></svg></button></div>
+        </div>
+      </div>
+      <div class="capsule" style="bottom:88px">
+        <span class="grip"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        <button class="people"><span class="stack"><img class="face f24" src="../../web/components/org/avatars/raccoon.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/fox.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/owl.webp" alt=""></span>7 here</button>
+        <span class="divider"></span>
+        <button class="icon-btn" style="background:var(--sunk);color:var(--ink)"><svg class="i"><use href="#i-time"/></svg></button>
+        <button class="btn btn-ink"><svg class="i"><use href="#i-chat"/></svg>Change it<span class="keys on-ink"><kbd>/</kbd></span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 4. Home ============ -->
+  <div class="frame-label"><h2>Home</h2><span>One input, a few starters, then the busiest apps as live thumbnails.</span></div>
+  <div class="browser">
+    <div class="chrome"><div class="lights"><i></i><i></i><i></i></div><div class="url mono">clayground.fun</div></div>
+    <div class="home">
+      <div class="topbar">
+        <div class="mark"><span class="blob"></span>Clayground</div>
+        <button class="you-chip"><img class="face f28" src="../../web/components/org/avatars/koala.webp" alt="">Kip <span>that's you</span></button>
+      </div>
+
+      <section class="hero">
+        <div>
+          <h1>Make a thing.<br>Pass it around.</h1>
+          <p>Describe an app and Clay builds it in seconds. Anyone with the link can change it by chatting, and everyone sees it change.</p>
+        </div>
+        <div class="crowd">
+          <div class="crowd-faces">
+            <img src="../../web/components/org/avatars/frog.webp" alt="">
+            <img src="../../web/components/org/avatars/otter.webp" alt="">
+            <img src="../../web/components/org/avatars/elephant.webp" alt="">
+            <img src="../../web/components/org/avatars/toucan.webp" alt="">
+          </div>
+          <p><b>Fig, Pebble, Tembo</b> and 38 others are changing apps right now.</p>
+        </div>
+      </section>
+
+      <div class="maker">
+        <div class="input"><em>a frog choir, one note per person</em><span class="caret"></span></div>
+        <button class="btn btn-accent">Make it<span class="keys"><kbd>↵</kbd></span></button>
+      </div>
+      <div class="starters">Or start with
+        <button>a shared pixel garden</button>
+        <button>a guestbook on tiny planets</button>
+        <button>a snail race everyone bets on</button>
+        <button>a haiku wall</button>
+      </div>
+
+      <div class="gal-head"><h2>Busy right now</h2><span><span class="live-dot"></span>41 people building in 12 apps</span></div>
+      <div class="grid">
+        <a class="tile big">
+          <div class="thumb"><div class="app mini-planets" data-app></div><span class="here"><span class="live-dot"></span>7 here</span></div>
+          <div class="tile-foot"><div class="t"><b>Tiny Planets</b><span>38 people changed it · v15 · <span class="fork">forked from Night Sky</span></span></div>
+            <span class="stack"><img class="face f24" src="../../web/components/org/avatars/raccoon.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/fox.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/owl.webp" alt=""></span></div>
+        </a>
+        <a class="tile">
+          <div class="thumb frogs"><i></i><i class="sing"></i><i></i><i></i><i></i><i class="sing"></i><i></i><i></i><i class="sing"></i><i></i><i></i><i></i><span class="here"><span class="live-dot"></span>5 here</span></div>
+          <div class="tile-foot"><div class="t"><b>Frog Choir</b><span>22 changed it · v31</span></div><span class="stack"><img class="face f24" src="../../web/components/org/avatars/frog.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/swan.webp" alt=""></span></div>
+        </a>
+        <a class="tile">
+          <div class="thumb haiku"><p>an old silent pond / a frog jumps in, then three more / now it is a band</p><p>deploy on friday / the planets keep on spinning / nobody noticed</p><span class="here"><span class="live-dot"></span>3 here</span></div>
+          <div class="tile-foot"><div class="t"><b>Haiku Wall</b><span>51 changed it · v40</span></div><span class="stack"><img class="face f24" src="../../web/components/org/avatars/crane.webp" alt=""></span></div>
+        </a>
+        <a class="tile">
+          <div class="thumb pixels"><span class="here"><span class="live-dot"></span>9 here</span></div>
+          <div class="tile-foot"><div class="t"><b>Pixel Garden</b><span>64 changed it · v52</span></div><span class="stack"><img class="face f24" src="../../web/components/org/avatars/snail.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/bear.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/hare.webp" alt=""></span></div>
+        </a>
+        <a class="tile">
+          <div class="thumb snails"><div><i style="left:62%"></i></div><div><i style="left:30%"></i></div><div><i style="left:78%;background:#7aa6c9"></i></div><div><i style="left:12%;background:#b98ad1"></i></div><span class="here"><span class="live-dot"></span>4 here</span></div>
+          <div class="tile-foot"><div class="t"><b>Snail Derby</b><span>17 changed it · v12</span></div><span class="stack"><img class="face f24" src="../../web/components/org/avatars/goat.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/penguin.webp" alt=""></span></div>
+        </a>
+        <a class="tile">
+          <div class="thumb moonparty"><span class="here"><span class="live-dot"></span>6 here</span></div>
+          <div class="tile-foot"><div class="t"><b>Moon Party</b><span>9 changed it · v6 · <span class="fork">forked from Tiny Planets</span></span></div><span class="stack"><img class="face f24" src="../../web/components/org/avatars/moth.webp" alt=""><img class="face f24" src="../../web/components/org/avatars/whale.webp" alt=""></span></div>
+        </a>
+        <a class="tile">
+          <div class="thumb weather"><span class="here"><span class="live-dot"></span>2 here</span></div>
+          <div class="tile-foot"><div class="t"><b>Window Weather</b><span>11 changed it · v19</span></div><span class="stack"><img class="face f24" src="../../web/components/org/avatars/seal.webp" alt=""></span></div>
+        </a>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  // Fill every app slot with the same hosted app, the way each frame embeds the live version.
+  const tpl = document.getElementById("planets");
+  document.querySelectorAll("[data-app]").forEach((slot) => slot.appendChild(tpl.content.cloneNode(true)));
+</script>
+</body>
+</html>

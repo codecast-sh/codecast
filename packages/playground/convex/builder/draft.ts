@@ -4,12 +4,12 @@
 // (lib/files + lib/transpile) to what makes an app break at load in the
 // browser: an import of a file that is not there, a package the import map
 // does not name, a stylesheet imported from JavaScript.
-import { ENTRY_PATH, byteLength, fileExtension, fileSetProblems, needsTranspile, normalizeFilePath, type FileDraft } from "../lib/files";
+import { ENTRY_PATH, FILE_TYPES, byteLength, fileExtension, fileSetProblems, needsTranspile, normalizeFilePath, type FileDraft } from "../lib/files";
 import { esmUrl } from "../lib/runtime";
 import { transpile } from "../lib/transpile";
 import type { TouchedFile } from "../validators";
 
-const ALLOWED_TYPES = ".html .js .mjs .jsx .ts .tsx .css .json .svg .txt .md";
+const ALLOWED_TYPES = FILE_TYPES.map((t) => `.${t}`).join(" ");
 
 /** A file operation the agent got wrong; its message goes back to the agent. */
 export class DraftError extends Error {}

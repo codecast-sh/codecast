@@ -47,20 +47,46 @@ async function hmacSha256Hex(key: string, message: string): Promise<string> {
   return Array.from(mac, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** How long a runtime token is good for. The shell hands each frame a fresh
+ *  one well before its token runs out (RUNTIME_TOKEN_RENEW_MS). */
+export const RUNTIME_TOKEN_TTL_MS = 30 * 60_000;
+export const RUNTIME_TOKEN_RENEW_MS = 10 * 60_000;
+
 /** The credential an app's SDK holds instead of the visitor secret. App code
- *  is written by strangers and can read anything the SDK has, so it gets a
- *  token that proves "this visitor, in this app" and nothing more: it opens
- *  that app's data and presence state, never the room, the character or
- *  another app. Keyed by the secret's hash, which never leaves the server
- *  and the visitor's own browser, so the shell derives it without a round
- *  trip and the server checks it without storing anything. */
-export async function runtimeToken(secretHash: string, appId: string): Promise<string> {
-  return hmacSha256Hex(secretHash, `runtime:${appId}`);
+ *  is written by strangers and can read anything the SDK has, and the
+ *  runtime lets it reach any site, so the token is made to be worth little
+ *  once it leaves: it proves "this visitor, in this app, for the version on
+ *  their screen, until `expires`" and nothing more. It opens that app's data
+ *  and presence state, never the room, the character or another app, and it
+ *  dies within RUNTIME_TOKEN_TTL_MS of the person leaving that version.
+ *  Keyed by the secret's hash, which never leaves the server and the
+ *  visitor's own browser, so the shell mints it without a round trip and
+ *  the server checks it without storing anything.
+ *
+ *  A "watch" token is the same proof for looking only: the home page's live
+ *  previews run apps the visitor never opened, so the app reads its data but
+ *  cannot write in their name. Shaped "<version>.<expires>.<mac>", with a
+ *  leading "w" for watching. */
+export type TokenScope = "use" | "watch";
+
+export async function runtimeToken(secretHash: string, appId: string, version: number, expires: number, scope: TokenScope = "use"): Promise<string> {
+  const domain = scope === "watch" ? "watch" : "runtime";
+  return `${scope === "watch" ? "w" : ""}${version}.${expires}.${await hmacSha256Hex(secretHash, `${domain}:${appId}:${version}:${expires}`)}`;
 }
 
-/** The shell's side: the runtime token for a secret it holds. */
-export async function runtimeTokenForSecret(secret: string, appId: string): Promise<string> {
-  return runtimeToken(await sha256Hex(secret), appId);
+/** The shell's side: a fresh runtime token for a secret it holds. */
+export async function runtimeTokenForSecret(secret: string, appId: string, version: number, now = Date.now(), scope: TokenScope = "use"): Promise<string> {
+  return runtimeToken(await sha256Hex(secret), appId, version, now + RUNTIME_TOKEN_TTL_MS, scope);
+}
+
+/** What a live runtime token for this visitor and app allows, or null. */
+export async function runtimeTokenScope(secretHash: string, appId: string, token: string, now: number): Promise<TokenScope | null> {
+  const m = /^(w?)(\d{1,6})\.(\d{13})\.[0-9a-f]{64}$/.exec(token);
+  if (!m) return null;
+  const expires = Number(m[3]);
+  if (expires <= now || expires > now + RUNTIME_TOKEN_TTL_MS) return null;
+  const scope: TokenScope = m[1] ? "watch" : "use";
+  return sameToken(await runtimeToken(secretHash, appId, Number(m[2]), expires, scope), token) ? scope : null;
 }
 
 /** Constant-time string comparison, for comparing tokens. */

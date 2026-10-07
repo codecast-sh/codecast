@@ -1,25 +1,28 @@
 // The room's stream: people's messages, the builder's cards and system notes,
 // newest first, a page at a time. A build card's state is joined from its
-// builds row at read time, so the card and the build can never disagree.
+// builds row at read time, so the card and the build can never disagree; its
+// narration is not (builds.progress), so Clay's running commentary never
+// re-runs the page.
 import { paginationOptsValidator, type PaginationResult } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { fail } from "./lib/errors";
-import { MESSAGE_PAGE_MAX, RUNTIME_ERROR_MAX } from "./lib/limits";
-import { cleanElement, cleanMessageBody } from "./lib/room";
+import { MESSAGE_PAGE_MAX, RUNTIME_ERROR_MAX, TRIAGE_CEILING_USD } from "./lib/limits";
+import { cleanElement, cleanLine, cleanMessageBody } from "./lib/room";
 import { takeRate } from "./limits";
 import { postSystemNote, requireApp, touchApp } from "./model";
 import { stopTyping } from "./presence";
-import { enqueueBuild } from "./builder/queue";
+import { buildRefusal, chargeSpend, enqueueBuild } from "./builder/queue";
 import { internal } from "./_generated/api";
 import { versionByNumber } from "./versions";
 import { publicVisitors, requireVisitor, type PublicVisitor } from "./visitors";
-import { composerMode, elementRef, visitorArgs, type BuildStatus, type ElementRef, type MessageKind, type SystemNote, type TouchedFile } from "./validators";
+import { composerMode, elementRef, visitorArgs, type BuildStatus, type ElementRef, type MessageKind, type SystemNote } from "./validators";
 
 /** Send a message. `change` makes it a change request and queues its build
  *  (the message then carries the build card), `chat` plain chat, and `auto`
- *  stores it as chat marked triage "pending" until builder/triage settles it.
+ *  stores it as chat marked triage "pending" until builder/triage settles it
+ *  (plain chat while builds are refused).
  *  Sending clears the sender's typing indicator. */
 export const send = mutation({
   args: { ...visitorArgs, app_id: v.id("apps"), body: v.string(), mode: composerMode, element: v.optional(elementRef) },
@@ -31,16 +34,24 @@ export const send = mutation({
     await takeRate(ctx, "appMessage", app._id);
     const element = args.element ? cleanElement(args.element) : null;
     const kind: MessageKind = args.mode === "change" ? "request" : "chat";
+    // While builds are refused (paused, a budget spent) an Auto message is
+    // chat: triage would pay a model to queue a build that cannot start.
+    const triage = args.mode === "auto" && !(await buildRefusal(ctx, app, visitor._id));
     const messageId = await ctx.db.insert("messages", {
       app_id: app._id,
       kind,
       visitor_id: visitor._id,
       body,
       ...(element ? { element } : {}),
-      ...(args.mode === "auto" ? { triage: "pending" as const } : {}),
+      ...(triage ? { triage: "pending" as const } : {}),
     });
     if (kind === "request") await enqueueBuild(ctx, app, (await ctx.db.get(messageId))!, visitor._id);
-    if (args.mode === "auto") await ctx.scheduler.runAfter(0, internal.builder.triage.classify, { message_id: messageId });
+    if (triage) {
+      // Held against the budgets until the call's real cost replaces it, so
+      // a burst of triage calls cannot run past them.
+      await chargeSpend(ctx, app._id, visitor._id, TRIAGE_CEILING_USD);
+      await ctx.scheduler.runAfter(0, internal.builder.triage.classify, { message_id: messageId });
+    }
     await stopTyping(ctx, app._id, visitor._id);
     await touchApp(ctx, app);
     return { message_id: messageId, kind };
@@ -60,7 +71,7 @@ export const reportError = mutation({
       .withIndex("by_app_version", (q) => q.eq("app_id", app._id).eq("version", args.version))
       .first();
     if (reported) return { message_id: reported.message_id, fresh: false };
-    const message = args.message.replace(/\s+/g, " ").trim().slice(0, RUNTIME_ERROR_MAX) || "Something went wrong";
+    const message = cleanLine(args.message, RUNTIME_ERROR_MAX) ?? "Something went wrong";
     await takeRate(ctx, "message", visitor._id);
     const message_id = await postSystemNote(ctx, app._id, { type: "error", version: args.version, message }, `The app hit an error: ${message}`);
     await ctx.db.insert("app_errors", { app_id: app._id, version: args.version, message_id });
@@ -75,8 +86,6 @@ export type BuildView = {
   queue_position: number | null;
   base_version: number | null;
   result_version: number | null;
-  narration: { at: number; text: string }[];
-  files_touched: TouchedFile[];
   /** The live version's one-line summary, once live. */
   summary: string | null;
   /** Why it failed, for people; `error_detail` is the raw cause behind "Details". */
@@ -88,8 +97,9 @@ export type BuildView = {
 
 export type NoteView =
   | { type: "fork"; by: PublicVisitor | null; version: number; fork: { slug: string; name: string } | null }
-  | { type: "restore"; by: PublicVisitor | null; from_version: number; version: number }
-  | { type: "error"; version: number; message: string };
+  | { type: "restore"; by: PublicVisitor | null; from_version: number; version: number; undid: number | null }
+  | { type: "error"; version: number; message: string }
+  | { type: "data"; outcome: "skipped" | "partial" };
 
 export type MessageView = {
   id: Id<"messages">;
@@ -119,8 +129,6 @@ function buildView(b: Doc<"builds">, positions: Map<Id<"builds">, number>, summa
     queue_position: positions.get(b._id) ?? null,
     base_version: b.base_version ?? null,
     result_version: b.result_version ?? null,
-    narration: b.narration,
-    files_touched: b.files_touched,
     summary,
     error: b.error ?? null,
     error_detail: b.error_detail ?? null,
@@ -130,14 +138,14 @@ function buildView(b: Doc<"builds">, positions: Map<Id<"builds">, number>, summa
 }
 
 async function noteView(ctx: QueryCtx, note: SystemNote, people: Map<Id<"visitors">, PublicVisitor>): Promise<NoteView> {
-  if (note.type === "error") return note;
+  if (note.type === "error" || note.type === "data") return note;
   const by = people.get(note.visitor_id) ?? null;
-  if (note.type === "restore") return { type: "restore", by, from_version: note.from_version, version: note.version };
+  if (note.type === "restore") return { type: "restore", by, from_version: note.from_version, version: note.version, undid: note.undid ?? null };
   const fork = await ctx.db.get(note.fork_app_id);
   return { type: "fork", by, version: note.version, fork: fork && { slug: fork.slug, name: fork.name } };
 }
 
-const noteAuthor = (note: SystemNote | undefined) => (note && note.type !== "error" ? note.visitor_id : undefined);
+const noteAuthor = (note: SystemNote | undefined) => (note && (note.type === "fork" || note.type === "restore") ? note.visitor_id : undefined);
 
 /** The stream, newest first; feed straight to usePaginatedQuery. */
 export const list = query({

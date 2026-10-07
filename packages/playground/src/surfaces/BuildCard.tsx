@@ -1,27 +1,37 @@
-// A change request's card (DESIGN 6.5): queued, building (narrated live),
-// live (the one celebration) or failed. Everyone sees the same card; its
-// state is the builds row, joined in by messages.list.
-import { useEffect, useState, type ReactNode } from "react";
+// A change request's card (DESIGN 6.5): queued (one dashed row), building
+// (narrated live), live (the one celebration), superseded (one line) or
+// failed. Everyone sees the same card; its state is the builds row, joined in
+// by messages.list, and its narration is read apart (builds.progress) so only
+// the card wakes while Clay works. The build line along the top carries
+// progress. The steps and the clock are for eyes; the stream's status line
+// says each change of state to a screen reader once.
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import type { BuildView, MessageView } from "../../convex/messages";
+import type { NarrationLine } from "../../convex/validators";
 import { useCopy } from "../lib/clipboard";
 import { errorData } from "../lib/errors";
-import { clock, ordinal } from "../lib/format";
-import { useVisitorMutation } from "../lib/identity";
-import { absolute, versionUrl } from "../lib/router";
+import { chatTime, clock, plural } from "../lib/format";
+import { useIdentity, useVisitorMutation } from "../lib/identity";
+import { absolute, appUrl, versionUrl } from "../lib/router";
 import { useNow } from "../lib/useNow";
+import { BuildLine, buildProgress } from "../ui/BuildLine";
+import { Blob } from "../ui/Blob";
 import { Button, IconButton } from "../ui/Button";
 import { ElementChip, FileChip } from "../ui/Chips";
 import { Dots } from "../ui/Dots";
-import { Face } from "../ui/Face";
-import { CheckIcon, LinkIcon } from "../ui/icons";
+import { Face, type Person } from "../ui/Face";
+import { CheckIcon, LinkIcon, RestoreIcon } from "../ui/icons";
 import { Spinner } from "../ui/Spinner";
 import { useToast } from "../ui/Toast";
-import { useAppState } from "./appState";
+import { useBuildProgress } from "../data/builds";
+import { restoreSaid, reverseOf, versionLine, versionSummary } from "../lib/versionCopy";
+import { useAppState, useComposer } from "./appState";
+import { lineLabel, useBusy } from "./buildTicker";
 import s from "./BuildCard.module.css";
 
 export function BuildCard({ m, b }: { m: MessageView; b: BuildView }) {
-  if (b.status === "queued") return <QueuedRow m={m} chip={ordinal(b.queue_position ?? 1)} />;
+  if (b.status === "queued") return <Queued m={m} b={b} />;
   if (b.status === "building") return <Building m={m} b={b} />;
   if (b.status === "live") return <Live m={m} b={b} />;
   return <Failed m={m} b={b} />;
@@ -29,134 +39,347 @@ export function BuildCard({ m, b }: { m: MessageView; b: BuildView }) {
 
 /** A request the builder has not picked up yet. */
 export function WaitingCard({ m }: { m: MessageView }) {
-  return <QueuedRow m={m} chip={<Dots size={5} light />} />;
+  return <QueuedRow m={m} chip={<Dots />} />;
+}
+
+/** In line: its place, or "Starting" with nothing ahead of it. */
+function Queued({ m, b }: { m: MessageView; b: BuildView }) {
+  const label = lineLabel(b, useBusy());
+  return <QueuedRow m={m} chip={label === "Starting" ? <><Spinner />Starting</> : label} />;
 }
 
 function QueuedRow({ m, chip }: { m: MessageView; chip: ReactNode }) {
+  const { me } = useIdentity();
+  const mine = m.author?.id === me.id;
   return (
     <div className={s.queued} data-id={m.id} title={m.body}>
       <span className={s.ordinal}>{chip}</span>
-      {m.author && <Face person={m.author} size={24} />}
+      {m.author && <Face person={m.author} size={20} />}
       <span className={s.queuedText}>{m.body}</span>
+      <span className={s.queuedMeta}>{mine ? "You, in line" : m.author?.name}</span>
     </div>
   );
 }
 
+/** The asker on the right of a card's head: face, name, and one fact. */
 function Asker({ m, fact }: { m: MessageView; fact?: ReactNode }) {
   return (
     <span className={s.asker}>
-      {m.author && <Face person={m.author} size={24} />}
+      {m.author && <Face person={m.author} size={20} decorative />}
       {m.author && <span className={s.askerName}>{m.author.name}</span>}
       {fact}
     </span>
   );
 }
 
-const EXPECTED_MS = 30_000;
+/** The asker's own words, clamped to `lines`. Words that overflow the clamp
+ *  make it a toggle, for a tap or a key. */
+function Request({ m, lines = 3 }: { m: MessageView; lines?: number }) {
+  const [open, setOpen] = useState(false);
+  const text = useRef<HTMLParagraphElement>(null);
+  const [clamped, setClamped] = useState(false);
+  useLayoutEffect(() => {
+    const el = text.current;
+    if (!el || open) return;
+    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [m.body, open, lines]);
+  const toggle = clamped || open;
+  return (
+    <>
+      <p
+        ref={text}
+        className={`${s.request} ${toggle ? s.toggle : ""}`}
+        style={{ WebkitLineClamp: open ? "unset" : lines }}
+        {...(toggle && {
+          role: "button",
+          tabIndex: 0,
+          "aria-expanded": open,
+          onClick: () => setOpen((o) => !o),
+          onKeyDown: (e: KeyboardEvent) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            setOpen((o) => !o);
+          },
+        })}
+      >
+        {m.body}
+      </p>
+      {m.element && <div className={s.element}><ElementChip element={m.element} /></div>}
+    </>
+  );
+}
+
 const SHOWN_STEPS = 4;
 const SHOWN_FILES = 6;
-const CELEBRATE_MS = 5_000;
 
-function Building({ m, b }: { m: MessageView; b: BuildView }) {
-  const { app } = useAppState();
+/** Clay at work: the request, Clay's plan under it once Clay has said it,
+ *  then the steps, the newest being what Clay is doing now. `landing`: the
+ *  version is live and on its way to your screen, so the line completes and
+ *  turns green, the clock stops, every step is done and the title says so.
+ *  While Clay makes an app's first version the app column narrates it
+ *  (FirstBuild), so the card keeps to the request. */
+function Building({ m, b, landing = false }: { m: MessageView; b: BuildView; landing?: boolean }) {
+  const { app, making } = useAppState();
   const now = useNow(250);
-  const [open, setOpen] = useState(false);
-  const [allSteps, setAllSteps] = useState(false);
-  const elapsed = b.started_at ? now - b.started_at : 0;
-  const meter = 90 * (1 - Math.exp(-elapsed / EXPECTED_MS * 1.6));
-  const steps = b.narration;
-  const hidden = allSteps ? 0 : Math.max(0, steps.length - SHOWN_STEPS);
-  const files = b.files_touched;
+  const { narration, files_touched: files } = useBuildProgress(b.id);
+  const elapsed = b.started_at ? (landing && b.finished_at ? b.finished_at : now) - b.started_at : 0;
+  const n = b.result_version ?? app.version_count + 1;
   return (
-    <article className={`${s.card} ${s.building}`} data-id={m.id}>
-      <header className={`${s.head} ${s.stripes}`}>
-        <Spinner size={26} />
-        <span className={s.state}>Building v{app.version_count + 1}</span>
-        <Asker m={m} fact={<span className={s.timer}>{clock(elapsed)}</span>} />
+    <article className={s.card} data-id={m.id}>
+      <BuildLine progress={landing ? 100 : buildProgress(elapsed)} state={landing ? "live" : "building"} />
+      <header className={s.head}>
+        <span className={s.title}>
+          {landing ? <span className={s.check}><CheckIcon /></span> : <Spinner />}
+          {landing ? <span>v{n} <span className={s.going}>going live</span></span> : `Building v${n}`}
+        </span>
+        <Asker m={m} fact={<span className={s.timer} aria-hidden>{clock(elapsed)}</span>} />
       </header>
       <div className={s.body}>
-        <p className={`${s.request} ${open ? s.open : ""}`} onClick={() => setOpen((o) => !o)}>{m.body}</p>
-        {m.element && <ElementChip element={m.element} />}
-        {steps.length > 0 && (
-          <ol className={s.narration}>
-            {hidden > 0 && (
-              <li className={s.fold}>
-                <button onClick={() => setAllSteps(true)}>+{hidden} earlier steps</button>
-              </li>
-            )}
-            {steps.slice(hidden).map((step, i, shown) => (
-              <li key={step.at + step.text} className={i === shown.length - 1 ? s.now : ""}>{step.text}</li>
-            ))}
-          </ol>
-        )}
-        {files.length > 0 && (
-          <div className={s.files}>
+        <Request m={m} />
+        {!making && <Narration narration={narration} landing={landing} />}
+        {!making && files.length > 0 && (
+          <div className={s.files} aria-hidden>
             {files.slice(0, SHOWN_FILES).map((f) => <FileChip key={f.path} path={f.path} written={f.how !== "read"} />)}
             {files.length > SHOWN_FILES && <span className={s.moreFiles}>+{files.length - SHOWN_FILES} more</span>}
           </div>
         )}
-        <div className={s.meter}><i style={{ width: `${meter}%` }} /></div>
       </div>
     </article>
   );
 }
 
-function Live({ m, b }: { m: MessageView; b: BuildView }) {
-  const { app, versionByNumber, flashLive, view, restore } = useAppState();
-  const { copied, copy } = useCopy();
-  const n = b.result_version ?? 0;
-  const summary = b.summary ?? versionByNumber.get(n)?.summary ?? "";
-  const current = n === app.live_version;
-  // Celebrate a version that just went live, not one scrolled back into.
-  const [celebrate] = useState(() => b.finished_at !== null && Date.now() - b.finished_at < CELEBRATE_MS);
-  const [undoing, setUndoing] = useState(false);
-  useEffect(() => {
-    if (!current) setUndoing(false);
-  }, [current]);
-
-  if (!current) {
-    return (
-      <div className={s.collapsed} data-id={m.id}>
-        <i className={s.bar} />
-        <span className={s.collapsedV}>v{n}</span>
-        <span className={s.collapsedSummary}>{summary}</span>
-        {m.author && <Face person={m.author} size={24} />}
-        <button className={s.textBtn} onClick={() => view(n)}>See it</button>
-      </div>
-    );
-  }
+/** Clay's plan, then its steps, the newest being what Clay is doing now;
+ *  earlier ones fold away. Shared by the card and the first build's column. */
+export function Narration({ narration, landing = false }: { narration: NarrationLine[]; landing?: boolean }) {
+  const [allSteps, setAllSteps] = useState(false);
+  const plan = narration.find((l) => l.kind === "plan");
+  const steps = narration.filter((l) => l.kind !== "plan" && !(landing && l.kind === "now"));
+  const hidden = allSteps ? 0 : Math.max(0, steps.length - SHOWN_STEPS);
   return (
-    <article className={`${s.card} ${celebrate ? s.celebrate : ""}`} data-id={m.id}>
-      <header className={`${s.head} ${s.liveHead}`}>
-        <span className={s.liveTitle}><b>v{n}</b> is live</span>
-        <Asker m={m} />
+    <>
+      {plan && (
+        <p className={s.plan} title={plan.text}>
+          <Blob size={16} />
+          <span>{plan.text}</span>
+        </p>
+      )}
+      {steps.length > 0 && (
+        <ol className={s.steps} aria-hidden>
+          {hidden > 0 && (
+            <li className={s.earlier}>
+              <button onClick={() => setAllSteps(true)}>{plural(hidden, "earlier step")}</button>
+            </li>
+          )}
+          {steps.slice(hidden).map((step, i, shown) => {
+            const current = i === shown.length - 1 && !landing;
+            return (
+              <li key={step.at} className={current ? s.now : ""} title={current ? undefined : step.text}>
+                {current ? <i className={s.pulse} /> : <CheckIcon />}
+                <span>
+                  {step.text}
+                  {current && <i className={s.caret} />}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </>
+  );
+}
+
+function Live({ m, b }: { m: MessageView; b: BuildView }) {
+  const { landed } = useAppState();
+  const n = b.result_version ?? 0;
+  if (n > landed) return <Building m={m} b={b} landing />;
+  if (n < landed) return <Superseded m={m} b={b} n={n} />;
+  return <LiveNow m={m} b={b} n={n} />;
+}
+
+/** A folded row's tooltip: what it did, then who asked for it, in their words. */
+const asked = (m: MessageView, summary: string) => `${summary}\n${m.author?.name ?? "Someone"} asked: ${m.body}`;
+
+export function useSummary(b: BuildView) {
+  const { versionByNumber } = useAppState();
+  return b.summary ?? versionByNumber.get(b.result_version ?? 0)?.summary ?? "";
+}
+
+/** A version that is no longer live, folded to one log row: the version,
+ *  what it did (a restore with the restore glyph and its verb), who and
+ *  when. The whole row shows it to you; "See it" says so on hover or focus.
+ *  The version you are viewing is marked as on the timeline, and its row
+ *  takes you back to live. */
+function FoldedRow({ id, n, summary, person, at, title, restore = false }: { id: string; n: number; summary: string; person: Person | null; at: number; title: string; restore?: boolean }) {
+  const { view, viewing } = useAppState();
+  const now = useNow(60_000);
+  const isViewing = viewing === n;
+  return (
+    <button
+      className={`${s.folded} ${isViewing ? s.foldedViewing : ""}`}
+      data-id={id}
+      title={title}
+      aria-current={isViewing || undefined}
+      aria-label={isViewing ? `v${n}, viewing: ${summary}. Back to live` : `v${n}: ${summary}${person ? `, ${person.name}` : ""}. See it`}
+      onClick={() => view(isViewing ? null : n)}
+    >
+      <i className={s.bar} />
+      <span className={s.foldedV}>v{n}</span>
+      {restore && <span className={s.foldedGlyph} aria-hidden><RestoreIcon /></span>}
+      <span className={s.foldedSummary}>{summary}</span>
+      {person && <Face person={person} size={20} />}
+      <span className={s.trail}>
+        <span className={s.foldedMeta}>{isViewing ? "Viewing" : `${person ? `${person.name} · ` : ""}${chatTime(at, now)}`}</span>
+        <span className={s.seeIt} aria-hidden>{isViewing ? "Back to live" : "See it"}</span>
+      </span>
+    </button>
+  );
+}
+
+function Superseded({ m, b, n }: { m: MessageView; b: BuildView; n: number }) {
+  const summary = useSummary(b);
+  return <FoldedRow id={m.id} n={n} summary={summary} person={m.author} at={b.finished_at ?? m.created_at} title={asked(m, summary)} />;
+}
+
+/** The one-click way back from `n` while it is live (versionCopy
+ *  reverseOf): Undo on a build, Bring back on an undo, busy until done. */
+export function useReverse(n: number) {
+  const { restore, versionByNumber } = useAppState();
+  const [busy, setBusy] = useState(false);
+  const entry = versionByNumber.get(n);
+  const back = entry ? reverseOf(entry, versionByNumber) : null;
+  if (!back) return null;
+  return {
+    ...back,
+    busy,
+    run: async () => {
+      setBusy(true);
+      await restore(back.target, n);
+      setBusy(false);
+    },
+  };
+}
+
+/** The card of the live version (DESIGN 6.5): the green line, "v15 is live",
+ *  and one actions row that ends in its meta and its link. Celebrates only
+ *  the version that just landed on this screen, not one scrolled back into.
+ *  `share`: the maker's own first version, the moment to pass it around, so
+ *  copying the app's link leads. */
+function LiveShell({ id, n, aside, actions, meta, share = false, children }: { id: string; n: number; aside: ReactNode; actions: ReactNode; meta?: string; share?: boolean; children: ReactNode }) {
+  const { app, flashLive, cheer } = useAppState();
+  const { copied, copy } = useCopy();
+  const [celebrate] = useState(() => cheer === n);
+  return (
+    <article className={`${s.card} ${s.live} ${celebrate ? s.celebrate : ""}`} data-id={id}>
+      <BuildLine progress={100} state="live" />
+      <header className={s.head}>
+        <span className={`${s.title} ${s.liveTitle}`}><b>v{n}</b> is live</span>
+        {aside}
       </header>
       <div className={s.body}>
-        {summary && <p className={s.summary}>{summary}</p>}
+        {children}
+        {share && <p className={s.share}>Anyone with the link can change it. Send it to a friend.</p>}
         <div className={s.actions}>
-          <Button size="sm" onClick={flashLive}>See it</Button>
-          {b.base_version != null && (
-            <Button size="sm" busy={undoing} onClick={async () => {
-              setUndoing(true);
-              await restore(b.base_version!);
-              setUndoing(false);
-            }}>
-              {undoing ? "Undoing" : "Undo"}
+          {share && (
+            <Button variant="ink" onClick={() => copy("app", absolute(appUrl(app.slug)))}>
+              {copied === "app" ? <CheckIcon /> : <LinkIcon />}
+              {copied === "app" ? "Copied" : "Copy link"}
             </Button>
           )}
-          <IconButton label={copied ? "Copied" : `Copy the link to v${n}`} size={32} onClick={() => copy("v", absolute(versionUrl(app.slug, n)))}>
-            {copied ? <CheckIcon /> : <LinkIcon />}
-          </IconButton>
+          <Button onClick={flashLive}>See it</Button>
+          {actions}
+          <span className={s.grow} />
+          {meta && <span className={s.meta}>{meta}</span>}
+          {!share && (
+            <IconButton label={copied ? "Copied" : `Copy the link to v${n}`} onClick={() => copy("v", absolute(versionUrl(app.slug, n)))}>
+              {copied ? <CheckIcon /> : <LinkIcon />}
+            </IconButton>
+          )}
         </div>
       </div>
     </article>
   );
 }
 
+/** Undo, or Bring back, busy until the version it restores is live. */
+export function ReverseButton({ r, variant, className }: { r: NonNullable<ReturnType<typeof useReverse>>; variant?: "quiet" | "text"; className?: string }) {
+  return (
+    <Button variant={variant} className={className} busy={r.busy} onClick={r.run}>
+      {!r.busy && <RestoreIcon />}
+      {r.busy ? r.busyLabel : r.label}
+    </Button>
+  );
+}
+
+function LiveNow({ m, b, n }: { m: MessageView; b: BuildView; n: number }) {
+  const summary = useSummary(b);
+  const { files_touched } = useBuildProgress(b.id);
+  const { versionByNumber } = useAppState();
+  const { me } = useIdentity();
+  const entry = versionByNumber.get(n);
+  const tryIt = entry?.try_it;
+  // The first thing Clay made for you: now it is worth sending to someone.
+  const madeByYou = entry?.kind === "build" && entry.parent_number === null && m.author?.id === me.id;
+  const undo = useReverse(n);
+  const changed = files_touched.filter((f) => f.how !== "read").length;
+  const took = b.started_at && b.finished_at ? `Built in ${clock(b.finished_at - b.started_at)}` : null;
+  const meta = [took, changed > 0 ? `${plural(changed, "file")} changed` : null].filter(Boolean).join(" · ");
+  return (
+    <LiveShell
+      id={m.id}
+      n={n}
+      aside={<Asker m={m} />}
+      meta={meta}
+      share={madeByYou}
+      actions={undo && <ReverseButton r={undo} />}
+    >
+      <Request m={m} lines={2} />
+      {summary && <p className={s.summary}>{summary}</p>}
+      {tryIt && <TryIt text={tryIt} className={s.tryIt} />}
+    </LiveShell>
+  );
+}
+
+type RestoreNote = Extract<NonNullable<MessageView["note"]>, { type: "restore" }>;
+
+/** A restore is a version too: live, it is a card saying who undid or
+ *  brought back whose version, with a one-click way to reverse it; once
+ *  something newer lands, it folds into the log like any other version. */
+export function RestoreCard({ m, note }: { m: MessageView; note: RestoreNote }) {
+  const { landed, versionByNumber } = useAppState();
+  const { me } = useIdentity();
+  const now = useNow(30_000);
+  const n = note.version;
+  const entry = versionByNumber.get(n);
+  const line = entry ? versionLine(entry, versionByNumber) : null;
+  const said = restoreSaid(note, versionByNumber, me.id);
+  const reverse = useReverse(n);
+  if (n < landed) return <FoldedRow id={m.id} n={n} summary={entry ? versionSummary(entry, versionByNumber) : said} person={note.by} at={m.created_at} title={said} restore />;
+  if (n > landed) return null;
+  return (
+    <LiveShell
+      id={m.id}
+      n={n}
+      aside={<time className={s.when}>{chatTime(m.created_at, now)}</time>}
+      actions={reverse && <ReverseButton r={reverse} />}
+    >
+      <p className={s.said}>
+        {note.by && <Face person={note.by} size={20} />}
+        <span>{said}</span>
+      </p>
+      {line && <p className={s.aboutSummary}>{line.summary}</p>}
+    </LiveShell>
+  );
+}
+
 function Failed({ m, b }: { m: MessageView; b: BuildView }) {
-  const { composer } = useAppState();
+  const composer = useComposer();
   const retryBuild = useVisitorMutation(api.builder.queue.retry);
   const toast = useToast();
+  const now = useNow(30_000);
   const [details, setDetails] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const retry = async () => {
@@ -168,30 +391,46 @@ function Failed({ m, b }: { m: MessageView; b: BuildView }) {
     }
     setRetrying(false);
   };
+  // The line stays where the build stopped.
+  const stoppedAt = b.started_at && b.finished_at ? buildProgress(b.finished_at - b.started_at) : 8;
+  const at = b.finished_at ?? m.created_at;
   return (
     <article className={s.card} data-id={m.id}>
-      <header className={`${s.head} ${s.failHead}`}>
-        <span className={s.bang} aria-hidden>!</span>
-        <span className={s.state}>Didn't make it</span>
-        <Asker m={m} />
+      <BuildLine progress={stoppedAt} state="failed" />
+      <header className={s.head}>
+        <span className={s.title}>
+          <span className={s.bang} aria-hidden>!</span>
+          Didn't make it
+        </span>
+        <Asker m={m} fact={<time className={s.when}>{chatTime(at, now)}</time>} />
       </header>
       <div className={s.body}>
-        <p className={s.request}>{m.body}</p>
+        <Request m={m} />
         <p className={s.why}>{b.error ?? "Clay couldn't finish this one."}</p>
         <div className={s.actions}>
-          <Button size="sm" variant="make" busy={retrying} onClick={retry}>Try again</Button>
-          <Button size="sm" onClick={() => {
+          <Button variant="accent" busy={retrying} onClick={retry}>Try again</Button>
+          <Button onClick={() => {
             composer.setMode("change");
             composer.setText(m.body);
             composer.setElement(m.element);
             composer.focus();
           }}>Edit</Button>
+          <span className={s.grow} />
           {b.error_detail && (
-            <button className={s.textBtn} onClick={() => setDetails((d) => !d)} aria-expanded={details}>Details</button>
+            <Button variant="text" onClick={() => setDetails((d) => !d)} aria-expanded={details}>Details</Button>
           )}
         </div>
         {details && b.error_detail && <pre className={s.details}>{b.error_detail}</pre>}
       </div>
     </article>
+  );
+}
+
+/** What to do to notice a change that shows itself only when used. */
+export function TryIt({ text, className }: { text: string; className?: string }) {
+  return (
+    <p className={className}>
+      <b>Try it</b> {text[0].toLowerCase() + text.slice(1)}
+    </p>
   );
 }

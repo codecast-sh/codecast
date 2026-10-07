@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { buildStatus, elementRef, messageKind, systemNote, touchedFile, versionKind, versionRef } from "./validators";
+import { buildStatus, elementRef, messageKind, narrationLine, systemNote, touchedFile, versionKind, versionRef } from "./validators";
 
 export default defineSchema({
   /** Anonymous people. The secret lives in their browser; only its hash here.
@@ -11,8 +11,7 @@ export default defineSchema({
     character_avatar: v.optional(v.string()),
     character_name: v.optional(v.string()),
     created_at: v.number(),
-    seen_at: v.number(),
-  }),
+  }).index("by_secret_hash", ["secret_hash"]),
 
   apps: defineTable({
     slug: v.string(),
@@ -26,7 +25,6 @@ export default defineSchema({
     forked_from: v.optional(versionRef),
     created_at: v.number(),
     last_activity_at: v.number(),
-    budget: v.optional(v.object({ day: v.string(), spent_usd: v.number() })),
     /** Changes Clay suggests next, written with each version it builds; the
      *  empty room offers them. A fork starts with its source's. */
     ideas: v.optional(v.array(v.string())),
@@ -47,6 +45,16 @@ export default defineSchema({
     request_message_id: v.optional(v.id("messages")),
     /** restore: the version whose files this copies; fork: the source. */
     source: v.optional(versionRef),
+    /** restore: the live version it undid, when it brought back exactly what
+     *  that version was built on. */
+    undid: v.optional(v.number()),
+    /** build: where to look when it lands, the element its change is about (a
+     *  CSS selector), and for a change people find by doing, what to try. */
+    spotlight: v.optional(v.string()),
+    try_it: v.optional(v.string()),
+    /** The gallery's picture of it, taken by the first screen that showed
+     *  it (stills.ts). Set once; the only field added after the insert. */
+    still: v.optional(v.id("_storage")),
     file_count: v.number(),
     bytes: v.number(),
     files_hash: v.string(),
@@ -74,7 +82,8 @@ export default defineSchema({
   }).index("by_hash", ["hash"]),
 
   /** The room's stream, ordered by _creationTime. A build card's state lives
-   *  on its builds row; the card message only points at it. */
+   *  on its builds row and its live narration on build_progress; the card
+   *  message only points at them. */
   messages: defineTable({
     app_id: v.id("apps"),
     kind: messageKind,
@@ -95,15 +104,29 @@ export default defineSchema({
     status: buildStatus,
     base_version: v.optional(v.number()),
     result_version: v.optional(v.number()),
-    narration: v.array(v.object({ at: v.number(), text: v.string() })),
-    files_touched: v.array(touchedFile),
+    /** Set once the build was started again because the app's live version
+     *  moved while it ran (queue.finish); a second move fails it. */
+    restarted: v.optional(v.boolean()),
     cost_usd: v.optional(v.number()),
     /** Why it failed, in one line for people; `error_detail` is the raw cause. */
     error: v.optional(v.string()),
     error_detail: v.optional(v.string()),
     started_at: v.optional(v.number()),
     finished_at: v.optional(v.number()),
-  }).index("by_app_status", ["app_id", "status"]),
+  })
+    .index("by_app_status", ["app_id", "status"])
+    /** Builds running anywhere, which hold their cost ceiling against the
+     *  global budget until they finish (queue.advance). */
+    .index("by_status", ["status"]),
+
+  /** What a build card narrates while Clay works, rewritten several times a
+   *  second. Kept off the builds row so those writes wake only the card that
+   *  shows them, never the room's whole stream (messages.list). */
+  build_progress: defineTable({
+    build_id: v.id("builds"),
+    narration: v.array(narrationLine),
+    files_touched: v.array(touchedFile),
+  }).index("by_build", ["build_id"]),
 
   presence: defineTable({
     app_id: v.id("apps"),
@@ -150,13 +173,31 @@ export default defineSchema({
     message_id: v.id("messages"),
   }).index("by_app_version", ["app_id", "version"]),
 
-  /** What builds cost across every app, per UTC day (the global budget). */
-  spend: defineTable({ day: v.string(), usd: v.number() }).index("by_day", ["day"]),
+  /** Daily totals, one row per key per UTC day (tallies.ts): build spend in
+   *  dollars overall, per app and per visitor, and bytes of data copied into
+   *  forks overall and per visitor. */
+  tallies: defineTable({ key: v.string(), day: v.string(), value: v.number() }).index("by_key_day", ["key", "day"])
+    .index("by_day", ["day"]),
 
   /** Fixed-window counters (lib/rateLimit), keyed "<rule>:<subject>". */
   limits: defineTable({
     key: v.string(),
     window_start: v.number(),
     count: v.number(),
-  }).index("by_key", ["key"]),
+  })
+    .index("by_key", ["key"])
+    .index("by_window_start", ["window_start"]),
+
+  /** "Report this app": one row per visitor per app, kept for a person to
+   *  read later (there is no moderation UI in v1). */
+  reports: defineTable({
+    app_id: v.id("apps"),
+    visitor_id: v.id("visitors"),
+    /** The version on screen when they reported it. */
+    version: v.number(),
+    reason: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_app_visitor", ["app_id", "visitor_id"])
+    .index("by_created", ["created_at"]),
 });

@@ -29,7 +29,8 @@ export type RunRoute =
   | { kind: "folder"; location: string }
   | { kind: "file"; slug: string; number: number; path: string };
 
-const VERSION_NUMBER = /^[1-9]\d{0,5}$/;
+/** v0 is a new app's starter, served while its first build runs. */
+const VERSION_NUMBER = /^(0|[1-9]\d{0,5})$/;
 
 /** What a /run/ pathname asks for, or null for anything the runtime does not
  *  serve (bad slug, bad version, a path no version could hold). */

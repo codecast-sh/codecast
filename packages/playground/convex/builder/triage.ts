@@ -6,11 +6,10 @@ import { runAssistant } from "@platform/agent";
 import { ConvexError, v } from "convex/values";
 import { internal } from "../_generated/api";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
-import { BUILD_ROOM_CONTEXT } from "../lib/limits";
+import { BUILD_ROOM_CONTEXT, TRIAGE_CEILING_USD } from "../lib/limits";
 import { TRIAGE_MODEL, TRIAGE_SYSTEM, parseTriage, triagePrompt } from "../prompts";
-import { enqueueBuild, roomBefore } from "./queue";
+import { chargeSpend, enqueueBuild, roomBefore } from "./queue";
 
-const TRIAGE_CEILING_USD = 0.02;
 const TRIAGE_DEADLINE_MS = 15_000;
 /** The smallest cap the harness makes a call with; the answer is one word. */
 const TRIAGE_MAX_TOKENS = 1_024;
@@ -44,20 +43,22 @@ export const classify = internalAction({
     });
     const answer = result.messages.map((m) => (m.role === "assistant" ? (m.content ?? "") : "")).join(" ");
     if (result.reason !== "done") console.warn(`[triage] ${message_id} stopped: ${result.reason} ${result.error ?? ""}`);
-    await ctx.runMutation(internal.builder.triage.settle, { message_id, kind: parseTriage(answer) ?? "chat" });
+    await ctx.runMutation(internal.builder.triage.settle, { message_id, kind: parseTriage(answer) ?? "chat", cost_usd: result.costUsd });
     return null;
   },
 });
 
 /** Settle a pending message: a change queues its build (unless the asker is
- *  over the build rate, when it stays chat); chat just clears the mark. */
+ *  over the build rate, when it stays chat); chat just clears the mark. The
+ *  call's real cost replaces the hold messages.send put on the budgets. */
 export const settle = internalMutation({
-  args: { message_id: v.id("messages"), kind: v.union(v.literal("change"), v.literal("chat")) },
-  handler: async (ctx, { message_id, kind }) => {
+  args: { message_id: v.id("messages"), kind: v.union(v.literal("change"), v.literal("chat")), cost_usd: v.number() },
+  handler: async (ctx, { message_id, kind, cost_usd }) => {
     const message = await ctx.db.get(message_id);
-    if (message?.triage !== "pending") return;
-    const app = kind === "change" && message.visitor_id ? await ctx.db.get(message.app_id) : null;
-    if (app && message.visitor_id) {
+    const app = message && (await ctx.db.get(message.app_id));
+    if (app) await chargeSpend(ctx, app._id, message.visitor_id, cost_usd - TRIAGE_CEILING_USD);
+    if (!app || message.triage !== "pending") return;
+    if (kind === "change" && message.visitor_id) {
       try {
         await enqueueBuild(ctx, app, message, message.visitor_id);
         return;

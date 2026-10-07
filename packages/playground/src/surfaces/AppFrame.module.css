@@ -1,7 +1,9 @@
 .stage { position: absolute; inset: 0; background: var(--paper); overflow: hidden; }
 .frame {
   position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: transparent;
-  opacity: 0; transition: opacity 280ms var(--glide);
+  opacity: 0; transition: opacity 280ms var(--ease-out); pointer-events: none;
 }
-.shown { opacity: 1; }
-.loading { position: absolute; inset: 0; display: grid; place-items: center; background: var(--dot-grid), var(--butter); }
+/* The version on screen fades in over the one it replaces. */
+.top { opacity: 1; z-index: 2; pointer-events: auto; }
+.under { opacity: 1; z-index: 1; transition: none; }
+.loading { position: absolute; inset: 0; display: grid; place-items: center; background: var(--paper); animation: global(fade-in) var(--t-quick); }

@@ -30,8 +30,11 @@ export type ElementRef = Infer<typeof elementRef>;
  *  character renamed later reads right. */
 export const systemNote = v.union(
   v.object({ type: v.literal("fork"), visitor_id: v.id("visitors"), version: v.number(), fork_app_id: v.id("apps") }),
-  v.object({ type: v.literal("restore"), visitor_id: v.id("visitors"), from_version: v.number(), version: v.number() }),
+  v.object({ type: v.literal("restore"), visitor_id: v.id("visitors"), from_version: v.number(), version: v.number(), undid: v.optional(v.number()) }),
   v.object({ type: v.literal("error"), version: v.number(), message: v.string() }),
+  /** A fork's data did not all come over: skipped (a copy budget was spent)
+   *  or partial (the copy broke off). */
+  v.object({ type: v.literal("data"), outcome: v.union(v.literal("skipped"), v.literal("partial")) }),
 );
 export type SystemNote = Infer<typeof systemNote>;
 
@@ -44,5 +47,15 @@ export const touchedFile = v.object({
   how: v.union(v.literal("read"), v.literal("wrote"), v.literal("deleted")),
 });
 export type TouchedFile = Infer<typeof touchedFile>;
+
+/** A line of a build card's narration: a step, Clay's plan (the card's lede),
+ *  or what Clay is doing this moment ("now": thinking, reading), which stands
+ *  only until the next line arrives. */
+export const narrationLine = v.object({
+  at: v.number(),
+  text: v.string(),
+  kind: v.optional(v.union(v.literal("plan"), v.literal("now"))),
+});
+export type NarrationLine = Infer<typeof narrationLine>;
 
 export const versionRef = v.object({ app_id: v.id("apps"), version: v.number() });

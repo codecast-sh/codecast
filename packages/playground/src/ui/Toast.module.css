@@ -1,19 +1,20 @@
 .toast {
   position: fixed; z-index: var(--z-toast); top: var(--s4); left: 50%; translate: -50% 0;
-  display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 24px));
-  background: var(--ink); color: var(--paper); border-radius: var(--r-pill); padding: 7px 18px 7px 8px;
-  font: 700 14px/1.3 var(--ui); box-shadow: var(--pop-sm);
-  animation: arrive var(--t-arrive) var(--squish);
+  display: flex; align-items: center; gap: 10px; max-width: min(640px, calc(100vw - 24px));
+  padding: 6px 14px; border-radius: 12px; background: var(--glass); backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--edge); font: 500 13.5px/1.2 var(--ui); color: var(--ink);
+  animation: drop 500ms var(--ease-pop) both;
 }
-.toast:not(:has(> span:first-child[title])) { padding-left: 18px; }
+.withFace { padding-left: 6px; }
+@keyframes drop { from { opacity: 0; transform: translateY(-10px); } }
 .clickable { cursor: pointer; }
-.text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.action {
-  flex: none; color: var(--ink); background: var(--butter); border: var(--line-thin); border-radius: var(--r-pill);
-  padding: 2px 12px; font: 800 13px var(--ui);
-}
-.leaving { animation: leave var(--t-quick) var(--glide) forwards; }
-@keyframes leave { to { opacity: 0; transform: scale(.98); } }
+.text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action { flex: none; margin: -2px -6px -2px 0; }
+.leaving { animation: global(fade-out) var(--t-quick) var(--ease-out) forwards; }
+.version { color: var(--live); font-weight: 650; }
+.who { font-weight: 600; }
+.summary { color: var(--ink-2); }
 @media (max-width: 767px) {
   .toast { width: calc(100vw - 24px); }
 }
+@media (prefers-reduced-motion: reduce) { @keyframes drop { from { opacity: 0; } } }

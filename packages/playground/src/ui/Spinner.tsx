@@ -1,6 +1,6 @@
 import s from "./Spinner.module.css";
 
-/** The orbiting paper disc with a tomato dot: work in progress. */
-export function Spinner({ size = 26 }: { size?: number }) {
-  return <span className={s.spin} style={{ width: size, height: size }} aria-hidden />;
+/** A 13px ring turning: Clay is at work (DESIGN 4.4). */
+export function Spinner({ className = "" }: { className?: string }) {
+  return <span className={`${s.spin} ${className}`} aria-hidden />;
 }

@@ -1,6 +1,6 @@
-// The page's title and Open Graph tags follow the app in view. Static
-// unfurlers read index.html's defaults; per-app unfurls need the server (see
-// the shell's notes on /og).
+// The page's title and Open Graph tags follow the app in view, for the tab
+// and for anything that renders the page. Unfurlers never run it; they get
+// the app's preview from /og/<slug> (convex/lib/unfurl unfurlSlug).
 import { useEffect } from "react";
 import type { AppView } from "../../convex/apps";
 

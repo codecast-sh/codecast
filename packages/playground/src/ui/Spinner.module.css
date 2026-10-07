@@ -1,2 +1,7 @@
-.spin { position: relative; flex: none; display: inline-block; border-radius: 50%; border: var(--line-thick); background: var(--paper); animation: orbit 1.2s linear infinite; }
-.spin::after { content: ""; position: absolute; top: 10%; left: 32%; width: 26%; height: 26%; border-radius: 50%; background: var(--tomato); }
+.spin {
+  flex: none; display: inline-block; width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: global(spin) 900ms linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none !important; border-color: var(--accent); border-right-color: var(--accent-soft); }
+}

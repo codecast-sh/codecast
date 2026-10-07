@@ -3,11 +3,12 @@
 // settling) is called explicitly and the room's view is read back.
 import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
 import { convexTest } from "convex-test";
+import { mintVisitor } from "../../src/lib/mint";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { APP_DAILY_BUDGET_USD } from "../lib/limits";
-import { dayKey } from "./rules";
+import { APP_DAILY_BUDGET_USD, VISITOR_DAILY_BUDGET_USD } from "../lib/limits";
+import { TALLY, dayKey } from "../tallies";
 
 beforeAll(() => jest.useFakeTimers());
 afterAll(() => jest.useRealTimers());
@@ -15,6 +16,8 @@ afterAll(() => jest.useRealTimers());
 const modules = {
   "../_generated/server.ts": () => import("../_generated/server"),
   "../apps.ts": () => import("../apps"),
+  "../builds.ts": () => import("../builds"),
+  "../tallies.ts": () => import("../tallies"),
   "../messages.ts": () => import("../messages"),
   "../presence.ts": () => import("../presence"),
   "../versions.ts": () => import("../versions"),
@@ -26,10 +29,9 @@ const modules = {
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const a = await t.mutation(api.visitors.register, {});
-  const b = await t.mutation(api.visitors.register, {});
-  const A = { visitor_id: a.visitor_id, secret: a.secret };
-  const B = { visitor_id: b.visitor_id, secret: b.secret };
+  const register = (args: { secret: string; nonce: number }) => t.mutation(api.visitors.register, args);
+  const A = await mintVisitor(register);
+  const B = await mintVisitor(register);
   const app = await t.mutation(api.apps.create, { ...A, name: "Tea Tally" });
   const app_id = app.app_id as Id<"apps">;
   const room = async () => (await t.query(api.messages.list, { ...A, app_id, paginationOpts: { numItems: 50, cursor: null } })).page;
@@ -37,11 +39,11 @@ async function setup() {
   const change = (who: typeof A, body: string) => t.mutation(api.messages.send, { ...who, app_id, mode: "change", body });
   const advance = () => t.mutation(internal.builder.queue.advance, { app_id });
   const files = async (n: number) => t.query(internal.versions.draft, { app_id, number: n });
-  const finish = async (build_id: Id<"builds">, result: { ok: true; summary: string; ideas?: string[]; files: { path: string; text: string }[] } | { ok: false; error: string; detail: string }) =>
+  const finish = async (build_id: Id<"builds">, result: { ok: true; summary: string; name?: string; ideas?: string[]; files: { path: string; text: string }[] } | { ok: false; error: string; detail: string }) =>
     t.mutation(internal.builder.queue.finish, { build_id, cost_usd: 0.05, narration: [{ at: 1, text: "Checked, going live" }], files_touched: [], result });
   const edited = async (n: number, find: string, replace: string) =>
     (await files(n)).map((f) => (f.path === "src/styles.css" ? { ...f, text: f.text.replace(find, replace) } : f));
-  return { t, a, b, A, B, app_id, room, card, change, advance, files, finish, edited };
+  return { t, A, B, app_id, room, card, change, advance, files, finish, edited };
 }
 
 describe("the build queue", () => {
@@ -79,10 +81,30 @@ describe("the build queue", () => {
 
     const timeline = await s.t.query(api.versions.list, { ...s.A, app_id: s.app_id });
     expect(timeline.map((v) => [v.number, v.kind, v.author?.id, v.parent_number])).toEqual([
-      [1, "seed", s.a.visitor_id, null],
-      [2, "build", s.b.visitor_id, 1],
+      [1, "seed", s.A.visitor_id, null],
+      [2, "build", s.B.visitor_id, 1],
     ]);
     expect(timeline[1].request_message_id).toBe(first.message_id);
+  });
+
+  test("an app made from a request starts on an unseen starter, so the maker's first build is v1", async () => {
+    const s = await setup();
+    const made = await s.t.mutation(api.apps.create, { ...s.A, prompt: "a frog choir" });
+    const app_id = made.app_id as Id<"apps">;
+    expect((await s.t.query(api.apps.get, { ...s.A, slug: made.slug }))?.live_version).toBe(0);
+    expect(await s.t.query(api.versions.list, { ...s.A, app_id })).toEqual([]);
+    expect(await s.t.query(api.versions.get, { ...s.A, app_id, number: 0 })).toBeNull();
+    await expect(s.t.mutation(api.apps.fork, { ...s.A, app_id, number: 0, name: "Starter" })).rejects.toThrow(/does not exist/);
+
+    await s.t.mutation(internal.builder.queue.advance, { app_id });
+    const card = (await s.t.query(api.messages.list, { ...s.A, app_id, paginationOpts: { numItems: 5, cursor: null } })).page.find((m) => m.build)!;
+    expect(card.build?.base_version).toBe(0);
+    const starter = await s.t.query(internal.versions.draft, { app_id, number: 0 });
+    await s.finish(card.build!.id, { ok: true, summary: "A frog choir", name: "Frog Choir", files: starter });
+    expect((await s.t.query(api.apps.get, { ...s.A, slug: made.slug }))?.name).toBe("Frog Choir");
+    const timeline = await s.t.query(api.versions.list, { ...s.A, app_id });
+    expect(timeline.map((v) => [v.number, v.kind, v.parent_number])).toEqual([[1, "build", null]]);
+    await expect(s.t.mutation(api.versions.restore, { ...s.A, app_id, number: 0, expected_live: 1 })).rejects.toThrow(/does not exist/);
   });
 
   test("a draft the version writer refuses fails the build with the reason behind Details", async () => {
@@ -115,7 +137,7 @@ describe("the build queue", () => {
     const req = await s.change(s.A, "add a sound");
     await s.advance();
     const { build } = await s.card(req.message_id);
-    await s.t.mutation(internal.builder.queue.expire, { build_id: build!.id });
+    await s.t.mutation(internal.builder.queue.expire, { build_id: build!.id, started_at: build!.started_at! });
     expect((await s.card(req.message_id)).build?.status).toBe("failed");
     await s.finish(build!.id, { ok: true, summary: "Adds a sound", files: await s.edited(1, "#fff4d6;", "#000;") });
     expect((await s.card(req.message_id)).build?.status).toBe("failed");
@@ -124,7 +146,7 @@ describe("the build queue", () => {
 
   test("an app over today's budget fails new builds without starting them", async () => {
     const s = await setup();
-    await s.t.run((ctx) => ctx.db.patch(s.app_id, { budget: { day: dayKey(Date.now()), spent_usd: APP_DAILY_BUDGET_USD } }));
+    await s.t.run((ctx) => ctx.db.insert("tallies", { key: TALLY.appSpend(s.app_id), day: dayKey(Date.now()), value: APP_DAILY_BUDGET_USD }));
     const req = await s.change(s.A, "add a leaderboard");
     await s.advance();
     const { build } = await s.card(req.message_id);
@@ -132,14 +154,99 @@ describe("the build queue", () => {
     expect(build?.error).toMatch(/This app has used today's building budget/);
   });
 
-  test("finishing charges the app and the global day", async () => {
+  test("an asker over their own budget fails without starting, whatever app they ask in", async () => {
+    const s = await setup();
+    await s.t.run((ctx) => ctx.db.insert("tallies", { key: TALLY.visitorSpend(s.B.visitor_id as Id<"visitors">), day: dayKey(Date.now()), value: VISITOR_DAILY_BUDGET_USD }));
+    const theirs = await s.change(s.B, "add a leaderboard");
+    await s.advance();
+    expect((await s.card(theirs.message_id)).build?.error).toMatch(/a lot of changes today/);
+    const mine = await s.change(s.A, "add a leaderboard");
+    await s.advance();
+    expect((await s.card(mine.message_id)).build?.status).toBe("building");
+  });
+
+  test("finishing charges the day overall, the app and the asker", async () => {
     const s = await setup();
     const req = await s.change(s.A, "make it blue");
     await s.advance();
     await s.finish((await s.card(req.message_id)).build!.id, { ok: false, error: "x", detail: "y" });
-    const [app, spend] = await s.t.run(async (ctx) => [await ctx.db.get(s.app_id), await ctx.db.query("spend").collect()] as const);
-    expect(app?.budget).toEqual({ day: dayKey(Date.now()), spent_usd: 0.05 });
-    expect(spend.map((r) => r.usd)).toEqual([0.05]);
+    const tallies = await s.t.run((ctx) => ctx.db.query("tallies").collect());
+    expect(Object.fromEntries(tallies.map((r) => [r.key, r.value]))).toEqual({
+      [TALLY.spend]: 0.05,
+      [TALLY.appSpend(s.app_id)]: 0.05,
+      [TALLY.visitorSpend(s.A.visitor_id as Id<"visitors">)]: 0.05,
+    });
+  });
+
+  test("the card's narration lives apart from the stream", async () => {
+    const s = await setup();
+    const req = await s.change(s.A, "make it blue");
+    await s.advance();
+    const { build } = await s.card(req.message_id);
+    await s.t.mutation(internal.builder.queue.narrate, { build_id: build!.id, narration: [{ at: 1, text: "Painting it blue" }], files_touched: [{ path: "src/styles.css", how: "wrote" }] });
+    expect(await s.t.query(api.builds.progress, { ...s.B, build_id: build!.id })).toEqual({
+      narration: [{ at: 1, text: "Painting it blue" }],
+      files_touched: [{ path: "src/styles.css", how: "wrote" }],
+    });
+    expect(Object.keys((await s.card(req.message_id)).build!)).not.toContain("narration");
+  });
+});
+
+describe("a live version that moves under a running build", () => {
+  test("a restore during a build restarts it from the new live version instead of undoing it", async () => {
+    const s = await setup();
+    const v2 = await s.change(s.A, "make it blue");
+    await s.advance();
+    await s.finish((await s.card(v2.message_id)).build!.id, { ok: true, summary: "Blue", files: await s.edited(1, "#fff4d6;", "#2b59ff;") });
+    const req = await s.change(s.B, "add a moon");
+    await s.advance();
+    const running = (await s.card(req.message_id)).build!;
+    expect([running.status, running.base_version]).toEqual(["building", 2]);
+
+    // Someone restores v1 (as v3) while Clay works from v2.
+    await s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 1, expected_live: 2 });
+    await s.finish(running.id, { ok: true, summary: "Adds a moon", files: await s.edited(2, "#2b59ff;", "#123456;") });
+    const restarted = (await s.card(req.message_id)).build!;
+    expect([restarted.id, restarted.status, restarted.base_version]).toEqual([running.id, "queued", null]);
+    expect((await s.t.query(api.builds.progress, { ...s.A, build_id: running.id }))?.narration[0].text).toMatch(/v3 went live while Clay worked/);
+    expect((await s.t.query(api.versions.list, { ...s.A, app_id: s.app_id })).map((v) => v.number)).toEqual([1, 2, 3]);
+
+    await s.advance();
+    expect((await s.card(req.message_id)).build?.base_version).toBe(3);
+    await s.finish(running.id, { ok: true, summary: "Adds a moon", files: await s.edited(3, "#fff4d6;", "#123456;") });
+    const live = (await s.card(req.message_id)).build!;
+    expect([live.status, live.result_version]).toEqual(["live", 4]);
+    const tl = await s.t.query(api.versions.list, { ...s.A, app_id: s.app_id });
+    expect(tl.map((v) => [v.number, v.kind, v.parent_number])).toEqual([[1, "seed", null], [2, "build", 1], [3, "restore", 2], [4, "build", 3]]);
+  });
+
+  test("a second move gives up with a reason rather than loop", async () => {
+    const s = await setup();
+    const v2 = await s.change(s.A, "make it blue");
+    await s.advance();
+    await s.finish((await s.card(v2.message_id)).build!.id, { ok: true, summary: "Blue", files: await s.edited(1, "#fff4d6;", "#2b59ff;") });
+    const req = await s.change(s.B, "add a moon");
+    for (const live of [2, 3]) {
+      await s.advance();
+      await s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 1, expected_live: live });
+      await s.finish((await s.card(req.message_id)).build!.id, { ok: true, summary: "Adds a moon", files: await s.edited(1, "#fff4d6;", "#123456;") });
+    }
+    const gave = (await s.card(req.message_id)).build!;
+    expect([gave.status, gave.error]).toEqual(["failed", "The app kept changing while Clay worked. Try again."]);
+    expect((await s.t.query(api.versions.list, { ...s.A, app_id: s.app_id })).length).toBe(4);
+  });
+
+  test("the first run's watchdog leaves a restarted build alone", async () => {
+    const s = await setup();
+    const req = await s.change(s.B, "add a moon");
+    await s.advance();
+    const first = (await s.card(req.message_id)).build!;
+    // As finish does when the live version moved: back in line, then started again later.
+    await s.t.run((ctx) => ctx.db.patch(first.id, { status: "queued", base_version: undefined, started_at: undefined, restarted: true }));
+    jest.advanceTimersByTime(1_000);
+    await s.advance();
+    await s.t.mutation(internal.builder.queue.expire, { build_id: first.id, started_at: first.started_at! });
+    expect((await s.card(req.message_id)).build?.status).toBe("building");
   });
 });
 
@@ -150,21 +257,21 @@ describe("triage and the first build", () => {
     const hi = await s.t.mutation(api.messages.send, { ...s.B, app_id: s.app_id, mode: "auto", body: "morning all" });
     expect((await s.card(ask.message_id)).triage_pending).toBe(true);
 
-    await s.t.mutation(internal.builder.triage.settle, { message_id: ask.message_id, kind: "change" });
-    await s.t.mutation(internal.builder.triage.settle, { message_id: hi.message_id, kind: "chat" });
+    await s.t.mutation(internal.builder.triage.settle, { message_id: ask.message_id, kind: "change", cost_usd: 0 });
+    await s.t.mutation(internal.builder.triage.settle, { message_id: hi.message_id, kind: "chat", cost_usd: 0 });
     const asked = await s.card(ask.message_id);
     const said = await s.card(hi.message_id);
     expect([asked.kind, asked.triage_pending, asked.build?.status]).toEqual(["request", false, "queued"]);
     expect([said.kind, said.triage_pending, said.build]).toEqual(["chat", false, null]);
 
     // Settling twice (a retried action) queues nothing more.
-    await s.t.mutation(internal.builder.triage.settle, { message_id: ask.message_id, kind: "change" });
+    await s.t.mutation(internal.builder.triage.settle, { message_id: ask.message_id, kind: "change", cost_usd: 0 });
     expect((await s.room()).filter((m) => m.build).length).toBe(1);
   });
 
   test("making an app from a prompt queues its first build on the prompt", async () => {
     const t = convexTest(schema, modules);
-    const a = await t.mutation(api.visitors.register, {});
+    const a = await mintVisitor((args) => t.mutation(api.visitors.register, args));
     const created = await t.mutation(api.apps.create, { visitor_id: a.visitor_id, secret: a.secret, prompt: "a frog choir" });
     const page = await t.query(api.messages.list, {
       visitor_id: a.visitor_id,

@@ -59,12 +59,20 @@ describe("runBuilder", () => {
     ]);
     expect(r.narration.view().map((l) => l.text)).toEqual([
       "Adding a reset button.",
-      "Adding a reset button (src/App.jsx)",
+      "Adding a reset button",
       "Fixing a problem the check found",
-      "Creating src/Reset.jsx",
+      "Creating Reset.jsx",
       "Checked, going live",
     ]);
     expect(r.steps).toBeGreaterThan(3);
+  });
+
+  test("finish says where the change is and what to try", async () => {
+    const r = await build([
+      call("edit_file", { ...importReset, path: "src/styles.css", old_text: "--accent: #c4491f;", new_text: "--accent: #ff6a4d;" }),
+      call("finish", { summary: "Turns the buttons tomato", spotlight: " .wave ", try: "Tap the wave button." }),
+    ]);
+    expect(r.outcome).toEqual({ kind: "finished", summary: "Turns the buttons tomato", spotlight: ".wave", try: "Tap the wave button" });
   });
 
   test("decline settles without changing anything", async () => {
@@ -85,11 +93,11 @@ describe("runBuilder", () => {
     const r = await build([
       call("edit_file", { path: "src/App.jsx", old_text: "no such text", new_text: "x" }),
       call("finish", { summary: "Nothing" }),
-      call("edit_file", { path: "src/styles.css", old_text: "--leaf: #2fd6a0;", new_text: "--leaf: #ff6a4d;" }),
+      call("edit_file", { path: "src/styles.css", old_text: "--accent: #c4491f;", new_text: "--accent: #ff6a4d;" }),
       call("finish", { summary: "Turns the buttons tomato" }),
     ]);
     expect(r.outcome).toEqual({ kind: "finished", summary: "Turns the buttons tomato" });
-    expect(r.draft.read("src/styles.css")).toContain("--leaf: #ff6a4d;");
+    expect(r.draft.read("src/styles.css")).toContain("--accent: #ff6a4d;");
   });
 
   test("a run that ends its turn without finish is a stop, not a commit", async () => {

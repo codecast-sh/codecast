@@ -47,7 +47,7 @@ function Hello() {
   const openPicker = useCharacterPicker();
   useEffect(() => {
     if (!fresh) return;
-    toast({ face: me, text: `You're ${characterTitle(me)}.`, action: { label: "Change", onClick: () => openPicker() } });
+    toast({ face: me, text: `You're ${characterTitle(me)}.`, action: { label: "Pick another", onClick: () => openPicker() } });
   }, [fresh]);
   return null;
 }
@@ -58,7 +58,7 @@ function Booting() {
     const t = setTimeout(() => setLate(true), 400);
     return () => clearTimeout(t);
   }, []);
-  return <div className={s.boot}>{late && <Blob size={72} squash />}</div>;
+  return <div className={s.boot}>{late && <Blob size={28} faint />}</div>;
 }
 
 /** Shown when the connection drops after it was up; gone without fanfare. */
@@ -82,7 +82,7 @@ function Reconnecting() {
   if (!down) return null;
   return (
     <div className={s.reconnecting} role="status">
-      Reconnecting <Dots size={5} light />
+      Reconnecting <Dots />
     </div>
   );
 }

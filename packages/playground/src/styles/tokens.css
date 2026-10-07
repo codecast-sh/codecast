@@ -1,60 +1,83 @@
 /* Clayground tokens (DESIGN.md section 4). Components never use a raw hex. */
 :root {
-  /* core */
-  --butter: #ffd84a;
-  --butter-deep: #f7c21b;
-  --ink: #1d1631;
-  --ink-soft: #4a4160;
-  --ink-faint: rgba(29, 22, 49, 0.13);
-  --paper: #fffdf6;
-  --cream: #fff7e0;
+  /* neutrals: warm paper, never pure white or neutral gray */
+  --paper: #f7f3ec;
+  --surface: #fffdf9;
+  --sunk: #efe9df;
+  --line: #e5ddd0;
+  --line-2: #d4c9b8;
+  --ink: #2b2520;
+  --ink-2: #665c53;
+  --ink-3: #776b60;
 
-  /* meaning: each color means exactly one thing */
-  --tomato: #ff5b3a;
-  --tomato-soft: #ffd6cc;
-  --mint: #2fd6a0;
-  --pool: #3b7bff;
-  --bubble: #ff9fd2;
-  --sky: #9fe3ff;
+  /* persimmon: Clay, and the actions that start Clay's work */
+  --accent: #c4491f;
+  --accent-hover: #ad3f1a;
+  --accent-soft: #f7e2d6;
+  --clay-eyes: #2b1a12;
 
-  --scrim: rgba(29, 22, 49, 0.45);
+  /* live: used small, as a dot, a label, a tick or a 2px line; never a fill */
+  --live: #277548;
+  --live-soft: #e3f0e6;
+  --live-line: #bfdcc8;
+  --live-fold: #a8cdb4;
 
-  --display: "Bagel Fat One", "Gabarito", sans-serif;
-  --ui: "Gabarito", system-ui, sans-serif;
-  --mono: "Martian Mono", ui-monospace, monospace;
+  /* overlays */
+  --scrim: rgba(43, 37, 32, .32);
+  --glass: rgba(255, 253, 249, .94);
+  --hover-row: rgba(239, 233, 223, .55);
+  --past-frame: rgba(255, 253, 249, .85);
+  --shadow-tint: 70, 45, 20;
+  --edge: rgba(var(--shadow-tint), .08);
 
+  /* type (4.2) */
+  --ui: "Commissioner", system-ui, sans-serif;
+  --voice: "Recursive", var(--ui);
+  --mono: "Recursive", ui-monospace, monospace;
+  --voice-axes: "CASL" 1, "MONO" 0;
+  --mono-axes: "CASL" 0, "MONO" 1;
+
+  --t-hero: 700 46px/1.05 var(--voice);
+  --t-h1: 700 24px/1.1 var(--voice);
+  --t-h2: 700 20px/1.1 var(--voice);
+  --t-h3: 700 18px/1.2 var(--voice);
+  --t-card: 650 14.5px/1.2 var(--voice);
+  --t-input-lg: 500 21px/1.3 var(--ui);
+  --t-lede: 400 18px/1.5 var(--ui);
+  --t-body: 400 14px/1.45 var(--ui);
+  --t-name: 650 13.5px/1.3 var(--ui);
+  --t-label: 600 13px/1.2 var(--ui);
+  --t-meta: 400 12px/1.35 var(--ui);
+  --t-mono: 500 11.5px/1.4 var(--mono);
+
+  /* space, radius, line, elevation (4.3) */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px;
-  --s6: 24px; --s8: 32px; --s11: 44px; --s15: 60px;
+  --s6: 24px; --s8: 32px; --s12: 48px; --s16: 64px;
 
-  --r-xs: 8px;
-  --r-sm: 12px;
-  --r-md: 16px;
-  --r-lg: 20px;
-  --r-xl: 24px;
-  --r-2xl: 34px;
+  --r-xs: 5px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
   --r-pill: 999px;
 
-  --line-thin: 2px solid var(--ink);
-  --line: 2.5px solid var(--ink);
-  --line-thick: 3px solid var(--ink);
-  --line-heavy: 4px solid var(--ink);
+  --hair: 1px solid var(--line);
+  --hair-2: 1px solid var(--line-2);
+  --ring-line: inset 0 0 0 1px var(--line);
+  --ring-line-2: inset 0 0 0 1px var(--line-2);
 
-  --pop-xs: 2px 2px 0 var(--ink);
-  --pop-sm: 3px 3px 0 var(--ink);
-  --pop: 5px 5px 0 var(--ink);
-  --pop-lg: 8px 8px 0 var(--ink);
-  --pop-xl: 12px 12px 0 var(--ink);
+  --shadow-sm: 0 1px 2px rgba(var(--shadow-tint), .06), 0 0 0 1px rgba(var(--shadow-tint), .02);
+  --shadow-md: 0 8px 24px -10px rgba(var(--shadow-tint), .22), 0 2px 5px rgba(var(--shadow-tint), .06);
+  --shadow-lg: 0 24px 60px -18px rgba(var(--shadow-tint), .35), 0 4px 10px rgba(var(--shadow-tint), .08);
+  --focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink-2);
 
-  --focus: 0 0 0 3px var(--paper), 0 0 0 6px var(--ink);
-  --dot-grid: radial-gradient(var(--ink-faint) 1.6px, transparent 1.8px) 0 0 / 22px 22px;
-  --stripes: repeating-linear-gradient(-45deg, var(--butter) 0 10px, var(--butter-deep) 10px 20px);
-
-  --squish: cubic-bezier(.34, 1.56, .64, 1);
-  --glide: cubic-bezier(.2, .8, .2, 1);
+  /* motion (4.4) */
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-pop: cubic-bezier(.3, 1.35, .6, 1);
   --t-press: 120ms;
-  --t-quick: 180ms;
-  --t-move: 260ms;
-  --t-arrive: 360ms;
+  --t-quick: 150ms;
+  --t-move: 250ms;
+  --t-arrive: 320ms;
 
   /* layers (4.5) */
   --z-frame: 0;

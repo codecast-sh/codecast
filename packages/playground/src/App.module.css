@@ -1,6 +1,7 @@
-.boot { position: fixed; inset: 0; display: grid; place-items: center; background: var(--dot-grid), var(--butter); }
+.boot { position: fixed; inset: 0; display: grid; place-items: center; background: var(--paper); }
 .reconnecting {
   position: fixed; z-index: var(--z-toast); top: var(--s4); left: 50%; translate: -50% 0;
-  display: flex; align-items: center; gap: var(--s2); background: var(--ink); color: var(--paper);
-  border-radius: var(--r-pill); padding: 6px 16px; font: 800 13px var(--ui); animation: arrive var(--t-arrive) var(--squish);
+  display: flex; align-items: center; gap: var(--s2); height: 28px; padding: 0 14px; border-radius: var(--r-pill);
+  background: var(--ink); color: var(--surface); box-shadow: var(--shadow-md); font: 600 12.5px/1 var(--ui);
+  animation: global(fade-in) var(--t-quick) var(--ease-out);
 }

@@ -3,6 +3,7 @@
 // called explicitly.
 import { afterAll, beforeAll, describe, expect, jest, test } from "bun:test";
 import { convexTest } from "convex-test";
+import { mintVisitor } from "../src/lib/mint";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -13,6 +14,8 @@ afterAll(() => jest.useRealTimers());
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
   "./apps.ts": () => import("./apps"),
+  "./builds.ts": () => import("./builds"),
+  "./tallies.ts": () => import("./tallies"),
   "./messages.ts": () => import("./messages"),
   "./presence.ts": () => import("./presence"),
   "./runtime.ts": () => import("./runtime"),
@@ -25,10 +28,9 @@ const modules = {
 
 async function setup() {
   const t = convexTest(schema, modules);
-  const a = await t.mutation(api.visitors.register, {});
-  const b = await t.mutation(api.visitors.register, {});
-  const A = { visitor_id: a.visitor_id, secret: a.secret };
-  const B = { visitor_id: b.visitor_id, secret: b.secret };
+  const register = (args: { secret: string; nonce: number }) => t.mutation(api.visitors.register, args);
+  const A = await mintVisitor(register);
+  const B = await mintVisitor(register);
   const made = await t.mutation(api.apps.create, { ...A, name: "Tea Tally" });
   const app_id = made.app_id as Id<"apps">;
   const files = (id: Id<"apps">, n: number) => t.query(internal.versions.draft, { app_id: id, number: n });
@@ -42,35 +44,63 @@ async function setup() {
     app_id,
     kind: "build",
     summary: "Turns the background blue",
-    author_id: a.visitor_id as Id<"visitors">,
+    author_id: A.visitor_id as Id<"visitors">,
     files: v1.map((f) => (f.path === "src/styles.css" ? { ...f, text: `${f.text}\nbody { background: blue; }\n` } : f)),
   });
-  return { t, a, b, A, B, app_id, slug: made.slug, files, timeline, room, view };
+  return { t, A, B, app_id, slug: made.slug, files, timeline, room, view };
 }
 
 describe("restore", () => {
   test("appends a new live version with the old files and tells the room", async () => {
     const s = await setup();
-    const { number } = await s.t.mutation(api.versions.restore, { ...s.B, app_id: s.app_id, number: 1 });
+    const { number } = await s.t.mutation(api.versions.restore, { ...s.B, app_id: s.app_id, number: 1, expected_live: 2 });
     expect(number).toBe(3);
     expect(await s.files(s.app_id, 3)).toEqual(await s.files(s.app_id, 1));
 
     const tl = await s.timeline();
     expect(tl.map((v) => [v.number, v.kind, v.parent_number])).toEqual([[1, "seed", null], [2, "build", 1], [3, "restore", 2]]);
     expect(tl[2].source).toEqual({ app_id: s.app_id, version: 1 });
-    expect(tl[2].author?.id).toBe(s.b.visitor_id);
-    expect(tl[2].summary).toBe(tl[0].summary);
+    expect(tl[2].author?.id).toBe(s.B.visitor_id);
     expect((await s.view(s.slug))?.live_version).toBe(3);
 
     const note = (await s.room()).find((m) => m.kind === "system")!;
-    expect(note.note).toMatchObject({ type: "restore", from_version: 1, version: 3, by: { id: s.b.visitor_id } });
+    expect(note.note).toMatchObject({ type: "restore", from_version: 1, version: 3, by: { id: s.B.visitor_id } });
+  });
+
+  test("restoring what the live version was built on is an undo of it, said as one", async () => {
+    const s = await setup();
+    await s.t.mutation(api.versions.restore, { ...s.B, app_id: s.app_id, number: 1, expected_live: 2 });
+    const undo = (await s.timeline())[2];
+    expect(undo.undid).toBe(2);
+    expect(undo.summary).toBe("Undid v2: Turns the background blue");
+    expect((await s.room()).find((m) => m.kind === "system")!.note).toMatchObject({ type: "restore", undid: 2 });
+  });
+
+  test("restoring anything else brings it back, keeping its summary", async () => {
+    const s = await setup();
+    // Undo v2 (v3), then bring v2 back: a redo, not an undo of v3.
+    await s.t.mutation(api.versions.restore, { ...s.B, app_id: s.app_id, number: 1, expected_live: 2 });
+    await s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 2, expected_live: 3 });
+    const back = (await s.timeline())[3];
+    expect(back.undid).toBeNull();
+    expect(back.summary).toBe("Turns the background blue");
+    expect((await s.room()).find((m) => m.note?.type === "restore" && m.note.version === 4)!.note).toMatchObject({ from_version: 2, undid: null });
   });
 
   test("refuses the live version and versions that do not exist", async () => {
     const s = await setup();
-    await expect(s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 2 })).rejects.toThrow(/already live/);
-    await expect(s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 9 })).rejects.toThrow(/does not exist/);
+    await expect(s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 2, expected_live: 2 })).rejects.toThrow(/already live/);
+    await expect(s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 9, expected_live: 2 })).rejects.toThrow(/does not exist/);
     expect((await s.timeline()).length).toBe(2);
+  });
+
+  test("refuses when something went live since it was chosen, so a double Undo restores once", async () => {
+    const s = await setup();
+    // Two people press Undo on v2 together: both chose against v2 being live.
+    await s.t.mutation(api.versions.restore, { ...s.A, app_id: s.app_id, number: 1, expected_live: 2 });
+    await expect(s.t.mutation(api.versions.restore, { ...s.B, app_id: s.app_id, number: 1, expected_live: 2 })).rejects.toThrow(/v3 is live now/);
+    expect((await s.timeline()).map((v) => v.number)).toEqual([1, 2, 3]);
+    expect((await s.room()).filter((m) => m.note?.type === "restore").length).toBe(1);
   });
 });
 
@@ -78,27 +108,28 @@ describe("fork", () => {
   test("makes a new app from any version, with a copy of the data, linked both ways", async () => {
     const s = await setup();
     await s.t.run(async (ctx) => {
-      const by = s.a.visitor_id as Id<"visitors">;
+      const by = s.A.visitor_id as Id<"visitors">;
       await ctx.db.insert("app_data", { app_id: s.app_id, collection: "cups", value: { n: 3 }, size: 7, rev: 1, created_by: by, updated_by: by, updated_at: 1 });
       await ctx.db.insert("app_data_usage", { app_id: s.app_id, docs: 1, bytes: 7 });
     });
 
+    // A small app's data copies inside the fork itself: there the moment it exists.
     const fork = await s.t.mutation(api.apps.fork, { ...s.B, app_id: s.app_id, number: 1, name: "  Tea Tally, Bo's take " });
-    await s.t.mutation(internal.runtime.copyData, { from_app_id: s.app_id, to_app_id: fork.app_id, cursor: null });
 
     const forked = (await s.view(fork.slug))!;
     expect([forked.name, forked.live_version, forked.forked_from]).toEqual(["Tea Tally, Bo's take", 1, { app_id: s.app_id, slug: s.slug, name: "Tea Tally", version: 1 }]);
     expect(await s.files(fork.app_id, 1)).toEqual(await s.files(s.app_id, 1));
     const [v1] = await s.timeline(fork.app_id);
-    expect([v1.kind, v1.author?.id, v1.source]).toEqual(["fork", s.b.visitor_id, { app_id: s.app_id, version: 1 }]);
+    expect([v1.kind, v1.author?.id, v1.source]).toEqual(["fork", s.B.visitor_id, { app_id: s.app_id, version: 1 }]);
 
     const data = await s.t.run((ctx) => ctx.db.query("app_data").collect());
     expect(data.filter((d) => d.app_id === fork.app_id).map((d) => d.value)).toEqual([{ n: 3 }]);
 
     const note = (await s.room()).find((m) => m.kind === "system")!;
-    expect(note.note).toMatchObject({ type: "fork", version: 1, by: { id: s.b.visitor_id }, fork: { slug: fork.slug, name: "Tea Tally, Bo's take" } });
+    expect(note.note).toMatchObject({ type: "fork", version: 1, by: { id: s.B.visitor_id }, fork: { slug: fork.slug, name: "Tea Tally, Bo's take" } });
     expect(await s.room(fork.app_id)).toEqual([]);
-    expect((await s.timeline()).map((v) => v.fork_count)).toEqual([1, 0]);
+    const [source1, source2] = await s.timeline();
+    expect([source1.forks.map((f) => [f.slug, f.name, f.by?.id]), source2.forks]).toEqual([[[fork.slug, "Tea Tally, Bo's take", s.B.visitor_id]], []]);
   });
 
   test("needs a name and a real version", async () => {

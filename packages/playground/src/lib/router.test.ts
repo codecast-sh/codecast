@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRoute } from "./router";
+import { isPlainClick, parseRoute } from "./router";
 
 describe("parseRoute", () => {
   test("home", () => {
@@ -20,5 +20,17 @@ describe("parseRoute", () => {
     expect(parseRoute("/frog-choir-m6ub/v/0", "")).toEqual({ kind: "missing" });
     expect(parseRoute("/frog-choir-m6ub/v/abc", "")).toEqual({ kind: "missing" });
     expect(parseRoute("/frog-choir-m6ub/edit", "")).toEqual({ kind: "missing" });
+  });
+});
+
+describe("isPlainClick", () => {
+  const click = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false };
+  test("a plain primary click moves in place", () => {
+    expect(isPlainClick(click)).toBe(true);
+  });
+  test("modified, other-button and handled clicks are the browser's", () => {
+    for (const e of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { defaultPrevented: true }]) {
+      expect(isPlainClick({ ...click, ...e })).toBe(false);
+    }
   });
 });

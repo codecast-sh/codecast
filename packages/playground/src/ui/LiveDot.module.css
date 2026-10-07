@@ -1,1 +1,7 @@
-.dot { flex: none; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--mint); border: var(--line-thin); animation: pulse-ring 1.6s infinite; }
+.dot { position: relative; flex: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
+/* The celebration's one ping: a ring from 3px to 10px, fading. */
+.ping::after { content: ""; position: absolute; inset: 0; border-radius: 50%; animation: ping 600ms var(--ease-out) both; }
+@keyframes ping {
+  from { box-shadow: 0 0 0 3px rgba(39, 117, 72, .45); }
+  to { box-shadow: 0 0 0 10px rgba(39, 117, 72, 0); }
+}

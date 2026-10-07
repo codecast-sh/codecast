@@ -1,11 +1,9 @@
 .stack { display: inline-flex; align-items: center; }
-.slot { display: inline-flex; margin-left: calc(var(--size) / -3); border-radius: 35%; }
-.slot:first-child { margin-left: 0; }
-.slot > span { box-shadow: var(--pop-xs); }
-.stack[data-hop] .slot { animation: face-hop var(--t-arrive) var(--squish) both; }
-@keyframes face-hop { 40% { transform: translateY(-4px); } }
-.more {
-  margin-left: calc(var(--size) / -4); height: var(--size); min-width: var(--size); padding: 0 7px;
-  display: inline-grid; place-items: center; border: var(--line); border-radius: var(--r-sm);
-  background: var(--ink); color: var(--butter); font: 800 13px var(--ui); box-shadow: var(--pop-xs);
-}
+.slot { display: inline-flex; border-radius: 30%; box-shadow: 0 0 0 2px var(--ring, var(--surface)); }
+.slot + .slot { margin-left: -7px; }
+.stack[data-hop] .slot { animation: global(hop) 500ms var(--ease-pop) both; }
+.stack .arriving { animation: face-in var(--t-arrive) var(--ease-out) both; }
+@keyframes face-in { from { opacity: 0; transform: translateY(6px); } }
+.stack .leaving { animation: global(fade-out) var(--t-quick) var(--ease-out) forwards; pointer-events: none; }
+.more { margin-left: 5px; font: 600 12px/1 var(--ui); color: var(--ink-2); font-feature-settings: "tnum" 1; }
+@media (prefers-reduced-motion: reduce) { @keyframes face-in { from { opacity: 0; } } }

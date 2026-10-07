@@ -1,0 +1,6 @@
+.line {
+  position: absolute; top: 0; left: 0; height: 2px; border-radius: 0 2px 2px 0; pointer-events: none;
+  background: var(--accent); transition: width 600ms var(--ease-out), background-color 200ms var(--ease-out), opacity 200ms;
+}
+.live { width: 100% !important; background: var(--live); transition: width var(--t-move) var(--ease-out), background-color 200ms var(--ease-out); }
+.failed { opacity: .45; }

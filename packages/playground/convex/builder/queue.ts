@@ -1,5 +1,7 @@
 // The build queue: one build at a time per app, first in first out, each
-// starting from the live version at the moment it starts. A request message
+// starting from the live version at the moment it starts, and committing only
+// on top of that same version (a restore that lands meanwhile restarts it). A
+// request message
 // carries its build (build_id), so the room shows one item per request that
 // morphs from queued to building to live or failed, and a retry re-queues the
 // same item. run.ts does the work; everything that changes a build's status
@@ -9,14 +11,16 @@ import { internal } from "../_generated/api";
 import { internalMutation, internalQuery, mutation, type MutationCtx, type QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { fail, type PlaygroundErrorData } from "../lib/errors";
-import { BUILD_DEADLINE_MS, BUILD_HISTORY_CONTEXT, BUILD_ROOM_CONTEXT } from "../lib/limits";
+import { BUILD_CEILING_USD, BUILD_DEADLINE_MS, BUILD_HISTORY_CONTEXT, BUILD_ROOM_CONTEXT, GLOBAL_DAILY_BUDGET_USD } from "../lib/limits";
 import { takeRate } from "../limits";
 import { requireApp } from "../model";
+import { cleanAppName } from "../lib/slugs";
 import { appendVersion } from "../versions";
 import { publicVisitors, requireVisitor } from "../visitors";
-import { touchedFile, visitorArgs } from "../validators";
+import { narrationLine, touchedFile, visitorArgs, type NarrationLine } from "../validators";
 import type { PromptMessage } from "../prompts";
-import { cleanIdeas, dayKey, nextInLine, spentOn, startRefusal, type Refusal } from "./rules";
+import { TALLY, addTally, tally } from "../tallies";
+import { cleanIdeas, nextInLine, startRefusal, type Refusal } from "./rules";
 
 /** Time past the run's own deadline before the watchdog fails a build whose
  *  action died without reporting. */
@@ -40,23 +44,32 @@ export async function enqueueBuild(
     card_message_id: message._id,
     requested_by: message.visitor_id,
     status: "queued",
-    narration: [],
-    files_touched: [],
   });
   await ctx.db.patch(message._id, { kind: "request", build_id: buildId, triage: undefined });
   await ctx.scheduler.runAfter(0, internal.builder.queue.advance, { app_id: app._id });
   return buildId;
 }
 
-/** Why a build of `app` may not start now (paused, a budget spent), or null. */
-export async function buildRefusal(ctx: QueryCtx, app: Doc<"apps">, now = Date.now()): Promise<Refusal | null> {
-  const day = dayKey(now);
-  const global = await ctx.db.query("spend").withIndex("by_day", (q) => q.eq("day", day)).unique();
-  return startRefusal({
-    paused: process.env.PLAYGROUND_BUILDS_OFF === "1",
-    appSpent: spentOn(app.budget && { day: app.budget.day, usd: app.budget.spent_usd }, day),
-    globalSpent: spentOn(global, day),
-  });
+/** Why a build of `app` asked by `asker` may not start now (paused, a
+ *  budget spent), or null. `heldUsd` is spend not charged yet that already
+ *  counts against the global budget (builds running elsewhere). */
+export async function buildRefusal(ctx: QueryCtx, app: Doc<"apps">, asker: Id<"visitors">, heldUsd = 0): Promise<Refusal | null> {
+  const [globalSpent, appSpent, visitorSpent] = await Promise.all([
+    tally(ctx, TALLY.spend),
+    tally(ctx, TALLY.appSpend(app._id)),
+    tally(ctx, TALLY.visitorSpend(asker)),
+  ]);
+  return startRefusal({ paused: process.env.PLAYGROUND_BUILDS_OFF === "1", appSpent, globalSpent: globalSpent + heldUsd, visitorSpent });
+}
+
+/** What builds running anywhere may still cost: each holds its ceiling until
+ *  finish charges what it really spent, so a burst of builds starting at once
+ *  cannot overrun the global budget. Read only when a build starts, so the
+ *  queries that show whether builds are paused do not watch every build. */
+async function heldByRunningBuilds(ctx: QueryCtx): Promise<number> {
+  const enough = Math.ceil(GLOBAL_DAILY_BUDGET_USD / BUILD_CEILING_USD);
+  const running = await ctx.db.query("builds").withIndex("by_status", (q) => q.eq("status", "building")).take(enough);
+  return running.length * BUILD_CEILING_USD;
 }
 
 /** Start the next build if none is running. Refused builds (paused,
@@ -70,20 +83,21 @@ export const advance = internalMutation({
       ...(await ctx.db.query("builds").withIndex("by_app_status", (q) => q.eq("app_id", app_id).eq("status", "building")).take(1)),
       ...(await ctx.db.query("builds").withIndex("by_app_status", (q) => q.eq("app_id", app_id).eq("status", "queued")).collect()),
     ];
-    const next = nextInLine(rows);
+    const nextId = nextInLine(rows);
+    const next = nextId && rows.find((r) => r._id === nextId);
     if (!next) return;
 
     const now = Date.now();
-    const refusal = await buildRefusal(ctx, app, now);
+    const refusal = await buildRefusal(ctx, app, next.requested_by, await heldByRunningBuilds(ctx));
     if (refusal) {
-      await ctx.db.patch(next, { status: "failed", error: refusal.error, error_detail: refusal.detail, finished_at: now });
+      await ctx.db.patch(next._id, { status: "failed", error: refusal.error, error_detail: refusal.detail, finished_at: now });
       await ctx.scheduler.runAfter(0, internal.builder.queue.advance, { app_id });
       return;
     }
 
-    await ctx.db.patch(next, { status: "building", base_version: app.live_version, started_at: now });
-    await ctx.scheduler.runAfter(0, internal.builder.run.build, { build_id: next });
-    await ctx.scheduler.runAfter(BUILD_DEADLINE_MS + WATCHDOG_GRACE_MS, internal.builder.queue.expire, { build_id: next });
+    await ctx.db.patch(next._id, { status: "building", base_version: app.live_version, started_at: now });
+    await ctx.scheduler.runAfter(0, internal.builder.run.build, { build_id: next._id });
+    await ctx.scheduler.runAfter(BUILD_DEADLINE_MS + WATCHDOG_GRACE_MS, internal.builder.queue.expire, { build_id: next._id, started_at: now });
   },
 });
 
@@ -122,6 +136,8 @@ export const job = internalQuery({
       app_id: app._id,
       app_name: app.name,
       base: build.base_version,
+      /** A new app's first build: its base is the starter. */
+      first: versions[0]?.kind === "seed",
       next: app.version_count + 1,
       asker: name(build.requested_by),
       request: request.body,
@@ -132,28 +148,35 @@ export const job = internalQuery({
   },
 });
 
-const narrationLine = v.object({ at: v.number(), text: v.string() });
+type Progress = { narration: NarrationLine[]; files_touched: Doc<"build_progress">["files_touched"] };
+
+export function progressRow(ctx: QueryCtx, buildId: Id<"builds">) {
+  return ctx.db.query("build_progress").withIndex("by_build", (q) => q.eq("build_id", buildId)).unique();
+}
+
+async function writeProgress(ctx: MutationCtx, buildId: Id<"builds">, progress: Progress): Promise<void> {
+  const row = await progressRow(ctx, buildId);
+  if (row) await ctx.db.patch(row._id, progress);
+  else await ctx.db.insert("build_progress", { build_id: buildId, ...progress });
+}
 
 /** The card's live state while building. False once the build is no longer
  *  building, which tells the run to stop. */
-export const progress = internalMutation({
+export const narrate = internalMutation({
   args: { build_id: v.id("builds"), narration: v.array(narrationLine), files_touched: v.array(touchedFile) },
-  handler: async (ctx, { build_id, ...state }): Promise<boolean> => {
+  handler: async (ctx, { build_id, ...progress }): Promise<boolean> => {
     const build = await ctx.db.get(build_id);
     if (build?.status !== "building") return false;
-    await ctx.db.patch(build_id, state);
+    await writeProgress(ctx, build_id, progress);
     return true;
   },
 });
 
-async function chargeSpend(ctx: MutationCtx, app: Doc<"apps">, usd: number, now: number): Promise<void> {
-  if (!(usd > 0)) return;
-  const day = dayKey(now);
-  const appSpent = spentOn(app.budget && { day: app.budget.day, usd: app.budget.spent_usd }, day);
-  await ctx.db.patch(app._id, { budget: { day, spent_usd: appSpent + usd } });
-  const row = await ctx.db.query("spend").withIndex("by_day", (q) => q.eq("day", day)).unique();
-  if (row) await ctx.db.patch(row._id, { usd: row.usd + usd });
-  else await ctx.db.insert("spend", { day, usd });
+/** Count what a model call cost toward the global, the app's and the asker's
+ *  daily budgets. A negative amount gives back part of a hold. */
+export async function chargeSpend(ctx: MutationCtx, appId: Id<"apps">, asker: Id<"visitors"> | undefined, usd: number): Promise<void> {
+  if (!Number.isFinite(usd)) return;
+  await addTally(ctx, [TALLY.spend, TALLY.appSpend(appId), ...(asker ? [TALLY.visitorSpend(asker)] : [])], usd);
 }
 
 async function failBuild(ctx: MutationCtx, build: Doc<"builds">, error: string, detail: string, now: number) {
@@ -161,7 +184,10 @@ async function failBuild(ctx: MutationCtx, build: Doc<"builds">, error: string, 
 }
 
 /** The run's end: commit the draft as the new live version, or fail with a
- *  reason. Either way the cost is charged and the queue moves on. */
+ *  reason. Either way the cost is charged and the queue moves on. A draft is
+ *  committed only on top of the version it started from: when a restore (or
+ *  anything else) moved the live version meanwhile, the build starts again
+ *  from the new one once, then gives up, rather than undo what landed. */
 export const finish = internalMutation({
   args: {
     build_id: v.id("builds"),
@@ -172,7 +198,10 @@ export const finish = internalMutation({
       v.object({
         ok: v.literal(true),
         summary: v.string(),
+        name: v.optional(v.string()),
         ideas: v.optional(v.array(v.string())),
+        spotlight: v.optional(v.string()),
+        try: v.optional(v.string()),
         files: v.array(v.object({ path: v.string(), text: v.string() })),
       }),
       v.object({ ok: v.literal(false), error: v.string(), detail: v.string() }),
@@ -183,22 +212,35 @@ export const finish = internalMutation({
     if (!build) return;
     const app = await requireApp(ctx, build.app_id);
     const now = Date.now();
-    await chargeSpend(ctx, app, args.cost_usd, now);
+    await chargeSpend(ctx, app._id, build.requested_by, args.cost_usd);
     await ctx.db.patch(build._id, { cost_usd: (build.cost_usd ?? 0) + args.cost_usd });
     // The watchdog may have failed it already; its result then goes nowhere.
     if (build.status !== "building") return;
-    await ctx.db.patch(build._id, { narration: args.narration, files_touched: args.files_touched });
 
-    if (!args.result.ok) {
+    const moved = args.result.ok && app.live_version !== build.base_version;
+    if (moved && !build.restarted) {
+      await ctx.db.patch(build._id, { status: "queued", base_version: undefined, started_at: undefined, restarted: true });
+      await writeProgress(ctx, build._id, {
+        narration: [{ at: now, text: `v${app.live_version} went live while Clay worked. Starting again from it.` }],
+        files_touched: [],
+      });
+    } else if (moved) {
+      await writeProgress(ctx, build._id, { narration: args.narration, files_touched: args.files_touched });
+      await failBuild(ctx, build, "The app kept changing while Clay worked. Try again.", `live moved from v${build.base_version} to v${app.live_version} twice`, now);
+    } else if (!args.result.ok) {
+      await writeProgress(ctx, build._id, { narration: args.narration, files_touched: args.files_touched });
       await failBuild(ctx, build, args.result.error, args.result.detail, now);
     } else {
+      await writeProgress(ctx, build._id, { narration: args.narration, files_touched: args.files_touched });
       try {
         const { number } = await appendVersion(
           ctx,
-          (await ctx.db.get(app._id))!,
+          app,
           {
             kind: "build",
             summary: args.result.summary,
+            ...(args.result.spotlight ? { spotlight: args.result.spotlight } : {}),
+            ...(args.result.try ? { try_it: args.result.try } : {}),
             author_id: build.requested_by,
             parent_number: build.base_version,
             request_message_id: build.request_message_id,
@@ -207,7 +249,8 @@ export const finish = internalMutation({
         );
         await ctx.db.patch(build._id, { status: "live", result_version: number, finished_at: now });
         const ideas = cleanIdeas(args.result.ideas ?? []);
-        if (ideas.length) await ctx.db.patch(app._id, { ideas });
+        const name = cleanAppName(args.result.name);
+        if (ideas.length || name) await ctx.db.patch(app._id, { ...(ideas.length ? { ideas } : {}), ...(name ? { name } : {}) });
       } catch (e) {
         if (!(e instanceof ConvexError)) throw e;
         await failBuild(ctx, build, "The code Clay wrote didn't run.", (e.data as PlaygroundErrorData).message, now);
@@ -220,10 +263,11 @@ export const finish = internalMutation({
 /** The watchdog: a build still building well past its deadline lost its run
  *  (the action died); fail it so the queue moves on. */
 export const expire = internalMutation({
-  args: { build_id: v.id("builds") },
-  handler: async (ctx, { build_id }) => {
+  args: { build_id: v.id("builds"), started_at: v.number() },
+  handler: async (ctx, { build_id, started_at }) => {
     const build = await ctx.db.get(build_id);
-    if (build?.status !== "building") return;
+    // A restarted build has a later start and its own watchdog.
+    if (build?.status !== "building" || build.started_at !== started_at) return;
     await failBuild(ctx, build, "It ran out of time on a big change. Try a smaller step.", "the build's run stopped reporting", Date.now());
     await ctx.scheduler.runAfter(0, internal.builder.queue.advance, { app_id: build.app_id });
   },

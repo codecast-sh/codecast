@@ -1,8 +1,25 @@
 // Per-app link previews. The shell is static, so a link unfurler would only
-// ever see its site-wide defaults; /og/<slug> serves an app's own tags and
-// sends any person who lands there on to the app.
+// ever see its site-wide defaults. /og/<slug> on the deployment serves an
+// app's own tags (and sends any person who lands there on to the app), and
+// whatever serves the shell hands an unfurler asking for an app link that
+// page instead of index.html (unfurlSlug), so every copied link unfurls as
+// its app.
+import { isSlug } from "./slugs";
 
-export type UnfurlApp = { name: string; summary: string | null; version: number; contributors: number };
+/** Link preview fetchers: messengers, social sites and chat apps. iMessage
+ *  fetches as facebookexternalhit and Twitterbot. */
+const UNFURLERS = /facebookexternalhit|facebot|twitterbot|slackbot|slack-imgproxy|discordbot|linkedinbot|whatsapp|telegrambot|skypeuripreview|redditbot|embedly|pinterest|mastodon|bluesky|googlebot|bingbot|applebot|iframely/i;
+
+/** The app whose preview an unfurler fetching `pathname` should get, or null
+ *  to serve the shell as usual. */
+export function unfurlSlug(pathname: string, userAgent: string | null | undefined): string | null {
+  if (!userAgent || !UNFURLERS.test(userAgent)) return null;
+  const m = /^\/([^/]+)(?:\/v\/\d+)?\/?$/.exec(pathname);
+  return m && isSlug(m[1]) ? m[1] : null;
+}
+
+/** `image`: the live version's still, when a screen has taken one. */
+export type UnfurlApp = { name: string; summary: string | null; version: number; contributors: number; image: string | null };
 
 const escape = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -18,6 +35,9 @@ export function unfurlHtml(app: UnfurlApp, url: string): string {
   const title = escape(`${app.name} · Clayground`);
   const description = escape(app.summary ? `${app.summary}. ${unfurlFacts(app)}` : unfurlFacts(app));
   const href = escape(url);
+  const image = app.image
+    ? `<meta property="og:image" content="${escape(app.image)}" />\n<meta name="twitter:card" content="summary_large_image" />`
+    : `<meta name="twitter:card" content="summary" />`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -29,7 +49,7 @@ export function unfurlHtml(app: UnfurlApp, url: string): string {
 <meta property="og:title" content="${escape(app.name)}" />
 <meta property="og:description" content="${description}" />
 <meta property="og:url" content="${href}" />
-<meta name="twitter:card" content="summary" />
+${image}
 <link rel="canonical" href="${href}" />
 <meta http-equiv="refresh" content="0; url=${href}" />
 </head>

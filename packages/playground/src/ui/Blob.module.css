@@ -1,16 +1,9 @@
-.blob {
-  position: relative; flex: none; display: inline-block; background: var(--tomato);
-  border: calc(2.5px * max(1, var(--u) * .8)) solid var(--ink);
-  border-radius: 58% 42% 55% 45% / 48% 60% 40% 52%;
-  box-shadow: calc(3px * var(--u)) calc(3px * var(--u)) 0 var(--ink);
-}
+.blob { position: relative; flex: none; display: inline-block; background: var(--accent); border-radius: 38%; }
 .blob::before, .blob::after {
-  content: ""; position: absolute; top: 30%; width: 15%; height: 20%; background: var(--ink); border-radius: 50%;
-  transition: transform var(--t-move) var(--glide);
+  content: ""; position: absolute; top: 38%; width: 13%; height: 22%;
+  border-radius: max(1px, calc(var(--size) * .07)); background: var(--clay-eyes);
 }
-.blob::before { left: 26%; }
-.blob::after { left: 50%; }
-.down::before, .down::after { transform: translateY(calc(3px * var(--u))); }
-.wobble { animation: wobble 4s ease-in-out infinite; }
-.squash { animation: squash 1.2s ease-in-out infinite; transform-origin: 50% 100%; }
-@keyframes squash { 50% { transform: scale(1.04, .92); } }
+.blob::before { left: 30%; }
+.blob::after { right: 30%; }
+.down::before, .down::after { top: calc(38% + 3px); }
+.faint { opacity: .5; }

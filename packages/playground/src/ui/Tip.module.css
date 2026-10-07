@@ -1,0 +1,12 @@
+.tip {
+  position: absolute; left: 50%; translate: -50% 4px; z-index: 1;
+  display: flex; align-items: center; gap: 6px; width: max-content; max-width: 260px; white-space: normal; text-align: left;
+  padding: 6px 8px; border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-lg), 0 0 0 1px var(--line);
+  font: var(--t-meta); color: var(--ink-2); opacity: 0; pointer-events: none;
+  transition: opacity var(--t-quick), translate var(--t-quick) var(--ease-out);
+}
+.above { bottom: calc(100% + 8px); }
+.below { top: calc(100% + 8px); translate: -50% -4px; }
+:hover > .tip, :focus-visible > .tip { opacity: 1; translate: -50% 0; transition-delay: 400ms; }
+@media (hover: none) { .tip { display: none; } }
+@media (prefers-reduced-motion: reduce) { .tip, .below { translate: -50% 0; } }

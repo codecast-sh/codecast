@@ -13,58 +13,10 @@
 //      links back to the source.
 //
 //   bun scripts/verify-timeline.ts   exit 1 on any failure; prints timings
-import { join } from "node:path";
-import { ConvexClient } from "convex/browser";
-import type { FunctionReference } from "convex/server";
-import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
-import { runtimeTokenForSecret } from "../convex/lib/identity";
+import { api } from "../convex/_generated/api";
 import { livePath, versionPath } from "../convex/lib/runPaths";
-
-const ROOT = join(import.meta.dir, "..");
-const env = await Bun.file(join(ROOT, ".env.local")).text();
-const CLOUD = /^CONVEX_URL=(\S+)/m.exec(env)![1];
-const SITE = CLOUD.replace(/\.convex\.cloud$/, ".convex.site");
-const SEEN_TIMEOUT_MS = 15_000;
-
-let failures = 0;
-function check(name: string, ok: boolean, detail?: unknown) {
-  if (!ok) failures++;
-  console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok || detail === undefined ? "" : `: ${JSON.stringify(detail).slice(0, 600)}`}`);
-}
-const ms = (n: number) => `${Math.round(n)}ms`;
-
-type Creds = { visitor_id: string; secret: string };
-
-/** One person: their own connection and credentials. */
-async function person() {
-  const client = new ConvexClient(CLOUD);
-  const { visitor_id, secret } = await client.mutation(api.visitors.register, {});
-  const creds: Creds = { visitor_id, secret };
-  /** Resolve when a live query's answer satisfies `pick`, with how long it
-   *  took. Credentials are the caller's to pass (the runtime takes a token). */
-  const until = <Q extends FunctionReference<"query">, T>(
-    what: string,
-    query: Q,
-    args: Q["_args"],
-    pick: (value: Q["_returnType"]) => T | null | undefined | false,
-  ) =>
-    new Promise<{ value: T; after: number }>((resolve, reject) => {
-      const start = performance.now();
-      const timer = setTimeout(() => {
-        stop();
-        reject(new Error(`timed out waiting for ${what}`));
-      }, SEEN_TIMEOUT_MS);
-      const stop = client.onUpdate(query, args, (value) => {
-        const hit = pick(value);
-        if (hit === null || hit === undefined || hit === false) return;
-        clearTimeout(timer);
-        stop();
-        resolve({ value: hit, after: performance.now() - start });
-      });
-    });
-  return { client, creds, until };
-}
+import { ROOT, SITE, check, finish, ms, visitor, type Creds } from "./lib/harness";
 
 /** Commit a version the way a finished build does. */
 async function commit(appId: Id<"apps">, author: string, summary: string, files: { path: string; text: string }[]) {
@@ -73,8 +25,8 @@ async function commit(appId: Id<"apps">, author: string, summary: string, files:
   if ((await proc.exited) !== 0) throw new Error(await new Response(proc.stderr).text());
 }
 
-const A = await person();
-const B = await person();
+const A = await visitor();
+const B = await visitor();
 const room = (who: Creds, id: Id<"apps">) => ({ ...who, app_id: id, paginationOpts: { numItems: 50, cursor: null } });
 
 // 1. An app with four versions, each a different color.
@@ -93,7 +45,7 @@ const timeline = await A.client.query(api.versions.list, { ...A.creds, app_id: a
 check("the app has four versions", timeline.map((v) => v.number).join() === "1,2,3,4", timeline.map((v) => v.number));
 
 // 2. Data the app wrote, so the fork has something to copy.
-const runtime = { visitor_id: A.creds.visitor_id, app_id: appId, token: await runtimeTokenForSecret(A.creds.secret, appId) };
+const runtime = await A.runtime(appId);
 await A.client.mutation(api.runtime.insert, { ...runtime, collection: "moons", value: { name: "Io" } });
 await A.client.mutation(api.runtime.setShared, { ...runtime, key: "count", value: 7 });
 
@@ -103,7 +55,7 @@ const seenNote = B.until("the restore note", api.messages.list, room(B.creds, ap
   page.page.find((m) => m.note?.type === "restore"),
 );
 const t0 = performance.now();
-const restored = await A.client.mutation(api.versions.restore, { ...A.creds, app_id: appId, number: 2 });
+const restored = await A.client.mutation(api.versions.restore, { ...A.creds, app_id: appId, number: 2, expected_live: 4 });
 const confirmed = performance.now() - t0;
 const [live, note] = await Promise.all([seenLive, seenNote]);
 check("restore appends v5", restored.number === 5, restored);
@@ -120,14 +72,14 @@ console.log(`     restore: confirmed to A in ${ms(confirmed)}, live for B ${ms(l
 
 // 4. B forks v3; A is watching the source.
 const seenFork = A.until("the fork note", api.messages.list, room(A.creds, appId), (page) => page.page.find((m) => m.note?.type === "fork"));
-const seenMarker = A.until("the fork marker", api.versions.list, { ...A.creds, app_id: appId }, (tl) => tl.find((v) => v.number === 3 && v.fork_count === 1));
+const seenMarker = A.until("the fork marker", api.versions.list, { ...A.creds, app_id: appId }, (tl) => tl.find((v) => v.number === 3 && v.forks.length === 1));
 const t1 = performance.now();
 const fork = await B.client.mutation(api.apps.fork, { ...B.creds, app_id: appId, number: 3, name: "Timeline check, take two" });
 const forkConfirmed = performance.now() - t1;
 const [forkNote, marker] = await Promise.all([seenFork, seenMarker]);
 const forkNoteView = forkNote.value.note;
 check("A sees the fork note", forkNoteView?.type === "fork" && forkNoteView.fork?.slug === fork.slug && forkNoteView.version === 3, forkNoteView);
-check("v3 carries a fork marker", marker.value.fork_count === 1);
+check("v3 carries a fork marker", marker.value.forks.length === 1);
 const forked = (await B.client.query(api.apps.get, { ...B.creds, slug: fork.slug }))!;
 check("the fork links back to v3", forked.forked_from?.app_id === appId && forked.forked_from.version === 3, forked.forked_from);
 const [v3, f1] = await Promise.all([
@@ -135,7 +87,7 @@ const [v3, f1] = await Promise.all([
   B.client.query(api.versions.files, { ...B.creds, app_id: fork.app_id, number: 1 }),
 ]);
 check("the fork's v1 holds v3's files", v3!.files_hash === f1!.files_hash);
-const forkRuntime = { visitor_id: B.creds.visitor_id, app_id: fork.app_id, token: await runtimeTokenForSecret(B.creds.secret, fork.app_id) };
+const forkRuntime = await B.runtime(fork.app_id);
 const moons = await B.until("the copied data", api.runtime.list, { ...forkRuntime, collection: "moons" }, (docs) => docs.length > 0 && docs);
 const count = await B.client.query(api.runtime.shared, { ...forkRuntime, key: "count" });
 check("the fork has a copy of the data", moons.value[0]?.name === "Io" && count?.value === 7, { moons: moons.value, count });
@@ -145,6 +97,5 @@ const unfurl = await fetch(`${SITE}/og/${fork.slug}`);
 const html = await unfurl.text();
 check("the fork's link preview names it", unfurl.ok && html.includes('content="Timeline check, take two"'), html.slice(0, 300));
 
-console.log(`\n${made.slug} and ${fork.slug}: ${failures ? `${failures} failed` : "all ok"}`);
 await Promise.all([A.client.close(), B.client.close()]);
-process.exit(failures ? 1 : 0);
+finish(`${made.slug} and ${fork.slug}`);

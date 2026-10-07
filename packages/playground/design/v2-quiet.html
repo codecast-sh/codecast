@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1520">
+<title>Clayground v2 · quiet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@300..800&family=Fragment+Mono&family=Fredoka:wght@500;600&display=swap" rel="stylesheet">
+<style>
+/* Quiet: the chrome is near-monochrome and recedes; the app and the animal
+   faces carry the color. One signal hue (live) and one alarm hue (failed),
+   both used only as small marks, never as fills. */
+:root {
+  --canvas: #ececea;       /* the mockup page only */
+  --bg: #f7f7f5;           /* panels, docks */
+  --surface: #ffffff;      /* cards, inputs, popovers */
+  --sunk: #f0f0ed;         /* inset fields, chips, hover */
+  --line: #e3e2de;         /* hairlines */
+  --line-strong: #cfcec8;  /* control borders */
+  --ink: #17171a;          /* text, primary buttons */
+  --ink-2: #5d5c57;        /* secondary text */
+  --ink-3: #96958f;        /* meta, disabled */
+  --live: #1f9d5c;         /* live: dot, live tick, the going-live moment */
+  --live-soft: #e3f4ea;
+  --alarm: #d5482f;        /* failed and errors only */
+  --clay: #ef6a4c;         /* Clay's own face, nothing else */
+
+  --ui: "Host Grotesk", ui-sans-serif, sans-serif;
+  --mono: "Fragment Mono", ui-monospace, monospace;
+
+  --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 14px;
+  --hair: 1px solid var(--line);
+  --float: 0 1px 2px rgba(23,23,26,.06), 0 6px 20px -6px rgba(23,23,26,.16);
+  --pop: 0 1px 2px rgba(23,23,26,.08), 0 16px 40px -12px rgba(23,23,26,.28);
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --spring: cubic-bezier(.3,1.4,.5,1);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--canvas); font: 500 13px/1.45 var(--ui); color: var(--ink); -webkit-font-smoothing: antialiased; padding: 48px 40px 96px; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.mono { font-family: var(--mono); font-size: 11.5px; letter-spacing: -.01em; }
+svg { display: block; }
+
+/* mockup scaffolding */
+.sheet { width: 1440px; margin: 0 auto; }
+.caption { display: flex; align-items: baseline; gap: 14px; margin: 56px 0 14px; }
+.caption:first-child { margin-top: 0; }
+.caption b { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.caption span { color: var(--ink-2); font-size: 13px; }
+.frame { position: relative; border-radius: 12px; overflow: hidden; background: var(--surface); box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 24px 60px -30px rgba(0,0,0,.3); }
+.browser { height: 36px; display: flex; align-items: center; gap: 14px; padding: 0 14px; background: var(--bg); border-bottom: var(--hair); }
+.lights { display: flex; gap: 6px; } .lights i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); }
+.url { flex: 0 0 420px; margin: 0 auto; height: 22px; border-radius: 6px; background: var(--sunk); display: flex; align-items: center; justify-content: center; color: var(--ink-2); }
+.url em { font-style: normal; color: var(--ink); }
+
+/* faces: the only color the chrome owns */
+.f { position: relative; flex: none; width: var(--s, 24px); height: var(--s, 24px); border-radius: 30%; overflow: hidden; background: var(--sunk); }
+.f img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.f::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+.f.clay { background: var(--clay); }
+.f.clay::before { content: ""; position: absolute; left: 30%; top: 38%; width: 12%; height: 18%; border-radius: 50%; background: var(--ink); box-shadow: calc(var(--s, 24px) * .28) 0 0 var(--ink); }
+.stack { display: flex; align-items: center; }
+.stack .f { box-shadow: 0 0 0 2px var(--ring, var(--surface)); }
+.stack .f + .f, .stack .more { margin-left: calc(var(--s, 24px) * -.28); }
+.more { height: var(--s, 24px); min-width: var(--s, 24px); padding: 0 6px; border-radius: 999px; background: var(--sunk); box-shadow: 0 0 0 2px var(--ring, var(--surface)); display: grid; place-items: center; font: 600 11px var(--ui); color: var(--ink-2); }
+
+/* small pieces */
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex: none; box-shadow: 0 0 0 3px var(--live-soft); }
+.v { font: 12px var(--mono); letter-spacing: -.02em; color: var(--ink); }
+kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px; border: 1px solid var(--line-strong); border-bottom-width: 2px; background: var(--surface); font: 10.5px var(--mono); color: var(--ink-2); vertical-align: middle; }
+.ink kbd { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.22); color: rgba(255,255,255,.75); }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); font-weight: 600; font-size: 12.5px; }
+.btn:hover { background: var(--sunk); }
+.btn.ink { background: var(--ink); border-color: var(--ink); color: #fff; }
+.btn.ghost { border-color: transparent; background: none; color: var(--ink-2); }
+.btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
+.ib { width: 28px; height: 28px; border-radius: var(--r-sm); display: grid; place-items: center; color: var(--ink-2); }
+.ib:hover { background: var(--sunk); color: var(--ink); }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border-radius: var(--r-xs); background: var(--sunk); border: 1px solid var(--line); font: 11px var(--mono); color: var(--ink-2); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip.w { color: var(--ink); background: var(--surface); border-color: var(--line-strong); }
+.chip svg { flex: none; }
+
+/* ============ the app (Tiny Planets: not chrome, it can be loud) ============ */
+.app { position: absolute; inset: 0; overflow: hidden; background: radial-gradient(120% 90% at 50% 55%, #22306b 0%, #141a3d 45%, #0b0e22 100%); font-family: "Fredoka", var(--ui); color: #f3eedd; }
+.app::before { content: ""; position: absolute; inset: 0; background-image: radial-gradient(1px 1px at 12% 18%, #fff8 50%, transparent 51%), radial-gradient(1px 1px at 72% 12%, #fff9 50%, transparent 51%), radial-gradient(1.5px 1.5px at 84% 64%, #fffa 50%, transparent 51%), radial-gradient(1px 1px at 33% 78%, #fff7 50%, transparent 51%), radial-gradient(1px 1px at 55% 30%, #fff6 50%, transparent 51%), radial-gradient(1px 1px at 8% 60%, #fff8 50%, transparent 51%), radial-gradient(1.5px 1.5px at 92% 28%, #fff9 50%, transparent 51%), radial-gradient(1px 1px at 46% 90%, #fff6 50%, transparent 51%); }
+.app h1 { position: absolute; left: 4%; top: 5%; font-weight: 600; font-size: clamp(16px, 2.3vw, 30px); letter-spacing: .01em; }
+.app h1 small { display: block; font-size: .5em; font-weight: 500; opacity: .6; margin-top: 4px; }
+.sys { position: absolute; left: 50%; top: 52%; width: 0; height: 0; }
+.sun { position: absolute; width: 74px; height: 74px; left: -37px; top: -37px; border-radius: 50%; background: radial-gradient(circle at 40% 38%, #fff3b0, #ffc23d 45%, #ff8a2b); box-shadow: 0 0 60px 10px #ffb34a55; }
+.orbit { position: absolute; border: 1px dashed #ffffff22; border-radius: 50%; animation: spin var(--t) linear infinite; }
+.orbit .p { position: absolute; left: 50%; top: 0; transform: translate(-50%, -50%); animation: spin var(--t) linear infinite reverse; display: grid; justify-items: center; gap: 4px; }
+.orbit .p i { display: block; width: var(--d); height: var(--d); border-radius: 50%; background: var(--c); box-shadow: inset -4px -4px 0 #0003; }
+.orbit .p b { font-weight: 500; font-size: 11px; opacity: .75; white-space: nowrap; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.o1 { width: 200px; height: 200px; left: -100px; top: -100px; --t: 40s; }
+.o2 { width: 330px; height: 330px; left: -165px; top: -165px; --t: 70s; }
+.o3 { width: 470px; height: 470px; left: -235px; top: -235px; --t: 110s; }
+.o4 { width: 620px; height: 620px; left: -310px; top: -310px; --t: 160s; }
+.o2 .p { animation-delay: -20s; } .o2 { animation-delay: -20s; }
+.o3 { animation-delay: -60s; } .o3 .p { animation-delay: -60s; }
+.o4 { animation-delay: -90s; } .o4 .p { animation-delay: -90s; }
+.plant { position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%); padding: 12px 22px; border-radius: 999px; background: #ffc23d; color: #241a05; font-weight: 600; font-size: 15px; box-shadow: 0 6px 24px #ffc23d44; }
+.app .count { position: absolute; right: 4%; top: 5.5%; font-size: 13px; opacity: .7; }
+
+/* ============ frame 1: room open ============ */
+.room-frame { height: 900px; }
+.room-layout { position: absolute; top: 36px; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 1fr 400px; }
+.appcol { position: relative; display: grid; grid-template-rows: 1fr 68px; min-width: 0; }
+.appcol .stage { position: relative; }
+.panel { position: relative; display: grid; grid-template-rows: auto 1fr auto; background: var(--bg); border-left: var(--hair); min-height: 0; }
+.resize { position: absolute; left: -3px; top: 0; bottom: 0; width: 5px; cursor: col-resize; }
+.resize::after { content: ""; position: absolute; left: 1px; top: 50%; width: 3px; height: 28px; margin-top: -14px; border-radius: 2px; background: var(--line-strong); }
+
+.rh { padding: 12px 12px 10px 16px; border-bottom: var(--hair); display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; background: var(--surface); }
+.rh .name { font-weight: 650; font-size: 15px; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rh .sub { grid-column: 1; display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+.rh .sub .sep { width: 2px; height: 2px; border-radius: 50%; background: var(--ink-3); }
+.rh .sub a { color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
+.rh .tools { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 2px; }
+.rh .tools .stack { margin-right: 8px; cursor: pointer; }
+.rh .tools .me { margin: 0 2px 0 4px; }
+.vline { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+
+.stream { overflow: hidden; padding: 6px 0 10px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; }
+.msg { display: grid; grid-template-columns: 24px 1fr; gap: 0 10px; padding: 5px 16px; }
+.msg:hover { background: rgba(0,0,0,.018); }
+.msg .who { display: flex; align-items: baseline; gap: 6px; }
+.msg .who b { font-weight: 600; font-size: 12.5px; }
+.msg .who time { color: var(--ink-3); font-size: 11px; }
+.msg p { font-size: 13.5px; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; }
+.msg.cont { padding-top: 0; }
+.msg.cont .f { visibility: hidden; height: 0; }
+.msg .chip { margin-top: 4px; }
+.mine { padding: 4px 16px 6px 50px; display: grid; justify-items: end; }
+.mine p { background: var(--surface); border: var(--hair); border-radius: 10px 10px 3px 10px; padding: 6px 10px; font-size: 13.5px; max-width: 100%; }
+.mine time { color: var(--ink-3); font-size: 11px; margin-top: 3px; }
+
+.note { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 16px; color: var(--ink-2); font-size: 12px; }
+.note svg { color: var(--ink-3); }
+.note time { color: var(--ink-3); }
+
+/* cards: same hairline box everywhere, state is said in words and one mark */
+.card { margin: 6px 12px; background: var(--surface); border: var(--hair); border-radius: var(--r-lg); overflow: hidden; position: relative; }
+.ch { display: flex; align-items: center; gap: 8px; padding: 9px 12px 0; }
+.ch .state { font-weight: 650; font-size: 13px; letter-spacing: -.005em; }
+.ch .asker { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; }
+.ch .asker b { color: var(--ink); font-weight: 600; }
+.cb { padding: 6px 12px 11px; }
+.req { font-size: 13.5px; color: var(--ink); line-height: 1.45; }
+.req::before { content: "\201C"; } .req::after { content: "\201D"; }
+
+.spin { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid var(--line-strong); border-top-color: var(--ink); animation: spin 0.9s linear infinite; flex: none; }
+.steps { list-style: none; margin: 10px 0 0; padding: 10px 0 0; border-top: var(--hair); display: grid; gap: 5px; font-size: 12.5px; color: var(--ink-2); }
+.steps li { display: grid; grid-template-columns: 14px 1fr; gap: 6px; align-items: start; }
+.steps li svg { margin-top: 3px; color: var(--ink-3); }
+.steps li.now { color: var(--ink); font-weight: 600; }
+.steps li.now::before { content: ""; width: 6px; height: 6px; margin: 6px 0 0 3px; border-radius: 50%; background: var(--ink); animation: breathe 1.4s ease-in-out infinite; }
+.steps .earlier { color: var(--ink-3); font-size: 11.5px; padding-left: 20px; }
+.caret { display: inline-block; width: 1.5px; height: 13px; background: var(--ink); margin-left: 2px; vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes breathe { 50% { opacity: .3; } }
+.files { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.meter { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--sunk); }
+.meter i { display: block; height: 100%; width: 46%; background: var(--ink); animation: creep 30s cubic-bezier(.1,.6,.3,1) forwards; }
+@keyframes creep { from { width: 40%; } to { width: 78%; } }
+
+.queued { margin: 2px 12px; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); color: var(--ink-2); font-size: 12.5px; }
+.queued .ord { font: 11px var(--mono); color: var(--ink); background: var(--sunk); border-radius: 4px; padding: 1px 5px; flex: none; }
+.queued .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+
+.past { margin: 2px 12px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md); font-size: 12.5px; color: var(--ink-2); }
+.past:hover { background: var(--sunk); }
+.past .v { color: var(--ink-2); }
+.past .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.past button { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+
+/* the live card: the one moment */
+.live .ch .state { display: flex; align-items: center; gap: 7px; }
+.live .ch .state .v { font-size: 13px; }
+.summary { font-size: 13.5px; font-weight: 500; }
+.actions { display: flex; gap: 6px; margin-top: 10px; align-items: center; }
+.actions .ib { margin-left: auto; width: 24px; height: 24px; }
+.live { animation: land 8s var(--ease) infinite; }
+.live::before { content: ""; position: absolute; left: 0; top: 0; height: 2px; width: 100%; background: var(--live); transform-origin: left; animation: sweep 8s var(--ease) infinite; }
+.live .dot { animation: ping 8s ease-out infinite; }
+@keyframes land { 0%, 3% { box-shadow: 0 0 0 0 transparent; } 6% { box-shadow: 0 0 0 4px var(--live-soft); } 30%, 100% { box-shadow: 0 0 0 0 transparent; } }
+@keyframes sweep { 0%, 4% { transform: scaleX(0); opacity: 1; } 16% { transform: scaleX(1); opacity: 1; } 40%, 100% { transform: scaleX(1); opacity: 0; } }
+@keyframes ping { 5% { box-shadow: 0 0 0 3px var(--live-soft); } 12% { box-shadow: 0 0 0 9px transparent; } 13%, 100% { box-shadow: 0 0 0 3px var(--live-soft); } }
+.hop .f { animation: hop 8s var(--spring) infinite; }
+.hop .f:nth-child(2) { animation-delay: .05s; } .hop .f:nth-child(3) { animation-delay: .1s; } .hop .f:nth-child(4) { animation-delay: .15s; }
+@keyframes hop { 5% { transform: none; } 8% { transform: translateY(-4px); } 12%, 100% { transform: none; } }
+
+.typing { display: flex; align-items: center; gap: 8px; padding: 6px 16px 0; color: var(--ink-3); font-size: 12px; }
+.dots { display: inline-flex; gap: 3px; } .dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--ink-3); animation: dt 1.2s infinite; } .dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes dt { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }
+
+/* composer */
+.composer { padding: 10px 12px 12px; border-top: var(--hair); background: var(--bg); }
+.modes { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.seg { display: inline-flex; padding: 2px; border-radius: 7px; background: var(--sunk); border: var(--hair); }
+.seg button { height: 22px; padding: 0 9px; border-radius: 5px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.06); }
+.modes .hint { margin-left: auto; color: var(--ink-3); font-size: 11.5px; display: flex; align-items: center; gap: 4px; }
+.field { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 4px; padding: 6px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line-strong); box-shadow: 0 0 0 3px rgba(23,23,26,.05); }
+.field .text { padding: 4px 4px 5px; font-size: 13.5px; min-height: 26px; color: var(--ink); }
+.field .text .ph { color: var(--ink-3); }
+.send { width: 28px; height: 28px; border-radius: var(--r-sm); background: var(--ink); color: #fff; display: grid; place-items: center; }
+.pick { color: var(--ink-2); }
+
+/* timeline dock */
+.tl { position: relative; background: var(--bg); border-top: var(--hair); display: grid; grid-template-columns: 170px 1fr 150px; align-items: center; padding: 0 18px; }
+.tl .meta { font-size: 12px; color: var(--ink-2); line-height: 1.35; }
+.tl .meta b { color: var(--ink); font-weight: 600; display: block; font-size: 12.5px; }
+.tl .keys { justify-self: end; color: var(--ink-3); font-size: 11.5px; display: flex; gap: 4px; align-items: center; }
+.track { position: relative; height: 40px; display: grid; grid-template-columns: repeat(15, 1fr); align-items: center; }
+.track::before { content: ""; position: absolute; left: 0; right: calc(100% / 15 / 2); top: 15px; height: 1px; background: var(--line-strong); }
+.tick { position: relative; display: grid; justify-items: center; gap: 6px; height: 40px; align-content: start; padding-top: 11px; cursor: pointer; }
+.tick i { width: 9px; height: 9px; border-radius: 50%; background: var(--surface); border: 1.5px solid var(--ink-3); position: relative; z-index: 1; }
+.tick span { font: 10.5px var(--mono); color: var(--ink-3); }
+.tick.restore i { border-style: dashed; }
+.tick.forked i::after { content: ""; position: absolute; right: -6px; top: -6px; width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+.tick.focus i { width: 11px; height: 11px; margin-top: -1px; border-color: var(--ink); background: var(--ink); box-shadow: 0 0 0 3px var(--bg), 0 0 0 4.5px var(--ink); }
+.tick.focus span { color: var(--ink); }
+.tick.live i { width: 11px; height: 11px; margin-top: -1px; background: var(--live); border-color: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
+.tick.live span { color: var(--live); }
+.tick.building i { border: 1.5px dashed var(--ink-2); background: var(--bg); }
+.tick.building span { color: var(--ink-2); }
+.track .run { position: absolute; top: 15px; height: 1px; left: calc(100% / 15 * 13.5); width: calc(100% / 15); background: repeating-linear-gradient(90deg, var(--ink-2) 0 3px, transparent 3px 6px); }
+
+.peek { position: absolute; bottom: 58px; width: 288px; background: var(--surface); border: var(--hair); border-radius: var(--r-xl); box-shadow: var(--pop); padding: 12px; z-index: 5; }
+.peek::after { content: ""; position: absolute; bottom: -6px; left: var(--px, 50%); width: 10px; height: 10px; background: var(--surface); border-right: var(--hair); border-bottom: var(--hair); transform: translateX(-50%) rotate(45deg); }
+.peek .top { display: flex; align-items: center; gap: 8px; }
+.peek .top .v { font-size: 14px; }
+.peek .top .by { color: var(--ink-2); font-size: 12px; margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.peek .sum { margin-top: 8px; font-weight: 600; font-size: 13.5px; }
+.peek .rq { margin-top: 3px; font-size: 12.5px; color: var(--ink-2); }
+.peek .fk { margin-top: 8px; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.peek .actions { margin-top: 12px; }
+
+/* ============ frame 2: clean link ============ */
+.clean-frame { height: 760px; }
+.clean-frame .app { top: 36px; }
+.presence { position: absolute; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 6px; padding: 5px 5px 5px 4px; border-radius: 12px; background: rgba(255,255,255,.94); backdrop-filter: blur(12px); box-shadow: 0 0 0 1px rgba(0,0,0,.08), var(--float); --ring: #fff; }
+.grip { width: 12px; height: 22px; display: grid; grid-template-columns: repeat(2, 3px); gap: 3px; align-content: center; justify-content: center; cursor: grab; }
+.grip i { width: 3px; height: 3px; border-radius: 50%; background: var(--line-strong); }
+.presence .stack { padding: 0 4px 0 2px; }
+.presence .here { font-size: 12px; color: var(--ink-2); margin-right: 2px; }
+.presence .btn.ink { height: 30px; border-radius: 8px; padding: 0 8px 0 11px; gap: 8px; }
+.presence .ib { width: 30px; height: 30px; }
+.toast { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 12px 6px 6px; border-radius: 999px; background: rgba(255,255,255,.96); box-shadow: 0 0 0 1px rgba(0,0,0,.08), var(--float); font-size: 13px; white-space: nowrap; animation: toast 8s var(--ease) infinite; }
+.toast .dot { margin-left: 4px; }
+.toast b { font-weight: 600; }
+.toast .sum { color: var(--ink-2); }
+@keyframes toast { 0% { opacity: 0; transform: translate(-50%, -8px); } 5%, 55% { opacity: 1; transform: translate(-50%, 0); } 62%, 100% { opacity: 0; transform: translate(-50%, -4px); } }
+.tag { position: absolute; font-size: 12px; color: var(--ink-2); display: flex; gap: 8px; align-items: center; }
+.anno { position: absolute; font-size: 12px; color: #fff; opacity: .55; font-family: var(--ui); }
+
+/* ============ frame 3: states ============ */
+.states { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 16px; }
+.state-box { position: relative; height: 300px; border-radius: 12px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
+.state-box .label { position: absolute; left: 14px; bottom: 12px; font-size: 12px; color: var(--ink-2); }
+.viewing .app { inset: 0; box-shadow: inset 0 0 0 2px var(--ink); }
+.vpill { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 12px; border-radius: 999px; background: var(--ink); color: #fff; font-size: 12.5px; white-space: nowrap; box-shadow: var(--float); }
+.vpill .btn { height: 24px; border-radius: 999px; border: 0; background: #fff; color: var(--ink); }
+.failed-wrap { padding: 20px 4px; }
+.failed .ch .state { color: var(--ink); display: flex; align-items: center; gap: 7px; }
+.bang { width: 14px; height: 14px; border-radius: 50%; background: var(--alarm); color: #fff; font: 700 10px/14px var(--ui); text-align: center; }
+.why { font-size: 13px; color: var(--ink); margin-top: 6px; }
+.details { margin-top: 8px; font-size: 12px; color: var(--ink-3); display: flex; align-items: center; gap: 4px; }
+.tucked { position: absolute; right: 0; top: 100px; width: 34px; padding: 6px 0 8px; border-radius: 10px 0 0 10px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.08), var(--float); display: grid; justify-items: center; gap: 4px; font-size: 11px; color: var(--ink-2); }
+.callout { position: absolute; right: 20px; bottom: 70px; width: 260px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.96); box-shadow: 0 0 0 1px rgba(0,0,0,.08), var(--float); }
+.callout .top { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.callout .top b { font-weight: 650; }
+.callout .top .mono { margin-left: auto; color: var(--ink-2); }
+.callout p { margin-top: 4px; font-size: 12px; color: var(--ink-2); }
+
+/* ============ frame 4: home ============ */
+.home { background: var(--bg); padding: 0 56px 64px; }
+.home .bar { height: 64px; display: flex; align-items: center; border-bottom: var(--hair); margin: 0 -56px 0; padding: 0 56px; background: var(--surface); }
+.mark { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
+.you { margin-left: auto; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 4px; border-radius: 8px; border: var(--hair); background: var(--surface); font-size: 12.5px; }
+.you b { font-weight: 600; } .you span { color: var(--ink-3); }
+.hero { display: grid; grid-template-columns: 1fr 360px; gap: 64px; padding: 72px 0 56px; align-items: end; }
+.hero h1 { font-weight: 600; font-size: 46px; line-height: 1.04; letter-spacing: -.035em; max-width: 620px; }
+.hero .lede { margin-top: 14px; font-size: 16px; color: var(--ink-2); max-width: 520px; line-height: 1.5; }
+.now { border: var(--hair); border-radius: var(--r-xl); background: var(--surface); padding: 6px; }
+.now .row { display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; align-items: center; padding: 7px 8px; font-size: 12.5px; }
+.now .row + .row { border-top: var(--hair); }
+.now .row b { font-weight: 600; }
+.now .row span { color: var(--ink-2); }
+.now .row time { color: var(--ink-3); font-size: 11.5px; }
+.now .row .live-v { color: var(--live); font: 11px var(--mono); }
+.maker { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 8px 8px 8px 20px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line-strong); box-shadow: 0 0 0 4px rgba(23,23,26,.04), var(--float); }
+.maker .in { font-size: 20px; font-weight: 500; color: var(--ink); letter-spacing: -.01em; }
+.maker .in .ph { color: var(--ink-3); }
+.maker .in .caret { height: 22px; vertical-align: -4px; }
+.maker .btn.ink { height: 44px; padding: 0 18px; font-size: 14px; border-radius: 10px; gap: 10px; }
+.starters { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12.5px; color: var(--ink-3); }
+.starters .btn { height: 28px; font-weight: 500; color: var(--ink-2); border-color: var(--line); }
+.gh { display: flex; align-items: baseline; margin: 64px 0 16px; }
+.gh h2 { font-weight: 600; font-size: 18px; letter-spacing: -.015em; }
+.gh .meta { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12.5px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.gc { display: block; border-radius: var(--r-xl); background: var(--surface); border: var(--hair); overflow: hidden; transition: box-shadow .2s var(--ease), transform .2s var(--ease); }
+.gc:hover { box-shadow: var(--float); transform: translateY(-2px); }
+.thumb { position: relative; height: 196px; overflow: hidden; border-bottom: var(--hair); }
+.badge { position: absolute; left: 10px; top: 10px; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 7px; border-radius: 999px; background: rgba(255,255,255,.94); font-size: 11.5px; font-weight: 600; box-shadow: 0 0 0 1px rgba(0,0,0,.06); }
+.badge .dot { width: 6px; height: 6px; box-shadow: none; }
+.gf { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 14px 13px; align-items: center; }
+.gf b { font-weight: 600; font-size: 14px; letter-spacing: -.01em; }
+.gf .m { color: var(--ink-2); font-size: 12px; grid-column: 1; }
+.gf .stack { grid-column: 2; grid-row: 1 / span 2; }
+.gf .lin { grid-column: 1 / -1; color: var(--ink-3); font-size: 11.5px; display: flex; gap: 5px; align-items: center; margin-top: 4px; }
+
+/* thumbnails: tiny renders of real apps */
+.t-planets .app { position: absolute; inset: 0; }
+.t-planets .sys { transform: scale(.42); }
+.t-frog { background: #d9f0c8; display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; padding: 28px 22px 22px; align-content: end; }
+.t-frog i { aspect-ratio: 1; border-radius: 50%; background: #5aa443; position: relative; }
+.t-frog i:nth-child(3n) { background: #3c8a2e; transform: translateY(-14px); }
+.t-frog i:nth-child(4n) { transform: translateY(-26px); background: #7cc35e; }
+.t-frog i::after { content: ""; position: absolute; left: 22%; top: 24%; width: 18%; height: 18%; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px #1d2b16 inset, 220% 0 0 #fff; }
+.t-haiku { background: #f3ede1; padding: 26px 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font: 500 11px/1.5 Georgia, serif; color: #3b3326; }
+.t-haiku div { background: #fffaf0; border-radius: 3px; padding: 10px; box-shadow: 0 1px 2px #0001; }
+.t-haiku div:nth-child(2) { transform: rotate(1.5deg); } .t-haiku div:nth-child(3) { transform: rotate(-1deg); }
+.t-moon { background: linear-gradient(#2b1645, #6a2f6b 60%, #e0797a); }
+.t-moon::before { content: ""; position: absolute; right: 24%; top: 26%; width: 70px; height: 70px; border-radius: 50%; background: #fbe8c8; box-shadow: inset -14px -6px 0 #e7c79a; }
+.t-moon::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 46px; background: repeating-linear-gradient(90deg, #1b0e2d 0 18px, #23123a 18px 30px); clip-path: polygon(0 40%, 8% 10%, 14% 50%, 22% 0, 30% 45%, 40% 20%, 52% 55%, 62% 5%, 72% 40%, 82% 15%, 92% 50%, 100% 25%, 100% 100%, 0 100%); }
+.t-pond { background: #8fd3e8; display: grid; grid-template-columns: repeat(14, 1fr); }
+.t-pond i { aspect-ratio: 1; }
+.t-bird { background: #fff7ec; display: grid; place-items: center; font: 600 22px "Fredoka", sans-serif; color: #b2492c; text-align: center; line-height: 1.2; }
+.t-bird small { display: block; font-size: 12px; color: #7a6a58; font-weight: 500; margin-top: 8px; }
+.t-bird .opts { display: flex; gap: 6px; margin-top: 12px; justify-content: center; }
+.t-bird .opts span { font-size: 12px; padding: 5px 10px; border-radius: 999px; background: #f4dcc4; color: #5d3a24; }
+
+/* notes column on the right of the sheet */
+.notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; margin-top: 24px; color: var(--ink-2); font-size: 13px; line-height: 1.55; }
+.notes b { color: var(--ink); font-weight: 600; display: block; margin-bottom: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: opacity .15s !important; }
+}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<!-- ========================================================== 1. room -->
+<div class="caption"><b>The room, open beside the app</b><span>The app keeps the width it needs and stays interactive. The chrome is white, gray and hairlines; the faces are the color.</span></div>
+<div class="frame room-frame">
+  <div class="browser"><div class="lights"><i></i><i></i><i></i></div><div class="url mono">clayground.fun/<em>tiny-planets</em>?room</div></div>
+  <div class="room-layout">
+    <div class="appcol">
+      <div class="stage">
+        <div class="app">
+          <h1>Tiny Planets<small>everyone who visits plants one</small></h1>
+          <div class="count">23 planets planted</div>
+          <div class="sys">
+            <div class="sun"></div>
+            <div class="orbit o1"><div class="p" style="--d:16px;--c:#7fd1ff"><i></i><b>Pebble</b></div></div>
+            <div class="orbit o2"><div class="p" style="--d:24px;--c:#ff8fb5"><i></i><b>Juniper</b></div></div>
+            <div class="orbit o3"><div class="p" style="--d:20px;--c:#9ee37d"><i></i><b>Sage</b></div></div>
+            <div class="orbit o4"><div class="p" style="--d:30px;--c:#c9a3ff"><i></i><b>Mango</b></div></div>
+          </div>
+          <div class="plant">Plant a planet</div>
+        </div>
+      </div>
+      <!-- timeline dock -->
+      <div class="tl">
+        <div class="meta"><b>15 versions</b>since Sunday</div>
+        <div class="track">
+          <div class="run"></div>
+          <div class="tick"><i></i><span>1</span></div>
+          <div class="tick"><i></i><span>2</span></div>
+          <div class="tick"><i></i><span>3</span></div>
+          <div class="tick"><i></i><span>4</span></div>
+          <div class="tick"><i></i><span>5</span></div>
+          <div class="tick"><i></i><span>6</span></div>
+          <div class="tick"><i></i><span>7</span></div>
+          <div class="tick"><i></i><span>8</span></div>
+          <div class="tick"><i></i><span>9</span></div>
+          <div class="tick"><i></i><span>10</span></div>
+          <div class="tick forked focus"><i></i><span>11</span></div>
+          <div class="tick"><i></i><span>12</span></div>
+          <div class="tick restore"><i></i><span>13</span></div>
+          <div class="tick live"><i></i><span>14</span></div>
+          <div class="tick building"><i></i><span>15</span></div>
+        </div>
+        <div class="keys"><kbd>&larr;</kbd><kbd>&rarr;</kbd>&nbsp;to step</div>
+        <!-- peek on v11 -->
+        <div class="peek" style="left: calc(170px + 18px + (100% - 170px - 150px - 36px) / 15 * 10.5 - 144px);">
+          <div class="top"><span class="v">v11</span><span class="by"><span class="f" style="--s:18px"><img src="../../web/components/org/avatars/seal.webp" alt=""></span>Nori · Sunday 9:40</span></div>
+          <div class="sum">Bigger sun, softer glow</div>
+          <div class="rq">&ldquo;the sun is tiny, make it the star of the show and less harsh&rdquo;</div>
+          <div class="fk"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="3" cy="2.5" r="1.5"/><circle cx="3" cy="9.5" r="1.5"/><circle cx="9" cy="4" r="1.5"/><path d="M3 4v4M9 5.5c0 2-6 1.5-6 2.5"/></svg>Forked into <u>Moon Party</u> by Rascal</div>
+          <div class="actions"><button class="btn sm">View</button><button class="btn sm">Restore</button><button class="btn sm">Fork from here</button></div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <div class="resize"></div>
+      <header class="rh">
+        <div class="name">Tiny Planets</div>
+        <div class="tools">
+          <div class="stack hop">
+            <span class="f"><img src="../../web/components/org/avatars/otter.webp" alt="Pebble the otter"></span>
+            <span class="f"><img src="../../web/components/org/avatars/owl.webp" alt="Sage the owl"></span>
+            <span class="f"><img src="../../web/components/org/avatars/fox.webp" alt="Juniper the fox"></span>
+            <span class="f"><img src="../../web/components/org/avatars/toucan.webp" alt="Mango the toucan"></span>
+            <span class="more">+3</span>
+          </div>
+          <button class="ib" title="Copy link"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 014 4l-1 1M9 11.5l-1 1a2.8 2.8 0 01-4-4l1-1"/></svg></button>
+          <div class="vline"></div>
+          <button class="me" title="You are Pocket the raccoon"><span class="f" style="--s:26px"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></span></button>
+          <button class="ib" title="Close"><svg width="14" height="14" viewBox="0 0 14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7"/></svg></button>
+        </div>
+        <div class="sub"><span class="dot"></span><span class="v">v14</span> live<span class="sep"></span>7 here<span class="sep"></span>forked from&nbsp;<a href="#">Haiku Wall v3</a></div>
+      </header>
+
+      <div class="stream">
+        <div class="past"><span class="v">v12</span><span class="t">Every planet wears a ring</span><span class="f" style="--s:18px"><img src="../../web/components/org/avatars/hare.webp" alt=""></span><button>See it</button></div>
+
+        <div class="msg"><span class="f"><img src="../../web/components/org/avatars/seal.webp" alt=""></span><div><div class="who"><b>Nori</b><time>4:02</time></div><p>rings were cute but way too busy with 20+ planets. rolling back to 11</p></div></div>
+        <div class="note"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 7a4.5 4.5 0 104.5-4.5H4.5M4.5 1L2.8 2.5 4.5 4"/></svg>Nori restored v11 as v13<time>· 4:02</time></div>
+
+        <div class="card live">
+          <div class="ch"><span class="state"><span class="dot"></span><span class="v">v14</span> is live</span><span class="asker"><span class="f" style="--s:18px"><img src="../../web/components/org/avatars/fox.webp" alt=""></span><b>Juniper</b> · 4:09</span></div>
+          <div class="cb">
+            <div class="summary">Planets orbit the sun now, each at its own speed.</div>
+            <div class="actions"><button class="btn sm">See it</button><button class="btn sm">Undo</button><button class="ib" title="Copy link to v14"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 014 4l-1 1M9 11.5l-1 1a2.8 2.8 0 01-4-4l1-1"/></svg></button></div>
+          </div>
+        </div>
+
+        <div class="msg"><span class="f"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><div><div class="who"><b>Pebble</b><time>4:10</time></div><p>oh that's so good</p></div></div>
+        <div class="msg cont"><span class="f"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><div><p>a bit fast though, I can't click mine</p></div></div>
+        <div class="msg"><span class="f"><img src="../../web/components/org/avatars/owl.webp" alt=""></span><div><div class="who"><b>Sage</b><time>4:10</time></div><p>agree. and names on hover? labels pile up at the bottom</p><span class="chip"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-dasharray="2 1.5"><rect x=".5" y=".5" width="9" height="9" rx="1.5"/></svg>b · Mango</span></div></div>
+        <div class="mine"><p>I'll do hover names once Pebble's lands</p><time>4:11</time></div>
+
+        <div class="card">
+          <div class="ch"><span class="spin"></span><span class="state">Building v15</span><span class="asker"><span class="f" style="--s:18px"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><b>Pebble</b> · <span class="mono">0:14</span></span></div>
+          <div class="cb">
+            <div class="req">slow the orbits down by half and leave a faint trail behind each planet</div>
+            <ul class="steps">
+              <li class="earlier">2 earlier steps</li>
+              <li><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 5.2l2.3 2.3 4.7-5"/></svg>Halved the orbit speeds in orbit.css</li>
+              <li><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 5.2l2.3 2.3 4.7-5"/></svg>Added a trail layer under each planet</li>
+              <li class="now"><span>Fading the trails so they read on the dark sky<span class="caret"></span></span></li>
+            </ul>
+            <div class="files"><span class="chip w">orbit.css</span><span class="chip w">Trail.jsx</span><span class="chip">App.jsx</span></div>
+          </div>
+          <div class="meter"><i></i></div>
+        </div>
+
+        <div class="queued"><span class="ord">2nd</span><span class="f" style="--s:18px"><img src="../../web/components/org/avatars/toucan.webp" alt=""></span><span class="t">make this glow when someone else is planting</span><span class="chip"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-dasharray="2 1.5"><rect x=".5" y=".5" width="9" height="9" rx="1.5"/></svg>button · Plant a planet</span></div>
+
+        <div class="typing"><span class="f" style="--s:16px"><img src="../../web/components/org/avatars/owl.webp" alt=""></span>Sage is typing<span class="dots"><i></i><i></i><i></i></span></div>
+      </div>
+
+      <div class="composer">
+        <div class="modes">
+          <div class="seg"><button class="on">Auto</button><button>Change it</button><button>Just chat</button></div>
+          <span class="hint"><kbd>&#8984;</kbd><kbd>1</kbd>&ndash;<kbd>3</kbd></span>
+        </div>
+        <div class="field">
+          <button class="ib pick" title="Point at something in the app"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="1.5" width="9" height="9" rx="2" stroke-dasharray="2.2 1.8"/><path d="M8 8l6 2.2-2.6 1-1 2.6z" fill="currentColor" stroke-linejoin="round"/></svg></button>
+          <div class="text"><span class="ph">Say anything, or ask for a change</span></div>
+          <button class="send" title="Send"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 12V2M2.5 6.5L7 2l4.5 4.5"/></svg></button>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ========================================================== 2. clean link -->
+<div class="caption"><b>The clean link, the moment a change lands</b><span>One small pill in a corner and a toast that says who changed what. The faces hop once. That is the whole celebration.</span></div>
+<div class="frame clean-frame">
+  <div class="browser"><div class="lights"><i></i><i></i><i></i></div><div class="url mono">clayground.fun/<em>tiny-planets</em></div></div>
+  <div class="app">
+    <h1>Tiny Planets<small>everyone who visits plants one</small></h1>
+    <div class="count">23 planets planted</div>
+    <div class="sys">
+      <div class="sun"></div>
+      <div class="orbit o1" style="--t:80s"><div class="p" style="--d:16px;--c:#7fd1ff"><i></i><b>Pebble</b></div></div>
+      <div class="orbit o2" style="--t:140s"><div class="p" style="--d:24px;--c:#ff8fb5"><i></i><b>Juniper</b></div></div>
+      <div class="orbit o3" style="--t:220s"><div class="p" style="--d:20px;--c:#9ee37d"><i></i><b>Sage</b></div></div>
+      <div class="orbit o4" style="--t:320s"><div class="p" style="--d:30px;--c:#c9a3ff"><i></i><b>Mango</b></div></div>
+    </div>
+    <div class="plant">Plant a planet</div>
+  </div>
+  <div class="toast"><span class="dot"></span><span class="f" style="--s:24px"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><span><b><span class="v">v15</span> is live</b> · Pebble: <span class="sum">slower orbits, each planet leaves a trail</span></span></div>
+  <div class="presence">
+    <div class="grip" title="Drag anywhere"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="stack hop">
+      <span class="f"><img src="../../web/components/org/avatars/otter.webp" alt=""></span>
+      <span class="f"><img src="../../web/components/org/avatars/owl.webp" alt=""></span>
+      <span class="f"><img src="../../web/components/org/avatars/fox.webp" alt=""></span>
+      <span class="f"><img src="../../web/components/org/avatars/toucan.webp" alt=""></span>
+    </div>
+    <span class="here">7 here</span>
+    <button class="ib" title="Timeline"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 8h13"/><circle cx="4" cy="8" r="1.6" fill="#fff"/><circle cx="8.5" cy="8" r="1.6" fill="#fff"/><circle cx="13" cy="8" r="1.9" fill="currentColor"/></svg></button>
+    <button class="btn ink">Change it <span class="ink"><kbd>/</kbd></span></button>
+  </div>
+</div>
+
+<!-- ========================================================== 3. states -->
+<div class="caption"><b>Quieter states</b><span>Viewing the past, a failed build, and a build running while the room is closed.</span></div>
+<div class="states">
+  <div class="state-box viewing">
+    <div class="app" style="background: radial-gradient(120% 90% at 50% 55%, #2a2a4a 0%, #151628 60%, #0b0c18 100%);">
+      <div class="sys" style="transform: scale(.55); top: 56%;">
+        <div class="sun"></div>
+        <div class="orbit o2" style="animation:none"><div class="p" style="--d:24px;--c:#ff8fb5;animation:none"><i></i><b>Juniper</b></div></div>
+        <div class="orbit o3" style="animation:none;transform:rotate(130deg)"><div class="p" style="--d:20px;--c:#9ee37d;animation:none;transform:translate(-50%,-50%) rotate(-130deg)"><i></i><b>Sage</b></div></div>
+      </div>
+    </div>
+    <div class="vpill">You're viewing <span class="v" style="color:#fff">v9</span>, nobody else is <button class="btn">Back to live</button></div>
+  </div>
+  <div class="state-box failed-wrap">
+    <div class="card failed" style="margin:0 12px">
+      <div class="ch"><span class="state"><span class="bang">!</span>Didn't make it</span><span class="asker"><span class="f" style="--s:18px"><img src="../../web/components/org/avatars/hare.webp" alt=""></span><b>Hazel</b> · 3:51</span></div>
+      <div class="cb">
+        <div class="req">turn every planet into a playable mini golf hole</div>
+        <div class="why">Clay ran out of time on a big change. Smaller steps usually land.</div>
+        <div class="actions"><button class="btn sm ink">Try again</button><button class="btn sm">Edit</button><span class="details" style="margin-left:auto">Details <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 3.5l3 3 3-3"/></svg></span></div>
+      </div>
+    </div>
+    <div class="msg" style="margin-top:6px"><span class="f clay"></span><div><div class="who"><b>Clay</b><time>3:52</time></div><p>Want me to start with just one hole on Hazel's planet?</p></div></div>
+  </div>
+  <div class="state-box">
+    <div class="app" style="background: radial-gradient(120% 90% at 50% 55%, #22306b 0%, #141a3d 45%, #0b0e22 100%);"></div>
+    <div class="callout">
+      <div class="top"><span class="spin"></span><b>Building v15</b><span class="mono">0:14</span></div>
+      <p>Fading the trails so they read on the dark sky</p>
+    </div>
+    <div class="presence" style="bottom:16px; right:16px">
+      <div class="grip"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="stack"><span class="f"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><span class="f"><img src="../../web/components/org/avatars/owl.webp" alt=""></span></div>
+      <span class="here">7 here</span>
+      <button class="btn ink">Change it</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================== 4. home -->
+<div class="caption"><b>Home</b><span>The input is the hero, the gallery shows real apps running, and the crowd is who is around right now.</span></div>
+<div class="frame home">
+  <div class="bar">
+    <div class="mark"><span class="f clay" style="--s:22px"></span>Clayground</div>
+    <div class="you"><span class="f" style="--s:24px"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></span><b>Pocket</b><span>that's you</span></div>
+  </div>
+
+  <div class="hero">
+    <div>
+      <h1>Make a thing. Pass it around.</h1>
+      <p class="lede">Describe an app and Clay builds it. Share the link and anyone can change it by asking. Every version stays, so nothing breaks for good.</p>
+      <div class="maker" style="margin-top:32px">
+        <div class="in"><span class="ph">a frog choir, one note per person</span><span class="caret"></span></div>
+        <button class="btn ink">Make it <span class="ink"><kbd>&crarr;</kbd></span></button>
+      </div>
+      <div class="starters">Or start with <button class="btn">A shared guestbook</button><button class="btn">Pixel pond</button><button class="btn">Guess the bird</button><button class="btn">Group playlist</button></div>
+    </div>
+    <div class="now">
+      <div class="row"><span class="f"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><span><b>Pebble</b> changed Tiny Planets</span><span class="live-v">v15</span></div>
+      <div class="row"><span class="f"><img src="../../web/components/org/avatars/frog.webp" alt=""></span><span><b>Puddle</b> made Frog Choir</span><time>2m</time></div>
+      <div class="row"><span class="f"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></span><span><b>Rascal</b> forked Moon Party</span><time>6m</time></div>
+      <div class="row"><span class="f"><img src="../../web/components/org/avatars/crane.webp" alt=""></span><span><b>Iris</b> restored Haiku Wall v3</span><time>9m</time></div>
+      <div class="row"><span class="f"><img src="../../web/components/org/avatars/elephant.webp" alt=""></span><span><b>Juno</b> changed Guess the Bird</span><time>11m</time></div>
+    </div>
+  </div>
+
+  <div class="gh"><h2>Busy right now</h2><span class="meta"><span class="dot"></span>41 people in 12 apps</span></div>
+  <div class="grid">
+    <a class="gc">
+      <div class="thumb t-planets"><div class="app"><div class="sys"><div class="sun"></div><div class="orbit o2"><div class="p" style="--d:24px;--c:#ff8fb5"><i></i></div></div><div class="orbit o3"><div class="p" style="--d:20px;--c:#9ee37d"><i></i></div></div><div class="orbit o4"><div class="p" style="--d:30px;--c:#c9a3ff"><i></i></div></div></div></div><span class="badge"><span class="dot"></span>7 here</span></div>
+      <div class="gf"><b>Tiny Planets</b><span class="m">38 people changed it · <span class="v">v15</span></span><span class="stack"><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/otter.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/owl.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/fox.webp" alt=""></span><span class="more" style="--s:22px">+4</span></span></div>
+    </a>
+    <a class="gc">
+      <div class="thumb t-frog"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span class="badge"><span class="dot"></span>12 here</span></div>
+      <div class="gf"><b>Frog Choir</b><span class="m">19 people changed it · <span class="v">v8</span></span><span class="stack"><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/frog.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/goat.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/koala.webp" alt=""></span><span class="more" style="--s:22px">+9</span></span></div>
+    </a>
+    <a class="gc">
+      <div class="thumb t-haiku"><div>an old silent pond<br>a frog jumps into<br>the build queue</div><div>tab after tab<br>the room fills<br>with small animals</div><div>restore v3<br>and the spring<br>comes back</div><div>seven here<br>no one agrees<br>on the font</div><span class="badge"><span class="dot"></span>4 here</span></div>
+      <div class="gf"><b>Haiku Wall</b><span class="m">61 people changed it · <span class="v">v27</span></span><span class="stack"><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/crane.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/swan.webp" alt=""></span><span class="more" style="--s:22px">+2</span></span></div>
+    </a>
+    <a class="gc">
+      <div class="thumb t-moon"><span class="badge"><span class="dot"></span>3 here</span></div>
+      <div class="gf"><b>Moon Party</b><span class="m">5 people changed it · <span class="v">v4</span></span><span class="stack"><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/raccoon.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/moth.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/lynx.webp" alt=""></span></span>
+        <span class="lin"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="3" cy="2.5" r="1.5"/><circle cx="3" cy="9.5" r="1.5"/><circle cx="9" cy="4" r="1.5"/><path d="M3 4v4M9 5.5c0 2-6 1.5-6 2.5"/></svg>forked from Tiny Planets v11</span></div>
+    </a>
+    <a class="gc">
+      <div class="thumb t-pond" id="pond"><span class="badge"><span class="dot"></span>6 here</span></div>
+      <div class="gf"><b>Pixel Pond</b><span class="m">22 people changed it · <span class="v">v12</span></span><span class="stack"><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/whale.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/penguin.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/seal.webp" alt=""></span><span class="more" style="--s:22px">+3</span></span></div>
+    </a>
+    <a class="gc">
+      <div class="thumb t-bird"><div>Which bird sings this?<small>round 4 of 10 · 5 playing</small><div class="opts"><span>Robin</span><span>Wren</span><span>Blackbird</span></div></div><span class="badge"><span class="dot"></span>5 here</span></div>
+      <div class="gf"><b>Guess the Bird</b><span class="m">14 people changed it · <span class="v">v19</span></span><span class="stack"><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/elephant.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/robin.webp" alt=""></span><span class="f" style="--s:22px"><img src="../../web/components/org/avatars/squirrel.webp" alt=""></span><span class="more" style="--s:22px">+2</span></span></div>
+    </a>
+  </div>
+</div>
+
+<div class="notes">
+  <div><b>Type and color</b>Host Grotesk at 12 to 15px carries every surface, Fragment Mono only for versions, files and timers. Gray scale plus one live green that appears as a dot, a tick and one sweep, never as a fill. Red is for failure only.</div>
+  <div><b>Structure kept</b>Room docked beside a shrinking app, the capsule with grip and "/" key, queued to building to live cards, collapsed past versions, timeline with peek, Clay as a character, every canonical string.</div>
+  <div><b>The one moment</b>When a version goes live: the card rises in, a green line sweeps across its top, the live dot rings once, the faces in the stack hop 4px in a stagger, and a toast names who changed what. Nothing else moves except work in progress.</div>
+</div>
+
+</div>
+<script>
+  // Pixel Pond thumbnail: a deterministic water grid with lily pads and fish.
+  const pond = document.getElementById("pond");
+  const tones = ["#8fd3e8", "#7cc8e0", "#9adbec", "#86cfe5"];
+  for (let i = 0; i < 14 * 9; i++) {
+    const cell = document.createElement("i");
+    const pad = [17, 18, 31, 46, 47, 60, 88, 89, 102].includes(i);
+    const fish = [52, 53, 77].includes(i);
+    cell.style.background = pad ? "#4f9a4a" : fish ? "#ff8a3d" : tones[(i * 7) % 4];
+    pond.insertBefore(cell, pond.firstChild);
+  }
+</script>
+</body>
+</html>

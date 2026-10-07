@@ -76,8 +76,15 @@ const serveUnfurl = httpAction(async (ctx, request) => {
   const slug = new URL(request.url).pathname.slice("/og/".length);
   const app = await ctx.runQuery(internal.apps.unfurl, { slug });
   if (!app) return notFound();
+  // Tags and a refresh, nothing that runs: it shares the runtime's site.
   return new Response(unfurlHtml(app, new URL(`/${slug}`, shellUrl()).href), {
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": SHORT },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": SHORT,
+      "Content-Security-Policy": "default-src 'none'",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+    },
   });
 });
 

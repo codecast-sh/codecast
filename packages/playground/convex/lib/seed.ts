@@ -1,6 +1,6 @@
 // Version 1 of every new app: the smallest app that shows the whole runtime
-// working (live faces, a shared counter, a guestbook signed with faces),
-// styled well enough to be worth changing. The first build starts from here.
+// working (live faces, a shared counter, notes signed with faces), in a calm,
+// neutral style that reads as a placeholder. The first build replaces it.
 import type { FileDraft } from "./files";
 import { importMapScript } from "./runtime";
 
@@ -42,32 +42,31 @@ import { useCollection, useShared, usePresence, me } from "playground";
 
 const NAME = ${JSON.stringify(appName)};
 
-function Face({ person, size = 40 }) {
+function Face({ person, size = 32 }) {
   return <img className="face" src={person.avatar} alt={person.name} title={person.name} width={size} height={size} />;
 }
 
-function Guestbook() {
-  const { docs, insert } = useCollection("guestbook");
+function Notes() {
+  const { docs, insert } = useCollection("notes");
   const [text, setText] = useState("");
-  const sign = (e) => {
+  const leave = (e) => {
     e.preventDefault();
     const words = text.trim();
     if (!words) return;
     insert({ text: words });
     setText("");
   };
-  const notes = docs.slice(-12).reverse();
 
   return (
-    <section className="book">
-      <form onSubmit={sign}>
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder={\`Sign as \${me.name}\`} maxLength={140} />
-        <button type="submit">Sign</button>
+    <section className="notes">
+      <form onSubmit={leave}>
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder={\`Leave a note as \${me.name}\`} maxLength={140} />
+        <button type="submit">Post</button>
       </form>
       <ul>
-        {notes.map((note) => (
+        {docs.slice(-8).reverse().map((note) => (
           <li key={note._id}>
-            {note._by && <Face person={note._by} size={32} />}
+            {note._by && <Face person={note._by} size={28} />}
             <p>
               <b>{note._by?.name ?? "Someone"}</b> {note.text}
             </p>
@@ -83,19 +82,21 @@ export default function App() {
   const { people } = usePresence();
 
   return (
-    <main className="stage">
-      <section className="card">
-        <div className="crowd">
+    <main>
+      <header>
+        <h1>{NAME}</h1>
+        <div className="crowd" aria-label={\`\${people.length} here\`}>
           {people.map((p) => (
-            <Face key={p.id} person={p} size={48} />
+            <Face key={p.id} person={p} />
           ))}
         </div>
-        <h1>{NAME}</h1>
-        <p className="lede">A fresh lump of clay. Open the room and say what it should become.</p>
+      </header>
+      <p className="lede">This app is new. Open the room and say what it should become.</p>
+      <div className="wave">
         <button onClick={() => setWaves((n) => n + 1)}>Wave hello</button>
-        <p className="count">{waves === 0 ? "Nobody has waved yet" : waves === 1 ? "1 wave so far" : \`\${waves} waves so far\`}</p>
-        <Guestbook />
-      </section>
+        <span>{waves === 0 ? "Nobody has waved yet" : waves === 1 ? "1 wave so far" : \`\${waves} waves so far\`}</span>
+      </div>
+      <Notes />
     </main>
   );
 }
@@ -104,153 +105,104 @@ export default function App() {
     {
       path: "src/styles.css",
       text: `:root {
-  --ink: #1d1631;
-  --paper: #fffdf6;
-  --sun: #ffd84a;
-  --leaf: #2fd6a0;
-  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --ink: #2b2520;
+  --ink-soft: #6f655c;
+  --paper: #f7f3ec;
+  --surface: #fffdf9;
+  --line: #e2d9cc;
+  --accent: #c4491f;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--ink);
+  background: var(--paper);
 }
 
 * { box-sizing: border-box; }
 
-body {
-  margin: 0;
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at 18% 22%, #ffe9a8 0 18%, transparent 18.5%),
-    radial-gradient(circle at 84% 78%, #c9f5e6 0 22%, transparent 22.5%),
-    #fff4d6;
+body { margin: 0; }
+
+main {
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: clamp(32px, 10vh, 96px) 20px 48px;
 }
 
-.stage {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-
-.card {
-  width: min(440px, 100%);
-  padding: 36px 32px 28px;
-  background: var(--paper);
-  border: 3px solid var(--ink);
-  border-radius: 28px;
-  box-shadow: 8px 8px 0 var(--ink);
-  text-align: center;
-}
-
-.crowd {
+header {
   display: flex;
-  justify-content: center;
-  min-height: 48px;
-  margin-bottom: 16px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
-
-.face {
-  flex: none;
-  border: 2.5px solid var(--ink);
-  border-radius: 35%;
-  background: var(--sun);
-  box-shadow: 2px 2px 0 var(--ink);
-}
-
-.crowd .face { margin-left: -12px; }
-.crowd .face:first-child { margin-left: 0; }
 
 h1 {
-  margin: 0 0 8px;
-  font-size: clamp(32px, 8vw, 44px);
-  line-height: 1;
+  margin: 0;
+  font-size: clamp(28px, 7vw, 36px);
+  line-height: 1.1;
   letter-spacing: -0.02em;
 }
 
 .lede {
-  margin: 0 0 24px;
-  font-size: 17px;
-  line-height: 1.4;
-  opacity: 0.75;
+  margin: 10px 0 32px;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.crowd { display: flex; flex: none; }
+.crowd .face + .face { margin-left: -8px; }
+
+.face {
+  flex: none;
+  border-radius: 50%;
+  background: var(--line);
+  box-shadow: 0 0 0 2px var(--paper);
 }
 
 button {
   font: inherit;
-  font-size: 18px;
-  font-weight: 800;
-  padding: 12px 26px;
-  color: var(--ink);
-  background: var(--leaf);
-  border: 3px solid var(--ink);
-  border-radius: 16px;
-  box-shadow: 4px 4px 0 var(--ink);
-  cursor: pointer;
-  transition: transform 120ms, box-shadow 120ms;
-}
-
-button:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
-button:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); transition-duration: 0ms; }
-
-.count {
-  margin: 16px 0 0;
-  font-size: 14px;
   font-weight: 600;
-  opacity: 0.6;
+  min-height: 44px;
+  padding: 0 18px;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
 }
 
-.book {
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 3px dashed var(--ink);
-  text-align: left;
+button:active { transform: scale(0.97); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wave {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 14px;
+  color: var(--ink-soft);
 }
 
-.book form { display: flex; gap: 8px; }
+.notes { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--line); }
+.notes form { display: flex; gap: 8px; }
 
-.book input {
+.notes input {
   flex: 1;
   min-width: 0;
+  min-height: 44px;
   font: inherit;
-  font-size: 16px;
-  padding: 10px 14px;
+  padding: 0 14px;
   color: var(--ink);
-  background: #fff;
-  border: 3px solid var(--ink);
-  border-radius: 14px;
-  outline: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
 
-.book input:focus { box-shadow: 0 0 0 3px var(--sun); }
-.book button { font-size: 16px; padding: 10px 18px; background: var(--sun); }
+.notes button { color: var(--ink); background: var(--surface); border: 1px solid var(--line); }
 
-.book ul {
-  list-style: none;
-  margin: 16px 0 0;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-  max-height: 260px;
-  overflow-y: auto;
-}
+.notes ul { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 12px; }
+.notes li { display: flex; align-items: flex-start; gap: 10px; animation: arrive 200ms ease-out; }
+.notes li p { margin: 4px 0 0; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
 
-.book li {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  animation: arrive 260ms cubic-bezier(.2, 1.4, .4, 1);
-}
-
-.book li p {
-  margin: 0;
-  padding: 8px 12px;
-  font-size: 15px;
-  line-height: 1.35;
-  background: #fff;
-  border: 2.5px solid var(--ink);
-  border-radius: 4px 14px 14px 14px;
-  overflow-wrap: anywhere;
-}
-
-@keyframes arrive { from { opacity: 0; transform: translateY(-6px) scale(.96); } }
-@media (prefers-reduced-motion: reduce) { .book li { animation: none; } }
+@keyframes arrive { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .notes li { animation: none; } }
 `,
     },
   ];

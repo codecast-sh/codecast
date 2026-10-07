@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useLinger } from "../lib/useLinger";
+import { Button } from "./Button";
 import { Face, type Person } from "./Face";
 import s from "./Toast.module.css";
 
@@ -15,12 +17,11 @@ const ToastContext = createContext<(t: ToastSpec) => void>(() => {});
 
 export const useToast = () => useContext(ToastContext);
 
-/** One toast at a time, top center: arrives with a squish, stays (paused
- *  while hovered), glides away. A newer toast replaces the current one. */
+/** One toast at a time, top center, on glass: drops in, stays (paused while
+ *  hovered or focused), fades away. A newer toast replaces the current one. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<(ToastSpec & { key: number }) | null>(null);
   const [leaving, setLeaving] = useState(false);
-  const hovered = useRef(false);
   const seq = useRef(0);
 
   const show = useCallback((t: ToastSpec) => {
@@ -28,33 +29,31 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToast({ ...t, key: ++seq.current });
   }, []);
 
+  const { hold } = useLinger(toast?.key ?? null, toast?.ms ?? 4000, () => setLeaving(true));
+
+  // Unmount on a timer, not animationend: a hidden tab never runs the fade.
   useEffect(() => {
-    if (!toast) return;
-    let left = toast.ms ?? 4000;
-    const tick = setInterval(() => {
-      if (!hovered.current) left -= 100;
-      if (left <= 0) {
-        clearInterval(tick);
-        setLeaving(true);
-      }
-    }, 100);
-    return () => clearInterval(tick);
-  }, [toast]);
+    if (!leaving) return;
+    const t = setTimeout(() => setToast(null), 200);
+    return () => clearTimeout(t);
+  }, [leaving]);
 
   const dismiss = () => setLeaving(true);
 
   return (
     <ToastContext.Provider value={show}>
       {children}
+      {/* Always mounted, so a screen reader hears each toast as it comes. */}
+      {createPortal(<p className="sr-only" role="status">{toast && !leaving ? toast.text : ""}</p>, document.body)}
       {toast &&
         createPortal(
           <div
             key={toast.key}
-            role="status"
-            className={`${s.toast} ${leaving ? s.leaving : ""} ${toast.onClick ? s.clickable : ""}`}
-            onAnimationEnd={() => leaving && setToast(null)}
-            onPointerEnter={() => (hovered.current = true)}
-            onPointerLeave={() => (hovered.current = false)}
+            className={`${s.toast} ${toast.face ? s.withFace : ""} ${leaving ? s.leaving : ""} ${toast.onClick ? s.clickable : ""}`}
+            onPointerEnter={() => hold(true)}
+            onPointerLeave={() => hold(false)}
+            onFocus={() => hold(true)}
+            onBlur={() => hold(false)}
             onClick={() => {
               if (!toast.onClick) return;
               toast.onClick();
@@ -64,7 +63,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             {toast.face && <Face person={toast.face} size={24} />}
             <span className={s.text}>{toast.text}</span>
             {toast.action && (
-              <button
+              <Button
+                variant="text"
                 className={s.action}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -73,11 +73,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 }}
               >
                 {toast.action.label}
-              </button>
+              </Button>
             )}
           </div>,
           document.body,
         )}
     </ToastContext.Provider>
+  );
+}
+
+/** The new-version toast's line (DESIGN 6.2): "v15 is live · Juniper:
+ *  summary", or for a restore "v8 is live · Peak undid v7: its summary". */
+export function LiveToastText({ version, name, verb, summary }: { version: number; name?: string; verb?: string | null; summary: string }) {
+  return (
+    <>
+      <span className={s.version}>v{version} is live</span>
+      {name && <span className={s.who}> · {name}{verb ? ` ${verb}` : ""}:</span>} <span className={s.summary}>{summary}</span>
+    </>
   );
 }

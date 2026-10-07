@@ -21,6 +21,9 @@ const CONTENT_TYPES: Record<string, string> = {
   md: "text/plain; charset=utf-8",
 };
 
+/** The file types a version may hold. */
+export const FILE_TYPES = Object.keys(CONTENT_TYPES);
+
 const TRANSPILED = new Set(["jsx", "ts", "tsx"]);
 
 export const ENTRY_PATH = "index.html";

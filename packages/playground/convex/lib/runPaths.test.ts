@@ -12,6 +12,10 @@ describe("runRoute", () => {
     expect(runRoute("/run/frog-choir-k3x9/v/12/")).toEqual({ kind: "file", slug: "frog-choir-k3x9", number: 12, path: ENTRY_PATH });
   });
 
+  test("v0, a new app's starter, is served while its first build runs", () => {
+    expect(runRoute("/run/a-b2c3/v/0/")).toEqual({ kind: "file", slug: "a-b2c3", number: 0, path: ENTRY_PATH });
+  });
+
   test("a folder without its slash redirects to it, so relative paths resolve", () => {
     expect(runRoute("/run/frog-choir-k3x9/v/12")).toEqual({ kind: "folder", location: "/run/frog-choir-k3x9/v/12/" });
   });
@@ -31,7 +35,7 @@ describe("runRoute", () => {
     for (const bad of [
       "/run/",
       "/run/Bad_Slug/v/1/",
-      "/run/a-b2c3/v/0/",
+      "/run/a-b2c3/v/00/",
       "/run/a-b2c3/v/012/",
       "/run/a-b2c3/v/v1/",
       "/run/a-b2c3/v/1234567/",

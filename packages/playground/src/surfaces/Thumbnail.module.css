@@ -1,7 +1,15 @@
-.thumb { position: absolute; inset: 0; overflow: hidden; background: var(--cream); }
-.placeholder { position: absolute; inset: 0; display: grid; place-items: center; background: var(--dot-grid), var(--cream); }
-.frame {
-  position: absolute; top: 0; left: 0; width: 400%; height: 400%; border: 0; transform: scale(.25); transform-origin: 0 0;
-  pointer-events: none; opacity: 0; transition: opacity 280ms var(--glide); background: var(--paper);
+/* Every app is an 800x800 page scaled by --scale to cover the tile from its
+   top left corner; the still is the same page as an image, covering the
+   same way. */
+.thumb { position: absolute; inset: 0; overflow: hidden; background: var(--sunk); }
+.placeholder { position: absolute; inset: 0; display: grid; place-items: center; }
+.still {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; object-position: top left;
+  opacity: 0; transition: opacity var(--t-quick) var(--ease-out);
 }
-.loaded { opacity: 1; }
+.frame {
+  position: absolute; top: 0; left: 0; border: 0;
+  transform: scale(var(--scale)); transform-origin: 0 0;
+  pointer-events: none; opacity: 0; transition: opacity 280ms var(--ease-out);
+}
+.shown { opacity: 1; }

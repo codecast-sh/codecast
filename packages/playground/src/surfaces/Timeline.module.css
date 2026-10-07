@@ -1,58 +1,110 @@
 .dock {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 76px; z-index: var(--z-dock);
-  display: flex; align-items: center; gap: var(--s4); padding: 0 var(--s4);
-  background: var(--paper); border-top: var(--line); animation: dock-in var(--t-move) var(--glide);
+  position: absolute; left: 0; right: 0; bottom: 0; height: 68px; z-index: var(--z-dock);
+  display: flex; align-items: center; gap: var(--s5); padding: 0 16px 0 20px;
+  background: var(--paper); border-top: var(--hair-2); animation: dock-in var(--t-move) var(--ease-out);
 }
 @keyframes dock-in { from { transform: translateY(100%); } }
-.dockHead { flex: none; display: flex; flex-direction: column; gap: 2px; font: 800 13px var(--ui); min-width: 92px; }
-.dockHead span { font: 600 12px var(--ui); color: var(--ink-soft); }
-.stepKeys { flex: none; font: 600 12px var(--ui); color: var(--ink-soft); }
-@media (max-width: 1200px) { .stepKeys { display: none; } }
+.label { width: 112px; flex: none; display: flex; flex-direction: column; gap: 1px; }
+.label b { font: 650 13px/1.3 var(--ui); font-feature-settings: "tnum" 1; }
+.label span { font: var(--t-meta); color: var(--ink-3); }
+.keys { flex: none; display: flex; align-items: center; gap: var(--s3); font: var(--t-meta); color: var(--ink-3); }
+.unseen { visibility: hidden; }
+@media (max-width: 1200px) { .keys { display: none; } }
 
-.strip { flex: none; padding: 4px 16px 6px; border-top: var(--line); background: var(--paper); }
+.strip { flex: none; padding: 2px 6px 0; border-top: var(--hair); background: var(--paper); }
 
-.beadsWrap { flex: 1; min-width: 0; }
-.beads {
-  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 22px 24px 10px;
+.trackWrap { flex: 1; min-width: 0; }
+.track {
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: 0 24px;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
           mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
 }
-.beads::-webkit-scrollbar { display: none; }
-.string { position: relative; display: flex; align-items: center; min-width: 100%; width: max-content; height: 34px; }
-.string::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; background: var(--ink); border-radius: 2px; }
-.slot { position: relative; flex: 0 1 72px; min-width: 34px; display: grid; place-items: center; }
-
-.bead {
-  position: relative; width: 18px; height: 18px; border-radius: 50%; border: var(--line); background: var(--fill);
-  display: grid; place-items: center; padding: 0;
-  transition: width var(--t-quick) var(--squish), height var(--t-quick) var(--squish), transform var(--t-quick) var(--squish);
+.track::-webkit-scrollbar { display: none; }
+/* The line runs 30px down, leaving room above a mark for the faces of who is
+   looking at it, and for a dot's hover face. Labels sit clear of the
+   viewing ring and the focus ring around it. */
+.rail { position: relative; display: flex; min-width: 100%; width: max-content; height: 64px; }
+.rail::before { content: ""; position: absolute; left: 0; right: 0; top: 30px; height: 1px; background: var(--line-2); }
+.slot { position: relative; flex: 1 0 18px; }
+/* A fork's track starts where it came from, a link back on the line. */
+.stub { position: relative; flex: none; display: flex; align-items: center; height: 61px; padding-right: 6px; }
+.stub a {
+  display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 0; background: var(--paper);
+  font: 400 12px/1 var(--ui); color: var(--ink-3); white-space: nowrap; transition: color var(--t-quick);
 }
-.bead:hover, .bead:focus-visible, .peeked { width: 28px; height: 28px; transform: translateY(-2px); box-shadow: var(--focus); }
-.live { width: 30px; height: 30px; background: var(--mint); }
-.live.peeked, .live:hover { width: 32px; height: 32px; }
-.num { font: 700 9px/1 var(--mono); }
-.restore:not(.live) { background: repeating-linear-gradient(-45deg, var(--ink) 0 2px, var(--cream) 2px 6px); }
-.viewing { background: var(--bubble); box-shadow: 0 0 0 3px var(--paper), 0 0 0 6px var(--bubble); }
-.askerFace { position: absolute; bottom: calc(100% + 6px); left: 50%; translate: -50% 4px; opacity: 0; pointer-events: none; transition: opacity var(--t-quick), translate var(--t-quick) var(--squish); }
-.bead:hover .askerFace, .bead:focus-visible .askerFace, .peeked .askerFace { opacity: 1; translate: -50% 0; }
-.buildingBead { width: 22px; height: 22px; border-radius: 50%; border: 2.5px dashed var(--ink); background: var(--paper); display: grid; place-items: center; }
+.stub a:hover { color: var(--ink); }
+.stub svg { width: 13px; height: 13px; flex: none; }
+.faces .slot { flex-basis: 30px; }
+.strip .slot { flex: 0 0 40px; }
 
-.peek { display: flex; flex-direction: column; gap: var(--s2); }
+/* Every mark is centered on the line. */
+.mark, .building {
+  position: absolute; left: 50%; top: 30.5px; translate: -50% -50%; display: grid; place-items: center; padding: 0;
+  transition: transform var(--t-quick) var(--ease-out);
+}
+.mark { width: 24px; height: 24px; border-radius: 8px; }
+.mark:hover, .peeked { transform: scale(1.3); }
+/* Focus is a persimmon ring outside the mark; the ink ring is the version
+   you are viewing, and the green one what is live. */
+.mark:focus-visible { box-shadow: none; outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.tick { width: 9px; height: 9px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+.restore { width: 11px; height: 11px; box-shadow: inset 0 0 0 1.5px var(--ink-3), inset 0 0 0 3px var(--surface), inset 0 0 0 5.5px var(--ink-3); }
+.live .tick { width: 13px; height: 13px; background: var(--live); box-shadow: 0 0 0 4px var(--live-soft); }
+.viewing .tick { width: 13px; height: 13px; background: var(--ink); box-shadow: 0 0 0 4px var(--paper), 0 0 0 5.5px var(--ink); }
+
+.face { position: relative; display: inline-flex; border-radius: 6px; opacity: .7; filter: saturate(.7); transition: opacity var(--t-quick), filter var(--t-quick); }
+.face > span { border-radius: 6px; }
+.mark:hover .face, .mark:focus-visible .face, .peeked .face { opacity: 1; filter: none; }
+.live .face { opacity: 1; filter: none; box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--live); }
+.viewing .face { opacity: 1; filter: none; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3.5px var(--ink); }
+
+.hoverFace {
+  position: absolute; bottom: calc(100% - 2px); left: 50%; translate: -50% 4px; opacity: 0; pointer-events: none;
+  transition: opacity var(--t-quick), translate var(--t-quick) var(--ease-out);
+}
+.mark:hover .hoverFace, .mark:focus-visible .hoverFace { opacity: 1; translate: -50% 0; }
+.forked { position: absolute; top: -5px; left: 50%; width: 1px; height: 6px; margin-left: -2px; background: var(--ink-3); box-shadow: 3px 0 0 var(--ink-3); }
+.faces .forked { top: -9px; }
+
+.building { width: 15px; height: 15px; border-radius: 50%; border: 1.5px dashed var(--accent); background: var(--paper); }
+
+.num {
+  position: absolute; top: 48px; left: 50%; translate: -50% 0; white-space: nowrap; pointer-events: none;
+  font: 400 11.5px/1.2 var(--ui); font-feature-settings: "tnum" 1; color: var(--ink-3);
+}
+.num.live { color: var(--live); font-weight: 600; }
+.num.viewing { color: var(--ink); font-weight: 600; }
+.restoreBadge {
+  position: absolute; right: -4px; bottom: -4px; width: 12px; height: 12px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 1.5px var(--paper), inset 0 0 0 1px var(--line-2); color: var(--ink-2);
+}
+.restoreBadge svg { width: 8px; height: 8px; stroke-width: 2.4; }
+
+.watchers {
+  --ring: var(--paper); position: absolute; left: 50%; top: 2px; translate: -50% 0; display: inline-flex; pointer-events: auto;
+  animation: global(arrive) var(--t-arrive) var(--ease-out); transition: opacity var(--t-quick);
+}
+.dots .watchers { top: 6px; }
+.slot:has(.mark:hover, .mark:focus-visible) .watchers { opacity: 0; }
+
+.cheer .face, .cheer .tick { animation: global(hop) 500ms var(--ease-pop); }
+
+.peekBox.peekBox { padding: 14px; }
+.peek { display: flex; flex-direction: column; }
 .peekHead { display: flex; align-items: center; gap: var(--s2); }
-.peekHead b { font: 400 26px/1 var(--display); }
-.peekHead small { font: 600 12px var(--ui); color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.summary { font: 700 14px/1.35 var(--ui); overflow-wrap: anywhere; }
+.peekHead b { margin-right: 4px; font: var(--t-h2); font-variation-settings: var(--voice-axes); }
+.peekHead small { min-width: 0; font: 400 12.5px/1.3 var(--ui); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary { margin-top: 10px; font: 600 14px/1.4 var(--ui); overflow-wrap: anywhere; }
 .request {
-  font: 500 13px/1.35 var(--ui); color: var(--ink-soft);
+  margin-top: 4px; font: 400 13px/1.4 var(--ui); color: var(--ink-2);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.peekActions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
-.isLive { font: 800 13px var(--ui); display: inline-flex; align-items: center; gap: 6px; }
-.isLive::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--mint); border: var(--line-thin); }
-.strip .beads { padding-top: 14px; padding-bottom: 4px; }
-.forkDot { position: absolute; top: -4px; right: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--pool); border: var(--line-thin); }
-.origin { display: flex; flex-wrap: wrap; gap: 6px; font: 700 12px var(--ui); }
-.origin span { display: inline-flex; align-items: center; gap: 5px; }
-.origin span::before { content: ""; width: 8px; height: 8px; border-radius: 50%; border: var(--line-thin); }
-.restored::before { background: var(--mint); }
-.forked::before { background: var(--pool); }
+.origin { display: flex; align-items: center; gap: 6px; margin-top: 6px; font: 400 12.5px/1.3 var(--ui); color: var(--ink-2); }
+.origin a { color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.takes { margin-top: 8px; font: 400 12.5px/1.4 var(--ui); color: var(--ink-2); }
+.origin svg { width: 13px; height: 13px; flex: none; }
+.peekActions { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; margin-top: 12px; }
+.isLive { display: inline-flex; align-items: center; gap: 7px; margin-right: auto; font: 600 13px var(--ui); color: var(--live); }
+.isLive::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 3px var(--live-soft); }
+@media (prefers-reduced-motion: reduce) { @keyframes dock-in { from { opacity: 0; } } }

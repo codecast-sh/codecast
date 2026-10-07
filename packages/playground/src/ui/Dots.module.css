@@ -1,5 +1,6 @@
-.dots { display: inline-flex; gap: calc(var(--d) / 2); align-items: center; }
-.dots i { width: var(--d); height: var(--d); border-radius: 50%; background: var(--ink); animation: hop 1.2s infinite; }
+.dots { display: inline-flex; gap: 3px; align-items: center; }
+.dots i { width: var(--d); height: var(--d); border-radius: 50%; background: currentColor; animation: dot 1.2s infinite; }
 .dots i:nth-child(2) { animation-delay: 150ms; }
 .dots i:nth-child(3) { animation-delay: 300ms; }
-.light i { background: var(--paper); }
+@keyframes dot { 30% { transform: translateY(-3px); opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { @keyframes dot { 30% { opacity: .5; } } .dots i { animation: none !important; } }

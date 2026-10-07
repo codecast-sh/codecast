@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SECRET_LENGTH, isSecretShaped, newSecret, randomToken, runtimeToken, runtimeTokenForSecret, sameToken, secretMatches, sha256Hex } from "./identity";
+import { RUNTIME_TOKEN_TTL_MS, SECRET_LENGTH, isSecretShaped, newSecret, randomToken, runtimeToken, runtimeTokenForSecret, runtimeTokenScope, sameToken, secretMatches, sha256Hex } from "./identity";
 
 describe("secrets", () => {
   test("a new secret is the right shape and never repeats", () => {
@@ -39,17 +39,47 @@ describe("randomToken", () => {
 });
 
 describe("runtime tokens", () => {
-  test("the shell's token is the one the server derives from the stored hash", async () => {
+  const NOW = Date.UTC(2026, 9, 7, 12);
+
+  test("the shell's token is the one the server derives from the stored hash, and holds while fresh", async () => {
     const secret = newSecret();
-    expect(await runtimeTokenForSecret(secret, "app1")).toBe(await runtimeToken(await sha256Hex(secret), "app1"));
+    const hash = await sha256Hex(secret);
+    const token = await runtimeTokenForSecret(secret, "app1", 3, NOW);
+    expect(token).toBe(await runtimeToken(hash, "app1", 3, NOW + RUNTIME_TOKEN_TTL_MS));
+    expect(await runtimeTokenScope(hash, "app1", token, NOW + 1_000)).toBe("use");
   });
 
   test("a token opens one app for one visitor", async () => {
     const secret = newSecret();
-    const token = await runtimeTokenForSecret(secret, "app1");
-    expect(token).not.toBe(await runtimeTokenForSecret(secret, "app2"));
-    expect(token).not.toBe(await runtimeTokenForSecret(newSecret(), "app1"));
+    const hash = await sha256Hex(secret);
+    const token = await runtimeTokenForSecret(secret, "app1", 3, NOW);
+    expect(await runtimeTokenScope(hash, "app2", token, NOW)).toBeNull();
+    expect(await runtimeTokenScope(await sha256Hex(newSecret()), "app1", token, NOW)).toBeNull();
     expect(token).not.toContain(secret);
+  });
+
+  test("a token dies at its expiry and cannot be stretched or forged", async () => {
+    const secret = newSecret();
+    const hash = await sha256Hex(secret);
+    const token = await runtimeTokenForSecret(secret, "app1", 3, NOW);
+    expect(await runtimeTokenScope(hash, "app1", token, NOW + RUNTIME_TOKEN_TTL_MS)).toBeNull();
+    const [version, expires, mac] = token.split(".");
+    expect(await runtimeTokenScope(hash, "app1", `${version}.${Number(expires) + 60_000}.${mac}`, NOW)).toBeNull();
+    expect(await runtimeTokenScope(hash, "app1", `4.${expires}.${mac}`, NOW)).toBeNull();
+    // One minted with a far expiry is refused even with a valid mac.
+    const far = await runtimeToken(hash, "app1", 3, NOW + 10 * RUNTIME_TOKEN_TTL_MS);
+    expect(await runtimeTokenScope(hash, "app1", far, NOW)).toBeNull();
+    for (const junk of ["", "abc", hash, `${version}.${expires}`]) expect(await runtimeTokenScope(hash, "app1", junk, NOW)).toBeNull();
+  });
+
+  test("a watch token only watches, and cannot be turned into one that writes", async () => {
+    const secret = newSecret();
+    const hash = await sha256Hex(secret);
+    const watch = await runtimeTokenForSecret(secret, "app1", 3, NOW, "watch");
+    expect(await runtimeTokenScope(hash, "app1", watch, NOW)).toBe("watch");
+    expect(await runtimeTokenScope(hash, "app1", watch.slice(1), NOW)).toBeNull();
+    const use = await runtimeTokenForSecret(secret, "app1", 3, NOW);
+    expect(await runtimeTokenScope(hash, "app1", `w${use}`, NOW)).toBeNull();
   });
 
   test("sameToken compares exactly", () => {

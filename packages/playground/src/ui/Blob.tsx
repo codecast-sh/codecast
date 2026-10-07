@@ -1,11 +1,11 @@
 import s from "./Blob.module.css";
 
-/** Clay: a tomato squircle with two ink eyes. The brand mark and the builder's face. */
-export function Blob({ size = 46, wobble = false, squash = false, down = false, className = "" }: { size?: number; wobble?: boolean; squash?: boolean; down?: boolean; className?: string }) {
+/** Clay's face: a persimmon squircle with two dark eyes (DESIGN 2). */
+export function Blob({ size = 22, down = false, faint = false, className = "" }: { size?: number; down?: boolean; faint?: boolean; className?: string }) {
   return (
     <span
-      className={`${s.blob} ${wobble ? s.wobble : ""} ${squash ? s.squash : ""} ${down ? s.down : ""} ${className}`}
-      style={{ width: size, height: size, ["--u" as string]: `${size / 46}` }}
+      className={`${s.blob} ${down ? s.down : ""} ${faint ? s.faint : ""} ${className}`}
+      style={{ width: size, height: size, ["--size" as string]: `${size}px` }}
       aria-hidden
     />
   );

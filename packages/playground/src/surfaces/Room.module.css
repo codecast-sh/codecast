@@ -1,28 +1,38 @@
 .panel {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-room);
-  display: flex; flex-direction: column; background: var(--cream); border-left: var(--line-heavy);
-  animation: slide-in 320ms var(--squish);
+  display: flex; flex-direction: column; background: var(--paper); border-left: var(--hair-2);
+  animation: slide-in var(--t-arrive) var(--ease-out);
 }
-@keyframes slide-in { from { opacity: 0; transform: translateX(24px); } }
-.leaving { animation: slide-out var(--t-quick) var(--glide) forwards; }
-@keyframes slide-out { to { opacity: 0; transform: translateX(24px); } }
+@keyframes slide-in { from { opacity: 0; transform: translateX(16px); } }
+.leaving { animation: global(fade-out) var(--t-quick) var(--ease-out) forwards; }
 .resize {
-  position: absolute; left: -9px; top: 50%; z-index: 2; width: 14px; height: 58px; margin-top: -29px;
-  background: var(--paper); border: var(--line); border-radius: var(--r-xs); cursor: col-resize; touch-action: none;
+  position: absolute; left: -3px; top: 50%; z-index: 2; width: 5px; height: 44px; margin-top: -22px;
+  border-radius: 3px; background: var(--line-2); cursor: col-resize; touch-action: none;
+  transition: width var(--t-quick), left var(--t-quick), background var(--t-quick);
 }
-.resize:hover { background: var(--butter); }
+.resize:hover, .resize:active, .resize:focus-visible { width: 7px; left: -4px; background: var(--ink-3); }
+/* The room takes focus itself only to hand it on; its own edge says enough. */
+.panel:focus-visible, .sheet:focus-visible { box-shadow: var(--shadow-lg), 0 0 0 1px var(--edge); }
+.panel:focus-visible { box-shadow: none; }
 
 .sheet {
-  position: fixed; left: 0; right: 0; z-index: var(--z-room); display: flex; flex-direction: column;
-  background: var(--cream); border-top: var(--line-heavy); border-radius: 28px 28px 0 0; overflow: hidden;
-  box-shadow: 0 -4px 0 var(--ink-faint);
-  transition: height 320ms var(--squish), bottom var(--t-quick) var(--glide);
-  animation: sheet-in 320ms var(--squish);
+  position: fixed; left: 0; right: 0; z-index: var(--z-room); display: flex; flex-direction: column; overflow: hidden;
+  background: var(--paper); border-radius: 20px 20px 0 0; box-shadow: var(--shadow-lg), 0 0 0 1px var(--edge);
+  transition: height var(--t-arrive) var(--ease-out), bottom var(--t-quick) var(--ease-out);
+  animation: sheet-in var(--t-arrive) var(--ease-out);
 }
 @keyframes sheet-in { from { transform: translateY(100%); } }
 .dragging { transition: none; }
-.sheetLeaving { animation: sheet-out var(--t-quick) var(--glide) forwards; }
+.sheetLeaving { animation: sheet-out var(--t-quick) var(--ease-out) forwards; }
 @keyframes sheet-out { to { transform: translateY(100%); } }
-.grab { flex: none; touch-action: none; background: var(--butter); }
-.handle { display: block; width: 44px; height: 5px; border-radius: var(--r-pill); background: var(--ink); margin: 10px auto 6px; }
-.grab:has(> :only-child) { background: var(--cream); }
+.grab { flex: none; touch-action: none; }
+.grabPeek { flex: 1; min-height: 0; display: flex; flex-direction: column; cursor: pointer; }
+.grabPeek > :last-child { flex: 1; min-height: 0; }
+.past { flex: none; min-height: 44px; border-bottom: var(--hair); background: var(--sunk); }
+.handle { display: block; width: 36px; height: 4px; border-radius: var(--r-pill); background: var(--line-2); margin: 8px auto 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes slide-in { from { opacity: 0; } }
+  @keyframes sheet-in { from { opacity: 0; } }
+  @keyframes sheet-out { to { opacity: 0; } }
+}
