@@ -64,7 +64,7 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRun
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, THREAD_STATE_RESULT_MAX_CHARS, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
@@ -11919,11 +11919,24 @@ export const cliRenameSession = mutation({
 // The one write path for a pinned thread state (`cast state`, and the brief
 // edit that mirrors a role's first line, orgRoles.performBriefEdit). `text`
 // is already normalized by the caller.
+/** A station's json result as sent: kept only when it parses and fits. */
+function threadStateResultOf(result: string | undefined): string | null {
+  const text = result?.trim();
+  if (!text || text.length > THREAD_STATE_RESULT_MAX_CHARS) return null;
+  try {
+    JSON.parse(text);
+  } catch {
+    return null;
+  }
+  return text;
+}
+
 export async function performSetThreadState(
   ctx: MutationCtx,
   conv: Doc<"conversations">,
   text: string,
   status: ThreadStateStatus,
+  result?: string | null,
 ): Promise<{ at: number; resurfaced: boolean }> {
   const at = Date.now();
   await ctx.db.patch(conv._id, {
@@ -11931,6 +11944,9 @@ export async function performSetThreadState(
     thread_state_at: at,
     thread_state_msg_count: conv.message_count ?? 0,
     thread_state_status: status,
+    // Every write replaces the result, so a later state never carries an
+    // earlier station's report.
+    thread_state_result: result ?? undefined,
   });
   // A `blocked` declaration from a HIDDEN session is a claim on the user's
   // eyes — the same claim `cast trigger complete --needs-attention` makes,
@@ -11974,6 +11990,7 @@ export const setThreadState = mutation({
     // writes from older CLIs — those default to "working", the overwhelmingly
     // common truth for a state written mid-session.
     status: v.optional(v.string()),
+    result: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -12003,7 +12020,7 @@ export const setThreadState = mutation({
     }
 
     const status = parseThreadStateStatus(args.status) ?? "working";
-    const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status);
+    const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result));
     return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced };
   },
 });
@@ -12037,6 +12054,7 @@ export const getThreadState = query({
       title: conv.title ?? null,
       state: conv.thread_state ?? null,
       status: conv.thread_state_status ?? null,
+      result: conv.thread_state_result ?? null,
       at: conv.thread_state_at ?? null,
       msg_count_at_write: conv.thread_state_msg_count ?? null,
       message_count: conv.message_count ?? 0,

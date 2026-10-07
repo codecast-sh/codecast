@@ -170,16 +170,39 @@ export function hasThreadState(fields: ThreadStateFields | null | undefined): bo
  * so no writer can leave a status or a count behind without its text. Used by
  * `cast state clear`, by the enqueue of a human's message (the declaration of
  * who acts next has been answered), and by the web store's optimistic clear. */
+/** Longest result kept beside a state: a station's report, not a transcript. */
+export const THREAD_STATE_RESULT_MAX_CHARS = 32_000;
+
+/**
+ * A state's fenced json block, whole: what a workflow station reports for its
+ * edges to route on. The display text is capped at THREAD_STATE_MAX_CHARS and
+ * a long report's block would be cut; this keeps it. The last block wins. Null
+ * when there is none, it does not parse, or it is past the result cap.
+ */
+export function threadStateResult(text: string): string | null {
+  const blocks = [...text.matchAll(/```json[ \t]*\n([\s\S]*?)\n[ \t]*```/g)];
+  const last = blocks[blocks.length - 1]?.[1]?.trim();
+  if (!last || last.length > THREAD_STATE_RESULT_MAX_CHARS) return null;
+  try {
+    JSON.parse(last);
+  } catch {
+    return null;
+  }
+  return last;
+}
+
 export function clearedThreadStateFields(): {
   thread_state: undefined;
   thread_state_at: undefined;
   thread_state_msg_count: undefined;
   thread_state_status: undefined;
+  thread_state_result: undefined;
 } {
   return {
     thread_state: undefined,
     thread_state_at: undefined,
     thread_state_msg_count: undefined,
     thread_state_status: undefined,
+    thread_state_result: undefined,
   };
 }

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
+  threadStateResult,
   normalizeThreadState,
   threadStateHeadline,
   threadStateCardLine,
@@ -180,5 +181,19 @@ describe("hasThreadState", () => {
     expect(hasThreadState({})).toBe(false);
     expect(hasThreadState({ thread_state: "   " })).toBe(false);
     expect(hasThreadState({ thread_state: "up" })).toBe(true);
+  });
+});
+
+describe("threadStateResult", () => {
+  const long = "x".repeat(1500);
+  test("keeps the fenced json block whole, past the display cap", () => {
+    const text = `Proven.\n\n\`\`\`json\n{ "outcome": "red", "evidence": "${long}" }\n\`\`\`\n`;
+    expect(JSON.parse(threadStateResult(text)!)).toEqual({ outcome: "red", evidence: long });
+  });
+
+  test("takes the last block, and none when there is none or it does not parse", () => {
+    expect(threadStateResult('```json\n{"a":1}\n```\nthen\n```json\n{"a":2}\n```')).toBe('{"a":2}');
+    expect(threadStateResult("Working on it.")).toBeNull();
+    expect(threadStateResult('```json\n{ "a": \n```')).toBeNull();
   });
 });

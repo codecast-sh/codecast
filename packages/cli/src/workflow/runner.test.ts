@@ -756,7 +756,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   let cap: ReturnType<typeof captureConsole>;
   let origFetch: typeof fetch;
   let calls: Array<{ route: string; body: any }>;
-  let pinned: { state: string; status: string };
+  let pinned: { state: string; status: string; result?: string | null };
   let workState: string;
   let inboxReads: Array<{ id: string; work_state: string; is_live: boolean }>;
 
@@ -838,6 +838,23 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     pinned = { state: "Which base should prove run on?", status: "working" };
     await run();
     expect(calls.some(c => c.route === "/cli/sessions/kill")).toBe(false);
+  }, 30000);
+
+  test("a station routes on its result even when the pinned text was cut short", async () => {
+    // Union's prove station (2026-10-07): its pin ran past the 1200-character
+    // display cap, the cut fell inside the JSON block, and the run failed with
+    // no outgoing edge although the hand had proven its cause.
+    pinned = { state: `Proven.\n\n\`\`\`json\n{ "outcome": "red", "evidence": "${"x".repeat(1200)}…`, status: "done", result: '{ "outcome": "red", "evidence": "long" }' };
+    const routed = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      prove [label="Prove", backend=session, agent=claude, prompt="prove it"]
+      ship [shape=parallelogram, script="true"]
+      exit [shape=Msquare]
+      start -> prove
+      prove -> ship [condition="prove.json.outcome = red"]
+      ship -> exit
+    }`);
+    expect(await runWorkflow(routed, { cwd: tmpDir, runId: "run-2", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions)).toBe("completed");
   }, 30000);
 
   test("a gate answered with its key reports the node completed, not failed", async () => {

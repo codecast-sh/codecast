@@ -475,7 +475,11 @@ async function executeSessionNode(
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
     // conversations.getThreadState: the pinned text is `state`, its status `status`.
     const pinnedText: string = typeof pinned?.state === "string" ? pinned.state : "";
-    recordNodeOutput(context, node.id, `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`);
+    // The pin is display text, capped; its json block is stored whole as
+    // `result`, which is what the station's edges route on.
+    const pinnedResult: string = typeof pinned?.result === "string" ? pinned.result : "";
+    const output = `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`;
+    recordNodeOutput(context, node.id, output, pinnedResult || output);
     const pinnedStatus: string = pinned?.status || "";
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);

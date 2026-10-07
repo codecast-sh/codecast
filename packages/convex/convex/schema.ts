@@ -795,6 +795,9 @@ export default defineSchema({
     // with the text. Drives the status chip on the panel and the row tint on
     // the inbox card; absent on rows written before it existed.
     thread_state_status: v.optional(v.string()),
+    // The pin's json block, whole: what a workflow station reports for its
+    // edges to route on (cast state; the text above is capped for display).
+    thread_state_result: v.optional(v.string()),
     // The page an agent offered as a pane (`cast browser pane <url>`). One
     // latest offer, never a list: an agent that started three dev servers is
     // telling the reader about the newest, and a queue of dead addresses reads

@@ -66,6 +66,27 @@ describe("setThreadState", () => {
     expect((tables.conversations[0] as any).thread_state_msg_count).toBe(42);
   });
 
+  test("a station's result is kept whole beside the capped text, and a later write without one drops it", async () => {
+    // The line routes on the result; the pin text is display and is capped.
+    const tables = tablesWith();
+    const db = makeFakeDb(tables);
+    const result = JSON.stringify({ outcome: "red", evidence: "e".repeat(2000) });
+    await (setThreadState as any)._handler(ctxAs(db, RUNNER), { session: "abc1234", text: "Proven.", status: "done", result });
+    expect((tables.conversations[0] as any).thread_state_result).toBe(result);
+    const read = await (getThreadState as any)._handler(ctxAs(db, RUNNER), { session: "abc1234" });
+    expect(read.result).toBe(result);
+
+    await (setThreadState as any)._handler(ctxAs(db, RUNNER), { session: "abc1234", text: "Working again." });
+    expect((tables.conversations[0] as any).thread_state_result).toBeUndefined();
+  });
+
+  test("a result that is not json is not stored", async () => {
+    const tables = tablesWith();
+    const db = makeFakeDb(tables);
+    await (setThreadState as any)._handler(ctxAs(db, RUNNER), { session: "abc1234", text: "Proven.", result: "{ cut" });
+    expect((tables.conversations[0] as any).thread_state_result).toBeUndefined();
+  });
+
   test("empty text clears the state rather than pinning a blank line", async () => {
     const tables = tablesWith({ thread_state: "Waiting on CI", thread_state_at: 1, thread_state_msg_count: 3 });
     const db = makeFakeDb(tables);

@@ -15,6 +15,7 @@ import { stdinText } from "./sendBody.js";
 import { fmt, c } from "./colors.js";
 import {
   normalizeThreadState,
+  threadStateResult,
   threadStateFreshness,
   parseThreadStateStatus,
   THREAD_STATE_MAX_CHARS,
@@ -204,7 +205,10 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
         process.exit(1);
       }
 
-      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined });
+      // The json block rides whole beside the capped text: a workflow
+      // station's edges route on it.
+      const stationResult = intent.mode === "set" ? threadStateResult(intent.text) : null;
+      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined, result: stationResult ?? undefined });
       // Keep the reminder hook's local stamp in step with the write — but only
       // for THIS session. `--for` writes to somebody else's thread, and their
       // agent's reminder is keyed to their own machine's stamp, not ours.
