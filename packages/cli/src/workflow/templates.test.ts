@@ -122,7 +122,7 @@ describe("line.cast template", () => {
       "task_id", "task_title", "task_description", "acceptance_criteria", "task_status", "execution_status",
       "review_verdict", "review_note", "handoff", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
-      "run_dir", ...Object.keys(EMPTY_VARS),
+      "run_dir", "last_error", ...Object.keys(EMPTY_VARS),
     ]);
     const nodeVar = /^(\w+)\.(output|outcome|json(\.\w+)*)$/;
     const texts = [graph.stack!, ...[...graph.nodes.values()].flatMap((n) => [n.prompt, n.script, n.doc, n.card])].filter(Boolean) as string[];
@@ -509,11 +509,15 @@ describe("line.cast station scripts", () => {
   test("unproven parks the cause at open with what Prove tried, leaving a hand's own handoff in review", () => {
     expect(run("unproven", { handoff: "none", "prove.output": "No test could reach the daemon's socket." }).code).toBe(0);
     expect(run("unproven", { handoff: "needs_context", "prove.output": "" }).code).toBe(0);
+    // A hand that never spawned leaves no output: the run's last error stands in.
+    expect(run("unproven", { handoff: "none", last_error: "spawn failed" }).code).toBe(0);
     const parked = "Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the line once it can be shown.";
     expect(calls()).toEqual([
       ["task", "update", "ct-1", "-s", "open"],
       ["task", "comment", "ct-1", `${parked} What Prove tried: No test could reach the daemon's socket.`, "-t", "blocker"],
       ["task", "comment", "ct-1", parked, "-t", "blocker"],
+      ["task", "update", "ct-1", "-s", "open"],
+      ["task", "comment", "ct-1", `${parked} What Prove tried: spawn failed`, "-t", "blocker"],
     ]);
   });
 
@@ -699,12 +703,39 @@ describe("line.cast offline run through the session path", () => {
     expect(JSON.parse(node.result_preview.split("\n")[0])).toEqual({ dissolved: "judge_defect", moments: 2 });
   }, 30000);
 
-  test("a prove that ends without its proof parks at unproven and the run completes", async () => {
+  // The real unproven script runs, its cast calls logged by a stub, so the
+  // test sees the blocker a person would: what Prove said, or, when the hand
+  // never spawned and left no output, the run's last error.
+  test.each([
+    ["settles without its proof", "I could not write a test that shows the miss."],
+    ["never spawns", "What Prove tried: spawn failed"],
+  ])("a prove that %s parks at unproven with what it tried, and the run completes", async (how, tried) => {
     pinned.prove = "I could not write a test that shows the miss.";
-    expect(await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }))).toBe("completed");
-    expect(stations()).toEqual(["ground", "analyze", "prove"]);
+    if (how === "never spawns") {
+      const fetchOk = globalThis.fetch;
+      globalThis.fetch = (async (url: any, init: any) =>
+        String(url).endsWith("/cli/spawn") && /^You show the miss/m.test(JSON.parse(init.body).prompt)
+          ? new Response("{}", { status: 200 })
+          : fetchOk(url, init)) as typeof fetch;
+    }
+    // One JSON array per call: Prove's output runs over several lines.
+    const castLog = path.join(tmpDir, "cast.log");
+    const castStub = path.join(tmpDir, "cast");
+    fs.writeFileSync(castStub, `#!/usr/bin/env bun\nrequire("fs").appendFileSync(${JSON.stringify(castLog)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`, { mode: 0o755 });
+    const graph = offlineLine(tmpDir);
+    graph.nodes.get("unproven")!.script = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line).nodes.get("unproven")!.script!.replaceAll("cast ", `${castStub} `);
+    expect(await runWorkflow(graph, opts({ runId: "run_1" }))).toBe("completed");
     const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
     expect(ran.slice(-2)).toEqual(["unproven", "exit"]);
+    const castCalls: string[][] = fs.readFileSync(castLog, "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(castCalls).toEqual([
+      ["task", "update", "ct-7", "-s", "open"],
+      ["task", "comment", "ct-7", expect.stringContaining(tried), "-t", "blocker"],
+    ]);
+    expect(castCalls[1][3]).toStartWith("Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the line once it can be shown. What Prove tried: ");
+    // Parked, never closed: no done or drop reached the task.
+    expect(castCalls.some((c) => c[1] === "done" || c[1] === "drop")).toBe(false);
+    expect(calls.some((c) => c.route === "/cli/work/done" || c.route === "/cli/work/drop")).toBe(false);
   }, 30000);
 
   test("a malformed profile stops the run before any hand starts", async () => {
