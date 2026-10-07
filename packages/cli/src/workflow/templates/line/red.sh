@@ -18,23 +18,33 @@ if [ $category = prompt ]; then
   # The miss is shown on the base. A rerun reattaches this cause's branch with
   # the last round's commits on it, so the run's own worktree goes to the
   # merge base for the check and comes back to the branch after.
-  home="$(git rev-parse --abbrev-ref HEAD)"
+  # It always returns to the run's branch, even when an earlier station left
+  # the worktree detached: returning to "wherever HEAD was" would leave it on
+  # the base and send the builder to work there.
+  home=$branch
   # The base is where the branch leaves the default branch as the remote has
   # it: a checkout's local copy can lag the remote by many commits, and the
   # project's prove command measures from the remote too.
   upstream=$default_branch
   git rev-parse --verify --quiet "origin/$default_branch" >/dev/null && upstream="origin/$default_branch"
-  base="$(git merge-base HEAD $upstream 2>/dev/null)"
+  base="$(git merge-base "$home" $upstream 2>/dev/null)"
   if [ -n "$base" ] && [ "$(git rev-parse HEAD)" != "$base" ]; then
     [ -z "$(git status --porcelain --untracked-files=no)" ] || { answer false "the worktree has uncommitted changes, so it cannot go to the base to show the miss"; exit 0; }
-    trap 'git checkout -q "$home"' EXIT
     git checkout -q --detach "$base" || { answer false "could not check out the base $base"; exit 0; }
   fi
+  trap 'git checkout -q "$home"' EXIT
   if bash -c "$cmd" > "$dir/prove.log" 2>&1; then
     answer true "the prove command shows the miss on the base"
   else
     answer false "the prove command did not show the miss on the base: $(clean "$dir/prove.log")"
   fi
+  exit 0
+fi
+# A change to the line itself (line-map.md LX6) is shown on the line's own
+# recorded runs, which the prove station names in its comment; there is no
+# command to rerun, so the station passes with that note.
+if [ $category = line ]; then
+  answer true "a line cause: the prove comment names the recorded runs that show it"
   exit 0
 fi
 [ -f "$dir/repro.sh" ] || { answer false "no repro.sh"; exit 0; }

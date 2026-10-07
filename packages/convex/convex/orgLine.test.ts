@@ -453,3 +453,19 @@ describe("orgRoles.setLine (L2)", () => {
     expect(lineSlugOf({ line_workflow_slug: "feature" })).toBe("feature");
   });
 });
+
+// line-map.md LX6: "Start now" on a line cause starts the project lead's line
+// on it through the same start the sweep uses, whether or not the role starts
+// work on its own, and refuses a second start while the run lives.
+describe("startLineCauseCore (LX6)", () => {
+  test("starts the lead role's line on a cause in its project, once", async () => {
+    const { startLineCauseCore } = await import("./lineCause");
+    const { ctx, tables } = fixtures({ role: { trust: "propose" }, task: { assignee: undefined, source: "signal", category: "line" } });
+    const out = await startLineCauseCore(ctx, HOST as any, "tasks_1" as any);
+    expect(out.role_handle).toBe("growth");
+    expect(tables.workflow_runs).toHaveLength(1);
+    expect(tables.workflow_runs[0]).toMatchObject({ task_id: "tasks_1", user_id: HOST, workflow_name: "line" });
+    expect(tables.tasks[0].status).toBe("in_progress");
+    await expect(startLineCauseCore(ctx, HOST as any, "tasks_1" as any)).rejects.toThrow(/already has a live run/);
+  });
+});
