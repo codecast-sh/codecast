@@ -492,6 +492,11 @@ export function buildLineMap(input: LineMapInput): LineMap {
   for (const node of nodes.values()) {
     node.now.sort((a, b) => a.at - b.at);
     node.passed.sort((a, b) => b.at - a.at);
+    // Two ends mean the line did not deliver: a fix that came back, a run that
+    // ended with nothing landed. They mark like a failing station, so the map
+    // says so at a glance (LX2); held, dissolved and dropped are outcomes, not trouble.
+    if (node.end === "reopened" && node.through > 0) node.marks.push({ level: "warn", words: `${plural(node.through, "fix", "fixes")} came back during the watch in the last ${label}` });
+    if (node.end === "stopped" && node.through > 0) node.marks.push({ level: "warn", words: `${plural(node.through, "run")} stopped without a change in the last ${label}` });
     if (node.kind === "source" || node.kind === "end" || node.kind === "signals" || node.kind === "expectations") continue;
     const times = durations.get(node.id) ?? [];
     node.medianMs = median(times);
