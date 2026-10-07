@@ -21,6 +21,9 @@ const TONE: Record<OutcomeTone, string> = {
   calm: "text-sol-text",
 };
 
+/** An outcome's tone as its text color. */
+export const outcomeToneClass = (tone: OutcomeTone) => TONE[tone];
+
 /** The run's outcome in one sentence, in its tone. `muted` draws a run that
  *  no longer speaks for the cause (a later run followed it): red is kept for
  *  the cause's state now. `brief` is a row's version (runOutcome). */
@@ -50,6 +53,13 @@ const STEP_MARK: Record<StepState, { icon: typeof Check; cls: string }> = {
   waiting: { icon: Pause, cls: "text-sol-yellow" },
   noted: { icon: Hand, cls: "text-sol-text-dim" },
 };
+
+/** A station's state as its mark: the same check, cross, spinner and pause every run path draws. */
+export function StepMark({ state, className }: { state: StepState; className?: string }) {
+  const mark = STEP_MARK[state];
+  const Icon = mark.icon;
+  return <Icon className={cn("w-3.5 h-3.5 shrink-0", mark.cls, className)} aria-hidden />;
+}
 
 /** The path a run took, phase by phase: each station's result in one line and
  *  the session that did it; the stations it did not reach fold per phase. */

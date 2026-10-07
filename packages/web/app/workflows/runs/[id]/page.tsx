@@ -16,6 +16,7 @@ import { isLineRun } from "@codecast/shared/contracts/changeCard";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../../hooks/useSyncDecisionDetail";
 import { useCoarseNow } from "../../../../hooks/useCoarseNow";
 import { lineTabHref } from "../../../../lib/lineSettings";
+import { lineTraceHref } from "../../../../lib/line/lineMapUrl";
 import { useWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { useForeignWorkspace } from "../../../../hooks/useForeignWorkspace";
@@ -206,6 +207,8 @@ function RunDetailContent({ runId }: { runId: string }) {
               {card && (prUrl
                 ? <ReportChip href={prUrl} external title="The change on GitHub">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>
                 : <ReportChip href="#run-card-diff" title="The change's diff, on the card below">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>)}
+              {/* The cause's whole story, this run one part of it (line-map.md LX4). */}
+              {line && run.task_id && <ReportChip href={lineTraceHref(run._id)} title="Follow this cause through the line: its signals, every run, the card, the ship and the watch">Trace</ReportChip>}
               {line && (
                 <ReportChip href={projectId ? lineTabHref(project?.short_id ?? projectId) : "/line"} title={`This project's line: its flow, stations and versions${projectForeign ? `, read from ${projectForeign.name}` : ""}`}>
                   {projectId ? "Line tab" : "the line"}

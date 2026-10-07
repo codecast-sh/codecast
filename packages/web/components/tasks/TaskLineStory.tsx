@@ -18,6 +18,7 @@ import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { lineTabHref } from "../../lib/lineSettings";
+import { lineTraceHref } from "../../lib/line/lineMapUrl";
 import type { TaskItem } from "../../store/inboxStore";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
 import { useGoalChip } from "../../hooks/useGoalChip";
@@ -74,7 +75,13 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
   // Once no run is live, the newest run's shape stands in for the strip.
   const phases = useMemo(() => (latest && !live ? runPath(latest, null, task) : null), [latest, live, task]);
   const watching = task.status === "done" && !!task.watch_until && task.watch_until > now;
-  const whereLine = <span className={cn("text-[13px] font-medium", TONE[where.tone])} data-cause-where>{where.text}</span>;
+  // The where sentence, and the trace (line-map.md LX4): the cause's whole story, step by step.
+  const whereLine = (
+    <span className="inline-flex items-baseline gap-3 min-w-0">
+      <span className={cn("text-[13px] font-medium", TONE[where.tone])} data-cause-where>{where.text}</span>
+      <Link href={lineTraceHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="Follow this cause through the line, step by step" data-cause-trace>Trace<ArrowUpRight className="w-3 h-3" /></Link>
+    </span>
+  );
   // Readiness is about admission: once the cause is closed it has no more to say.
   const readiness = task.status === "done" || task.status === "dropped" ? null : task.readiness ?? null;
   const kind = [task.category, task.risk && `${task.risk} risk`].filter(Boolean).join(" · ");
@@ -158,22 +165,22 @@ function readinessWords(readiness: string, note?: string | null): string {
   return `Not ready${why ? `: ${why.charAt(0).toLowerCase()}${why.slice(1)}` : ""}.`.replace(/\.\.$/, ".");
 }
 
+/** A signal behind the cause: the row opens its trace (line-map.md LX4), and
+ *  the arrow goes back to where it was seen. */
 function SignalRow({ s, now }: { s: LineSignal; now: number }) {
-  const body = (
-    <>
-      <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
-      <span className="min-w-0 truncate text-sol-text">{s.title}</span>
-      {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
-      <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
-      {s.evidence_url && <ArrowUpRight className="w-3 h-3 shrink-0 text-sol-text-dim" />}
-    </>
-  );
-  const cls = "flex items-baseline gap-2 px-1 py-0.5 rounded text-[12px] min-w-0";
   return (
-    <li data-cause-signal={s.short_id ?? s._id}>
-      {s.evidence_url
-        ? <a href={s.evidence_url} target="_blank" rel="noreferrer" className={cn(cls, "hover:bg-sol-bg-alt/60")} title="Where it was seen">{body}</a>
-        : <div className={cls}>{body}</div>}
+    <li className="flex items-baseline gap-1 rounded hover:bg-sol-bg-alt/60 min-w-0" data-cause-signal={s.short_id ?? s._id}>
+      <Link href={lineTraceHref(s.short_id || s._id)} className="flex-1 flex items-baseline gap-2 px-1 py-0.5 text-[12px] min-w-0" title="Trace this signal through the line" data-signal-trace>
+        <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
+        <span className="min-w-0 truncate text-sol-text">{s.title}</span>
+        {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
+        <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
+      </Link>
+      {s.evidence_url && (
+        <a href={s.evidence_url} target="_blank" rel="noreferrer" className="shrink-0 px-1 text-sol-text-dim hover:text-sol-blue" title="Where it was seen" data-signal-evidence>
+          <ArrowUpRight className="w-3 h-3" />
+        </a>
+      )}
     </li>
   );
 }

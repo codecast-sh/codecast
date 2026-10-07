@@ -1,0 +1,285 @@
+/* The line map (line-map.md LX2, LX3). Theme tokens only, and line.css's one
+   meaning per color: blue is motion (work crossing, a live lamp), yellow asks,
+   orange ages or starves, red fails, violet is rework (a loop back). Nodes
+   stay neutral so the trouble is what the eye finds. */
+
+.lmap-scroll {
+  --lmap-belt: var(--sol-blue);
+  --lmap-line: color-mix(in srgb, var(--sol-text-muted) 55%, transparent);
+  --lmap-idle: color-mix(in srgb, var(--sol-border) 85%, transparent);
+  position: relative;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.lmap-canvas { position: relative; margin: 0 auto; }
+
+/* Phases, named over the path. */
+.lmap-phases { position: absolute; inset: 0 0 auto 0; height: 22px; pointer-events: none; }
+.lmap-phase {
+  position: absolute;
+  top: 8px;
+  font-size: 10.5px;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+}
+
+/* ── edges ── */
+.lmap-edges { position: absolute; inset: 0; overflow: visible; }
+.lmap-edge { cursor: pointer; }
+.lmap-edge-hit { fill: none; stroke: transparent; stroke-width: 14px; pointer-events: stroke; }
+.lmap-edge-line {
+  fill: none;
+  stroke: color-mix(in srgb, var(--lmap-belt) 42%, var(--lmap-line));
+  stroke-linecap: round;
+  transition: stroke 160ms ease, opacity 200ms ease, stroke-width 200ms ease;
+  pointer-events: none;
+}
+.lmap-edge[data-empty="true"] .lmap-edge-line { stroke: var(--lmap-idle); stroke-dasharray: 3 4; }
+.lmap-edge[data-kind="loop"] .lmap-edge-line { stroke: color-mix(in srgb, var(--sol-violet) 55%, transparent); }
+.lmap-edge[data-kind="loop"][data-empty="true"] .lmap-edge-line { stroke: color-mix(in srgb, var(--sol-violet) 26%, transparent); }
+.lmap-edge[data-end="reopened"]:not([data-empty]) .lmap-edge-line { stroke: color-mix(in srgb, var(--sol-red) 60%, transparent); }
+.lmap-edge[data-end="stopped"]:not([data-empty]) .lmap-edge-line { stroke: color-mix(in srgb, var(--sol-orange) 55%, transparent); }
+.lmap-edge:hover .lmap-edge-line, .lmap-edge[data-selected="true"] .lmap-edge-line { stroke: var(--lmap-belt); }
+.lmap-edge[data-selected="true"] .lmap-edge-line { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--lmap-belt) 45%, transparent)); }
+.lmap-edge-label {
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  fill: var(--sol-text-dim);
+  paint-order: stroke;
+  stroke: var(--sol-bg);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.lmap-edge[data-kind="loop"] .lmap-edge-label { fill: color-mix(in srgb, var(--sol-violet) 80%, var(--sol-text-dim)); }
+
+/* Work moving: dots walk the edges into a node that holds work now. */
+.lmap-edge-flow {
+  fill: none;
+  stroke: var(--lmap-belt);
+  stroke-width: 2.5px;
+  stroke-linecap: round;
+  stroke-dasharray: 0 16;
+  opacity: 0.75;
+  animation: lmap-flow linear infinite;
+  pointer-events: none;
+}
+@keyframes lmap-flow { to { stroke-dashoffset: -32; } }
+
+/* ── nodes ── */
+.lmap-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 7px 9px 7px 10px;
+  text-align: left;
+  border-radius: 10px;
+  background: var(--sol-card, var(--sol-bg));
+  border: 1px solid color-mix(in srgb, var(--sol-border) 90%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-text) 4%, transparent);
+  color: var(--sol-text);
+  font-family: var(--font-mono), monospace;
+  transition: border-color 140ms ease, box-shadow 160ms ease, opacity 200ms ease, transform 140ms ease;
+  overflow: hidden;
+  z-index: 1;
+}
+.lmap-node::before {
+  /* The tone's edge: trouble shows as a bar down the node's left side. */
+  content: "";
+  position: absolute;
+  left: 0; top: 8px; bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+}
+.lmap-node[data-tone="fail"]::before { background: var(--sol-red); }
+.lmap-node[data-tone="warn"]::before { background: var(--sol-orange); }
+.lmap-node[data-tone="ask"]::before { background: var(--sol-yellow); }
+.lmap-node[data-tone="ask"] { border-color: color-mix(in srgb, var(--sol-yellow) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-yellow) 7%, var(--sol-card, var(--sol-bg))); }
+.lmap-node:hover { border-color: color-mix(in srgb, var(--lmap-belt) 45%, var(--sol-border)); }
+.lmap-node:focus-visible { outline: none; }
+.lmap-node[data-focused="true"], .lmap-node:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--lmap-belt) 30%, transparent); }
+.lmap-node[data-selected="true"] {
+  border-color: var(--lmap-belt);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lmap-belt) 22%, transparent);
+}
+.lmap-node[data-kind="source"], .lmap-node[data-kind="expectations"] { border-radius: 9999px; padding: 5px 12px; justify-content: center; gap: 1px; }
+.lmap-node[data-kind="expectations"] { border-style: dashed; }
+.lmap-node[data-kind="signals"], .lmap-node[data-kind="causes"] { background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sol-card, var(--sol-bg))); }
+.lmap-node[data-kind="end"] { border-radius: 9999px; padding-inline: 12px; }
+.lmap-node[data-main="true"][data-kind="station"],
+.lmap-node[data-kind="decide"],
+.lmap-node[data-kind="ship"],
+.lmap-node[data-kind="watch"] { border-color: color-mix(in srgb, var(--sol-text-dim) 45%, var(--sol-border)); }
+.lmap-node:not([data-main]) { background: color-mix(in srgb, var(--sol-bg) 55%, var(--sol-card, var(--sol-bg))); }
+
+.lmap-node-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lmap-node-label { font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lmap-node:not([data-main]) .lmap-node-label { font-weight: 500; color: var(--sol-text-muted); }
+.lmap-visits {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--sol-bg);
+  background: var(--lmap-belt);
+}
+.lmap-node-nums { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; }
+.lmap-here { font-size: 10.5px; color: var(--sol-text-muted); white-space: nowrap; }
+.lmap-here b { font-size: 17px; font-weight: 700; color: var(--sol-text); letter-spacing: -0.03em; margin-right: 1px; }
+.lmap-here[data-zero="true"] b { font-weight: 400; color: var(--sol-text-dim); opacity: 0.6; }
+.lmap-here[data-zero="true"] { color: var(--sol-text-dim); }
+.lmap-here[data-ask="true"], .lmap-here[data-ask="true"] b { color: var(--sol-yellow); }
+.lmap-through { font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; }
+.lmap-through b { color: var(--sol-text-muted); font-weight: 600; }
+.lmap-through[data-zero="true"] { opacity: 0.55; }
+.lmap-node[data-compact="true"] .lmap-node-nums { justify-content: flex-start; }
+/* The through count wears an arrow so it reads as passing, not resting. */
+.lmap-node:not([data-compact]) .lmap-through::before { content: "\2192 "; opacity: 0.7; }
+
+.lmap-lamp { width: 6px; height: 6px; border-radius: 9999px; flex-shrink: 0; background: color-mix(in srgb, var(--sol-text-dim) 50%, transparent); }
+.lmap-lamp[data-tone="live"] { background: var(--lmap-belt); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lmap-belt) 18%, transparent); }
+.lmap-lamp[data-tone="ask"] { background: var(--sol-yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-yellow) 20%, transparent); }
+.lmap-lamp[data-tone="warn"] { background: var(--sol-orange); }
+.lmap-lamp[data-tone="fail"] { background: var(--sol-red); }
+.lmap-lamp[data-tone="info"] { background: color-mix(in srgb, var(--sol-cyan) 70%, transparent); }
+.lmap-node[data-end="held"] .lmap-lamp { background: var(--sol-green); }
+.lmap-node[data-end="reopened"] .lmap-lamp { background: var(--sol-red); }
+.lmap-node[data-end="dissolved"] .lmap-lamp { background: var(--sol-cyan); }
+.lmap-node[data-end="stopped"] .lmap-lamp { background: var(--sol-orange); }
+
+/* A mark says what is wrong, in words, under its node. */
+.lmap-mark {
+  position: absolute;
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--sol-text-dim);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  pointer-events: auto;
+  z-index: 1;
+  transition: opacity 200ms ease;
+}
+.lmap-mark[data-level="warn"] { color: color-mix(in srgb, var(--sol-orange) 85%, var(--sol-text)); }
+.lmap-mark[data-level="fail"] { color: var(--sol-red); }
+
+/* ── a trace: one path lit, the rest stepped back ── */
+[data-tracing="true"] .lmap-node:not([data-on]),
+[data-tracing="true"] .lmap-mark { opacity: 0.28; }
+[data-tracing="true"] .lmap-edge:not([data-on]) .lmap-edge-line { opacity: 0.18; }
+[data-tracing="true"] .lmap-edge:not([data-on]) .lmap-edge-label { opacity: 0; }
+[data-tracing="true"] .lmap-edge[data-on] .lmap-edge-line { stroke: var(--lmap-belt); stroke-dasharray: none; opacity: 1; }
+[data-tracing="true"] .lmap-edge[data-on][data-kind="loop"] .lmap-edge-line { stroke: var(--sol-violet); }
+[data-tracing="true"] .lmap-node[data-on] { border-color: var(--lmap-belt); }
+
+@media (prefers-reduced-motion: reduce) {
+  .lmap-edge-flow { animation: none; display: none; }
+  .lmap-node, .lmap-edge-line, .lmap-mark { transition: none; }
+}
+
+/* ── the map's page: map over panel, side by side when there is room ── */
+.lmap-view { display: flex; min-height: 0; min-width: 0; height: 100%; }
+.lmap-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.lmap-bar { display: flex; align-items: center; gap: 12px; padding: 6px 16px 4px; min-width: 0; flex-wrap: wrap; }
+.lmap-windows { display: inline-flex; border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); border-radius: 7px; padding: 1px; gap: 1px; }
+.lmap-windows button { font-family: var(--font-mono), monospace; font-size: 11px; padding: 2px 8px; border-radius: 5px; color: var(--sol-text-dim); }
+.lmap-windows button:hover { color: var(--sol-text); }
+.lmap-windows button[aria-pressed="true"] { background: color-mix(in srgb, var(--sol-text) 8%, transparent); color: var(--sol-text); }
+.lmap-legend { display: inline-flex; align-items: center; gap: 12px; font-size: 10.5px; color: var(--sol-text-dim); }
+.lmap-legend i { display: inline-block; width: 18px; height: 0; border-top: 3px solid color-mix(in srgb, var(--lmap-belt, var(--sol-blue)) 42%, var(--sol-text-muted)); vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+.lmap-legend i[data-kind="loop"] { border-top-color: color-mix(in srgb, var(--sol-violet) 55%, transparent); }
+.lmap-legend i[data-kind="empty"] { border-top: 1px dashed var(--sol-border); }
+.lmap-scroll.lmap-fill { flex: 1 1 auto; min-height: 0; }
+.lmap-note { margin: 2px 16px 6px; font-size: 11.5px; color: var(--sol-text-muted); }
+.lmap-note code { color: var(--sol-text); }
+.lmap-trace-bar {
+  display: flex; align-items: center; gap: 10px; margin: 2px 16px 6px; padding: 6px 10px;
+  border-radius: 8px; font-size: 12px; min-width: 0;
+  background: color-mix(in srgb, var(--sol-blue) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 30%, transparent);
+}
+
+.lmap-panel {
+  flex: 0 0 auto;
+  width: min(440px, 46%);
+  min-width: 320px;
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  background: var(--sol-bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  animation: lmap-panel-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes lmap-panel-in { from { opacity: 0; transform: translateX(12px); } }
+@media (prefers-reduced-motion: reduce) { .lmap-panel { animation: none; } }
+/* Narrow: the panel takes the floor over the map. */
+@container line-floor (max-width: 760px) {
+  .lmap-view { position: relative; }
+  .lmap-panel { position: absolute; inset: 0; width: auto; min-width: 0; border-left: 0; z-index: 3; }
+}
+.lmap-panel[data-wide="true"] { width: min(640px, 60%); }
+.lmap-panel-head { padding: 12px 16px 10px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent); display: flex; flex-direction: column; gap: 4px; }
+.lmap-panel-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lmap-panel-title h2 { font-size: 14px; font-weight: 650; color: var(--sol-text); margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lmap-panel-what { font-size: 12px; color: var(--sol-text-muted); line-height: 1.45; }
+.lmap-panel-nav { display: flex; gap: 2px; padding: 6px 12px 0; font-size: 11px; }
+.lmap-panel-nav a { padding: 2px 6px; border-radius: 5px; color: var(--sol-text-dim); }
+.lmap-panel-nav a:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.lmap-panel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 16px 28px; }
+.lmap-sec { padding-top: 14px; scroll-margin-top: 8px; }
+.lmap-sec + .lmap-sec { margin-top: 6px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
+.lmap-sec-title { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 650; color: var(--sol-text); margin-bottom: 6px; }
+.lmap-sec-title small { font-weight: 400; color: var(--sol-text-dim); font-size: 11px; }
+.lmap-empty { font-size: 12px; color: var(--sol-text-dim); line-height: 1.5; }
+
+.lmap-items { display: flex; flex-direction: column; }
+.lmap-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 5px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.lmap-item:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.lmap-item[data-active="true"] { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
+.lmap-item-title { color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lmap-item-meta { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lmap-item-sub { grid-column: 1 / -1; display: flex; gap: 10px; font-size: 11px; color: var(--sol-text-dim); min-width: 0; }
+.lmap-item-sub a:hover { color: var(--sol-text); text-decoration: underline; }
+.lmap-chip { font-size: 10.5px; padding: 0 5px; border-radius: 4px; white-space: nowrap; }
+.lmap-chip[data-tone="warn"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+.lmap-chip[data-tone="fail"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+.lmap-chip[data-tone="ok"] { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, transparent); }
+.lmap-chip[data-tone="muted"] { color: var(--sol-text-dim); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+
+.lmap-health { display: flex; flex-direction: column; gap: 6px; }
+.lmap-health-words { font-size: 12.5px; line-height: 1.45; color: var(--sol-text); }
+.lmap-health-words[data-level="warn"] { color: color-mix(in srgb, var(--sol-orange) 85%, var(--sol-text)); }
+.lmap-health-words[data-level="fail"] { color: var(--sol-red); }
+.lmap-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 4px; }
+.lmap-stat b { display: block; font-family: var(--font-mono), monospace; font-size: 15px; font-weight: 650; color: var(--sol-text); font-variant-numeric: tabular-nums; }
+.lmap-stat span { font-size: 10.5px; color: var(--sol-text-dim); }
+
+.lmap-left-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 2px 0 8px; background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.lmap-left-bar > span[data-left="moved"], .lmap-left-bar > span[data-left="held"] { background: color-mix(in srgb, var(--sol-blue) 60%, transparent); }
+.lmap-left-bar > span[data-left="failed"], .lmap-left-bar > span[data-left="reopened"] { background: var(--sol-red); }
+.lmap-left-bar > span[data-left="stopped"] { background: var(--sol-orange); }
+.lmap-left-bar > span[data-left="dissolved"] { background: var(--sol-cyan); }
+.lmap-left-bar > span[data-left="dropped"], .lmap-left-bar > span[data-left="parked"] { background: var(--sol-text-dim); }
+.lmap-left-bar > span[data-left="live"] { background: color-mix(in srgb, var(--sol-blue) 30%, transparent); }
+
+.lmap-panel-foot { flex: 0 0 auto; display: flex; gap: 14px; align-items: center; padding: 6px 16px; font-size: 11px; color: var(--sol-text-dim); border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
+.lmap-panel-foot span { display: inline-flex; align-items: center; gap: 4px; }
