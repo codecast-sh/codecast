@@ -195,3 +195,17 @@ test("decisionAnswer reads the option's words", () => {
   expect(decisionAnswer({ ...F.decisionsA[0], answer_text: "[S] Ship :: Land it" })).toBe("Ship");
   expect(decisionAnswer({ ...F.decisionsA[0], answer_index: undefined })).toBeNull();
 });
+
+describe("the finder's words and the goal, as a person reads them", () => {
+  test("the finding drops markdown's marks", () => {
+    const md = "## Finding\n**An intro reaches both people** (see `ex-1`, [cluster](https://x.test/c))";
+    const t = trace("sg-a1", { signals: F.rows.signals.map((s) => (s._id === "sig_a1" ? { ...s, detail_md: md } : s)) });
+    expect(t.steps[0].detail).toBe("An intro reaches both people (see ex-1, cluster)");
+  });
+
+  test("ground names the goal when the caller knows it, else keeps its ref", () => {
+    const r = resolveTraceRef("ct-102", rows)!;
+    expect(buildLineTrace(r, rows, { now: F.NOW, goalName: (g) => (g === "in-3" ? "Matching that lands" : null) }).steps.find((s) => s.stage === "ground")?.detail).toBe("Serves Matching that lands");
+    expect(buildLineTrace(r, rows, { now: F.NOW }).steps.find((s) => s.stage === "ground")?.detail).toBe("Serves in-3");
+  });
+});
