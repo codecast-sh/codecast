@@ -14,7 +14,7 @@ import {
   CAUSES_NODE, EXPECTATIONS_NODE, SIGNALS_NODE, endNodeId, runVisits, sourceNodeId,
   type LineGraph, type MapDecision, type MapEnd, type MapRun, type MapSignal,
 } from "./lineMap";
-import { cardName, causeWhere, choiceWords, runOutcome, runPath, shortDay, type ReportRun, type ReportStep, type ReportTask, type RunOutcome, type StepState } from "./runReport";
+import { cardName, causeWhere, choiceWords, isRoutineStation, runOutcome, runPath, shortDay, type ReportRun, type ReportStep, type ReportTask, type RunOutcome, type StepState } from "./runReport";
 import { SHIPPED_LINE } from "./shippedLine.generated";
 
 export type TraceTask = LineCauseTask & { review_verdict?: { verdict: string } | null };
@@ -365,4 +365,58 @@ function sessionArtifacts(s: ReportStep | undefined | null | false): TraceArtifa
   if (s.href.startsWith("/conversation/")) return [{ kind: "session", label: s.hrefTitle ?? "Open the session", href: s.href }];
   if (s.href.startsWith("/decisions/")) return [{ kind: "decision", label: s.hrefTitle ?? "Open the decision", href: s.href }];
   return [];
+}
+
+// ── the story's blocks, for a reader ─────────────────────────────────────────
+
+/** The trace's page: `/line/trace/<ref>` (LX4). Any ref resolveTraceRef takes. */
+export const traceHref = (ref: string) => `/line/trace/${encodeURIComponent(ref)}`;
+
+/** One row of a run in the story: a station visit, or an earlier round of a
+ *  loop the run row kept no details for, folded into one row. `visit` counts
+ *  the station's visits in this run, from 1, so a second implement says so.
+ *  `routine` marks a step that only assembles the card. */
+export type TraceRunRow =
+  | { kind: "station"; step: TraceStep; visit: number; routine: boolean }
+  | { kind: "loop"; steps: TraceStep[]; stations: string[] };
+
+export type TraceBlock =
+  | { kind: "step"; step: TraceStep }
+  | { kind: "run"; runId: string; round: number; rows: TraceRunRow[]; status: TraceStatus; at: number | null; durationMs: number | null; rounds: number };
+
+/**
+ * The story as a reader takes it (LX4): the stage steps one by one, and each
+ * run as one block of its stations, where an earlier round of a loop folds
+ * into one row naming the stations it went through, and a station visited
+ * again says which visit it is.
+ */
+export function traceBlocks(trace: Pick<LineTrace, "steps">): TraceBlock[] {
+  const out: TraceBlock[] = [];
+  for (const step of trace.steps) {
+    if (step.stage !== "station" || !step.runId) { out.push({ kind: "step", step }); continue; }
+    let block = out[out.length - 1];
+    if (block?.kind !== "run" || block.runId !== step.runId) {
+      block = { kind: "run", runId: step.runId, round: step.round ?? 1, rows: [], status: "done", at: null, durationMs: null, rounds: 1 };
+      out.push(block);
+    }
+    const last = block.rows[block.rows.length - 1];
+    if (step.inferred) {
+      if (last?.kind === "loop") { last.steps.push(step); if (!isRoutineStation(step.nodeId ?? "")) last.stations.push(step.title); }
+      else block.rows.push({ kind: "loop", steps: [step], stations: isRoutineStation(step.nodeId ?? "") ? [] : [step.title] });
+      continue;
+    }
+    const visit = block.rows.reduce((n, r) => n + (r.kind === "station" ? (r.step.nodeId === step.nodeId ? 1 : 0) : r.steps.filter((s) => s.nodeId === step.nodeId).length), 1);
+    block.rows.push({ kind: "station", step, visit, routine: isRoutineStation(step.nodeId ?? "") });
+  }
+  for (const b of out) {
+    if (b.kind !== "run") continue;
+    const timed = b.rows.flatMap((r) => (r.kind === "station" ? [r.step] : []));
+    const first = timed.find((s) => s.at != null)?.at ?? null;
+    const lastTimed = [...timed].reverse().find((s) => s.at != null);
+    b.at = first;
+    b.durationMs = first != null && lastTimed?.at != null ? lastTimed.at + (lastTimed.durationMs ?? 0) - first : null;
+    b.rounds = 1 + b.rows.filter((r) => r.kind === "loop").length;
+    b.status = timed.some((s) => s.status === "current") ? "current" : timed[timed.length - 1]?.status === "failed" ? "failed" : "done";
+  }
+  return out;
 }

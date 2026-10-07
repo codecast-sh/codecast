@@ -77,7 +77,12 @@ export function ShipControl({ target, size = "full" }: { target: ShipTargetRef; 
           </button>
         </PopoverTrigger>
         <PopoverContent
-          align={size === "compact" ? "end" : "start"}
+          // The compact button sits near the left of a header column, so an
+          // end alignment pushed the 23rem panel past the window edge and the
+          // collision shift parked it flush left over the sidebar. Start keeps
+          // it under the button; the padding keeps the shift off the edges.
+          align="start"
+          collisionPadding={12}
           className="w-[23rem] border-sol-border bg-sol-bg p-0 text-sol-text"
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); press(); } }}
           data-ship-popover
