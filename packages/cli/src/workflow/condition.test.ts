@@ -44,12 +44,15 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["prove.json.reproduced = true", {}, false],
     ["prove.json.reproduced = false", { "prove.json": '{"reproduced":false}' }, true],
     ["prove.json.reproduced = false", {}, false],
+    // No proof at all, whatever the hand said: never a dead end (ct-57659).
+    ["prove.json.reproduced != true and prove.json.reproduced != false", {}, true],
+    ["prove.json.reproduced != true and prove.json.reproduced != false", { "prove.json": '{"reproduced":false}' }, false],
     ["red.json.red = true", { "red.json": '{"red":true}' }, true],
     ["red.json.red = true", { "red.json": '{"red":false}' }, false],
     ["red.json.red != true", {}, true],
     ["red.json.red != true", { "red.json": '{"red":true}' }, false],
-    ["outcome = success and category != prompt", { outcome: "success", category: "code" }, true],
-    ["outcome = success and category != prompt", { outcome: "success", category: "prompt" }, false],
+    ["outcome = success and category != prompt and category != line", { outcome: "success", category: "code" }, true],
+    ["outcome = success and category != prompt and category != line", { outcome: "success", category: "line" }, false],
     ["outcome = success and category = prompt", { outcome: "success", category: "prompt" }, true],
     ["outcome = success and category = prompt", { outcome: "failure", category: "prompt" }, false],
     // A profile command is a direct context key; absent from the profile it is empty.
