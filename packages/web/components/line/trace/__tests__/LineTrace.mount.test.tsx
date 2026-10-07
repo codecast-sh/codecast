@@ -214,11 +214,22 @@ describe("LineTracePage", () => {
     await done();
   });
 
-  test("a ref nothing on the line goes by says so, and what a trace takes", async () => {
+  test("a cause held in another workspace (another team's line) still traces", async () => {
+    seed();
+    const other = <T,>(list: T[]) => Object.fromEntries(list.map((r: any) => [r._id, { ...r, workspace: "team:t2" }]));
+    useInboxStore.setState({ tasks: other(F.rows.tasks), signals: other(F.rows.signals), workflowRuns: other(F.rows.runs) } as any);
+    const { host, done } = await mount(React.createElement(LineTracePage, { refParam: "ct-101" }));
+    expect(q(host, "[data-trace-missing]")).toBeNull();
+    expect(text(q(host, "[data-trace-head] h1"))).toBe("Broker replies skip the question asked");
+    expect(text(step(host, "finding"))).toContain("The agent answered a different question than the broker asked.");
+    await done();
+  });
+
+  test("a ref nothing on the line matches says so, and what a trace takes", async () => {
     seed();
     const { host, done } = await mount(React.createElement(LineTracePage, { refParam: "sg-nope" }));
     expect(q(host, "[data-trace-missing]")).not.toBeNull();
-    expect(text(host)).toContain("Nothing on the line goes by sg-nope");
+    expect(text(host)).toContain("Nothing on the line matches sg-nope");
     await done();
   });
 });

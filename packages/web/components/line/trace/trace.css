@@ -5,9 +5,12 @@
 .ltrace-body { container-type: inline-size; }
 .ltrace-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem; }
 .ltrace-map-col { order: -1; min-width: 0; }
-.ltrace-map { height: 300px; }
+.ltrace-map { height: 380px; }
 @container (min-width: 1080px) {
   .ltrace-grid { grid-template-columns: minmax(26rem, 40rem) minmax(0, 1fr); gap: 2rem; max-width: 100rem; }
   .ltrace-map-col { order: 0; }
   .ltrace-map { position: sticky; top: 1.5rem; height: min(640px, calc(100vh - 9rem)); }
 }
+/* The map scaled to the pane (TraceMap): zoom keeps hit areas and scrolling true to the scale. */
+.ltrace-map-box { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ltrace-map-box .lmap-canvas { zoom: var(--ltrace-zoom, 1); }
