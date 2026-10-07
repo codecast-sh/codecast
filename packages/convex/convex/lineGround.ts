@@ -118,7 +118,7 @@ export async function recordGroundCore(ctx: any, taskId: Id<"tasks">, outcome: {
 
 const groundFieldsValidator = v.object({
   goal_ref: v.string(),
-  category: v.union(v.literal("code"), v.literal("prompt"), v.literal("ux"), v.literal("infra"), v.literal("data")),
+  category: v.union(v.literal("code"), v.literal("prompt"), v.literal("ux"), v.literal("infra"), v.literal("data"), v.literal("line")),
   risk: v.union(v.literal("low"), v.literal("review"), v.literal("plan")),
   readiness: v.union(v.literal("ready"), v.literal("needs_context"), v.literal("not_actionable")),
   readiness_note: v.string(),
