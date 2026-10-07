@@ -226,14 +226,21 @@ describe("signals in a project (line-profile.md LP1)", () => {
     expect((await task(byShort.task_id)).project_id).toBe(quality);
   });
 
-  test("fingerprint attach stays inside the project: the same key in two projects is two causes", async () => {
-    const { add } = await withProjects();
-    const a = await add({ fingerprint: "shared-key", title: "Timeout on send", project: "Agent Quality" });
-    const b = await add({ fingerprint: "shared-key", title: "Timeout on send", project: "Infrastructure" });
-    expect(b.attach).toBe("new");
-    expect(b.task_id).not.toBe(a.task_id);
-    const again = await add({ fingerprint: "shared-key", title: "Timeout on send", project: "Infrastructure" });
-    expect(again).toMatchObject({ attach: "fingerprint", task_id: b.task_id });
+  test("fingerprint attach is workspace wide: the open cause takes the key wherever it is, and the signal records the project it was filed for", async () => {
+    const { add, t, quality, infra } = await withProjects();
+    const a = await add({ fingerprint: "union:cluster:c7", title: "Agent repeats itself", project: "Agent Quality" });
+    const b = await add({ fingerprint: "union:cluster:c7", title: "Agent repeats itself", project: "Infrastructure" });
+    expect(b).toMatchObject({ attach: "fingerprint", task_id: a.task_id });
+    const row = await t.run(async (ctx) => await ctx.db.get(b.signal_id));
+    expect(row?.project_id).toBe(quality);
+    expect(row?.filed_for_project_id).toBe(infra);
+    // The cause stays where it is.
+    expect((await t.run(async (ctx) => await ctx.db.get(a.task_id)))?.project_id).toBe(quality);
+    // Filed for the cause's own project, nothing extra is recorded.
+    const same = await add({ fingerprint: "union:cluster:c7", title: "Agent repeats itself", project: "Agent Quality" });
+    expect((await t.run(async (ctx) => await ctx.db.get(same.signal_id)))?.filed_for_project_id).toBeUndefined();
+    const shown = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", task: a.task_short_id } as any);
+    expect(shown.signals.find((s: any) => s.short_id === b.short_id)?.filed_for_project_id).toBe(infra);
   });
 
   test("without a project, attach is workspace wide and the signal takes its cause's project", async () => {
