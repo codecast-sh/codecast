@@ -234,6 +234,9 @@ function ProjectDetailContent() {
   useSyncTasks();
 
   const { tab, setTab } = useIntentTab(PROJECT_TABS, `/projects/${projectRef}`);
+  // The Line tab is a map that needs the height: the header's own rows fold
+  // to one line there, so the map's main row shows on open (line-map.md LX1).
+  const [headOpen, setHeadOpen] = useState(false);
   const phone = useIsPhone();
   const now = useCoarseNow(60_000);
   const counted = useTasksBackfilled();
@@ -443,7 +446,14 @@ function ProjectDetailContent() {
               I1), each with its first number. Nothing renders when it is in none. */}
           <ProjectInitiatives projectId={project._id} size="xs" label="Part of" metrics="chip" />
         </>}
-        extra={<>
+        extra={tab === "line" && !phone && !headOpen ? (
+          <div className="mt-2 flex items-baseline gap-3 min-w-0 text-[12px]" data-project-head-folded>
+            {project.description && <p className="min-w-0 truncate" style={{ color: "var(--sol-text-muted)" }} title={project.description}>{project.description}</p>}
+            <button type="button" onClick={() => setHeadOpen(true)} className="shrink-0 text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-project-head-unfold>
+              {project.description ? "More" : "Folder, repositories and charter"}
+            </button>
+          </div>
+        ) : <>
           {project.description && (
             <p className="mt-2 max-w-[80ch] text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>{project.description}</p>
           )}

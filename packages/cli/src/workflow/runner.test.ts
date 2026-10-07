@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, type RunOptions } from "./runner.js";
+import { runWorkflow, reportRunStopped, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, type RunOptions } from "./runner.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -827,6 +827,29 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     workState = "working";
     expect(await run()).toBe("completed");
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
+  }, 30000);
+
+  const stopOpts = { runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" } as RunOptions;
+
+  test("a runner stopped by a signal records its run as failed at the node it last reported", async () => {
+    // Stop the runner while it waits on the gate, the way Ctrl-C lands mid-run.
+    const inner = globalThis.fetch;
+    let stopped: Promise<void> | null = null;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (!stopped && String(url).endsWith("/cli/workflow-runs/poll-gate")) stopped = reportRunStopped(stopOpts, "SIGINT");
+      return inner(url, init);
+    }) as typeof fetch;
+    await run();
+    await stopped;
+    const stop = calls.find(c => c.route === "/cli/workflow-runs/progress" && c.body.fail_reason)!;
+    expect(stop.body).toMatchObject({ run_id: "run-1", node_id: "decide", run_status: "failed", node_status: "failed", fail_reason: expect.stringContaining("SIGINT") });
+  }, 30000);
+
+  test("a signal after the run reported its end leaves the finished run alone", async () => {
+    expect(await run()).toBe("completed");
+    calls.length = 0;
+    await reportRunStopped(stopOpts, "SIGTERM");
+    expect(calls.filter(c => c.route === "/cli/workflow-runs/progress")).toEqual([]);
   }, 30000);
 
   test("a station that declared done is retired, so a later settle cannot file it under needs input", async () => {

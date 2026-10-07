@@ -153,6 +153,37 @@ describe("the gate (LE11, LE16)", () => {
     expect(waiting[0].message).toContain("Follow-ups lead with the question (ct-1)");
   });
 
+  const askCard = (t: any, runId: any) => t.mutation(api.workflow_runs.pauseAtGate, {
+    api_token: TOKEN, run_id: runId, node_id: "decide", prompt: "Ship this change?",
+    choices: [{ key: "S", label: "[S] Ship", target: "ship" }, { key: "D", label: "[D] Drop", target: "drop" }],
+  });
+  const waitingUnread = async (read: () => Promise<{ notes: any[] }>) =>
+    (await read()).notes.filter((n) => n.type === "card_waiting" && !n.read);
+
+  test("a card withdrawn with its run leaves no card waiting notice behind", async () => {
+    const { t, ids, read } = await setup({ status: "in_progress" });
+    await askCard(t, ids.runId);
+    expect(await waitingUnread(read)).toHaveLength(1);
+    // Dropping the cause cancels the run, which withdraws its open card.
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
+    const decision = await t.run(async (ctx) => (await ctx.db.query("session_decisions").first()) as any);
+    expect(decision.status).toBe("withdrawn");
+    expect(await waitingUnread(read)).toHaveLength(0);
+  });
+
+  test("a card answered somewhere other than the notice settles the notice too", async () => {
+    const { t, ids, read } = await setup({ status: "in_progress" });
+    await askCard(t, ids.runId);
+    const other = await t.run(async (ctx) => ctx.db.insert("notifications", {
+      recipient_user_id: ids.owner, type: "card_waiting", entity_type: "task", entity_id: String(ids.taskId),
+      link: "/decisions/someone-else", message: "another card", read: false, created_at: T0,
+    } as any));
+    await t.mutation(api.workflow_runs.respondToGateFromCli, { api_token: TOKEN, run_id: ids.runId, response: "S" });
+    const unread = await waitingUnread(read);
+    // Only this card's notice settles; another card's stays.
+    expect(unread.map((n) => String(n._id))).toEqual([String(other)]);
+  });
+
   test("a review approve inside a live line run leaves the cause in review: the run decides done", async () => {
     const { t, ids, read } = await setup({ status: "in_progress" });
     await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "done", review_verdict: "approve" });
