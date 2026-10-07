@@ -43,6 +43,7 @@
       "notificationRouter.js",
       "osPermissions.js",
       "computerPermissions.js",
+      "daemonSetup.js",
       "browserPanes.js",
       "shareCursors.js",
       "spellMenu.js",
