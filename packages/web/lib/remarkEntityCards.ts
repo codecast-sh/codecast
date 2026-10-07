@@ -1,4 +1,4 @@
-import { parseCallRef } from "@codecast/shared/entities";
+import { parseCallRef, parseReplayRef, replayRefStart } from "@codecast/shared/entities";
 import { parseEntityUrl, CONTEXTUAL_PR_REF_PREFIX, entityTypeFromId, type EntityType } from "./entityLinks";
 
 const CARD_PREFIX = "card:";
@@ -15,7 +15,7 @@ export type EntityCardsOptions = {
    *  `cl-42@12:34` alone on its line to show the frame and mid-sentence to
    *  cite it, and a picture splitting the sentence in two would read neither
    *  way. Team chat leaves it off: there a bare reference is a share, except
-   *  a call moment in running text (isCallMoment). */
+   *  a moment in running text (isMoment). */
   aloneOnly?: boolean;
 };
 
@@ -125,14 +125,16 @@ function toCardRow(links: any[]): any {
   };
 }
 
-/** A moment of a call (`cl-42@12:34`). Its card is a picture, which in the
- *  middle of a sentence cuts the sentence in two, and prose that quotes
- *  moments (how an agent reports what it saw on a screen) would read as a
+/** A moment of a call (`cl-42@12:34`) or of a replay (`rp-12@1:23`). Its
+ *  card is a picture (a frame, a player), which in the middle of a sentence
+ *  cuts the sentence in two, and prose that quotes moments (how an agent
+ *  reports what it saw on a screen or a customer's page) would read as a
  *  stack of pictures with the words stranded between them. So even in team
  *  chat a moment is a card only on a line of its own; in running text it is
- *  the moment pill, with the frame on hover. */
-function isCallMoment(node: any): boolean {
-  return parseCallRef(mdastText(node))?.at_ms != null;
+ *  the moment pill. */
+function isMoment(node: any): boolean {
+  const text = mdastText(node);
+  return parseCallRef(text)?.at_ms != null || replayRefStart(parseReplayRef(text)) != null;
 }
 
 /** Whether children[i] stands on a line of its own: nothing but other
@@ -163,9 +165,9 @@ function splitInline(node: any, types?: readonly EntityType[]): any[] {
     if (children.length) parts.push({ ...node, children });
     children = [];
   };
-  // A moment inside emphasis is running text: it stays inside it (isCallMoment).
+  // A moment inside emphasis is running text: it stays inside it (isMoment).
   for (const child of node.children.flatMap((c: any) => splitInline(c, types))) {
-    if (isEntityLink(child, types) && !isCallMoment(child)) {
+    if (isEntityLink(child, types) && !isMoment(child)) {
       flush();
       parts.push(child);
     } else children.push(child);
@@ -177,7 +179,7 @@ function splitInline(node: any, types?: readonly EntityType[]): any[] {
 function paragraphBlocks(node: any, types?: readonly EntityType[]): any[] | null {
   if (node.type !== "paragraph" || !Array.isArray(node.children)) return null;
   const children = node.children.flatMap((c: any) => splitInline(c, types));
-  const cards = new Set(children.filter((c: any, i: number) => isEntityLink(c, types) && (!isCallMoment(c) || onOwnLine(children, i, types))));
+  const cards = new Set(children.filter((c: any, i: number) => isEntityLink(c, types) && (!isMoment(c) || onOwnLine(children, i, types))));
   if (cards.size === 0) return null;
   const blocks: any[] = [];
   let prose: any[] = [];

@@ -2,7 +2,8 @@ import { createContext, useContext, useMemo } from "react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, parseProposalChangeRef, proposalChangeRefId, proposalChangeLabelSuffix, type EntityType } from "./entityLinks";
+import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, parseProposalChangeRef, proposalChangeRefId, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from "./entityLinks";
+import { replayTitle } from "../components/ops/opsModel";
 import { repoObjectRefOf, repoObjectTitle } from "./repoObjects";
 import { findEntityInStore, entityTypeInStore, resolveAssigneeInfo } from "./liveEntities";
 import { useInboxStore } from "../store/inboxStore";
@@ -55,6 +56,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   commit: "Commit",
   call: "Call",
   source: "Source",
+  replay: "Replay",
 };
 
 
@@ -256,7 +258,12 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // A product source (`src-N`) seeds from the Ops sources in the store; the
   // query keeps it live and covers a source the viewer never opened Ops for.
   const { data: source } = useQueryNoThrow(api.ingest.webGetSource, live && type === "source" ? { ref: rawId } : "skip");
-  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : undefined;
+  // A product recording (`rp-N`), or a moment or stretch of it (`rp-N@1:23`):
+  // the replay is the row; the time only says where it opens. Seeded from the
+  // Ops replays in the store, kept live by the query.
+  const replayRef = type === "replay" ? parseReplayRef(rawId) : null;
+  const { data: replay } = useQueryNoThrow(api.replays.webGetReplay, live && type === "replay" ? { ref: replayRef?.replay ?? rawId } : "skip");
+  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : type === "replay" ? replay : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -264,8 +271,8 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // must not re-render on the churn of a collection with thousands of rows; the
   // live query above is what keeps the label fresh.
   const seed = useMemo(
-    () => (live && type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
-    [live, type, rawId],
+    () => (live && type ? findEntityInStore(useInboxStore.getState(), type, replayRef?.replay ?? rawId) : undefined),
+    [live, type, rawId, replayRef?.replay],
   );
   const entity: any = fixtures ? served : isRepoObject ? repoObject.entity ?? seed : served ?? seed;
   // An untitled call is named by where it happened ("Huddle in <session>"),
@@ -282,7 +289,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // prefers its display_title — the generated short name, not the whole
   // prompt's first line.
   const resolvedTitle: string | undefined =
-    (isTrigger ? entity?.display_title : undefined) || (type === "decision" ? entity?.question : undefined) || callName || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
+    (isTrigger ? entity?.display_title : undefined) || (type === "decision" ? entity?.question : undefined) || callName || (type === "replay" ? replayTitle(entity) : undefined) || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
   const labelArgs = {
     title: resolvedTitle,
     shortId: entity?.short_id,
@@ -297,7 +304,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // `fullLabel` (the link's tooltip, the reveal band's strip) and in the hover
   // card. Until the row is in hand the reference reads as written, which
   // already carries the number.
-  const partSuffix = callRefLabelSuffix(callRef) + proposalChangeLabelSuffix(entity ? changeRef : null);
+  const partSuffix = callRefLabelSuffix(callRef) + (entity ? replayRefLabelSuffix(replayRef) : "") + proposalChangeLabelSuffix(entity ? changeRef : null);
   const changeOnly = entity && changeRef ? partSuffix.trim() : null;
   const label = changeOnly ?? entityReferenceLabel(labelArgs) + partSuffix;
   const fullLabel = resolvedTitle?.trim() ? resolvedTitle.trim() + partSuffix : label;
@@ -316,7 +323,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // `op-N`, a decision's by its `sd-N` and a source's by its `src-N`: the
   // form a person reads. One change
   // of a proposal keeps its number, so the page opens with it in focus.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : ((type === "initiative" || type === "proposal" || type === "decision" || type === "source") && entity?.short_id) || (entity?._id ?? rawId);
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : replayRef ? rawId.toLowerCase() : ((type === "initiative" || type === "proposal" || type === "decision" || type === "source" || type === "replay") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
   return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href, changeSeq: changeRef?.seq };

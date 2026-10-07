@@ -27,7 +27,8 @@ import { importVendorRecording, VendorCallError, type ImportOutcome, type Vendor
 import { connectionIdForSource, tokenFor, type FetchLike } from "../tokenConnectors";
 import { isTokenRefusal } from "../lib/sourceHealth";
 import { tokenHttp } from "../lib/tokenHttp";
-import { METRIC_WATCH_LIMITS, PASSTHROUGH_MAX_BYTES, POSTHOG_PROJECT_ID } from "@codecast/shared/contracts/ingest";
+import { historyInstants, type HistorySpan } from "../lib/ingestGroups";
+import { METRIC_NO_HISTORY, METRIC_WATCH_LIMITS, PASSTHROUGH_MAX_BYTES, POSTHOG_PROJECT_ID } from "@codecast/shared/contracts/ingest";
 import type { RrwebEvent } from "@codecast/shared/replay";
 import { cleanUrl } from "@codecast/shared/contracts/replay";
 
@@ -40,6 +41,12 @@ const LIST_READ_MAX_BYTES = 2 * 1024 * 1024;
 /** Every snapshot blob of one recording together, compressed text as received. */
 const SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
 const SNAPSHOT_MAX_BLOBS = 60;
+/**
+ * blob_v2 keys read in one call. PostHog refuses a wider range from a personal
+ * key, and its snapshot throttle counts calls (12 a minute, 60 an hour on the
+ * free tier), so a recording costs one call per this many blobs, not per blob.
+ */
+export const SNAPSHOT_BLOBS_PER_READ = 20;
 export const RECORDINGS_LIST_MAX = 100;
 
 // PostHog recording ids are UUIDs; insight refs are numeric ids or 8 character
@@ -164,6 +171,31 @@ export function insightScalar(insight: any): number | null {
   return numeric(first);
 }
 
+/**
+ * The series a watch's value is the latest point of, as dated points, oldest
+ * first: a trends insight's first series (`data` beside `days`). Null when the
+ * value is not a point of a series (an aggregated number, a HogQL table), so
+ * history is never in other units than the polled value.
+ */
+export function insightSeries(insight: any): { at: number; value: number }[] | null {
+  const result = insight?.result ?? insight?.results;
+  const first = Array.isArray(result) ? result[0] : null;
+  if (!first || typeof first !== "object" || Array.isArray(first)) return null;
+  if (numeric(first.aggregated_value) !== null) return null;
+  const data: unknown[] = Array.isArray(first.data) ? first.data : [];
+  const days: unknown[] = Array.isArray(first.days) ? first.days : [];
+  if (!data.length || days.length !== data.length) return null;
+  const points: { at: number; value: number }[] = [];
+  data.forEach((raw, i) => {
+    const value = numeric(raw);
+    // "2026-09-07" or "2026-09-07 13:00:00", read as UTC.
+    const day = typeof days[i] === "string" ? (days[i] as string).trim().replace(" ", "T") : "";
+    const at = Date.parse(day.length === 10 ? `${day}T00:00:00Z` : /[zZ]|[+-]\d\d:?\d\d$/.test(day) ? day : `${day}Z`);
+    if (value !== null && Number.isFinite(at)) points.push({ at, value });
+  });
+  return points.length ? points.sort((a, b) => a.at - b.at) : null;
+}
+
 /** The path of a saved insight with a fresh result: a numeric id directly, a short id through the list filter. */
 export function insightPath(ref: string): string {
   const r = ref.trim();
@@ -185,7 +217,7 @@ export async function fetchMetricValue(
   conn: PostHogConn,
   watch: Pick<Doc<"metric_watches">, "query_kind" | "query">,
   fetchImpl: FetchLike = fetch,
-): Promise<{ ok: true; value: number } | { ok: false; status?: number; error: string }> {
+): Promise<{ ok: true; value: number } | PostHogFailure> {
   if (watch.query_kind === "hogql") {
     const parsed = parseJson(await posthogRequest(conn, "/query/", { method: "POST", body: hogqlBody(watch.query), maxBytes: VALUE_READ_MAX_BYTES }, fetchImpl));
     if (!parsed.ok) return parsed;
@@ -193,14 +225,179 @@ export async function fetchMetricValue(
     return value === null ? { ok: false, error: "The query returned no number in its first cell" } : { ok: true, value };
   }
   if (watch.query_kind === "insight") {
-    const parsed = parseJson(await posthogRequest(conn, insightPath(watch.query), { maxBytes: VALUE_READ_MAX_BYTES }, fetchImpl));
-    if (!parsed.ok) return parsed;
-    const insight = /^\d+$/.test(watch.query.trim()) ? parsed.body : parsed.body?.results?.[0];
-    if (!insight) return { ok: false, error: `PostHog has no insight ${watch.query}` };
-    const value = insightScalar(insight);
+    const insight = await readInsight(conn, watch.query, fetchImpl);
+    if (!insight.ok) return insight;
+    const value = insightScalar(insight.insight);
     return value === null ? { ok: false, error: "The insight's result has no number to watch" } : { ok: true, value };
   }
   return { ok: false, error: `A PostHog source cannot poll a ${watch.query_kind} watch` };
+}
+
+/** A saved insight with a fresh result, by numeric id or short id. */
+async function readInsight(conn: PostHogConn, ref: string, fetchImpl: FetchLike): Promise<{ ok: true; insight: any } | { ok: false; status?: number; error: string }> {
+  const parsed = parseJson(await posthogRequest(conn, insightPath(ref), { maxBytes: VALUE_READ_MAX_BYTES }, fetchImpl));
+  if (!parsed.ok) return parsed;
+  const insight = /^\d+$/.test(ref.trim()) ? parsed.body : parsed.body?.results?.[0];
+  return insight ? { ok: true, insight } : { ok: false, error: `PostHog has no insight ${ref}` };
+}
+
+// ── Binding now() (metric history) ──
+
+/** Clock reads other than now(): a query using one cannot be moved to a past instant. */
+const OTHER_CLOCKS = /\b(today|yesterday|now64|nowInBlock|current_timestamp|current_date|currentDate|currentTimestamp|localtimestamp|utc_timestamp|unix_timestamp)\b/i;
+const UNIT_MS: Record<string, number> = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, week: 7 * 864e5, month: 30 * 864e5, quarter: 91 * 864e5, year: 365 * 864e5 };
+const UNITS = "second|minute|hour|day|week|month|quarter|year";
+/** `<column> <op> ` right before a now(). */
+const BEFORE_NOW = /([A-Za-z_][\w.]*)\s*(>=|<=|>|<)\s*$/;
+/** What may come before a column compared against now(): the start, a paren, a comma, or a clause or boolean word. */
+const COMPARISON_OPENS = /(^|[(,]|\b(?:and|or|not|where|prewhere|having|on|when|then|else))\s*$/i;
+/** An optional ` - interval N unit` (or toIntervalUnit(N)) right after a now(). */
+const AFTER_NOW = new RegExp(`^\\s*-\\s*(?:interval\\s+(\\d+)\\s+(${UNITS})s?\\b|toInterval(${UNITS})\\s*\\(\\s*(\\d+)\\s*\\))`, "i");
+
+/**
+ * The query with string literals, quoted names and comments blanked to
+ * spaces at the same offsets, so a search sees only code. Null when a quote
+ * or comment never closes.
+ */
+export function hogqlCodeOnly(q: string): string | null {
+  let out = "";
+  let i = 0;
+  while (i < q.length) {
+    const c = q[i];
+    if (c === "'" || c === '"' || c === "`") {
+      let j = i + 1;
+      for (; j < q.length; j++) {
+        if (q[j] === "\\") j++;
+        else if (q[j] === c) {
+          if (q[j + 1] === c) j++;
+          else break;
+        }
+      }
+      if (j >= q.length) return null;
+      out += " ".repeat(j + 1 - i);
+      i = j + 1;
+    } else if (c === "-" && q[i + 1] === "-") {
+      const end = q.indexOf("\n", i);
+      const j = end === -1 ? q.length : end;
+      out += " ".repeat(j - i);
+      i = j;
+    } else if (c === "/" && q[i + 1] === "*") {
+      const end = q.indexOf("*/", i + 2);
+      if (end === -1) return null;
+      out += " ".repeat(end + 2 - i);
+      i = end + 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/** A past instant as HogQL reads it: second precision, UTC. */
+export function hogqlInstant(at: number): string {
+  return `toDateTime('${new Date(Math.floor(at / 1000) * 1000).toISOString().replace(".000Z", "Z")}')`;
+}
+
+export type BoundQuery = { ok: true; query: string; window_ms: number | null } | { ok: false; error: string };
+
+/**
+ * A HogQL watch query as it would have read at `at`: every now() becomes a
+ * fixed instant. Only a now() compared straight against a column
+ * (`timestamp > now() - interval 1 day`, `timestamp < now()`) is bound; a
+ * lower bound also gains `<column> <= <instant>`, because the window the
+ * query names must end at the instant, not at the present. Anything else
+ * that reads the clock is refused, since binding it would quietly answer a
+ * different question. `window_ms` is the longest lower-bound window, so the
+ * caller can space points by it.
+ */
+export function bindHogqlNow(query: string, at: number): BoundQuery {
+  const code = hogqlCodeOnly(query);
+  if (code === null) return { ok: false, error: "The query has an unclosed quote or comment" };
+  const clock = OTHER_CLOCKS.exec(code);
+  if (clock) return { ok: false, error: `The query reads the clock through ${clock[1]}(), which cannot be moved to a past instant; use now()` };
+  const instant = hogqlInstant(at);
+  const edits: { start: number; end: number; text: string }[] = [];
+  let window: number | null = null;
+  const calls = /\bnow\s*\(/gi;
+  for (let m = calls.exec(code); m; m = calls.exec(code)) {
+    // The original text, not the blanked one: now('UTC') blanks to now(     ).
+    const close = /^\s*\)/.exec(query.slice(m.index + m[0].length));
+    if (!close) return { ok: false, error: "now() with an argument cannot be bound to a past instant" };
+    const nowEnd = m.index + m[0].length + close[0].length;
+    const before = BEFORE_NOW.exec(code.slice(0, m.index));
+    const after = AFTER_NOW.exec(code.slice(nowEnd));
+    const end = nowEnd + (after ? after[0].length : 0);
+    const start = m.index - (before?.[0].length ?? 0);
+    // The comparison must stand alone: anything but a clause or a boolean
+    // before the column, or arithmetic after the bound, makes it another one.
+    const next = code.slice(end).trimStart()[0];
+    if (!before || !COMPARISON_OPENS.test(code.slice(0, start)) || (next && "+-*/%(".includes(next))) {
+      return { ok: false, error: "Only a now() compared straight against a column (timestamp > now() - interval 1 day) can be bound to a past instant" };
+    }
+    const [, column, op] = before;
+    const shift = query.slice(nowEnd, end);
+    if (op.startsWith(">")) {
+      const n = after ? Number(after[1] ?? after[4]) : 0;
+      const unit = (after?.[2] ?? after?.[3] ?? "").toLowerCase();
+      if (after) window = Math.max(window ?? 0, n * UNIT_MS[unit]);
+      edits.push({ start, end, text: `(${column} ${op} ${instant}${shift} AND ${column} <= ${instant})` });
+    } else {
+      edits.push({ start: m.index, end: nowEnd, text: instant });
+    }
+  }
+  if (!edits.length) return { ok: false, error: "The query has no now() to bind, so every past instant would read the same" };
+  let out = query;
+  for (const e of edits.sort((a, b) => b.start - a.start)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  return { ok: true, query: out, window_ms: window };
+}
+
+/** How many times one past instant is asked again after PostHog says to slow down or that it is busy. */
+const HISTORY_RETRIES = 4;
+const HISTORY_RETRY_MAX_MS = 15_000;
+
+/**
+ * The past values PostHog holds for a watch, oldest first, so it starts with
+ * a history instead of one point per poll. An insight answers its own dated
+ * series. A HogQL watch is asked again at each past instant with now() bound
+ * to it (bindHogqlNow), through the same read a poll makes. A read that
+ * stops partway keeps what it has and says why in `note`.
+ */
+export async function fetchMetricHistory(
+  conn: PostHogConn,
+  watch: Pick<Doc<"metric_watches">, "query_kind" | "query">,
+  span: HistorySpan,
+  fetchImpl: FetchLike = fetch,
+  sleep: (ms: number) => Promise<unknown> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<{ ok: true; points: { at: number; value: number }[]; note?: string } | { ok: false; status?: number; error: string }> {
+  if (watch.query_kind === "insight") {
+    const insight = await readInsight(conn, watch.query, fetchImpl);
+    if (!insight.ok) return insight;
+    const points = insightSeries(insight.insight);
+    return points ? { ok: true, points } : { ok: false, error: METRIC_NO_HISTORY.aggregate };
+  }
+  const check = bindHogqlNow(watch.query, span.now);
+  if (!check.ok) return { ok: false, error: check.error };
+  const instants = historyInstants(span, check.window_ms);
+  if (!instants.length) return { ok: false, error: METRIC_NO_HISTORY.covered };
+  const points: { at: number; value: number }[] = [];
+  // Newest first, so a read cut short still joins the polled points.
+  for (const at of instants.reverse()) {
+    const bound = bindHogqlNow(watch.query, at);
+    if (!bound.ok) return { ok: false, error: bound.error };
+    let read = await fetchMetricValue(conn, { query_kind: "hogql", query: bound.query }, fetchImpl);
+    // 429 is a rate limit and 503 is PostHog's "queries are a little too busy": both pass.
+    for (let tries = 0; !read.ok && (read.status === 429 || read.status === 503) && tries < HISTORY_RETRIES; tries++) {
+      await sleep(Math.min(read.retry_after_ms ?? 5000 * 2 ** tries, HISTORY_RETRY_MAX_MS));
+      read = await fetchMetricValue(conn, { query_kind: "hogql", query: bound.query }, fetchImpl);
+    }
+    if (!read.ok) {
+      if (!points.length || isTokenRefusal(read.status)) return read;
+      return { ok: true, points: points.reverse(), note: `Stopped after ${points.length} past values: ${read.error}` };
+    }
+    points.push({ at, value: read.value });
+  }
+  return { ok: true, points: points.reverse() };
 }
 
 // ── The passthrough query ──
@@ -305,9 +502,49 @@ export function snapshotSources(body: any): { source: string; blob_key?: string 
   return [];
 }
 
-export function snapshotPath(recordingId: string, src: { source: string; blob_key?: string }): string {
-  const params = new URLSearchParams({ source: src.source });
-  if (src.blob_key !== undefined) params.set("blob_key", src.blob_key);
+/** One snapshot call: a single blob, or for blob_v2 an inclusive key range. */
+export type SnapshotRead = { source: string; blob_key?: string; end_blob_key?: string };
+
+/**
+ * The calls that read these sources: blob_v2 keys in consecutive runs of up to
+ * SNAPSHOT_BLOBS_PER_READ, everything else one call each.
+ */
+export function snapshotReads(sources: { source: string; blob_key?: string }[]): SnapshotRead[] {
+  const reads: SnapshotRead[] = [];
+  for (const src of sources) {
+    const last = reads[reads.length - 1];
+    const key = src.blob_key !== undefined && /^\d+$/.test(src.blob_key) ? Number(src.blob_key) : null;
+    if (src.source === "blob_v2" && key !== null && last?.source === "blob_v2" && last.blob_key !== undefined) {
+      const end = Number(last.end_blob_key ?? last.blob_key);
+      if (key === end + 1 && key - Number(last.blob_key) < SNAPSHOT_BLOBS_PER_READ) {
+        last.end_blob_key = String(key);
+        continue;
+      }
+    }
+    reads.push({ ...src });
+  }
+  return reads;
+}
+
+/** A range read as the single blobs it covers. */
+function splitRead(read: SnapshotRead): SnapshotRead[] {
+  if (read.end_blob_key === undefined || read.blob_key === undefined) return [read];
+  const out: SnapshotRead[] = [];
+  for (let k = Number(read.blob_key); k <= Number(read.end_blob_key); k++) out.push({ source: read.source, blob_key: String(k) });
+  return out;
+}
+
+/**
+ * The path of one read. blob_v2 is read by an inclusive key range and PostHog
+ * refuses a bare blob_key ("Must provide both start blob key and end blob
+ * key"), so a single blob is the range from its key to itself.
+ */
+export function snapshotPath(recordingId: string, read: SnapshotRead): string {
+  const params = new URLSearchParams({ source: read.source });
+  if (read.blob_key !== undefined && read.source === "blob_v2") {
+    params.set("start_blob_key", read.blob_key);
+    params.set("end_blob_key", read.end_blob_key ?? read.blob_key);
+  } else if (read.blob_key !== undefined) params.set("blob_key", read.blob_key);
   return `/session_recordings/${recordingId}/snapshots?${params.toString()}`;
 }
 
@@ -399,15 +636,23 @@ export async function fetchRecordingEvents(
   const events: RrwebEvent[] = [];
   let budget = SNAPSHOT_MAX_BYTES;
   let truncated = sources.length > SNAPSHOT_MAX_BLOBS;
-  for (const src of sources.slice(0, SNAPSHOT_MAX_BLOBS)) {
+  const queue = snapshotReads(sources.slice(0, SNAPSHOT_MAX_BLOBS));
+  while (queue.length) {
+    const read = queue.shift()!;
     if (budget <= 0) {
       truncated = true;
       break;
     }
-    const answer = await posthogRequest(conn, snapshotPath(recordingId, src), { maxBytes: budget }, fetchImpl);
+    const answer = await posthogRequest(conn, snapshotPath(recordingId, read), { maxBytes: budget }, fetchImpl);
     if (!answer.ok) {
+      const overBudget = answer.status !== undefined && answer.status < 300;
+      // A range over the budget is read again blob by blob, so the blobs that fit still land.
+      if (overBudget && read.end_blob_key !== undefined && read.end_blob_key !== read.blob_key) {
+        queue.unshift(...splitRead(read));
+        continue;
+      }
       // Over the budget: keep what was read. Any other failure fails the import.
-      if (answer.status !== undefined && answer.status < 300) {
+      if (overBudget) {
         truncated = true;
         break;
       }

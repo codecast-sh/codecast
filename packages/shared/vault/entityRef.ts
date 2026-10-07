@@ -40,6 +40,7 @@ import {
   parseEntityUrl,
   PR_REF_SOURCE,
   COMMIT_REF_SOURCE,
+  REPLAY_REF_SOURCE,
   type EntityType,
 } from "../entities";
 
@@ -105,6 +106,8 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   call: /^cl-\d+(?::\d+(?:-\d+)?)?$/i,
   // `src` is a path segment (src-tauri), so a product source takes digits only.
   source: /^src-\d+$/i,
+  // A product recording, or a moment or stretch of it (rp-12, rp-12@1:23).
+  replay: new RegExp(`^(?:rp-\\d+|${REPLAY_REF_SOURCE})$`, "i"),
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -313,4 +316,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   decision: "--sol-yellow",
   call: "--sol-red",
   source: "--sol-orange",
+  replay: "--sol-magenta",
 };

@@ -6,7 +6,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpsGroups, useOpsReplays, useOpsSources } from "../../hooks/useSyncOps";
 import { relTimeShort } from "../../lib/utils";
 import { formatReplayTime } from "@codecast/shared/replay";
-import { replayPlace } from "./opsModel";
+import { replayTitle } from "./opsModel";
 import { opsHref } from "./opsPaths";
 import { OpsFeedEmpty, ProviderIcon, pressable, useOpsFeed } from "./parts";
 import type { OpsGroup, OpsSource } from "./opsTypes";
@@ -52,9 +52,9 @@ export function ReplaysTab({ source }: { source: string | null }) {
         </thead>
         <tbody>
           {replays.map((r) => (
-            <tr key={r._id} data-row aria-label={`${r.short_id} ${replayPlace(r.url) ?? r.external_id}`} {...pressable(() => router.push(opsHref.replay(r.short_id || r._id)), "link")}>
+            <tr key={r._id} data-row aria-label={`${r.short_id} ${replayTitle(r)}`} {...pressable(() => router.push(opsHref.replay(r.short_id || r._id)), "link")}>
               <td className="min-w-0">
-                <div className="text-sol-text truncate" title={r.url ?? undefined}>{replayPlace(r.url) ?? r.external_id}</div>
+                <div className="text-sol-text truncate" title={r.url ?? undefined}>{replayTitle(r)}</div>
                 <div className="ops-dim text-[11px] truncate">
                   <span className="ops-mono">{r.short_id}</span>
                   {r.user?.email || r.user?.name || r.user?.id ? <span> · {r.user.email ?? r.user.name ?? r.user.id}</span> : null}

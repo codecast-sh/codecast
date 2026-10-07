@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Network,
   Phone,
+  Film,
   Signpost,
   Radio,
   Target,
@@ -18,7 +19,7 @@ import {
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
-import { parseCallRef, type EntityType } from "../lib/entityLinks";
+import { parseCallRef, parseReplayRef, replayRefStart, type EntityType } from "../lib/entityLinks";
 import { ACCENT, type Accent } from "../lib/entityCardAccent";
 import { SessionMark } from "./identity";
 import { cleanUserMessage } from "./sessionMessage";
@@ -49,15 +50,16 @@ import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";
 import { RevealButton, RevealOpenLink, type RevealTarget } from "./ObjectReveal";
-import { ProposalDetail, ProposalMeta, ProposalSnippet } from "./org/ProposalCard";
-import { ProposalLoading, ProposalSubjects } from "./org/ProposalLedger";
-import { LEDGER_INKS } from "./org/ProposalSubjectCard";
+import { ProposalBody, ProposalMeta } from "./org/ProposalCard";
+import { useOrgHover } from "./org/proposalContexts";
 import { useProposalChanges } from "./org/proposalHooks";
+import { EntityIdPill } from "./EntityIdPill";
 import { TranscriptTurnList } from "./calls/TranscriptTurns";
 import { groupTurns } from "./calls/transcriptTurnModel";
 import { firstName, fmtCallLength } from "./calls/speakers";
 import { CallMomentFrame } from "./calls/CallMomentFrame";
-import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, replayFacts, sourceFacts } from "./ops/parts";
+import { ReplayMomentEmbed } from "./ops/ReplayMomentEmbed";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -84,6 +86,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   pr: GitPullRequest,
   commit: GitCommitHorizontal,
   call: Phone,
+  replay: Film,
   source: Radio,
 };
 
@@ -218,6 +221,8 @@ export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }
       "provider",
     );
     sourceFacts(entity).forEach((fact, i) => push(<span className="whitespace-nowrap">{fact}</span>, `fact${i}`));
+  } else if (type === "replay") {
+    replayFacts(entity).forEach((fact, i) => push(<span className={i === 0 ? "truncate" : "whitespace-nowrap"}>{fact}</span>, `fact${i}`, i === 0));
   } else {
     push(<span className="font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>, "type");
   }
@@ -560,6 +565,9 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
       ? <p className="text-[12px] leading-relaxed text-sol-red">{entity.last_error}</p>
       : <p className="text-[11px] italic text-sol-text-dim">Its errors, checks and deploys are on the Ops page.</p>;
   }
+  if (type === "replay") {
+    return <p className="text-[11px] italic text-sol-text-dim">Its events, console and network{entity.dom_chunks ? ", and the page itself," : ""} are on the replay page.</p>;
+  }
   if (type === "call") {
     if (entity.turns) return <CallTurns call={entity} />;
     return entity.summary ? <CardMarkdown content={entity.summary} /> : <p className="text-[11px] italic text-sol-text-dim">No summary yet.</p>;
@@ -584,6 +592,8 @@ export function ObjectCardFrame({
   href,
   onOpen,
   openLabel,
+  hideOpen = false,
+  kind,
   footerId,
   resolved,
   served,
@@ -599,6 +609,10 @@ export function ObjectCardFrame({
   onOpen?: (e: React.MouseEvent) => void;
   /** "Open task" — the footer link and the header arrow's tooltip. */
   openLabel: string;
+  /** True when the card already sits on the page the link opens: no Open link in the head or the foot. */
+  hideOpen?: boolean;
+  /** The object's kind as `data-entity-card`, a hook for the one style a kind needs. */
+  kind?: string;
   footerId: string;
   /** True once the object is in hand. */
   resolved: boolean;
@@ -691,6 +705,7 @@ export function ObjectCardFrame({
       // The surface stays the same open or closed; only the border raise and
       // the chevron say the card is open, so expanding never recolors it.
       className={`entity-card group/card relative min-w-0 cursor-pointer overflow-hidden rounded-md border bg-sol-card ${expanded ? accent.borderOpen : accent.border} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
+      data-entity-card={kind}
     >
       {/* A flat card renders as its own surface — no header strip; the
           open/expand controls float over the top-right corner on hover.
@@ -700,7 +715,7 @@ export function ObjectCardFrame({
         <>
           <div className="absolute right-1.5 top-1.5 z-[1] flex items-center gap-0.5 rounded bg-sol-card/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
             {resolved && !expanded && <RevealButton target={reveal} className={`text-sol-text-dim ${accent.hoverText}`} />}
-            {!expanded && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
+            {!expanded && !hideOpen && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
             <ChevronDown
               className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
             />
@@ -728,7 +743,7 @@ export function ObjectCardFrame({
           <div className="ml-auto mt-[1px] flex flex-shrink-0 items-center gap-1.5">
             {header.timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{header.timeAgo}</span>}
             {resolved && !expanded && <RevealButton target={reveal} className={revealChrome} />}
-            {resolved && !expanded && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
+            {resolved && !expanded && !hideOpen && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
             <ChevronDown
               className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
             />
@@ -771,7 +786,7 @@ export function ObjectCardFrame({
                 <span className="font-mono text-[10px] text-sol-text-dim">{footerId}</span>
                 <span className="flex items-center gap-3">
                   <RevealButton target={reveal} withLabel className={`text-[10px] text-sol-text-muted ${accent.hoverText} hover:underline`} />
-                  <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />
+                  {!hideOpen && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
                 </span>
               </div>
             </div>
@@ -784,14 +799,16 @@ export function ObjectCardFrame({
 
 /**
  * A staffing proposal shared in a conversation (org-staffing.md S24, S39):
- * its letter, then its changes as a ledger, one plain sentence per subject
- * with what it moves and why, each with Accept and Skip, and a closing row
- * for all of it. The row came through useEntityResolution (store-fed); the
- * changes are read from the store here.
+ * its letter, a totals line, then its changes as entries, one plain sentence
+ * per subject (or one row per record group) with what it moves and why,
+ * each with Approve, Reject and Reply, and the foot. The row came through
+ * useEntityResolution (store-fed); the changes are read from the store here.
  */
 function ProposalEntityCard({ rawId, entity, served, count, href }: { rawId: string; entity: any; served: boolean; count: number; href: string }) {
   const changes = useProposalChanges(entity?._id);
   const Icon = TYPE_ICON.proposal;
+  // On the org screen (the hover channel is fed there) the link would open the page the person is reading.
+  const onScreen = useOrgHover() !== null;
   return (
     <ObjectCardFrame
       accent={ACCENT.proposal}
@@ -799,6 +816,8 @@ function ProposalEntityCard({ rawId, entity, served, count, href }: { rawId: str
       ariaLabel={`${TYPE_LABEL.proposal}: ${entity?.title ?? rawId}`}
       href={href}
       openLabel="Open proposal"
+      hideOpen={onScreen}
+      kind="proposal"
       footerId={entity?.short_id ?? rawId}
       resolved={!!entity}
       served={served}
@@ -808,40 +827,9 @@ function ProposalEntityCard({ rawId, entity, served, count, href }: { rawId: str
         meta: entity ? <ProposalMeta proposal={entity} changes={changes} /> : undefined,
         // No age: what waits is the meta line's, and a narrow pane needs the width for the title.
       }}
-      snippet={entity ? <ProposalSnippet proposal={entity} changes={changes} href={href} compact={count > 1} /> : undefined}
-      detail={entity ? <ProposalDetail proposal={entity} changes={changes} href={href} summary={entity.summary_md ? <CardMarkdown content={entity.summary_md} /> : null} /> : null}
+      snippet={entity ? <ProposalBody proposal={entity} changes={changes} compact={count > 1} summary={entity.summary_md ? <CardMarkdown content={entity.summary_md} /> : undefined} /> : undefined}
+      detail={entity ? <ProposalBody proposal={entity} changes={changes} open summary={entity.summary_md ? <CardMarkdown content={entity.summary_md} /> : undefined} /> : null}
     />
-  );
-}
-
-/**
- * One change of a proposal alone on its line (`op-55#3`, org-staffing.md
- * S39): the card of the subject that change belongs to, standing by itself.
- * Its first line says where it sits in the proposal ("First of nine in" and
- * the proposal's title, which opens the org page with the change in focus);
- * then the entry, whose Accept is the frame's one filled button. Every change
- * to that subject is in the card and is decided with it.
- *
- * Not ObjectCardFrame: there is no strip, nothing to expand and no footer,
- * the card is the content. It spans its row whatever shares the line, so
- * three change references are three full width cards, never tiles.
- */
-function ProposalChangeEntityCard({ refId, seq, entity, served, href }: { refId: string; seq: number; entity: any; served: boolean; href: string }) {
-  const changes = useProposalChanges(entity?._id);
-  return (
-    <div
-      className={`entity-card not-prose min-w-0 rounded-md border bg-sol-card px-4 py-3 text-left ${LEDGER_INKS}`}
-      style={{ gridColumn: "1 / -1", borderColor: "color-mix(in srgb, var(--sol-violet) 25%, transparent)" }}
-      data-change-ref={refId}
-    >
-      {entity ? (
-        <ProposalSubjects proposal={entity} changes={changes} only={seq} href={href} />
-      ) : served ? (
-        <p className="m-0 text-[12px] leading-[1.6] text-[color:var(--ink-quiet)]">Not available to you.</p>
-      ) : (
-        <ProposalLoading />
-      )}
-    </div>
   );
 }
 
@@ -871,14 +859,20 @@ export function EntityObjectCard({ refId, count, unresolved }: {
   // is still resolving) renders back as the text that was typed.
   if (!type) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
   if (type === "proposal") {
+    // One change alone on its line (`op-55#3`): the proposal's pill, opening the org screen with that change in focus.
     return changeSeq != null
-      ? <ProposalChangeEntityCard refId={rawId} seq={changeSeq} entity={entity} served={served} href={href} />
+      ? <EntityIdPill shortId={rawId} type="proposal" />
       : <ProposalEntityCard rawId={rawId} entity={entity} served={served} count={count} href={href} />;
   }
   // A moment of a call (`cl-42@12:34`) is a picture, not a record to expand:
   // the frame of the call's video at that second, linking to the page there.
   if (type === "call" && parseCallRef(rawId)?.at_ms != null) {
     return <CallMomentFrame rawId={rawId} entity={entity} served={served} href={href} />;
+  }
+  // A moment of a replay (`rp-12@1:23`), or a stretch of it, is the recorded
+  // page playing from that second, in the isolated player.
+  if (type === "replay" && replayRefStart(parseReplayRef(rawId)) != null) {
+    return <ReplayMomentEmbed rawId={rawId} entity={entity} served={served} href={href} />;
   }
   const isRepoObject = type === "pr" || type === "commit";
   // Same rule as the pill: a repository reference that names nothing codecast

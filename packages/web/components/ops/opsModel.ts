@@ -227,6 +227,13 @@ export function replayPlace(url: string | null | undefined): string | null {
   }
 }
 
+/** What a replay is called wherever it is named (its Ops page, a pill, a
+ *  moment embed): the page it was recorded on, else the vendor's id for it. */
+export function replayTitle(r: { url?: string | null; external_id?: string } | null | undefined): string | undefined {
+  if (!r) return undefined;
+  return replayPlace(r.url) ?? r.external_id ?? undefined;
+}
+
 /** The repro's base url: the origin the recording started on. */
 export function replayBaseUrl(url: string | null | undefined): string {
   if (!url) return "http://localhost:3000";

@@ -189,6 +189,17 @@ describe("codecast.json", () => {
     expect(mergeCodecastConfig(second.config, { name: "union", source: { id: "src-6", workspace: "team:k57" } }).changes).toEqual([]);
   });
 
+  test("reads the replay block, refuses a bad one, and merge keeps it", () => {
+    const file = { ingestKey: "cc_ing_abc", sources: {}, replay: { dom: "onError", sampleRate: 0.05 } };
+    const parsed = parseCodecastConfig(file);
+    expect(parsed).toEqual({ ok: true, config: file as never });
+    const bad = parseCodecastConfig({ sources: {}, replay: { dom: "always", sampleRate: 2, extra: 1 } });
+    expect((bad as { errors: string[] }).errors).toEqual(['unknown key "replay.extra"', 'replay.dom must be one of "off", "onError", "sampled"', "replay.sampleRate must be a number from 0 to 1"]);
+    const merged = mergeCodecastConfig(parsed.ok ? parsed.config : null, { name: "web", source: { id: "src-9", workspace: "team:k57" } });
+    expect(merged.config.replay).toEqual({ dom: "onError", sampleRate: 0.05 });
+    expect(Object.keys(merged.config)).toEqual(["ingestKey", "sources", "replay"]);
+  });
+
   test("the keys URL is the endpoint's origin", () => {
     expect(codecastKeysUrlOf(null)).toBe("https://convex.codecast.sh/.well-known/codecast-keys.json");
     expect(codecastKeysUrlOf({ endpoint: "https://x.convex.site/cli/ingest" })).toBe("https://x.convex.site/.well-known/codecast-keys.json");

@@ -7,7 +7,7 @@
  */
 
 import { entityRoute, parseEntityUrl, parseRepoObjectId, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
-import { laneRedirectTarget } from '@codecast/web/lib/laneRedirect';
+import { laneRedirectTarget, pageAliasTarget } from '@codecast/web/lib/laneRedirect';
 import { settingsPathFor } from '@codecast/web/lib/settingsSections';
 
 /**
@@ -138,6 +138,12 @@ export function mobileRouteForUrl(url: string): string | null {
   // sends them (lib/laneRedirect), and from there to the phone's screen.
   const moved = laneRedirectTarget(path);
   if (moved) return mobileRouteForUrl(moved);
+  // The web's other names for its pages (/approvals, /plan, /mail, /routines)
+  // resolve through the same table the web redirects with. On the phone
+  // /routines always means the Routines segment, which lists armed triggers in
+  // either mode.
+  const alias = pageAliasTarget(path);
+  if (alias) return mobileRouteForUrl(alias);
   const page = PAGE_ROUTES[path.length > 1 ? path.replace(/\/+$/, '') : path];
   if (page) return page;
   // Team invites are completed on the web; the Chat tab (where the team

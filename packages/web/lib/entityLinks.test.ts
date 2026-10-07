@@ -750,3 +750,28 @@ describe("product sources (src-N)", () => {
     expect(parseEntityUrl("/ops/issues/eg-4")).toBeNull();
   });
 });
+
+describe("replays (rp-N) and their moments (rp-N@m:ss)", () => {
+  // `rp` takes digits only, and a moment or stretch rides the same reference
+  // (the player opens there), the way a call moment does.
+  test("rp-N, a moment and a stretch are replay references; words are not", () => {
+    expect(inferEntityTypeFromShortId("rp-12")).toBe("replay");
+    expect(entityTypeFromId("rp-12@1:23")).toBe("replay");
+    expect(entityTypeFromId("rp-12@1:00-2:30")).toBe("replay");
+    expect(entityTypeFromId("rp-12@1:99")).toBe(null);
+    for (const word of ["rp-x", "rp-", "rp-tauri"]) expect(isEntityId(word)).toBe(false);
+    const prose = "Saw it at rp-12@1:23, and again in rp-3@0:10-0:40 (rp-4 too).";
+    expect(prose.match(bareEntityIdRegex())).toEqual(["rp-12@1:23", "rp-3@0:10-0:40", "rp-4"]);
+  });
+
+  test("a replay opens its Ops page, a moment opens it at that time, and the link reads back", () => {
+    expect(entityRoute("replay", "rp-12")).toBe("/ops/replays/rp-12");
+    expect(entityRoute("replay", "rp-12@1:23")).toBe("/ops/replays/rp-12?t=83000");
+    expect(entityRoute("replay", "rp-12@1:00-2:30")).toBe("/ops/replays/rp-12?t=60000");
+    expect(parseEntityUrl("https://codecast.sh/ops/replays/rp-12?t=83500")).toEqual({ type: "replay", id: "rp-12@1:23" });
+    expect(parseEntityUrl("/ops/replays/rp-12")).toEqual({ type: "replay", id: "rp-12" });
+    // The rest of Ops is still a source or a view.
+    expect(parseEntityUrl("/ops?source=src-2")).toEqual({ type: "source", id: "src-2" });
+    expect(parseEntityUrl("/ops/replays")).toBe(null);
+  });
+});

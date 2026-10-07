@@ -12,7 +12,7 @@
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Gunzip, gzipSync, strToU8, strFromU8 } from "fflate";
-import { internalAction, internalMutation, internalQuery, query } from "./functions";
+import { action, internalAction, internalMutation, internalQuery, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -27,16 +27,29 @@ import { readBodyCapped } from "./lib/tokenHttp";
 import { ingestUserValidator, replayProviderValidator } from "./ingestSchema";
 import {
   parseReplayChunkKey,
+  parseReplayDomChunkKey,
   r2FreshGetUrl,
   r2Presign,
   replayChunkKey,
+  replayDomChunkKey,
   replaysBucketFromEnv,
   safeReplayPathSegment,
   type R2Bucket,
 } from "./lib/r2";
-import { REPLAY_LIMITS, type ReplayEvent, type ReplayProvider } from "@codecast/shared/contracts/replay";
+import { REPLAY_LIMITS, VENDOR_CONVERTER_VERSION, needsVendorImport, type ReplayEvent, type ReplayProvider } from "@codecast/shared/contracts/replay";
 import { INGEST_SHORT_ID_PREFIX, type IngestItem, type SourceProvider } from "@codecast/shared/contracts/ingest";
-import { parseReplayEvents, renderTimeline, replayCounts, sortReplayEvents } from "@codecast/shared/replay";
+import { parseReplayEvents, renderTimeline, replayCounts, sortReplayEvents, type RrwebEvent } from "@codecast/shared/replay";
+import {
+  REPLAY_DOM_LIMITS,
+  REPLAY_FRAME_PATH,
+  REPLAY_PLAYER_ORIGIN,
+  REPLAY_PLAYER_MODES,
+  replayPlayerUrl,
+  type ReplayChunkKind,
+  type ReplayPlayerLink,
+  type ReplayPlayerManifest,
+} from "@codecast/shared/contracts/replayPlayer";
+import { mintReplayCap, replayCapKey } from "./lib/replayCap";
 
 type ReplayItem = Extract<IngestItem, { type: "replay" }>;
 type Db = { db: any };
@@ -68,6 +81,14 @@ export const REPLAY_CHUNK_MAX_INFLATED_BYTES = 8 * 1024 * 1024;
  * (a chunk sign answers 400, an error keeps no recording link).
  */
 export const REPLAYS_NEW_PER_HOUR = 300;
+
+/** What an import carries about the DOM capture it stored (storeReplayDom). */
+const domArgs = {
+  dom_chunk_keys: v.optional(v.array(v.string())),
+  dom_bytes: v.optional(v.number()),
+  /** The capture's first rrweb timestamp: the epoch the stream's t counts from. */
+  dom_t0: v.optional(v.number()),
+};
 
 /** The provider a recording from this source is: our recorder, unless the source mirrors a vendor. */
 export function replayProviderFor(source: SourceProvider): ReplayProvider {
@@ -181,12 +202,25 @@ export async function recordReplayChunk(
   seq: number,
   key: string,
   now: number,
+  kind: ReplayChunkKind = "events",
 ): Promise<{ ok: true; replay_id: Id<"replays"> } | { ok: false; reason: string }> {
-  if (!Number.isInteger(seq) || seq < 0 || seq >= REPLAY_LIMITS.max_chunks_per_replay) {
-    return { ok: false, reason: `seq must be 0 to ${REPLAY_LIMITS.max_chunks_per_replay - 1}` };
+  const max = kind === "dom" ? REPLAY_DOM_LIMITS.max_chunks_per_replay : REPLAY_LIMITS.max_chunks_per_replay;
+  if (!Number.isInteger(seq) || seq < 0 || seq >= max) {
+    return { ok: false, reason: `seq must be 0 to ${max - 1}` };
   }
   const row = await ensureReplay(ctx, source, externalId, now);
   if (!row) return { ok: false, reason: `this source opened ${REPLAYS_NEW_PER_HOUR} recordings in the last hour; try again later` };
+  if (kind === "dom") {
+    // The capture the player plays: listed apart from the stream, so the
+    // assembly (which reads chunk_keys) never sees it.
+    const dom = row.dom_chunk_keys ?? [];
+    if (dom.includes(key)) return { ok: true, replay_id: row._id };
+    const next = dom.filter((k) => parseReplayDomChunkKey(k)?.seq !== seq);
+    next.push(key);
+    next.sort((a, b) => (parseReplayDomChunkKey(a)?.seq ?? 0) - (parseReplayDomChunkKey(b)?.seq ?? 0));
+    await ctx.db.patch(row._id, { dom_chunk_keys: next, updated_at: now });
+    return { ok: true, replay_id: row._id };
+  }
   if (row.chunk_keys.includes(key)) return { ok: true, replay_id: row._id };
   const keys = row.chunk_keys.filter((k) => parseReplayChunkKey(k)?.seq !== seq);
   keys.push(key);
@@ -225,8 +259,8 @@ export const linkGroup = internalMutation({
 });
 
 export const recordChunk = internalMutation({
-  args: { source_id: v.id("event_sources"), replay_external_id: v.string(), seq: v.number(), key: v.string() },
-  handler: async (ctx, args) => recordReplayChunk(ctx, await sourceOrThrow(ctx, args.source_id), args.replay_external_id, args.seq, args.key, Date.now()),
+  args: { source_id: v.id("event_sources"), replay_external_id: v.string(), seq: v.number(), key: v.string(), kind: v.optional(v.union(v.literal("events"), v.literal("dom"))) },
+  handler: async (ctx, args) => recordReplayChunk(ctx, await sourceOrThrow(ctx, args.source_id), args.replay_external_id, args.seq, args.key, Date.now(), args.kind ?? "events"),
 });
 
 // ── Reading chunks (actions) ──
@@ -320,6 +354,7 @@ function summarize(events: ReplayEvent[], shortId: string) {
     counts: replayCounts(events),
     duration_ms: Math.max(0, last - first),
     url: events.find((e) => e.type === "nav")?.url,
+    first_t: first,
   };
 }
 
@@ -353,6 +388,8 @@ export const saveSummary = internalMutation({
     url: v.optional(v.string()),
     /** Chunks the assembly could not read (readReplayChunks). */
     skipped: v.optional(v.number()),
+    /** The stream's first event t: with started_at, where the replay clock's zero falls (dom_t0). */
+    first_t: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.replay_id);
@@ -377,6 +414,10 @@ export const saveSummary = internalMutation({
       counts: args.counts,
       duration_ms: args.duration_ms,
       ...(row.url || !args.url ? {} : { url: args.url }),
+      // Our recorder's t counts from started_at, and the replay clock from
+      // the stream's first event, so that event's wall clock is the zero the
+      // player maps the DOM capture against.
+      ...(row.provider === "sdk" && args.first_t !== undefined ? { dom_t0: row.started_at + args.first_t } : {}),
       updated_at: now,
     });
   },
@@ -426,6 +467,66 @@ async function putChunk(bucket: R2Bucket, key: string, body: Uint8Array): Promis
   if (!res.ok) throw new Error(`R2 put of ${key} answered ${res.status}`);
 }
 
+/**
+ * Split a DOM capture into gzipped chunks: events packed until their JSON
+ * passes chunk_target_raw_bytes, so one chunk's text is held at a time. A
+ * chunk that gzips past chunk_max_bytes is halved; a single event past it
+ * (a page too heavy to keep) is dropped and counted.
+ */
+export function chunkDomEvents(events: readonly RrwebEvent[]): { chunks: Uint8Array[]; dropped: number } {
+  const chunks: Uint8Array[] = [];
+  let dropped = 0;
+  const pack = (slice: readonly RrwebEvent[]) => {
+    if (!slice.length) return;
+    const gz = gzipSync(strToU8(JSON.stringify(slice)));
+    if (gz.length <= REPLAY_DOM_LIMITS.chunk_max_bytes) {
+      chunks.push(gz);
+      return;
+    }
+    if (slice.length === 1) {
+      dropped++;
+      return;
+    }
+    const half = Math.ceil(slice.length / 2);
+    pack(slice.slice(0, half));
+    pack(slice.slice(half));
+  };
+  let from = 0;
+  let raw = 0;
+  for (let i = 0; i < events.length; i++) {
+    raw += JSON.stringify(events[i]).length;
+    if (raw >= REPLAY_DOM_LIMITS.chunk_target_raw_bytes) {
+      pack(events.slice(from, i + 1));
+      from = i + 1;
+      raw = 0;
+    }
+  }
+  pack(events.slice(from));
+  return { chunks: chunks.slice(0, REPLAY_DOM_LIMITS.max_chunks_per_replay), dropped: dropped + Math.max(0, chunks.length - REPLAY_DOM_LIMITS.max_chunks_per_replay) };
+}
+
+/**
+ * Store a recording's DOM capture (already masked, prepareDomCapture) beside
+ * its stream: content addressed under the recording's `dom/` prefix, so a
+ * re-import uploads only what changed. Answers what saveImported records.
+ */
+export async function storeReplayDom(
+  bucket: R2Bucket,
+  input: { source_id: string; external_id: string; events: readonly RrwebEvent[] },
+): Promise<{ dom_chunk_keys: string[]; dom_bytes: number; dom_t0: number; dropped: number }> {
+  const { chunks, dropped } = chunkDomEvents(input.events);
+  const replay = safeReplayPathSegment(input.external_id);
+  const keys: string[] = [];
+  let bytes = 0;
+  for (let seq = 0; seq < chunks.length; seq++) {
+    const key = replayDomChunkKey({ sourceId: input.source_id, replay, seq, sha256: await sha256Hex(chunks[seq]) });
+    await putChunk(bucket, key, chunks[seq]);
+    keys.push(key);
+    bytes += chunks[seq].length;
+  }
+  return { dom_chunk_keys: keys, dom_bytes: bytes, dom_t0: input.events[0]?.timestamp ?? 0, dropped };
+}
+
 /** Open (or find) the row an import fills, so its short id can head the timeline. */
 export const openImport = internalMutation({
   args: { source_id: v.id("event_sources"), external_id: v.string(), started_at: v.optional(v.number()) },
@@ -446,6 +547,8 @@ export const saveImported = internalMutation({
     url: v.optional(v.string()),
     started_at: v.optional(v.number()),
     user: v.optional(ingestUserValidator),
+    ...domArgs,
+    first_t: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -456,11 +559,17 @@ export const saveImported = internalMutation({
       chunks_at: now,
       timeline_at: now,
       imported_at: now,
+      converter_version: VENDOR_CONVERTER_VERSION,
       counts: args.counts,
       duration_ms: args.duration_ms,
       ...(args.url ? { url: args.url } : {}),
       ...(args.user ? { user: args.user } : {}),
       ...(args.started_at ? { started_at: args.started_at } : {}),
+      // A re-import replaces the capture too: a copy whose read kept none
+      // (an unplayable capture) must not keep an older one's keys.
+      dom_chunk_keys: args.dom_chunk_keys ?? [],
+      dom_bytes: args.dom_bytes ?? 0,
+      ...(args.dom_t0 !== undefined ? { dom_t0: args.dom_t0 + (args.first_t ?? 0) } : {}),
       updated_at: now,
     });
   },
@@ -481,6 +590,7 @@ export const importExternal = internalAction({
     events: v.any(),
     started_at: v.optional(v.number()),
     user: v.optional(ingestUserValidator),
+    ...domArgs,
   },
   handler: async (ctx, args): Promise<{ replay_id: Id<"replays">; short_id: string; chunks: number }> => {
     const bucket = replaysBucketFromEnv();
@@ -501,6 +611,7 @@ export const importExternal = internalAction({
       chunk_keys: keys,
       started_at: args.started_at,
       user: args.user,
+      ...(args.dom_chunk_keys ? { dom_chunk_keys: args.dom_chunk_keys, dom_bytes: args.dom_bytes, dom_t0: args.dom_t0 } : {}),
       ...summarize(events, opened.short_id),
     });
     return { ...opened, chunks: keys.length };
@@ -514,7 +625,7 @@ export const importedReplays = internalQuery({
     const out: Record<string, { replay_id: Id<"replays">; short_id: string; imported: boolean }> = {};
     for (const id of args.external_ids.slice(0, LIST_MAX)) {
       const row = await findReplay(ctx, args.source_id, id);
-      if (row) out[id] = { replay_id: row._id, short_id: row.short_id, imported: row.imported_at !== undefined };
+      if (row) out[id] = { replay_id: row._id, short_id: row.short_id, imported: !needsVendorImport(row) };
     }
     return out;
   },
@@ -531,7 +642,7 @@ export const recordingForImport = internalQuery({
     const userId = await requireUserOrToken(ctx, args.api_token);
     const row = await readableReplay(ctx, userId, args.replay);
     if (!row) notFound("Replay not found");
-    return { replay_id: row!._id, short_id: row!.short_id, source_id: row!.source_id, provider: row!.provider, external_id: row!.external_id, imported_at: row!.imported_at ?? null };
+    return { replay_id: row!._id, short_id: row!.short_id, source_id: row!.source_id, provider: row!.provider, external_id: row!.external_id, imported_at: row!.imported_at ?? null, converter_version: row!.converter_version ?? null };
   },
 });
 
@@ -556,8 +667,12 @@ function replayView(row: Doc<"replays">, sourceName: string | null) {
     counts: row.counts,
     group_ids: row.group_ids,
     chunks: row.chunk_keys.length,
+    /** DOM chunks: the capture the player plays. 0 means the replay reads as text only. */
+    dom_chunks: row.dom_chunk_keys?.length ?? 0,
+    dom_bytes: row.dom_bytes ?? null,
     has_timeline: row.timeline_at !== undefined,
     imported_at: row.imported_at ?? null,
+    converter_version: row.converter_version ?? null,
     updated_at: row.updated_at,
   };
 }
@@ -635,6 +750,24 @@ export const get = query({
 });
 
 /**
+ * A replay as a reference names it (`rp-N` or Convex id), for the pill and
+ * the moment embed a conversation renders: the list row, or null when it is
+ * missing or the reader's workspace does not hold it, never an error, so the
+ * reference reads as text. Never the timeline: a pill needs a name, and the
+ * timeline is the replay's content.
+ */
+export const webGetReplay = query({
+  args: { ref: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token).catch(() => null);
+    if (!userId) return null;
+    const row = await readableReplay(ctx, userId, args.ref);
+    if (!row) return null;
+    return replayView(row, (await ctx.db.get(row.source_id))?.name ?? null);
+  },
+});
+
+/**
  * `cast replay show|repro`: the detail plus the chunk keys, which the
  * /cli/replays/get route swaps for URLs signed at request time
  * (signReplayChunks). Internal so the keys never reach a client unsigned.
@@ -660,11 +793,89 @@ export async function signReplayChunks<T extends { chunk_keys: string[] }>(res: 
 
 /** The object behind one chunk of a replay the user may read, for the redirect route; null otherwise. */
 export const chunkObject = internalQuery({
-  args: { user_id: v.optional(v.id("users")), api_token: v.optional(v.string()), replay: v.string(), seq: v.number() },
+  args: { user_id: v.optional(v.id("users")), api_token: v.optional(v.string()), replay: v.string(), seq: v.number(), kind: v.optional(v.union(v.literal("events"), v.literal("dom"))) },
   handler: async (ctx, args): Promise<string | null> => {
     const userId = args.user_id ?? (args.api_token ? (await verifyApiToken(ctx, args.api_token))?.userId : undefined);
     if (!userId) return null;
     const row = await readableReplay(ctx, userId, args.replay);
-    return row?.chunk_keys.find((k) => parseReplayChunkKey(k)?.seq === args.seq) ?? null;
+    if (!row) return null;
+    if (args.kind === "dom") return (row.dom_chunk_keys ?? []).find((k: string) => parseReplayDomChunkKey(k)?.seq === args.seq) ?? null;
+    return row.chunk_keys.find((k) => parseReplayChunkKey(k)?.seq === args.seq) ?? null;
   },
 });
+
+// ── The player (contracts/replayPlayer.ts) ──
+
+/** Who may open a replay's player, and whether there is anything to play. A refusal reads like a missing replay. */
+export const playerTarget = internalQuery({
+  args: { api_token: v.optional(v.string()), replay: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await readableReplay(ctx, userId, args.replay);
+    if (!row) notFound("Replay not found");
+    return { replay_id: row!._id, user_id: userId, short_id: row!.short_id, has_dom: (row!.dom_chunk_keys?.length ?? 0) > 0 };
+  },
+});
+
+const playerModeValidator = v.union(...REPLAY_PLAYER_MODES.map((m) => v.literal(m)));
+
+/**
+ * A link to the player for one replay the caller may read: a capability good
+ * for REPLAY_CAP_TTL_MS, the player URL at a moment, and where frames are
+ * rendered. The web embeds `player_url` in an iframe; the CLI posts `cap` to
+ * `frame_url`. Mint a fresh link each time the player is opened: it is a
+ * bearer for the replay until it lapses.
+ */
+export const playerLink = action({
+  args: {
+    api_token: v.optional(v.string()),
+    replay: v.string(),
+    t_ms: v.optional(v.number()),
+    mode: v.optional(playerModeValidator),
+    controls: v.optional(v.boolean()),
+    autoplay: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<ReplayPlayerLink> => {
+    const target = await ctx.runQuery(internal.replays.playerTarget, { api_token: args.api_token, replay: args.replay });
+    const now = Date.now();
+    const frame_url = `${REPLAY_PLAYER_ORIGIN}${REPLAY_FRAME_PATH}`;
+    const key = await replayCapKey();
+    if (!target.has_dom || !key) return { short_id: target.short_id, has_dom: false, cap: null, player_url: null, frame_url, expires_at: now };
+    const { cap, expires_at } = await mintReplayCap(key, { replay_id: String(target.replay_id), user_id: String(target.user_id), now });
+    const player_url = replayPlayerUrl({ cap, t_ms: args.t_ms ?? null, mode: args.mode, controls: args.controls, autoplay: args.autoplay });
+    return { short_id: target.short_id, has_dom: true, cap, player_url, frame_url, expires_at };
+  },
+});
+
+/**
+ * What an opened capability reads: the replay's DOM keys and clock, if the
+ * person it was minted for can still read it (a removal from the team takes
+ * effect on the next load, not when the token lapses). Internal: the route
+ * signs the keys before anything leaves.
+ */
+export const playerManifestRow = internalQuery({
+  args: { replay_id: v.string(), user_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = ctx.db.normalizeId("users", args.user_id);
+    if (!userId) return null;
+    const row = await readableReplay(ctx, userId, args.replay_id);
+    if (!row || !(row.dom_chunk_keys?.length)) return null;
+    return {
+      dom_chunk_keys: row.dom_chunk_keys as string[],
+      replay: { short_id: row.short_id, provider: row.provider, url: row.url ?? null, started_at: row.started_at, duration_ms: row.duration_ms ?? null },
+      t0: row.dom_t0 ?? row.started_at,
+    };
+  },
+});
+
+/** The manifest the player reads, with the DOM keys swapped for URLs signed now. */
+export async function signPlayerManifest(
+  row: { dom_chunk_keys: string[]; replay: ReplayPlayerManifest["replay"]; t0: number },
+  expiresAt: number,
+  bucket: R2Bucket,
+  now: number = Date.now(),
+): Promise<ReplayPlayerManifest> {
+  const dom_urls: string[] = [];
+  for (const key of row.dom_chunk_keys) dom_urls.push((await r2FreshGetUrl(bucket, key, now)).url);
+  return { replay: row.replay, t0: row.t0, dom_urls, expires_at: expiresAt };
+}

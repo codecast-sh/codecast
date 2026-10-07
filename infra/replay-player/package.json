@@ -1,0 +1,18 @@
+{
+  "name": "codecast-replay-player",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/player.ts --outfile public/player.js --target browser --minify && cp node_modules/@rrweb/replay/dist/style.css public/player.css",
+    "test": "bun test",
+    "deploy": "bun run build && bunx wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "1.4.0",
+    "@rrweb/replay": "2.1.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4",
+    "@types/bun": "^1.4.2"
+  }
+}

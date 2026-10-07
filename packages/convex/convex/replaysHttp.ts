@@ -13,10 +13,19 @@
 // Chunk read: a 302 to a GET signed now for a few minutes, minted only after
 // the reader's workspace access is checked, the way a shared call's video is
 // served (http.ts sharedCallVideo). No URL into the bucket is ever stored.
+//
+// A chunk is either the semantic stream's (`kind` absent or "events") or the
+// DOM capture the player plays (`kind: "dom"`, kept under the recording's
+// dom/ prefix and listed apart, contracts/replayPlayer.ts). Player manifest:
+// the player page, on its own origin, exchanges a capability
+// (lib/replayCap.ts) for the DOM chunks' signed URLs.
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { r2FreshGetUrl, r2Presign, replayChunkKey, replaysBucketFromEnv, safeReplayPathSegment } from "./lib/r2";
+import { r2FreshGetUrl, r2Presign, replayChunkKey, replayDomChunkKey, replaysBucketFromEnv, safeReplayPathSegment } from "./lib/r2";
+import { openReplayCap, replayCapKey } from "./lib/replayCap";
+import { signPlayerManifest } from "./replays";
+import { REPLAY_DOM_LIMITS, REPLAY_PLAYER_MANIFEST_PATH, type ReplayChunkKind } from "@codecast/shared/contracts/replayPlayer";
 import { admitIngestKey, ingestCorsHeaders, ingestJson, ingestRoute } from "./ingestHttp";
 import { REPLAY_LIMITS } from "@codecast/shared/contracts/replay";
 
@@ -44,24 +53,31 @@ export interface ReplaySignBody {
   seq: number;
   sha256: string;
   size: number;
+  /** Which stream the chunk is: the semantic events (default) or the DOM capture. */
+  kind: ReplayChunkKind;
 }
 
 /** The sign request, checked, or the reason it is refused (always a 400: retrying will not help). */
 export function validateReplaySign(body: unknown): ReplaySignBody | string {
   if (!body || typeof body !== "object") return "body must be a JSON object";
   const b = body as Record<string, unknown>;
+  if (b.kind !== undefined && b.kind !== "events" && b.kind !== "dom") return `kind must be "events" or "dom"`;
+  const kind: ReplayChunkKind = b.kind === "dom" ? "dom" : "events";
+  const limits = kind === "dom" ? REPLAY_DOM_LIMITS : REPLAY_LIMITS;
   if (typeof b.replay_id !== "string" || !b.replay_id.trim() || b.replay_id.length > 200) return "replay_id must be a string of 1 to 200 characters";
-  if (typeof b.seq !== "number" || !Number.isInteger(b.seq) || b.seq < 0 || b.seq >= REPLAY_LIMITS.max_chunks_per_replay) {
-    return `seq must be an integer from 0 to ${REPLAY_LIMITS.max_chunks_per_replay - 1}`;
+  if (typeof b.seq !== "number" || !Number.isInteger(b.seq) || b.seq < 0 || b.seq >= limits.max_chunks_per_replay) {
+    return `seq must be an integer from 0 to ${limits.max_chunks_per_replay - 1}`;
   }
   if (typeof b.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(b.sha256)) return "sha256 must be 64 lowercase hex characters (of the gzipped chunk)";
   if (typeof b.size !== "number" || !Number.isInteger(b.size) || b.size <= 0) return "size must be the chunk's byte length";
-  if (b.size > REPLAY_LIMITS.chunk_max_bytes) return `a chunk is at most ${REPLAY_LIMITS.chunk_max_bytes} bytes`;
-  return { replay_id: b.replay_id.trim(), seq: b.seq, sha256: b.sha256, size: b.size };
+  if (b.size > limits.chunk_max_bytes) return `a ${kind === "dom" ? "DOM " : ""}chunk is at most ${limits.chunk_max_bytes} bytes`;
+  return { replay_id: b.replay_id.trim(), seq: b.seq, sha256: b.sha256, size: b.size, kind };
 }
 
 /**
- * POST <prefix><key> { replay_id, seq, sha256, size } -> { key, upload_url, exists, expires_in }.
+ * POST <prefix><key> { replay_id, seq, sha256, size, kind? } -> { key, upload_url, exists, expires_in }.
+ * `kind: "dom"` signs a chunk of the DOM capture (gzipped JSON array of rrweb
+ * events) under the recording's dom/ prefix, held to REPLAY_DOM_LIMITS.
  * 401 stops the SDK (bad key), 403 stops it for a refused origin, 400 drops
  * the chunk, 429 and 503 are worth a retry (a paused source is a 503). The
  * upload URL signs the declared size as the PUT's content-length, so the
@@ -84,8 +100,9 @@ export async function handleReplaySign(ctx: any, request: Request, key: string):
 
     const bucket = replaysBucketFromEnv();
     if (!bucket) return ingestJson(503, { error: "replay storage is not configured" }, cors);
-    const objectKey = replayChunkKey({ sourceId: String(source._id), replay: safeReplayPathSegment(sign.replay_id), seq: sign.seq, sha256: sign.sha256 });
-    const recorded = await ctx.runMutation(internal.replays.recordChunk, { source_id: source._id, replay_external_id: sign.replay_id, seq: sign.seq, key: objectKey });
+    const keyParts = { sourceId: String(source._id), replay: safeReplayPathSegment(sign.replay_id), seq: sign.seq, sha256: sign.sha256 };
+    const objectKey = sign.kind === "dom" ? replayDomChunkKey(keyParts) : replayChunkKey(keyParts);
+    const recorded = await ctx.runMutation(internal.replays.recordChunk, { source_id: source._id, replay_external_id: sign.replay_id, seq: sign.seq, key: objectKey, kind: sign.kind });
     if (!recorded.ok) return ingestJson(400, { error: recorded.reason }, cors);
 
     const head = await fetch(await r2Presign(bucket, "HEAD", objectKey, REPLAY_LIMITS.signed_url_ttl_s), { method: "HEAD" }).catch(() => null);
@@ -105,7 +122,7 @@ export const replaySign = httpAction(async (ctx, request) => {
 export const REPLAY_CHUNK_PATH = "/cli/replays/chunk";
 
 /**
- * GET /cli/replays/chunk?replay=<rp-N|id>&seq=<n>. The web signs in with its
+ * GET /cli/replays/chunk?replay=<rp-N|id>&seq=<n>[&kind=dom]. The web signs in with its
  * Convex session (Authorization: Bearer <jwt>); the CLI sends its api token
  * as X-Api-Token, which a JWT check would refuse. A refusal and a missing
  * chunk answer the same 404.
@@ -130,9 +147,41 @@ export const replayChunk = httpAction(async (ctx, request) => {
   const apiToken = request.headers.get("X-Api-Token") ?? undefined;
   const userId = apiToken ? undefined : await getAuthUserId(ctx).catch(() => null);
   if (!apiToken && !userId) return new Response("Unauthorized", { status: 401, headers: { "Cache-Control": "no-store", ...CHUNK_CORS } });
-  const key: string | null = await ctx.runQuery(internal.replays.chunkObject, { user_id: userId ?? undefined, api_token: apiToken, replay, seq });
+  const kind = u.searchParams.get("kind") === "dom" ? ("dom" as const) : undefined;
+  const key: string | null = await ctx.runQuery(internal.replays.chunkObject, { user_id: userId ?? undefined, api_token: apiToken, replay, seq, ...(kind ? { kind } : {}) });
   const bucket = replaysBucketFromEnv();
   if (!key || !bucket) return notFound();
   const { url } = await r2FreshGetUrl(bucket, key);
   return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...CHUNK_CORS } });
+});
+
+/** The path the player page exchanges its capability at (GET ?cap=). */
+export { REPLAY_PLAYER_MANIFEST_PATH };
+
+// The player reads from its own origin with no credentials: the capability is
+// the whole authorization, so any origin may ask.
+const PLAYER_CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Max-Age": "86400",
+};
+
+export const replayPlayerManifestPreflight = httpAction(async () => new Response(null, { status: 204, headers: PLAYER_CORS }));
+
+/**
+ * GET /cli/replays/player?cap=<cap> -> ReplayPlayerManifest. A forged,
+ * lapsed or revoked capability, and a replay with no DOM capture, all answer
+ * the same 404.
+ */
+export const replayPlayerManifest = httpAction(async (ctx, request) => {
+  const headers = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...PLAYER_CORS };
+  const missing = () => new Response(JSON.stringify({ error: "This replay link has expired or does not exist." }), { status: 404, headers: { "Content-Type": "application/json", ...headers } });
+  const now = Date.now();
+  const cap = await openReplayCap(await replayCapKey(), new URL(request.url).searchParams.get("cap"), now);
+  const bucket = replaysBucketFromEnv();
+  if (!cap || !bucket) return missing();
+  const row = await ctx.runQuery(internal.replays.playerManifestRow, { replay_id: cap.r, user_id: cap.u });
+  if (!row) return missing();
+  const manifest = await signPlayerManifest(row, cap.exp, bucket, now);
+  return new Response(JSON.stringify(manifest), { status: 200, headers: { "Content-Type": "application/json", ...headers } });
 });

@@ -122,6 +122,22 @@ const FAKE_SOURCE = {
   groups_open: 0,
 };
 
+// A product recording of a checkout that failed.
+const FAKE_REPLAY = {
+  _id: "rx72qtvpbmmrmwcjqmhzawejsx8bq9gm",
+  short_id: "rp-7",
+  provider: "posthog",
+  source_name: "codecast-web",
+  external_id: "0199abc",
+  url: "https://shop.example.com/checkout",
+  user: null,
+  started_at: Date.now() - 3600_000,
+  duration_ms: 185_000,
+  counts: { clicks: 9, errors: 1, failed_requests: 0 },
+  chunks: 1,
+  dom_chunks: 0,
+};
+
 // What the proposal feeder asked the server for. A proposal is store-fed, so
 // this fake never answers it: the pill paints from the seeded row.
 const PROPOSAL_GETS: string[] = [];
@@ -135,6 +151,7 @@ function fakeQuery(fn: unknown, args: any) {
   }
   if (name === "entities:resolveIdType") return TYPE_OF_CONVEX_ID[args?.id] ?? null;
   if (name === "artifacts:getShared") return args?.slug === PAGE_SLUG ? FAKE_PAGE : null;
+  if (name === "replays:webGetReplay") return args?.ref === "rp-7" ? FAKE_REPLAY : null;
   if (name === "ingest:webGetSource") return [FAKE_SOURCE].find((r) => r.short_id === args?.ref || r._id === args?.ref) ?? null;
   const rows = ROWS[name];
   if (!rows) return undefined;
@@ -152,6 +169,9 @@ mock.module("convex/react", () => ({
   ...convexReact,
   useQuery: fakeQuery,
   useQueries: () => ({}),
+  // Nothing here writes; a surface that holds a mutation (a feature offer
+  // under an artifact card) only needs one to exist.
+  useMutation: () => async () => undefined,
 }));
 
 const noThrow = await import("../hooks/useQueryNoThrow");
@@ -415,10 +435,11 @@ describe("published page links", () => {
     expect(html).toContain('href="https://example.com/a/Ab3xYz9Qw12k"');
   });
 
-  // "Open in a pane" rides next to "open" on both shapes, so a page can sit
-  // beside the conversation instead of in another browser tab.
+  // A pane verb rides next to "open" on both shapes, so a page can sit beside
+  // the conversation instead of in another browser tab: the embed's toolbar
+  // names it "Open beside your work", the pill's glyph "Open in a pane".
   test("both the embed and the pill offer to open the page in a pane", () => {
-    expect(render(PAGE_URL)).toContain('aria-label="Open in a pane"');
+    expect(render(PAGE_URL)).toContain('aria-label="Open beside your work"');
     expect(render(`The numbers are in ${PAGE_URL} if you want detail.`)).toContain('aria-label="Open in a pane"');
   });
 });
@@ -729,5 +750,25 @@ describe("product sources (src-N)", () => {
     const html = render("| Source |\n| --- |\n| src-13 union (app connector) |\n\nSee packages/src-tauri.");
     expect(pillTexts(html)).toEqual(["union"]);
     expect(html).toContain("src-tauri");
+  });
+});
+
+describe("replays (rp-N)", () => {
+  test("rp-N reads as the page it recorded, linked to its Ops page", () => {
+    const html = render("The failure is in rp-7.");
+    expect(pillText(html)).toBe("shop.example.com/checkout");
+    expect(html).toContain('href="/ops/replays/rp-7"');
+  });
+
+  test("a moment reads as the page and the second, and opens the replay there", () => {
+    const html = render("It broke at rp-7@1:23 after the second click.");
+    expect(pillText(html)).toBe("shop.example.com/checkout @1:23");
+    expect(html).toContain('href="/ops/replays/rp-7?t=83000"');
+  });
+
+  test("a replay this viewer cannot read stays the text it was written as", () => {
+    const html = render("See rp-9@0:05.");
+    expect(html).toContain("rp-9@0:05");
+    expect(html).not.toContain("shop.example.com");
   });
 });

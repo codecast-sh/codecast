@@ -224,6 +224,10 @@ function consoleLevel(level: unknown): ReplayConsoleLevel | undefined {
 /** One request from rrweb's network plugin (url, status, startTime/endTime) or PostHog's (name, responseStatus, duration). */
 function networkEvent(r: any, t: number, pageUrl?: string): ReplayEvent | undefined {
   if (!r || typeof r !== "object") return undefined;
+  // posthog-js lists each Server-Timing metric of a response beside it
+  // (entryType "serverTiming", named like "cfEdge" or "total", no status): a
+  // performance entry that is not a resource or a navigation is no request.
+  if (typeof r.entryType === "string" && r.entryType !== "resource" && r.entryType !== "navigation") return undefined;
   const url = typeof r.url === "string" ? r.url : typeof r.name === "string" ? r.name : undefined;
   if (!url) return undefined;
   const statusRaw = r.status ?? r.responseStatus ?? r.response?.status;

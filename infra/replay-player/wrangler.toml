@@ -1,0 +1,32 @@
+# replay.codecast.sh: the replay player and frame renderer
+# (docs/architecture/external-data.md X5, "Playing a replay").
+#
+# Its own origin, apart from codecast.sh and from a.codecast.sh (published
+# pages): it draws customers' DOM. Frames render in Cloudflare Browser
+# Rendering through the `browser` binding (the account is on Workers Paid).
+#
+# Deploy: bun install && bun run deploy   (from this directory; builds
+# public/player.js and public/player.css, then `wrangler deploy`. The custom
+# domain below creates its DNS record and certificate on first deploy.)
+name = "codecast-replay-player"
+main = "src/worker.ts"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+routes = [
+  { pattern = "replay.codecast.sh", custom_domain = true },
+]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# The page route and /frame are the worker's; only player.js and player.css are files.
+run_worker_first = ["/p/*", "/frame", "/health"]
+
+[browser]
+binding = "BROWSER"
+
+[vars]
+CONVEX_ORIGIN = "https://convex.codecast.sh"
+PLAYER_ORIGIN = "https://replay.codecast.sh"

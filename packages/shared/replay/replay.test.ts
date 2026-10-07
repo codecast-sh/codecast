@@ -245,6 +245,18 @@ describe("fromRrweb", () => {
     ]);
   });
 
+  test("PostHog's Server-Timing entries beside a request are not requests", () => {
+    const ph = fromRrweb([
+      { type: 4, timestamp: T, data: { href: "https://a.test/p/1" } },
+      { type: 6, timestamp: T + 10, data: { plugin: "rrweb/network@1", payload: { requests: [
+        { name: "https://a.test/api/x", entryType: "resource", method: "GET", responseStatus: 500, duration: 40, initiatorType: "fetch" },
+        { name: "cfEdge", entryType: "serverTiming", duration: 2, startTime: 5 },
+        { name: "total", entryType: "serverTiming", duration: 343, startTime: 5 },
+      ] } } },
+    ]);
+    expect(ph.filter((e) => e.type === "network")).toEqual([{ type: "network", t: 10, method: "GET", url: "https://a.test/api/x", status: 500, ms: 40 }]);
+  });
+
   test("Sentry's console breadcrumbs and fetch spans read the same", () => {
     const s = fromRrweb([
       { type: 4, timestamp: T, data: { href: "https://a.test/" } },

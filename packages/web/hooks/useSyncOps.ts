@@ -180,7 +180,7 @@ const sourceSig = (s: OpsSource) => `${s.updated_at}|${s.status}|${s.short_id}|$
 const groupSig = (g: OpsGroup) => `${g.updated_at}|${g.status}|${g.count}|${g.last_seen}|${g.signal_task_id ?? ""}`;
 const eventSig = (e: OpsEvent) => `${e.created_at}`;
 const replaySig = (r: OpsReplay) => `${r.updated_at}|${r.chunks}|${r.has_timeline ? 1 : 0}`;
-const watchSig = (w: OpsWatch) => `${w.updated_at}|${w.state}|${w.last_at ?? 0}|${w.status}`;
+const watchSig = (w: OpsWatch) => `${w.updated_at}|${w.state}|${w.last_at ?? 0}|${w.status}|${w.history?.at ?? 0}:${w.history?.reading ? 1 : 0}`;
 
 const byNewest = <T,>(at: (row: T) => number) => (a: T, b: T) => at(b) - at(a);
 

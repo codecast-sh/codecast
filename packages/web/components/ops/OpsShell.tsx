@@ -1,7 +1,7 @@
 // The frame every Ops view renders in: the title, the workspace's sources as
 // chips (a click narrows the tabs to one source), and the tab bar. The number
 // keys switch tabs.
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Radar, Settings2 } from "lucide-react";
@@ -10,6 +10,7 @@ import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { useOpsGroups, useOpsReplays, useOpsSources, useOpsWatches, useSyncOpsGroups, useSyncOpsReplays, useSyncOpsSources, useSyncOpsWatches } from "../../hooks/useSyncOps";
 import { OPS_TABS, OPS_TAB_LABEL, opsHref, type OpsTab, type OpsView } from "./opsPaths";
 import { OpsFeedsContext, SETUP_HREF, SourceChip, type OpsFeeds } from "./parts";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import "./ops.css";
 
 /** The tabs whose count is work waiting on a person (open issues, alerting watches); the rest are plain totals. */
@@ -52,7 +53,7 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
   const activeTab: OpsTab | null = view.view === "tab" ? view.tab : view.view === "issue" ? "issues" : view.view === "replay" ? "replays" : null;
   const sourceFilter = view.view === "tab" ? view.source : null;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target) || hasOpenModal()) return;
       const n = Number(e.key);

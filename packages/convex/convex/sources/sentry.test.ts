@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import schema from "../schema";
-import { makeFakeDb, schemaIndexes } from "../testDb";
+import { armedTriggerRows, makeFakeDb, schemaIndexes } from "../testDb";
 import { hex, hmacSha256, verifyHmacHex } from "../lib/hmac";
 import { HOUR_MS, hourStart } from "../lib/ingestGroups";
 import { applyMirrorBatch, createSource, mirrorGroups, sourceStats } from "../ingest";
@@ -494,7 +494,7 @@ function world() {
       event_groups: [],
       event_samples: [],
       external_events: [],
-      agent_tasks: [],
+      agent_tasks: armedTriggerRows("error_new", "error_regressed", "error_spike"),
       conversations: [],
       replays: [],
       webhook_deliveries: [],

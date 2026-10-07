@@ -270,7 +270,19 @@ export const METRIC_WATCH_LIMITS = {
   interval_default_ms: 5 * 60_000,
   interval_max_ms: 7 * 24 * 3600_000,
   query_chars: 20_000,
+  /** How far back `cast metrics backfill` reads by default, and at most. */
+  backfill_days_default: 30,
+  backfill_days_max: 365,
 } as const;
+
+/** Why a watch has no history to read from its source (metrics.loadHistory): not failures, so they never stop a source. */
+export const METRIC_NO_HISTORY = {
+  covered: "The watch's points already reach back as far as asked",
+  aggregate: "The insight's value is a total, not a dated series; its history is its polls",
+} as const;
+
+/** A watch's last history read, as stored on it: when, how many past points it added, why none, or still reading. */
+export type MetricWatchHistory = { at: number; added: number; note?: string; reading?: boolean };
 
 export const PASSTHROUGH_MAX_BYTES = 256 * 1024;
 

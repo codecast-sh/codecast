@@ -2,7 +2,7 @@
 // app functions return them (packages/convex/convex/ingest.ts sourceView and
 // groupView, replays.ts replayView, metrics.ts watchView, sources/app.ts).
 // Types only: the server is the shape's owner.
-import type { GroupKind, GroupStatus, SourceProvider, SourceStatus, Transition, WatchDirection, WatchKind } from "@codecast/shared/contracts/ingest";
+import type { GroupKind, GroupStatus, SourceProvider, SourceStatus, Transition, MetricWatchHistory, WatchDirection, WatchKind } from "@codecast/shared/contracts/ingest";
 import type { ReplayBackfill, ReplayProvider } from "@codecast/shared/contracts/replay";
 
 export type OpsSource = {
@@ -124,8 +124,12 @@ export type OpsReplay = {
   counts: { clicks: number; errors: number; failed_requests: number };
   group_ids: string[];
   chunks: number;
+  /** DOM chunks: the page capture the player plays. 0 means the replay reads as text only. */
+  dom_chunks?: number;
+  dom_bytes?: number | null;
   has_timeline: boolean;
   imported_at: number | null;
+  converter_version?: number | null;
   updated_at: number;
 };
 
@@ -152,6 +156,7 @@ export type OpsWatch = {
   state: "ok" | "alert";
   group_id?: string;
   last_error?: string;
+  history?: MetricWatchHistory;
   last_value: number | null;
   last_at: number | null;
   source_name: string | null;

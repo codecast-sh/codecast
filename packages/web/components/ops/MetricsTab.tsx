@@ -1,10 +1,13 @@
 // The Metrics tab: one card per watched metric (X7), its last 60 values as a
 // line with the threshold drawn across, the side of it that alerts shaded.
+// "Load history" reads each watch's past values from its source
+// (metrics.loadHistory), so a chart is full at once instead of one poll at a time.
 import Link from "next/link";
 import { useMemo } from "react";
+import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpsGroups, useOpsSources, useOpsWatches } from "../../hooks/useSyncOps";
-import { relTimeShort } from "../../lib/utils";
+import { formatRelative, relTimeShort } from "../../lib/utils";
 import { opsHref } from "./opsPaths";
 import { OpsFeedEmpty, ProviderIcon, useOpsFeed } from "./parts";
 import type { OpsWatch } from "./opsTypes";
@@ -31,8 +34,22 @@ export function MetricsTab({ source }: { source: string | null }) {
     );
   }
 
+  const loadable = watches.filter((w) => !w.history?.reading);
+  const loadAll = () => {
+    const store = useInboxStore.getState();
+    for (const w of loadable) store.loadOpsWatchHistory(w._id);
+  };
+
   return (
     <div className="ops-pad">
+      <div className="flex items-center gap-2.5 text-[11.5px] mb-3">
+        <span className="flex-1 text-sol-text-muted">
+          Fill each chart with the last 30 days: an insight's own series, or a HogQL query read again at past times. Past values never alert.
+        </span>
+        <button type="button" className="ops-btn shrink-0" disabled={loadable.length === 0} onClick={loadAll} data-ops-load-history>
+          Load history
+        </button>
+      </div>
       <div className="ops-watch-grid">
         {watches.map((w) => {
           const short = w.group_id ? groupShort.get(w.group_id) : undefined;
@@ -60,12 +77,22 @@ export function MetricsTab({ source }: { source: string | null }) {
                 <span className="ml-auto ops-num">{w.last_at ? relTimeShort(w.last_at, now) : "never polled"}</span>
               </div>
               {w.last_error && <div className="text-[11px] mt-1.5" style={{ color: "var(--sol-red)" }}>{w.last_error}</div>}
+              <HistoryLine watch={w} now={now} />
             </div>
           );
         })}
       </div>
     </div>
   );
+}
+
+/** Where the watch's history read stands: reading, how many past values came over, or why none. */
+function HistoryLine({ watch, now }: { watch: OpsWatch; now: number }) {
+  const h = watch.history;
+  if (!h) return null;
+  const read = `${h.added} past value${h.added === 1 ? "" : "s"} from the source, read ${formatRelative(h.at, now)}`;
+  const text = h.reading ? "Reading history…" : h.added === 0 && h.note ? `No history: ${h.note}` : h.note ? `${read} (${h.note})` : read;
+  return <div className="text-[11px] mt-1 ops-dim" title={h.note}>{text}</div>;
 }
 
 /** The points as a line, the threshold as a dashed rule, the alerting side faintly shaded. */

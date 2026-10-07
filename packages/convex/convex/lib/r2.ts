@@ -96,6 +96,19 @@ export function parseReplayChunkKey(key: string): { seq: number; sha256: string 
   return m ? { seq: Number(m[1]), sha256: m[2] } : null;
 }
 
+/** One chunk of a recording's DOM capture (raw rrweb events, for the player):
+ *  beside its semantic chunks, under `dom/`, content addressed the same way
+ *  and expired by the same bucket-wide lifecycle rule. */
+export function replayDomChunkKey(opts: { sourceId: string; replay: string; seq: number; sha256: string }): string {
+  return `${REPLAYS_ROOT}${opts.sourceId}/${opts.replay}/dom/${String(opts.seq).padStart(4, "0")}-${opts.sha256}.json.gz`;
+}
+
+/** The sequence number and sha256 a DOM chunk key names, or null for a key outside that layout. */
+export function parseReplayDomChunkKey(key: string): { seq: number; sha256: string } | null {
+  const m = key.match(/^replays\/[^/]+\/[^/]+\/dom\/(\d{4,})-([0-9a-f]{64})\.json\.gz$/);
+  return m ? { seq: Number(m[1]), sha256: m[2] } : null;
+}
+
 /** A presigned URL for one request on one object, or on the bucket itself
  *  when `key` is empty (a listing), with any query `params` signed in. */
 export function r2Presign(

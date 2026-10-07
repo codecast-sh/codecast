@@ -7,7 +7,7 @@ import schema from "../schema";
 import { makeFakeDb, schemaIndexes } from "../testDb";
 import { REPLAY_BACKFILL_PAGE, listPostHogPage, runBackfillPage, savePage, type BackfillVendor } from "./replayBackfill";
 import { VendorCallError } from "./vendorReplay";
-import { replayBackfillLine, replayBackfillResumes, type ReplayBackfill } from "@codecast/shared/contracts/replay";
+import { REPLAY_BACKFILL_LIMITS, replayBackfillLine, replayBackfillResumes, replayBackfillStalled, type ReplayBackfill } from "@codecast/shared/contracts/replay";
 
 const h = (fn: any) => fn._handler;
 
@@ -83,6 +83,28 @@ describe("runBackfillPage", () => {
     expect(plain.state.status).toBe("running");
     const huge = await runBackfillPage(vendor({}, { listError: new VendorCallError({ error: "429", status: 429, retry_after_ms: 86_400_000 }) }).v, fresh(), clock());
     expect(huge.next_in_ms).toBe(REPLAY_BACKFILL_PAGE.max_rate_wait_ms);
+  });
+
+  test("a vendor that answers 429 forever stops the import after the cap; a recording landing resets it", async () => {
+    const limited = vendor({}, { listError: new VendorCallError({ error: "429", status: 429, retry_after_ms: 60_000 }) }).v;
+    const first = await runBackfillPage(limited, fresh(), clock(1_000));
+    expect(first.state.rate_limited_since).toBe(1_000);
+    const later = await runBackfillPage(limited, first.state, clock(1_000 + REPLAY_BACKFILL_LIMITS.rate_limited_max_ms - 1));
+    expect(later.state.status).toBe("running");
+    const capped = await runBackfillPage(limited, later.state, clock(1_000 + REPLAY_BACKFILL_LIMITS.rate_limited_max_ms));
+    expect(capped.next_in_ms).toBeNull();
+    expect(capped.state).toMatchObject({ status: "error", last_error: expect.stringMatching(/rate limited the import for 120 minutes/) });
+    // Mid page too, and an import that lands clears the clock.
+    const mid = vendor({ "0": { ids: ["a", "b"], next: "2" } }, { fail: { b: { error: "429", status: 429 } } });
+    const one = await runBackfillPage(mid.v, fresh({ rate_limited_since: 1 }), clock(5_000));
+    expect(one.state.status).toBe("running");
+    expect(one.state.rate_limited_since).toBe(5_000);
+  });
+
+  test("the longest wait plus the longest action never reads as stalled", () => {
+    const tenMinuteAction = 10 * 60_000;
+    expect(REPLAY_BACKFILL_PAGE.max_rate_wait_ms + tenMinuteAction).toBeLessThan(REPLAY_BACKFILL_LIMITS.stalled_ms);
+    expect(replayBackfillStalled(fresh({ updated_at: 0 }), REPLAY_BACKFILL_PAGE.max_rate_wait_ms + tenMinuteAction)).toBe(false);
   });
 
   test("a refused token pauses the import and reports the connection lost", async () => {

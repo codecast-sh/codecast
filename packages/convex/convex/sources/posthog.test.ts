@@ -4,6 +4,7 @@ import { gzipSync, strFromU8, strToU8 } from "fflate";
 import schema from "../schema";
 import { makeFakeDb, schemaIndexes } from "../testDb";
 import { PASSTHROUGH_MAX_BYTES } from "@codecast/shared/contracts/ingest";
+import { VENDOR_CONVERTER_VERSION } from "@codecast/shared/contracts/replay";
 import { fromRrweb } from "@codecast/shared/replay";
 import { createSource } from "../ingest";
 import { importedReplays } from "../replays";
@@ -24,7 +25,9 @@ import {
   query,
   recordingRow,
   recordingsPath,
+  snapshotReads,
   snapshotSources,
+  SNAPSHOT_BLOBS_PER_READ,
   sourceForCaller,
 } from "./posthog";
 
@@ -221,26 +224,68 @@ describe("recordings", () => {
     expect(decompressPostHogEvent({ ...FULL, cv: "2024-10", data: "not gzip" })).toBeNull();
   });
 
+  // A fake PostHog snapshots endpoint: blob_v2 only by an inclusive start and
+  // end key, at most 20 apart, a bare blob_key refused, as PostHog answers.
+  const blobServer = (blobs: string[][], urls: string[]) => async (url: string) => {
+    urls.push(url);
+    if (url.endsWith("/snapshots")) return json({ sources: blobs.map((_, i) => ({ source: "blob_v2", blob_key: String(i) })) });
+    const q = new URL(url).searchParams;
+    const start = q.get("start_blob_key");
+    const end = q.get("end_blob_key");
+    if (!start || !end) return json({ detail: "Must provide both start blob key and end blob key" }, { status: 400 });
+    if (Number(end) - Number(start) > 20) return json({ detail: "Cannot request more than 20 blob keys at once" }, { status: 400 });
+    return new Response(blobs.slice(Number(start), Number(end) + 1).flat().join("\n"));
+  };
+  const path = (range: string) => `https://us.posthog.com/api/projects/77/session_recordings/rec-1/snapshots?source=blob_v2&${range}`;
+
   test("a fetched recording converts to the semantic stream through fromRrweb", async () => {
     const urls: string[] = [];
-    const fetchImpl = async (url: string) => {
-      urls.push(url);
-      if (url.endsWith("/snapshots")) return json({ sources: [{ source: "blob_v2", blob_key: "0" }, { source: "blob_v2", blob_key: "1" }] });
-      if (url.includes("blob_key=0")) return new Response([JSON.stringify(["w", META]), JSON.stringify(["w", { ...FULL, cv: "2024-10", data: packed(FULL.data) }])].join("\n"));
-      return new Response([JSON.stringify(["w", CLICK]), JSON.stringify(["w", CONSOLE])].join("\n"));
-    };
-    const read = await fetchRecordingEvents(conn, "rec-1", fetchImpl);
+    const blobs = [
+      [JSON.stringify(["w", META]), JSON.stringify(["w", { ...FULL, cv: "2024-10", data: packed(FULL.data) }])],
+      [JSON.stringify(["w", CLICK]), JSON.stringify(["w", CONSOLE])],
+    ];
+    const read = await fetchRecordingEvents(conn, "rec-1", blobServer(blobs, urls));
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.truncated).toBe(false);
-    expect(urls.slice(1)).toEqual([
-      "https://us.posthog.com/api/projects/77/session_recordings/rec-1/snapshots?source=blob_v2&blob_key=0",
-      "https://us.posthog.com/api/projects/77/session_recordings/rec-1/snapshots?source=blob_v2&blob_key=1",
-    ]);
+    // Both blobs in one call: PostHog's snapshot throttle counts calls.
+    expect(urls.slice(1)).toEqual([path("start_blob_key=0&end_blob_key=1")]);
     const events = fromRrweb(read.events);
     expect(events.map((e) => e.type)).toEqual(["nav", "click", "console"]);
     expect(events[0]).toMatchObject({ url: "https://app.example.com/checkout", title: "Checkout" });
     expect(events[1]).toMatchObject({ label: "Pay now", t: 2_000 });
+  });
+
+  test("blob_v2 keys are read in consecutive runs of at most SNAPSHOT_BLOBS_PER_READ", () => {
+    const keys = (...k: (string | number)[]) => k.map((b) => ({ source: "blob_v2", blob_key: String(b) }));
+    expect(snapshotReads(keys(0, 1, 2))).toEqual([{ source: "blob_v2", blob_key: "0", end_blob_key: "2" }]);
+    expect(snapshotReads(keys(0, 1, 3))).toEqual([
+      { source: "blob_v2", blob_key: "0", end_blob_key: "1" },
+      { source: "blob_v2", blob_key: "3" },
+    ]);
+    const many = snapshotReads(keys(...Array.from({ length: 45 }, (_, i) => i)));
+    expect(many.map((r) => [r.blob_key, r.end_blob_key])).toEqual([["0", "19"], ["20", "39"], ["40", "44"]]);
+    expect(SNAPSHOT_BLOBS_PER_READ).toBeLessThanOrEqual(20);
+    expect(snapshotReads([{ source: "realtime" }])).toEqual([{ source: "realtime" }]);
+  });
+
+  test("a long recording reads 20 blobs a call, every event kept", async () => {
+    const urls: string[] = [];
+    const blobs = Array.from({ length: 25 }, (_, i) => [JSON.stringify(["w", { ...CLICK, timestamp: CLICK.timestamp + i }])]);
+    const read = await fetchRecordingEvents(conn, "rec-1", blobServer(blobs, urls));
+    expect(read.ok && read.events.length).toBe(25);
+    expect(urls.slice(1)).toEqual([path("start_blob_key=0&end_blob_key=19"), path("start_blob_key=20&end_blob_key=24")]);
+  });
+
+  test("a range over the byte budget is read again blob by blob, keeping the blobs that fit", async () => {
+    const urls: string[] = [];
+    const big = (i: number) => [JSON.stringify(["w", { ...CLICK, timestamp: CLICK.timestamp + i, pad: "x".repeat(13 * 1024 * 1024) }])];
+    const read = await fetchRecordingEvents(conn, "rec-1", blobServer([big(0), big(1)], urls));
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.length).toBe(1);
+    expect(read.truncated).toBe(true);
+    expect(urls.slice(1)).toEqual([path("start_blob_key=0&end_blob_key=1"), path("start_blob_key=0&end_blob_key=0"), path("start_blob_key=1&end_blob_key=1")]);
   });
 });
 
@@ -334,7 +379,7 @@ describe("actions", () => {
     const w = world();
     await connected(w);
     const source = w.db._tables.event_sources[0];
-    await w.db.insert("replays", { workspace: source.workspace, source_id: source._id, short_id: "rp-7", provider: "posthog", external_id: "r2", started_at: 1, counts: { clicks: 0, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: [], imported_at: 5, created_at: 1, updated_at: 1 });
+    await w.db.insert("replays", { workspace: source.workspace, source_id: source._id, short_id: "rp-7", provider: "posthog", external_id: "r2", started_at: 1, counts: { clicks: 0, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: [], imported_at: 5, converter_version: VENDOR_CONVERTER_VERSION, created_at: 1, updated_at: 1 });
     globalThis.fetch = (async () => json({ results: [{ id: "r1", start_time: "2026-10-01T00:00:00Z" }, { id: "r2" }, { id: "bad/id" }] })) as any;
     const out = await h(listRecordings)(actionCtx(w, "u1"), { ...TEAM, source: "product" });
     expect(out.recordings.map((r: any) => [r.id, r.replay, r.imported])).toEqual([
@@ -368,7 +413,7 @@ describe("actions", () => {
 
     // importExternal stamps imported_at on the row; the second read is ours.
     const source = w.db._tables.event_sources[0];
-    await w.db.insert("replays", { workspace: source.workspace, source_id: source._id, short_id: "rp-1", provider: "posthog", external_id: "rec-1", started_at: 1, counts: { clicks: 1, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: ["k"], imported_at: 9, created_at: 1, updated_at: 1 });
+    await w.db.insert("replays", { workspace: source.workspace, source_id: source._id, short_id: "rp-1", provider: "posthog", external_id: "rec-1", started_at: 1, counts: { clicks: 1, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: ["k"], imported_at: 9, converter_version: VENDOR_CONVERTER_VERSION, created_at: 1, updated_at: 1 });
     urls.length = 0;
     const again = await h(importRecording)(actionCtx(w, "u1", actions), { ...TEAM, source: "product", recording: "rec-1" });
     expect(again).toMatchObject({ short_id: "rp-1", imported: false });

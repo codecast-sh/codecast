@@ -119,7 +119,8 @@ committed `codecast.json` (schema and merge in
 {
   "endpoint": "https://...",          only when not codecast prod (https://convex.codecast.sh/cli/ingest)
   "ingestKey": "cc_ing_...",          the keyed source's write-only key, public by design like a Sentry DSN
-  "sources": { "<name>": { "id": "src-N", "workspace": "team:<id>" } }
+  "sources": { "<name>": { "id": "src-N", "workspace": "team:<id>" } },
+  "replay": { "dom": "off", "sampleRate": 0 }   optional; the browser recorder's settings (X5)
 }
 ```
 
@@ -130,7 +131,8 @@ directory up to the checkout root, else one at the root; `--no-write` writes
 nothing, and outside a checkout nothing is written and the command says so.
 The merge records the source under its name, a keyed source's new key (one
 key per file; a new one replaces the old and the command says so) and a
-non-prod endpoint, keeps key order stable, and prints every change; a file
+non-prod endpoint, keeps a `replay` block as it is, keeps key order stable,
+and prints every change; a file
 that does not parse, or carries a key the schema does not know, is left
 alone. The web's Add source shows the same file (`codecastJsonFor`,
 `components/ops/opsModel.ts`). Readers: the platform SDK
@@ -334,7 +336,7 @@ The bucket credentials are `REPLAYS_R2_ACCESS_KEY_ID` and
 `REPLAYS_R2_SECRET_ACCESS_KEY` (a token scoped to the bucket alone), with
 `R2_ENDPOINT` shared and `REPLAYS_R2_BUCKET` defaulting to `codecast-replays`.
 
-Three things read the stream (`packages/shared/replay/`):
+Four things read the stream (`packages/shared/replay/`); the fourth, `replayMoment` (`moment.ts`), is one moment as text (below, "Playing a replay"):
 
 - `renderTimeline(events)`: the text timeline `cast replay show` prints and the summary stores.
 - `toRepro(events, baseUrl)`: a Playwright test that replays navigation, clicks, typed placeholders and submits up to the error, then asserts the error does not happen.
@@ -357,25 +359,156 @@ skip those already imported (`replays.importedReplays`), and import the rest
 two at a time, each in its own action, through the same
 `importVendorRecording` a read takes, with its byte caps. A page that imported
 anything pauses 15 s before the next, which keeps PostHog near 150 calls a
-minute. A 429 waits the vendor's Retry-After (60 s without one, 15 min at
+minute. A 429 waits the vendor's Retry-After (60 s without one, 10 min at
 most) and redoes the page from where it stopped: the ids it already handled
 ride `page_seen`, so each recording counts once and the cursor moves only past
-a finished page. A refused token pauses the import and stops the source
+a finished page. Rate limited for two hours with nothing imported
+(`rate_limited_since`), the import stops on that error instead of waiting
+forever. A refused token pauses the import and stops the source
 through `lib/sourceHealth.markConnectionLost`; ten failures in a row stop it on
-the error. A stop, a pause or a stalled run (no page for 15 minutes) continues
-from the cursor on the next start; `--restart` or another window starts over.
+the error. A stop, a pause or a stalled run (no page for 30 minutes, longer
+than the longest wait plus the longest action, so a live import never reads as
+stalled) continues from the cursor on the next start; `--restart` or another
+window starts over.
 `started_at` names the run, so a page left scheduled by an earlier run does
 nothing. Imported recordings link to no groups: a Sentry replay is linked
 through its issue as before, and matching a PostHog recording's errors to
 groups is left out. Chunks still expire with the bucket's 30-day lifecycle
 rule, so "all" brings older recordings over only for a month.
 
+The import is paced, not cheap on the scheduler. Each recording costs up to
+three actions (the page, `importOne`, and `replays.importExternal` inside
+it), so 10,000 recordings are about 1,000 pages, 20,000 to 30,000 scheduled
+functions and, at 15 s between pages, five hours or more. That stays inside
+Convex's limits, but on a project with that many recordings prefer a window
+(`--since 30d`) to `all`, and watch the scheduler backlog while it runs.
+
 The SDK recorder (`@platform/analytics/replay`) keeps a ring buffer of the last
 60 seconds and uploads it when an error happens (always), or for a sampled
-share of sessions (`replaySampleRate`, default 0). It never records an input
+share of sessions (`sampleRate`, default 0). It never records an input
 value, and drops URLs matching `redactUrl`. It costs one capture listener per
 event type and a throttled outline walk at navigation, nothing per mutation.
 This is the lesson from the August 2026 rrweb slowdown.
+
+Its DOM mode (`replayDom: "off" | "onError" | "sampled"`, default off) adds
+the page capture the player plays, and is the one part that does cost per
+mutation, so an app turns it on knowing that. `"onError"` uploads the capture
+only when an error keeps the recording; `"sampled"` also uploads it from the
+start in sessions the sample keeps. rrweb's record (`@rrweb/record` 2.1.7, an
+optional peer, the version the player pins) is imported on demand only when
+the mode is on, configured in `replayDom.ts`: no mouse movement, clicks only
+among mouse interactions, scroll every 500 ms and media every 800 ms at most,
+every input masked, the text of any editable region masked, `[data-private]`
+blocked whole (an empty box its size), no canvas, fonts, inline images or
+cross-origin iframes. A checkout (fresh full snapshot) every 30 s or 5,000
+events bounds the ring: until the capture ships, the recorder holds the
+current segment and the one before, so the oldest event it ships is always a
+snapshot the player can start from. Each event is serialized once at upload,
+its strings through the app's `scrubUrl` (per string, never over the JSON
+text) and a Meta href through `cleanUrl` too. A door that keeps refusing drops
+the capture back to a ring opening on a fresh snapshot; past 60 DOM chunks the
+DOM recording stops and the semantic one carries on.
+
+An app sets both in its codecast.json `replay` block (X1), which the platform
+and codecast parsers read alike (a drift test holds the two, and the DOM caps,
+equal). Codecast's own web ships `"dom": "off"`, `"sampleRate": 0`.
+
+Measured in Chrome (`platform/packages/analytics/bench/replayDomBench.ts`,
+2026-10-07, layout settled before each step, means over 450 steps). On a
+2,000-row synthetic list (8,015 nodes), a burst of 50 text updates, 20 class
+toggles and 5 rows in and out costs 0.83 ms with no recorder, 1.05 ms with the
+semantic recorder and 3.5 ms with DOM mode on: about 2.5 ms per burst for
+rrweb (p95 8.4 ms against 3.4 ms). A click plus a keystroke costs 0.2 ms more.
+The one-off costs are larger. rrweb's start (its first full snapshot) took
+51 to 66 ms and a checkout 25 ms on that page. On the codecast inbox (5,200 to
+5,500 nodes, stylesheets inlined) they were 83 to 90 ms and 56 ms, so DOM mode
+there is a ~56 ms long task every 30 s. Two snapshots of the inbox were
+4.3 MB of JSON and 520 KB gzipped, with 17 ms to serialize at upload.
+
+### Playing a replay
+
+The semantic stream is what an agent reads. Beside it a recording may keep
+its page capture, the raw rrweb events, so people can watch it and agents can
+see frames of it. The contract every piece below shares is
+`packages/shared/contracts/replayPlayer.ts`.
+
+**Storage.** A vendor import keeps the capture (VENDOR_CONVERTER_VERSION 3,
+so older copies re-import on their next read or backfill pass). It is masked
+first by the semantic stream's own rule (`shared/replay/dom.ts`
+`prepareDomCapture`): an input event's text, a field's value attribute, a
+textarea's text and every text node under `[data-private]`, an editable
+region or rrweb's and the vendors' block classes become stars of the same
+length, in snapshots, added nodes and later mutations, and a Meta href goes
+through `cleanUrl`. A capture with no full snapshot is not kept (nothing could
+draw it). The masked events are packed into gzipped chunks of about 6 MB of
+JSON (`REPLAY_DOM_LIMITS`: 8 MB gzipped per chunk, 60 chunks; a single event
+past the cap is dropped) and uploaded by the adapter's own action
+(`vendorReplay.storeDomCapture`, `replays.storeReplayDom`), because a capture
+of tens of MB cannot ride an action's arguments. Keys are
+`replays/<source>/<replay>/dom/<seq>-<sha256>.json.gz`: content addressed, in
+the same private bucket, expired by the same bucket-wide 30 day rule. The row
+lists them as `dom_chunk_keys` with `dom_bytes`, and `dom_t0`, the epoch ms of
+the replay clock's zero. A failed upload costs the player, not the import.
+A re-import that kept no capture clears the old keys.
+
+**The replay clock.** Every time the player, a reference and the CLI speak is
+ms since the stream's first event, the clock `renderTimeline` prints. For an
+import `dom_t0` is the capture's first rrweb timestamp plus the stream's first
+`t`; for our recorder the assembly sets it to `started_at` plus the first `t`.
+The player maps an rrweb timestamp to the clock as `timestamp - dom_t0`.
+rrweb draws only events strictly before the offset it is given, so a moment
+is drawn one millisecond past, and an event at exactly `t` shows.
+
+**The capability.** The player holds no codecast session.
+`replays.playerLink` (an action; `/cli/replays/player-link` for the CLI)
+checks the caller can read the replay and mints
+`<base64url {v, r, u, exp}>.<hex HMAC-SHA256>` for one replay and one person,
+good for ten minutes (`lib/replayCap.ts`). The key is derived from
+`REPLAYS_R2_SECRET_ACCESS_KEY` with a fixed label, so there is no new secret
+and only Convex signs or verifies. `GET /cli/replays/player?cap=` opens it,
+re-checks that the named person can still read the replay (a removal lands
+on the next load), and answers `ReplayPlayerManifest`: the replay's summary,
+`t0` and the DOM chunks as GETs signed for a few minutes. A forged, lapsed or
+revoked capability and a replay with no capture answer the same 404. The
+answer carries CORS `*`: the capability is the whole authorization. The
+replays bucket already allows GET from any origin.
+
+**The player** is `infra/replay-player`, a Worker on `replay.codecast.sh`, its
+own origin: customer DOM never renders on codecast.sh, nor on a.codecast.sh
+where anyone's published HTML runs. `GET /p/<cap>?t=<ms>&mode=frame&controls=0&autoplay=1`
+(`replayPlayerUrl`) serves a page with `script-src 'self'`,
+`Referrer-Policy: no-referrer` and no caching; its script (`src/player.ts`,
+bundled with `@rrweb/replay` into `public/player.js`) reads the manifest and
+the chunks and hands them to rrweb's Replayer, whose iframe is sandboxed with
+`allow-same-origin` only (no scripts; rrweb also turns `<script>` into
+`<noscript>`). Interactive mode has a control bar (hidden by `controls=0`)
+and speaks postMessage with whatever embeds it: the player posts `ready`,
+`time` (on every seek and four times a second while playing), `state`,
+`frame` and `error`, tagged `source: "codecast-replay-player"`, to its parent
+with targetOrigin `*` (it says nothing private); the host posts `seek`
+(`t_ms`, optional `play`), `play`, `pause` and `speed`, tagged
+`codecast-replay-host`, and should check `event.origin` against
+`REPLAY_PLAYER_ORIGIN`. Frame mode draws the page at `t`, waits for its images
+and fonts (at most 4 s), exposes `window.__codecastReplay` (state, url,
+visible text, size) and `window.__codecastReplaySeek(t)`, and posts `frame`.
+
+**Frames** are rendered server side, so a cloud host sees what a laptop sees.
+`POST https://replay.codecast.sh/frame { cap, times_ms }` (at most 12 per
+request) first asks the manifest route whether the capability opens, so a
+forged one costs one GET and no browser time, then loads the frame-mode page
+in Cloudflare Browser Rendering (the Worker's `browser` binding; the account
+is on Workers Paid, checked 2026-10-07 with `cf accounts subscriptions get`,
+and a REST screenshot probe answered), screenshots the stage per time and
+answers `{ frames: [{ t_ms, png_base64, url, outline, width, height, error? }] }`.
+A full browser pool answers 429 with Retry-After. A recording is drawn at its
+own size, scaled down past 1600 px.
+
+**SDK captures** (DOM mode, above) upload through the same sign
+route: `POST /cli/ingest/replay-sign/<key> { replay_id, seq, sha256, size, kind: "dom" }`
+signs a DOM chunk (a gzipped JSON array of rrweb events with epoch
+timestamps) under the recording's `dom/` prefix, held to `REPLAY_DOM_LIMITS`,
+and lists it in `dom_chunk_keys`, never in `chunk_keys`, so the assembly never
+reads it. The chunk read redirect takes `&kind=dom` too.
 
 ## X6. Promotion to the line
 
@@ -439,7 +572,28 @@ analytics product: codecast keeps watched metrics, not events.
 `metric_watches` rows (a HogQL query or an insight id, a threshold, a
 direction, an interval) are polled, their last 60 values kept on the row, and
 crossings become `metric` group transitions. `cast metrics query "<hogql>"`
-passes a query through and stores nothing. Recordings: `cast replay ls
+passes a query through and stores nothing.
+
+A watch fills its past instead of waiting 60 polls for a chart
+(`metrics.loadHistory` and `readHistory`, `cast metrics backfill [mw-N]
+[--source s] [--days 30]`, the Metrics tab's "Load history"; a new watch
+runs it on creation). An insight answers its own dated series. A HogQL
+query is asked again at past instants with now() bound to each one
+(`bindHogqlNow`): every now() compared straight against a column becomes
+`toDateTime('<iso>Z')`, and a lower bound (`timestamp > now() - interval 1
+day`) also gains `timestamp <= <instant>`, because the window must end at
+the instant and not at the present. Anything else that reads the clock
+(today(), now('UTC'), toStartOfDay(now()), arithmetic around the bound, no
+now() at all) is refused with the reason on the watch, since binding it
+would answer a different question. Instants run back from the oldest point
+the watch holds, a day apart when the query's window is a day or more and
+one interval apart otherwise, within `--days` and at most the 60 the row
+keeps. Each is read through `fetchMetricValue`, the poll's own read, newest
+first; a 429 is retried after its Retry-After, and a read that stops partway
+keeps what it has and says why. Watches on one source start 20 s apart.
+Past points go under the polled ones (`mergeMetricHistory`, oldest first)
+and never pass through the group upsert: history fires no alert and the
+watch's state and group follow the live polls alone. Recordings: `cast replay ls
 --source posthog` lists them from the API; `show` imports one (snapshots to
 `fromRrweb` to chunks and `timeline_md`) the first time it is read, and
 `cast replay import` brings every retained one over (X5). Each PostHog and
@@ -637,7 +791,7 @@ parity is verified end to end.
 
 **CLI**: `cast sources` (ls, add, show, key rotate, pause, resume, rm, test),
 `cast events` (ls, groups, show, resolve, ignore, -w), `cast replay` (ls, show,
-repro), `cast metrics` (ls, add, show, query, rm), `cast connector` (ls, readers,
+repro, snap; `show --at 1:23` prints one moment), `cast metrics` (ls, add, show, query, rm), `cast connector` (ls, readers,
 actions, read, do, calls, refresh; grant and revoke print the browser page
 where a person grants), and `--source` on `cast
 trigger add` and `update` (an unknown source is refused in one line, the
@@ -655,6 +809,20 @@ subsection of the Triggers snippet teaches agents the verbs. The web trigger
 form saves through `eventFilterForSave`, so a `--source` or `--repo` armed from
 the CLI survives an edit.
 
+`cast replay snap rp-N@1:23` (a stretch: `rp-N@1:00-2:30 --every 10s`, or
+`--every` alone across the whole replay, at most 50 frames) mints a
+capability, has the replay player render the frames server side, and writes
+each PNG to the owner-only scratch directory, remembered by `callFrameRefs`
+so a Read of it syncs as `Frame of the replay: rp-N@1:23`, never as the
+customer's page. Beside each frame it prints, fenced as product text, the
+moment (`replayMoment`): the page's URL, its visible text (the rendered
+frame's, else the stream's last outline), the last few actions before it, and
+the console and failed or slow requests within 5 s. A replay with no capture
+says so and prints the text alone. `cast replay show rp-N --at 1:23` (or
+`show rp-N@1:23`) prints the moment without a frame. A moment reference is
+`rp-N@m:ss` (`parseReplayRef`, the call moment's clock grammar); an event
+index form is left out because the timeline prints times, not indices.
+
 **Web**: `/ops` with tabs Timeline (transitions across sources, with deploy and
 release markers), Issues (groups, with sparklines from `buckets`), Replays,
 Metrics, and Apps (each app connector's manifest and each Sentry source's
@@ -662,7 +830,8 @@ writes, with the grant toggles a person uses, and the call audit). Detail pages
 `/ops/issues/:id` (stack, samples, release, commit, the session that wrote it,
 cause, triggers fired, replays) and `/ops/replays/:id` (a player with a
 scrubber, event list, view outline, console and network panes, and buttons to
-copy the repro or start a fix session). Source setup sits on Settings →
+copy the repro or start a fix session; the replay player embeds there when the
+replay keeps a page capture, X5 "Playing a replay"). Source setup sits on Settings →
 Integrations next to the other connections. Ingestion transitions render
 inline in transcripts and timelines through `registerExternalEventStyles`.
 

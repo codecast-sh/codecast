@@ -1,7 +1,7 @@
 // `cast metrics` (external-data.md X7, X10): the watch body and what each verb posts.
 import { describe, expect, test } from "bun:test";
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
-import { formatQueryResult, formatWatchLine, metricAddBody, type WatchRow } from "./metricsCommand.js";
+import { formatHistoryLine, formatQueryResult, formatWatchLine, metricAddBody, type WatchRow } from "./metricsCommand.js";
 
 describe("metricAddBody", () => {
   test("needs a source, one query and one direction", () => {
@@ -54,8 +54,39 @@ describe("cast metrics on the wire", () => {
     expect(h.out()).toContain("every 2h");
   });
 
+  test("backfill reads one watch, a source's, or every watch, with --days, and names what it skipped", async () => {
+    h.answer = () => ({ scheduled: ["mw-2"], skipped: [{ watch: "mw-1", reason: "old is paused" }] });
+    await h.run("backfill");
+    await h.run("backfill", "mw-2", "--days", "14");
+    await h.run("backfill", "--source", "ph");
+    expect(h.calls).toEqual([
+      { path: "/cli/metrics/backfill", body: { ...SCOPE } },
+      { path: "/cli/metrics/backfill", body: { watch: "mw-2", days: 14, ...SCOPE } },
+      { path: "/cli/metrics/backfill", body: { source: "ph", ...SCOPE } },
+    ]);
+    expect(h.out()).toContain("mw-2");
+    expect(h.out()).toContain("skipped");
+    expect(h.out()).toContain("paused");
+  });
+
+  test("backfill refuses a --days that is not a positive number before posting", async () => {
+    await expect(h.run("backfill", "mw-2", "--days", "zero")).rejects.toThrow();
+    expect(h.calls).toHaveLength(0);
+  });
+
   test("query without --source posts nothing", async () => {
     await expect(h.run("query", "select 1")).rejects.toThrow(/exit 1/);
     expect(h.calls).toHaveLength(0);
+  });
+});
+
+describe("formatHistoryLine", () => {
+  test("reading, read, and none with the reason", () => {
+    expect(formatHistoryLine({})).toBeNull();
+    expect(formatHistoryLine({ history: { at: 0, added: 0, reading: true } })).toMatch(/reading/);
+    expect(formatHistoryLine({ history: { at: 0, added: 31 } }, 60_000)).toMatch(/^history: 31 past values read/);
+    expect(formatHistoryLine({ history: { at: 0, added: 0, note: "The query has no now() to bind" } })).toBe("history: none (The query has no now() to bind)");
+    // A read that stopped partway keeps its count and says why.
+    expect(formatHistoryLine({ history: { at: 0, added: 12, note: "Stopped after 12 past values: PostHog answered 429" } }, 60_000)).toMatch(/^history: 12 past values read .*\(Stopped after 12/);
   });
 });

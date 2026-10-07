@@ -51,8 +51,22 @@ export type ReplayProvider = (typeof REPLAY_PROVIDERS)[number];
  * first read imports it (convex sources/vendorReplay.ts). `cast replay show`
  * and the web replay page both ask this.
  */
-export function needsVendorImport(row: { provider: string; imported_at: number | null | undefined }): boolean {
-  return row.provider !== "sdk" && (REPLAY_PROVIDERS as readonly string[]).includes(row.provider) && !row.imported_at;
+/**
+ * The version of the vendor conversion (rrweb to ReplayEvent) an imported
+ * copy was made with. A copy is converted once, at import, so a fix to the
+ * converter reaches stored replays only by importing them again; raise this
+ * when the conversion's output changes and older copies re-import on their
+ * next read or backfill pass. 2: performance entries other than resources
+ * and navigations are no longer failed requests. 3: the rrweb capture itself
+ * is kept beside the stream (DOM chunks, contracts/replayPlayer.ts), so the
+ * player can play it and agents can see frames.
+ */
+export const VENDOR_CONVERTER_VERSION = 3;
+
+/** A mirrored recording that has not been imported, or was imported by an older converter. */
+export function needsVendorImport(row: { provider: string; imported_at?: number | null; converter_version?: number | null }): boolean {
+  if (row.provider === "sdk" || !(REPLAY_PROVIDERS as readonly string[]).includes(row.provider)) return false;
+  return !row.imported_at || (row.converter_version ?? 1) < VENDOR_CONVERTER_VERSION;
 }
 
 export const REPLAY_LIMITS = {
@@ -130,6 +144,8 @@ export interface ReplayBackfill {
   failed: number;
   /** Failures since the last success; past REPLAY_BACKFILL_LIMITS.failures_in_row the import stops on the error. */
   failures_in_row?: number;
+  /** When the vendor began answering 429 without a recording landing since; past REPLAY_BACKFILL_LIMITS.rate_limited_max_ms the import stops. */
+  rate_limited_since?: number;
   last_error?: string;
   started_at: number;
   updated_at: number;
@@ -137,9 +153,15 @@ export interface ReplayBackfill {
 }
 
 export const REPLAY_BACKFILL_LIMITS = {
-  /** A running import whose last page wrote nothing for this long died (an action killed mid page): it may be started again. */
-  stalled_ms: 15 * 60_000,
+  /**
+   * A running import whose last page wrote nothing for this long died (an
+   * action killed mid page): it may be started again. Longer than the longest
+   * rate limit wait plus the longest action, so a live import never reads as stalled.
+   */
+  stalled_ms: 30 * 60_000,
   failures_in_row: 10,
+  /** Rate limited this long with nothing imported, the import stops on it rather than waiting forever. */
+  rate_limited_max_ms: 2 * 3600_000,
 } as const;
 
 /** The start of a window, or undefined for "all". */

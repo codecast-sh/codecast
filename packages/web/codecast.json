@@ -5,5 +5,9 @@
       "id": "src-11",
       "workspace": "team:k97cxdv2nqef5wfm26jvrxf6fd84a30y"
     }
+  },
+  "replay": {
+    "dom": "off",
+    "sampleRate": 0
   }
 }

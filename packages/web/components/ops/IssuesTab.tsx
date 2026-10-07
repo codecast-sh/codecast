@@ -1,7 +1,7 @@
 // The Issues tab: every group across the workspace's sources, newest activity
 // first, with the last 72 hours as bars from the group's own buckets. j and k
 // move, Enter opens.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { GroupKind, GroupStatus } from "@codecast/shared/contracts/ingest";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -15,6 +15,7 @@ import { bucketSeries } from "./opsModel";
 import { opsHref } from "./opsPaths";
 import { KIND_LOOK, KindGlyph, OpsFeedEmpty, SourceChip, StatusPill, pressable, useOpsFeed } from "./parts";
 import type { OpsGroup } from "./opsTypes";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 const STATUS_FILTERS: { key: GroupStatus | "all"; label: string }[] = [
   { key: "open", label: "Open" },
@@ -48,8 +49,8 @@ export function IssuesTab({ source }: { source: string | null }) {
   );
   const kinds = useMemo(() => [...new Set(all.map((g) => g.kind))], [all]);
 
-  useEffect(() => setFocus(0), [status, kind, source]);
-  useEffect(() => {
+  useWatchEffect(() => setFocus(0), [status, kind, source]);
+  useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target) || hasOpenModal()) return;
       if (e.key === "j" || e.key === "ArrowDown") setFocus((f) => Math.min(groups.length - 1, f + 1));
@@ -62,7 +63,7 @@ export function IssuesTab({ source }: { source: string | null }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [groups, focus, router]);
   // j and k can walk past the fold: keep the focused row on screen.
-  useEffect(() => {
+  useWatchEffect(() => {
     bodyRef.current?.querySelector<HTMLElement>("[data-focused]")?.scrollIntoView({ block: "nearest" });
   }, [focus]);
 

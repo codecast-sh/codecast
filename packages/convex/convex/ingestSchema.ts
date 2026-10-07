@@ -44,6 +44,7 @@ export const replayBackfillValidator = v.object({
   skipped: v.number(),
   failed: v.number(),
   failures_in_row: v.optional(v.number()),
+  rate_limited_since: v.optional(v.number()),
   last_error: v.optional(v.string()),
   started_at: v.number(),
   updated_at: v.number(),
@@ -306,6 +307,14 @@ export const ingestTables = {
     assemble_at: v.optional(v.number()),
     /** A mirrored vendor recording is imported the first time it is read (X7). */
     imported_at: v.optional(v.number()),
+    /** VENDOR_CONVERTER_VERSION the imported copy was converted with; absent means 1. */
+    converter_version: v.optional(v.number()),
+    /** R2 keys of the DOM capture (raw rrweb events, masked), in order: what the player plays. Absent or empty: no capture. */
+    dom_chunk_keys: v.optional(v.array(v.string())),
+    /** The capture's gzipped size in bytes. */
+    dom_bytes: v.optional(v.number()),
+    /** The epoch ms of the replay clock's zero (the stream's first event), which the player maps rrweb timestamps against. */
+    dom_t0: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -344,6 +353,12 @@ export const ingestTables = {
     state: v.union(v.literal("ok"), v.literal("alert")),
     group_id: v.optional(v.id("event_groups")),
     last_error: v.optional(v.string()),
+    /**
+     * The last read of the history the source already holds (metrics.loadHistory):
+     * when, how many past points it added, or why there is none. `reading`
+     * while the read is on its way.
+     */
+    history: v.optional(v.object({ at: v.number(), added: v.number(), note: v.optional(v.string()), reading: v.optional(v.boolean()) })),
     created_at: v.number(),
     updated_at: v.number(),
   })

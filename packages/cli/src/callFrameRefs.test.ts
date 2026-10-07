@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { callFrameSeenRef } from "@codecast/shared/contracts";
+import { replayFrameSeenRef } from "@codecast/shared/contracts/replayPlayer";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-frames-"));
 const savedDir = process.env.CODECAST_DIR;
@@ -65,6 +66,20 @@ describe("a Read of a snapped frame", () => {
     expect(messages.some((m) => m.images?.length)).toBe(false);
     const res = messages.flatMap((m) => m.toolResults ?? []).find((r) => r.toolUseId === "toolu_1");
     expect(callFrameSeenRef(res?.content)).toBe("cl-117@2:30");
+  });
+
+  it("a replay frame becomes the replay's moment, never the customer's page", () => {
+    const file = writeFrame("rp-12-83s.png");
+    rememberCallFrames([{ path: file, ref: "rp-12@1:23", recording_id: "replay_row", width: 1280, height: 800 }]);
+    const { call, result } = readLines("toolu_rp", file, PNG.length);
+    const messages = parseSessionFile(`${call}\n${result}\n`);
+    expect(referenceCallFrames(messages as any)).toBe(1);
+    expect(messages.some((m) => m.images?.length)).toBe(false);
+    const res = messages.flatMap((m) => m.toolResults ?? []).find((r) => r.toolUseId === "toolu_rp");
+    expect(replayFrameSeenRef(res?.content)).toBe("rp-12@1:23");
+    expect(callFrameSeenRef(res?.content)).toBeNull();
+    // Said once, however often it is replaced.
+    expect(referenceCallFrames(messages as any)).toBe(0);
   });
 
   it("is known in a later batch than its Read, and after a restart forgot the Read", () => {

@@ -16,8 +16,9 @@
 import { isPrivateHost } from "../contracts/browserPaneOffer";
 import { callAnchorHref, callFrameHref, parseCallMomentParam } from "../contracts/callLinks";
 import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/callRecordings";
+import { parseReplayRef, replayRefId, type ReplayRef } from "../contracts/replayPlayer";
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -63,6 +64,9 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // A product source is addressed by query: the Ops timeline narrowed to it
   // (`/ops?source=src-N`), since `/ops/<tab>` is a view, never a source.
   source: "/ops",
+  // A product recording is an Ops page of its own (`/ops/replays/rp-N`), and
+  // a moment of it opens there at that time (`?t=<ms>`, see entityRoute).
+  replay: "/ops/replays",
 };
 
 /**
@@ -81,6 +85,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   sd: "decision",
   cl: "call",
   src: "source",
+  rp: "replay",
 };
 
 /**
@@ -90,7 +95,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
  * "src-tauri" are prose. Every matcher below derives
  * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -159,6 +164,13 @@ export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
   if (!norm) return null;
   if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
+  if (norm === "replay") {
+    // A moment, or the start of a stretch, opens the replay at that time.
+    const ref = parseReplayRef(id);
+    const at = replayRefStart(ref);
+    const base = `${ENTITY_ROUTE.replay}/${encodeURIComponent(ref?.replay ?? id)}`;
+    return at != null ? `${base}?t=${at}` : base;
+  }
   if (norm === "call") {
     const ref = parseCallRef(id);
     // A moment opens on the picture its citation renders (the shared screen
@@ -208,6 +220,7 @@ export function entityTypeFromId(id: string): EntityType | null {
   const s = (id || "").trim();
   const callRef = parseCallRef(s);
   if (callRef?.turns || callRef?.at_ms != null) return "call";
+  if (/^rp-\d+@/i.test(s)) return parseReplayRef(s) ? "replay" : null;
   if (/^doc:/i.test(s)) return "doc";
   if (isConvexId(s.toLowerCase())) return null;
   if (/^jx[a-z0-9]{5,}$/i.test(s)) return "session";
@@ -386,6 +399,22 @@ function stripGitSuffix(name: string): string {
  * Anything after the object (`/files`, `/checks`, a fragment) is dropped: it
  * addresses a view of the object, and the object is what the reference names.
  */
+/** `/ops/replays/<rp-N or id>[?t=<ms>]`: a replay, or the moment of it the
+ *  link opens at. The rest of `/ops` addresses a source (by query) or a view. */
+function parseReplayPath(segs: string[], search: string): string | null {
+  if (segs.length !== 3 || segs[0].toLowerCase() !== "ops" || segs[1].toLowerCase() !== "replays") return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(segs[2]).trim();
+  } catch {
+    id = segs[2].trim();
+  }
+  if (!/^rp-\d+$/i.test(id) && !isConvexId(id)) return null;
+  const t = search ? new URLSearchParams(search).get("t") : null;
+  const atMs = t !== null && /^\d+$/.test(t) ? Number(t) : null;
+  return /^rp-/i.test(id) ? replayRefId(id.toLowerCase(), atMs) : id;
+}
+
 function parseRepoObjectPath(segs: string[], github: boolean): RepoObjectRef | null {
   const object = (owner: string, name: string, kind: string, value: string): RepoObjectRef | null => {
     const repository = `${owner}/${stripGitSuffix(name)}`.toLowerCase();
@@ -569,6 +598,35 @@ export function callRefLabelSuffix(ref: { turns?: { from_seq: number; to_seq: nu
 }
 
 // ---------------------------------------------------------------------------
+// Replays and the moments inside them
+//
+// A product recording is quoted by its short id, `rp-12`, and a moment of it
+// the way a call moment is written: `rp-12@1:23`, on the replay's own clock
+// (ms since its first event, the clock the player and the text timeline
+// show). A stretch, `rp-12@1:00-2:30`, is what `cast replay snap --every`
+// samples; a reader opens it at its start. The parser and the prose form live
+// with the player contract (contracts/replayPlayer).
+// ---------------------------------------------------------------------------
+
+/** A moment or a stretch of a replay, as prose writes it: `rp-12@1:23`, `rp-12@1:00-2:30`. */
+export const REPLAY_REF_SOURCE = `rp-\\d+@(?:${CALL_TIME_SOURCE})(?:-(?:${CALL_TIME_SOURCE}))?`;
+
+export { parseReplayRef, replayRefId, type ReplayRef };
+
+/** Where a replay reference opens, in ms of the replay's clock: its moment,
+ *  the start of its stretch, or null for the whole replay. */
+export function replayRefStart(ref: ReplayRef | null | undefined): number | null {
+  return ref?.at_ms ?? ref?.range?.from_ms ?? null;
+}
+
+/** What a replay reference adds to the replay's name in a pill (` @1:23`,
+ *  ` @1:00–2:30`), the way callRefLabelSuffix labels a call moment. */
+export function replayRefLabelSuffix(ref: ReplayRef | null | undefined): string {
+  if (ref?.range) return ` @${formatCallTime(ref.range.from_ms)}–${formatCallTime(ref.range.to_ms)}`;
+  return ref?.at_ms != null ? ` @${formatCallTime(ref.at_ms)}` : "";
+}
+
+// ---------------------------------------------------------------------------
 // One change of a proposal
 //
 // A proposal's changes are numbered, and a person or an agent names one the
@@ -620,10 +678,10 @@ export function shortIdSource(tail = "[a-z0-9]+"): string {
  * alternation — mobile's markdown tokenizer scans every inline form in one
  * pass, so it needs the branch, not a standalone matcher.
  */
-export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${REPLAY_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${REPLAY_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
 /** Scans prose for bare object ids. Bounded by anything but a letter, digit
  *  or hyphen on either side, so it can't split a longer token: a hyphen is a
@@ -824,6 +882,8 @@ export function parseEntityUrl(
   if (segs.length < 1) return null;
   const repoObject = parseRepoObjectPath(segs, false);
   if (repoObject) return { type: repoObject.type, id: repoObjectId(repoObject) };
+  const replay = parseReplayPath(segs, search);
+  if (replay) return { type: "replay", id: replay };
   const type = SEGMENT_TYPE[segs[0].toLowerCase()];
   if (!type) return null;
 

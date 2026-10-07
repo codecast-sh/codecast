@@ -13,6 +13,7 @@ import { CODECAST_EVENTS, type CodecastEventName, type CodecastEventProps } from
 import { CHUNK_LOAD_ERROR_PATTERNS } from "./chunkReloadGuard";
 import { DOC_REWRITTEN_ERROR } from "@codecast/shared/docs";
 import codecastJson from "../codecast.json";
+import { parseCodecastConfig } from "@codecast/shared/contracts/codecastConfig";
 
 type AnalyticsRuntime = typeof import("@platform/analytics/web-runtime");
 
@@ -115,14 +116,21 @@ export function initAnalytics(): Promise<void> {
 }
 
 // The replay recorder rides the codecast sink: with no sink (no key, or
-// development) it never loads. Sample 0 means a recording uploads only when
-// an error is reported, carrying the minute before it. Its own chunk, loaded
-// after init, so the boot path pays nothing for it.
+// development) it never loads. Its own chunk, loaded after init, so the boot
+// path pays nothing for it. codecast.json's `replay` block sets it: by
+// default sample 0 (a recording uploads only when an error is reported,
+// carrying the minute before it) and DOM capture off. The DOM capture (rrweb,
+// its own chunk again) costs main-thread time on every DOM change, about
+// 2.5 ms per burst of churn and a ~55 ms snapshot every 30 s on the inbox
+// (docs/architecture/external-data.md X5), which is why it stays off here
+// unless the file turns it on.
 function startReplayOnError(analytics: AnalyticsRuntime) {
   const sink = analytics.getCodecastSink();
   if (!sink || typeof window === "undefined") return;
+  const parsed = parseCodecastConfig(codecastJson);
+  const replay = parsed.ok ? parsed.config.replay : undefined;
   void import("@platform/analytics/replay")
-    .then(({ startReplay }) => startReplay({ sink, sampleRate: 0 }))
+    .then(({ startReplay }) => startReplay({ sink, sampleRate: replay?.sampleRate ?? 0, replayDom: replay?.dom ?? "off" }))
     .catch(() => {});
 }
 

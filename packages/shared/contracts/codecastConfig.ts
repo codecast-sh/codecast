@@ -5,8 +5,15 @@
 //   {
 //     "endpoint": "https://convex.codecast.sh/cli/ingest",   optional; prod when absent
 //     "ingestKey": "cc_ing_...",                               optional; the keyed source's write-only key
-//     "sources": { "<name>": { "id": "src-N", "workspace": "team:<id>" } }
+//     "sources": { "<name>": { "id": "src-N", "workspace": "team:<id>" } },
+//     "replay": { "dom": "off" | "onError" | "sampled", "sampleRate": 0.05 }   optional
 //   }
+//
+// `replay` configures the platform replay recorder in the app's browser
+// bundle: `dom` turns on the rrweb DOM capture codecast's player plays
+// (default off, since it costs main-thread time on every DOM change), and
+// `sampleRate` is the share of sessions recorded from the start (default 0:
+// a recording uploads only when an error is reported).
 //
 // Nothing in it is a secret. The ingest key only writes into one source, and
 // ships in browser bundles by design, like a Sentry DSN. The sources name
@@ -32,6 +39,17 @@ export interface CodecastConfig {
   endpoint?: string;
   ingestKey?: string;
   sources: Record<string, CodecastConfigSource>;
+  replay?: CodecastReplayConfig;
+}
+
+/** The recorder's DOM capture: off, the minute before a reported error, or sampled sessions too. Same list as @platform/analytics. */
+export const REPLAY_DOM_MODES = ["off", "onError", "sampled"] as const;
+export type ReplayDomMode = (typeof REPLAY_DOM_MODES)[number];
+
+export interface CodecastReplayConfig {
+  dom?: ReplayDomMode;
+  /** Share of sessions recorded from the start, 0 to 1. */
+  sampleRate?: number;
 }
 
 const SOURCE_ID = /^src-\d+$/;
@@ -47,9 +65,26 @@ export function parseCodecastConfig(raw: unknown): { ok: true; config: CodecastC
   if (!isObject(raw)) return { ok: false, errors: ["codecast.json is not a JSON object"] };
   const errors: string[] = [];
   for (const key of Object.keys(raw)) {
-    if (!["$schema", "endpoint", "ingestKey", "sources"].includes(key)) errors.push(`unknown key "${key}"`);
+    if (!["$schema", "endpoint", "ingestKey", "sources", "replay"].includes(key)) errors.push(`unknown key "${key}"`);
   }
   const config: CodecastConfig = { sources: {} };
+  if (raw.replay !== undefined) {
+    if (!isObject(raw.replay)) errors.push('replay must be an object { "dom"?, "sampleRate"? }');
+    else {
+      const r = raw.replay;
+      const replay: CodecastReplayConfig = {};
+      for (const key of Object.keys(r)) if (key !== "dom" && key !== "sampleRate") errors.push(`unknown key "replay.${key}"`);
+      if (r.dom !== undefined) {
+        if (!(REPLAY_DOM_MODES as readonly unknown[]).includes(r.dom)) errors.push(`replay.dom must be one of ${REPLAY_DOM_MODES.map((m) => `"${m}"`).join(", ")}`);
+        else replay.dom = r.dom as ReplayDomMode;
+      }
+      if (r.sampleRate !== undefined) {
+        if (typeof r.sampleRate !== "number" || !(r.sampleRate >= 0 && r.sampleRate <= 1)) errors.push("replay.sampleRate must be a number from 0 to 1");
+        else replay.sampleRate = r.sampleRate;
+      }
+      config.replay = replay;
+    }
+  }
   if (raw.endpoint !== undefined) {
     if (typeof raw.endpoint !== "string" || !/^https?:\/\/[^\s]+$/.test(raw.endpoint)) errors.push("endpoint must be an http(s) URL");
     else config.endpoint = raw.endpoint.replace(/\/+$/, "");
@@ -95,11 +130,12 @@ export function mergeCodecastConfig(
     config.endpoint = endpoint;
     changes.push(`endpoint = ${endpoint}`);
   }
-  // Stable key order: endpoint, ingestKey, sources, so diffs of the committed file stay small.
+  // Stable key order: endpoint, ingestKey, sources, replay, so diffs of the committed file stay small.
   const ordered: CodecastConfig = {
     ...(config.endpoint ? { endpoint: config.endpoint } : {}),
     ...(config.ingestKey ? { ingestKey: config.ingestKey } : {}),
     sources: Object.fromEntries(Object.keys(config.sources).sort().map((k) => [k, config.sources[k]])),
+    ...(config.replay ? { replay: config.replay } : {}),
   };
   return { config: ordered, changes };
 }

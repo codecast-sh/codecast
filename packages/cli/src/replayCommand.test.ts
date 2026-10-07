@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
-import { needsVendorImport } from "@codecast/shared/contracts/replay";
-import { decodeChunk, followReplayImport, formatReplayImport, readReplayEvents, reproBaseUrl, type ReplayDetail } from "./replayCommand.js";
+import { VENDOR_CONVERTER_VERSION, needsVendorImport } from "@codecast/shared/contracts/replay";
+import { decodeChunk, fetchReplayFrames, followReplayImport, formatReplayImport, parseEvery, readReplayEvents, reproBaseUrl, snapTimes, type ReplayDetail } from "./replayCommand.js";
 
 const EVENTS = [
   { type: "nav", t: 0, url: "https://app.test/checkout", title: "Checkout" },
@@ -53,7 +53,7 @@ describe("cast replay on the wire", () => {
   });
 
   test("a PostHog recording id with --source is imported, then read by its short id", async () => {
-    h.answer = (p) => (p === "/cli/replays/import" ? { short_id: "rp-9", imported: true } : p === "/cli/replays/get" ? { ...detail, short_id: "rp-9", provider: "posthog", imported_at: 1, timeline_md: "0:00 nav /checkout" } : {});
+    h.answer = (p) => (p === "/cli/replays/import" ? { short_id: "rp-9", imported: true } : p === "/cli/replays/get" ? { ...detail, short_id: "rp-9", provider: "posthog", imported_at: 1, converter_version: VENDOR_CONVERTER_VERSION, timeline_md: "0:00 nav /checkout" } : {});
     await h.run("show", "0193abc", "--source", "ph");
     expect(h.calls.map((c) => c.path)).toEqual(["/cli/replays/import", "/cli/replays/get"]);
     expect(h.calls[0].body).toEqual({ source: "ph", recording: "0193abc", ...SCOPE });
@@ -80,7 +80,9 @@ describe("cast replay on the wire", () => {
 
   test("our own recording, or one already imported, is never imported", () => {
     expect(needsVendorImport({ provider: "sdk", imported_at: null })).toBe(false);
-    expect(needsVendorImport({ provider: "sentry", imported_at: 5 })).toBe(false);
+    expect(needsVendorImport({ provider: "sentry", imported_at: 5, converter_version: VENDOR_CONVERTER_VERSION })).toBe(false);
+    // A copy an older converter made is imported again.
+    expect(needsVendorImport({ provider: "sentry", imported_at: 5 })).toBe(true);
     expect(needsVendorImport({ provider: "sentry", imported_at: null })).toBe(true);
   });
 
@@ -130,5 +132,47 @@ describe("cast replay import", () => {
     const printed: string[] = [];
     await followReplayImport(async () => ({ name: "ph", replay_backfill: state({ status: "paused", last_error: "PostHog refused the token (401)" }) }), (l) => printed.push(l), { sleep: async () => {} });
     expect(printed).toEqual(["ph: paused the last 30d: 0 listed, 0 imported: PostHog refused the token (401)"]);
+  });
+});
+
+describe("snap", () => {
+  test("draws the named moment, a stretch every step, or the whole replay; held to the recording", () => {
+    expect(snapTimes({ at_ms: 83_000 }, null, 60_000)).toEqual([60_000]);
+    expect(snapTimes({ range: { from_ms: 10_000, to_ms: 30_000 } }, 10_000, 60_000)).toEqual([10_000, 20_000, 30_000]);
+    expect(snapTimes({ range: { from_ms: 50_000, to_ms: 90_000 } }, null, 60_000)).toEqual([50_000, 60_000]);
+    expect(snapTimes({}, 20_000, 45_000)).toEqual([0, 20_000, 40_000, 45_000]);
+  });
+
+  test("--every reads like a player clock", () => {
+    expect(parseEvery("10s")).toBe(10_000);
+    expect(parseEvery("1:00")).toBe(60_000);
+    expect(parseEvery("5")).toBe(5_000);
+    expect(parseEvery(undefined)).toBeNull();
+    expect(() => parseEvery("0s")).toThrow("at least 1s");
+  });
+
+  test("frames are asked for in batches, and a busy browser pool is waited out once", async () => {
+    const asked: number[][] = [];
+    let busy = true;
+    const slept: number[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if (busy) {
+        busy = false;
+        return new Response("{}", { status: 429, headers: { "Retry-After": "7" } });
+      }
+      asked.push(body.times_ms);
+      return Response.json({ frames: body.times_ms.map((t: number) => ({ t_ms: t, url: null, outline: "", width: 1, height: 1, png_base64: "AA==" })) });
+    }) as any;
+    const times = Array.from({ length: 15 }, (_, i) => i * 1000);
+    const frames = await fetchReplayFrames({ cap: "c", frame_url: "https://replay.test/frame" }, times, { fetchImpl, sleep: async (ms) => void slept.push(ms) });
+    expect(frames.map((f) => f.t_ms)).toEqual(times);
+    expect(asked.map((b) => b.length)).toEqual([12, 3]);
+    expect(slept).toEqual([7_000]);
+  });
+
+  test("a refusal fails with the renderer's words", async () => {
+    const fetchImpl = (async () => Response.json({ error: "This replay link has expired" }, { status: 404 })) as any;
+    await expect(fetchReplayFrames({ cap: "c", frame_url: "https://replay.test/frame" }, [0], { fetchImpl })).rejects.toThrow("expired");
   });
 });

@@ -5,6 +5,7 @@
 // query through and stores nothing.
 //
 //   cast metrics ls [--source s] | show mw-N | rm mw-N
+//   cast metrics backfill [mw-N] [--source s] [--days 30]
 //   cast metrics add <name> --source s --hogql "<q>"|--insight <id> --above N|--below N [--every 1h]
 //   cast metrics query "<hogql>" --source s
 //
@@ -30,6 +31,7 @@ export interface WatchRow {
   status: "active" | "paused";
   state?: string;
   last_error?: string;
+  history?: { at: number; added: number; note?: string; reading?: boolean };
   points: { at: number; value: number }[];
   last_value: number | null;
   last_at: number | null;
@@ -75,6 +77,24 @@ export function formatWatchLine(w: WatchRow, now: number = Date.now()): string {
 export function formatWatchList(rows: WatchRow[], now: number = Date.now()): string {
   if (rows.length === 0) return "No metric watches. Add one: cast metrics add <name> --source <posthog source> --hogql \"<query>\" --above <n>";
   return rows.map((w) => formatWatchLine(w, now)).join("\n");
+}
+
+/** Where a watch's history stands: read, reading, or why there is none. Null before the first read. */
+export function formatHistoryLine(w: Pick<WatchRow, "history">, now: number = Date.now()): string | null {
+  const h = w.history;
+  if (!h) return null;
+  if (h.reading) return "history: reading from the source";
+  if (h.added === 0 && h.note) return `history: none (${h.note})`;
+  const read = `history: ${h.added} past value${h.added === 1 ? "" : "s"} read ${ago(h.at, now)}`;
+  return h.note ? `${read} (${h.note})` : read;
+}
+
+/** What `cast metrics backfill` started, and the watches it could not. */
+export function formatHistoryStart(res: { scheduled: string[]; skipped: { watch: string; reason: string }[] }): string {
+  const lines: string[] = [];
+  if (res.scheduled.length) lines.push(`${fmt.success("reading")} ${res.scheduled.join(", ")}: their past values land in a few seconds (cast metrics ls)`);
+  for (const s of res.skipped) lines.push(`${fmt.muted("skipped")} ${s.watch}: ${s.reason}`);
+  return lines.length ? lines.join("\n") : "No metric watches to read.";
 }
 
 /** A passthrough answer as tab-separated rows under its column names. */
@@ -135,6 +155,8 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
         const w: WatchRow = res.watch;
         const lines = [formatWatchLine(w), fmt.muted(`  ${w.query_kind}: ${w.query}`), fmt.muted(`  every ${formatDuration(w.interval_ms)}`)];
         if (w.last_error) lines.push(fmt.error(`  ${w.last_error}`));
+        const history = formatHistoryLine(w);
+        if (history) lines.push(fmt.muted(`  ${history}`));
         if (res.group) lines.push(fmt.muted(`  group ${res.group.short_id} ${res.group.status}${res.group.last_transition ? `, last ${res.group.last_transition} ${ago(res.group.last_transition_at)}` : ""}`));
         return lines.join("\n");
       });
@@ -149,6 +171,21 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
     .action(async (ref: string, o: { json?: boolean }) => {
       const res = await apiPost(deps, "/cli/metrics/remove", { watch: ref });
       emit(o.json, res, () => `${fmt.success("removed")} ${res.removed}`);
+    });
+
+  metrics
+    .command("backfill")
+    .description("Fill a watch's chart with its past values now, instead of one per poll: an insight's own series, or a HogQL query read again with now() bound to past instants (one per day for a window of a day or more, else one per interval). Past values never alert.")
+    .argument("[watch]", "mw-N; default every watch in the workspace")
+    .option("--source <name>", "Only this source's watches")
+    .option("--days <n>", "How far back to read (default 30)")
+    .option(...TEAM_OPTION)
+    .option(...JSON_OPTION)
+    .action(async (ref: string | undefined, o: { source?: string; days?: string; team?: string; json?: boolean }) => {
+      const days = o.days === undefined ? undefined : Number(o.days);
+      if (days !== undefined && !(days > 0)) throw new Error("--days takes a positive number");
+      const res = await scopedWrite(deps, "/cli/metrics/backfill", { ...(ref ? { watch: ref } : {}), ...(o.source ? { source: o.source } : {}), ...(days !== undefined ? { days } : {}) }, o.team);
+      emit(o.json, res, () => formatHistoryStart(res));
     });
 
   metrics

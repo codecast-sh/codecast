@@ -18,6 +18,7 @@ const ID_TYPE_TABLES = [
   ["commits", "commit"],
   ["transcripts", "call"],
   ["event_sources", "source"],
+  ["replays", "replay"],
 ] as const;
 
 /**

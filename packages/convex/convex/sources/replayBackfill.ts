@@ -54,9 +54,9 @@ export const REPLAY_BACKFILL_PAGE = {
   concurrency: 2,
   budget_ms: 4 * 60_000,
   pause_ms: 15_000,
-  /** A 429 with no Retry-After, and the most any Retry-After is waited. */
+  /** A 429 with no Retry-After, and the most any Retry-After is waited (well under REPLAY_BACKFILL_LIMITS.stalled_ms). */
   rate_wait_ms: 60_000,
-  max_rate_wait_ms: 15 * 60_000,
+  max_rate_wait_ms: 10 * 60_000,
   /** A list call that failed for another reason is tried again after this. */
   retry_ms: 60_000,
 } as const;
@@ -110,6 +110,18 @@ export async function runBackfillPage(
     stamp();
     return { state, next_in_ms: null };
   };
+  // A 429 waits as asked, but not forever: rate limited past the cap with
+  // nothing imported in between, the import stops and says so.
+  const rateLimited = (f: VendorFailure): PageOutcome => {
+    const now = clock.now();
+    state.rate_limited_since ??= now;
+    if (now - state.rate_limited_since >= REPLAY_BACKFILL_LIMITS.rate_limited_max_ms) {
+      return stop("error", `${vendor.name} has rate limited the import for ${Math.round((now - state.rate_limited_since) / 60_000)} minutes with nothing imported`);
+    }
+    state.last_error = `${vendor.name} is rate limiting the import; waiting`;
+    stamp();
+    return { state, next_in_ms: rateWait(f) };
+  };
   const failedAgain = (error: string, retry: number): PageOutcome => {
     state.failures_in_row = (state.failures_in_row ?? 0) + 1;
     state.last_error = error.slice(0, 500);
@@ -124,11 +136,7 @@ export async function runBackfillPage(
   } catch (e) {
     const f = failureOf(e);
     if (f.lost) return { ...stop("paused", f.error), lost: f.error };
-    if (f.status === 429) {
-      state.last_error = `${vendor.name} is rate limiting the import; waiting`;
-      stamp();
-      return { state, next_in_ms: rateWait(f) };
-    }
+    if (f.status === 429) return rateLimited(f);
     return failedAgain(f.error, REPLAY_BACKFILL_PAGE.retry_ms);
   }
 
@@ -137,7 +145,7 @@ export async function runBackfillPage(
   const already = await vendor.imported(page.ids);
   const todo = page.ids.filter((id) => !already.has(id) && !seen.has(id));
   // Set by a worker; typed through a cast so the checks after the await are not narrowed to null.
-  let halt = null as { lost?: string; wait?: number; error?: string } | null;
+  let halt = null as { lost?: string; rate?: VendorFailure; error?: string } | null;
   let importedNow = 0;
   let next = 0;
   const worker = async () => {
@@ -149,10 +157,11 @@ export async function runBackfillPage(
         state.imported++;
         importedNow++;
         state.failures_in_row = 0;
+        delete state.rate_limited_since;
       } else if (r.lost) {
         halt ??= { lost: r.error };
       } else if (r.status === 429) {
-        halt ??= { wait: rateWait(r) };
+        halt ??= { rate: r };
       } else {
         // One recording the vendor will not hand over (gone, corrupt): counted, never retried.
         seen.add(id);
@@ -174,11 +183,9 @@ export async function runBackfillPage(
     hold();
     return stop("error", halt.error);
   }
-  if (halt?.wait !== undefined) {
+  if (halt?.rate) {
     hold();
-    state.last_error = `${vendor.name} is rate limiting the import; waiting`;
-    stamp();
-    return { state, next_in_ms: halt.wait };
+    return rateLimited(halt.rate);
   }
   if (todo.some((id) => !seen.has(id))) {
     // Out of time with recordings left: the same page again, at once.
@@ -190,6 +197,7 @@ export async function runBackfillPage(
   state.listed += page.ids.length;
   state.skipped += page.ids.filter((id) => already.has(id) && !seenBefore.has(id)).length;
   delete state.page_seen;
+  delete state.rate_limited_since;
   if (!state.failures_in_row) delete state.last_error;
   if (page.next === null) {
     state.status = "done";
@@ -380,9 +388,10 @@ export const start = mutation({
     const resume = !args.restart && replayBackfillResumes(current, now) && window === current!.window;
     const since = replayBackfillSince(window, now);
     const state: ReplayBackfill = resume
-      ? { ...current!, status: "running", failures_in_row: 0, last_error: undefined, started_at: now, updated_at: now }
+      ? { ...current!, status: "running", failures_in_row: 0, rate_limited_since: undefined, last_error: undefined, started_at: now, updated_at: now }
       : { status: "running", window, ...(since !== undefined ? { since } : {}), until: now, listed: 0, imported: 0, skipped: 0, failed: 0, started_at: now, updated_at: now };
     delete state.last_error;
+    delete state.rate_limited_since;
     delete state.finished_at;
     await ctx.db.patch(source._id, { replay_backfill: state });
     await ctx.scheduler.runAfter(0, internal.sources.replayBackfill.runPage, { source_id: source._id, run: now });

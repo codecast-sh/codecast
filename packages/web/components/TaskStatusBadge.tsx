@@ -6,7 +6,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { ComponentType } from "react";
-import { cn } from "@/lib/utils";
+import { cn } from "../lib/utils";
 import { StatusCircle } from "./StatusCircle";
 
 export type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";

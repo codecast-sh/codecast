@@ -352,7 +352,7 @@ describe("the sign route", () => {
 
   test("validates the chunk it is asked to sign", () => {
     const ok = { replay_id: "r1", seq: 0, sha256: SHA("a"), size: 100 };
-    expect(validateReplaySign(ok)).toEqual(ok);
+    expect(validateReplaySign(ok)).toEqual({ ...ok, kind: "events" });
     expect(validateReplaySign({ ...ok, size: REPLAY_LIMITS.chunk_max_bytes + 1 })).toContain("at most");
     expect(validateReplaySign({ ...ok, sha256: "ABC" })).toContain("sha256");
     expect(validateReplaySign({ ...ok, seq: REPLAY_LIMITS.max_chunks_per_replay })).toContain("seq");

@@ -113,7 +113,7 @@ export function CallMomentFrame({
 /** The line a moment's card is captioned with (webGetCallRef's `line`, the
  *  shared lineSaidAt), and whether it ended long enough before the moment
  *  that the card says when it was said, the way `cast call snap` does. */
-export function momentCaption(entity: any, atMs: number): { line: MomentLine; saidBefore: boolean } | null {
+function momentCaption(entity: any, atMs: number): { line: MomentLine; saidBefore: boolean } | null {
   const line: MomentLine | null | undefined = entity?.line;
   if (!line) return null;
   return { line, saidBefore: !line.during && atMs - line.t1 >= CALL_JUST_SAID_MS };

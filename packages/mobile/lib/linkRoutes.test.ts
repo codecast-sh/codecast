@@ -46,6 +46,14 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/settings/integrations')).toBe('/settings/mail');
   });
 
+  test("the web's short page names open the same screens", () => {
+    expect(mobileRouteForUrl('https://codecast.sh/approvals')).toBe('/decisions');
+    expect(mobileRouteForUrl('https://codecast.sh/plan')).toBe('/settings/plan');
+    expect(mobileRouteForUrl('/mail')).toBe('/settings/mail');
+    expect(mobileRouteForUrl('https://codecast.sh/integrations/')).toBe('/settings/mail');
+    expect(mobileRouteForUrl('https://codecast.sh/routines')).toBe('/(tabs)/tasks?segment=routines');
+  });
+
   test('invites, chat and calls land on the chat tab', () => {
     expect(mobileRouteForUrl('https://codecast.sh/join/abc')).toBe('/(tabs)/chat');
     expect(mobileRouteForUrl('https://codecast.sh/chat')).toBe('/(tabs)/chat');

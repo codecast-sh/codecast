@@ -17,6 +17,11 @@
  * on its tool result, which the web renders as that frame under the call's
  * own access rule, and which shows nothing once the recording is gone.
  *
+ * `cast replay snap` frames ride the same memory: a frame of a customer's
+ * page is as private as the replay, so it becomes `Frame of the replay:
+ * rp-12@1:23` (contracts/replayPlayer.ts), which the web renders under the
+ * replay's own access rule.
+ *
  * Which image is a frame: its path when the image names one (a Codex image,
  * an inline marker), else the path of the Read whose result it is (the tool
  * call travels on an earlier message, so its path is remembered across
@@ -29,6 +34,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { callFrameSeenRef, callFrameSeenText } from "@codecast/shared/contracts";
+import { replayFrameSeenRef, replayFrameSeenText } from "@codecast/shared/contracts/replayPlayer";
 import { codecastDir, homeDir } from "./codecastDir.js";
 
 export type CallFrameEntry = {
@@ -164,13 +170,22 @@ type FrameMessage = {
   images?: FrameImage[];
 };
 
+/** The line a frame's reference becomes: a replay's moment or a call's. */
+function seenText(ref: string): string {
+  return ref.startsWith("rp-") ? replayFrameSeenText(ref) : callFrameSeenText(ref);
+}
+
+function seenRef(text: string): string | null {
+  return callFrameSeenRef(text) ?? replayFrameSeenRef(text);
+}
+
 /** Where a moment's reference goes: the tool result the image answered, else
  *  the message's own text. Said once however many images named it. */
 function cite(msg: FrameMessage, toolUseId: string | undefined, ref: string): void {
-  const line = callFrameSeenText(ref);
+  const line = seenText(ref);
   const result = toolUseId ? msg.toolResults?.find((r) => r.toolUseId === toolUseId) : undefined;
   if (result) {
-    if (callFrameSeenRef(result.content) === ref) return;
+    if (seenRef(result.content) === ref) return;
     result.content = result.content ? `${result.content}\n${line}` : line;
     return;
   }

@@ -26,6 +26,7 @@ import {
   GitCommitHorizontal,
   ChevronDown,
   Radio,
+  Film,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { InitiativeHoverContent } from "./initiatives/InitiativeHoverContent";
@@ -45,6 +46,10 @@ import {
   parseContextualPrRef,
   parseRepoObjectId,
   parseCallRef,
+  parseReplayRef,
+  replayRefId,
+  replayRefStart,
+  formatCallTime,
   repoObjectId,
   repoObjectGitHubUrl,
   type EntityType,
@@ -91,7 +96,8 @@ import { TimeAgo } from "./tasks/TaskCommentStream";
 import { useRevealRef } from "../lib/revealHost";
 import { RevealOpenLink } from "./ObjectReveal";
 import { ModObjectPill } from "./mods/ModObjectPill";
-import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "./ops/parts";
+import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, replayFacts, sourceFacts } from "./ops/parts";
+import { replayTitle } from "./ops/opsModel";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 
@@ -380,6 +386,31 @@ function SourceHoverContent({ source }: { source: any }) {
         <ShortId id={source.short_id} className="text-[10px] text-gray-500" />
         <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
           Open in Ops <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// What a replay reference has to answer at a glance: whose session on which
+// page, what broke in it, and, for a moment, which second. The player is not
+// in the hover (a capture is megabytes of page); the moment alone on its line
+// embeds it, and the link opens the replay there.
+function ReplayHoverContent({ replay, rawId }: { replay: any; rawId: string }) {
+  const at = replayRefStart(parseReplayRef(rawId));
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <Film className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-magenta" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug break-all">{replayTitle(replay) ?? replay.short_id}</div>
+          <div className="mt-1 text-[10px] text-gray-400">{replayFacts(replay).join(" · ")}</div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        <ShortId id={at != null ? replayRefId(replay.short_id, at) : replay.short_id} className="text-[10px] text-gray-500" />
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          {at != null ? `Open at ${formatCallTime(at)}` : "Open in Ops"} <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -1195,6 +1226,8 @@ export function EntityIdPill({
               ? Phone
             : type === "source"
               ? Radio
+            : type === "replay"
+              ? Film
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1225,6 +1258,9 @@ export function EntityIdPill({
             // A source wears the Ops orange, the colour of what wakes triggers.
             : type === "source"
               ? "bg-sol-orange/[0.08] text-sol-orange hover:bg-sol-orange/[0.16]"
+            // A replay wears the magenta of the replay issues on Ops.
+            : type === "replay"
+              ? "bg-sol-magenta/[0.08] text-sol-magenta hover:bg-sol-magenta/[0.16]"
             : isPr
               ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
@@ -1375,6 +1411,7 @@ export function EntityIdPill({
             : type === "decision" ? <DecisionHoverContent decision={entity} />
             : type === "call" ? <CallHoverContent call={entity} rawId={rawId} />
             : type === "source" ? <SourceHoverContent source={entity} />
+            : type === "replay" ? <ReplayHoverContent replay={entity} rawId={rawId} />
             : isPr ? <PullRequestHoverContent pr={entity} />
             : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />

@@ -115,10 +115,28 @@ function fakeQuery(fn: unknown, args: any) {
   if (name === "messages:webGet") return args?.id === MSG_CONVEX_ID ? FAKE_SHARED_MESSAGE : null;
   if (name === "linkPreviews:get") return args?.url === FAKE_PREVIEW.url ? FAKE_PREVIEW : null;
   if (name === "transcripts:webGetCallRef") return args?.ref === "cl-117" ? { _id: "k117", short_id: "cl-117", title: "Recording test coordination markers", status: "ended", turns: null, line: null } : null;
+  if (name === "replays:webGetReplay") return args?.ref === "rp-7" ? FAKE_REPLAY : null;
   const rows = ROWS[name];
   if (!rows) return undefined;
   return rows.find((r) => r.short_id === args?.short_id || r._id === args?.id) ?? null;
 }
+
+// A product recording that kept its page capture.
+const FAKE_REPLAY = {
+  _id: "rx72qtvpbmmrmwcjqmhzawejsx8bq9gm",
+  short_id: "rp-7",
+  provider: "posthog",
+  source_name: "codecast-web",
+  external_id: "0199abc",
+  url: "https://shop.example.com/checkout",
+  user: { email: "ada@example.com" },
+  started_at: Date.now() - 3600_000,
+  duration_ms: 185_000,
+  counts: { clicks: 9, errors: 1, failed_requests: 2 },
+  chunks: 1,
+  dom_chunks: 2,
+  dom_bytes: 420_000,
+};
 
 const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({
@@ -126,6 +144,7 @@ mock.module("convex/react", () => ({
   useQuery: fakeQuery,
   useQueries: () => ({}),
   useMutation: () => async () => {},
+  useAction: () => async () => ({ short_id: "rp-7", has_dom: false, cap: null, player_url: null, frame_url: "", expires_at: 0 }),
 }));
 
 const noThrow = await import("../hooks/useQueryNoThrow");
@@ -192,6 +211,31 @@ describe("shared-object detection", () => {
     expect(html).toContain('data-call-moment="cl-117@2:30"');
     expect(html).toMatch(/<p>The share moved on to the cobalt slide by .*entity-ref.* in prose\.<\/p>/s);
     expect(html).toContain('data-card-count="1"');
+  });
+
+  // A replay moment is the recorded page playing, so it follows the same
+  // rule: the player on a line of its own, the moment pill in a sentence.
+  test("a replay moment in a sentence stays the pill; one on its own line embeds the player", () => {
+    const html = render("Paying failed at rp-7@1:23 for the second time.\nrp-7@1:23");
+    expect(html.match(/data-replay-moment=/g)?.length).toBe(1);
+    expect(html).toContain('data-replay-moment="rp-7@1:23"');
+    // The pill names the page and the second, and both open the replay there.
+    expect(html).toMatch(/<p>Paying failed at .*shop\.example\.com\/checkout @1:23.* for the second time\.<\/p>/s);
+    expect(html.match(/href="\/ops\/replays\/rp-7\?t=83000"/g)?.length).toBe(2);
+  });
+
+  test("a stretch of a replay on its own line opens the player at its start", () => {
+    const html = render("rp-7@1:00-2:30");
+    expect(html).toContain('data-replay-moment="rp-7@1:00-2:30"');
+    expect(html).toContain('href="/ops/replays/rp-7?t=60000"');
+  });
+
+  test("a whole replay alone on its line is its card", () => {
+    const html = render("rp-7");
+    expect(html).toContain("entity-card-row");
+    expect(html).toContain("shop.example.com/checkout");
+    expect(html).toContain("1 error");
+    expect(html).not.toContain("data-replay-moment");
   });
 
   test("a call moment inside emphasis stays inside it", () => {

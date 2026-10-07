@@ -568,6 +568,39 @@ export function appendMetricPoint(points: { at: number; value: number }[], point
 }
 
 /**
+ * The source's own past values under the watch's points: those older than
+ * the first polled point (a poll's reading wins over the series at its time),
+ * oldest first, cut to the newest GROUP_RULES.metric_points.
+ */
+export function mergeMetricHistory(points: { at: number; value: number }[], history: { at: number; value: number }[]): { points: { at: number; value: number }[]; added: number } {
+  const firstPolled = points.length ? points[0].at : Infinity;
+  const older = history.filter((p) => p.at < firstPolled && Number.isFinite(p.value)).sort((a, b) => a.at - b.at);
+  const merged = [...older, ...points].slice(-GROUP_RULES.metric_points);
+  return { points: merged, added: Math.max(0, merged.length - Math.min(points.length, GROUP_RULES.metric_points)) };
+}
+
+const DAY_MS = 24 * 3600_000;
+
+/** What a backfill asks for: back from the oldest point the watch holds (or now), within `days`. */
+export type HistorySpan = { now: number; oldest: number | null; interval_ms: number; days: number };
+
+/**
+ * The past instants a backfill reads a watch at, oldest first: a day apart
+ * when the query's window is a day or more (a daily count read hourly would
+ * repeat itself 24 times), else one poll interval apart. They run back from
+ * the oldest point the watch already holds, stay within `days`, and stop at
+ * GROUP_RULES.metric_points, all the row keeps.
+ */
+export function historyInstants(span: HistorySpan, window_ms: number | null): number[] {
+  const step = window_ms !== null && window_ms >= DAY_MS ? DAY_MS : span.interval_ms;
+  const from = Math.min(span.oldest ?? span.now, span.now);
+  const floor = span.now - span.days * DAY_MS;
+  const out: number[] = [];
+  for (let at = from - step; at > floor && out.length < GROUP_RULES.metric_points; at -= step) out.push(at);
+  return out.reverse();
+}
+
+/**
  * One polled value of a watch as a group occurrence. A metric is a state
  * kind (STATE_TRANSITIONS): inside its line it is ok, across it failing, and
  * only a flip announces metric_alert or metric_recovered. The fingerprint is

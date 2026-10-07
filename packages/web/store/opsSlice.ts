@@ -36,6 +36,8 @@ export type OpsSliceActions = {
   /** Import every recording a PostHog or Sentry source still keeps; a stopped import continues where it was. */
   startOpsReplayImport: (sourceId: string, window?: ReplayBackfillWindow) => void;
   stopOpsReplayImport: (sourceId: string) => void;
+  /** Read the past values a watch's source already holds into it now (metrics.loadHistory). */
+  loadOpsWatchHistory: (watchId: string) => void;
   removeOpsSource: (sourceId: string) => void;
   grantOpsAction: (sourceId: string, actionName: string) => void;
   revokeOpsAction: (sourceId: string, actionName: string) => void;
@@ -55,6 +57,7 @@ type OpsDraft = {
   opsGroups: Record<string, any>;
   opsSamples: Record<string, any>;
   opsApps: Record<string, any>;
+  opsWatches: Record<string, any>;
   currentUser?: { _id: string } | null;
 };
 
@@ -85,7 +88,7 @@ export function createOpsSlice(): OpsSliceActions {
       const prev: ReplayBackfill | undefined = row.replay_backfill;
       const w = window ?? prev?.window ?? DEFAULT_REPLAY_BACKFILL_WINDOW;
       if (prev && replayBackfillResumes(prev, now) && w === prev.window) {
-        row.replay_backfill = { ...prev, status: "running", last_error: undefined, started_at: now, updated_at: now };
+        row.replay_backfill = { ...prev, status: "running", failures_in_row: 0, rate_limited_since: undefined, last_error: undefined, started_at: now, updated_at: now };
         return;
       }
       if (prev?.status === "running") return;
@@ -96,6 +99,13 @@ export function createOpsSlice(): OpsSliceActions {
     stopOpsReplayImport: action(function (this: OpsDraft, sourceId: string) {
       const b = this.opsSources[sourceId]?.replay_backfill;
       if (b?.status === "running") Object.assign(b, { status: "paused", last_error: "Stopped", updated_at: Date.now() });
+    }),
+
+    // The same mark metrics.loadHistory writes: "reading" until the read lands.
+    loadOpsWatchHistory: action(function (this: OpsDraft, watchId: string) {
+      const row = this.opsWatches[watchId];
+      if (!row) return;
+      row.history = { at: Date.now(), added: 0, reading: true };
     }),
 
     // The server purges the source's groups and samples (ingest.purgeSourceRows),

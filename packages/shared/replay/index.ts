@@ -15,3 +15,5 @@ export {
   urlPath,
   type ReplayFailure,
 } from "./events";
+export { prepareDomCapture, domCapturePlayable } from "./dom";
+export { replayMoment, formatReplayMoment, replayClockStart, replayClockDuration, type ReplayMoment, type ReplayMomentOptions } from "./moment";
