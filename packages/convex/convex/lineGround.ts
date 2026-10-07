@@ -21,6 +21,7 @@ import { gatherGoalsBrief } from "./goals";
 import {
   briefGoalRefs,
   groundCausePrompt,
+  LINE_CATEGORIES,
   parseGroundReply,
   type GoalsBrief,
   type GroundCauseInput,
@@ -118,7 +119,7 @@ export async function recordGroundCore(ctx: any, taskId: Id<"tasks">, outcome: {
 
 const groundFieldsValidator = v.object({
   goal_ref: v.string(),
-  category: v.union(v.literal("code"), v.literal("prompt"), v.literal("ux"), v.literal("infra"), v.literal("data")),
+  category: v.union(...LINE_CATEGORIES.map((c) => v.literal(c))),
   risk: v.union(v.literal("low"), v.literal("review"), v.literal("plan")),
   readiness: v.union(v.literal("ready"), v.literal("needs_context"), v.literal("not_actionable")),
   readiness_note: v.string(),

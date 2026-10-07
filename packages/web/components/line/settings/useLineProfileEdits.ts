@@ -10,7 +10,7 @@ import type { LineProfileEdit, PublishedLineProfile } from "@codecast/shared/con
 import { useInboxStore } from "../../../store/inboxStore";
 import { newRequestId } from "../../../lib/sessionCommands";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
-import { lineEditRows, lineEditStates, liveLineProfile, type LineEditStatus } from "../../../lib/lineSettings";
+import { lineEditRows, lineEditStates, lineWriteGate, liveLineProfile, type LineEditStatus, type RosterDevice } from "../../../lib/lineSettings";
 
 export type EditState = LineEditStatus;
 
@@ -53,4 +53,21 @@ export function useLineProfileEdits(projectId: string | null, published: Publish
   }, [states]);
 
   return { lp, states, send, clear, now };
+}
+
+/**
+ * Everything a surface that edits one project's profile needs: the published
+ * copy (by reference; the floor's project signature watches only part of
+ * it), the edits travelling over it, and who can write the file (the
+ * machine an edit goes to, or why nothing can). Line settings and a map
+ * panel's values both read it here.
+ */
+export function useLineProfileEditor(projectId: string | null) {
+  const published = useInboxStore((s) => (projectId ? ((s.projects as Record<string, { line_profile?: PublishedLineProfile | null }>)[projectId]?.line_profile ?? null) : null));
+  // Only a roster this session has heard live says a machine is offline; a
+  // cached one from an earlier visit would lock the page on a stale flag.
+  const roster = useInboxStore((s) => (s.machineRosterLive ? (s.machineRoster as RosterDevice[]) : null));
+  const edits = useLineProfileEdits(projectId, published);
+  const gate = useMemo(() => lineWriteGate(published, roster), [published, roster]);
+  return { published, edits, gate, device: gate.device ?? "the machine" };
 }
