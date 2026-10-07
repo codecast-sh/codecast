@@ -75,9 +75,9 @@ export const ASKS = {
   focus: "Find a free hour for me to focus this week",
   morning: "Every weekday at 8, tell me what's on today",
   planWeek: "Help me plan my week. Ask me what's on my plate first.",
-  sayNo: "Help me write a kind note saying no to an invitation",
+  sayNo: "Write a kind note declining a friend's dinner invitation",
   compare: "Compare the three best rated robot vacuums for a small apartment",
-  trip: "Plan a relaxed weekend away for two, with a rough budget",
+  trip: "Plan a relaxed weekend away for two, with rough costs",
   mondays: "Every Monday at 9, remind me to plan the week",
 } as const;
 

@@ -250,10 +250,11 @@ Short ids render as live pills wherever codecast shows prose.`,
     hasOptions: true,
     description: `Goals: the workspace's active initiatives with their metrics, project charters and principles, as one document
 
-  cast goals [--brief] [--json] [--team <name|id|personal>]
+  cast goals [--brief] [--json] [--project <ref> | --task <ct>] [--team <name|id|personal>]
 
 --brief is the compact shape a prompt reads. Each metric prints with its goal_ref
-(in-N:key); a project's goal_ref is its short id.`,
+(in-N:key); a project's goal_ref is its short id. --task reads the brief a cause
+is grounded against: its own project's, else its workspace's.`,
     load: () => import("./goalsCommand.js").then((m) => m.registerGoalsCommand),
   },
   {

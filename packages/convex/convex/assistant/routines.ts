@@ -8,6 +8,8 @@ import type { Id } from "../_generated/dataModel";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { routineRefusal, type RoutineShape } from "@codecast/shared/contracts/assistant";
 import { walletPlan } from "../lib/wallet";
+import { cadenceAt, nextCadenceRun, type WallCadence } from "@platform/assistant/cadence";
+import { wallClockAt } from "@platform/assistant/zone";
 
 // The statuses that count as armed: a paused routine fires nothing.
 const ARMED_STATUSES = ["scheduled", "running"] as const;
@@ -104,4 +106,39 @@ export async function hostedRoutineRefusal(
     }
   }
   return routineRefusal(plan, routine, armedOthers);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+
+/** The stored shape of agent_tasks.cadence. */
+export type StoredCadence = WallCadence;
+
+// A hosted routine said as a time of day keeps that time on the person's
+// clock (@platform/assistant cadence): a daily or weekly repeat, or one on
+// listed weekdays, is stored with a wall-clock cadence in their zone, so a
+// daylight saving change moves nothing and "weekdays" skips the weekend. A
+// repeat of hours ("every 3 hours") stays a plain interval. This is the one
+// rule for it: insertTask applies it to every new routine and applyTaskUpdate
+// to every schedule edit, whichever surface (the assistant's tool, the web
+// form) set it. `weekdays` overrides the days the interval implies; `kept`
+// is the cadence the routine had, whose days survive an edit of its time.
+// Returns the cadence and the first run it makes (on or after `run_at`), or
+// null when the routine runs on an interval.
+export async function hostedWallCadence(
+  ctx: { db: any },
+  routine: { user_id: Id<"users">; hosted: boolean; schedule_type: string; interval_ms?: number; run_at?: number; weekdays?: number[]; kept?: StoredCadence },
+): Promise<{ cadence: StoredCadence; run_at: number } | null> {
+  if (!routine.hosted || routine.schedule_type !== "recurring" || !routine.run_at) return null;
+  const daily = routine.interval_ms === DAY_MS;
+  if (!routine.weekdays?.length && !daily && routine.interval_ms !== WEEK_MS) return null;
+  const user = await ctx.db.get(routine.user_id);
+  const zone = user?.timezone ?? routine.kept?.zone;
+  const weekdays = routine.weekdays?.length
+    ? routine.weekdays
+    : daily
+      ? routine.kept?.weekdays
+      : [wallClockAt(routine.run_at, zone).weekday];
+  const cadence = cadenceAt(routine.run_at, zone, weekdays);
+  return { cadence, run_at: nextCadenceRun(cadence, routine.run_at - 1) };
 }

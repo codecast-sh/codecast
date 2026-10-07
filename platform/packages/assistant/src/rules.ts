@@ -10,6 +10,7 @@
 // both read that table, so they cannot disagree.
 import type { Gate, GateDecision, ToolCallRequest } from "@platform/agent";
 import { normalizeTimezone } from "./zone";
+import { cadenceAt, nextCadenceRun, plainCadence, weekdayNumbers } from "./cadence";
 
 /** What a rule decides for its tool. With no rule the gate asks. */
 export type RuleDecision = "allow" | "ask" | "refuse";
@@ -156,8 +157,25 @@ export function plainSchedule(at: number, hours: number, timezone: string | null
   return `${plainEvery(hours)}, starting ${date(true)} at ${time}`;
 }
 
+/** Runs on some weekdays at a first run's time of day, as one line: "weekdays
+ *  at 8:00 AM, starting Wednesday, October 7". The start is the first run the
+ *  cadence actually makes, so a first run on a Saturday for a weekdays
+ *  routine says the Monday. */
+export function plainWeekdaySchedule(at: number, weekdays: readonly number[], timezone: string | null | undefined, now = Date.now()): string {
+  const timeZone = normalizeTimezone(timezone);
+  const cadence = cadenceAt(at, timeZone, weekdays);
+  const first = nextCadenceRun(cadence, at - 1);
+  const fmt = (t: number, options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { ...options, timeZone }).format(t);
+  const thisYear = fmt(first, { year: "numeric" }) === fmt(now, { year: "numeric" });
+  const start = fmt(first, { weekday: "long", month: "long", day: "numeric", ...(thisYear ? {} : { year: "numeric" }) });
+  return `${plainCadence(cadence)}${timezone && timeZone === timezone ? "" : " UTC"}, starting ${start}`;
+}
+
 /** A field whose name says it is a repeat in hours (`repeat_every_hours`). */
 const EVERY_HOURS = /(^|_)every_hours$/;
+
+/** The field that lists the weekdays a routine runs on (`days: ["mon"]`). */
+const DAYS_FIELD = "days";
 
 /** Fields that hold the plan the person is agreeing to, in their own words,
  *  shown under a heading as wrapped prose rather than as an exact draft. */
@@ -191,6 +209,7 @@ export function approvalContext(input: Record<string, unknown>, opts: { timezone
   const lines: string[] = [];
   const instants: [string, number][] = [];
   let every: number | undefined;
+  let days: number[] | undefined;
   const plan: string[] = [];
   const blocks: string[] = [];
   for (const [key, value] of Object.entries(input ?? {})) {
@@ -201,6 +220,10 @@ export function approvalContext(input: Record<string, unknown>, opts: { timezone
     }
     if (typeof value === "number" && value > 0 && EVERY_HOURS.test(key)) {
       every = value;
+      continue;
+    }
+    if (key === DAYS_FIELD && Array.isArray(value) && weekdayNumbers(value.map(String)).length) {
+      days = weekdayNumbers(value.map(String));
       continue;
     }
     if (typeof value === "string" && PLAN_FIELDS[key] && value.trim()) {
@@ -218,7 +241,9 @@ export function approvalContext(input: Record<string, unknown>, opts: { timezone
     else lines.push(`**${humanLabel(key)}:** ${typeof value === "boolean" ? shown : literal(shown)}`);
   }
   // One start and a repeat read as one schedule line; otherwise each says itself.
-  const when = every !== undefined && instants.length === 1
+  const when = days !== undefined && instants.length === 1
+    ? [`**When:** ${capitalized(plainWeekdaySchedule(instants[0]![1], days, opts.timezone, opts.now))}`]
+    : every !== undefined && instants.length === 1
     ? [`**When:** ${capitalized(plainSchedule(instants[0]![1], every, opts.timezone, opts.now))}`]
     : [
         ...instants.map(([key, at]) => `**${humanLabel(key)}:** ${plainInstant(at, opts.timezone, opts.now)}`),

@@ -31,11 +31,16 @@ afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 // What the by-slug feeder says: undefined (not yet), null (none), or the row.
 let fork: any = undefined;
 let roles: any[] = [];
+// Each mock keeps the module's other exports: bun shares a mock across the
+// files of one run, so a sibling test importing one of them would break.
+const realWorkflows = await import("../../../../hooks/useSyncWorkflows");
+const realOrgTree = await import("../../../../hooks/useSyncOrgTree");
 mock.module("../../../../hooks/useSyncWorkflows", () => ({
+  ...realWorkflows,
   useWorkflowBySlug: () => fork,
   useWorkflows: () => ({ workflows: fork ? [fork] : [], ready: true }),
 }));
-mock.module("../../../../hooks/useSyncOrgTree", () => ({ useSyncOrgTree: () => ({ tree: { roles } }) }));
+mock.module("../../../../hooks/useSyncOrgTree", () => ({ ...realOrgTree, useSyncOrgTree: () => ({ tree: { roles } }) }));
 mock.module("../../../WorkflowGraphView", () => ({
   WorkflowGraphView: ({ nodes, onNodeSelect }: any) => React.createElement("div", { "data-graph": nodes.length },
     nodes.map((n: any) => React.createElement("button", { key: n.id, "data-node": n.id, onClick: () => onNodeSelect(n) }, n.label))),
@@ -111,7 +116,10 @@ test("a copy no role runs says so; a role on it is counted; saved is said only a
     set.call(area, "Mine.");
     area.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   });
+  // A prompt draft waits for a choice (line-map.md LX5): leaving the field saves nothing.
   await act(async () => { area.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true })); });
+  expect(calls).toHaveLength(0);
+  await act(async () => { m.host.querySelector<HTMLButtonElement>("[data-station-apply]")!.click(); });
   expect(calls.at(-1)?.[0]).toBe("saveLineWorkflow");
   // The store paints the saved graph (saveLineWorkflow); the panel follows it.
   fork = { ...fork, nodes: (calls.at(-1)![1][0] as any).nodes };
@@ -188,5 +196,44 @@ test("a published project edits its repo's line through the profile's edit path"
   useInboxStore.setState({ projects: { p1: { ...project, line_profile: { ...published, published_at: 2, line: { file: ".codecast/line/line.cast", graph_hash: "abcdef0123456789", name: "line", source: "", nodes: SHIPPED_LINE.nodes, edges: SHIPPED_LINE.edges, files: {} } } } } } as any);
   await m.render();
   expect(headline(m.host)).toBe("This project's line lives in its repo, in .codecast/line, at version abcdef01.");
+  await m.unmount();
+});
+
+// line-map.md LX5, LX6: a station's prompt draft can go through the line
+// instead of applying: it files the composer's cause, category line, with the
+// draft attached as the proposed prompt, and the editor goes back to the
+// stored text while the cause shows under it.
+test("Send through the line files a line cause with the draft attached, and applies nothing", async () => {
+  fork = { _id: "w1", ...forkShippedLine(SHIPPED_LINE, project) };
+  const filed: any[] = [];
+  useInboxStore.setState({
+    tasks: {},
+    signals: {},
+    fileLineCause: (key: string, projectId: string, fields: any) => {
+      filed.push([key, projectId, fields]);
+      useInboxStore.setState((s: any) => ({ tasks: { ...s.tasks, [`temp_task_${key}`]: { _id: `temp_task_${key}`, client_key: key, short_id: "ct-…", title: fields.title, status: "open", project_id: projectId } } }));
+      return Promise.resolve({ task_id: "t1", task_short_id: "ct-9" });
+    },
+  } as any);
+  const m = await mount();
+  await act(async () => { m.host.querySelector<HTMLButtonElement>('[data-node="implement"]')!.click(); });
+  const area = m.host.querySelector<HTMLTextAreaElement>("[data-station-text]")!;
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value")!.set!;
+    set.call(area, "Build only what the steps ask.");
+    area.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  await act(async () => { m.host.querySelector<HTMLButtonElement>("[data-station-send]")!.click(); });
+  expect(calls).toHaveLength(0);
+  expect(filed).toHaveLength(1);
+  const [, projectId, fields] = filed[0];
+  expect(projectId).toBe("p1");
+  expect(fields.subject).toBe("line:station:implement");
+  expect(fields.title).toBe("Change the Implement station's prompt");
+  expect(fields.detail_md).toContain("Build only what the steps ask.");
+  expect(m.host.querySelector<HTMLTextAreaElement>("[data-station-text]")!.value).not.toBe("Build only what the steps ask.");
+  const row = m.host.querySelector("[data-station-sent] [data-change-cause]")!;
+  expect(row.getAttribute("data-status")).toBe("filing");
+  expect(row.textContent).toContain("Change the Implement station's prompt");
   await m.unmount();
 });

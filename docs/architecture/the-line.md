@@ -107,10 +107,12 @@ that starts with a key picks that option; anything else is `answer_text` and
 routes the run on its unconditional edge, as today. `respondToGateFromCli` is
 the same call.
 
-Withdraw. `workflow_runs.cancel` withdraws the run's open gate decision.
-`withdraw` on a gate decision fails the run with `fail_reason: "gate
-withdrawn"`. Both go through `settleResolution` so ladder roles receive the
-passive fact.
+Withdraw. `workflow_runs.cancel` withdraws the run's open gate decision, and
+so does a runner reporting its run completed or failed (a runner stopped by a
+signal while it waits at the gate). `withdraw` on a gate decision fails the
+run with `fail_reason: "gate withdrawn"`. All go through `settleResolution`,
+so ladder roles receive the passive fact and the card's "card waiting" notice
+is marked read.
 
 Failure gates. The runner's existing decisions for a reject verdict and for
 exhausted retries (`queueTaskDecision`) carry `workflow_run_id` too, so the

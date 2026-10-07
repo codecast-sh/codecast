@@ -568,6 +568,18 @@ export function appendMetricPoint(points: { at: number; value: number }[], point
 }
 
 /**
+ * The source's own past values under the watch's points: those older than
+ * the first polled point (a poll's reading wins over the series at its time),
+ * oldest first, cut to the newest GROUP_RULES.metric_points.
+ */
+export function mergeMetricHistory(points: { at: number; value: number }[], history: { at: number; value: number }[]): { points: { at: number; value: number }[]; added: number } {
+  const firstPolled = points.length ? points[0].at : Infinity;
+  const older = history.filter((p) => p.at < firstPolled && Number.isFinite(p.value)).sort((a, b) => a.at - b.at);
+  const merged = [...older, ...points].slice(-GROUP_RULES.metric_points);
+  return { points: merged, added: Math.max(0, merged.length - Math.min(points.length, GROUP_RULES.metric_points)) };
+}
+
+/**
  * One polled value of a watch as a group occurrence. A metric is a state
  * kind (STATE_TRANSITIONS): inside its line it is ok, across it failing, and
  * only a flip announces metric_alert or metric_recovered. The fingerprint is
