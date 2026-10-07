@@ -102,6 +102,8 @@ export type TraceOpts = {
   graph?: LineGraph | null;
   /** Who answered a decision, by name ("Ashot Petrosian"), when the caller knows. */
   answeredBy?: (d: MapDecision) => string | null | undefined;
+  /** A goal by its name ("Matching that lands"), when the caller knows it; else its ref. */
+  goalName?: (ref: string) => string | null | undefined;
 };
 
 /** How a signal joined its cause (signals.attach), as a sentence. */
@@ -116,8 +118,13 @@ const ATTACH_WORDS: Record<string, string> = {
 const KIND_WORDS: Record<string, string> = { bug: "a bug", regression: "a regression", prompt_miss: "a prompt miss", ux: "a UX problem", cohesion: "a cohesion problem", request: "a request" };
 const kindWords = (kind: string) => KIND_WORDS[kind] ?? kind.replace(/_/g, " ");
 
+/** Markdown's inline marks taken off, so a finder's words read as words. */
+export const plainWords = (s: string) => s.replace(/(\*\*|__)(.+?)\1/g, "$2").replace(/`([^`]+)`/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^[>*-]\s+/, "").trim();
 /** The first line of prose in a finder's markdown: headings are its labels, not its words. */
-const firstLine = (s: string | null | undefined): string | null => s?.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) ?? null;
+const firstLine = (s: string | null | undefined): string | null => {
+  const line = s?.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
+  return line ? plainWords(line) || null : null;
+};
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const isLive = (r: { status: string }) => r.status === "running" || r.status === "paused" || r.status === "pending";
 const STATUS_OF: Record<StepState, TraceStatus> = { done: "done", noted: "done", failed: "failed", live: "current", waiting: "current" };
@@ -205,7 +212,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     durationMs: groundVisit?.n.started_at != null && groundVisit.n.completed_at != null ? groundVisit.n.completed_at - groundVisit.n.started_at : null,
     status: grounded ? "done" : groundStep ? STATUS_OF[groundStep.state] : "waiting",
     detail: grounded
-      ? [cause.goal_ref ? (cause.goal_ref === "none" ? "Serves no goal yet" : `Serves ${cause.goal_ref}`) : null, cause.readiness_note?.trim()].filter(Boolean).join(". ")
+      ? [cause.goal_ref ? (cause.goal_ref === "none" ? "Serves no goal yet" : `Serves ${opts.goalName?.(cause.goal_ref) || cause.goal_ref}`) : null, cause.readiness_note?.trim()].filter(Boolean).join(". ")
       : groundStep ? groundStep.result : "Waiting to be admitted: the line grounds a cause when a run starts on it",
     links: [], artifacts: sessionArtifacts(groundStep), nodeId: graph.nodes.some((n) => n.id === "ground") ? "ground" : null,
   });
