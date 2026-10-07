@@ -20,6 +20,9 @@ export default defineConfig({
   resolve: sharedResolve,
   css: sharedCss,
   logLevel: "warn",
+  // @platform/design/fonts imports fontsource .css for its side effect; left
+  // external, Node loads that .css itself and throws ERR_UNKNOWN_FILE_EXTENSION.
+  ssr: { noExternal: ["@platform/design", /^@fontsource/] },
   build: {
     // Two SSR entries: the build-time marketing prerender, and the
     // request-time share-page renderer the web server imports.
