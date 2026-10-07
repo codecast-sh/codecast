@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseJointMessage } from "@codecast/shared/contracts/jointMessage";
+import { inFlightPending, serverPendingBubbles } from "./pendingBanner";
 import { canSteer, isHeldForTurnEnd, mergeQueueRows, queueRowsOf, reorderQueueRows, type QueueRow } from "./sharedQueue";
 
 const row = (id: string, at: number, from: string, content: string, status = "pending", queued?: boolean): QueueRow =>
@@ -30,5 +31,22 @@ describe("shared queue", () => {
     expect(isHeldForTurnEnd(held)).toBe(true);
     expect(canSteer(held)).toBe(true);
     expect(canSteer(row("h", 1, "Ann", "note", "held"))).toBe(false);
+  });
+});
+
+
+describe("queued rows and the delivery tracker", () => {
+  const timeline = { seen: new Set<string>(), seenContent: new Set<string>(), local: [], newestServerTs: 0, atLiveTail: true, normalize: (s: string) => s.trim() };
+
+  test("a row held for the turn's end is not late and draws no bubble", () => {
+    const held = { message_id: "q", created_at: 1, status: "held", queued: true, content: "after this" };
+    expect(inFlightPending(held)).toBeNull();
+    expect(inFlightPending({ inflight: [held] } as any)).toBeNull();
+    expect(serverPendingBubbles({ ...held, inflight: [held] }, timeline)).toEqual([]);
+  });
+
+  test("a teammate's waiting message is drawn as theirs", () => {
+    const row = { message_id: "p", created_at: 1, status: "pending", content: "check mobile", from_user_id: "u_bob" };
+    expect(serverPendingBubbles({ ...row, inflight: [row] }, timeline)[0]).toMatchObject({ from_user_id: "u_bob" });
   });
 });
