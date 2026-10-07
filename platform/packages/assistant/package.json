@@ -9,6 +9,7 @@
     "./plans": "./src/plans.ts",
     "./wallet": "./src/wallet.ts",
     "./zone": "./src/zone.ts",
+    "./cadence": "./src/cadence.ts",
     "./text": "./src/text.ts",
     "./whisk": "./src/whisk.ts",
     "./rules": "./src/rules.ts",

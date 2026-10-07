@@ -91,3 +91,21 @@ export function zonedDay(t: number, zone: string | null | undefined): ZonedDay {
   const timezone = normalizeTimezone(zone);
   return dayBounds(localDate(t, timezone), timezone);
 }
+
+/** The instant `minutes` past local midnight on `date` in `zone`: the wall
+ *  clock reading "8:00 AM on October 7" there. The offsets in force a day
+ *  either side are tried (as startOfDate does), and the earliest one that
+ *  reads back as that clock wins, so a repeated hour answers with its first
+ *  occurrence. A clock the zone skips (2:30 AM on a spring-forward day) has
+ *  no instant; it answers with the moment the same span after the jump, the
+ *  way a person's alarm rings late rather than not at all. */
+export function zonedInstant(date: string, minutes: number, zone: string | null | undefined): number {
+  const timezone = normalizeTimezone(zone);
+  const wall = Date.parse(`${date}T00:00:00Z`) + minutes * 60_000;
+  const offsets = [offsetAt(wall - DAY_MS, timezone), offsetAt(wall + DAY_MS, timezone)];
+  const exact = offsets
+    .map((offset) => wall - offset)
+    .filter((t) => wallAsUtc(t, timezone) === wall);
+  if (exact.length) return Math.min(...exact);
+  return wall - Math.min(...offsets);
+}

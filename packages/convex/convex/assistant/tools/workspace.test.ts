@@ -333,6 +333,22 @@ describe("routines", () => {
     await expect(call("cancel_routine", { id: "tr-nope" })).rejects.toThrow("No routine tr-nope");
   });
 
+  test("a routine at a time of day keeps it on their clock, and weekdays start on the next weekday", async () => {
+    const { t, user, call } = await setup();
+    await t.run((ctx) => ctx.db.patch(user, { timezone: "America/New_York" } as any));
+    // Saturday at 8 in New York, asked for weekdays: the first run is Monday at 8.
+    const set = await call("schedule_routine", { instruction: "Send you a short news summary", first_run: "2030-01-05T08:00:00-05:00", days: ["mon", "tue", "wed", "thu", "fri"] });
+    expect(set.text).toContain('"repeats": "weekdays at 8:00 AM"');
+    const row = await t.run(async (ctx) => (await ctx.db.query("agent_tasks").collect())[0]);
+    expect(row).toMatchObject({
+      schedule_type: "recurring",
+      interval_ms: 24 * 3_600_000,
+      run_at: Date.parse("2030-01-07T13:00:00Z"),
+      cadence: { zone: "America/New_York", minutes: 480, weekdays: [1, 2, 3, 4, 5] },
+    });
+    await expect(call("schedule_routine", { instruction: "x", first_run: "2030-01-05T08:00:00-05:00", days: ["mon"], repeat_every_hours: 24 })).rejects.toThrow("not both");
+  });
+
   test("the plan's rules hold: the free plan repeats at most daily", async () => {
     const { call } = await setup();
     await expect(call("schedule_routine", { instruction: "Check mail", first_run: "2030-01-02T08:00:00Z", repeat_every_hours: 2 })).rejects.toThrow("at most once every day");

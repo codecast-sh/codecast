@@ -40,8 +40,10 @@ import {
   approvalContext,
   humanLabel,
   NEVER,
+  plainDays,
   plainEvery,
   scopeMatch,
+  weekdayNumbers,
   stepAsk,
   systemPrompt as assistantPrompt,
   withRules as withRulesIn,
@@ -64,6 +66,7 @@ import { ALLOW_SCOPES, toolsFor, type ToolsForOptions } from "./tools";
 import { normalizeTimezone } from "../lib/teamDay";
 import { decisionAnswerOf, pendingInput, turnsIn, type Input, type Turn } from "./input";
 import { closeProviderIncident, noteProviderFault } from "./incidents";
+import { titleAfterHostedAnswer } from "../titleGeneration";
 import {
   isStorableRow,
   loadHistory,
@@ -410,6 +413,9 @@ export function alwaysCovers(call: Pick<PendingCallView, "name" | "label">, scop
 export function approveWords(call: Pick<PendingCallView, "name" | "input">, alwaysOffered: boolean): string {
   if (call.name === "schedule_routine") {
     const hours = call.input.repeat_every_hours;
+    const days = Array.isArray(call.input.days) ? weekdayNumbers(call.input.days.map(String)) : [];
+    const said = days.length ? plainDays(days) : "";
+    if (said) return `Start it. Runs ${said.startsWith("every") ? said : `on ${said}`} until you pause it.`;
     return typeof hours === "number" && hours > 0 ? `Start it. Runs ${plainEvery(hours)} until you pause it.` : "Set it for that one time.";
   }
   return alwaysOffered ? "Just this time." : "Go ahead.";
@@ -979,6 +985,7 @@ export const finish = internalMutation({
     if (args.model) await closeProviderIncident(ctx, args.model);
     await endTurn(ctx, turn, { ...common, status: "done", reason: "done" });
     await setWorkState(ctx, turn.conversation_id, args.asks_person ? "idle" : "done");
+    if (conversation) await titleAfterHostedAnswer(ctx, conversation);
     await afterTurn(ctx, turn);
     return null;
   },

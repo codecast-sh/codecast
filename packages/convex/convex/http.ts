@@ -5040,6 +5040,7 @@ cliRoute("/cli/metrics/get", async (ctx, body) => ctx.runQuery(api.metrics.getWa
 cliRoute("/cli/metrics/create", async (ctx, body) => ctx.runMutation(api.metrics.createWatch, body));
 cliRoute("/cli/metrics/update", async (ctx, body) => ctx.runMutation(api.metrics.updateWatch, body));
 cliRoute("/cli/metrics/remove", async (ctx, body) => ctx.runMutation(api.metrics.removeWatch, body));
+cliRoute("/cli/metrics/history", async (ctx, body) => ctx.runMutation(api.metrics.loadHistory, body));
 cliRoute("/cli/metrics/query", async (ctx, body) => ctx.runAction(api.sources.posthog.query, body));
 cliRoute("/cli/connector/capabilities", async (ctx, body) => ctx.runQuery(api.sources.app.capabilities, body));
 cliRoute("/cli/connector/read", async (ctx, body) => ctx.runAction(api.sources.app.read, body));

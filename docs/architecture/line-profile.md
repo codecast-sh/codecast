@@ -14,9 +14,11 @@ A line belongs to a project (a codecast `projects` row), not to a workspace.
 A team with eight projects has up to eight lines, each with its own signals,
 causes, goals, cards and throughput.
 
-- A signal carries `project_id`. A cause is a task, and its `project_id` is
-  the signal's. Fingerprint attach and the attach judge look only inside the
-  project.
+- A signal carries `project_id`. A new cause is a task, and its `project_id`
+  is the signal's. The attach judge looks only inside the project. Fingerprint
+  attach looks across the workspace: an open cause holding the key takes the
+  signal wherever it sits, and a signal filed for another project records
+  that project in `filed_for_project_id` (the-line-end-to-end.md LE4).
 - `cast signal add` takes `--project <ref>`. Without it the project comes
   from the repo's profile (`[line] project`), and a finder that serves several
   projects names one per signal.

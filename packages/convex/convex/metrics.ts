@@ -16,8 +16,8 @@ import { invalidScope, notFound, requireUserOrToken } from "./lib/auth";
 import { nextShortId } from "./counters";
 import { patchSourceStats, scopeArgs, scopeOf, sourceByRef, upsertGroup } from "./ingest";
 import { rowByRef } from "./lib/rowByRef";
-import { appendMetricPoint, planMetric } from "./lib/ingestGroups";
-import { connFor, fetchMetricValue, validWatchQuery } from "./sources/posthog";
+import { appendMetricPoint, mergeMetricHistory, planMetric } from "./lib/ingestGroups";
+import { METRIC_NO_HISTORY, connFor, fetchMetricHistory, fetchMetricValue, validWatchQuery } from "./sources/posthog";
 import { isTokenRefusal } from "./lib/sourceHealth";
 import { INGEST_LIMITS, INGEST_SHORT_ID_PREFIX, METRIC_WATCH_LIMITS, type SourceProvider, type WatchKind } from "@codecast/shared/contracts/ingest";
 import { watchDirectionValidator as directionValidator, watchKindValidator } from "./ingestSchema";
@@ -95,9 +95,12 @@ export const createWatch = mutation({
       next_check_at: now,
       points: [],
       state: "ok",
+      history: { at: now, added: 0, reading: true },
       created_at: now,
       updated_at: now,
     });
+    // The past the source already holds comes over now, not one poll at a time.
+    await ctx.scheduler.runAfter(0, internal.metrics.readHistory, { watch_id: id });
     return { watch: watchView((await ctx.db.get(id))!, source) };
   },
 });
@@ -285,5 +288,98 @@ export const recordPoint = internalMutation({
     // A poll is not an ingested event, so the *_today counters stay the door's.
     await patchSourceStats(ctx, source, (st) => ({ groups_open: Math.max(0, (st.groups_open ?? 0) + upserted.open_delta), last_poll_at: now }), now);
     return { group_id: upserted.group_id, transitions: upserted.transitions };
+  },
+});
+
+// ── History (metrics.loadHistory) ──
+
+/**
+ * `cast metrics history` and the Metrics tab's "Load history": every watch in
+ * reach (one, a source's, or the workspace's) reads the past its source
+ * already holds, each in its own action. A new watch does this on its own.
+ */
+export const loadHistory = mutation({
+  args: { ...scopeArgs, source: v.optional(v.string()), watch: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const { userId, workspaceKey } = await scopeOf(ctx, args);
+    let rows: Doc<"metric_watches">[];
+    if (args.watch) rows = [await watchByRef(ctx, userId, args.watch)];
+    else {
+      const source = args.source ? await sourceByRef(ctx, userId, workspaceKey, args.source) : null;
+      rows = await (source
+        ? ctx.db.query("metric_watches").withIndex("by_source", (q) => q.eq("source_id", source._id))
+        : ctx.db.query("metric_watches").withIndex("by_workspace", (q) => q.eq("workspace", workspaceKey))
+      ).take(LIST_MAX);
+      rows = rows.filter((r) => r.workspace === workspaceKey);
+    }
+    const scheduled: string[] = [];
+    const skipped: { watch: string; reason: string }[] = [];
+    const now = Date.now();
+    for (const row of rows) {
+      const source = await ctx.db.get(row.source_id);
+      if (source?.status !== "active") {
+        skipped.push({ watch: row.short_id, reason: `${source?.name ?? "its source"} is ${source?.status ?? "removed"}` });
+      } else if (row.query_kind === "hogql") {
+        // Nothing to ask PostHog: say so on the watch, where every surface reads it.
+        await ctx.db.patch(row._id, { history: { at: now, added: 0, note: METRIC_NO_HISTORY.hogql } });
+        skipped.push({ watch: row.short_id, reason: METRIC_NO_HISTORY.hogql });
+      } else {
+        await ctx.db.patch(row._id, { history: { at: now, added: 0, reading: true } });
+        await ctx.scheduler.runAfter(0, internal.metrics.readHistory, { watch_id: row._id });
+        scheduled.push(row.short_id);
+      }
+    }
+    return { scheduled, skipped };
+  },
+});
+
+export const historyInputs = internalQuery({
+  args: { watch_id: v.id("metric_watches") },
+  handler: async (ctx, args) => {
+    const watch = await ctx.db.get(args.watch_id);
+    return watch ? { query_kind: watch.query_kind, query: watch.query, source_id: watch.source_id } : null;
+  },
+});
+
+/** One watch's past values from its source, under its points. History never announces a transition. */
+export const readHistory = internalAction({
+  args: { watch_id: v.id("metric_watches") },
+  handler: async (ctx, args): Promise<{ added?: number; note?: string } | null> => {
+    const watch = await ctx.runQuery(internal.metrics.historyInputs, args);
+    if (!watch) return null;
+    if (watch.query_kind === "hogql") {
+      await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note: METRIC_NO_HISTORY.hogql });
+      return { note: METRIC_NO_HISTORY.hogql };
+    }
+    const source = await ctx.runQuery(internal.sources.posthog.sourceForPoll, { source_id: watch.source_id });
+    if (!source || source.status !== "active") {
+      const note = source ? `The source is ${source.status}` : "The source was removed";
+      await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note });
+      return { note };
+    }
+    const conn = await connFor(ctx, source);
+    const read = "error" in conn ? { ok: false as const, error: conn.error, lost: true } : await fetchMetricHistory(conn, watch);
+    if (read.ok) return await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, points: read.points });
+    await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note: read.error });
+    if ("lost" in read || isTokenRefusal(read.status)) {
+      await ctx.runMutation(internal.ingest.sourceConnectionLost, { source_id: source.source_id, error: read.error });
+    }
+    return { note: read.error };
+  },
+});
+
+export const recordHistory = internalMutation({
+  args: { watch_id: v.id("metric_watches"), points: v.optional(v.array(v.object({ at: v.number(), value: v.number() }))), note: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const watch = await ctx.db.get(args.watch_id);
+    if (!watch) return null;
+    const now = Date.now();
+    if (!args.points) {
+      await ctx.db.patch(watch._id, { history: { at: now, added: 0, note: (args.note ?? "No history").slice(0, INGEST_LIMITS.message_chars) }, updated_at: now });
+      return { added: 0 };
+    }
+    const merged = mergeMetricHistory(watch.points, args.points);
+    await ctx.db.patch(watch._id, { points: merged.points, history: { at: now, added: merged.added }, updated_at: now });
+    return { added: merged.added };
   },
 });

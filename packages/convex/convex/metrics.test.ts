@@ -4,8 +4,9 @@ import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { GROUP_RULES, METRIC_WATCH_LIMITS } from "@codecast/shared/contracts/ingest";
 import { createSource, sourceConnectionLost } from "./ingest";
-import { createWatch, getWatch, listWatches, pollDue, pollInputs, pollWatch, recordPoint, removeWatch, updateWatch } from "./metrics";
-import { sourceForPoll } from "./sources/posthog";
+import { createWatch, getWatch, historyInputs, listWatches, loadHistory, pollDue, pollInputs, pollWatch, readHistory, recordHistory, recordPoint, removeWatch, updateWatch } from "./metrics";
+import { insightSeries, sourceForPoll } from "./sources/posthog";
+import { mergeMetricHistory } from "./lib/ingestGroups";
 import { encryptConnectionSecret, tokenConnectionRow } from "./tokenConnectors";
 
 const h = (fn: any) => fn._handler;
@@ -333,5 +334,108 @@ describe("pollWatch end to end", () => {
     await h(pollWatch)({ runQuery: route, runMutation: route }, { watch_id: row._id });
     expect(w.db._tables.event_sources[0].status).toBe("active");
     expect(w.db._tables.metric_watches[0].last_error).toMatch(/503/);
+  });
+});
+
+describe("history", () => {
+  const realFetch = globalThis.fetch;
+  const KEY = "test-connection-secrets-key-at-least-32-bytes!!";
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    delete process.env.CONNECTION_SECRETS_KEY;
+  });
+  // The shape PostHog answers for a trends insight (read live 2026-10-06), cut to what is read.
+  const trends = (data: number[], days: string[], extra: Record<string, unknown> = {}) => ({ id: 42, result: [{ data, days, labels: days, count: data.reduce((a, b) => a + b, 0), ...extra }] });
+
+  test("an insight's first series becomes dated points; a total or a table has none", () => {
+    expect(insightSeries(trends([1, 2, 3], ["2026-09-07", "2026-09-08", "2026-09-09"]))).toEqual([
+      { at: Date.UTC(2026, 8, 7), value: 1 },
+      { at: Date.UTC(2026, 8, 8), value: 2 },
+      { at: Date.UTC(2026, 8, 9), value: 3 },
+    ]);
+    expect(insightSeries(trends([5], ["2026-09-07 13:00:00"]))).toEqual([{ at: Date.UTC(2026, 8, 7, 13), value: 5 }]);
+    expect(insightSeries(trends([1, 2], ["2026-09-07", "2026-09-08"], { aggregated_value: 3 }))).toBeNull();
+    expect(insightSeries({ result: [[4]] })).toBeNull();
+    expect(insightSeries(trends([1, 2], ["2026-09-07"]))).toBeNull();
+  });
+
+  test("history goes under the polled points, never over them, cut to metric_points", () => {
+    const polled = [{ at: 1000, value: 9 }];
+    const history = [{ at: 10, value: 1 }, { at: 999, value: 2 }, { at: 1000, value: 7 }, { at: 2000, value: 8 }];
+    expect(mergeMetricHistory(polled, history)).toEqual({ points: [{ at: 10, value: 1 }, { at: 999, value: 2 }, { at: 1000, value: 9 }], added: 2 });
+    const long = Array.from({ length: 100 }, (_, i) => ({ at: i, value: i }));
+    const merged = mergeMetricHistory([], long);
+    expect(merged.points).toHaveLength(GROUP_RULES.metric_points);
+    expect(merged.points[merged.points.length - 1].at).toBe(99);
+    expect(merged.added).toBe(GROUP_RULES.metric_points);
+    const full = Array.from({ length: GROUP_RULES.metric_points }, (_, i) => ({ at: 1000 + i, value: i }));
+    expect(mergeMetricHistory(full, long).added).toBe(0);
+  });
+
+  test("a new watch reads its history at once and says it is reading", async () => {
+    const w = world();
+    const row = await watch(w, { query_kind: "insight", query: "42" });
+    expect(row.history).toMatchObject({ added: 0, reading: true });
+    expect(w.scheduled.filter((x) => x.name === "metrics:readHistory").map((x) => x.args.watch_id)).toEqual([row._id]);
+  });
+
+  test("load reads every watch in reach; a HogQL watch and a paused source say why they have none", async () => {
+    const w = world();
+    const hog = await watch(w);
+    const ins = (await h(createWatch)(w.as("u1"), { ...TEAM, source: "product", name: "installs", query_kind: "insight", query: "42", threshold: 1, direction: "above" })).watch;
+    await h(createSource)(w.as("u1"), { ...TEAM, name: "old", provider: "posthog" });
+    const off = (await h(createWatch)(w.as("u1"), { ...TEAM, source: "old", name: "x", query_kind: "insight", query: "7", threshold: 1, direction: "above" })).watch;
+    w.db._tables.event_sources.find((s: any) => s.name === "old").status = "paused";
+    w.scheduled.length = 0;
+    const out = await h(loadHistory)(w.as("u1"), { ...TEAM });
+    expect(out.scheduled).toEqual([ins.short_id]);
+    expect(out.skipped.map((x: any) => x.watch).sort()).toEqual([hog.short_id, off.short_id].sort());
+    expect(w.scheduled.map((x) => x.args.watch_id)).toEqual([ins._id]);
+    expect(w.db._tables.metric_watches.find((r: any) => r._id === hog._id).history.note).toMatch(/HogQL/);
+    // Another workspace's caller reaches nothing.
+    await expect(h(loadHistory)(w.as("u2"), { watch: ins.short_id })).rejects.toThrow(/not found/);
+  });
+
+  test("reads the insight's series through the connection and puts it under the watch, with no transition", async () => {
+    const w = world();
+    process.env.CONNECTION_SECRETS_KEY = KEY;
+    await w.db.insert("app_installations", {
+      provider: "posthog",
+      team_id: "team_1",
+      connected_by: "u1",
+      access_token_enc: await encryptConnectionSecret("phx_SECRET", KEY),
+      config: { host: "https://us.posthog.com", project_id: "77" },
+      granted_scopes: [],
+      created_at: 1,
+      updated_at: 1,
+    });
+    const row = await watch(w, { query_kind: "insight", query: "42", threshold: 2, direction: "above" });
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify(trends([0, 5, 1], ["2026-09-07", "2026-09-08", "2026-09-09"])));
+    }) as any;
+    const handlers: Record<string, any> = {
+      "metrics:historyInputs": historyInputs,
+      "sources/posthog:sourceForPoll": sourceForPoll,
+      "tokenConnectors:tokenConnectionRow": tokenConnectionRow,
+      "metrics:recordHistory": recordHistory,
+      "ingest:sourceConnectionLost": sourceConnectionLost,
+    };
+    const route = async (fn: any, args: any) => h(handlers[getFunctionName(fn)])(w.internalCtx, args);
+    expect(await h(readHistory)({ runQuery: route, runMutation: route }, { watch_id: row._id })).toEqual({ added: 3 });
+    expect(urls).toEqual(["https://us.posthog.com/api/projects/77/insights/42/?refresh=blocking"]);
+    const stored = w.db._tables.metric_watches[0];
+    expect(stored.points.map((p: any) => p.value)).toEqual([0, 5, 1]);
+    expect(stored.history).toMatchObject({ added: 3 });
+    expect(stored.history.reading).toBeUndefined();
+    // A past crossing (5 > 2) is history, not news.
+    expect(w.db._tables.external_events).toHaveLength(0);
+
+    globalThis.fetch = (async () => new Response(JSON.stringify({ detail: "Invalid personal API key." }), { status: 401 })) as any;
+    await h(readHistory)({ runQuery: route, runMutation: route }, { watch_id: row._id });
+    expect(w.db._tables.metric_watches[0].history.note).toMatch(/401/);
+    expect(w.db._tables.metric_watches[0].points).toHaveLength(3);
+    expect(w.db._tables.event_sources[0]).toMatchObject({ status: "error" });
   });
 });

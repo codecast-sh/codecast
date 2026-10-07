@@ -164,6 +164,31 @@ export function insightScalar(insight: any): number | null {
   return numeric(first);
 }
 
+/**
+ * The series a watch's value is the latest point of, as dated points, oldest
+ * first: a trends insight's first series (`data` beside `days`). Null when the
+ * value is not a point of a series (an aggregated number, a HogQL table), so
+ * history is never in other units than the polled value.
+ */
+export function insightSeries(insight: any): { at: number; value: number }[] | null {
+  const result = insight?.result ?? insight?.results;
+  const first = Array.isArray(result) ? result[0] : null;
+  if (!first || typeof first !== "object" || Array.isArray(first)) return null;
+  if (numeric(first.aggregated_value) !== null) return null;
+  const data: unknown[] = Array.isArray(first.data) ? first.data : [];
+  const days: unknown[] = Array.isArray(first.days) ? first.days : [];
+  if (!data.length || days.length !== data.length) return null;
+  const points: { at: number; value: number }[] = [];
+  data.forEach((raw, i) => {
+    const value = numeric(raw);
+    // "2026-09-07" or "2026-09-07 13:00:00", read as UTC.
+    const day = typeof days[i] === "string" ? (days[i] as string).trim().replace(" ", "T") : "";
+    const at = Date.parse(day.length === 10 ? `${day}T00:00:00Z` : /[zZ]|[+-]\d\d:?\d\d$/.test(day) ? day : `${day}Z`);
+    if (value !== null && Number.isFinite(at)) points.push({ at, value });
+  });
+  return points.length ? points.sort((a, b) => a.at - b.at) : null;
+}
+
 /** The path of a saved insight with a fresh result: a numeric id directly, a short id through the list filter. */
 export function insightPath(ref: string): string {
   const r = ref.trim();
@@ -193,15 +218,44 @@ export async function fetchMetricValue(
     return value === null ? { ok: false, error: "The query returned no number in its first cell" } : { ok: true, value };
   }
   if (watch.query_kind === "insight") {
-    const parsed = parseJson(await posthogRequest(conn, insightPath(watch.query), { maxBytes: VALUE_READ_MAX_BYTES }, fetchImpl));
-    if (!parsed.ok) return parsed;
-    const insight = /^\d+$/.test(watch.query.trim()) ? parsed.body : parsed.body?.results?.[0];
-    if (!insight) return { ok: false, error: `PostHog has no insight ${watch.query}` };
-    const value = insightScalar(insight);
+    const insight = await readInsight(conn, watch.query, fetchImpl);
+    if (!insight.ok) return insight;
+    const value = insightScalar(insight.insight);
     return value === null ? { ok: false, error: "The insight's result has no number to watch" } : { ok: true, value };
   }
   return { ok: false, error: `A PostHog source cannot poll a ${watch.query_kind} watch` };
 }
+
+/** A saved insight with a fresh result, by numeric id or short id. */
+async function readInsight(conn: PostHogConn, ref: string, fetchImpl: FetchLike): Promise<{ ok: true; insight: any } | { ok: false; status?: number; error: string }> {
+  const parsed = parseJson(await posthogRequest(conn, insightPath(ref), { maxBytes: VALUE_READ_MAX_BYTES }, fetchImpl));
+  if (!parsed.ok) return parsed;
+  const insight = /^\d+$/.test(ref.trim()) ? parsed.body : parsed.body?.results?.[0];
+  return insight ? { ok: true, insight } : { ok: false, error: `PostHog has no insight ${ref}` };
+}
+
+/**
+ * The past values PostHog already holds for a watch, so it starts with a
+ * history instead of one point per poll. Only an insight's series has dated
+ * values; a HogQL watch answers one number and its history is its polls.
+ */
+export async function fetchMetricHistory(
+  conn: PostHogConn,
+  watch: Pick<Doc<"metric_watches">, "query_kind" | "query">,
+  fetchImpl: FetchLike = fetch,
+): Promise<{ ok: true; points: { at: number; value: number }[] } | { ok: false; status?: number; error: string }> {
+  if (watch.query_kind !== "insight") return { ok: false, error: METRIC_NO_HISTORY.hogql };
+  const insight = await readInsight(conn, watch.query, fetchImpl);
+  if (!insight.ok) return insight;
+  const points = insightSeries(insight.insight);
+  return points ? { ok: true, points } : { ok: false, error: METRIC_NO_HISTORY.aggregate };
+}
+
+/** Why a watch has no history to read: not failures, so they never stop a source. */
+export const METRIC_NO_HISTORY = {
+  hogql: "A HogQL watch reads one number; its history is its polls",
+  aggregate: "The insight's value is a total, not a dated series; its history is its polls",
+} as const;
 
 // ── The passthrough query ──
 

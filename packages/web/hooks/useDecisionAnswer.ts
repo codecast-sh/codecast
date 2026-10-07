@@ -49,10 +49,12 @@ export function useDecisionAnswer(item: QueueItem | null) {
   // options commit real money: rendered un-answerable everywhere.
   const isInfraDialog = !!item && item.source !== "decide" && isUsageLimitDialog(options.map((o) => o.label));
 
-  const answer = useCallback((index: number) => {
+  // A decision's answer hands back its dispatch, so a card that held its
+  // buttons can tell a refusal from a write still on its way.
+  const answer = useCallback((index: number): Promise<unknown> | undefined => {
     if (!item) return;
     if (item.source === "decide" && item.decisionId) {
-      answerDecision(item.decisionId, { index });
+      return answerDecision(item.decisionId, { index });
     } else if (poll) {
       sendToSession(item.conversationId, buildSingleAnswerPayload(poll.question, index));
     }

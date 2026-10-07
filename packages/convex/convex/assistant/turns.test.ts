@@ -198,6 +198,24 @@ describe("a turn", () => {
     expect(s.messages.map((m) => m.content)).toEqual(["Book a dentist", "On it."]);
   });
 
+  test("a finished answer names a conversation no title pass has named, past the pass floor", async () => {
+    const { t, user, conversationId } = await setup();
+    const titlePasses = () => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((job) => job.name.includes("generateTitle")).length);
+    // A pass a moment ago (the message-2 milestone, before the reply landed)
+    // holds the usual milestones behind their floor.
+    await t.run((ctx) => ctx.db.patch(conversationId, { title_gen_scheduled_at: Date.now() }));
+    faux.setResponses([reply("Here's your packing list, saved as a note.")]);
+    await say(t, conversationId, user, "Make a packing list for Chicago");
+    await settle(t);
+    expect(await titlePasses()).toBe(1);
+    // Once a pass has named it (it writes a subtitle), turns leave it to the milestones.
+    await t.run((ctx) => ctx.db.patch(conversationId, { subtitle: "Packing for a work trip", title_gen_scheduled_at: Date.now() }));
+    faux.setResponses([reply("Added a gym section.")]);
+    await say(t, conversationId, user, "Add gym clothes");
+    await settle(t);
+    expect(await titlePasses()).toBe(1);
+  });
+
   test("a tool call and its result are stored as rows the transcript renders", async () => {
     const { t, user, conversationId } = await setup();
     faux.setResponses([callTool("list_tasks", {}), reply("You have nothing on your list.")]);
@@ -1114,6 +1132,8 @@ describe("pieces", () => {
   test("the yes says what it does: a routine starts and keeps going, a one-off write is just this time", () => {
     expect(approveWords({ name: "schedule_routine", input: { repeat_every_hours: 168 } }, false)).toBe("Start it. Runs every week until you pause it.");
     expect(approveWords({ name: "schedule_routine", input: {} }, false)).toBe("Set it for that one time.");
+    expect(approveWords({ name: "schedule_routine", input: { days: ["mon", "tue", "wed", "thu", "fri"] } }, false)).toBe("Start it. Runs on weekdays until you pause it.");
+    expect(approveWords({ name: "schedule_routine", input: { days: ["sun"] } }, false)).toBe("Start it. Runs every Sunday until you pause it.");
     expect(approveWords({ name: "send_mail", input: {} }, true)).toBe("Just this time.");
     expect(approveWords({ name: "replace_doc", input: {} }, false)).toBe("Go ahead.");
   });

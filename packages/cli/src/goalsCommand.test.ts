@@ -84,6 +84,25 @@ describe("cast goals", () => {
     expect(JSON.parse(out).principles).toBe(`${SHARED}\nUN-1 Project one.\n`);
   });
 
+  test("--task reads the brief the cause is grounded against: its own workspace and project, never the profile's default", async () => {
+    fs.mkdirSync(path.join(repo, ".codecast"));
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nproject = "Agent Quality"\n`);
+    const tasks: Record<string, unknown> = {
+      "ct-1": { short_id: "ct-1", workspace: "team:t1", project_id: "pj-match" },
+      "ct-2": { short_id: "ct-2", workspace: "team:t1" },
+    };
+    globalThis.fetch = (async (url: string | URL | Request, init: RequestInit) => {
+      const { api_token: _token, ...body } = JSON.parse(String(init.body));
+      const p = String(url).slice(SITE.length);
+      calls.push({ path: p, body });
+      return new Response(JSON.stringify(p === "/cli/work/get" ? tasks[body.short_id] : rows), { status: 200 });
+    }) as typeof fetch;
+    await run("--brief", "--task", "ct-1");
+    expect(calls.at(-1)).toEqual({ path: "/cli/goals/brief", body: { workspace: "team", team_id: "t1", project: "pj-match" } });
+    await run("--brief", "--task", "ct-2");
+    expect(calls.at(-1)).toEqual({ path: "/cli/goals/brief", body: { workspace: "team", team_id: "t1" } });
+  });
+
   test("readPrinciples: the shared set first, the profile's files that exist after it, never the shared set twice", () => {
     fs.writeFileSync(path.join(repo, "own.md"), "CC-1 Own.\n");
     fs.writeFileSync(path.join(repo, "copy.md"), "PR-1 Shared.\n");

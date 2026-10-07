@@ -226,6 +226,9 @@ describe("line.cast template", () => {
   test("after verify: code proves green, then every change meets the eval station, which owns its scope", () => {
     expect(fired("verify", { outcome: "success", category: "code" })).toEqual(["green"]);
     expect(fired("verify", { outcome: "success", category: "prompt" })).toEqual(["eval"]);
+    // A change to the line itself has no reproduction to rerun: eval judges it (line-map.md LX6).
+    expect(fired("verify", { outcome: "success", category: "line" })).toEqual(["eval"]);
+    expect(fired("verify", { outcome: "failure", category: "line" })).toEqual(["implement"]);
     expect(fired("verify", { outcome: "failure", category: "code" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "failure" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "success" })).toEqual(["eval"]);
@@ -329,6 +332,9 @@ describe("line.cast template", () => {
     expect(review).toContain("cast task verdict $task_id approve|changes|reject --note -");
     expect(graph.nodes.get("analyze")?.prompt).toContain("cast task update $task_id --steps -");
     expect(graph.nodes.get("implement")?.prompt).toContain("cast task handoff $task_id");
+    // A line cause (LX6): the builder knows the line's own files are the change, and P9 holds a station prompt.
+    for (const f of [".codecast/line.toml", ".codecast/line/line.cast", "cast expectations propose", "P9"]) expect(graph.nodes.get("implement")?.prompt).toContain(f);
+    expect(graph.nodes.get("prove")?.prompt).toContain("For line:");
   });
 
   test("script variables expand shell-quoted and leave $( alone; $human_message is empty when there is no note", () => {
@@ -387,6 +393,13 @@ describe("line.cast station scripts", () => {
     expect(calls()).toEqual([]);
   });
 
+  test("red for a line cause: the prove comment names the recorded runs, so it passes with that note", () => {
+    const line = run("red", { category: "line" });
+    expect(line.code).toBe(0);
+    expect(line.json).toEqual({ red: true, dir: runDir(), why: "a line cause: the prove comment names the recorded runs that show it" });
+    expect(calls()).toEqual([]);
+  });
+
   test("red for a prompt: the project's prove command shows the miss, run with the run's values; without one it passes with a note", () => {
     const prove = { category: "prompt", "line.commands.prove": 'test -s "$run_dir/freezes.txt" || { echo "no freezes for $task_id"; exit 1; }' };
     const missing = run("red", prove);
@@ -409,10 +422,14 @@ describe("line.cast station scripts", () => {
     fs.writeFileSync(path.join(repo, "prompt.txt"), "fixed\n");
     git("commit", "-qam", "fix");
     // The miss shows only while the prompt is the old one.
-    const prove = { category: "prompt", "line.commands.prove": 'grep -q old prompt.txt' };
+    const prove = { category: "prompt", branch: "codecast/line-ct-1", "line.commands.prove": 'grep -q old prompt.txt' };
     expect(run("red", prove).json).toEqual({ red: true, dir: runDir(), why: "the prove command shows the miss on the base" });
     expect(git("rev-parse", "--abbrev-ref", "HEAD")).toBe("codecast/line-ct-1");
     expect(fs.readFileSync(path.join(repo, "prompt.txt"), "utf-8")).toBe("fixed\n");
+    // A worktree an earlier station left detached on the base still ends on the run's branch.
+    git("checkout", "-q", "--detach", "main");
+    expect(run("red", prove).json.red).toBe(true);
+    expect(git("rev-parse", "--abbrev-ref", "HEAD")).toBe("codecast/line-ct-1");
     // Uncommitted work is never carried to the base.
     fs.writeFileSync(path.join(repo, "prompt.txt"), "edited\n");
     expect(run("red", prove).json.why).toBe("the worktree has uncommitted changes, so it cannot go to the base to show the miss");
@@ -455,7 +472,7 @@ describe("line.cast station scripts", () => {
     expect(crashed.out).toContain(`the eval command exited 2 and wrote no ${dir}/reps.json`);
     expect(calls()).toEqual([]);
     expect(run("eval", {}).code).toBe(0);
-    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's line profile names no eval command, so the eval station passed without evals.", "-t", "progress"]]);
+    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's line profile names no eval command, so the eval station passed without evals and the change is unscored.", "-t", "progress"]]);
   });
 
   test("ship runs the project's ship command and puts the one line it prints on the task; without one the merge step lands it", () => {
@@ -471,6 +488,23 @@ describe("line.cast station scripts", () => {
     expect(calls()).toEqual([
       ["task", "comment", "ct-1", "Shipped: merged codecast/line-ct-1 for ct-1 (run_1); deploy pending", "-t", "progress"],
       ["task", "comment", "ct-1", "Not shipped: not merged: no green eval gate", "-t", "blocker"],
+    ]);
+  });
+
+  test("dissolve: a miss that did not reproduce, and findings that were the judge's own mistake", () => {
+    expect(run("dissolve", {}).json).toEqual({ dissolved: "no_repro" });
+    fs.mkdirSync(runDir(), { recursive: true });
+    const moments = [
+      { judge: "comms", finding: "f-1", sentence: "The reply reports no problem about a call that reached voicemail.", name: "voicemail" },
+      { judge: "comms", finding: "f-2", sentence: "The reply reports no problem about a contact who went quiet.", name: "went quiet" },
+    ];
+    fs.writeFileSync(path.join(runDir(), "judge-defects.json"), JSON.stringify(moments, null, 1));
+    const judged = run("dissolve", {});
+    expect(judged.code).toBe(0);
+    expect(judged.json).toEqual({ dissolved: "judge_defect", moments: 2 });
+    expect(calls()).toEqual([
+      ["task", "done", "ct-1", "-m", "Dissolved: the miss did not reproduce. The evidence is in the prove comment."],
+      ["task", "done", "ct-1", "-m", "Dissolved: the findings were the judge's own mistake. 2 moments are recorded for that judge's evals; the prove comment has the evidence."],
     ]);
   });
 
@@ -644,6 +678,16 @@ describe("line.cast offline run through the session path", () => {
     const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
     expect(ran.slice(-3)).toEqual(["ship", "watch", "exit"]);
     expect(ran).not.toContain("merge");
+  }, 30000);
+
+  test("a miss that does not reproduce dissolves, and the dissolve station's line reaches the run as its node's result", async () => {
+    pinned.prove = 'No miss.\n```json\n{"reproduced": false}\n```';
+    const graph = offlineLine(tmpDir);
+    graph.nodes.get("dissolve")!.script = `printf '{"dissolved": "judge_defect", "moments": 2}\\n'; echo "Marked ct-7 done"`;
+    expect(await runWorkflow(graph, opts({ runId: "run_1" }))).toBe("completed");
+    expect(stations()).toEqual(["ground", "analyze", "prove"]);
+    const node = calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "dissolve" && c.body.node_status === "completed")!.body;
+    expect(JSON.parse(node.result_preview.split("\n")[0])).toEqual({ dissolved: "judge_defect", moments: 2 });
   }, 30000);
 
   test("a malformed profile stops the run before any hand starts", async () => {

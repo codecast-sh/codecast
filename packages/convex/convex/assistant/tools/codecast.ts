@@ -24,7 +24,7 @@ import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks"
 import { internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import { MEMORY_DOC_TITLE, TASK_LIST_FILTERS } from "./workspace";
-import { instant, NEVER, WHOLE_TOOL, type AllowScopes } from "@platform/assistant";
+import { instant, NEVER, WEEKDAY_KEYS, weekdayNumbers, WHOLE_TOOL, type AllowScopes } from "@platform/assistant";
 
 /** The sourced codecast tools whose results hold only text the person
  *  approved: the memory doc, which grows through remember's gate or an
@@ -65,7 +65,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
     defineTool({
       name: "list_tasks",
       label: "Check tasks",
-      description: "List the person's own tasks in codecast, most recently changed first: open ones by default, or finished ones (done or dropped), or all.",
+      description: "List the person's own to-dos, most recently changed first: open ones by default, or finished ones (done or dropped), or all.",
       parameters: Type.Object({
         filter: Type.Optional(literals(TASK_LIST_FILTERS)),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
@@ -80,7 +80,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
     defineTool({
       name: "create_task",
       label: "Add a task",
-      description: "Add a task to the person's own task list in codecast.",
+      description: "Add a to-do to the person's own to-do list.",
       parameters: Type.Object({
         title: Type.String(),
         description: Type.Optional(Type.String()),
@@ -95,9 +95,9 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
     defineTool({
       name: "update_task",
       label: "Update a task",
-      description: "Change one of the person's own tasks: its title, notes, priority, or status (done closes it, dropped abandons it). A task linked to a GitHub or Linear issue, or shared by link, cannot be changed here.",
+      description: "Change one of the person's own to-dos: its title, notes, priority, or status (done closes it, dropped abandons it). A to-do linked to a GitHub or Linear issue, or shared by link, cannot be changed here.",
       parameters: Type.Object({
-        id: Type.String({ description: "The task id from list_tasks, like ct-123." }),
+        id: Type.String({ description: "The to-do's id from list_tasks, like ct-123." }),
         title: Type.Optional(Type.String()),
         description: Type.Optional(Type.String()),
         status: Type.Optional(literals(TASK_STATUS_CATEGORIES)),
@@ -192,21 +192,29 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
       description:
         "Set a routine: an instruction this conversation carries out at a time, once or repeating. When it fires, the instruction arrives here as a message and you do the work then. " +
         "Write the instruction so it stands on its own. " +
-        "The only schedule is a first run and an optional fixed repeat, counted in hours from that first run. There are no weekdays-only schedules, no skipped days and no calendar rules: a 24 hour repeat also runs on Saturday and Sunday, so say that to a person who asks for weekdays only rather than promising it will skip them.",
+        "A routine at a time of day (every day at 8, weekdays at 8, every Sunday at 6) is first_run plus days, and keeps that time on their clock. A repeat within a day (every 3 hours) is first_run plus repeat_every_hours. Leave both out for once.",
       parameters: Type.Object({
-        instruction: Type.String({ description: "What you will do each time, written to the person in plain words as \"you\", like \"Remind you to plan the week, with a short checklist\". They read it on the approval card before agreeing, and it comes back to you as this routine's request when it runs. Name only work your tools can do now." }),
+        instruction: Type.String({ description: "What you will do each time, in plain words, like \"Remind you to plan the week, with a short checklist\". It comes back to you as this routine's request when it runs. Name only work your tools can do now." }),
         title: Type.Optional(Type.String({ description: "A short name the person sees." })),
-        first_run: Type.String({ description: "When it first runs, ISO 8601 with its UTC offset, like 2026-10-06T08:00:00-07:00. Every later run follows from it, so it must fall on the day asked for on the person's own calendar: for \"every Monday\", a date that is a Monday there. Work the weekday out from today's date before you write it." }),
-        repeat_every_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: `Repeat this often; 24 is daily, 168 weekly. Leave out for once. At least ${ROUTINE_MIN_INTERVAL_MS / 3_600_000}; the person's plan may set a longer floor.` })),
+        first_run: Type.String({ description: "When it first runs, ISO 8601 with its UTC offset, like 2026-10-06T08:00:00-07:00. Its time of day is the routine's time. With days, the first run is the first listed day on or after this date." }),
+        days: Type.Optional(Type.Array(literals(WEEKDAY_KEYS), { minItems: 1, uniqueItems: true, description: "The days of the week it runs on, at first_run's time of day: all seven for every day, mon to fri for weekdays, one day for weekly." })),
+        repeat_every_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: `For a repeat within a day only: repeat this many hours apart, counted from first_run. At least ${ROUTINE_MIN_INTERVAL_MS / 3_600_000}; the person's plan may set a longer floor. Not with days.` })),
       }),
       risk: "write",
-      run: async ({ instruction, title, first_run, repeat_every_hours }) => {
+      run: async ({ instruction, title, first_run, days, repeat_every_hours }) => {
+        if (days?.length && repeat_every_hours !== undefined) throw new Error("Give days or repeat_every_hours, not both");
+        const weekdays = days?.length ? weekdayNumbers(days) : undefined;
+        // Daily or weekly, the nominal spacing the plan check reads; the run
+        // times come from the wall clock (assistant/routines.ts hostedWallCadence).
+        const interval_ms = weekdays ? (weekdays.length === 1 ? 7 * 86_400_000 : 86_400_000)
+          : repeat_every_hours !== undefined ? Math.round(repeat_every_hours * 3_600_000) : undefined;
         const routine = await deps.runMutation(ops.scheduleRoutine, {
           ...here,
           prompt: instruction,
           ...(title ? { title } : {}),
           run_at: instant(first_run, "first_run"),
-          ...(repeat_every_hours !== undefined ? { interval_ms: Math.round(repeat_every_hours * 3_600_000) } : {}),
+          ...(interval_ms !== undefined ? { interval_ms } : {}),
+          ...(weekdays ? { weekdays } : {}),
         });
         return { content: `Routine set: ${json(routine)}`, details: { routine_id: routine.id } };
       },

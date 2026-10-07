@@ -10,6 +10,7 @@ import { changeGuideValidator } from "./lib/changeGuideValidator";
 import { followViewValidator } from "./lib/followView";
 import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
+import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -5039,6 +5040,12 @@ export default defineSchema({
     // the arming after the run returns to the cadence. Absent otherwise:
     // run_at is then the slot.
     cadence_slot_at: v.optional(v.number()),
+    // A hosted routine said as a time of day (assistant/routines.ts
+    // hostedWallCadence): the minutes past local midnight in `zone` and the
+    // weekdays (0 is Sunday) it runs on. When set, each run is found on that
+    // clock (@platform/assistant nextCadenceRun) and interval_ms is only the
+    // nominal spacing the plan check reads. Absent for interval triggers.
+    cadence: v.optional(v.object({ zone: v.string(), minutes: v.number(), weekdays: v.array(v.number()) })),
     event_filter: v.optional(eventFilterValidator),
     // Events fired at this trigger since its last claim, newest last and
     // capped at PENDING_EVENTS_CAP (external-data.md X4). Two firings before a
@@ -5931,13 +5938,10 @@ export default defineSchema({
     // parks it), what kind of change it needs, how much review it needs, and
     // whether it can be worked as it stands.
     goal_ref: v.optional(v.string()),
-    category: v.optional(v.union(
-      v.literal("code"),
-      v.literal("prompt"),
-      v.literal("ux"),
-      v.literal("infra"),
-      v.literal("data"),
-    )),
+    // Derived from LINE_CATEGORIES, the ground prompt's own list, so the
+    // stored field, the ground validator and the prompt cannot disagree.
+    // `line` is a change to the project's line itself (line-map.md LX6).
+    category: v.optional(v.union(...LINE_CATEGORIES.map((c) => v.literal(c)))),
     risk: v.optional(v.union(v.literal("low"), v.literal("review"), v.literal("plan"))),
     readiness: v.optional(v.union(
       v.literal("ready"),
@@ -6020,8 +6024,12 @@ export default defineSchema({
     observed_at: v.number(),
     created_at: v.number(),
     task_id: v.id("tasks"),
-    // The project the signal was filed into, or its cause's (line-profile.md LP1).
+    // The project of the cause it reached, else the one it was filed into
+    // (line-profile.md LP1).
     project_id: v.optional(v.id("projects")),
+    // Set when the finder filed it for a project other than its cause's: a
+    // fingerprint attaches across the workspace (the-line-end-to-end.md LE4).
+    filed_for_project_id: v.optional(v.id("projects")),
     attach: v.union(v.literal("fingerprint"), v.literal("judge"), v.literal("new"), v.literal("person")),
     // Set when this signal reopened a cause in watch (LE12).
     reopened: v.optional(v.boolean()),

@@ -24,6 +24,7 @@ import { createTaskAs, updateTaskAs } from "../../tasks";
 import { createDocAs, ownDocsBySourceFile, updateDocAs } from "../../docs";
 import { applyCancel, insertTask, logVerb } from "../../agentTasks";
 import { hostedHomeStamp, hostedOwnerRefusal } from "../routines";
+import { plainCadence } from "@platform/assistant/cadence";
 
 type Ctx = { db: any };
 
@@ -313,7 +314,7 @@ const routineView = (task: Doc<"agent_tasks">) => ({
   title: task.display_title ?? task.title,
   status: task.status,
   schedule: task.schedule_type,
-  ...(task.interval_ms ? { every_hours: Math.round((task.interval_ms / 3_600_000) * 100) / 100 } : {}),
+  ...(task.cadence ? { repeats: plainCadence(task.cadence) } : task.interval_ms ? { every_hours: Math.round((task.interval_ms / 3_600_000) * 100) / 100 } : {}),
   ...(task.run_at && task.status === "scheduled" ? { next_run: iso(task.run_at) } : {}),
   ...(task.last_run_at ? { last_run: iso(task.last_run_at) } : {}),
 });
@@ -326,6 +327,7 @@ export const scheduleRoutine = internalMutation({
     prompt: v.string(),
     run_at: v.number(),
     interval_ms: v.optional(v.number()),
+    weekdays: v.optional(v.array(v.number())),
   },
   handler: async (ctx, args) => {
     await hostedHome(ctx, args.user_id, args.conversation_id);
@@ -342,6 +344,7 @@ export const scheduleRoutine = internalMutation({
       schedule_type: args.interval_ms !== undefined ? "recurring" : "once",
       run_at: args.run_at,
       interval_ms: args.interval_ms,
+      weekdays: args.weekdays,
     });
     const row = (await ctx.db.get(created.id as Id<"agent_tasks">)) as Doc<"agent_tasks">;
     return routineView(row);

@@ -30,7 +30,8 @@ import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
 import { armedTriggers } from "./lib/triggerMatch";
-import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
+import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, hostedWallCadence, type HostedRoutine } from "./assistant/routines";
+import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
 
@@ -75,6 +76,12 @@ export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: R
 // slot the trigger was armed for, so the arming after the run
 // (nextArmingAfterRun) returns to the cadence instead of restarting it from
 // wherever the detour ended.
+// The first cadence slot after `after`: on the wall clock when the routine
+// keeps one (hostedWallCadence), else one interval on.
+function nextRecurringRun(task: Pick<Doc<"agent_tasks">, "interval_ms"> & Partial<Pick<Doc<"agent_tasks">, "cadence">>, after: number): number {
+  return task.cadence ? nextCadenceRun(task.cadence, after) : after + (task.interval_ms ?? 0);
+}
+
 function offCadence(task: Doc<"agent_tasks">, runAt: number): { run_at: number; cadence_slot_at?: number } {
   return task.schedule_type === "recurring"
     ? { run_at: runAt, cadence_slot_at: task.cadence_slot_at ?? task.run_at }
@@ -186,7 +193,7 @@ export async function applyActivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   const interval = task.interval_ms;
   await patchTask(ctx, task, {
     status: "scheduled",
-    run_at: Date.now() + (task.schedule_type === "recurring" && interval ? interval : 0),
+    run_at: task.schedule_type === "recurring" && interval ? nextRecurringRun(task, Date.now()) : Date.now(),
     cadence_slot_at: undefined,
     ...(task.precheck === "exit 1" ? { precheck: undefined } : {}),
   });
@@ -231,7 +238,7 @@ export async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
       task.schedule_type === "event"
         ? undefined
         : task.schedule_type === "recurring" && task.interval_ms
-          ? Date.now() + task.interval_ms
+          ? nextRecurringRun(task, Date.now())
           : task.run_at && task.run_at > Date.now()
             ? task.run_at
             : Date.now() + 60_000,
@@ -568,6 +575,9 @@ interface NewTaskArgs {
   role_id?: Id<"org_roles">;
   /** Created paused (org-hire.md H8): a routine a person activates later. Never for event triggers. */
   status?: "scheduled" | "paused";
+  /** The weekdays (0 is Sunday) a hosted routine runs on, at run_at's time
+   *  of day (assistant/routines.ts hostedWallCadence). */
+  weekdays?: number[];
 }
 
 export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
@@ -586,7 +596,12 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
   // A row created paused carries no run_at: activation (applyActivate) sets
   // the first run one interval out, so nothing fires until a person acts.
   const paused = args.status === "paused";
-  const run_at = args.schedule_type === "event" || paused ? undefined : (args.run_at || now);
+  const hosted = !!(await hostedHomeStamp(ctx, args.originating_conversation_id));
+  // A routine said as a time of day keeps it; its first run is the first slot
+  // on or after the one asked for (a weekdays routine asked for on a Saturday
+  // starts Monday).
+  const wall = await hostedWallCadence(ctx, { user_id: userId, hosted, schedule_type: args.schedule_type, interval_ms: args.interval_ms, run_at: args.run_at || now, weekdays: args.weekdays });
+  const run_at = args.schedule_type === "event" || paused ? undefined : (wall?.run_at ?? (args.run_at || now));
   await assertRoutineAllowed(ctx, {
     user_id: userId,
     originating_conversation_id: args.originating_conversation_id,
@@ -609,7 +624,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     originating_conversation_id: args.originating_conversation_id
       ? args.originating_conversation_id as Id<"conversations">
       : undefined,
-    hosted_home: await hostedHomeStamp(ctx, args.originating_conversation_id),
+    hosted_home: hosted || undefined,
     target_conversation_id: args.target_conversation_id
       ? args.target_conversation_id as Id<"conversations">
       : undefined,
@@ -625,6 +640,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     schedule_type: args.schedule_type,
     run_at,
     interval_ms: args.interval_ms,
+    cadence: wall?.cadence,
     event_filter,
     // Permissive by default: a schedule can act unless it explicitly opts into
     // safe (read-only) mode. Only an explicit "propose" restricts. Existing
@@ -1307,7 +1323,11 @@ function completedTaskRunFields(
 // day, until it landed just past the 24 hour window its evidence had to fall
 // in. A run that outlasts its interval skips the slots it missed, and a manual
 // run ahead of the next slot leaves that slot standing.
-export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type" | "interval_ms" | "run_at" | "cadence_slot_at"> & Partial<Pick<Doc<"agent_tasks">, "pending_events">>, now: number): Record<string, any> {
+export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type" | "interval_ms" | "run_at" | "cadence_slot_at"> & Partial<Pick<Doc<"agent_tasks">, "pending_events" | "cadence">>, now: number): Record<string, any> {
+  if (task.schedule_type === "recurring" && task.cadence) {
+    const slot = task.cadence_slot_at ?? task.run_at ?? now;
+    return { status: "scheduled", run_at: slot > now ? slot : nextCadenceRun(task.cadence, now), cadence_slot_at: undefined };
+  }
   if (task.schedule_type === "recurring" && task.interval_ms) {
     const slot = task.cadence_slot_at ?? task.run_at ?? now;
     const elapsed = slot > now ? 0 : Math.floor((now - slot) / task.interval_ms) + 1;
@@ -2465,6 +2485,15 @@ export async function applyTaskUpdate(
   // A new schedule is a new cadence: a slot kept from a detour under the old
   // one (offCadence) must not pull the next arming back onto it.
   if ("run_at" in patch) patch.cadence_slot_at = undefined;
+  // A schedule edit re-reads the wall clock (hostedWallCadence): a hosted
+  // daily or weekly routine keeps its time of day, and a daily one keeps the
+  // weekdays it had while its interval is unchanged. An interval edit drops it.
+  if ("run_at" in patch || "interval_ms" in patch || "schedule_type" in patch) {
+    const next = { schedule_type: (patch.schedule_type as string | undefined) ?? task.schedule_type, interval_ms: "interval_ms" in patch ? (patch.interval_ms as number | undefined) : task.interval_ms, run_at: "run_at" in patch ? (patch.run_at as number | undefined) : task.run_at };
+    const wall = await hostedWallCadence(ctx, { user_id: task.user_id, hosted: !!task.hosted_home, ...next, kept: next.interval_ms === task.interval_ms ? task.cadence : undefined });
+    patch.cadence = wall?.cadence;
+    if (wall && "run_at" in patch) patch.run_at = wall.run_at;
+  }
 
   // Which editable fields actually differ. The display_* resets ride along
   // with a prompt change but aren't edits themselves, so they never appear in

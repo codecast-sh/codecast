@@ -344,6 +344,12 @@ export const ingestTables = {
     state: v.union(v.literal("ok"), v.literal("alert")),
     group_id: v.optional(v.id("event_groups")),
     last_error: v.optional(v.string()),
+    /**
+     * The last read of the history the source already holds (metrics.loadHistory):
+     * when, how many past points it added, or why there is none. `reading`
+     * while the read is on its way.
+     */
+    history: v.optional(v.object({ at: v.number(), added: v.number(), note: v.optional(v.string()), reading: v.optional(v.boolean()) })),
     created_at: v.number(),
     updated_at: v.number(),
   })
