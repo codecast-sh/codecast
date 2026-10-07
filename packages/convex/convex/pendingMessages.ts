@@ -796,7 +796,7 @@ export async function performSessionSend(
   authUserId: Id<"users">,
   // `target`: a session the caller already resolved and checked (a role's
   // standing session behind `cast role wake`); it skips the `to` lookup.
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; image_storage_ids?: Id<"_storage">[]; target?: any }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; image_storage_ids?: Id<"_storage">[]; target?: any }
 ): Promise<{
   message_id: Id<"pending_messages">;
   to_short_id: string;
@@ -942,6 +942,7 @@ export async function performSessionSend(
     // composer, a detached `cast send`). A raw send is the model/effort
     // picker's slash command, a gesture rather than a message.
     human: !fromRef && !args.raw,
+    queue: !!args.queue && !!args.direct,
   });
 
   // Immediate liveness signal so the CLI can warn "the session looks offline" right away,
@@ -1024,6 +1025,9 @@ export const sendSessionMessage = mutation({
     // false = hold the send when the target is killed or idle past the prompt
     // cache lifetime (the CLI's default); true or absent = deliver regardless.
     wake: v.optional(v.boolean()),
+    // A person's "Queue for later": held for the end of the agent's turn in
+    // the session's shared queue (enqueuePendingMessage.queue). Direct sends only.
+    queue: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
