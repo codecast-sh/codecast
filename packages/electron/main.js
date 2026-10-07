@@ -153,8 +153,11 @@ const editUndo = createEditUndo({
 // loads: a boot screen or a loader there is an opaque card over somebody's work.
 function createShellWindow(options) {
   if (options.transparent) {
+    // Extends the caller's preferences (built from preloadPrefs()) rather than
+    // building a window's own.
     const prefs = options.webPreferences ?? {};
-    options = { ...options, webPreferences: { ...prefs, additionalArguments: [...(prefs.additionalArguments ?? []), "--transparent-window"] } };
+    const webPreferences = { ...prefs, additionalArguments: [...(prefs.additionalArguments ?? []), "--transparent-window"] };
+    options = { ...options, webPreferences };
   }
   return shellAuthority.register(new BrowserWindow(options));
 }

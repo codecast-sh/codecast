@@ -16961,7 +16961,7 @@ work
   .option("--steps <lines>", stdinText("Acceptance criteria as ordered steps, one per line (replaces the list)"))
   .option("--criteria <lines>", stdinText("Acceptance criteria, one per line (replaces the list)"))
   .option("--goal-ref <ref>", "The goal the cause threatens: a metric ref (in-N:key) or project short id from cast goals, or none; '' clears")
-  .option("--category <kind>", "What kind of change it needs: code, prompt, ux, infra or data")
+  .option("--category <kind>", "What kind of change it needs: code, prompt, ux, infra, data, or line (the project's own line)")
   .option("--risk <level>", "How much review it needs: low, review or plan")
   .option("--readiness <state>", "Whether it can be worked as it stands: ready, needs_context or not_actionable")
   .option("--readiness-note <text>", "One line on why")
@@ -20859,6 +20859,8 @@ workflow
       return;
     }
 
+    const { stopRunOnSignals } = await import("./workflow/runner.js");
+    stopRunOnSignals(runOpts);
     const outcome = await runWorkflow(graph, runOpts);
     if (outcome !== "completed") process.exitCode = 1;
   });
@@ -20893,8 +20895,21 @@ workflow
       console.error(`Workflow has no nodes — cannot execute. "${run.workflow_name ?? wf.name}" is neither a pushed workflow nor a shipped template.`);
       process.exit(1);
     }
-    const { runWorkflow } = await import("./workflow/runner.js");
-    const outcome = await runWorkflow(graph as any, {
+    // A row a runner already took past its start continues where it stands
+    // (runResume.ts): its runner died, and starting over would re-ask gates
+    // a person has answered.
+    const { isMidRun } = await import("./workflow/runResume.js");
+    const resume = isMidRun(run);
+    if (resume && !fs.existsSync(projectPath)) {
+      console.error(`Cannot resume ${runId} here: its checkout ${projectPath} is not on this machine.`);
+      process.exit(1);
+    }
+    if (!resume && run.status !== "pending") {
+      console.error(`Run ${runId} is ${run.status}: nothing to run.`);
+      process.exit(1);
+    }
+    const { runWorkflow, stopRunOnSignals } = await import("./workflow/runner.js");
+    const runOpts = {
       runId,
       convexSiteUrl: siteUrl,
       apiToken: config.auth_token,
@@ -20904,7 +20919,10 @@ workflow
       planId: run.plan_short_id,
       spawnerSession: run.spawner_conversation_id || undefined,
       runSession: run.primary_conversation_id || undefined,
-    });
+      ...(resume ? { resume: run } : {}),
+    };
+    stopRunOnSignals(runOpts);
+    const outcome = await runWorkflow(graph as any, runOpts);
     if (outcome !== "completed") process.exitCode = 1;
   });
 

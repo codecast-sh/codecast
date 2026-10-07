@@ -25,11 +25,23 @@ afterEach(() => {
   fs.rmSync(stage, { recursive: true, force: true });
 });
 
+// Workers on a file written at runtime rather than one in src/: no build can
+// name them, so the entrypoint rule does not reach them. Each still may not
+// start a source module.
+const RUNTIME_WORKERS: Record<string, string> = {
+  // A mod's approved local code, written to disk on every start.
+  "mods/localRunner.ts": "new Worker(file)",
+};
+
 test("every new Worker in src names a built entrypoint by its .js name", () => {
   const found: string[] = [];
   for (const rel of fs.readdirSync(import.meta.dir, { recursive: true }) as string[]) {
     if (!/\.tsx?$/.test(rel) || /\.test\.tsx?$/.test(rel)) continue;
     const source = fs.readFileSync(path.join(import.meta.dir, rel), "utf8");
+    if (RUNTIME_WORKERS[rel]) {
+      expect(source.match(/new Worker\([^;]*/g), `${rel}: only its runtime worker`).toEqual([RUNTIME_WORKERS[rel]]);
+      continue;
+    }
     for (const match of source.matchAll(/new Worker\(([^;]*)/g)) {
       const spec = /new URL\("\.\/([^"]+)", import\.meta\.url\)/.exec(match[1]);
       expect(spec, `${rel}: new Worker must take new URL("./<name>.js", import.meta.url)`).not.toBeNull();

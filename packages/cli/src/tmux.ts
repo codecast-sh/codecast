@@ -433,7 +433,7 @@ const PANE_LIST_FIELDS = [
   "#{@codecast_project_path}",
   "#{session_name}",
 ];
-const PANE_LIST_FORMAT = PANE_LIST_FIELDS.join(PANE_FIELD_SEP);
+export const PANE_LIST_FORMAT = PANE_LIST_FIELDS.join(PANE_FIELD_SEP);
 
 export type CodecastPane = {
   tmux: string;

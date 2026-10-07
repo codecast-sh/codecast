@@ -250,10 +250,11 @@ Short ids render as live pills wherever codecast shows prose.`,
     hasOptions: true,
     description: `Goals: the workspace's active initiatives with their metrics, project charters and principles, as one document
 
-  cast goals [--brief] [--json] [--team <name|id|personal>]
+  cast goals [--brief] [--json] [--project <ref> | --task <ct>] [--team <name|id|personal>]
 
 --brief is the compact shape a prompt reads. Each metric prints with its goal_ref
-(in-N:key); a project's goal_ref is its short id.`,
+(in-N:key); a project's goal_ref is its short id. --task reads the brief a cause
+is grounded against: its own project's, else its workspace's.`,
     load: () => import("./goalsCommand.js").then((m) => m.registerGoalsCommand),
   },
   {
@@ -402,10 +403,11 @@ host and token: cast integrations connect <provider>`,
   },
   {
     token: "replay",
-    description: `Replays: what a person did before something broke, as text and as a repro
+    description: `Replays: what a person did before something broke, as text, as frames of the page and as a repro
 
   cast replay ls [--source s] [--group eg-N]
-  cast replay show rp-N
+  cast replay show rp-N [--at 1:23]
+  cast replay snap rp-N@1:23 | rp-N@1:00-2:30 [--every 10s]
   cast replay repro rp-N [--base-url https://app] [--out file]
   cast replay import --source <posthog|sentry> [--since 30d|all] [--status|--stop]`,
     load: () => import("./replayCommand.js").then((m) => m.registerReplayCommand),
@@ -417,6 +419,7 @@ host and token: cast integrations connect <provider>`,
   cast metrics ls
   cast metrics add <name> --source s --hogql "<q>" --above <n> [--every 1h]
   cast metrics show|rm mw-N
+  cast metrics history [mw-N] [--source s]   past values from PostHog, now
   cast metrics query "<hogql>" --source s`,
     load: () => import("./metricsCommand.js").then((m) => m.registerMetricsCommand),
   },

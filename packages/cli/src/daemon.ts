@@ -57,6 +57,7 @@ import { formatHarnessChange, harnessCauseEnv, markHarnessChangesSent, removeHar
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
+import { liveRunnerPid } from "./workflow/runResume.js";
 import {
   accountSwitchRestartReason,
   previousAccountToClaim,
@@ -1444,6 +1445,69 @@ function persistLogQueue(): void {
   try {
     fs.writeFileSync(LOG_QUEUE_FILE, JSON.stringify(remoteLogQueue), { mode: 0o600 });
   } catch {}
+}
+
+// A workflow run executes in a tmux pane of its own (`cast workflow run-daemon`,
+// which resumes a row a runner already took past its start). Both a
+// run_workflow command and the resume sweep start one here. A run a live
+// runner holds is left alone; a pane a dead runner left is replaced.
+async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: string): Promise<{ tmux_session: string } | { error: string }> {
+  const holder = liveRunnerPid(runId);
+  if (holder) return { error: `run ${runId} is already driven by pid ${holder}` };
+  if (!hasTmux()) return { error: "tmux is not installed" };
+  let projectPath = process.env.HOME || "/tmp";
+  try {
+    const resp = await fetch(`${siteUrl}/cli/workflow-runs/get`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, run_id: runId }),
+    });
+    const data = await resp.json() as any;
+    const vp = data.run?.project_path ? validatePath(data.run.project_path) : null;
+    if (vp) projectPath = vp;
+  } catch {}
+  const tmuxSession = `wf-${runId.slice(-6)}`;
+  try { tmuxExecSync(["kill-session", "-t", `=${tmuxSession}`], { timeout: 5000 }); } catch { /* none left */ }
+  const { cmd: castCmd, prefixArgs: castPrefix } = resolveCastInvocation();
+  const cmdText = `${[castCmd, ...castPrefix].join(" ")} workflow run-daemon ${runId}`;
+  try {
+    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    await typeIntoPane(tmuxSession, cmdText);
+    log(`[REMOTE] Started workflow run ${runId} in tmux: ${tmuxSession}`);
+    return { tmux_session: tmuxSession };
+  } catch (spawnErr) {
+    return { error: `Failed to start workflow: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}` };
+  }
+}
+
+// A run outlives its runner (workflow/runResume.ts): the live runs this
+// machine drove whose runner is gone (a reboot, a crash, a closed pane)
+// continue where they stand. At most three resumes a run in six hours, so a
+// runner that dies on start is not restarted forever.
+const WORKFLOW_RESUME_TICK_MS = 2 * 60_000;
+const workflowResumes = new Map<string, number[]>();
+async function resumeOrphanedWorkflowRuns(): Promise<void> {
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!siteUrl || !token) return;
+  const resp = await fetch(`${siteUrl}/cli/workflow-runs/live-on-device`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: token, device: deviceId() }),
+  });
+  const data = await resp.json().catch(() => null) as { runs?: Array<{ run_id: string; current_node_id: string | null; updated_at: number }> } | null;
+  const now = Date.now();
+  for (const run of data?.runs ?? []) {
+    if (liveRunnerPid(run.run_id)) continue;
+    // A runner launched a moment ago has not claimed the run yet.
+    if (now - run.updated_at < WORKFLOW_RESUME_TICK_MS) continue;
+    const recent = (workflowResumes.get(run.run_id) ?? []).filter((t) => now - t < 6 * 60 * 60_000);
+    if (recent.length >= 3) continue;
+    workflowResumes.set(run.run_id, [...recent, now]);
+    log(`[WORKFLOW] ${run.run_id} has no runner here; resuming it at ${run.current_node_id ?? "its start"}`);
+    const started = await launchWorkflowRun(siteUrl, token, run.run_id);
+    if ("error" in started) log(`[WORKFLOW] resume of ${run.run_id} failed: ${started.error}`);
+  }
 }
 
 function getSiteUrl(): string | null {
@@ -6128,41 +6192,9 @@ async function executeRemoteCommand(
           error = "Missing workflow_run_id";
           break;
         }
-
-        let projectPath = process.env.HOME || "/tmp";
-        try {
-          const resp = await fetch(`${siteUrl}/cli/workflow-runs/get`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_token: config.auth_token, run_id: workflowRunId }),
-          });
-          const data = await resp.json() as any;
-          if (data.run?.project_path) {
-            const vp = validatePath(data.run.project_path);
-            if (vp) projectPath = vp;
-          }
-        } catch {}
-
-        const shortId = workflowRunId.slice(-6);
-        const tmuxSession = `wf-${shortId}`;
-
-        if (!hasTmux()) {
-          error = "tmux is not installed";
-          break;
-        }
-
-        const { cmd: castCmd, prefixArgs: castPrefix } = resolveCastInvocation();
-        const castBin = [castCmd, ...castPrefix].join(" ");
-        const cmdText = `${castBin} workflow run-daemon ${workflowRunId}`;
-
-        try {
-          tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
-          await typeIntoPane(tmuxSession, cmdText);
-          result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
-          log(`[REMOTE] Started workflow run ${workflowRunId} in tmux: ${tmuxSession}`);
-        } catch (spawnErr) {
-          error = `Failed to start workflow: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
-        }
+        const started = await launchWorkflowRun(siteUrl, config.auth_token, workflowRunId);
+        if ("error" in started) error = started.error;
+        else result = JSON.stringify({ tmux_session: started.tmux_session, workflow_run_id: workflowRunId });
         break;
       }
       case "start_session": {
@@ -8150,7 +8182,7 @@ async function executeRemoteCommand(
         // order; the republish (a cast cold start) runs off the command queue
         // and the reply says it is pending. args: LineProfileEditArgs.
         // Result: LineProfileEditReply.
-        const { runLineProfileEdit } = await import("./lineProfileEdit.js");
+        const { runLineProfileEdit, removeLineFile } = await import("./lineProfileEdit.js");
         try {
           let answered: string | undefined;
           const reply = await runLineProfileEdit(commandArgs ? JSON.parse(commandArgs) : {}, {
@@ -8160,6 +8192,7 @@ async function executeRemoteCommand(
               fs.mkdirSync(path.dirname(file), { recursive: true });
               atomicWriteFile(file, content, fs.existsSync(file) ? {} : { mode: 0o644 });
             },
+            remove: removeLineFile,
             // After the reply is reported, the republish runs and reports again
             // on this command with how it went.
             publish: (root) => {
@@ -29862,6 +29895,7 @@ async function main(): Promise<void> {
   }
   void seedLiveWorkflowRuns().catch((err) => logError("seedLiveWorkflowRuns failed", err as Error));
   setInterval(() => { void sweepGoneWorkflowHosts().catch((err) => logError("sweepGoneWorkflowHosts failed", err as Error)); }, 60_000);
+  setInterval(() => { void resumeOrphanedWorkflowRuns().catch((err) => logError("resumeOrphanedWorkflowRuns failed", err as Error)); }, WORKFLOW_RESUME_TICK_MS);
 
   const watcher = new SessionWatcher();
   const fileSyncs = new Map<string, InvalidateSync>();
