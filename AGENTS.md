@@ -10,7 +10,7 @@ Work directly in the main checkout. Other sessions may have uncommitted work in 
 
 ## Typechecking
 
-Typecheck with `cast check`; never run `tsc --noEmit` yourself. This tree's programs are listed in `.codecast/check.toml`: `cli`, `web`, `convex`, `mobile`, `sim` and `evals`. `cast check` runs all six, and `cast check web` runs one. A fresh `tsc` for each session builds the same program again every time: thirty of them across two repos on 2026-09-17 put this machine into swap and stalled everything on it, Chrome's extension included. Run test files directly (`bun test <file>`), and keep whole suite runs rare, because they are the other load the machine cannot absorb in parallel. `cast install check` adds the full command reference to your global instructions.
+Typecheck with `cast check`; never run `tsc --noEmit` yourself. This tree's programs are listed in `.codecast/check.toml`: `cli`, `web`, `convex`, `mobile`, `sim`, `evals` and `playground`. `cast check` runs all seven, and `cast check web` runs one. A fresh `tsc` for each session builds the same program again every time: thirty of them across two repos on 2026-09-17 put this machine into swap and stalled everything on it, Chrome's extension included. Run test files directly (`bun test <file>`), and keep whole suite runs rare, because they are the other load the machine cannot absorb in parallel. `cast install check` adds the full command reference to your global instructions.
 
 ## Git history
 

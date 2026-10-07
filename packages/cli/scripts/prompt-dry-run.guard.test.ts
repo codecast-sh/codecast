@@ -179,16 +179,18 @@ describe("guard cast: served reads", () => {
     }
   });
 
-  test("a session read goes live; read --ack (marks it read) and --ask (a paid model call) are refused unless the world served them", () => {
+  test("a session read goes live, --ask included (a question answered from the transcript changes nothing); read --ack marks it read and is refused unless the world served it", () => {
     const w = world({ tree: [...TREE, ["read", true]] });
     expect(w.cast("read", "jx7abcd", "--full").out).toBe("LIVE read jx7abcd --full dir=/real/state\n");
-    for (const argv of [["read", "jx7abcd", "--ack"], ["read", "jx7abcd", "--ack=true"], ["read", "jx7abcd", "--ask", "what landed?"], ["read", "jx7abcd", "--ask=what landed?"]]) {
+    expect(w.cast("read", "jx7abcd", "--ask", "what landed?").out).toBe("LIVE read jx7abcd --ask what landed? dir=/real/state\n");
+    expect(w.cast("read", "jx7abcd", "--ask=what landed?").code).toBe(0);
+    for (const argv of [["read", "jx7abcd", "--ack"], ["read", "jx7abcd", "--ack=true"]]) {
       const r = w.cast(...argv);
       expect(r.code).toBe(1);
-      expect(r.err).toContain("read the session without them");
+      expect(r.err).toContain("read the session without it");
       expect(w.log()).toContain(`REFUSED ${logged(argv)}`);
     }
-    expect(w.real().filter((a) => a !== "agent-context --json")).toEqual(["read jx7abcd --full"]);
+    expect(w.real().filter((a) => a !== "agent-context --json")).toEqual(["read jx7abcd --full", "read jx7abcd --ask what landed?", "read jx7abcd --ask=what landed?"]);
     // A synthetic world's prefix record still answers --ask with the transcript it holds.
     const prefixed = ["read", "jx7abcd"];
     const k = servedReadKey(prefixed);
@@ -226,7 +228,7 @@ describe("guard cast: served reads", () => {
     expect(classify("publish", "comments", "pg", "--resolve=c1")).toBe("write");
     expect(classify("read", "jx7abcd")).toBe("read");
     expect(classify("read", "jx7abcd", "--ack")).toBe("write");
-    expect(classify("read", "jx7abcd", "--ask", "x")).toBe("write");
+    expect(classify("read", "jx7abcd", "--ask", "x")).toBe("read");
     expect(fs.existsSync(path.join(w.runDir, "calls.log"))).toBe(false);
     expect(w.real()).toEqual([]);
   });
@@ -451,7 +453,7 @@ describe("prompt-dry-run.ts", () => {
     expect(h.recorded("stdin")).toBe("Reply with the word ok.");
     expect(h.recorded("env")).toBe("20\n1\nfake-token\n");
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "args.json"), "utf8"))).toEqual({
-      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null,
+      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null, claudeMd: null,
     });
     const out = JSON.parse(fs.readFileSync(path.join(h.runDir, "out.json"), "utf8"));
     expect(out).toMatchObject({ result: "ok", stop_reason: "end_turn", is_error: false });

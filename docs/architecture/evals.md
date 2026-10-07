@@ -187,8 +187,13 @@ How the rules are enforced:
   call runs `ok` (exit 0, no `is_error`), `model-as-pinned` (the pinned model
   answered) and `prod-budget` (the reply fit prod's `max_tokens`, so prod would
   not have truncated it). Every agent run adds `frozen-reads` (no `UNSERVED`
-  read; the evidence names the argv and the fix) and `no-unexpected-writes`
-  (no `REFUSED` write beyond what the harness note allows). Each surface adds
+  read under the surface's frozen verbs; the evidence names the argv and the
+  fix; a read the prompt itself asks for that the record predates, such as a
+  role's own `cast brief` on a snapshot from before the role existed, is
+  listed under `allowedUnserved` and noted rather than zeroed) and
+  `no-unexpected-writes` (no `REFUSED` write beyond what the harness note
+  allows; a line is judged by today's guard, so `cast read --ask`, a read since
+  2026-10-07, regrades on rescore). Each surface adds
   its own: a parse with prod's parser, a label match, `citations-real`,
   `no-wrong-close` and so on.
 - **Checks** are weighted and score from 0 to 1. Some are mechanical (org
@@ -337,7 +342,7 @@ more target reps):
 
 | Freeze | Baseline scores | Variant scores | Verdict |
 |---|---|---|---|
-| `e01b02e5` conflicting-ship-hold | 0, 0, 0, 0, 0 (`raises-decision` 0/5) | 10 reps, median 0.88 (`raises-decision` 8/10) | **separated: better**, p=0.007 against the paired 5 |
+| `e01b02e5` conflicting-ship-hold | 0, 0, 0, 0, 0 (`raises-decision` 0/5) | 10 reps, median 0.62 (`raises-decision` 6/10) | **separated: better**, p=0.042 against the paired 5 |
 | `0bd46dcc` personal-matter-dm-only | median 0.65 | median 0.90 | not separated |
 | `5db63f13` thread-pass-or-answer | median 0.30 | median 0.00 | not separated; every zero on both sides is `frozen-reads`, and the variant's judge scores are 0.8-0.9 against 0.3-0.9 |
 | `883284e5` team-anchor-opening | median 0.60 | median 0.55 | not separated |
@@ -350,6 +355,18 @@ one paragraph; regraded, that rep raises the decision and no baseline rep
 changes. Before the fix the target read p=0.019. The two reps that still fail
 said a card was sent without naming the command, which the dry run's harness
 note asks for. Cost: $37.12 for the three batches.
+
+Restated on 2026-10-07 from clean reps. 32 reps in these batches had run
+outside their served world (their `cast` reached the real CLI before the
+CLAUDE_ENV_FILE fix), so `./evals rescore` marks them crashed and they count
+for nothing. On the target only one variant rep was among them; rerun on the
+opening exactly as the variant had it, it failed `raises-decision`, and with
+the three variant reps that already failed that gate the target reads 6 of 10
+raised and p=0.042: still better, by less than first recorded. The rows for
+the other freezes rest partly on crashed reps (the baseline's 7764cfc1 and
+170ed751, the variant's four non-target freezes); they were noise rows on
+both sides, so they were left as they stand rather than rerun at about
+$0.68 a rep.
 
 ### #18, fixed in the call-summary prompt
 

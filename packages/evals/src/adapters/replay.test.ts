@@ -82,6 +82,18 @@ describe('route gates', () => {
     expect(byId(routeGates(agentMeta, { calls: [], agents: [agent(['REFUSED task create x'])] }))['no-unexpected-writes']!.pass).toBe(false);
   });
 
+  test("an agent's own brief read that the record predates is refused, named and no zero; a brief by handle still fails frozen-reads", () => {
+    const orgMeta = { ...surfaceMeta('org-review')!, model: 'pin' };
+    const g = byId(routeGates(orgMeta, { calls: [], agents: [agent(['UNSERVED brief', 'UNSERVED brief show', 'UNSERVED brief --json', 'UNSERVED task show ct-1 --json'])] }));
+    expect(g['frozen-reads']!.pass).toBe(true);
+    expect(g['frozen-reads']!.evidence.summary).toBe('every frozen read was served; 1 read(s) past the capture were refused; 3 own read(s) the record predates were refused (cast brief; cast brief show; cast brief --json)');
+    const named = byId(routeGates(orgMeta, { calls: [], agents: [agent(['UNSERVED brief @calling'])] }))['frozen-reads']!;
+    expect(named.pass).toBe(false);
+    expect(named.evidence.summary).toContain('cast brief @calling was not captured');
+    // role-wake has no such allowance: its own brief is captured by handle and served, so an unserved one is a snapshot defect.
+    expect(byId(routeGates(agentMeta, { calls: [], agents: [agent(['UNSERVED brief'])] }))['frozen-reads']!.pass).toBe(false);
+  });
+
   test("a read an older guard refused is judged by today's guard and is no write", () => {
     const writes = (line: string) => byId(routeGates(agentMeta, { calls: [], agents: [agent([line])] }))['no-unexpected-writes']!;
     expect(writes('REFUSED goals --brief').pass).toBe(true);

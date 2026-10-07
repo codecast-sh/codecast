@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultConfigDir } from "./config/configDir.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
-import { parseCodecastPaneRows, tmuxRunAsync } from "./tmux.js";
+import { PANE_LIST_FORMAT, parseCodecastPaneRows, tmuxRunAsync } from "./tmux.js";
 import { formatAgentPrompt, mergeAgentPromptSources, resolveAgentPromptSource } from "./agentPromptOrigin.js";
 
 export async function runAgentPrompt(args: string[]): Promise<void> {
@@ -25,7 +25,7 @@ export async function runAgentPrompt(args: string[]): Promise<void> {
   }
   let source = resolveAgentPromptSource(explicit, cache);
   if (!explicit && process.env.TMUX) {
-    const pane = await tmuxRunAsync(["display-message", "-p", "-t", process.env.TMUX_PANE || "", "#{@codecast_session_id}|#{session_created}|#{session_name}"]);
+    const pane = await tmuxRunAsync(["display-message", "-p", "-t", process.env.TMUX_PANE || "", PANE_LIST_FORMAT]);
     if (pane.status === 0) {
       const [senderPane] = parseCodecastPaneRows(pane.stdout);
       source = resolveAgentPromptSource(senderPane?.sessionId ?? undefined, cache);

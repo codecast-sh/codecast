@@ -122,10 +122,12 @@ is_read() {
     brief) ! has_arg edit "$@" ;;
     # `call hold` changes a live huddle's delivery; `call snap` uploads frames.
     call) ! has_arg hold "$@" && ! has_arg snap "$@" ;;
-    # `read --ack` clears the session's unread dot; `read --ask` runs a paid
-    # server-side model call no rep's cost records. A served world still
-    # answers both from its record, before this list is consulted.
-    read) ! has_flag --ack "$@" && ! has_flag --ask "$@" ;;
+    # `read --ack` clears the session's unread dot, so it writes. `read --ask`
+    # answers a question about the session from its transcript: a server-side
+    # model call, paid, that changes nothing, so it is a read (its cost is the
+    # account's, not the rep's ledger's). A served world answers both from its
+    # record, before this list is consulted.
+    read) ! has_flag --ack "$@" ;;
     link|search|feed|sessions|diff|summary|calls|goals) return 0 ;;
     # A published page's reads; comments --resolve, set, rollback and rm write.
     publish) case "${2:-}" in ls|versions|viewers|links) return 0 ;; comments) ! has_flag --resolve "$@" ;; *) return 1 ;; esac ;;
@@ -271,7 +273,7 @@ mark REFUSED
 case "${1:-}" in
   task|project|plan|doc|initiative|trigger|anchor|role|org) echo "dry run: 'cast $ARGV' would write, and is refused" >&2 ;;
   state) echo "dry run: cast state is refused" >&2 ;;
-  read) echo "dry run: 'cast $ARGV' is refused: --ack marks the session read and --ask runs a model call; read the session without them" >&2 ;;
+  read) echo "dry run: 'cast $ARGV' is refused: --ack marks the session read; read the session without it" >&2 ;;
   *) echo "dry run: 'cast $ARGV' is refused; write what you would post to the file the briefing names" >&2 ;;
 esac
 exit 1

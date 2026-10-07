@@ -28,12 +28,12 @@ test('nested launcher uses the current pane stamp or a fresh launch receipt, and
   'conversations.json': { native: parent },
   'tmux-spawns.json': { 'outer|launcher': { parent, timestamp: 100_500 } },
  };
- for (const pane of [`${parent}|101|outer|launcher`, '|101|outer|launcher']) {
+ for (const pane of [`${parent}|101|101||||outer|launcher`, '|101|101||||outer|launcher']) {
   const r = await run(['--subagent'], config, { TMUX: 'fixture', TMUX_PANE: '%42', ORIGIN_TEST_PANE: pane });
   expect(r.code).toBe(0);
   expect(r.out).toContain(`from="${parent}" subagent="true"`);
  }
- for (const pane of ['unknown|101|outer|launcher', '|401|outer|launcher', '|99|outer|launcher']) {
+ for (const pane of ['unknown|101|101||||outer|launcher', '|401|401||||outer|launcher', '|99|99||||outer|launcher']) {
   const r = await run(['--subagent'], config, { TMUX: 'fixture', TMUX_PANE: '%42', ORIGIN_TEST_PANE: pane });
   expect(r.code).not.toBe(0);
   expect(r.out).toBe('');
