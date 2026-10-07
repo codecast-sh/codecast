@@ -2,7 +2,8 @@ import { v } from "convex/values";
 import { LINE_SWEEP_ON } from "./lib/lineSweep";
 import { internalMutation, query } from "./functions";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
-import { TASK_PRIORITIES } from "@codecast/shared/tasks";
+import { isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
+import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
 import { capsFor, cardsCapOf, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
@@ -14,7 +15,7 @@ import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/org
 import { taskWork } from "./lib/orgOwnership";
 import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
-import { NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
+import { LINE_GOAL, NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { priority as linePriority, type Severity } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -38,7 +39,7 @@ export const LINE_STARTED_PREFIX = "the line started: run ";
 const agentAssignee = (role: { handle: string }) => `agent:${role.handle}`;
 
 // L9 and LE6: what a role's line may start. Two kinds, both open, with no
-// run yet, no blocker that is still open, and work the role owns by the one
+// run yet, no blocker or wait still open, and work the role owns by the one
 // ownership rule (org-staffing.md S26), so a wider role never starts what a
 // narrower one owns:
 //   - a task assigned to the role (its agent or the role itself);
@@ -60,7 +61,7 @@ export async function rankedCandidates(ctx: Ctx, role: any): Promise<RankedCandi
   const pool = await linePool(ctx, role, assignees);
   const roles = await allRolesInBoundary(ctx, role);
   const goals = new Map<string, GoalPriority | "unranked" | null>();
-  const out: RankedCandidate[] = [];
+  const owned: any[] = [];
   const seen = new Set<string>();
   for (const task of pool) {
     if (seen.has(String(task._id))) continue;
@@ -69,7 +70,13 @@ export async function rankedCandidates(ctx: Ctx, role: any): Promise<RankedCandi
     const assigned = assignees.has(task.assignee);
     if (!assigned && !(isReadyCause(task) && !task.assignee)) continue;
     if (!(await lineOwns(ctx, role, task, roles))) continue;
-    if (await isBlocked(ctx, task)) continue;
+    owned.push(task);
+  }
+  // Blockers and waits by the one rule (task-graph.md TG1).
+  const lookupsFor = await readinessLookups(ctx, owned);
+  const out: RankedCandidate[] = [];
+  for (const task of owned) {
+    if (!isUnblocked(task, lookupsFor(task).statusOf)) continue;
     out.push({ task, priority: linePriority(await goalPriorityOf(ctx, task, goals), severityOf(task), task.cause?.signal_count ?? 1) });
   }
   const age = (t: any) => t.created_at ?? t._creationTime ?? 0;
@@ -100,12 +107,14 @@ function severityOf(task: any): Severity {
   return SEVERITIES.has(task.priority) ? task.priority : "none";
 }
 
-// goal_ref is a metric ref `in-N:key`, a project's short id, or "none"
+// goal_ref is a metric ref `in-N:key`, a project's short id, "line" or "none"
 // (goalsBrief.ts). The goal's priority is read from its row in the task's own
-// workspace; a ref that names nothing readable there counts as unranked.
+// workspace; the line's own goal has no row and no priority, and a ref that
+// names nothing readable there counts as unranked.
 async function goalPriorityOf(ctx: Ctx, task: any, cache: Map<string, GoalPriority | "unranked" | null>): Promise<GoalPriority | "unranked" | null> {
   const ref = task.goal_ref?.trim();
   if (!ref || ref === NO_GOAL) return null;
+  if (ref === LINE_GOAL) return "unranked";
   const key = `${task.workspace}|${ref}`;
   if (cache.has(key)) return cache.get(key)!;
   const shortId = ref.split(":")[0];
@@ -127,16 +136,6 @@ async function linePool(ctx: Ctx, role: any, assignees: Set<string>): Promise<an
     .withIndex("by_workspace_source_status", (q: any) => q.eq("workspace", key).eq("source", "signal").eq("status", "open"))
     .collect());
   return rows.filter((t) => t.workspace === key);
-}
-
-// blocked_by holds task short ids (tasks.ts ready): a blocker counts as open
-// until it is done or dropped. An unknown id blocks nothing.
-async function isBlocked(ctx: Ctx, task: any): Promise<boolean> {
-  for (const shortId of task.blocked_by ?? []) {
-    const blocker = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-    if (blocker && blocker.status !== "done" && blocker.status !== "dropped") return true;
-  }
-  return false;
 }
 
 export function roleMayStartHands(role: any, now: number): boolean {
