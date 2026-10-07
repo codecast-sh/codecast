@@ -1,5 +1,5 @@
 import { githubRepository } from "../../../lib/repoNavigation";
-import { parseJointMessage } from "@codecast/shared/contracts/jointMessage";
+import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { JointParts } from "../JointParts";
 import { repoTreeHref } from "../../../lib/repoView";
 import { captureException } from "@sentry/react";
@@ -199,6 +199,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     .replace(/\[image\]/gi, "")
     .trim();
   const { contexts: contextBlocks, remaining: displayContent } = parseContextBlocks(rawContent);
+  // A joint turn is everyone's: the header names each author, the body their parts.
+  const jointParts = parseJointMessage(displayContent);
+  const jointNames = jointParts ? jointAuthors(jointParts) : undefined;
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
@@ -531,7 +534,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       </div>
       <div data-cc-message-who className="flex items-center gap-2 mb-2">
         <UserIcon avatarUrl={avatarUrl} />
-        <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
+        <span className="text-sol-blue text-xs font-medium">{jointNames ?? (userName || "You")}</span>
         <a
           href={`#msg-${messageId}`}
           className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -559,8 +562,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
       >
         {(() => {
-          const joint = parseJointMessage(displayContent);
-          if (joint) return <JointParts parts={joint} collapsed={!!effectivelyCollapsed} />;
+          if (jointParts) return <JointParts parts={jointParts} collapsed={!!effectivelyCollapsed} />;
           const hasTeammate = displayContent.includes('<teammate-message');
           if (effectivelyCollapsed && !hasTeammate) return <TextWithMentions text={displayContent} />;
           if (effectivelyCollapsed && hasTeammate) {

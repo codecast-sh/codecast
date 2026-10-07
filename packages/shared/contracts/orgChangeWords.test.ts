@@ -48,7 +48,7 @@ describe("changeWords: the sentence is the oracle's", () => {
       expect(w.sentence, c.kind).toBe(`${capital(changeLine(c, { brief: true, names }))}.`);
       expect(w.terse, c.kind).toBe(describeOrgChange(c));
       expect(w.chip, c.kind).toBe(chipLine(c));
-      expect(w.sentence, c.kind).not.toMatch(/—|–/);
+      expect(w.sentence, c.kind).not.toMatch(new RegExp(`[${String.fromCharCode(0x2013)}${String.fromCharCode(0x2014)}]`));
     }
     // Without names, the same rule holds and refs stand as written.
     for (const c of Object.values(GOOD)) expect(changeWords(c).sentence, c.kind).toBe(`${capital(changeLine(c, { brief: true }))}.`);

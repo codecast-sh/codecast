@@ -1,0 +1,26 @@
+{
+  "name": "guidance subagent-worded",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:subagent-worded"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:subagent-worded",
+    "title": "guidance subagent-worded"
+  },
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/subagent-worded.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "0f7a8719-1ab0-47ba-9fd0-94d3284b2c5f",
+  "createdAt": "2026-10-06T23:58:41.806Z"
+}

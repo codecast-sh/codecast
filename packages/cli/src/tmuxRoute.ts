@@ -95,8 +95,14 @@ function verbIndex(args: string[]): number {
 }
 
 /** The agent session a server-starting `new-session` names, when that session should get its own server. */
+/** Whether the call already names its server: -L or -S among the global flags before the verb (capture-pane's -S is a line number). */
+function namesServer(args: string[]): boolean {
+  const globals = args.slice(0, verbIndex(args));
+  return globals.includes("-L") || globals.includes("-S");
+}
+
 export function ownServerSession(args: string[], env: NodeJS.ProcessEnv = process.env): string | null {
-  if (args.includes("-L") || args.includes("-S")) return null;
+  if (namesServer(args)) return null;
   const rest = args.slice(verbIndex(args));
   if (rest[0] !== "new-session" && rest[0] !== "new") return null;
   const name = flagValue(rest, "-s");
@@ -109,7 +115,7 @@ export function ownServerSession(args: string[], env: NodeJS.ProcessEnv = proces
  * server, one per server for a fleet listing outside any session scope.
  */
 export function routeTmuxArgs(args: string[], env: NodeJS.ProcessEnv = process.env, scoped: string | undefined = scope.getStore()): string[][] {
-  if (args.includes("-L") || args.includes("-S")) return [args];
+  if (namesServer(args)) return [args];
   const rest = args.slice(verbIndex(args));
   const verb = rest[0] ?? "";
   const target = verb === "new-session" || verb === "new" ? flagValue(rest, "-s") : flagValue(rest, "-t");
