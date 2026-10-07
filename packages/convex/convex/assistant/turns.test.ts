@@ -198,6 +198,24 @@ describe("a turn", () => {
     expect(s.messages.map((m) => m.content)).toEqual(["Book a dentist", "On it."]);
   });
 
+  test("a finished answer names a conversation no title pass has named, past the pass floor", async () => {
+    const { t, user, conversationId } = await setup();
+    const titlePasses = () => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((job) => job.name.includes("generateTitle")).length);
+    // A pass a moment ago (the message-2 milestone, before the reply landed)
+    // holds the usual milestones behind their floor.
+    await t.run((ctx) => ctx.db.patch(conversationId, { title_gen_scheduled_at: Date.now() }));
+    faux.setResponses([reply("Here's your packing list, saved as a note.")]);
+    await say(t, conversationId, user, "Make a packing list for Chicago");
+    await settle(t);
+    expect(await titlePasses()).toBe(1);
+    // Once a pass has named it (it writes a subtitle), turns leave it to the milestones.
+    await t.run((ctx) => ctx.db.patch(conversationId, { subtitle: "Packing for a work trip", title_gen_scheduled_at: Date.now() }));
+    faux.setResponses([reply("Added a gym section.")]);
+    await say(t, conversationId, user, "Add gym clothes");
+    await settle(t);
+    expect(await titlePasses()).toBe(1);
+  });
+
   test("a tool call and its result are stored as rows the transcript renders", async () => {
     const { t, user, conversationId } = await setup();
     faux.setResponses([callTool("list_tasks", {}), reply("You have nothing on your list.")]);
