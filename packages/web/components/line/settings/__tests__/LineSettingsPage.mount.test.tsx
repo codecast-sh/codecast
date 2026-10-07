@@ -173,8 +173,11 @@ test("an edit shows at once and waits on the machine; a daemon refusal stops sho
   await act(async () => {
     const [id, r] = Object.entries((useInboxStore.getState() as any).sessionCommands)[0] as [string, any];
     useInboxStore.getState().syncTable("sessionCommands", [{ ...r, _id: id, executed_at: Date.now(), error: "/src/codecast/.codecast/line.toml: [line] size_budget must be at most 2000" }], { isDelta: true });
-    // The store tells its subscribers on the next tick.
-    await new Promise((r) => setTimeout(r, 20));
+    // The store tells its subscribers on a later tick, which a loaded machine
+    // can stretch well past a fixed wait: wait for the row instead.
+    for (let i = 0; i < 100 && row(host, "Size budget").querySelector(".lset-status")?.getAttribute("data-state") !== "refused"; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
   });
   const status = row(host, "Size budget").querySelector(".lset-status")!;
   expect(status.getAttribute("data-state")).toBe("refused");
