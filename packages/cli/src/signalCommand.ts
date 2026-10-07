@@ -4,7 +4,7 @@
 // (LE4), and reopens a cause still in watch (LE12).
 //
 //   cast signal add --source <s> --kind <k> --title <t> [--fingerprint <f>] [--project <ref>] [--detail -] [--url] [--subject] [--goal-hint] [--json]
-//   cast signal ls [--task ct-N] [--project <ref>] [--source <s>] [--json]
+//   cast signal ls [--task ct-N | --fingerprint <f>] [--project <ref>] [--source <s>] [--json]
 //   cast signal show sg-N [--json]
 //
 // Routes: /cli/signal/{add,ls,show} in http.ts (signals.ts). A signal lands in
@@ -181,14 +181,16 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .alias("list")
     .description("List signals: one cause's, or the newest of the workspace or one project")
     .option("--task <ct>", "Only the signals attached to this cause")
+    .option("--fingerprint <key>", "Only the signals filed under this fingerprint in the workspace, however old")
     .option("--project <ref>", "Only this project's signals: id, short id or title")
     .option("--source <name>", "Only signals from this finder")
     .option("-n, --limit <n>", "How many", (v: string) => parseInt(v, 10))
     .option("--team <name|id|personal>", "Workspace to read (default: the active one)")
     .option("--json", "Machine-readable output")
-    .action(async (options: { task?: string; project?: string; source?: string; limit?: number; team?: string; json?: boolean }) => {
+    .action(async (options: { task?: string; fingerprint?: string; project?: string; source?: string; limit?: number; team?: string; json?: boolean }) => {
       const result = await apiPost(deps, "/cli/signal/ls", {
         task: options.task,
+        fingerprint: options.fingerprint,
         source: options.source,
         limit: options.limit,
         ...(options.task ? {} : await scopeFor(deps, options.team, false, options.project)),

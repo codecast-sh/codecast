@@ -631,11 +631,16 @@ function signalView(row: Doc<"signals">, task: Doc<"tasks"> | null) {
   };
 }
 
-/** `cast signal ls`: one cause's signals, or the newest of the workspace or of one project in it. */
+/**
+ * `cast signal ls`: one cause's signals, one fingerprint's in the workspace
+ * (however old, through its index), or the newest of the workspace or of one
+ * project in it.
+ */
 export const listForCli = query({
   args: {
     api_token: v.string(),
     task: v.optional(v.string()),
+    fingerprint: v.optional(v.string()),
     source: v.optional(v.string()),
     limit: v.optional(v.number()),
     ...scopeArgs,
@@ -649,6 +654,14 @@ export const listForCli = query({
       const task = await ctx.db.query("tasks").withIndex("by_short_id", (q) => q.eq("short_id", args.task!)).first();
       if (!task || !(await canAccessTask(ctx, userId, task))) notFound("Task not found");
       rows = await ctx.db.query("signals").withIndex("by_task", (q) => q.eq("task_id", task._id)).order("desc").collect();
+    } else if (args.fingerprint?.trim()) {
+      const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
+      const fingerprint = args.fingerprint.trim();
+      rows = await ctx.db
+        .query("signals")
+        .withIndex("by_workspace_fingerprint", (q) => q.eq("workspace", db.workspaceKey).eq("fingerprint", fingerprint))
+        .order("desc")
+        .take(source ? CANDIDATE_WINDOW : limit);
     } else {
       const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
       const project = await resolveWorkspaceProject(ctx, db.workspaceKey, args.project);

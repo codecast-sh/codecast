@@ -187,6 +187,21 @@ describe("signals.ingest", () => {
     expect(shown.cause.signal_count).toBe(1);
   });
 
+  test("ls --fingerprint reads one fingerprint's signals however old, newest first", async () => {
+    // A finder asking which cause holds its key must not page the whole
+    // workspace: Union's planner read the newest 500 and the reply outgrew
+    // the box's transport cap, so no cause was ever found.
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "union:cluster:a", title: "Booking link points at localhost" });
+    for (let i = 0; i < 3; i++) await add({ fingerprint: `other-${i}`, title: `Unrelated ${i} zebra${i}` });
+    const again = await add({ fingerprint: "union:cluster:a", title: "Booking link points at localhost" });
+    const hit = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:a", limit: 1 });
+    expect(hit.signals.map((s: any) => s.short_id)).toEqual([again.short_id]);
+    expect(hit.signals[0].task_short_id).toBe((await task(first.task_id)).short_id);
+    const none = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:missing" });
+    expect(none.signals).toEqual([]);
+  });
+
   test("the web feed carries the fingerprint, the evidence link and the head of the detail (line-map.md LX7)", async () => {
     const { add, t, userId } = await setup();
     const quote = "> Book a time here: http://localhost:3000/book";

@@ -106,6 +106,12 @@ describe("cast signal on the wire", () => {
     expect(logs.join("\n")).toContain("--kind, --title");
   });
 
+  test("ls --fingerprint asks the server for that one key in the workspace", async () => {
+    answer = () => ({ signals: [] });
+    await run("ls", "--fingerprint", "union:cluster:c1", "-n", "1", "--json");
+    expect(calls[0]).toEqual({ path: "/cli/signal/ls", body: { fingerprint: "union:cluster:c1", limit: 1, project_path: "/repo", conversation_id: "s1" } });
+  });
+
   test("ls --task reads one cause's signals; ls --source reads the workspace", async () => {
     answer = () => ({ signals: [] });
     await run("ls", "--task", "ct-7");
