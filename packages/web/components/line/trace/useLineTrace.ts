@@ -11,9 +11,10 @@ import { useInboxStore, type SessionDecisionItem } from "../../../store/inboxSto
 import { useCollectionRows } from "../../../hooks/useCollectionRows";
 import { sig as decisionSig } from "../../../hooks/useTaskDecisions";
 import { useSyncSignals, useWorkspaceSignals } from "../../../hooks/useSyncSignals";
-import { useWorkflowBySlug, useWorkflowRun } from "../../../hooks/useSyncWorkflows";
+import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
-import { lineForkSlug } from "../../../lib/line/lineStations";
+import type { LineProject } from "../../../lib/lineFlow";
+import { useProjectStations } from "../settings/LineStations";
 import { buildLineTrace, resolveTraceRef, type LineTrace, type TraceRows, type TraceTask } from "../../../lib/line/lineTrace";
 import type { LineGraph, MapDecision, MapRun, MapSignal } from "../../../lib/line/lineMap";
 import { useCauseRuns } from "../RunReport";
@@ -32,6 +33,8 @@ export type LineTraceState = {
   trace: LineTrace | null;
   rows: TraceRows;
   graph: LineGraph | null;
+  /** The cause's project: whose line the map draws. */
+  project: LineProject | null;
   /** The floor has arrived: a missing trace is missing, not loading. */
   ready: boolean;
   now: number;
@@ -74,10 +77,12 @@ export function useLineTrace(ref: string): LineTraceState {
     decisions: byId(floor.decisions, causeCards as unknown as MapDecision[], [detail, newestDetail].flatMap((d) => (d?.decision ? [d.decision as unknown as MapDecision] : []))),
   }), [floor, causeSignals, causeRuns, lonelyRun, detail, newestDetail, causeCards, causeId]);
 
-  // The project's own line when it customized one, else the shipped line.
-  const project = useMemo(() => (cause?.project_id ? projects.find((p) => p._id === cause.project_id) ?? null : null), [cause?.project_id, projects]);
-  const fork = useWorkflowBySlug(project ? lineForkSlug(project as { _id: string; short_id?: string | null }) : null);
-  const graph = (fork?.nodes?.length ? fork : null) as LineGraph | null;
+  // The project's actual line, read where the map reads it (the repo's, a
+  // customized one, else the shipped line), so the path lands on its nodes.
+  const projectId = cause?.project_id ?? null;
+  const project = useMemo(() => (projectId ? projects.find((p) => p._id === projectId) ?? null : null), [projectId, projects]);
+  const stations = useProjectStations(projectId ?? "");
+  const graph = useMemo<LineGraph | null>(() => (projectId ? { nodes: stations.nodes, edges: stations.edges } : null), [projectId, stations.nodes, stations.edges]);
 
   // Who answered a card, by name: a teammate, or you.
   const people = useInboxStore((s) => s.teamMembers);
@@ -97,5 +102,5 @@ export function useLineTrace(ref: string): LineTraceState {
     });
   }, [ref, rows, cause, lonelyRun, detail, now, graph, people, meId]);
 
-  return { trace, rows, graph, ready, now };
+  return { trace, rows, graph, project, ready, now };
 }
