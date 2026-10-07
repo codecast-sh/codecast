@@ -5350,6 +5350,14 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           onViewableItemsChanged={handleViewableItemsChanged}
           viewabilityConfig={stickyViewabilityConfig}
           /* maintainVisibleContentPosition removed - was causing blank screen by fighting scroll offset */
+          // Drag the transcript to put the keyboard away. The composer is
+          // multiline, so the return key inserts a newline instead of
+          // submitting, and persistTaps="always" means a tap on the transcript
+          // never blurs either — without this the keyboard has no way down once
+          // the field is focused. iOS tracks the finger (iMessage style);
+          // 'interactive' is iOS-only and degrades to 'none' on Android, so
+          // Android gets 'on-drag', which dismisses as soon as a drag begins.
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           keyboardShouldPersistTaps="always"
         />
         <MessageTickRail
