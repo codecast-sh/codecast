@@ -2,19 +2,18 @@
 // A node's or an edge's panel beside the map (docs/architecture/line-map.md
 // LX3). One shape for every node: Now (what is here, oldest first, each
 // opening its trace), Through (what passed in the window, how each left and
-// how long it stayed), Health (in words first), Definition (what the node is
-// and every value that shapes it, edited in place through the line's edit
-// path, LX5) and Change (asking an agent for a change, LX6). An edge's panel
-// is the items that crossed it.
-import { useMemo, type ReactNode } from "react";
+// how long it stayed), Health (in words first) and Definition (what the node
+// is and every value that shapes it, edited in place through the line's edit
+// path, LX5), with asking an agent for a change (LX6) pinned to its footer so
+// it is always in reach. An edge's panel is the items that crossed it.
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { X } from "lucide-react";
+import { ArrowUpRight, MessageSquarePlus, X } from "lucide-react";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import type { SessionDecisionItem } from "../../../store/inboxStore";
-import { useInboxStore } from "../../../store/inboxStore";
 import { ageShort, type LineFlow, type SenseSource } from "../../../lib/lineFlow";
-import { LINE_FIELDS, lineWriteGate, type RosterDevice } from "../../../lib/lineSettings";
+import { LINE_FIELDS } from "../../../lib/lineSettings";
 import { decisionHref, runHref } from "../../../lib/decisionLinks";
 import { stationWords } from "../../../lib/line/runReport";
 import type { LineMap, MapEdge, MapItem, MapLeft, MapNode } from "../../../lib/line/lineMap";
@@ -26,9 +25,9 @@ import { ExpectationsPanel } from "../expectations/ExpectationsPanel";
 import { LineFinders } from "../settings/LineFinders";
 import { ProfileFieldRow } from "../settings/ProfileFieldRow";
 import { StationDefinition } from "../settings/LineStations";
-import { useLineProfileEdits } from "../settings/useLineProfileEdits";
+import { useLineProfileEditor } from "../settings/useLineProfileEdits";
 import { ChangeComposer } from "./ChangeComposer";
-import { edgeWords, nodeTone } from "./LineMap";
+import { edgeWords, nodeTone, throughWord } from "./LineMap";
 import "../settings/settings.css";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -72,6 +71,8 @@ export const nodeFields = (id: string) => (NODE_FIELDS[id] ?? []).map((k) => LIN
 
 const isStationKind = (n: MapNode) => n.kind === "station" || n.kind === "decide" || n.kind === "ship" || n.kind === "watch";
 
+const ITEM_WORDS: Record<MapItem["kind"], string> = { signal: "signal", cause: "cause", run: "run", decision: "card" };
+
 const LEFT_WORDS: Record<MapLeft, string> = {
   moved: "moved on", failed: "failed", live: "still here", held: "held", reopened: "reopened", dissolved: "dissolved", dropped: "dropped", stopped: "stopped", parked: "parked",
 };
@@ -105,7 +106,32 @@ export function LineMapPanel(p: PanelProps) {
   return null;
 }
 
-function PanelFrame({ title, kicker, what, onClose, nav, children, data }: { title: ReactNode; kicker?: ReactNode; what?: ReactNode; onClose: () => void; nav?: string[]; children: ReactNode; data: Record<string, string> }) {
+function PanelFrame({ title, kicker, what, onClose, nav, children, foot, data }: { title: ReactNode; kicker?: ReactNode; what?: ReactNode; onClose: () => void; nav?: string[]; children: ReactNode; foot?: ReactNode; data: Record<string, string> }) {
+  // The section strip tracks where the body is scrolled, so it says where you are.
+  const body = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState<string | null>(nav?.[0] ?? null);
+  // A picked tab holds while its smooth scroll runs, so a short last section
+  // reached at the bottom does not take the highlight from the one picked.
+  const picked = useRef(0);
+  useEffect(() => {
+    const el = body.current;
+    if (!el || !nav?.length) return;
+    const spy = () => {
+      if (Date.now() - picked.current < 700) return;
+      const top = el.getBoundingClientRect().top + 32;
+      let at = nav[0];
+      for (const s of nav) {
+        const sec = el.querySelector<HTMLElement>(`#lmap-${s.toLowerCase()}`);
+        if (sec && sec.getBoundingClientRect().top <= top) at = s;
+      }
+      // Scrolled to the end: the last section is the one in view.
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) at = nav[nav.length - 1];
+      setActive((a) => (a === at ? a : at));
+    };
+    spy();
+    el.addEventListener("scroll", spy, { passive: true });
+    return () => el.removeEventListener("scroll", spy);
+  }, [nav]);
   return (
     <aside className="lmap-panel" aria-label="Details" {...data}>
       <div className="lmap-panel-head">
@@ -120,10 +146,25 @@ function PanelFrame({ title, kicker, what, onClose, nav, children, data }: { tit
       </div>
       {nav && (
         <nav className="lmap-panel-nav" aria-label="Sections">
-          {nav.map((s) => <a key={s} href={`#lmap-${s.toLowerCase()}`} onClick={(e) => { e.preventDefault(); document.getElementById(`lmap-${s.toLowerCase()}`)?.scrollIntoView({ block: "start", behavior: "smooth" }); }}>{s}</a>)}
+          {nav.map((s) => (
+            <a
+              key={s}
+              href={`#lmap-${s.toLowerCase()}`}
+              aria-current={active === s ? "true" : undefined}
+              data-map-nav={s.toLowerCase()}
+              onClick={(e) => {
+                e.preventDefault();
+                const sec = body.current?.querySelector<HTMLElement>(`#lmap-${s.toLowerCase()}`);
+                if (sec && body.current) body.current.scrollTo({ top: sec.offsetTop - body.current.offsetTop - 4, behavior: "smooth" });
+                picked.current = Date.now();
+                setActive(s);
+              }}
+            >{s}</a>
+          ))}
         </nav>
       )}
-      <div className="lmap-panel-body">{children}</div>
+      <div ref={body} className="lmap-panel-body">{children}</div>
+      {foot}
     </aside>
   );
 }
@@ -139,6 +180,9 @@ function Section({ id, title, aside, children }: { id: string; title: string; as
 
 // ── a node ──
 
+/** Lists in the panel show this many rows, then "Show all". */
+const ROWS_SHOWN = 8;
+
 function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClose }: PanelProps & { node: MapNode }) {
   const asks = n.id === CARD_GATE_NODE_ID ? flow.awaiting.items : [];
   const tone = nodeTone(n, asks.length);
@@ -149,7 +193,8 @@ function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClo
       kicker={<span className="lmap-chip" data-tone={tone === "fail" ? "fail" : tone === "warn" ? "warn" : "muted"}>{kindWords(n)}</span>}
       what={nodeWhat(n)}
       onClose={onClose}
-      nav={["Now", "Through", "Health", "Definition", "Change"]}
+      nav={NODE_NAV}
+      foot={<AskBar node={n} projectId={projectId} />}
       data={{ "data-map-panel": n.id }}
     >
       <Section id="now" title="Now" aside={n.now.length + asks.length ? `${n.now.length + asks.length}, oldest first` : undefined}>
@@ -163,7 +208,7 @@ function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClo
           </div>
         )}
         {n.now.length > 0
-          ? <Items items={n.now} now={now} tracing={tracing} onTrace={onTrace} ageWord="here" />
+          ? <Items items={n.now} node={n} now={now} tracing={tracing} onTrace={onTrace} ageWord="here" />
           : asks.length === 0 && <p className="lmap-empty">{emptyNow(n)}</p>}
       </Section>
 
@@ -178,16 +223,48 @@ function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClo
       <Section id="definition" title="Definition">
         <Definition node={n} projectId={projectId} flow={flow} now={now} />
       </Section>
-
-      <Section id="change" title="Change">
-        <ChangeComposer node={n} projectId={projectId} />
-      </Section>
     </PanelFrame>
   );
 }
 
+const NODE_NAV = ["Now", "Through", "Health", "Definition"];
+
+/** The panel's footer, always in view: one line that opens the composer
+ *  asking an agent for a change to this node (LX6). Esc folds it back. */
+function AskBar({ node: n, projectId }: { node: MapNode; projectId: string | null }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => setOpen(false), [n.id]);
+  return (
+    <div
+      className="lmap-ask"
+      data-open={open ? "true" : undefined}
+      data-map-ask={n.id}
+      onKeyDown={(e) => {
+        // The composer clears its words on the first Esc; the next folds it here, not the panel.
+        if (e.key === "Escape" && open && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+      }}
+    >
+      {open ? (
+        <>
+          <div className="lmap-ask-head">
+            <MessageSquarePlus className="w-3.5 h-3.5 shrink-0" />
+            <span>Ask for a change to {n.label}</span>
+            <button type="button" onClick={() => setOpen(false)} className="ml-auto text-sol-text-dim hover:text-sol-text" aria-label="Fold the composer"><X className="w-3.5 h-3.5" /></button>
+          </div>
+          <div className="lmap-ask-body"><ChangeComposer node={n} projectId={projectId} autoFocus /></div>
+        </>
+      ) : (
+        <button type="button" className="lmap-ask-bar" onClick={() => setOpen(true)} disabled={!projectId} data-map-ask-open title={projectId ? "An agent works it through the line and brings you a card" : "Work under no project runs the shipped line"}>
+          <MessageSquarePlus className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{projectId ? `Ask for a change to ${n.label}...` : "Pick a project to change its line"}</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 function kindWords(n: MapNode): string {
-  if (n.kind === "source") return n.finder ? "source" : "undeclared source";
+  if (n.kind === "source") return n.undeclared ? "undeclared source" : "source";
   if (n.kind === "end") return "end";
   if (n.kind === "decide") return "your answer";
   if (n.kind === "expectations" || n.kind === "signals" || n.kind === "causes") return "intake";
@@ -195,42 +272,76 @@ function kindWords(n: MapNode): string {
 }
 
 function emptyNow(n: MapNode): string {
-  if (n.kind === "source" || n.kind === "signals" || n.kind === "expectations") return "Signals do not wait here; they pass straight on.";
+  if (n.kind === "expectations") return "Expectations hold no work. Finders that judge behavior grade against them; Definition lists them.";
+  if (n.kind === "source" || n.kind === "signals") return "Signals do not wait here; they pass straight on.";
   if (n.kind === "end") return "An end holds nothing; Through lists what ended here.";
   if (n.kind === "causes") return "No cause waits to be built.";
   return "Nothing is at this step now.";
 }
 
-function Items({ items, now, tracing, onTrace, ageWord, right }: { items: MapItem[]; now: number; tracing: string | null; onTrace: (ref: string) => void; ageWord?: string; right?: (it: MapItem) => ReactNode }) {
+/** The item kind a node holds, which its rows leave unsaid (every row at Causes is a cause). */
+const NODE_ITEM: Partial<Record<MapNode["kind"], MapItem["kind"]>> = { causes: "cause", signals: "signal", source: "signal", station: "run", ship: "run", watch: "cause" };
+
+/** Rows the panel lists: each opens its path on the map (click or return),
+ *  its title gets two lines, and trace and open show on hover or focus. Rows
+ *  that waited the same time sit under one age heading instead of repeating it. */
+function Items({ items, node, now, tracing, onTrace, ageWord, right }: { items: MapItem[]; node?: MapNode; now: number; tracing: string | null; onTrace: (ref: string) => void; ageWord?: string; right?: (it: MapItem) => ReactNode }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, ROWS_SHOWN);
+  const implied = node ? NODE_ITEM[node.kind] : undefined;
+  const age = (it: MapItem) => `${ageShort(Math.max(0, now - it.at))}${ageWord ? ` ${ageWord}` : " ago"}`;
+  // Headings only pay when ages repeat; a list of distinct ages keeps each on its row.
+  const grouped = !right && new Set(shown.map(age)).size < shown.length;
+  // Stuck on every row says nothing a row needs: the age heading carries it once.
+  const allStuck = grouped && shown.every((it) => it.stuck);
   return (
-    <ul className="lmap-items" data-map-items>
-      {items.map((it, i) => {
-        const href = itemHref(it);
-        return (
-          <li
-            key={`${it.kind}:${it.id}:${i}`}
-            className="lmap-item"
-            data-active={tracing === it.ref ? "true" : undefined}
-            onClick={() => onTrace(it.ref)}
-            title="Draw its path on the map"
-            data-map-item={it.ref}
-          >
-            <span className="lmap-item-title">{it.title}</span>
-            <span className="lmap-item-meta">
-              {right ? right(it) : <>{ageShort(Math.max(0, now - it.at))}{ageWord ? ` ${ageWord}` : " ago"}</>}
-            </span>
-            <span className="lmap-item-sub">
-              <span>{it.kind === "run" ? "run" : it.kind}</span>
-              {it.stuck && <span className="lmap-chip" data-tone="warn">stuck</span>}
-              {it.stalled && <span className="lmap-chip" data-tone="warn">silent a day</span>}
-              <span className="flex-1" />
-              <Link href={lineTraceHref(it.ref)} onClick={(e) => e.stopPropagation()} data-map-trace-link>its story</Link>
-              {href && <Link href={href} onClick={(e) => e.stopPropagation()}>open</Link>}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+    <>
+      <ul className="lmap-items" data-map-items>
+        {shown.map((it, i) => {
+          const href = itemHref(it);
+          const a = age(it);
+          const heading = grouped && (i === 0 || age(shown[i - 1]) !== a);
+          return (
+            <li key={`${it.kind}:${it.id}:${i}`} className="contents">
+              {heading && <div className="lmap-item-age" data-map-age data-warn={allStuck ? "true" : undefined}>{a}{allStuck ? ", past the usual wait" : ""}</div>}
+              <div
+                role="button"
+                tabIndex={0}
+                className="lmap-item"
+                data-active={tracing === it.ref ? "true" : undefined}
+                onClick={() => onTrace(it.ref)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onTrace(it.ref); } }}
+                title="Draw its path on the map"
+                data-map-item={it.ref}
+              >
+                <span className="lmap-item-title">{it.title}</span>
+                <span className="lmap-item-meta">
+                  <span className="lmap-item-acts">
+                    <Link href={lineTraceHref(it.ref)} onClick={(e) => e.stopPropagation()} data-map-trace-link title="Every step it took, from the first signal on">trace</Link>
+                    {href && <Link href={href} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-0.5">open<ArrowUpRight className="w-3 h-3" /></Link>}
+                  </span>
+                  {right || grouped ? null : a}
+                </span>
+                {(right || it.kind !== implied || (it.stuck && !allStuck) || it.stalled) && (
+                  <span className="lmap-item-sub">
+                    {/* Longer words (where it went and how long it stayed) read under the title. */}
+                    {right && <span className="text-sol-text-muted">{right(it)}</span>}
+                    {it.kind !== implied && <span>{ITEM_WORDS[it.kind]}</span>}
+                    {it.stuck && !allStuck && <span className="lmap-chip" data-tone="warn">stuck</span>}
+                    {it.stalled && <span className="lmap-chip" data-tone="warn">silent a day</span>}
+                  </span>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {items.length > ROWS_SHOWN && (
+        <button type="button" className="lmap-more" onClick={() => setAll((v) => !v)} data-map-show-all={items.length}>
+          {all ? "Show fewer" : `Show all ${items.length}`}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -258,29 +369,31 @@ function Through({ node: n, map, now, tracing, onTrace }: { node: MapNode; map: 
           {[...tally].map(([k, c]) => <span key={k} data-left={k} style={{ flex: c }} title={`${c} ${LEFT_WORDS[k]}`} />)}
         </div>
         <p className="lmap-empty mb-1">{[...tally].map(([k, c]) => `${c} ${LEFT_WORDS[k]}`).join(", ")}.</p>
-        <ItemsWithIndex items={items} now={now} tracing={tracing} onTrace={onTrace} right={(i) => {
+        <ItemsWithIndex items={items} node={n} now={now} tracing={tracing} onTrace={onTrace} right={(i) => {
           const v = visit.get(i)!;
           const where = v.to && v.left === "moved" ? `to ${byId.get(v.to) ?? v.to}` : LEFT_WORDS[v.left];
-          return <>{where}{v.durationMs != null ? `, ${ageShort(v.durationMs)}` : ""}</>;
+          return <>{where}{v.durationMs != null ? `, ${v.durationMs < 60_000 ? "under a minute" : ageShort(v.durationMs)}` : ""}</>;
         }} />
       </>
     );
   }
   if (!crossedIn.length) return <p className="lmap-empty">Nothing passed through in the last {map.window.label}.</p>;
-  return <Items items={crossedIn} now={now} tracing={tracing} onTrace={onTrace} />;
+  return <Items items={crossedIn} node={n} now={now} tracing={tracing} onTrace={onTrace} />;
 }
 
 /** Items whose right-hand words depend on their place in the list. */
-function ItemsWithIndex({ items, right, ...rest }: { items: MapItem[]; now: number; tracing: string | null; onTrace: (ref: string) => void; right: (i: number) => ReactNode }) {
+function ItemsWithIndex({ items, right, ...rest }: { items: MapItem[]; node?: MapNode; now: number; tracing: string | null; onTrace: (ref: string) => void; right: (i: number) => ReactNode }) {
   const idx = new Map(items.map((it, i) => [it, i]));
   return <Items items={items} {...rest} right={(it) => right(idx.get(it)!)} />;
 }
 
 function Health({ node: n, label, sense, now }: { node: MapNode; label: string; sense?: SenseSource; now: number }) {
-  const stats: Array<{ v: string; k: string }> = [];
+  const stats: Array<{ v: string; k: string; warn?: boolean }> = [];
   if (n.kind !== "source" && n.kind !== "expectations" && n.kind !== "signals" && n.kind !== "end") stats.push({ v: String(n.now.length), k: "here now" });
-  stats.push({ v: String(n.through), k: `through in ${label}` });
-  if (n.medianMs != null) stats.push({ v: ageShort(n.medianMs), k: "usual time here" });
+  stats.push({ v: String(n.through), k: `${throughWord(n)} in ${label}` });
+  if (n.medianMs != null) stats.push({ v: n.medianMs < 60_000 ? "<1m" : ageShort(n.medianMs), k: n.kind === "causes" ? "usual wait" : "usual time here" });
+  const oldest = n.now[0];
+  if (oldest && n.kind !== "end") stats.push({ v: ageShort(Math.max(0, now - oldest.at)), k: "oldest here", warn: n.now.some((it) => it.stuck) });
   if (isStationKind(n) && n.through > 0) stats.push({ v: `${Math.round((n.failed / n.through) * 100)}%`, k: "failed" });
   if (sense) stats.push({ v: sense.newest ? `${ageShort(now - sense.newest.created_at)} ago` : "never", k: "last signal" });
   return (
@@ -289,7 +402,7 @@ function Health({ node: n, label, sense, now }: { node: MapNode; label: string; 
         ? n.marks.map((m) => <p key={m.words} className="lmap-health-words" data-level={m.level}>{m.words}.</p>)
         : <p className="lmap-health-words">{healthyWords(n, label)}</p>}
       <div className="lmap-stats">
-        {stats.map((s) => <div key={s.k} className="lmap-stat"><b>{s.v}</b><span>{s.k}</span></div>)}
+        {stats.map((s) => <div key={s.k} className="lmap-stat" data-warn={s.warn ? "true" : undefined}><b>{s.v}</b><span>{s.k}</span></div>)}
       </div>
     </div>
   );
@@ -298,6 +411,7 @@ function Health({ node: n, label, sense, now }: { node: MapNode; label: string; 
 function healthyWords(n: MapNode, label: string): string {
   if (n.through === 0 && n.now.length === 0) return `Quiet: nothing reached it in the last ${label}.`;
   if (n.kind === "source") return "Filing as expected.";
+  if (n.kind === "end") return `${n.through} ended here in the last ${label}.`;
   return `Nothing wrong in the last ${label}.`;
 }
 
@@ -316,21 +430,21 @@ function Definition({ node: n, projectId, flow, now }: { node: MapNode; projectI
   );
 }
 
+/** A line nothing published: every value reads as its default (lineValue). */
+const DEFAULTS_ONLY: PublishedLineProfile = { finders: [], changed_at: 0 };
+
 function ProfileValues({ node: n, projectId, flow, now }: { node: MapNode; projectId: string; flow: LineFlow; now: number }) {
-  const published = useInboxStore((s) => ((s.projects as Record<string, { line_profile?: PublishedLineProfile | null }>)[projectId]?.line_profile ?? null));
-  const roster = useInboxStore((s) => (s.machineRosterLive ? (s.machineRoster as RosterDevice[]) : null));
-  const edits = useLineProfileEdits(projectId, published);
-  const gate = useMemo(() => lineWriteGate(published, roster), [published, roster]);
-  const lp = edits.lp;
+  const { edits, gate, device } = useLineProfileEditor(projectId);
+  const lp = edits.lp ?? DEFAULTS_ONLY;
   const fields = nodeFields(n.id);
   const finders = n.kind === "source" || n.kind === "signals";
   if (!fields.length && !finders) return null;
-  if (!lp) return <p className="lmap-empty">This project has published no line profile, so its values are the defaults. In its checkout, run <code>cast line profile --publish</code>.</p>;
-  const device = gate.device ?? "the machine";
+  const first = gate.writable && gate.first;
   const shown = n.kind === "source" ? { ...lp, finders: lp.finders.filter((f) => f.source.toLowerCase() === n.source?.toLowerCase()) } : lp;
   const sense = n.kind === "source" ? flow.sense.items.filter((s) => s.source.toLowerCase() === n.source?.toLowerCase()) : flow.sense.items;
   return (
     <div className="flex flex-col gap-1" data-map-values>
+      {first && <p className="lmap-empty" data-map-defaults>These are the defaults. Your first edit writes <code>{gate.file}</code> on {device} and publishes this line.</p>}
       {!gate.writable && <p className="lmap-empty">Read only. {gate.reason}</p>}
       {finders && <LineFinders lp={shown} sense={sense} now={now} writable={gate.writable} states={edits.states} device={device} send={edits.send} clear={edits.clear} />}
       {fields.length > 0 && (
@@ -338,6 +452,7 @@ function ProfileValues({ node: n, projectId, flow, now }: { node: MapNode; proje
           {fields.map((f) => <ProfileFieldRow key={f.key} field={f} lp={lp} writable={gate.writable} states={edits.states} device={device} now={edits.now} send={edits.send} clear={edits.clear} />)}
         </div>
       )}
+      {!edits.lp && <p className="lmap-cli" data-map-cli>Or in the checkout: <code>cast line profile --publish</code></p>}
     </div>
   );
 }
@@ -357,8 +472,8 @@ function EdgePanel({ map, edge: e, byId, now, tracing, onTrace, onSelectNode, on
       data={{ "data-map-panel": e.id }}
     >
       <div className="flex gap-3 pt-3 text-[12px]">
-        {from && <button type="button" className="text-sol-blue hover:underline" onClick={() => onSelectNode(from.id)}>{from.label}</button>}
-        {to && <button type="button" className="text-sol-blue hover:underline" onClick={() => onSelectNode(to.id)}>{to.label}</button>}
+        {from && <button type="button" className="text-sol-text-dim hover:text-sol-text" onClick={() => onSelectNode(from.id)}>From <span className="text-sol-blue">{from.label}</span></button>}
+        {to && <button type="button" className="text-sol-text-dim hover:text-sol-text" onClick={() => onSelectNode(to.id)}>To <span className="text-sol-blue">{to.label}</span></button>}
       </div>
       <Section id="crossed" title="Crossed" aside={`${plural(e.count, "crossing")} in the last ${map.window.label}`}>
         {items.length ? <Items items={items} now={now} tracing={tracing} onTrace={onTrace} /> : <p className="lmap-empty">Nothing crossed in the last {map.window.label}.</p>}
