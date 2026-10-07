@@ -60,6 +60,7 @@ import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { startShipCore } from "./ship";
 import { personEditCore, resolveProposalCore } from "./expectations";
+import { fileLineCauseCore, startLineCauseCore } from "./lineCause";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -1610,6 +1611,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (lp.publisher_user_id && lp.publisher_user_id !== String(userId)) throw new ConvexError("The checkout is on a teammate's machine: its owner can edit this file");
     const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: lp.root, edits }), lp.device_id, requestId);
     return { command_id: commandId };
+  },
+
+  // A change to the line asked of an agent (line-map.md LX6): a cause in the
+  // project, category line, the person's words its first signal, written by
+  // the signal door's own commit (lineCause.ts). The store painted the cause
+  // under `temp_task_<clientKey>`; the row carries the key, so it supersedes.
+  fileLineCause: async (ctx, userId, [clientKey, projectId, input]: [string, string, any]) => {
+    if (!isServerId(projectId)) throw new ConvexError("This project is not saved yet");
+    return await fileLineCauseCore(ctx, userId, clientKey, projectId as Id<"projects">, input);
+  },
+  // "Start now" on a line cause: the project lead's line, started on it.
+  startLineCause: async (ctx, userId, [taskId]: [string]) => {
+    if (!isServerId(taskId)) throw new ConvexError("The cause is still being filed; start it in a moment");
+    return await startLineCauseCore(ctx, userId, taskId as Id<"tasks">);
   },
 
   // A project's expectations, changed where they are read (line-map.md LX3,
