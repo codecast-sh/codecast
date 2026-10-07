@@ -11,12 +11,14 @@
 import { isMainStation } from "./runReport";
 import type { LineMap, MapEdge, MapNode } from "./lineMap";
 
-export const NODE_W = 112;
+export const NODE_W = 104;
 /** A step that only assembles the card, or a branch: narrower, so the path reads first. */
-export const NODE_W_SMALL = 84;
+export const NODE_W_SMALL = 98;
+/** A source or the expectations: a pill wide enough for a finder's name. */
+export const NODE_W_SOURCE = 136;
 export const NODE_H = 58;
 export const SOURCE_H = 44;
-const COL_GAP = 52;
+const COL_GAP = 44;
 /** Room under a node for its marks, in words. */
 const LANE_PITCH = 112;
 const SOURCE_PITCH = 54;
@@ -72,8 +74,8 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   for (const c of cols) {
     for (const n of map.nodes.filter((m) => m.col === c && !lane.has(m.id) && m.kind !== "source" && m.kind !== "expectations")) {
       // Follow a branch's own predecessor, so plan and its gate share a lane.
-      const pred = (into.get(n.id) ?? []).map((e) => lane.get(e.from)).find((l) => l != null && l !== 0);
       const side = leaves(n.id) ? 1 : -1;
+      const pred = (into.get(n.id) ?? []).map((e) => lane.get(e.from)).find((l) => l != null && Math.sign(l) === side);
       const tries = pred != null ? [pred, pred + Math.sign(pred), side, side * 2, -side, -side * 2, side * 3] : [side, side * 2, -side, -side * 2, side * 3];
       const l = tries.find((t) => t !== 0 && free(n.col, t)) ?? side * 4;
       lane.set(n.id, l);
@@ -82,7 +84,7 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   }
 
   // ── columns, left to right, each as wide as its widest node ──
-  const widthOf = (n: MapNode) => (isSmallNode(n) ? NODE_W_SMALL : NODE_W);
+  const widthOf = (n: MapNode) => (n.kind === "source" || n.kind === "expectations" ? NODE_W_SOURCE : isSmallNode(n) ? NODE_W_SMALL : NODE_W);
   const colW = new Map<number, number>();
   for (const n of map.nodes) colW.set(n.col, Math.max(colW.get(n.col) ?? 0, widthOf(n)));
   const colX = new Map<number, number>();
@@ -165,7 +167,7 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   const phases: PhaseSpan[] = [];
   for (const n of map.nodes) {
     // A branch sits inside the phases around it; the phases read off the path.
-    if (!(n.main || n.kind === "source" || n.kind === "expectations" || n.kind === "end")) continue;
+    if (!(n.main || n.kind === "source" || n.kind === "expectations")) continue;
     const b = boxes.get(n.id)!;
     const last = phases[phases.length - 1];
     if (last && last.key === n.phase) { const right = Math.max(last.x + last.w, b.x + b.w); last.x = Math.min(last.x, b.x); last.w = right - last.x; continue; }
@@ -218,7 +220,7 @@ export function neighbor(layout: MapLayout, from: string, dir: MapDirection): st
     if (!ahead) continue;
     const along = dir === "left" || dir === "right" ? Math.abs(dx) : Math.abs(dy);
     const across = dir === "left" || dir === "right" ? Math.abs(dy) : Math.abs(dx);
-    const cost = along + across * 2.5;
+    const cost = along + across * 4;
     if (cost < bestCost) { bestCost = cost; best = b.id; }
   }
   return best;

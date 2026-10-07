@@ -85,6 +85,10 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   shareChatMessageToSlack: SEND,
   retryPendingMessage: SEND,
   cancelPendingMessage: never("send: withdrawing a queued message is itself the way back from sending it"),
+  queueMessage: never("send: a queued message is taken back with its own remove button in the shared queue"),
+  releaseQueued: never("send: what was released goes into the session, like any send"),
+  reorderQueued: never("shared: the queue belongs to everyone in the session; moving it back is another move"),
+  mergeQueued: never("shared: a merged message is one turn others may already have seen; remove it from the queue instead"),
   clearDraftFinal: DRAFT,
   answerDecision: never("send: an answered decision has already been read by the agent that asked"),
   startShip: never("send: Ship starts a session that commits, pushes and opens a pull request; stopping it is the way back"),
@@ -239,6 +243,9 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
 
   // The project's line.toml, written on the checkout's machine by the daemon
   editLineProfile: never("machine control: the daemon rewrites the project's line.toml on its host, and the field is set back in the same settings control"),
+  fileLineCause: CREATE,
+  startLineCause: never("machine control: it starts a run on a machine; cancelling the run is the way back"),
+  removeTaskStub: never("internal: takes back a create the server refused, which never landed"),
 
   // A project's expectations (LM5): every change is a version judges grade against
   editExpectations: never("send: a line or a retirement becomes a proposal a person reads, and an applied one is a version judges grade against; a later retirement takes a line back"),
