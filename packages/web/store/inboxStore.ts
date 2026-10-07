@@ -288,6 +288,7 @@ import { createInitiativeSlice, type InitiativeSliceActions } from "./initiative
 import { createProjectUpdatesSlice, type ProjectUpdatesSliceActions } from "./projectUpdatesSlice";
 import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
 import { createLineSlice, type LineSliceActions } from "./lineSlice";
+import { taskCreateStub, taskStubId } from "./taskStub";
 import { createExpectationsSlice, type ExpectationsSliceActions } from "./expectationsSlice";
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
@@ -12556,16 +12557,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // a fallback keeps a bare call safe.
   createTask: asyncAction(function (this: Draft, opts: any) {
     if (!opts.client_key) opts.client_key = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    const tempId = `temp_task_${opts.client_key}`;
+    const tempId = taskStubId(opts.client_key);
     // A subtask stub inherits its parent's containers so it renders in place
     // (same group, same board scope) instead of jumping on the server echo.
     const parentRow = opts.parent
       ? (Object.values(this.tasks).find((t: any) => t.short_id === opts.parent || t._id === opts.parent) as TaskItem | undefined)
       : undefined;
-    this.tasks[tempId] = {
-      _id: tempId,
-      client_key: opts.client_key,
-      short_id: "ct-…",
+    this.tasks[tempId] = taskCreateStub(opts.client_key, {
       title: opts.title,
       description: opts.description,
       task_type: opts.task_type || "task",
@@ -12580,9 +12578,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       project_id: opts.project_id ?? (parentRow as any)?.project_id,
       team_id: opts.team_id ?? parentRow?.team_id,
       from_call: opts.from_call,
-      created_at: Date.now(),
-      updated_at: Date.now(),
-    } as any as TaskItem;
+    }) as any as TaskItem;
   }),
 
   // Remove a create-stub whose server create was permanently refused (depth
@@ -12603,7 +12599,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   removeTaskStub: sync(function (this: Draft, clientKey: string) {
-    const tempId = `temp_task_${clientKey}`;
+    const tempId = taskStubId(clientKey);
     if (!this.tasks[tempId]) return;
     delete this.tasks[tempId];
     delete (this.pending as any)[`tasks:${tempId}`];
