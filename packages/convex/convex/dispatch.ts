@@ -60,6 +60,7 @@ import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { startShipCore } from "./ship";
 import { personEditCore, resolveProposalCore } from "./expectations";
+import { fileLineCauseCore, startLineCauseCore } from "./lineCause";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -1604,12 +1605,41 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const project = await ctx.db.get(projectId as Id<"projects">);
     if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new ConvexError("Project not found");
     const lp = project.line_profile;
-    if (!lp?.root || !lp.device_id) throw new ConvexError("No machine has published this line's file yet: run cast line profile --publish in its checkout");
+    if (!lp?.root || !lp.device_id) {
+      // A line nothing has published yet (line-map.md LX5): the first edit
+      // writes the file on the viewer's own machine that last ran a session in
+      // the project's checkout, and that machine's republish makes it the
+      // line's. The daemon admits only a checkout it tracks.
+      const checkout = project.project_path;
+      if (lp || !checkout) throw new ConvexError("No machine has published this line's file yet: run cast line profile --publish in its checkout");
+      const last = await ctx.db.query("conversations")
+        .withIndex("by_user_git_root", (q: any) => q.eq("user_id", userId).eq("git_root", checkout))
+        .order("desc")
+        .filter((q: any) => q.neq(q.field("owner_device_id"), undefined))
+        .first();
+      if (!last?.owner_device_id) throw new ConvexError("None of your machines has run a session in this project's checkout yet: open one there, or run cast line profile --publish in it");
+      const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: checkout, edits }), last.owner_device_id, requestId);
+      return { command_id: commandId };
+    }
     // Only the publisher's own machine is ever a target: the row names who
     // published it, and enqueueConfigCommand refuses a device not the viewer's.
     if (lp.publisher_user_id && lp.publisher_user_id !== String(userId)) throw new ConvexError("The checkout is on a teammate's machine: its owner can edit this file");
     const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: lp.root, edits }), lp.device_id, requestId);
     return { command_id: commandId };
+  },
+
+  // A change to the line asked of an agent (line-map.md LX6): a cause in the
+  // project, category line, the person's words its first signal, written by
+  // the signal door's own commit (lineCause.ts). The store painted the cause
+  // under `temp_task_<clientKey>`; the row carries the key, so it supersedes.
+  fileLineCause: async (ctx, userId, [clientKey, projectId, input]: [string, string, any]) => {
+    if (!isServerId(projectId)) throw new ConvexError("This project is not saved yet");
+    return await fileLineCauseCore(ctx, userId, clientKey, projectId as Id<"projects">, input);
+  },
+  // "Start now" on a line cause: the project lead's line, started on it.
+  startLineCause: async (ctx, userId, [taskId]: [string]) => {
+    if (!isServerId(taskId)) throw new ConvexError("The cause is still being filed; start it in a moment");
+    return await startLineCauseCore(ctx, userId, taskId as Id<"tasks">);
   },
 
   // A project's expectations, changed where they are read (line-map.md LX3,

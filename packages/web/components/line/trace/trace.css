@@ -5,9 +5,25 @@
 .ltrace-body { container-type: inline-size; }
 .ltrace-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem; }
 .ltrace-map-col { order: -1; min-width: 0; }
-.ltrace-map { height: 300px; }
+.ltrace-map { height: 380px; }
 @container (min-width: 1080px) {
-  .ltrace-grid { grid-template-columns: minmax(26rem, 40rem) minmax(0, 1fr); gap: 2rem; max-width: 100rem; }
+  .ltrace-grid[data-full-map="true"] { grid-template-columns: minmax(26rem, 40rem) minmax(0, 1fr); gap: 2rem; max-width: 100rem; }
   .ltrace-map-col { order: 0; }
   .ltrace-map { position: sticky; top: 1.5rem; height: min(640px, calc(100vh - 9rem)); }
 }
+/* The whole map at full size, behind "Full size" (TraceMap). */
+.ltrace-map-box { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* The path strip: the nodes this item went through, at reading size. */
+.ltrace-strip { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 2px 0; }
+.ltrace-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  padding: 3px 9px; border-radius: 9999px; font-size: 12px; white-space: nowrap;
+  color: var(--sol-text);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 85%, transparent);
+  background: color-mix(in srgb, var(--sol-card, var(--sol-bg)) 70%, transparent);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.ltrace-chip:hover, .ltrace-chip[data-focus="true"] { border-color: color-mix(in srgb, var(--sol-blue) 55%, var(--sol-border)); }
+.ltrace-chip[data-status="failed"] { color: var(--sol-red); }
+.ltrace-chip[data-status="current"] { color: var(--sol-cyan); }
+.ltrace-chip[data-status="waiting"], .ltrace-chip[data-status="skipped"] { color: var(--sol-text-muted); border-style: dashed; }

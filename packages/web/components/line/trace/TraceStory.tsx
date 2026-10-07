@@ -37,7 +37,7 @@ const STAGE_LABEL: Record<TraceStep["stage"], string> = {
 
 /** The rail's dot: a step that happened is solid, one under way rings, one
  *  that has not happened is hollow. */
-const DOT: Record<TraceStatus, string> = {
+export const DOT: Record<TraceStatus, string> = {
   done: "bg-sol-text-muted border-sol-text-muted",
   failed: "bg-sol-red border-sol-red",
   current: "bg-sol-cyan/30 border-sol-cyan animate-pulse",
@@ -68,7 +68,7 @@ export function TraceStory({ trace, rows, compact = false, onFocusNode }: TraceS
   const runById = useMemo(() => new Map(rows.runs.map((r) => [r._id, r as unknown as ReportRun])), [rows.runs]);
   const runBlocks = blocks.filter((b): b is RunBlockData => b.kind === "run");
   const lastRunId = runBlocks[runBlocks.length - 1]?.runId ?? null;
-  const focusSignal = rows.signals.find((s) => s._id === trace.focusId) ?? null;
+  const focusSignal = rows.signals.find((s) => s._id === trace.focusSignalId) ?? null;
   const ctx: Ctx = { trace, compact, onFocusNode, projectId: (trace.cause as { project_id?: string }).project_id ?? null };
   return (
     <ol className={cn("relative", compact ? "text-[12px]" : "text-[13px]")} data-trace-story={trace.cause.short_id ?? trace.cause._id} data-trace-outcome={trace.outcome} data-compact={compact ? "" : undefined}>
@@ -81,10 +81,22 @@ export function TraceStory({ trace, rows, compact = false, onFocusNode }: TraceS
         }
         const s = b.step;
         const full = s.stage === "finding" && !compact && focusSignal?.detail_md ? focusSignal.detail_md : null;
-        return <StepItem key={s.id} step={s} last={last} nextFuture={nextFuture} ctx={ctx} fullWords={full} />;
+        return <StepItem key={s.id} step={s} title={stepTitle(s, trace, focusSignal?.source)} last={last} nextFuture={nextFuture} ctx={ctx} fullWords={full} />;
       })}
     </ol>
   );
+}
+
+/** A step's headline, never the cause's title again: the header already
+ *  says it. The finding is told as who saw it, the cause as the task it was
+ *  filed as, its kind and risk on the line under it (LX4). Every other step keeps its own words. */
+export function stepTitle(s: TraceStep, trace: LineTrace, source?: string | null): string {
+  const same = s.title.trim() === trace.cause.title.trim();
+  if (s.stage === "finding" && same) return `${source ? `${source[0].toUpperCase()}${source.slice(1)}` : "A finder"} saw this`;
+  if (s.stage === "cause" && same) {
+    return `Filed as ${trace.cause.short_id || "a cause"}`;
+  }
+  return s.title;
 }
 
 type Ctx = { trace: LineTrace; compact: boolean; onFocusNode?: (id: string | null) => void; projectId: string | null };
@@ -102,7 +114,7 @@ function Rail({ dot, last, dashed, compact }: { dot: string; last: boolean; dash
   );
 }
 
-function StepItem({ step: s, last, nextFuture, ctx, fullWords }: { step: TraceStep; last: boolean; nextFuture: boolean; ctx: Ctx; fullWords: string | null }) {
+function StepItem({ step: s, title, last, nextFuture, ctx, fullWords }: { step: TraceStep; title: string; last: boolean; nextFuture: boolean; ctx: Ctx; fullWords: string | null }) {
   const { trace, compact } = ctx;
   const outcome = s.stage === "outcome";
   const dot = (outcome && OUTCOME_DOT[trace.outcome]) || DOT[s.status];
@@ -120,7 +132,7 @@ function StepItem({ step: s, last, nextFuture, ctx, fullWords }: { step: TraceSt
       <Rail dot={dot} last={last} dashed={nextFuture || future} compact={compact} />
       <div className="min-w-0">
         <StepHead label={STAGE_LABEL[s.stage]} at={s.at} durationMs={s.durationMs} status={s.status} compact={compact} />
-        <div className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[14px] font-medium", tone)} data-trace-title>{s.title}</div>
+        <div className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[14px] font-medium", tone)} data-trace-title>{title}</div>
         {s.detail && <p className={cn("mt-0.5 leading-snug", future ? "text-sol-text-dim" : "text-sol-text-muted", compact && "line-clamp-2")} data-trace-detail>{s.detail}</p>}
         {fullWords && fullWords.trim() !== s.detail && (
           <div className="mt-1">
