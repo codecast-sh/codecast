@@ -74,7 +74,7 @@ export function pendingRetryClientId(messageId: string): string | undefined {
   return messageId.startsWith("serverpending_") ? undefined : messageId;
 }
 
-export type ServerPendingRow = { message_id: string; client_id?: string; created_at: number; status: string; content: string; hold_reason?: string };
+export type ServerPendingRow = { message_id: string; client_id?: string; created_at: number; status: string; content: string; hold_reason?: string; queued?: boolean; from_user_id?: string };
 // getConversationPendingMessage: the primary row (oldest in flight, else the
 // newest settled) plus `inflight`, every undelivered row. Older servers send
 // no `inflight`.
@@ -156,6 +156,9 @@ export function serverPendingBubbles(
 ) {
   const bubbles = [];
   for (const row of serverPendingRows(pending)) {
+    // Queued for the end of the turn: it shows in the shared queue above the
+    // composer, and becomes a bubble when the turn ends and it goes in.
+    if (row.status === "held") continue;
     if (!serverPendingBubbleVisible(row, timeline)) continue;
     const id = row.client_id;
     if (id && (timeline.seen.has(id) || timeline.local.some((m) => m._id === id || m._clientId === id))) continue;
@@ -166,6 +169,8 @@ export function serverPendingBubbles(
       role: "user" as const,
       content: row.content,
       timestamp: row.created_at,
+      // Whoever sent it, so a teammate's queued message is not drawn as the viewer's.
+      ...(row.from_user_id ? { from_user_id: row.from_user_id } : {}),
       ...(row.status === "delivered" ? {} : { _isOptimistic: true }),
       _serverPendingStatus: row.status,
       _serverPendingReason: row.hold_reason,
@@ -180,8 +185,10 @@ export function serverPendingBubbles(
 // (delivered/cancelled) so a lagging transcript keeps its bubble; to the
 // tracker that row is nothing in flight. Reading it as in flight raised
 // "Disconnected · Cancel" (and an auto-resume) after every delivered message.
-export function inFlightPending<T extends { status: string }>(pending: T | null | undefined): T | null {
-  if (!pending || pending.status === "delivered" || pending.status === "cancelled") return null;
+export function inFlightPending<T extends { status?: string }>(pending: T | null | undefined): T | null {
+  // No status: a viewer with only others' queued rows (no primary of their
+  // own). Held: waiting on purpose (the end of a turn), nothing to deliver yet.
+  if (!pending || !pending.status || pending.status === "delivered" || pending.status === "cancelled" || pending.status === "held") return null;
   return pending;
 }
 

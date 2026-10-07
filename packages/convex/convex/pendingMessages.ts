@@ -1690,7 +1690,9 @@ export const getConversationPendingMessage = query({
     const inflight = (sharedQueue ? msgs : visible)
       .filter((m) => SHOWN_PENDING_STATUSES.has(m.status) || (m.status === "held" && m.queued))
       .sort(byQueueOrder);
-    const msg = inflight.find((m) => visible.includes(m))
+    // The primary is what the viewer's delivery tracker watches: never a row
+    // held on purpose (queued for the end of the turn), which is not late.
+    const msg = inflight.find((m) => visible.includes(m) && m.status !== "held")
       ?? visible
         .filter((m) => TERMINAL_STATUSES.has(m.status as PendingStatus))
         .sort((a, b) => b.created_at - a.created_at)[0]

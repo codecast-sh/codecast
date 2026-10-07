@@ -10296,13 +10296,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // getConversationPendingMessage is the same order (lib/sessionQueue).
   // "Queue for later" (⌘↵): a row held on the server for the end of the
   // agent's turn, in the session's shared queue for everyone in it. The
-  // bubble paints at once as queued; the server releases the row when the
-  // turn ends (managedSessions.applyAgentStatus), or now via releaseQueued.
+  // server releases the row when the turn ends
+  // (managedSessions.applyAgentStatus), or now via releaseQueued.
   queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string) {
-    appendOptimisticMessage(this, convId, content, undefined, clientId);
-    notePendingMessageSendRequested(clientId);
-    const row = this.pendingMessages[convId]?.find((m) => m._clientId === clientId || m._id === clientId);
-    if (row) { delete row._isOptimistic; row._isQueued = true; }
+    // The one home of queue rows is the conversation's pending status row:
+    // the line shows the new entry at once, and the server's push of the
+    // real row replaces it.
+    const me = this.currentUser as any;
+    const status = ((this as any).pendingMessageStatus[convId] ??= { _id: convId, conversation_id: convId });
+    status.inflight = [...(status.inflight ?? []), {
+      message_id: clientId, client_id: clientId, created_at: Date.now(), status: "held", queued: true, content,
+      from_user_id: me?._id ? String(me._id) : undefined, from_name: me?.name || me?.email?.split("@")[0], from_image: me?.image || me?.github_avatar_url,
+    }];
   }),
 
   releaseQueued: action(function (this: Draft, convId: string) {
