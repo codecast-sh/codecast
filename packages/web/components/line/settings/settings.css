@@ -250,9 +250,10 @@
 }
 @keyframes lset-arrive-title { 0%, 30% { color: var(--sol-blue); } }
 
-/* The key hints need a keyboard: a narrow floor (a phone, a touch tablet) drops them. */
-@container line-floor (max-width: 760px) { .lset-footer { display: none; } }
-@media (pointer: coarse) { .lset-footer { display: none; } }
-
 /* Inside a station panel the timeout row ends the panel: no rule under it. */
 [data-station-panel] .lset-row { border-bottom: 0; padding-bottom: 0; }
+/* A source filing here without a finder: one click declares it (LX5). */
+.lset-declare { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 7px 10px; border-radius: 8px; border: 1px dashed color-mix(in srgb, var(--sol-border) 85%, transparent); }
+.lset-declare-words { font-size: 11.5px; color: var(--sol-text-muted); line-height: 1.45; min-width: 0; flex: 1 1 220px; }
+.lset-declare-words b { color: var(--sol-text); font-weight: 600; }
+.lset-declare .lset-add { margin-left: 0; white-space: nowrap; }
