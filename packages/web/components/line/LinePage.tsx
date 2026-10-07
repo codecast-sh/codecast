@@ -63,7 +63,7 @@ const FIRST_SIGNAL = `cast signal add --source person --kind bug --title "What y
 export function LinePage({ project: pinned, workspace }: { project?: string; workspace?: string | null } = {}) {
   const initiatives = useInitiatives();
   const { now, projects, lineRows, rollup, line } = useLineFloor(pinned, workspace);
-  const mapUrl = useLineMapUrl();
+  const mapUrl = useLineMapUrl(pinned ? null : line.param);
   // Settings belong to one project's line; on the map they are a panel.
   const settingsProject = line.key === ALL_PROJECTS || line.key === NO_PROJECT ? null : line.param;
   const openSettings = () => mapUrl.set({ node: LINE_SETTINGS_NODE });
@@ -150,6 +150,7 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
               flow={flow}
               now={now}
               note={allEmpty ? <FirstSignal /> : undefined}
+              lineParam={pinned ? null : line.param}
             />
           </div>
         )}
