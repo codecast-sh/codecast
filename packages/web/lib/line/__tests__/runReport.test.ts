@@ -117,7 +117,8 @@ describe("runOutcome", () => {
     expect(runOutcome(ends(["park"]), { status: "open", readiness_note: "No goal named" }).text).toBe("Parked: the cause is not ready to build. No goal named.");
     expect(runOutcome({ ...shippedRun, status: "running", current_node_id: "implement" }).text).toBe("Working: at Implement.");
     expect(runOutcome({ ...shippedRun, status: "paused", gate_node_id: "decide" }).text).toBe("Waiting for an answer on the card.");
-    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: the line had no next step.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: Prove finished, and the line has no route for that result yet.");
+    expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome failure, review_verdict none)" }).text).toBe("Stopped at Prove: Prove failed outright, and the line has no route for that yet.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "max_visits=2 exceeded on prove" }).text).toBe("Stopped: Prove looped twice.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "implement", fail_reason: "max_visits=3 exceeded on implement" }).text).toBe("Stopped: Implement looped three times.");
     expect(runOutcome({ ...shippedRun, status: "failed", current_node_id: "prove", fail_reason: "hand jx79xc0 killed after 30m at prove" }).text).toBe("Stopped: Prove's session ran out of time.");

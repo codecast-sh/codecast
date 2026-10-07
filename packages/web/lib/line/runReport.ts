@@ -312,7 +312,15 @@ export function stopWords(run: ReportRun, at = labelOf(run, run.current_node_id)
   let m: RegExpMatchArray | null;
   if (!why) return `Stopped at ${at}.`;
   if (/^stopped\b/i.test(why)) return `${why}.`;
-  if ((m = why.match(/^no outgoing edge from (\S+)/))) return `Stopped at ${labelOf(run, m[1])}: the line had no next step.`;
+  if ((m = why.match(/^no outgoing edge from (\S+)(?:.*?\boutcome (\w+))?/))) {
+    const st = labelOf(run, m[1]);
+    // The engine's words name the missing edge; a reader needs what the station did.
+    // The station's own status first: the engine's outcome can read success for a step that judged itself failed.
+    const failed = nodeOf(run, m[1])?.status === "failed" || /^fail/.test(m[2] ?? "fail");
+    return failed
+      ? `Stopped at ${st}: ${st} failed outright, and the line has no route for that yet.`
+      : `Stopped at ${st}: ${st} finished, and the line has no route for that result yet.`;
+  }
   if ((m = why.match(/^max_visits=(\d+) exceeded on (\S+)/))) return `Stopped: ${labelOf(run, m[2])} looped ${TIMES[Number(m[1])] ?? `${m[1]} times`}.`;
   if ((m = why.match(/^hand \S+ killed after \d+\s*m(?:in)?(?: at (\S+))?/))) return `Stopped: ${labelOf(run, m[1] ?? run.current_node_id)}'s session ran out of time.`;
   if ((m = why.match(/^gate (dismissed|withdrawn)$/))) return `Stopped: the question was ${m[1]}.`;
