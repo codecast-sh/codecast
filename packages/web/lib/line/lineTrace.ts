@@ -102,6 +102,8 @@ export type TraceOpts = {
   graph?: LineGraph | null;
   /** Who answered a decision, by name ("Ashot Petrosian"), when the caller knows. */
   answeredBy?: (d: MapDecision) => string | null | undefined;
+  /** A goal by its name ("Matching that lands"), when the caller knows it; else its ref. */
+  goalName?: (ref: string) => string | null | undefined;
 };
 
 /** How a signal joined its cause (signals.attach), as a sentence. */
@@ -116,8 +118,13 @@ const ATTACH_WORDS: Record<string, string> = {
 const KIND_WORDS: Record<string, string> = { bug: "a bug", regression: "a regression", prompt_miss: "a prompt miss", ux: "a UX problem", cohesion: "a cohesion problem", request: "a request" };
 const kindWords = (kind: string) => KIND_WORDS[kind] ?? kind.replace(/_/g, " ");
 
+/** Markdown's inline marks taken off, so a finder's words read as words. */
+export const plainWords = (s: string) => s.replace(/(\*\*|__)(.+?)\1/g, "$2").replace(/`([^`]+)`/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/^[>*-]\s+/, "").trim();
 /** The first line of prose in a finder's markdown: headings are its labels, not its words. */
-const firstLine = (s: string | null | undefined): string | null => s?.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) ?? null;
+const firstLine = (s: string | null | undefined): string | null => {
+  const line = s?.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
+  return line ? plainWords(line) || null : null;
+};
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const isLive = (r: { status: string }) => r.status === "running" || r.status === "paused" || r.status === "pending";
 const STATUS_OF: Record<StepState, TraceStatus> = { done: "done", noted: "done", failed: "failed", live: "current", waiting: "current" };
@@ -205,7 +212,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     durationMs: groundVisit?.n.started_at != null && groundVisit.n.completed_at != null ? groundVisit.n.completed_at - groundVisit.n.started_at : null,
     status: grounded ? "done" : groundStep ? STATUS_OF[groundStep.state] : "waiting",
     detail: grounded
-      ? [cause.goal_ref ? (cause.goal_ref === "none" ? "Serves no goal yet" : `Serves ${cause.goal_ref}`) : null, cause.readiness_note?.trim()].filter(Boolean).join(". ")
+      ? [cause.goal_ref ? (cause.goal_ref === "none" ? "Serves no goal yet" : `Serves ${opts.goalName?.(cause.goal_ref) || cause.goal_ref}`) : null, cause.readiness_note?.trim()].filter(Boolean).join(". ")
       : groundStep ? groundStep.result : "Waiting to be admitted: the line grounds a cause when a run starts on it",
     links: [], artifacts: sessionArtifacts(groundStep), nodeId: graph.nodes.some((n) => n.id === "ground") ? "ground" : null,
   });
@@ -245,14 +252,15 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     const answer = decisionAnswer(d);
     const waiting = d.status === "pending";
     const who = answer ? opts.answeredBy?.(d) : null;
-    const recommend = d.card?.recommend ? `Recommends ${d.card.recommend.verdict}${d.card.recommend.why ? `: ${d.card.recommend.why}` : ""}` : null;
+    const why = d.card?.recommend?.why?.trim().replace(/[.\s]+$/, "");
+    const recommend = d.card?.recommend ? `Recommends ${d.card.recommend.verdict}${why ? `: ${why}` : ""}` : null;
     steps.push({
       id: `card:${d._id}`, stage: "card", title: cardName(answer, d.card, waiting), at: d.created_at ?? null,
       durationMs: d.resolved_at != null && d.created_at != null ? d.resolved_at - d.created_at : waiting && d.created_at != null ? now - d.created_at : null,
       status: waiting ? "current" : d.status === "answered" ? "done" : "skipped",
       detail: [recommend, answer ? `${who ?? "Answered"}${who ? " answered" : ""} ${answer}${d.resolved_at ? ` ${shortDay(d.resolved_at)}` : ""}` : waiting ? "Waiting for an answer" : `The card was ${d.status}`].filter(Boolean).join(". "),
       links: d.short_id ? [{ label: "Open the card", href: `/decisions/${d.short_id}` }] : [],
-      artifacts: [], nodeId: CARD_GATE_NODE_ID,
+      artifacts: [], nodeId: CARD_GATE_NODE_ID, ...(d.workflow_run_id ? { runId: d.workflow_run_id } : {}),
     });
   }
   const finalEnd = latest ? lineRunOutcome(latest.node_statuses)?.kind ?? null : null;
@@ -265,7 +273,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
         id: `card:${answered._id}`, stage: "card", title: cardName(answered.gate_answer ? choiceWords(answered.gate_answer) : null, null, waiting), at: null, durationMs: null,
         status: waiting ? "current" : "done", detail: waiting ? "Waiting for an answer" : "",
         links: answered.gate_decision_short_id ? [{ label: "Open the card", href: `/decisions/${answered.gate_decision_short_id}` }] : [],
-        artifacts: [], nodeId: CARD_GATE_NODE_ID,
+        artifacts: [], nodeId: CARD_GATE_NODE_ID, runId: answered._id,
       });
     } else {
       steps.push(pending("card", "Card", closedBefore(finalEnd) ? "skipped" : "waiting", closedBefore(finalEnd) ? `No card: ${endWords(finalEnd!)}` : "Waiting for a card: it is written once the change passes review", CARD_GATE_NODE_ID));
@@ -383,13 +391,25 @@ export type TraceBlock =
 
 /**
  * The story as a reader takes it (LX4): the stage steps one by one, and each
- * run as one block of its stations, where an earlier round of a loop folds
+ * run as one block of its stations followed by the card it wrote, where an earlier round of a loop folds
  * into one row naming the stations it went through, and a station visited
  * again says which visit it is.
  */
 export function traceBlocks(trace: Pick<LineTrace, "steps">): TraceBlock[] {
   const out: TraceBlock[] = [];
-  for (const step of trace.steps) {
+  // A card follows the run that wrote it, so a later run reads after its card.
+  const runIds = new Set(trace.steps.flatMap((s) => (s.stage === "station" && s.runId ? [s.runId] : [])));
+  const cardsOf = new Map<string, TraceStep[]>();
+  for (const s of trace.steps) if (s.stage === "card" && s.runId && runIds.has(s.runId)) cardsOf.set(s.runId, [...(cardsOf.get(s.runId) ?? []), s]);
+  const placed = new Set([...cardsOf.values()].flat());
+  const steps: TraceStep[] = [];
+  for (const [i, s] of trace.steps.entries()) {
+    if (placed.has(s)) continue;
+    steps.push(s);
+    const next = trace.steps[i + 1];
+    if (s.stage === "station" && s.runId && (next?.stage !== "station" || next.runId !== s.runId)) steps.push(...(cardsOf.get(s.runId) ?? []));
+  }
+  for (const step of steps) {
     if (step.stage !== "station" || !step.runId) { out.push({ kind: "step", step }); continue; }
     let block = out[out.length - 1];
     if (block?.kind !== "run" || block.runId !== step.runId) {
