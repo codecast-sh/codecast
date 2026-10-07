@@ -3,16 +3,26 @@
    orange ages or starves, red fails, violet is rework (a loop back). Nodes
    stay neutral so the trouble is what the eye finds. */
 
-.lmap-scroll {
+/* The frame holds the scroller and its edge arrows (EdgeArrows). */
+.lmap-frame { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.lmap-frame > .lmap-scroll { flex: 1 1 auto; min-height: 0; }
+/* The edge arrows ride the phase row, the one band no node or edge crosses. */
+.lmap-frame > .line-edge-arrow { top: 22px; }
+.lmap-frame {
   --lmap-belt: var(--sol-blue);
   --lmap-line: color-mix(in srgb, var(--sol-text-muted) 55%, transparent);
   --lmap-idle: color-mix(in srgb, var(--sol-border) 85%, transparent);
+}
+.lmap-scroll {
   position: relative;
+  display: flex;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
 }
-.lmap-canvas { position: relative; margin: 0 auto; }
+/* Top-aligned: the line starts under the bar, never centered into the floor's middle. */
+.lmap-canvas { position: relative; flex: 0 0 auto; margin: 0 auto; align-self: flex-start; }
+.lmap-scroll.line-edge-fade { --edge-fade: 48px; }
 
 /* Phases, named over the path. */
 .lmap-phases { position: absolute; inset: 0 0 auto 0; height: 22px; pointer-events: none; }
@@ -108,7 +118,7 @@
   border-color: var(--lmap-belt);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--lmap-belt) 22%, transparent);
 }
-.lmap-node[data-kind="source"], .lmap-node[data-kind="expectations"] { border-radius: 9999px; padding: 5px 12px; justify-content: center; gap: 1px; }
+.lmap-node[data-kind="source"], .lmap-node[data-kind="expectations"], .lmap-node[data-kind="end"] { border-radius: 9999px; padding: 5px 12px; justify-content: center; gap: 1px; }
 .lmap-node[data-kind="expectations"] { border-style: dashed; }
 .lmap-node[data-kind="signals"], .lmap-node[data-kind="causes"] { background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sol-card, var(--sol-bg))); }
 .lmap-node[data-kind="end"] { border-radius: 9999px; padding-inline: 12px; }
@@ -129,18 +139,22 @@
   color: var(--sol-bg);
   background: var(--lmap-belt);
 }
-.lmap-node-nums { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; }
+.lmap-node-nums { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; min-height: 15px; }
 .lmap-here { font-size: 10.5px; color: var(--sol-text-muted); white-space: nowrap; }
 .lmap-here b { font-size: 17px; font-weight: 700; color: var(--sol-text); letter-spacing: -0.03em; margin-right: 1px; }
-.lmap-here[data-zero="true"] b { font-weight: 400; color: var(--sol-text-dim); opacity: 0.6; }
-.lmap-here[data-zero="true"] { color: var(--sol-text-dim); }
 .lmap-here[data-ask="true"], .lmap-here[data-ask="true"] b { color: var(--sol-yellow); }
 .lmap-through { font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; }
-.lmap-through b { color: var(--sol-text-muted); font-weight: 600; }
-.lmap-through[data-zero="true"] { opacity: 0.55; }
+.lmap-node:not([data-compact]) .lmap-here + .lmap-through { margin-left: auto; }
 .lmap-node[data-compact="true"] .lmap-node-nums { justify-content: flex-start; }
-/* The through count wears an arrow so it reads as passing, not resting. */
-.lmap-node:not([data-compact]) .lmap-through::before { content: "\2192 "; opacity: 0.7; }
+.lmap-empty-word { font-size: 10.5px; color: var(--sol-text-dim); opacity: 0.7; font-style: italic; }
+.lmap-node[data-empty="true"]:not([data-selected]) .lmap-node-label { color: var(--sol-text-muted); }
+/* Work stuck or piling up (a warn mark): the count and the node's edge take
+   the warning ink, so the map shows where work is stuck, not only what is
+   selected (LX3). A failing node takes red the same way. */
+.lmap-node[data-tone="warn"]:not([data-selected]) { border-color: color-mix(in srgb, var(--sol-orange) 50%, var(--sol-border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-orange) 10%, transparent); }
+.lmap-node[data-tone="warn"] .lmap-here b { color: var(--sol-orange); }
+.lmap-node[data-tone="fail"]:not([data-selected]) { border-color: color-mix(in srgb, var(--sol-red) 50%, var(--sol-border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 10%, transparent); }
+.lmap-node[data-tone="fail"] .lmap-here b { color: var(--sol-red); }
 
 .lmap-lamp { width: 6px; height: 6px; border-radius: 9999px; flex-shrink: 0; background: color-mix(in srgb, var(--sol-text-dim) 50%, transparent); }
 .lmap-lamp[data-tone="live"] { background: var(--lmap-belt); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lmap-belt) 18%, transparent); }
@@ -161,16 +175,18 @@
   line-height: 1.35;
   text-align: center;
   color: var(--sol-text-dim);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  /* One line, no wider than its node, so marks never run into a neighbour's
+     (LX2); the whole sentence is the tooltip and the panel's Health. */
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: auto;
   z-index: 1;
   transition: opacity 200ms ease;
 }
 .lmap-mark[data-level="warn"] { color: color-mix(in srgb, var(--sol-orange) 85%, var(--sol-text)); }
 .lmap-mark[data-level="fail"] { color: var(--sol-red); }
+.lmap-mark-more { color: var(--sol-text-dim); }
 
 /* ── a trace: one path lit, the rest stepped back ── */
 [data-tracing="true"] .lmap-node:not([data-on]),
@@ -196,9 +212,38 @@
 .lmap-windows button[aria-pressed="true"] { background: color-mix(in srgb, var(--sol-text) 8%, transparent); color: var(--sol-text); }
 .lmap-legend { display: inline-flex; align-items: center; gap: 12px; font-size: 10.5px; color: var(--sol-text-dim); }
 .lmap-legend i { display: inline-block; width: 18px; height: 0; border-top: 3px solid color-mix(in srgb, var(--lmap-belt, var(--sol-blue)) 42%, var(--sol-text-muted)); vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+.lmap-legend-num { font-size: 12px; font-weight: 700; color: var(--sol-text-muted); margin-right: 3px; }
 .lmap-legend i[data-kind="loop"] { border-top-color: color-mix(in srgb, var(--sol-violet) 55%, transparent); }
 .lmap-legend i[data-kind="empty"] { border-top: 1px dashed var(--sol-border); }
-.lmap-scroll.lmap-fill { flex: 1 1 auto; min-height: 0; }
+.lmap-frame.lmap-fill { flex: 1 1 auto; min-height: 0; }
+/* The page's map is as tall as its line, never the pane: the floor under it
+   holds what waits now (LX2). A tall line still scrolls inside its frame. */
+.lmap-frame.lmap-fit { flex: 0 1 auto; min-height: 0; max-height: 72%; }
+/* With a panel open the Now strip is one line, so the map takes the height. */
+.lmap-main:has(> .lmap-now[data-brief]) > .lmap-frame.lmap-fit { flex: 1 1 auto; max-height: none; }
+
+/* Where work waits now, under the map: one row per node holding work. */
+.lmap-now { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 16px 14px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
+.lmap-now-title { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 650; color: var(--sol-text); margin-bottom: 4px; }
+.lmap-now-title small { font-weight: 400; font-size: 11px; color: var(--sol-text-dim); }
+.lmap-now-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 24px; }
+.lmap-now-node { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; margin: 0 -8px; border-radius: 8px; text-align: left; min-width: 0; }
+.lmap-now-node:hover, .lmap-now-node:focus-visible { background: color-mix(in srgb, var(--sol-text) 4%, transparent); outline: none; }
+.lmap-now-head { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; }
+.lmap-now-head b { font-weight: 600; color: var(--sol-text); }
+.lmap-now-count { margin-left: auto; font-family: var(--font-mono), monospace; font-size: 12px; color: var(--sol-text-muted); font-variant-numeric: tabular-nums; }
+.lmap-now-words { font-size: 11.5px; color: var(--sol-text-dim); line-height: 1.4; padding-left: 13px; }
+.lmap-now-words[data-level="warn"] { color: color-mix(in srgb, var(--sol-orange) 85%, var(--sol-text-dim)); }
+.lmap-now-words[data-level="fail"] { color: var(--sol-red); }
+.lmap-now-item { font-size: 11.5px; color: var(--sol-text-muted); padding-left: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* One line while a panel is open: the panel holds the items. */
+.lmap-now[data-brief] { flex: 0 0 auto; overflow: hidden; padding: 7px 16px; }
+.lmap-now-line { font-size: 12px; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lmap-now-line b { font-weight: 600; color: var(--sol-text); }
+.lmap-now-name { color: var(--sol-text-muted); font-variant-numeric: tabular-nums; border-radius: 4px; }
+.lmap-now-name:hover, .lmap-now-name:focus-visible, .lmap-now-name[aria-pressed="true"] { color: var(--sol-text); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--sol-text) 35%, transparent); text-underline-offset: 2px; outline: none; }
+.lmap-now-name[data-tone="fail"] { color: var(--sol-red); }
+.lmap-now-name[data-tone="warn"] { color: color-mix(in srgb, var(--sol-orange) 85%, var(--sol-text-dim)); }
 .lmap-note { margin: 2px 16px 6px; font-size: 11.5px; color: var(--sol-text-muted); }
 .lmap-note code { color: var(--sol-text); }
 .lmap-trace-bar {
@@ -231,9 +276,10 @@
 .lmap-panel-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .lmap-panel-title h2 { font-size: 14px; font-weight: 650; color: var(--sol-text); margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lmap-panel-what { font-size: 12px; color: var(--sol-text-muted); line-height: 1.45; }
-.lmap-panel-nav { display: flex; gap: 2px; padding: 6px 12px 0; font-size: 11px; }
-.lmap-panel-nav a { padding: 2px 6px; border-radius: 5px; color: var(--sol-text-dim); }
+.lmap-panel-nav { display: flex; gap: 2px; padding: 6px 12px 6px; font-size: 11px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
+.lmap-panel-nav a { padding: 2px 7px; border-radius: 5px; color: var(--sol-text-dim); transition: color 120ms ease, background-color 120ms ease; }
 .lmap-panel-nav a:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.lmap-panel-nav a[aria-current="true"] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
 .lmap-panel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 16px 28px; }
 .lmap-sec { padding-top: 14px; scroll-margin-top: 8px; }
 .lmap-sec + .lmap-sec { margin-top: 6px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent); }
@@ -246,19 +292,37 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 2px 10px;
+  gap: 1px 10px;
   padding: 5px 6px;
   margin: 0 -6px;
   border-radius: 6px;
   font-size: 12.5px;
   cursor: pointer;
+  outline: none;
 }
-.lmap-item:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.lmap-item:hover, .lmap-item:focus-visible { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.lmap-item:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-blue) 45%, transparent); }
 .lmap-item[data-active="true"] { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
-.lmap-item-title { color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.lmap-item-meta { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Two lines for a title: rows differ at their ends as often as their starts. */
+.lmap-item-title { color: var(--sol-text); min-width: 0; line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.lmap-item-meta { display: inline-flex; align-items: baseline; gap: 10px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lmap-item-sub { grid-column: 1 / -1; display: flex; gap: 10px; font-size: 11px; color: var(--sol-text-dim); min-width: 0; }
-.lmap-item-sub a:hover { color: var(--sol-text); text-decoration: underline; }
+/* Trace and open wait for hover or focus, so the list reads as titles. */
+.lmap-item-acts { display: inline-flex; gap: 10px; opacity: 0; transition: opacity 120ms ease; }
+.lmap-item:hover .lmap-item-acts, .lmap-item:focus-within .lmap-item-acts, .lmap-item[data-active="true"] .lmap-item-acts { opacity: 1; }
+.lmap-item-acts a:hover { color: var(--sol-text); text-decoration: underline; }
+@media (hover: none) { .lmap-item-acts { opacity: 1; } }
+.lmap-item-age { font-size: 10.5px; color: var(--sol-text-dim); padding: 0 0 4px; font-variant-numeric: tabular-nums; }
+.lmap-item-age:first-child { padding-top: 0; }
+.lmap-items-prefix { font-size: 11px; color: var(--sol-text-muted); padding: 8px 0 2px; }
+.lmap-items > li:first-child > .lmap-items-prefix { padding-top: 0; }
+.lmap-items-prefix span { color: var(--sol-text-dim); }
+.lmap-item-count { font-size: 10.5px; color: var(--sol-text-dim); margin-left: 6px; font-variant-numeric: tabular-nums; }
+.lmap-item-age[data-warn="true"] { color: color-mix(in srgb, var(--sol-orange) 85%, var(--sol-text-dim)); }
+.lmap-more { margin-top: 4px; font-size: 11.5px; color: var(--sol-blue); }
+.lmap-more:hover { text-decoration: underline; }
+.lmap-cli { font-size: 11px; color: var(--sol-text-dim); margin-top: 4px; }
+.lmap-cli code { color: var(--sol-text-muted); }
 .lmap-chip { font-size: 10.5px; padding: 0 5px; border-radius: 4px; white-space: nowrap; }
 .lmap-chip[data-tone="warn"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
 .lmap-chip[data-tone="fail"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
@@ -272,6 +336,22 @@
 .lmap-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 4px; }
 .lmap-stat b { display: block; font-family: var(--font-mono), monospace; font-size: 15px; font-weight: 650; color: var(--sol-text); font-variant-numeric: tabular-nums; }
 .lmap-stat span { font-size: 10.5px; color: var(--sol-text-dim); }
+.lmap-stat[data-warn="true"] b { color: var(--sol-orange); }
+
+/* The ask bar: pinned under the panel body, one line until opened (LX6). */
+.lmap-ask { flex: 0 0 auto; border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); background: var(--sol-bg); padding: 8px 12px; }
+.lmap-ask-bar {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border-radius: 8px; text-align: left;
+  font-size: 12px; color: var(--sol-text-muted);
+  background: color-mix(in srgb, var(--sol-card, var(--sol-bg)) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 85%, transparent);
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.lmap-ask-bar:hover:not(:disabled) { color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-blue) 50%, var(--sol-border)); }
+.lmap-ask-bar:disabled { opacity: 0.6; cursor: default; }
+.lmap-ask-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--sol-text); margin-bottom: 6px; }
+.lmap-ask-body { max-height: min(46vh, 380px); overflow-y: auto; }
+.lmap-ask[data-open="true"] { box-shadow: 0 -6px 16px color-mix(in srgb, var(--sol-bg) 70%, transparent); }
 
 .lmap-left-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 2px 0 8px; background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 .lmap-left-bar > span[data-left="moved"], .lmap-left-bar > span[data-left="held"] { background: color-mix(in srgb, var(--sol-blue) 60%, transparent); }
@@ -283,3 +363,9 @@
 
 .lmap-panel-foot { flex: 0 0 auto; display: flex; gap: 14px; align-items: center; padding: 6px 16px; font-size: 11px; color: var(--sol-text-dim); border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
 .lmap-panel-foot span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* The legend is a reading aid for a wide map; a narrow one keeps the window switch and the settings. */
+.lmap-main { container: lmap-main / inline-size; }
+.lmap-legend > span { white-space: nowrap; }
+@container lmap-main (max-width: 1040px) { .lmap-legend > span:nth-child(n + 3) { display: none; } }
+@container lmap-main (max-width: 760px) { .lmap-legend { display: none; } }
