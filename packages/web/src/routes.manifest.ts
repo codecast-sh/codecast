@@ -110,6 +110,7 @@ const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-tal
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
+const BlogCloud = lazy(() => import("@/app/(marketing)/blog/codecast-in-the-cloud/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
 const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
 const BlogFieldManualChapter = lazy(() => import("@/app/(marketing)/blog/field-manual/ChapterPage"));
@@ -302,6 +303,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/the-pull-request-that-knows-its-sessions", component: cast(BlogPullRequests), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/one-repository-twenty-checkouts", component: cast(BlogWorktrees), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/codecast-in-the-cloud", component: cast(BlogCloud), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/fewer-bigger-jumps", component: cast(BlogJumps), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/field-manual", component: cast(BlogFieldManual), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/field-manual/:chapter", component: cast(BlogFieldManualChapter), layout: "marketing", guestOk: true, guestKind: "public" },

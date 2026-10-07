@@ -34,6 +34,7 @@ const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-tal
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
+const BlogCloud = lazy(() => import("@/app/(marketing)/blog/codecast-in-the-cloud/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
 const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
 const BlogFieldManualChapter = lazy(() => import("@/app/(marketing)/blog/field-manual/ChapterPage"));
@@ -225,6 +226,7 @@ export function App() {
               <Route path="blog/the-pull-request-that-knows-its-sessions" element={<E name="BlogPullRequests"><BlogPullRequests /></E>} />
               <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
               <Route path="blog/one-repository-twenty-checkouts" element={<E name="BlogWorktrees"><BlogWorktrees /></E>} />
+              <Route path="blog/codecast-in-the-cloud" element={<E name="BlogCloud"><BlogCloud /></E>} />
               <Route path="blog/fewer-bigger-jumps" element={<E name="BlogJumps"><BlogJumps /></E>} />
               <Route path="blog/field-manual" element={<E name="BlogFieldManual"><BlogFieldManual /></E>} />
               <Route path="blog/field-manual/:chapter" element={<E name="BlogFieldManualChapter"><BlogFieldManualChapter /></E>} />
