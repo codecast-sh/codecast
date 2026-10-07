@@ -103,7 +103,7 @@ export function CollabPresenceBar({ present, showHere, boxed = false, joint }: {
     >
       <div className="min-h-0 overflow-hidden">
         {open && (
-          <div className={`flex items-center gap-2 px-4 py-1 text-[11px] text-sol-text-muted min-w-0 ${boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
+          <div className={`flex items-center gap-2 px-4 py-1 text-[11px] text-sol-text-muted min-w-0 ${!writer ? "mb-0.5" : boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
             {writer ? (
               <>
                 <TypingIndicator members={typing.map((p) => presenceMember(p, roster))} />

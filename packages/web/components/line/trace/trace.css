@@ -1,0 +1,13 @@
+/* The trace page (line-map.md LX4) lays out by its own width, not the
+   window's: beside the inbox panel it is a narrow pane. Narrow, the map sits
+   above the story; wide, the story reads on the left and the map stays in
+   view on the right, so hovering a step lights its node. */
+.ltrace-body { container-type: inline-size; }
+.ltrace-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem; }
+.ltrace-map-col { order: -1; min-width: 0; }
+.ltrace-map { height: 300px; }
+@container (min-width: 1080px) {
+  .ltrace-grid { grid-template-columns: minmax(26rem, 40rem) minmax(0, 1fr); gap: 2rem; max-width: 100rem; }
+  .ltrace-map-col { order: 0; }
+  .ltrace-map { position: sticky; top: 1.5rem; height: min(640px, calc(100vh - 9rem)); }
+}

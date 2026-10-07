@@ -203,6 +203,14 @@ describe("LineTracePage", () => {
     expect(q(host, "[data-trace-story]")?.dataset.traceOutcome).toBe("held");
     expect(qa(host, '[data-trace-step="card"]').length).toBe(2);
     expect(text(qa(host, '[data-trace-step="card"]')[1])).toContain("You answered Ship");
+    // The map lights the path, loops included, and a hovered step focuses its node. (The
+    // fixtures sit weeks before the clock this page reads, so the map's sources, a
+    // two week reading, have aged out; the rest of the path is drawn.)
+    const lit = qa(host, '[data-trace-map] [data-map-node][data-on="true"]').map((n) => n.dataset.mapNode);
+    expect(lit).toEqual(expect.arrayContaining(["expectations", "signals", "causes", "implement", "decide", "ship", "end:held"]));
+    expect(q(host, '[data-trace-map] [data-map-node="end:dissolved"]')?.dataset.on).toBeUndefined();
+    await act(async () => { step(host, "cause").dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true })); });
+    expect(q(host, '[data-trace-map] [data-map-node="causes"]')?.dataset.focused).toBe("true");
     await done();
   });
 
