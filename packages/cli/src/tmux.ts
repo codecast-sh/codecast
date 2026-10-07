@@ -123,8 +123,21 @@ export async function runTmux<T>(args: string[], env: TmuxEnv, exec: (argv: stri
     return join([]);
   }
   const run = (argv: string[]) => (startsTmuxServer(withoutGlobals(argv)) ? startTmuxGuarded(argv, exec) : exec(argv));
-  return runRouted(routeTmuxArgs(args, env), run, join, env);
+  const argvs = routeTmuxArgs(args, env);
+  if (argvs.length === 1) return run(argvs[0]);
+  // A fleet listing asks every server; callers asking the same one at the same
+  // moment, through the same wrapper (its join shapes the answer), share it
+  // rather than each paying a call per server.
+  const key = JSON.stringify([tmuxSocketDir(env), env.TMUX ?? "", argvs]);
+  const inFlight = fleetListingsInFlight.get(join) ?? new Map<string, Promise<unknown>>();
+  fleetListingsInFlight.set(join, inFlight);
+  const shared = inFlight.get(key) as Promise<T> | undefined;
+  if (shared) return shared;
+  const listing = runRouted(argvs, run, join, env).finally(() => inFlight.delete(key));
+  inFlight.set(key, listing);
+  return listing;
 }
+const fleetListingsInFlight = new WeakMap<object, Map<string, Promise<unknown>>>();
 
 function withoutGlobals(argv: string[]): string[] {
   let i = 0;
