@@ -194,6 +194,14 @@ information during build sends the run back here instead of steering build.
 A miss that cannot be reproduced closes the cause as `dissolved` with the
 evidence; it is a success, not a failure.
 
+A Prove that ends without its proof (it failed outright, or `prove.json` is
+missing or says neither `reproduced: true` nor `false`) has neither shown the
+miss nor ruled it out, so the run goes to `unproven` and ends there. The cause
+moves back to `open` (a hand that already handed off `blocked` or
+`needs_context` leaves it in review) and gets a blocker comment carrying what
+Prove tried, or the run's last error when Prove left no output. It is never
+built on or dissolved; a person reruns the line once the miss can be shown.
+
 **Build.** One change, in the worktree, within the profile's size budget
 (400 changed lines by default; more splits or returns to plan). Prompt changes
 follow the profile's prompting standard (codecast's `docs/prompting.md` by
