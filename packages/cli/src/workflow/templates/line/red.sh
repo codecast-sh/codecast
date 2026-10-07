@@ -37,6 +37,13 @@ if [ $category = prompt ]; then
   fi
   exit 0
 fi
+# A change to the line itself (line-map.md LX6) is shown on the line's own
+# recorded runs, which the prove station names in its comment; there is no
+# command to rerun, so the station passes with that note.
+if [ $category = line ]; then
+  answer true "a line cause: the prove comment names the recorded runs that show it"
+  exit 0
+fi
 [ -f "$dir/repro.sh" ] || { answer false "no repro.sh"; exit 0; }
 if bash "$dir/repro.sh" > "$dir/red.log" 2>&1; then
   answer false "repro.sh passes before any fix, so it does not show the miss"
