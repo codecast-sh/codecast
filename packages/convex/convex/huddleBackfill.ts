@@ -15,7 +15,7 @@
 //   packages/convex/run.sh huddleBackfill:run '{"room_key":"channel:…","dryRun":false}'
 //   packages/convex/run.sh huddleBackfill:rooms '{}'                                   (rooms to run)
 import { v } from "convex/values";
-import { internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { HUDDLE_GRACE_MS } from "./transcripts";

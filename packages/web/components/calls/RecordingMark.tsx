@@ -33,7 +33,7 @@ export type RecordingMarkStatus = "starting" | "recording" | "stopping";
 
 /** The words for a mark's tooltip and screen readers: what is happening, who
  *  started it, and that anyone in the room may end it. */
-export function recordingMarkTitle(status: RecordingMarkStatus, by?: string | null, shared = false): string {
+function recordingMarkTitle(status: RecordingMarkStatus, by?: string | null, shared = false): string {
   if (status === "stopping") return "Recording stopped. Saving the video";
   const who = by ? ` ${by} started it.` : "";
   const where = shared ? ` ${RECORDING_SHARED_WORDS}` : "";
@@ -239,7 +239,7 @@ export const PLACE = {
  * at one height that covered some of them. Nothing above `sm`, where the box
  * hangs from its control.
  */
-export function usePhonePin(anchorRef: RefObject<HTMLElement | null>, place: keyof typeof PLACE, open: boolean): CSSProperties | undefined {
+function usePhonePin(anchorRef: RefObject<HTMLElement | null>, place: keyof typeof PLACE, open: boolean): CSSProperties | undefined {
   const phone = useMediaQuery(BELOW_SM);
   const [edge, setEdge] = useState<number | null>(null);
   const above = place === "above";

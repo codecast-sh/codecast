@@ -42,7 +42,7 @@
 
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { CALL_RECORDING_URL_WINDOW_MS, FRAME_SHARE_REFUSED_WORDS, type CallRecordingStopReason, callSpeakerName, guestIdFromIdentity, guestIdentity, isGuestPresent, isRecordingActive, isRecordingFilming, recordingCooling, shareIncludesVideo } from "@codecast/shared/contracts";

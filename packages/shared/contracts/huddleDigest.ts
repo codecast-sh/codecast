@@ -183,6 +183,7 @@ export function formatHuddleSummaryTag(
     "",
     digest,
     "",
+    `A task you file from this huddle takes \`--from-call ${ref}\`, which links it to the call so it shows on the call's page.`,
     `Read the whole transcript with \`${huddleTranscriptCommand(transcriptId)}\` (\`cast call ${transcriptId}\` for the summary and action items alone).`,
     ...(video
       ? [`It was recorded on video: \`cast call snap ${ref}:<line>\` shows the frame at a line said while it was filmed (\`${ref}@m:ss\` at a time).`]
@@ -214,6 +215,7 @@ export function parseHuddleSummaryTag(text: string | null | undefined): HuddleSu
     .replace(/^(?:A huddle just ended|The huddle in this session's room just ended)[^\n]*\n\n?/, "")
     .replace(/\n*It was recorded on video: [^\n]*\s*$/, "")
     .replace(/\n*Read the whole transcript with[^\n]*\s*$/, "")
+    .replace(/\n*A task you file from this huddle[^\n]*\s*$/, "")
     .trim();
   return {
     transcriptId: attrs.transcript,

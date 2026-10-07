@@ -68,6 +68,8 @@ describe("the huddle-summary wire tag", () => {
     const wire = formatHuddleSummaryTag("t123", digest);
     expect(isHuddleSummaryTag(wire)).toBe(true);
     expect(wire).toContain("cast call t123 --transcript");
+    // Tasks the agent files from the huddle link back to the call.
+    expect(formatHuddleSummaryTag("t123", digest, { callRef: "cl-42" })).toContain("--from-call cl-42");
     const parsed = parseHuddleSummaryTag(wire)!;
     expect(parsed.transcriptId).toBe("t123");
     expect(parsed.title).toBe("Auth rollout");

@@ -56,7 +56,7 @@ describe("the voice window's float", () => {
     expect(src).toContain("onHostExpand(() => openCallRef.current())");
     const open = src.slice(src.indexOf("const openCall"), src.indexOf("const ringIn"));
     expect(open).toContain("setRaised((n) => n + 1)");
-    expect(src).toMatch(/if \(raised && view === "panel"\) void showCallPanel\(\);\n  \}, \[view, raised\]\);/);
+    expect(src).toMatch(/if \(raised && view === "panel"\) void showCallPanel\(\);\n {2}\}, \[view, raised\]\);/);
   });
 
   test("the stage has one way back, shrink", () => {

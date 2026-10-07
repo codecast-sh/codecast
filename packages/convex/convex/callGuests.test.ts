@@ -646,7 +646,7 @@ describe("a call's words on its public link", () => {
     const state = async () => (await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).room;
     expect((await state()).words_public).toBe(false);
 
-    await claimShareToken(w.as("u1") as any, "transcripts", call as any, TOKEN);
+    await claimShareToken(w.as("u1") as any, "transcripts", call as any, TOKEN, "u1" as any);
     expect((await state()).words_public).toBe(true);
     expect((await run(describeGuestLink)(w.as(null), { token: ada.link.token })).words_public).toBe(true);
     const room = (await run(getLiveRooms)(w.as("u1"), {})).find((r: any) => r.room_key === ROOM);
@@ -656,7 +656,7 @@ describe("a call's words on its public link", () => {
     // media until they agree to the wider notice.
     expect(await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toEqual({ ok: false, reason: "notice_changed" });
 
-    await claimShareToken(w.as("u1") as any, "transcripts", w.db._tables.transcripts[0], null);
+    await claimShareToken(w.as("u1") as any, "transcripts", w.db._tables.transcripts[0], null, "u1" as any);
     expect((await state()).words_public).toBe(false);
     expect((await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).ok).toBe(true);
   });
@@ -667,12 +667,12 @@ describe("a call's words on its public link", () => {
     w.db._tables.transcripts.push(earlier);
     const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
     // Sharing last week's call says nothing about this one.
-    await claimShareToken(w.as("u1") as any, "transcripts", earlier as any, TOKEN);
+    await claimShareToken(w.as("u1") as any, "transcripts", earlier as any, TOKEN, "u1" as any);
     expect((await run(describeGuestLink)(w.as(null), { token: link.token })).words_public).toBe(false);
 
     // A record that ends takes its stamp with it; a new one starts unshared.
     const call = liveCall(w);
-    await claimShareToken(w.as("u1") as any, "transcripts", call as any, "4a2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c");
+    await claimShareToken(w.as("u1") as any, "transcripts", call as any, "4a2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c", "u1" as any);
     expect((await run(describeGuestLink)(w.as(null), { token: link.token })).words_public).toBe(true);
     await stampRoomWordsPublic(w.as("u1"), { ...w.db._tables.transcripts[1] }, { ending: true });
     expect((await run(describeGuestLink)(w.as(null), { token: link.token })).words_public).toBe(false);

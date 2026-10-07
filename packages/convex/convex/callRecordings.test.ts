@@ -1501,12 +1501,12 @@ describe("the public share link", () => {
     world.complete("EG_1", comp.r2_key, Date.now() - 60_000, 30_000);
     await look(t, recording_id);
     const token = "3f5c9a1e-2b3d-4c5e-8f60-718293a4b5c6";
-    await t.run(async (ctx: any) => await claimShareToken(ctx, "transcripts", await ctx.db.get(transcript_id), token));
+    await t.run(async (ctx: any) => await claimShareToken(ctx, "transcripts", await ctx.db.get(transcript_id), token, ana));
     await as(String(ana)).mutation(api.callRecordings.setCallShareVideo, { call: String(transcript_id), include: true });
     expect((await t.query(api.publicShare.getSharedCall, { share_token: token })).videos).toHaveLength(1);
     await t.run(async (ctx: any) => {
-      await claimShareToken(ctx, "transcripts", await ctx.db.get(transcript_id), null);
-      await claimShareToken(ctx, "transcripts", await ctx.db.get(transcript_id), token);
+      await claimShareToken(ctx, "transcripts", await ctx.db.get(transcript_id), null, ana);
+      await claimShareToken(ctx, "transcripts", await ctx.db.get(transcript_id), token, ana);
     });
     expect((await t.query(api.publicShare.getSharedCall, { share_token: token })).videos).toEqual([]);
     const row = await t.run(async (ctx: any) => await ctx.db.get(transcript_id));
