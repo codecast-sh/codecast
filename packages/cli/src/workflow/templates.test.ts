@@ -226,6 +226,9 @@ describe("line.cast template", () => {
   test("after verify: code proves green, then every change meets the eval station, which owns its scope", () => {
     expect(fired("verify", { outcome: "success", category: "code" })).toEqual(["green"]);
     expect(fired("verify", { outcome: "success", category: "prompt" })).toEqual(["eval"]);
+    // A change to the line itself has no reproduction to rerun: eval judges it (line-map.md LX6).
+    expect(fired("verify", { outcome: "success", category: "line" })).toEqual(["eval"]);
+    expect(fired("verify", { outcome: "failure", category: "line" })).toEqual(["implement"]);
     expect(fired("verify", { outcome: "failure", category: "code" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "failure" })).toEqual(["implement"]);
     expect(fired("green", { outcome: "success" })).toEqual(["eval"]);
@@ -329,6 +332,9 @@ describe("line.cast template", () => {
     expect(review).toContain("cast task verdict $task_id approve|changes|reject --note -");
     expect(graph.nodes.get("analyze")?.prompt).toContain("cast task update $task_id --steps -");
     expect(graph.nodes.get("implement")?.prompt).toContain("cast task handoff $task_id");
+    // A line cause (LX6): the builder knows the line's own files are the change, and P9 holds a station prompt.
+    for (const f of [".codecast/line.toml", ".codecast/line/line.cast", "cast expectations propose", "P9"]) expect(graph.nodes.get("implement")?.prompt).toContain(f);
+    expect(graph.nodes.get("prove")?.prompt).toContain("For line:");
   });
 
   test("script variables expand shell-quoted and leave $( alone; $human_message is empty when there is no note", () => {
@@ -384,6 +390,13 @@ describe("line.cast station scripts", () => {
     fs.writeFileSync(path.join(runDir(), "repro.sh"), "echo 'expected 2, got 3'; exit 1\n");
     expect(run("red", { category: "code" }).json).toEqual({ red: true, dir: runDir(), why: "repro.sh fails" });
     expect(fs.readFileSync(path.join(runDir(), "red.log"), "utf-8")).toBe("expected 2, got 3\n");
+    expect(calls()).toEqual([]);
+  });
+
+  test("red for a line cause: the prove comment names the recorded runs, so it passes with that note", () => {
+    const line = run("red", { category: "line" });
+    expect(line.code).toBe(0);
+    expect(line.json).toEqual({ red: true, dir: runDir(), why: "a line cause: the prove comment names the recorded runs that show it" });
     expect(calls()).toEqual([]);
   });
 
