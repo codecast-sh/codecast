@@ -274,10 +274,11 @@ banners the app posts anyway.
 
 Signing is electron-builder's (`mac.identity`, hardened runtime, the
 entitlements template). The afterSign hook from `createNotarizeHook()` reads
-`NOTARIZE_KEYCHAIN_PROFILE`, or `APPLE_ID` + `APPLE_PASSWORD` (+
-`APPLE_TEAM_ID`), notarizes the built `.app`, and skips with a printed line
-when neither is set. `templates/NOTARIZATION.md` has the one time
-`notarytool store-credentials` setup and the post build checks. The identity's
+an App Store Connect API key (`APPLE_API_KEY` + `APPLE_API_KEY_ID` +
+`APPLE_API_ISSUER`), or `NOTARIZE_KEYCHAIN_PROFILE`, or `APPLE_ID` +
+`APPLE_PASSWORD` (+ `APPLE_TEAM_ID`), notarizes the built `.app`, and skips
+with a printed line when none is set. `templates/NOTARIZATION.md` has the one
+time setup for each and the post build checks. The identity's
 Team ID must equal `update.teamId`, or the updater will refuse the app's own
 releases.
 

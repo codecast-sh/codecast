@@ -282,6 +282,8 @@ select.ev-b-input { font-family: var(--ev-font-ui); }
 .ev-b-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .ev-b-table th { text-align: left; font-size: 11px; font-weight: 500; color: var(--ev-text-dim); padding: 8px 10px; border-bottom: 1px solid var(--ev-rule); white-space: nowrap; }
 .ev-b-table td { padding: 9px 10px; border-bottom: 1px solid var(--ev-rule); vertical-align: middle; white-space: nowrap; }
+/* The range is the one long cell: it wraps so a narrow pane keeps every column on screen. */
+.ev-b-table td.ev-b-range { white-space: normal; min-width: 16ch; }
 .ev-b-table tbody tr { cursor: pointer; transition: background 120ms ease; }
 .ev-b-table tbody tr:hover { background: var(--ev-bg-highlight); }
 .ev-b-table td.ev-b-num { font-variant-numeric: tabular-nums; text-align: right; }

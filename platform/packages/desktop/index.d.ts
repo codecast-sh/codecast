@@ -347,8 +347,9 @@ export const updaterLogic: {
 
 // ── Build ──────────────────────────────────────────────────────────────────
 
-export const NOTARIZE_ENV: { keychainProfile: "NOTARIZE_KEYCHAIN_PROFILE"; appleId: "APPLE_ID"; applePassword: "APPLE_PASSWORD"; appleTeamId: "APPLE_TEAM_ID" };
+export const NOTARIZE_ENV: { apiKey: "APPLE_API_KEY"; apiKeyId: "APPLE_API_KEY_ID"; apiIssuer: "APPLE_API_ISSUER"; keychainProfile: "NOTARIZE_KEYCHAIN_PROFILE"; appleId: "APPLE_ID"; applePassword: "APPLE_PASSWORD"; appleTeamId: "APPLE_TEAM_ID" };
 export function notarizeCredentials(env?: Record<string, string | undefined>):
+  | { kind: "apiKey"; appleApiKey: string; appleApiKeyId: string; appleApiIssuer: string }
   | { kind: "keychainProfile"; keychainProfile: string }
   | { kind: "appleId"; appleId: string; appleIdPassword: string; teamId?: string }
   | null;

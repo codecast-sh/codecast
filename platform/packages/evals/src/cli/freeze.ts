@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import type { Command } from 'commander';
 
 import type { Conversation, EvalSources, Freeze, ProductionReply, RunDetail, RunSummary } from '../model';
@@ -43,8 +45,10 @@ async function productionOf(sources: EvalSources, f: Freeze, judged: boolean): P
 export function registerFreeze(program: Command, sources: EvalSources): void {
   const freeze = program.command('freeze').description('freeze a moment, replay the assistant from it, judge the replies');
 
-  addCommon(freeze.command('create [messageId]').description('freeze the moment the assistant had to act at a message (or --run a production run)'))
+  addCommon(freeze.command('create [messageId]').description('freeze the moment the assistant had to act at a message (or --run a production run, or --inbound a message that has not happened yet)'))
     .option('--run <runId>', 'replay a production run from its own trigger')
+    .option('--inbound <file>', "a what if: a JSON file describing a message in the app's own terms, delivered to --for's world as it stands now")
+    .option('--for <ref>', 'with --inbound: whose world it lands in (an id or prefix, an address, a name)')
     .option('--name <text>', 'a name; defaults to who, what woke it, and when')
     .option('--judge <criteria>', 'pass criteria every replay is graded by')
     .option('--notes <text>', 'why this moment matters')
@@ -52,8 +56,10 @@ export function registerFreeze(program: Command, sources: EvalSources): void {
     .action(async (messageId, flags) => {
       const store = need(sources, 'freezes', 'freeze store');
       const resolver = need(sources, 'freezeResolver', 'freeze resolver');
-      if (!messageId && !flags.run) throw new UsageError('a message id or --run <runId> is required');
-      const moment = await resolver.resolve({ messageRef: messageId, runRef: flags.run });
+      if ([messageId, flags.run, flags.inbound].filter(Boolean).length !== 1) throw new UsageError('one of: a message id, --run <runId>, or --inbound <file> --for <ref>');
+      if (flags.inbound && !flags.for) throw new UsageError('--inbound needs --for <ref>: whose world the message lands in');
+      const inbound = flags.inbound ? { spec: JSON.parse(readFileSync(flags.inbound, 'utf8')) as unknown, subjectRef: flags.for as string } : undefined;
+      const moment = await resolver.resolve({ messageRef: messageId, runRef: flags.run, inbound });
       const f = await store.create({ ...moment, name: flags.name ?? moment.name, judge: flags.judge ?? null, notes: flags.notes ?? null, tags: flags.tag });
       if (flags.json) return json(f);
       const p = opts(flags);

@@ -174,7 +174,7 @@ export interface FreezeInfo {
   visibility: EvalVisibility;
   createdAt: string;
   asOf: string;
-  anchor: { kind: "message" | "run"; id: string };
+  anchor: { kind: "message" | "run" | "inbound"; id: string };
   subject: { kind: string; id: string; title: string; subtitle?: string | null };
   trigger: { type: string; data?: Record<string, unknown> } | null;
   notes: string | null;

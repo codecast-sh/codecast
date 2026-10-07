@@ -7,16 +7,32 @@ in its log.
 
 ## Environment variables
 
-One of the two sources is required.
+One of the three sources is required. The first one present wins, in this order.
 
 | Variable | Use |
 | --- | --- |
-| `NOTARIZE_KEYCHAIN_PROFILE` | Name of a notarytool keychain profile. Preferred. Wins when both sources are set. |
+| `APPLE_API_KEY` | Path to an App Store Connect API key (`AuthKey_<id>.p8`). Preferred: read from a file, it needs no keychain, works from non-interactive shells, and survives Apple ID password changes. |
+| `APPLE_API_KEY_ID` | That key's ID. |
+| `APPLE_API_ISSUER` | The issuer ID shown above the key list in App Store Connect. |
+| `NOTARIZE_KEYCHAIN_PROFILE` | Name of a notarytool keychain profile. |
 | `APPLE_ID` | Apple ID email. Used with `APPLE_PASSWORD`. |
-| `APPLE_PASSWORD` | An app specific password for that Apple ID, not the account password. |
-| `APPLE_TEAM_ID` | The 10 character Team ID. Optional with the keychain profile; pass it with the Apple ID pair. |
+| `APPLE_PASSWORD` | An app specific password for that Apple ID, not the account password. Apple revokes every app specific password when the account password changes. |
+| `APPLE_TEAM_ID` | The 10 character Team ID. Pass it with the Apple ID pair. |
 
-## One time setup (keychain profile)
+electron-builder notarizes on its own when `APPLE_API_KEY*` are in its process
+environment, so hand the key to the hook instead (`createNotarizeHook({ env })`)
+to notarize once.
+
+## API key setup
+
+App Store Connect, Users and Access, Integrations, App Store Connect API: make a
+team key (Developer access is enough), download the `.p8` once, and keep it
+outside any repo (for example `~/.app-store-connect/`, mode 600).
+
+## Keychain profile setup
+
+Run from an interactive Terminal: from an agent or launchd shell the keychain
+write fails with "User interaction is not allowed".
 
 ```sh
 xcrun notarytool store-credentials codecast \

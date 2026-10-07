@@ -148,8 +148,10 @@
 .ev-sf-verdictline .ev-btn { height: 22px; }
 
 /* A product's own gate (SurfaceInfo.gate): its word is red where it failed, the gate's colour. */
-.ev-gate-chip { gap: 6px; }
+/* A gate's detail can name many cases: the chip wraps inside the title column instead of running under the numbers. */
+.ev-gate-chip { gap: 6px; height: auto; min-height: 20px; max-width: 100%; white-space: normal; align-items: baseline; padding-top: 2px; padding-bottom: 2px; line-height: 1.45; }
 .ev-gate-chip svg { width: 10px; height: 10px; }
+.ev-gate-chip > span:not(.ev-quiet) { white-space: nowrap; }
 .ev-gate-chip > .ev-quiet { padding-left: 6px; border-left: 1px solid var(--ev-rule); }
 .ev-gate-chip[data-ev-gate="red"] { border-color: color-mix(in srgb, var(--ev-red) 45%, transparent); }
 

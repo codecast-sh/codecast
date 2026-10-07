@@ -140,8 +140,12 @@ export interface Freeze {
   id: string;
   name: string;
   createdAt: string;
-  /** The message or production run the moment was cut at. */
-  anchor: { kind: 'message' | 'run'; id: string };
+  /**
+   * The message or production run the moment was cut at, or an inbound that
+   * has not happened yet: the world as it stands now, and a message the app
+   * delivers at replay from `meta`, to ask what the assistant would do.
+   */
+  anchor: { kind: 'message' | 'run' | 'inbound'; id: string };
   subject: ConvoSubject;
   /** The instant the world is cut at. A replay sees nothing later. */
   asOf: string;
@@ -166,7 +170,8 @@ export interface FreezeStore {
 
 /** How the app turns "freeze here" into a moment. */
 export interface FreezeResolver {
-  resolve(input: { messageRef?: string; runRef?: string }): Promise<Omit<Freeze, 'id' | 'createdAt' | 'tags' | 'notes' | 'judge'>>;
+  /** `inbound` is a what if: the app's own description of a message, delivered to `subjectRef`'s world as it stands now. */
+  resolve(input: { messageRef?: string; runRef?: string; inbound?: { spec: unknown; subjectRef: string } }): Promise<Omit<Freeze, 'id' | 'createdAt' | 'tags' | 'notes' | 'judge'>>;
 }
 
 export interface ReplayOptions {

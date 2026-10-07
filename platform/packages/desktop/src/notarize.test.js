@@ -7,14 +7,17 @@ const ctx = (platform = "darwin") => ({
   packager: { appInfo: { productFilename: "Codecast" } },
 });
 
-test("credentials: keychain profile wins, then Apple ID pair, else none", () => {
+test("credentials: API key wins, then keychain profile, then Apple ID pair, else none", () => {
   expect(notarizeCredentials({})).toBeNull();
+  expect(notarizeCredentials({ APPLE_API_KEY: "/k.p8", APPLE_API_KEY_ID: "K" })).toBeNull();
+  expect(notarizeCredentials({ APPLE_API_KEY: "/k.p8", APPLE_API_KEY_ID: "K", APPLE_API_ISSUER: "I", NOTARIZE_KEYCHAIN_PROFILE: "codecast" }))
+    .toEqual({ kind: "apiKey", appleApiKey: "/k.p8", appleApiKeyId: "K", appleApiIssuer: "I" });
   expect(notarizeCredentials({ APPLE_ID: "a" })).toBeNull();
   expect(notarizeCredentials({ NOTARIZE_KEYCHAIN_PROFILE: "codecast", APPLE_ID: "a", APPLE_PASSWORD: "p" }))
     .toEqual({ kind: "keychainProfile", keychainProfile: "codecast" });
   expect(notarizeCredentials({ APPLE_ID: "a", APPLE_PASSWORD: "p", APPLE_TEAM_ID: "T" }))
     .toEqual({ kind: "appleId", appleId: "a", appleIdPassword: "p", teamId: "T" });
-  expect(Object.values(NOTARIZE_ENV).sort()).toEqual(["APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "NOTARIZE_KEYCHAIN_PROFILE"]);
+  expect(Object.values(NOTARIZE_ENV).sort()).toEqual(["APPLE_API_ISSUER", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "NOTARIZE_KEYCHAIN_PROFILE"]);
 });
 
 test("hook skips loudly without credentials and off macOS", async () => {
@@ -33,8 +36,10 @@ test("hook notarizes the built app with the chosen credentials", async () => {
   const notarize = async (o) => calls.push(o);
   await createNotarizeHook({ env: { NOTARIZE_KEYCHAIN_PROFILE: "codecast" }, log: () => {}, notarize })(ctx());
   await createNotarizeHook({ env: { APPLE_ID: "a", APPLE_PASSWORD: "p", APPLE_TEAM_ID: "WRG9THCK9Q" }, log: () => {}, notarize })(ctx());
+  await createNotarizeHook({ env: { APPLE_API_KEY: "/k.p8", APPLE_API_KEY_ID: "K", APPLE_API_ISSUER: "I" }, log: () => {}, notarize })(ctx());
   expect(calls).toEqual([
     { appPath: "/out/Codecast.app", keychainProfile: "codecast" },
     { appPath: "/out/Codecast.app", appleId: "a", appleIdPassword: "p", teamId: "WRG9THCK9Q" },
+    { appPath: "/out/Codecast.app", appleApiKey: "/k.p8", appleApiKeyId: "K", appleApiIssuer: "I" },
   ]);
 });

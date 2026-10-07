@@ -56,7 +56,7 @@ export function BisectListView({ bisects, now }: { bisects: readonly BisectSumma
                       </EvalsLink>
                     </td>
                     <td>{b.surface}</td>
-                    <td className="ev-mono ev-b-fine ev-quiet">
+                    <td className="ev-mono ev-b-fine ev-quiet ev-b-range">
                       {endpointLabel(b.good)} to {endpointLabel(b.bad)}
                     </td>
                     <td>

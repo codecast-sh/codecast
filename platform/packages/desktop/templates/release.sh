@@ -9,7 +9,8 @@
 #   R2_PREFIX         desktop             (key prefix inside the bucket)
 #   PUBLIC_BASE_URL   https://dl.codecast.sh/desktop
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, R2_ENDPOINT   (UPLOADER=aws, the default)
-#   NOTARIZE_KEYCHAIN_PROFILE (or APPLE_ID + APPLE_PASSWORD [+ APPLE_TEAM_ID])
+#   APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, or NOTARIZE_KEYCHAIN_PROFILE,
+#   or APPLE_ID + APPLE_PASSWORD [+ APPLE_TEAM_ID]
 # Optional:
 #   CHANNEL           latest              (feed file <channel>-mac.yml)
 #   ARCH              arm64
