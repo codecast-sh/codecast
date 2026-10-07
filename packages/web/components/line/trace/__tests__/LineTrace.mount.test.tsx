@@ -214,11 +214,11 @@ describe("LineTracePage", () => {
     await done();
   });
 
-  test("a ref nothing on the line goes by says so, and what a trace takes", async () => {
+  test("a ref nothing on the line matches says so, and what a trace takes", async () => {
     seed();
     const { host, done } = await mount(React.createElement(LineTracePage, { refParam: "sg-nope" }));
     expect(q(host, "[data-trace-missing]")).not.toBeNull();
-    expect(text(host)).toContain("Nothing on the line goes by sg-nope");
+    expect(text(host)).toContain("Nothing on the line matches sg-nope");
     await done();
   });
 });

@@ -17,6 +17,7 @@ import type { LineProject } from "../../../lib/lineFlow";
 import { useProjectStations } from "../settings/LineStations";
 import { buildLineTrace, resolveTraceRef, type LineTrace, type TraceRows, type TraceTask } from "../../../lib/line/lineTrace";
 import type { LineGraph, MapDecision, MapRun, MapSignal } from "../../../lib/line/lineMap";
+import { useGoalChip } from "../../../hooks/useGoalChip";
 import { useCauseRuns } from "../RunReport";
 import { useLineFloor } from "../useLineFloor";
 
@@ -84,6 +85,9 @@ export function useLineTrace(ref: string): LineTraceState {
   const stations = useProjectStations(projectId ?? "");
   const graph = useMemo<LineGraph | null>(() => (projectId ? { nodes: stations.nodes, edges: stations.edges } : null), [projectId, stations.nodes, stations.edges]);
 
+  // The goal the cause serves, by name (a project or a goal), never its id.
+  const goal = useGoalChip(cause?.goal_ref);
+
   // Who answered a card, by name: a teammate, or you.
   const people = useInboxStore((s) => s.teamMembers);
   const meId = useInboxStore((s) => s.currentUser?._id ?? null);
@@ -93,6 +97,7 @@ export function useLineTrace(ref: string): LineTraceState {
     if (!resolved) return null;
     return buildLineTrace(resolved, rows, {
       now, graph,
+      goalName: (g) => (g === cause?.goal_ref && goal.kind !== "unknown" ? goal.label : null),
       answeredBy: (d) => {
         const by = (d as { answered_by?: { kind: string; id: string } }).answered_by;
         if (!by || by.kind !== "user") return null;
@@ -100,7 +105,7 @@ export function useLineTrace(ref: string): LineTraceState {
         return (people ?? []).find((m: { _id: string; name?: string }) => String(m._id) === by.id)?.name ?? null;
       },
     });
-  }, [ref, rows, cause, lonelyRun, detail, now, graph, people, meId]);
+  }, [ref, rows, cause, lonelyRun, detail, now, graph, people, meId, goal]);
 
   return { trace, rows, graph, project, ready, now };
 }

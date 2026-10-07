@@ -62,6 +62,14 @@ describe("buildLineMap: nodes from the definition", () => {
     expect(node(m, "source:ci").marks).toEqual([{ level: "info", words: "Files signals, but the profile does not declare it" }]);
   });
 
+  test("people and lessons are sources of every line, declared or not (LX2)", () => {
+    const s0 = F.rows.signals[0];
+    const extra = ["person", "lesson"].map((source, i) => ({ ...s0, _id: `sig_${source}`, short_id: `sg-${source}`, task_id: null, source, fingerprint: `${source}:${i}`, created_at: F.NOW - F.HOUR }));
+    const m2 = map({ signals: [...F.rows.signals, ...extra] as typeof F.rows.signals });
+    expect(node(m2, "source:person").marks).toEqual([]);
+    expect(node(m2, "source:lesson").marks).toEqual([]);
+  });
+
   test("expectations feed the finders that judge behavior", () => {
     expect(node(m, "expectations").kind).toBe("expectations");
     expect(edge(m, "expectations", "source:agentwatch").count).toBe(2);
@@ -202,6 +210,16 @@ describe("buildLineMap: marks in words", () => {
     expect(node(m, "verify").marks).toContainEqual({ level: "warn", words: `2 of ${node(m, "verify").through} failed in the last 30d` });
     expect(edge(m, "verify", endNodeId("stopped")).count).toBe(2);
     expect(node(m, endNodeId("stopped")).through).toBe(2);
+  });
+
+  test("the ends that mean something went wrong say so; the good ends stay quiet", () => {
+    const m = map({ windowMs: 30 * DAY });
+    expect(node(m, endNodeId("stopped")).marks).toEqual([{ level: "warn", words: "2 runs stopped without a change in the last 30d" }]);
+    const reopened = node(m, endNodeId("reopened"));
+    expect(reopened.through).toBeGreaterThan(0);
+    expect(reopened.marks).toEqual([{ level: "warn", words: `${reopened.through === 1 ? "1 fix" : `${reopened.through} fixes`} came back during the watch in the last 30d` }]);
+    expect(node(m, endNodeId("held")).marks).toEqual([]);
+    expect(node(m, endNodeId("dissolved")).marks).toEqual([]);
   });
 
   test("a silent finder says so", () => {

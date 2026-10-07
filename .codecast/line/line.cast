@@ -1,0 +1,182 @@
+// This project's line (docs/architecture/line-map.md LX5), written out from
+// the shipped line by cast the first time a station changed. Each station's
+// prompt or script is the file its `@<file>` names, beside this one. A run
+// bound to a task in this checkout runs this line ahead of the role's line
+// and the shipped one; `cast line profile --publish` shows it in the app.
+// The line (docs/architecture/the-line.md L1, the-line-end-to-end.md LE1 to
+// LE12): a role's pipeline for one cause, from grounding it in a goal to a
+// shipped, watched change.
+//
+//   cast workflow run line.cast --task ct-x [--review-backend codex]
+//
+// Every agent node is a codecast session (backend=session) started
+// unattended (L4) and reads only what its prompt names (P7). Each prompt
+// lives in its own file under line/ (`prompt="@<node>.md"`); a builtin
+// run reads them inlined by templates.ts, a run of this file reads them from
+// disk. Longer station scripts live there too (`script="@<node>.sh"`).
+//
+// Routing reads the task as it is after every node: the ground fields
+// (goal_ref, category, risk, readiness), $handoff and $review_verdict, plus a
+// node's JSON output under $<node>.json.<path>. prove and implement share one
+// worktree and branch ($worktree, $branch: line-<task id>); $run_dir is the
+// run's files (proof, reps, the card), set by the runner before the first node.
+//
+// What differs per project is the repo's line profile (.codecast/line.toml,
+// docs/architecture/line-profile.md), loaded once per run: its commands
+// ($line.commands.check|prove|eval|ship), principles, prompting standard,
+// size budget and watch days. This file names no repository path and no tool
+// of any one project. A command the profile leaves out makes its station pass
+// with a note on the task saying the project has none; without a ship command
+// the merge step lands the change.
+//
+// Stations, in order:
+//   ground      ties the cause to a goal and rates it; anything not ready, or
+//               serving no goal, parks with a comment (LE5)
+//   plan        only at risk = plan; a person approves it at plan_gate (LE7)
+//   analyze     acceptance criteria for the reviewer
+//   prove, red  the miss shown failing first; one that does not reproduce
+//               dissolves the cause with its evidence (LE8)
+//   implement, verify, green
+//               the change, the project's check command, the reproduction
+//               now passing; a prompt change, or a change to the line itself
+//               (category line, line-map.md LX6), goes from verify to eval
+//   eval        the project's eval command (it picks what the branch owes),
+//               then `cast line eval-result` for the verdict (LP4); an eval
+//               that could not judge the change (exit 2: no scored reps on a
+//               side) stops at unscored with a blocker, never back at the builder
+//   review      the independent reviewer (L3, LE9)
+//   card_draft, card_write, card
+//               the change card: assembled by code, three fields by a model,
+//               validated and published (LE10)
+//   decide      Ship, Revise or Drop on the card (LE11)
+//   ship        the project's ship command, when it has one: it lands the
+//               change its own way and says in one line what is true now
+//   merge       `cast line merge` (L12), when the project has no ship
+//               command: lands the branch when the role may merge, else says
+//               in one line why it is left to a person; it never fails the run
+//   watch       the cause watched for the profile's watch days after ship (LE12)
+digraph line {
+  graph [goal="$task_title", stack="Line · $assignee · $run_date"]
+  rankdir=LR
+
+  start [shape=Mdiamond, label="Start"]
+  exit  [shape=Msquare,  label="Exit"]
+
+  ground [label="Ground", backend=session, agent=claude, prompt="@ground.md"]
+
+  park [label="Park", shape=parallelogram, script="@park.sh"]
+
+  plan [label="Plan", backend=session, agent=claude, max_visits=3, prompt="@plan.md"]
+
+  plan_gate [label="Plan gate", shape=hexagon, category=approach,
+    prompt="Approve the plan for $task_title?",
+    doc="$plan.output"]
+
+  analyze [label="Analyze", backend=session, agent=claude, prompt="@analyze.md"]
+
+  // The prove hand finds the moments, runs the project's proof (minutes per
+  // replayed moment) and usually has to pick again once: three hours.
+  prove [label="Prove", backend=session, agent=claude, isolated=true, max_visits=2, timeout=10800, prompt="@prove.md"]
+
+  // The check stations run a project's own commands, and a project whose proof
+  // replays real moments through an agent, or whose eval owes a gate suite,
+  // takes hours, not minutes (Union's gate alone averages fifty minutes). The
+  // timeouts are sized for that; a command that hangs is still cut off.
+  red [label="Red", shape=parallelogram, timeout=5400, script="@red.sh"]
+
+  dissolve [label="Dissolve", shape=parallelogram,
+    script="cast task done $task_id -m \"Dissolved: the miss did not reproduce. The evidence is in the prove comment.\""]
+
+  // The builder runs the project's check and its failing check, which for a
+  // prompt is the proof's replays: the same hours as prove.
+  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@implement.md"]
+
+  verify [label="Verify", shape=parallelogram,
+    timeout=3600,
+    script="cd \"$(cast ws path $worktree)\" && bash -c $line.commands.check"]
+
+  green [label="Green", shape=parallelogram, timeout=1800, script="@green.sh"]
+
+  eval [label="Eval", shape=parallelogram, timeout=10800, script="@eval.sh"]
+
+  unscored [label="Unscored", shape=parallelogram,
+    script="note=$eval.output; cast task comment $task_id \"The eval station could not judge the change, so the builder was not sent back. Rerun the line once the eval can run.${note:+ $note}\" -t blocker"]
+
+  review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@review.md"]
+
+  card_draft [label="Card draft", shape=parallelogram, timeout=300,
+    script="cd \"$(cast ws path $worktree)\" || exit 1; cast card build --task $task_id --dir $run_dir --base $default_branch --json; exit 0"]
+
+  card_write [label="Card words", shape=tab, backend=session, agent=claude, max_visits=2, prompt="@card_write.md"]
+
+  card [label="Card", shape=parallelogram, timeout=300,
+    script="cd \"$(cast ws path $worktree)\" && cast card build --task $task_id --dir $run_dir --base $default_branch --publish --headline $card_write.json.headline --context $card_write.json.context --wrong $card_write.json.wrong --change $card_write.json.change --recommend $card_write.json.recommend --why $card_write.json.why"]
+
+  decide [label="Decide", shape=hexagon, category=review,
+    prompt="Ship this change? $card_write.json.headline",
+    doc="$card_write.json.context\n\nWhat is wrong: $card_write.json.wrong\n\nWhat this changes: $card_write.json.change\n\nRecommends $card_write.json.recommend: $card_write.json.why",
+    card="$run_dir/card.json"]
+
+  reopen [label="Reopen", shape=parallelogram, script="cast task update $task_id -s in_progress"]
+
+  drop [label="Drop", shape=parallelogram,
+    script="note=$human_message; cast task drop $task_id -m \"Dropped at the gate.${note:+ $note}\""]
+
+  ship [label="Ship", shape=parallelogram, timeout=3600, script="@ship.sh"]
+
+  merge [label="Merge", shape=parallelogram,
+    timeout=600,
+    script="cast line merge --run $run_id --branch $branch --into $default_branch --cwd $project_path --task $task_id"]
+
+  watch [label="Watch", shape=parallelogram, script="cast task update $task_id --watch-days $line.watch_days"]
+
+  start -> ground
+  ground -> park    [condition="readiness != ready or goal_ref = none or not goal_ref"]
+  ground -> plan    [condition="readiness = ready and goal_ref and goal_ref != none and risk = plan"]
+  ground -> analyze [condition="readiness = ready and goal_ref and goal_ref != none and risk != plan"]
+  park -> exit
+
+  plan -> plan_gate
+  plan_gate -> analyze [label="[A] Approve :: Build to this plan"]
+  plan_gate -> plan    [label="[R] Revise :: Your note goes back to the planner"]
+  plan_gate -> drop    [label="[D] Drop :: Close the cause with your reason"]
+
+  analyze -> prove
+  prove -> red       [condition="prove.json.reproduced = true"]
+  prove -> dissolve  [condition="prove.json.reproduced = false"]
+  red -> implement   [condition="red.json.red = true"]
+  red -> prove       [condition="red.json.red != true", label="no miss shown"]
+  dissolve -> exit
+
+  implement -> verify    [condition="handoff = done"]
+  verify -> green        [condition="outcome = success and category != prompt and category != line"]
+  verify -> eval         [condition="outcome = success and (category = prompt or category = line)"]
+  verify -> implement    [condition="outcome = failure", label="checks failed"]
+  green -> eval          [condition="outcome = success"]
+  green -> implement     [condition="outcome = failure", label="still red"]
+  eval -> review         [condition="outcome = success"]
+  eval -> implement      [condition="outcome = failure and eval.exit_code = 1", label="eval failed"]
+  eval -> unscored       [condition="outcome = failure and eval.exit_code != 1", label="eval could not score"]
+  unscored -> exit
+
+  review -> card_draft [condition="review_verdict = approve"]
+  review -> implement  [condition="review_verdict = changes", label="changes"]
+  review -> exit       [condition="review_verdict = reject"]
+
+  card_draft -> card_write
+  card_write -> card
+  card -> decide     [condition="outcome = success"]
+  card -> card_write [condition="outcome = failure", label="card refused"]
+
+  decide -> ship   [label="[S] Ship :: Land the change, then watch the cause"]
+  decide -> reopen [label="[R] Revise :: Your note goes back to the builder"]
+  decide -> drop   [label="[D] Drop :: Close the cause with your reason"]
+  reopen -> implement
+  drop -> exit
+
+  ship -> merge  [condition="outcome = success and not line.commands.ship"]
+  ship -> watch  [condition="outcome = success and line.commands.ship"]
+  ship -> exit   [condition="outcome = failure", label="not shipped"]
+  merge -> watch [condition="outcome = success"]
+  watch -> exit
+}
