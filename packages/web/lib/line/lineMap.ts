@@ -17,7 +17,7 @@
 import { CARD_GATE_NODE_ID, LINE_END_NODES, isLineRun, lineRunOutcome, verdictOfOption, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import type { LineFinderDecl } from "@codecast/shared/contracts/lineProfile";
-import { DAY, WEEK, ageShort, buildLineFlow, silentText, type LineCauseTask, type LineDecision, type LineFlowRun, type LineSignal } from "../lineFlow";
+import { DAY, WEEK, ageShort, buildLineFlow, isUndeclaredSource, quietWatchEnd, silentText, type LineCauseTask, type LineDecision, type LineFlowRun, type LineSignal } from "../lineFlow";
 import type { LineEdge, LineNode } from "./lineStations";
 import { choiceWords, isMainStation, phaseOfStation, runPath, type LinePhaseKey, type ReportRun, type StepState } from "./runReport";
 import { SHIPPED_LINE } from "./shippedLine.generated";
@@ -94,7 +94,12 @@ export type MapItem = {
 export type MapLeft = "moved" | "failed" | "live" | MapEnd | "parked";
 export type MapPassed = { item: MapItem; at: number; durationMs: number | null; left: MapLeft; to: string | null };
 
-export type MapMark = { level: "info" | "warn" | "fail"; words: string };
+/** `words` is the whole sentence (the panel's Health); `short` is what fits
+ *  under the node, built from the same numbers so the two never disagree (LX3). */
+export type MapMark = { level: "info" | "warn" | "fail"; words: string; short?: string };
+
+/** A usual time in words: "under a minute", "40m", "2h". */
+export const usualWords = (ms: number) => (ms < 60_000 ? "under a minute" : ageShort(ms));
 
 export type MapNode = {
   id: string;
@@ -118,6 +123,8 @@ export type MapNode = {
   failed: number;
   /** A source node's declaration, when the profile names it (LP3). */
   finder?: LineFinderDecl;
+  /** A source filing while the profile declares finders but not it (lineFlow isUndeclaredSource). */
+  undeclared?: boolean;
   /** A source node's name as signals carry it. */
   source?: string;
   end?: MapEnd;
@@ -146,7 +153,7 @@ export const CAUSES_NODE = "causes";
 export const sourceNodeId = (source: string) => `source:${source.toLowerCase()}`;
 export const endNodeId = (end: MapEnd) => `end:${end}`;
 
-const END_LABEL: Record<MapEnd, string> = { held: "Held", reopened: "Reopened", dissolved: "Dissolved", dropped: "Dropped", stopped: "Stopped" };
+export const END_LABEL: Record<MapEnd, string> = { held: "Held", reopened: "Reopened", dissolved: "Dissolved", dropped: "Dropped", stopped: "Stopped" };
 /** Where a run that ended at an end station goes on the map. */
 const END_OF_RUN: Record<LineRunEnd, string | null> = { dissolved: endNodeId("dissolved"), dropped: endNodeId("dropped"), parked: CAUSES_NODE, shipped: null };
 
@@ -238,7 +245,7 @@ export function runVisits(run: MapRun, graph: LineGraph = SHIPPED_LINE, decision
   // Earlier rounds through a gate: one answered decision per visit.
   const gates = new Map<string, MapDecision[]>();
   for (const d of decisions) {
-    if (d.workflow_run_id !== run._id || !d.gate_node_id || d.status === "pending") continue;
+    if (d.workflow_run_id !== run._id || !d.gate_node_id || !rawAnswer(d)) continue;
     gates.set(d.gate_node_id, [...(gates.get(d.gate_node_id) ?? []), d]);
   }
   for (const [gate, asked] of gates) {
@@ -263,9 +270,15 @@ export function runVisits(run: MapRun, graph: LineGraph = SHIPPED_LINE, decision
   return path;
 }
 
+/** The answer a decision was given, as its option reads; null while unanswered
+ *  (pending, withdrawn, expired), which is no round through its gate. */
+export function rawAnswer(d: MapDecision): string | null {
+  return d.answer_text?.trim() || (d.answer_index != null ? d.options?.[d.answer_index]?.label : undefined) || null;
+}
+
 /** The station a gate's answer led to: the gate's edge whose option words match the answer. */
 function answerTarget(graph: LineGraph, gate: string, d: MapDecision): string | null {
-  const answer = d.answer_text ?? (d.answer_index != null ? d.options?.[d.answer_index]?.label : undefined);
+  const answer = rawAnswer(d);
   if (!answer) return null;
   const words = choiceWords(answer).toLowerCase();
   const verdict = verdictOfOption(answer);
@@ -308,6 +321,7 @@ const median = (values: number[]): number | null => {
 };
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const UNDECLARED = "Files signals, but the profile does not declare it";
 
 /** "24h", "7d", "30d": the window in the words its switch uses. */
 export function windowLabel(windowMs: number): string {
@@ -320,6 +334,8 @@ const STUCK_SAMPLES = 3;
 const STUCK_FACTOR = 3;
 /** Never stuck sooner than this, however quick the station usually is. */
 const STUCK_FLOOR_MS = 15 * 60_000;
+/** A queue reads as piling up once this many wait and this many more came than left. */
+const QUEUE_MIN = 5;
 
 export const signalItem = (s: MapSignal): MapItem => ({ kind: "signal", id: s._id, ref: s.short_id || s._id, title: s.title, at: s.created_at, taskId: s.task_id });
 export const causeItem = (t: LineCauseTask, at: number): MapItem => ({ kind: "cause", id: t._id, ref: t.short_id || t._id, title: t.title, at, taskId: t._id });
@@ -353,8 +369,16 @@ export function buildLineMap(input: LineMapInput): LineMap {
   for (const src of sources) {
     const node = add({ id: sourceNodeId(src.source), kind: "source", label: src.source, phase: "sense", col: 1, main: true, source: src.source, ...(src.finder ? { finder: src.finder } : {}) });
     if (src.silent) node.marks.push({ level: "warn", words: `Silent: ${silentText(src, now).replace(/^silent /, "nothing filed in ")}` });
-    else if (src.undeclared) node.marks.push({ level: "info", words: "Files signals, but the profile does not declare it" });
+    else if (src.undeclared) { node.undeclared = true; node.marks.push({ level: "info", words: UNDECLARED }); }
   }
+  // The sense column keeps a week; a wider window still draws every source
+  // that filed in it, so the sources add up to Signals.
+  for (const s of input.signals) {
+    if (!inWindow(s.created_at) || nodes.has(sourceNodeId(s.source))) continue;
+    const node = add({ id: sourceNodeId(s.source), kind: "source", label: s.source, phase: "sense", col: 1, main: true, source: s.source });
+    if (isUndeclaredSource(s.source, input.finders ?? [])) { node.undeclared = true; node.marks.push({ level: "info", words: UNDECLARED }); }
+  }
+  const sourceNames = [...nodes.values()].filter((n) => n.kind === "source").map((n) => n.source!);
   add({ id: SIGNALS_NODE, kind: "signals", label: "Signals", phase: "sense", col: 2, main: true });
   add({ id: CAUSES_NODE, kind: "causes", label: "Causes", phase: "admit", col: 3, main: true });
 
@@ -404,8 +428,8 @@ export function buildLineMap(input: LineMapInput): LineMap {
     e.count++;
     if (!e.items.some((x) => x.kind === item.kind && x.id === item.id)) e.items.push(item);
   };
-  if (nodes.has(EXPECTATIONS_NODE)) for (const s of sources) if (judged.has(s.source.toLowerCase())) edge(EXPECTATIONS_NODE, sourceNodeId(s.source));
-  for (const s of sources) edge(sourceNodeId(s.source), SIGNALS_NODE);
+  if (nodes.has(EXPECTATIONS_NODE)) for (const s of sourceNames) if (judged.has(s.toLowerCase())) edge(EXPECTATIONS_NODE, sourceNodeId(s));
+  for (const s of sourceNames) edge(sourceNodeId(s), SIGNALS_NODE);
   edge(SIGNALS_NODE, CAUSES_NODE);
   for (const e of graphEdges) edge(e.from, e.to, e.label);
 
@@ -483,8 +507,9 @@ export function buildLineMap(input: LineMapInput): LineMap {
     for (const t of input.tasks) {
       if (!t.cause) continue;
       for (const s of reopenedBy.get(t._id) ?? []) if (inWindow(s.created_at)) { cross(watchNode.id, endNodeId("reopened"), causeItem(t, s.created_at)); bump(nodes.get(endNodeId("reopened"))); }
-      // LE12: a watch that ended quiet stamps resolved_at.
-      if (inWindow(t.resolved_at) && (t.resolved_at ?? 0) >= (t.closed_at ?? 0)) { cross(watchNode.id, endNodeId("held"), causeItem(t, t.resolved_at!)); bump(nodes.get(endNodeId("held"))); }
+      // LE12: the watch ended quiet, swept or not yet.
+      const quiet = quietWatchEnd(t, now);
+      if (inWindow(quiet)) { cross(watchNode.id, endNodeId("held"), causeItem(t, quiet!)); bump(nodes.get(endNodeId("held"))); }
     }
   }
 
@@ -492,6 +517,11 @@ export function buildLineMap(input: LineMapInput): LineMap {
   for (const node of nodes.values()) {
     node.now.sort((a, b) => a.at - b.at);
     node.passed.sort((a, b) => b.at - a.at);
+    // Two ends mean the line did not deliver: a fix that came back, a run that
+    // ended with nothing landed. They mark like a failing station, so the map
+    // says so at a glance (LX2); held, dissolved and dropped are outcomes, not trouble.
+    if (node.end === "reopened" && node.through > 0) node.marks.push({ level: "warn", words: `${plural(node.through, "fix", "fixes")} came back during the watch in the last ${label}` });
+    if (node.end === "stopped" && node.through > 0) node.marks.push({ level: "warn", words: `${plural(node.through, "run")} stopped without a change in the last ${label}` });
     if (node.kind === "source" || node.kind === "end" || node.kind === "signals" || node.kind === "expectations") continue;
     const times = durations.get(node.id) ?? [];
     node.medianMs = median(times);
@@ -504,7 +534,41 @@ export function buildLineMap(input: LineMapInput): LineMap {
     const silent = node.now.filter((it) => it.stalled).length;
     if (silent) node.marks.push({ level: "warn", words: `${plural(silent, "run")} silent for a day` });
     if (node.failed > 0) {
-      node.marks.push({ level: node.failed * 2 >= node.through ? "fail" : "warn", words: `${node.failed} of ${node.through} failed in the last ${label}` });
+      // The node shows the share; the window lives in the tooltip, since the
+      // window switch above the map already names it (LX2).
+      node.marks.push({ level: node.failed * 2 >= node.through ? "fail" : "warn", words: `${node.failed} of ${node.through} failed in the last ${label}`, short: `${node.failed} of ${node.through} failed` });
+    }
+  }
+
+  // ── the queue's health (LX3): a pile-up is trouble even when nothing failed.
+  // Its usual time is the wait from a cause's first sighting to its first run;
+  // it grows when far more came in than left in the window.
+  {
+    const waits: number[] = [];
+    const firstRun = new Map<string, number>();
+    for (const r of lineRuns) if (r.task_id) firstRun.set(r.task_id, Math.min(firstRun.get(r.task_id) ?? Infinity, r.created_at));
+    for (const [id, at] of firstRun) {
+      const t = taskById.get(id);
+      const seen = t?.cause?.first_seen ?? t?.created_at;
+      if (seen != null && at >= seen) waits.push(at - seen);
+    }
+    causes.medianMs = median(waits);
+    let stuck = 0;
+    if (causes.medianMs != null && waits.length >= STUCK_SAMPLES) {
+      const limit = Math.max(STUCK_FLOOR_MS, causes.medianMs * STUCK_FACTOR);
+      for (const it of causes.now) if (now - it.at > limit) it.stuck = true;
+      stuck = causes.now.filter((it) => it.stuck).length;
+    }
+    const left = [...edges.values()].filter((e) => e.from === CAUSES_NODE && e.kind !== "loop").reduce((n, e) => n + e.count, 0);
+    const piling = causes.now.length >= QUEUE_MIN && causes.through - left >= QUEUE_MIN && causes.through > left * 2;
+    // One mark from one set of numbers: the node, the Now list and Health all
+    // read the oldest wait against the usual one, so none of them disagree.
+    if (stuck || piling) {
+      const oldest = causes.now.reduce((m, it) => Math.min(m, it.at), Infinity);
+      const oldestAge = Number.isFinite(oldest) ? ageShort(Math.max(0, now - oldest)) : null;
+      const head = piling ? `Piling up: ${causes.through} came in, ${left} left in the last ${label}` : `${plural(stuck, "cause")} waiting longer than usual`;
+      const tail = oldestAge ? `Oldest has waited ${oldestAge}${causes.medianMs != null ? `; a cause usually starts within ${usualWords(causes.medianMs).replace("under a minute", "a minute")}` : ""}` : null;
+      causes.marks.push({ level: "warn", words: [head, tail].filter(Boolean).join(". "), short: oldestAge ? `Oldest ${oldestAge}, ${causes.now.length} waiting` : head });
     }
   }
 
