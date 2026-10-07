@@ -164,7 +164,7 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
               {trace ? <><b className="font-semibold">{trace.cause.title}</b><span className="text-sol-text-muted">: {trace.where.text}</span></> : <>No cause on this line matches {state.trace}.</>}
             </span>
             <span className="ml-auto shrink-0 flex items-center gap-3 text-[11px]">
-              {trace && <Link href={lineTraceHref(state.trace)} className="text-sol-blue hover:underline">the whole story</Link>}
+              {trace && <Link href={lineTraceHref(state.trace)} className="text-sol-blue hover:underline">full trace</Link>}
               <button type="button" onClick={() => set({ trace: null })} className="inline-flex items-center gap-1 text-sol-text-dim hover:text-sol-text" aria-label="Stop tracing">
                 <X className="w-3 h-3" />
               </button>
@@ -186,7 +186,7 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
         <footer className="lmap-panel-foot" data-map-keys>
           <span><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap>nodes</span>
           <span><KeyCap size="xs">↵</KeyCap>open</span>
-          <span><KeyCap size="xs">Esc</KeyCap>{open ? "close" : state.trace ? "stop tracing" : "close"}</span>
+          {(open || state.trace) && <span><KeyCap size="xs">Esc</KeyCap>{open ? "close" : "stop tracing"}</span>}
           <span><KeyCap size="xs">w</KeyCap>window</span>
         </footer>
       </div>
@@ -201,7 +201,7 @@ export function LineMapView({ projectId, rows, flow, now, note }: {
             </div>
             <p className="lmap-panel-what">Every value of the line at once. Each also shows on the node it shapes.</p>
           </div>
-          <div className="flex-1 min-h-0 flex flex-col"><LineSettingsPage project={projectId} embedded /></div>
+          <div className="flex-1 min-h-0 flex flex-col"><LineSettingsPage project={projectId} /></div>
         </aside>
       ) : open ? (
         <LineMapPanel
