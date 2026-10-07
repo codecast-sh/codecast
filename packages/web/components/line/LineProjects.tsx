@@ -10,6 +10,7 @@ import { ALL_PROJECTS, NO_PROJECT, defaultLineKey, type LineProject, type Rollup
 import { cn } from "../../lib/utils";
 import { lineProjectParam } from "../../lib/line/lineStations";
 import { centerInRow, edgeAttrs, useScrollEdges } from "./useScrollEdges";
+import { EdgeArrows } from "./EdgeArrows";
 
 /** The URL names a line by its project's short id (or id), "none" or "all". */
 const paramOf = (key: string, projects: LineProject[]) => {
@@ -67,7 +68,8 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
   if (rollup.length === 0) return null;
   const total = rollup.reduce((n, r) => n + r.causes, 0);
   return (
-    <nav ref={row} className="line-edge-fade line-scroll-quiet flex items-center gap-1 overflow-x-auto -mx-4 px-4 sm:-mx-6 sm:px-6 pb-0.5" aria-label="Projects" data-line-projects {...edgeAttrs(edges)}>
+    <div className="relative -mx-4 sm:-mx-6 min-w-0">
+    <nav ref={row} className="line-edge-fade line-scroll-quiet flex items-center gap-1 overflow-x-auto px-4 sm:px-6 pb-0.5" aria-label="Projects" data-line-projects {...edgeAttrs(edges)}>
       <Pill active={selected === ALL_PROJECTS} onClick={() => onSelect(ALL_PROJECTS)} label="All projects" count={total} />
       {rollup.map((r) => (
         <Pill
@@ -83,6 +85,8 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
         />
       ))}
     </nav>
+    <EdgeArrows scroller={row} edges={edges} label="projects" />
+    </div>
   );
 }
 

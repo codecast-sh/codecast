@@ -31,6 +31,7 @@ import { lineOptions } from "../../org/scope/lineBoard";
 import { LineChip } from "../CustomizedLineChip";
 import { EditStatus } from "./LineValueRow";
 import { useLineStationEdits } from "./useLineStationEdits";
+import { useSendThroughLine } from "../map/ChangeComposer";
 import { REPO_LINE_REL_DIR } from "@codecast/shared/contracts/lineProfile";
 import { SHIPPED_LINE } from "../../../lib/line/shippedLine.generated";
 import {
@@ -106,6 +107,7 @@ export function StationDefinition({ projectId, stationId }: { projectId: string;
     <div className="space-y-2" data-station-definition={stationId}>
       <StationPanel
         node={node}
+        projectId={projectId}
         line={m.inRepo && repo.source.kind === "repo" ? repo.source.line : SHIPPED_LINE}
         editable={m.inRepo ? repo.writable : m.customized}
         runsIt={m.inRepo || m.onFork.length > 0}
@@ -168,6 +170,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
             ref={panel}
             arrived={arrived}
             node={selected}
+            projectId={projectId}
             line={repo.source.kind === "repo" ? repo.source.line : SHIPPED_LINE}
             editable={repo.writable}
             runsIt
@@ -238,6 +241,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
           ref={panel}
           arrived={arrived}
           node={selected}
+          projectId={projectId}
           editable={customized}
           runsIt={onFork.length > 0}
           changed={diffs[selected.id] ?? []}
@@ -285,8 +289,10 @@ function RepoLineHeader({ repo, changedCount, onResetAll }: { repo: ReturnType<t
   );
 }
 
-function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsIt, changed, onPatch, onReset, onClose, status, pending }: {
+function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, editable, runsIt, changed, onPatch, onReset, onClose, status, pending }: {
   ref?: Ref<HTMLDivElement>;
+  /** The project whose line this is: a prompt draft can be sent through it (LX6). */
+  projectId?: string;
   /** A link in named this station: the panel flashes once (settings.css). */
   arrived?: boolean;
   node: LineNode;
@@ -318,6 +324,13 @@ function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsI
   const dirty = draft !== body.text;
   const patch = (p: StationPatch) => { onPatch(p); setSavedAt(Date.now()); };
   const commitText = () => { if (field && dirty) patch({ [field]: draft }); };
+  // A prompt change is a prompt change (line-map.md LX5): the editor offers to
+  // send the draft through the line, where it is shown, scored and carded,
+  // beside applying it now. So a prompt draft waits for one of the two
+  // instead of saving when the field loses focus.
+  const through = useSendThroughLine(projectId ?? null, node);
+  const offerSend = field === "prompt" && !!through.send;
+  const sendDraft = () => { if (dirty && through.send?.(draft)) setDraft(body.text); };
   const commitTimeout = () => {
     const m = Number(timeoutDraft);
     const next = timeoutDraft.trim() === "" ? null : Number.isFinite(m) && m > 0 ? Math.round(m * 60) : undefined;
@@ -326,6 +339,9 @@ function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsI
     if ((next ?? undefined) !== node.timeout) patch({ timeout: next });
   };
   const saveKeys = <><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></>;
+  const editHint = offerSend
+    ? <>Edit the {field}, then send it through the line or apply it now</>
+    : <>Edit the {field}; it saves when you leave the field, or on {saveKeys}</>;
 
   return (
     <div ref={ref} className="rounded-md p-3 space-y-2 scroll-mt-4" style={{ background: "var(--sol-bg-alt)", border: "1px solid var(--sol-border)" }} data-station-panel={node.id} data-lset-target={arrived ? "true" : undefined}>
@@ -354,9 +370,9 @@ function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsI
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={commitText}
+            onBlur={offerSend ? undefined : commitText}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitText(); }
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if (offerSend) sendDraft(); else commitText(); }
               if (e.key === "Escape" && dirty) { e.preventDefault(); e.stopPropagation(); setDraft(body.text); }
             }}
             spellCheck={false}
@@ -366,17 +382,25 @@ function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsI
             aria-label={`${node.label} ${field}`}
             data-station-text
           />
-          <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-station-save-state>
-            {dirty
+          <div className="flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: "var(--sol-text-dim)" }} data-station-save-state>
+            {dirty && offerSend
+              ? <>
+                  <span className="min-w-0">Send it through the line to have it proven and scored before it lands, or apply it to every run from now. <KeyCap size="xs">Esc</KeyCap> puts it back.</span>
+                  <span className="flex-1" />
+                  <button type="button" className="lset-ghost" onClick={commitText} data-station-apply>Apply now</button>
+                  <button type="button" className="lset-primary inline-flex items-center gap-1" onClick={sendDraft} data-station-send>Send through the line {saveKeys}</button>
+                </>
+            : dirty
               ? <>Saves when you leave the field, or on {saveKeys}. <KeyCap size="xs">Esc</KeyCap> puts it back.</>
               : status !== undefined
-                ? <>{status}{!pending && <>Edit the {field}; it saves when you leave the field, or on {saveKeys}</>}</>
+                ? <>{status}{!pending && editHint}</>
               : savedAt
                 ? <span key={savedAt} className="lset-status" data-state={runsIt ? "saved" : "warn"} role="status">
                     {runsIt ? `Saved. A run of the customized line started after this reads the new ${field}.` : "Saved to the copy. No role runs it yet, so no run reads it."}
                   </span>
-                : <>Edit the {field}; it saves when you leave the field, or on {saveKeys}</>}
+                : editHint}
           </div>
+          {through.sent}
         </>
       )}
 
