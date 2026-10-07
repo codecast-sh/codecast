@@ -69,6 +69,7 @@ const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
 const Line = lazy(() => import("@/app/line/page"));
 const LineSettings = lazy(() => import("@/app/line/settings/page"));
+const LineTrace = lazy(() => import("@/app/line/trace/[ref]/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
@@ -277,6 +278,7 @@ export function App() {
               <Route path="questions" element={<E name="Questions"><Questions /></E>} />
               <Route path="line" element={<E name="Line"><Line /></E>} />
               <Route path="line/settings" element={<E name="Line settings"><LineSettings /></E>} />
+              <Route path="line/trace/:ref" element={<E name="Line trace"><LineTrace /></E>} />
               <Route path="decisions/stacks" element={<E name="DecisionStacks"><DecisionStacks /></E>} />
               <Route path="decisions/stacks/:id" element={<E name="DecisionStack"><DecisionStack /></E>} />
               <Route path="decisions/:id" element={<E name="DecisionDetail"><DecisionDetail /></E>} />

@@ -7,7 +7,9 @@
 // store; a feeder only feeds.
 import { useMemo } from "react";
 import { isLineRun } from "@codecast/shared/contracts/changeCard";
-import { useInboxStore } from "../../../store/inboxStore";
+import { useInboxStore, type SessionDecisionItem } from "../../../store/inboxStore";
+import { useCollectionRows } from "../../../hooks/useCollectionRows";
+import { sig as decisionSig } from "../../../hooks/useTaskDecisions";
 import { useSyncSignals, useWorkspaceSignals } from "../../../hooks/useSyncSignals";
 import { useWorkflowBySlug, useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
@@ -56,13 +58,21 @@ export function useLineTrace(ref: string): LineTraceState {
   useSyncSignals(workspace);
   const causeSignals = useWorkspaceSignals(workspace);
   const causeRuns = useCauseRuns(causeId);
+  // Every card on the cause the store holds, answered ones too (the floor
+  // keeps the pending ones only), and the newest run's card fed by itself, so
+  // the card step can say who answered what (useTaskDecisions reads the same rows).
+  const cardWhere = useMemo(() => (d: SessionDecisionItem) => !!causeId && d.task_id === causeId, [causeId]);
+  const causeCards = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: cardWhere, sig: decisionSig });
+  const newestCard = causeRuns.find((r) => r.gate_decision_short_id)?.gate_decision_short_id;
+  useSyncDecisionDetail(newestCard);
+  const newestDetail = useDecisionDetail(newestCard);
 
   const rows = useMemo<TraceRows>(() => ({
     signals: byId(floor.signals, causeSignals as MapSignal[]),
     tasks: floor.tasks,
     runs: byId(floor.runs, causeRuns as unknown as MapRun[], lonelyRun ? [lonelyRun] : []).filter((r) => r.task_id !== causeId || isLineRun(r.node_statuses as never)),
-    decisions: byId(floor.decisions, detail?.decision ? [detail.decision as unknown as MapDecision] : []),
-  }), [floor, causeSignals, causeRuns, lonelyRun, detail, causeId]);
+    decisions: byId(floor.decisions, causeCards as unknown as MapDecision[], [detail, newestDetail].flatMap((d) => (d?.decision ? [d.decision as unknown as MapDecision] : []))),
+  }), [floor, causeSignals, causeRuns, lonelyRun, detail, newestDetail, causeCards, causeId]);
 
   // The project's own line when it customized one, else the shipped line.
   const project = useMemo(() => (cause?.project_id ? projects.find((p) => p._id === cause.project_id) ?? null : null), [cause?.project_id, projects]);

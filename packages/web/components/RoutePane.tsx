@@ -70,6 +70,7 @@ const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions
 // The line: the whole factory as one flow (the-line-end-to-end.md LE13).
 const Line = lazyPage("@/app/line/page", () => import("@/app/line/page"));
 const LineSettings = lazyPage("@/app/line/settings/page", () => import("@/app/line/settings/page"));
+const LineTrace = lazyPage("@/app/line/trace/[ref]/page", () => import("@/app/line/trace/[ref]/page"));
 const DecisionDetail = lazyPage("@/app/decisions/[id]/page", () => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazyPage("@/app/decisions/stacks/page", () => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazyPage("@/app/decisions/stacks/[id]/page", () => import("@/app/decisions/stacks/[id]/page"));
@@ -196,6 +197,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
   { pattern: /^\/line$/, paramNames: [], component: Line },
   { pattern: /^\/line\/settings$/, paramNames: [], component: LineSettings },
+  { pattern: /^\/line\/trace\/([^/]+)$/, paramNames: ["ref"], component: LineTrace },
   { pattern: /^\/threads$/, paramNames: [], component: Threads },
   { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];

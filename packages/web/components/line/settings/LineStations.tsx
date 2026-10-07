@@ -119,7 +119,7 @@ export function StationDefinition({ projectId, stationId }: { projectId: string;
       />
       <p className="text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-station-home>
         {m.inRepo
-          ? (repo.writable ? `Edits are written to the repo on ${repo.gate.device}, checked, and republished. Each run records the version it ran.` : repo.gate.reason)
+          ? (repo.gate.writable ? `Edits are written to the repo on ${repo.gate.device}, checked, and republished. Each run records the version it ran.` : repo.gate.reason)
           : m.customized
             ? (m.onFork.length ? "Edits save to this project's customized copy, which a role runs." : "Edits save to this project's customized copy. No role runs it yet.")
             : <>This project runs the shipped line, read only here. <button type="button" className="underline underline-offset-2" onClick={m.customize} data-customize-line>Customize this line</button> to edit its stations.</>}
