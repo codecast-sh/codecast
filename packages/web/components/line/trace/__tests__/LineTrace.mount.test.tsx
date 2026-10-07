@@ -82,7 +82,9 @@ describe("TraceStory", () => {
     const finding = step(host, "finding");
     expect(text(finding.querySelector("[data-trace-detail]"))).toBe("The agent answered a different question than the broker asked.");
     expect(finding.querySelector<HTMLAnchorElement>('a[href^="https://admin.example.com/agentwatch"]')?.textContent).toContain("Where it was seen");
-    expect(text(finding)).toContain("Breaks ex-union-3");
+    // The expectation is named by its sentence when the store holds it, never by its id.
+    expect(finding.querySelector("[data-trace-breaks]")?.getAttribute("data-trace-breaks")).toBe("ex-union-3");
+    expect(text(finding)).not.toContain("ex-union-3");
     expect(text(finding)).toContain("agentwatch · prompt miss");
 
     // The siblings each open their own trace.
@@ -203,9 +205,18 @@ describe("LineTracePage", () => {
     expect(q(host, "[data-trace-story]")?.dataset.traceOutcome).toBe("held");
     expect(qa(host, '[data-trace-step="card"]').length).toBe(2);
     expect(text(qa(host, '[data-trace-step="card"]')[1])).toContain("You answered Ship");
-    // The map lights the path, loops included, and a hovered step focuses its node. (The
-    // fixtures sit weeks before the clock this page reads, so the map's sources, a
-    // two week reading, have aged out; the rest of the path is drawn.)
+    // The header never repeats the cause's title in its steps, and says the path in one line.
+    expect(text(q(host, "[data-trace-summary]"))).toMatch(/^Found .*, 1 run/);
+    expect(text(q(step(host, "cause"), "[data-trace-title]"))).toBe("Filed as ct-101");
+    // The path strip: only the nodes it went through, each chip going to its step.
+    const chips = qa(host, "[data-trace-chip]").map((c) => c.dataset.traceChip);
+    expect(chips).toEqual(expect.arrayContaining(["expectations", "signals", "causes", "implement", "end:held"]));
+    expect(chips).not.toContain("end:dissolved");
+    // The whole map is behind Full size. It lights the path, loops included, and a hovered
+    // step focuses its node. (The fixtures sit weeks before the clock this page reads, so the
+    // map's sources, a two week reading, have aged out; the rest of the path is drawn.)
+    expect(q(host, "[data-trace-map]")).toBeNull();
+    await act(async () => { q(host, "[data-trace-map-zoom]")!.click(); });
     const lit = qa(host, '[data-trace-map] [data-map-node][data-on="true"]').map((n) => n.dataset.mapNode);
     expect(lit).toEqual(expect.arrayContaining(["expectations", "signals", "causes", "implement", "decide", "ship", "end:held"]));
     expect(q(host, '[data-trace-map] [data-map-node="end:dissolved"]')?.dataset.on).toBeUndefined();
@@ -214,11 +225,22 @@ describe("LineTracePage", () => {
     await done();
   });
 
-  test("a ref nothing on the line goes by says so, and what a trace takes", async () => {
+  test("a cause held in another workspace (another team's line) still traces", async () => {
+    seed();
+    const other = <T,>(list: T[]) => Object.fromEntries(list.map((r: any) => [r._id, { ...r, workspace: "team:t2" }]));
+    useInboxStore.setState({ tasks: other(F.rows.tasks), signals: other(F.rows.signals), workflowRuns: other(F.rows.runs) } as any);
+    const { host, done } = await mount(React.createElement(LineTracePage, { refParam: "ct-101" }));
+    expect(q(host, "[data-trace-missing]")).toBeNull();
+    expect(text(q(host, "[data-trace-head] h1"))).toBe("Broker replies skip the question asked");
+    expect(text(step(host, "finding"))).toContain("The agent answered a different question than the broker asked.");
+    await done();
+  });
+
+  test("a ref nothing on the line matches says so, and what a trace takes", async () => {
     seed();
     const { host, done } = await mount(React.createElement(LineTracePage, { refParam: "sg-nope" }));
     expect(q(host, "[data-trace-missing]")).not.toBeNull();
-    expect(text(host)).toContain("Nothing on the line goes by sg-nope");
+    expect(text(host)).toContain("Nothing on the line matches sg-nope");
     await done();
   });
 });
