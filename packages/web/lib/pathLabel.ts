@@ -58,6 +58,8 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
   // A project or a run is named from the store (tabTitle recordTabTitle);
   // the address alone gives its kind, never its id.
   if (clean.startsWith("/workflows/runs/")) return "Run";
+  // A trace (line-map.md LX4) titles by the ref it follows.
+  if (clean.startsWith("/line/trace/")) { const r = clean.split("/")[3]; return r ? `Trace ${decodeURIComponent(r)}` : "Trace"; }
   if (clean.startsWith("/projects/") && clean.split("/")[2] && !/^pj-\d+$/i.test(clean.split("/")[2])) return "Project";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";

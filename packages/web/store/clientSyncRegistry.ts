@@ -1093,7 +1093,10 @@ export const CLIENT_SYNC_REGISTRY = {
   // (getConversationPendingMessage). One row keyed by conversation id;
   // transient — never persisted (a reload re-derives it).
   pendingMessageStatus: {
-    sync: { isDelta: true },
+    // inflight (every waiting row, the shared queue) changes while the
+    // primary row's scalars stay put: a new queued message, a reorder, a
+    // merge. The engine skips nested arrays unless asked to compare them.
+    sync: { isDelta: true, deepFields: ["inflight"] },
     feeds: ["pendingMessages.getConversationPendingMessage"],
   },
   // The message feed (getMessageFeed): the viewer's and teammates' user

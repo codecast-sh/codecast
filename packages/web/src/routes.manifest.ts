@@ -150,6 +150,7 @@ const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
 const Line = lazy(() => import("@/app/line/page"));
 const LineSettings = lazy(() => import("@/app/line/settings/page"));
+const LineTrace = lazy(() => import("@/app/line/trace/[ref]/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
@@ -355,6 +356,7 @@ export const ROUTES: RouteEntry[] = [
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, like /questions.
   { path: "line", component: cast(Line), layout: "dashboardShell", tab: "/line" },
   { path: "line/settings", component: cast(LineSettings), layout: "dashboardShell", tab: "/line/settings" },
+  { path: "line/trace/:ref", component: cast(LineTrace), layout: "dashboardShell", tab: "/line/trace/:ref" },
   { path: "decisions/stacks", component: cast(DecisionStacks), layout: "dashboardShell", tab: "/decisions/stacks" },
   { path: "decisions/stacks/:id", component: cast(DecisionStack), layout: "dashboardShell", tab: "/decisions/stacks/:id" },
   { path: "decisions/:id", component: cast(DecisionDetail), layout: "dashboardShell", tab: "/decisions/:id" },

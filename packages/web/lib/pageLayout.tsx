@@ -24,7 +24,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/decisions(\/|$)/,
   // The line owns its canvas: six stations side by side, each its own scroll.
   // Its settings page is the same floor, with its own index and scroll.
-  /^\/line(\/settings)?$/,
+  // A trace (LX4) is the same canvas: the map beside the story.
+  /^\/line(\/settings|\/trace\/[^/]+)?$/,
   // Chat owns its whole canvas: three columns, each with its own scroll region.
   /^\/chat(\/|$)/,
   // The public rooms are the same three column surface.

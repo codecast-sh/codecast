@@ -26,6 +26,7 @@ import { hasOpenModal } from "../../shortcuts";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useGoalChip } from "../../hooks/useGoalChip";
+import { lineTraceHref } from "../../lib/line/lineMapUrl";
 import "./changeCard.css";
 import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 import { ChangeGuideWalkthrough } from "../tasks/ChangeGuideWalkthrough";
@@ -149,6 +150,8 @@ function ChangeCardCause({ card, brief = false, facts = [] }: { card: ChangeCard
       <p className="cc-cause-head" data-card-cause>
         <Link href={`/tasks/${card.cause.task}`} className="cc-cause-ref">{card.cause.task}</Link>
         <span className="cc-cause-title">{card.cause.title}</span>
+        {/* The cause followed through the line, step by step (line-map.md LX4). */}
+        <Link href={lineTraceHref(card.cause.task)} className="cc-cause-ref cc-cause-trace" title="Follow this cause through the line: its signals, runs, card, ship and watch" data-card-trace>trace</Link>
       </p>
       <SepRow items={meta} className="cc-cause-facts" />
     </div>

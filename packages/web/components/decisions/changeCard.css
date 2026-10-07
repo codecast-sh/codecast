@@ -89,6 +89,8 @@
 .cc-cause-ref { margin-right: 0.6rem; font-family: var(--font-mono, ui-monospace), monospace; font-size: 11px; color: var(--sol-text-dim); transition: color 120ms; }
 .cc-cause-ref:hover { color: var(--sol-violet); text-decoration: underline; text-underline-offset: 2px; }
 .cc-cause-title { color: var(--sol-text-muted); }
+/* The trace link trails the title (line-map.md LX4): quiet until hovered. */
+.cc-cause-trace { margin: 0 0 0 0.6rem; white-space: nowrap; }
 .cc-head-row .cc-cause-head { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 /* A row's one cause line: the title, then the row's own facts trailing it. */
 .cc-cause-fact.cc-nowrap { white-space: nowrap; }
