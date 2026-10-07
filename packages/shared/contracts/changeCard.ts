@@ -397,6 +397,8 @@ export interface CardTaskInput {
   goal_why?: string | null;
   risk?: string | null;
   risk_reason?: string | null;
+  /** What kind of change it is (the ground field): a prompt or line change with no eval result says it is unscored. */
+  category?: string | null;
 }
 
 /** The slice of the task's evidence (taskEvidence.ts) the card reads. */
@@ -479,6 +481,9 @@ export function evalExamples(result: EvalResult): CardExample[] {
  * a test build it the same way. Fields the model writes come in as given and
  * stay empty when absent, so validateChangeCard names them.
  */
+/** The Eval check of a prompt or line change no eval judged. */
+export const UNSCORED_DETAIL = "Unscored: this project's line has no eval command, so no eval replayed the changed prompt";
+
 export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
   const { task, evidence, evalResult } = input;
   const cause = task.cause ?? null;
@@ -510,6 +515,10 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
       detail: evalResult.surfaces.length ? evalResult.surfaces.map(surfaceLine).join("; ") : "no surface touched",
     });
     if (gates.length) checks.push(suiteGateCheck(gates));
+  } else if (task.category === "prompt" || task.category === "line") {
+    // A prompt change is proven by evals (prompting.md P9). Without them the
+    // card says so in place of the verdict it lacks (line-map.md LX6).
+    checks.push({ name: "Eval", ok: true, detail: UNSCORED_DETAIL });
   }
   if (evidence?.review_verdict) {
     checks.push({

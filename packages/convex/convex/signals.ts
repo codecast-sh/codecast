@@ -309,7 +309,7 @@ type WorkDb = Awaited<ReturnType<typeof createDataContext>>;
  * cause is found or opened inside it; the signal carries the project it was
  * filed into, else its cause's.
  */
-export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null) {
+export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null, newCause: { category?: "line"; client_key?: string } = {}) {
   const workspace = db.workspaceKey;
   const observedAt = signal.observed_at ?? now;
   let attach: SignalAttach;
@@ -365,6 +365,9 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
       source: "signal",
       triage_status: "suggested",
       ...(projectId ? { project_id: projectId } : {}),
+      // A cause filed against the line itself (line-map.md LX6) names its
+      // category and the client's key for its optimistic row at birth.
+      ...newCause,
       attempt_count: 0,
       retry_count: 0,
       max_retries: 3,

@@ -191,7 +191,7 @@ export type LineWriteGate =
   /** away: the roster has not heard from the machine lately. That flag runs
    *  stale under load, so the edit is still sent; it waits for the machine up
    *  to DAEMON_COMMAND_TTL_MS and is dropped, untouched, if it never answers. */
-  | { writable: true; device: string; file: string; away?: boolean }
+  | { writable: true; device: string; file: string; away?: boolean; first?: boolean }
   | { writable: false; reason: string; device: string | null; file: string };
 
 /**
@@ -200,8 +200,12 @@ export type LineWriteGate =
  * only the machine's owner can send it commands. A roster not yet loaded
  * stays writable: the server judges the send either way.
  */
-export function lineWriteGate(lp: Facts, roster: RosterDevice[] | null): LineWriteGate {
+export function lineWriteGate(lp: Facts, roster: RosterDevice[] | null, checkout?: string | null): LineWriteGate {
   const file = lp?.file ?? LINE_PROFILE_REL_PATH;
+  // Nothing published, but the project names its checkout: the defaults are
+  // editable, and the first edit writes the file on the viewer's machine that
+  // last ran a session there, whose republish makes it the line (LX5).
+  if (!lp && checkout) return { writable: true, device: "your machine with this checkout", file, first: true };
   if (!lp) return { writable: false, device: null, file, reason: "No machine has published this line yet. Run cast line profile --publish in the project's checkout." };
   if (!lp.root || !lp.device_id || !hasProfileFacts(lp)) {
     return { writable: false, device: null, file, reason: "An older cast published this line, without the machine that holds the file. Run cast line profile --publish there with a current cast." };
@@ -294,9 +298,11 @@ export function lineEditStatus(row: LineEditRow, lp: Facts, now: number): LineEd
   try { reply = JSON.parse(row.result ?? "{}"); } catch {}
   if (reply.changed === false) return { ...base, at, state: "saved" };
   if (reply.published?.ok === false) return { ...base, at, state: "saved", note: `Written to the file, but the republish failed: ${reply.published.detail ?? "no detail"}. This page shows the last published copy until the next publish.` };
-  // The republished copy is stamped after the write, so a row published since
-  // the answer already says what the file says.
-  if ((lp?.published_at ?? 0) >= at) return { ...base, at, state: "saved" };
+  // A copy published since the answer already says what the file says. When
+  // the machine republished as part of the edit, it stamps that copy before it
+  // answers, so any copy published since the request carries the edit.
+  const since = reply.published?.ok === true ? row.requested_at : at;
+  if ((lp?.published_at ?? 0) >= since) return { ...base, at, state: "saved" };
   if (now - at > LINE_EDIT_REPUBLISH_MS) return { ...base, at, state: "saved", note: "Written to the file. The republished copy has not arrived, so this page still shows the last one." };
   return { ...base, at, state: "publishing", slow: false };
 }
@@ -317,10 +323,10 @@ export function lineEditRows(rows: Record<string, unknown> | null | undefined, p
  * nothing is travelling.
  */
 export function liveLineProfile<P extends PublishedLineProfile | null | undefined>(lp: P, rows: LineEditRow[], now: number): P {
-  if (!lp) return lp;
   const open = rows.filter((r) => r.edits?.length && travelling(lineEditStatus(r, lp, now)));
   if (open.length === 0) return lp;
-  const next = structuredClone(lp) as PublishedLineProfile;
+  // A first edit on a line nothing published yet lays itself over the defaults.
+  const next = (lp ? structuredClone(lp) : { finders: [], changed_at: 0 }) as PublishedLineProfile;
   for (const r of open) applyLineEdits(next, r.edits!);
   return next as P;
 }

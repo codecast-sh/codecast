@@ -56,10 +56,20 @@ export function ExpectationsPanel({ projectId, setupHref, scroll = true, classNa
   const youAnswer = !!row?.you_answer;
 
   // A link to one line (`#ex-<project>-<n>`, as a finding cites it) lands on
-  // it once the document has rendered.
+  // it once the document has rendered. The row mounts after the hash was set,
+  // so CSS :target never matches it; the landed row is marked instead.
   useEffect(() => {
-    const id = decodeURIComponent(window.location.hash.slice(1));
-    if (id.startsWith("ex-")) document.getElementById(id)?.scrollIntoView({ block: "center" });
+    const land = () => {
+      const id = decodeURIComponent(window.location.hash.slice(1));
+      document.querySelectorAll("[data-expectation][data-landed]").forEach((el) => el.removeAttribute("data-landed"));
+      const el = id.startsWith("ex-") ? document.getElementById(id) : null;
+      if (!el) return;
+      el.setAttribute("data-landed", "");
+      el.scrollIntoView({ block: "center" });
+    };
+    land();
+    window.addEventListener("hashchange", land);
+    return () => window.removeEventListener("hashchange", land);
   }, [doc]);
 
   const aside = (
@@ -130,7 +140,7 @@ function Line({ e, projectId, youAnswer }: { e: Expectation; projectId: string; 
   const [retiring, setRetiring] = useState(false);
   const editExpectations = useInboxStore((s) => s.editExpectations);
   return (
-    <li id={e.id} className="group scroll-mt-16 rounded px-1 -mx-1 target:bg-sol-yellow/15" data-expectation={e.id}>
+    <li id={e.id} className="group scroll-mt-16 rounded px-1 -mx-1 transition-colors duration-700 data-[landed]:bg-sol-yellow/15" data-expectation={e.id}>
       <div className="flex items-baseline gap-2 text-[12.5px] leading-snug">
         <span className="min-w-0 flex-1 text-sol-text">
           {e.text}

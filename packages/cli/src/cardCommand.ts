@@ -82,8 +82,13 @@ async function branchDiff(base: string, task: string): Promise<{ files: number; 
   const cwd = process.cwd();
   const lineBranch = `codecast/line-${task}`;
   const head = await runGit(cwd, ["rev-parse", "--verify", "--quiet", lineBranch]).then(() => lineBranch, () => "HEAD");
+  // A branch name is measured as the remote has it: a checkout's local copy
+  // can lag by days, and against it the card counted every commit the
+  // branch was rebased over (918 files for a two-line prompt change).
+  const remote = /^[\w./-]+$/.test(base) && !base.startsWith("origin/") && !/^[0-9a-f]{7,40}$/.test(base) ? `origin/${base}` : null;
+  const from = remote ? await runGit(cwd, ["rev-parse", "--verify", "--quiet", remote]).then(() => remote, () => base) : base;
   try {
-    return parseShortstat(await runGit(cwd, ["diff", "--shortstat", `${base}...${head}`]));
+    return parseShortstat(await runGit(cwd, ["diff", "--shortstat", `${from}...${head}`]));
   } catch {
     return null;
   }

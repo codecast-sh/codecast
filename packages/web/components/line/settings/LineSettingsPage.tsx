@@ -1,26 +1,22 @@
 "use client";
-// /line/settings (plan pl-838): one project's line, read and edited in one
-// place. The project comes from the same switcher as /line (useLineFloor ->
-// LineProjects useLineProject), so the URL's ?project= carries between the
-// two pages. Every value paints from the store copy of the line's file
-// (projects.line_profile); an edit paints at once and goes to the daemon on
-// the machine holding the checkout (useLineProfileEdits), which writes
+// One project's line settings (plan pl-838), the panel the line map opens for
+// the whole line (line-map.md LX1, `?node=line`; /line/settings redirects
+// there). The map holds the project switcher, the way back and the key hints;
+// this panel holds every value. Each paints from the store copy of the line's
+// file (projects.line_profile); an edit paints at once and goes to the daemon
+// on the machine holding the checkout (useLineProfileEdits), which writes
 // `.codecast/line.toml` in place and republishes. The Stations section is
-// LineStations, built beside this page.
+// LineStations.
 import { useEffect, useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
-import { useInboxStore } from "../../../store/inboxStore";
 import { useSyncDevices } from "../../../hooks/useSyncDevices";
 import { ALL_PROJECTS, NO_PROJECT, buildLineFlow, scopeLine } from "../../../lib/lineFlow";
-import { LINE_SECTIONS, lineSettingsTarget, lineWriteGate, type RosterDevice } from "../../../lib/lineSettings";
-import { KeyCap } from "../../KeyboardShortcutsHelp";
-import { LineProjectSwitcher } from "../LineProjects";
+import { LINE_SECTIONS, lineSettingsTarget, type LineWriteGate } from "../../../lib/lineSettings";
 import { useLineFloor } from "../useLineFloor";
 import { LineFinders } from "./LineFinders";
 import { ProfileFieldRow } from "./ProfileFieldRow";
-import { useLineProfileEdits } from "./useLineProfileEdits";
+import { useLineProfileEditor } from "./useLineProfileEdits";
 import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { LineStations } from "./LineStations";
 import "../line.css";
@@ -28,23 +24,14 @@ import "./settings.css";
 
 const NAV = [...LINE_SECTIONS.map((s) => ({ id: s.id, title: s.title })), { id: "stations", title: "Stations" }];
 
-/** `embedded` is the line's settings as a panel of the map (line-map.md LX1):
- *  the map holds the project switcher and the way back, so the panel drops its
- *  own header and key footer, and `project` names the map's project. */
-export function LineSettingsPage({ project: pinned, embedded = false }: { project?: string; embedded?: boolean } = {}) {
+/** `project` names the map's project; without it the URL's ?project= does. */
+export function LineSettingsPage({ project: pinned }: { project?: string } = {}) {
   useSyncDevices();
   const { now, projects, lineRows, rollup, line } = useLineFloor(pinned);
   const project = useMemo(() => projects.find((p) => p._id === line.key) ?? null, [projects, line.key]);
-  // The published copy by reference (the floor's project signature watches
-  // only part of it), shown with the edits still travelling laid over it.
-  const published = useInboxStore((s) => (project ? ((s.projects as Record<string, { line_profile?: PublishedLineProfile | null }>)[project._id]?.line_profile ?? null) : null));
-  const edits = useLineProfileEdits(project?._id ?? null, published);
+  // The published copy with the edits still travelling laid over it.
+  const { edits, gate, device } = useLineProfileEditor(project?._id ?? null);
   const lp = edits.lp;
-  // Only a roster this session has heard live says a machine is offline; a
-  // cached one from an earlier visit would lock the page on a stale flag.
-  const roster = useInboxStore((s) => (s.machineRosterLive ? (s.machineRoster as RosterDevice[]) : null));
-  const gate = useMemo(() => lineWriteGate(published, roster), [published, roster]);
-  const device = gate.device ?? "the machine";
   // A link in names a section or a station (lineSettingsHref): the page opens
   // scrolled to it, and the target carries data-lset-target, which flashes once.
   const target = lineSettingsTarget(useSearchParams());
@@ -93,19 +80,8 @@ export function LineSettingsPage({ project: pinned, embedded = false }: { projec
     if (id !== inView) setInView(id);
   };
 
-  const lineHref = `/line${line.href.slice(line.href.indexOf("?"))}`;
-
   return (
     <div className="line-floor lset-floor h-full flex flex-col min-h-0" data-line-settings>
-      {!embedded && <header className="shrink-0 px-4 sm:px-6 pt-5 pb-3 flex flex-col gap-3">
-        <div className="flex items-baseline gap-3 min-w-0">
-          <h1 className="text-[13px] font-semibold text-sol-text leading-none">Line settings</h1>
-          <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">what one project's line listens to, holds work to, checks and limits</span>
-          <Link href={lineHref} className="ml-auto text-[11.5px] text-sol-text-muted hover:text-sol-text whitespace-nowrap" data-lset-back>Back to the line</Link>
-        </div>
-        <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={line.select} />
-      </header>}
-
       {!project || !lp ? (
         <Unset lineKey={line.key} titled={project?.title} hasLines={rollup.length > 0} />
       ) : (
@@ -153,22 +129,12 @@ export function LineSettingsPage({ project: pinned, embedded = false }: { projec
         </div>
       )}
 
-      {/* The keys only where a value can be edited, and only where there is a
-          keyboard to press them (settings.css hides it on narrow floors). */}
-      {!embedded && project && lp && gate.writable && (
-        <footer className="lset-footer shrink-0 flex items-center gap-4 px-4 sm:px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim" data-lset-footer>
-          <span className="flex items-center gap-1" title="Move between values"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap><span className="line-hint-text">values</span></span>
-          <span className="flex items-center gap-1" title="Edit a value, then save it"><KeyCap size="xs">↵</KeyCap><span className="line-hint-text">edit, then save</span></span>
-          <span className="flex items-center gap-1" title="Put an edit back"><KeyCap size="xs">Esc</KeyCap><span className="line-hint-text">put back</span></span>
-          <span className="flex items-center gap-1" title="Back to the default"><KeyCap size="xs">⌫</KeyCap><span className="line-hint-text">back to the default</span></span>
-        </footer>
-      )}
     </div>
   );
 }
 
 /** Where the file is and who can change it: the machine an edit goes to, or why nothing here can. */
-function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: ReturnType<typeof lineWriteGate> }) {
+function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: LineWriteGate }) {
   return (
     <div className="lset-plate" data-writable={gate.writable ? "true" : "false"} data-away={gate.writable && gate.away ? "true" : undefined} data-lset-plate>
       <div className="lset-plate-file">
