@@ -16,7 +16,6 @@ import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useInitiatives } from "../../hooks/useInitiatives";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../shortcuts";
-import { KeyHint } from "../changes/useChangesKeys";
 import { LINE_STATION_SETTINGS, lineSettingsHref, lineTabHref } from "../../lib/lineSettings";
 import { formatElapsed } from "../../lib/taskLine";
 import { cn } from "../../lib/utils";
@@ -63,7 +62,7 @@ const FIRST_SIGNAL = `cast signal add --source person --kind bug --title "What y
 export function LinePage({ project: pinned, workspace }: { project?: string; workspace?: string | null } = {}) {
   const initiatives = useInitiatives();
   const { now, projects, lineRows, rollup, line } = useLineFloor(pinned, workspace);
-  const mapUrl = useLineMapUrl();
+  const mapUrl = useLineMapUrl(pinned ? null : line.param);
   // Settings belong to one project's line; on the map they are a panel.
   const settingsProject = line.key === ALL_PROJECTS || line.key === NO_PROJECT ? null : line.param;
   const openSettings = () => mapUrl.set({ node: LINE_SETTINGS_NODE });
@@ -114,42 +113,39 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
 
   return (
     <div className="line-floor h-full flex flex-col min-h-0" data-line-page>
-      <header className="shrink-0 px-4 sm:px-6 pt-5 pb-3 flex flex-col gap-3">
-        <div className="flex items-baseline gap-3 min-w-0">
-          <h1 className="text-[13px] font-semibold text-sol-text leading-none">{pinned ? "The map" : "The line"}</h1>
-          <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
-          {tabHref && (
-            <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This project's line: its map, sources, stations and versions" data-line-tab-link>
-              Line tab
-            </Link>
-          )}
-          {pinned && (
-            <Link href={line.href} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project's line on one floor" data-line-all-link>
-              All lines
-            </Link>
-          )}
-          {settingsProject && (
-            <button type="button" onClick={openSettings} className={cn(tabHref || pinned ? "" : "ml-auto", "self-center shrink-0 inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text")} title="What this line listens to, checks, limits and runs" data-line-settings-link>
-              <SlidersHorizontal className="w-3 h-3" />
-              <span>settings</span>
-              <KeyHint action="line.settings" />
-            </button>
-          )}
-        </div>
-        {!pinned && <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => line.select(k)} />}
-        {onMap && !allEmpty && <Throughput t={flow.throughput} lead={<Headline parts={headlineLead(lineHeadline(flow, now))} onStation={onStation} />} />}
-      </header>
+      {/* The project's Line tab sits under the project's own header: the map
+          leads, its window and counts in the map's own bar. /line names itself
+          and switches lines; settings live once, in the map's bar. */}
+      {!pinned && (
+        <header className="shrink-0 px-4 sm:px-6 pt-5 pb-3 flex flex-col gap-3">
+          <div className="flex items-baseline gap-3 min-w-0">
+            <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
+            <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
+            {tabHref && (
+              <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This project's line: its map, sources, stations and versions" data-line-tab-link>
+                Line tab
+              </Link>
+            )}
+          </div>
+          <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => line.select(k)} />
+          {onMap && !allEmpty && <Throughput t={flow.throughput} lead={<Headline parts={headlineLead(lineHeadline(flow, now))} onStation={onStation} />} />}
+        </header>
+      )}
 
       {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => line.select(k)} />
         : !onMap ? <Onboarding projects={projects} />
         : (
-          <div className="flex-1 min-h-0 border-t border-sol-border/30" data-line-flow>
+          <div className={cn("flex-1 min-h-0", !pinned && "border-t border-sol-border/30")} data-line-flow>
             <LineMapView
               projectId={line.key === NO_PROJECT ? null : line.key}
               rows={scoped}
               flow={flow}
               now={now}
               note={allEmpty ? <FirstSignal /> : undefined}
+              lineParam={pinned ? null : line.param}
+              barEnd={pinned ? (
+                <Link href={line.href} className="shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project's line on one floor" data-line-all-link>All lines</Link>
+              ) : undefined}
             />
           </div>
         )}
