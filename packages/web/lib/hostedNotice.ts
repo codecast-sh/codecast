@@ -2,7 +2,7 @@
 // engine's typed notice (NOTICE_KINDS in contracts/assistant), its tone, and
 // how an inbox row names a conversation that ended on one. A leaf, so the
 // pure row view and the transcript read one rule.
-import { APPROVAL_ANSWERS, noticeKindOf, type NoticeKind } from "@codecast/shared/contracts/assistant";
+import { APPROVAL_ANSWERS, NOTICE_KINDS, noticeKindOf, type NoticeKind } from "@codecast/shared/contracts/assistant";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 
 /** The notice kind of a transcript row, or null for any other row. A notice
@@ -28,23 +28,35 @@ export function lastNoticeKind(messages: readonly { role?: string; subtype?: str
 
 type NoticeRow = { role?: string; subtype?: string | null; message_uuid?: string | null; content?: string | null };
 
+/** A hosted conversation row as the stop rule reads it: its agent, and the
+ *  stop the engine stamped on it (conversations.hosted_stop). */
+type StopRow = { agent_type?: string | null; hosted_stop?: string | null };
+
 /** The stop a hosted conversation ended on, or null: for any other agent, or
- *  a transcript that ends on anything else. The inbox files such a row under
- *  "Couldn't finish" rather than the person's turn, and keeps it out of the
- *  needs-input count: the assistant failed them, they owe no reply. */
-export function hostedStopOf(agentType: string | null | undefined, messages: readonly NoticeRow[] | undefined): NoticeKind | null {
-  return isHostedAgentType(agentType) ? lastNoticeKind(messages) : null;
+ *  one whose last turn ended on anything else. The row's own stamp
+ *  (conversations.hosted_stop, written as the turn stops and cleared when the
+ *  next starts) decides, so the answer holds whether or not the transcript is
+ *  loaded; a row from before the stamp falls back to the transcript. The
+ *  inbox files such a row under "Couldn't finish" rather than the person's
+ *  turn, and keeps it out of the needs-input count: the assistant failed
+ *  them, they owe no reply. */
+export function hostedStopOf(row: StopRow | undefined, messages: readonly NoticeRow[] | undefined): NoticeKind | null {
+  if (!row || !isHostedAgentType(row.agent_type)) return null;
+  if (row.hosted_stop !== undefined) {
+    return (NOTICE_KINDS as readonly string[]).includes(row.hosted_stop ?? "") ? (row.hosted_stop as NoticeKind) : null;
+  }
+  return lastNoticeKind(messages);
 }
 
 /** `rows` split into the person's real turns and the hosted conversations
  *  that ended on a stop. One rule for the inbox section and the badge. */
-export function splitHostedStops<T extends { _id: string; agent_type?: string }>(
+export function splitHostedStops<T extends { _id: string } & StopRow>(
   rows: readonly T[],
   messagesOf: (id: string) => readonly NoticeRow[] | undefined,
 ): { asks: T[]; stopped: T[] } {
   const asks: T[] = [];
   const stopped: T[] = [];
-  for (const row of rows) (hostedStopOf(row.agent_type, messagesOf(row._id)) ? stopped : asks).push(row);
+  for (const row of rows) (hostedStopOf(row, messagesOf(row._id)) ? stopped : asks).push(row);
   return { asks, stopped };
 }
 
@@ -52,12 +64,12 @@ export function splitHostedStops<T extends { _id: string; agent_type?: string }>
  *  that splits them re-renders when a stop lands or clears, and not on every
  *  streamed message. */
 export function hostedStopsSig(
-  sessions: Record<string, { agent_type?: string }>,
+  sessions: Record<string, StopRow>,
   messages: Record<string, readonly NoticeRow[] | undefined>,
 ): string {
   let sig = "";
   for (const id in sessions) {
-    const kind = hostedStopOf(sessions[id]?.agent_type, messages[id]);
+    const kind = hostedStopOf(sessions[id], messages[id]);
     if (kind) sig += `${id}:${kind},`;
   }
   return sig;

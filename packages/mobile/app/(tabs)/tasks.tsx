@@ -33,7 +33,7 @@ import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskAc
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
 import { showActionSheet } from "@/lib/actionSheet";
-import { useModeWords } from "@codecast/web/lib/surfaces";
+import { useModeWords, useSurfaceMode } from "@codecast/web/lib/surfaces";
 import { RoutineList } from "@/components/hosted/Routines";
 
 const ICON_EMOJI: Record<string, string> = {
@@ -43,7 +43,11 @@ const ICON_EMOJI: Record<string, string> = {
 };
 
 type Segment = "tasks" | "plans" | "docs" | "routines";
-const SEGMENTS: Segment[] = ["tasks", "plans", "docs", "routines"];
+/** Each segment is the phone's view of a web page, so the surface registry's
+ *  page rule (lib/surfaceRules PAGE_SURFACES) decides which ones a mode shows:
+ *  hosted mode has no Plans, as the web has no /plans there. */
+const SEGMENT_PAGES: Record<Segment, string> = { tasks: "/tasks", plans: "/plans", docs: "/docs", routines: "/triggers" };
+const SEGMENTS = Object.keys(SEGMENT_PAGES) as Segment[];
 type SourceFilter = "" | "human" | "bot";
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type GroupBy = "status" | "assignee" | "priority" | "plan";
@@ -188,8 +192,13 @@ export default function TasksScreen() {
   // mounted. Tapping a segment afterwards is the person's own choice, and
   // drops the link's name from the address so the same link works again.
   const linked = useLocalSearchParams<{ segment?: string }>().segment;
-  const linkedSegment = SEGMENTS.find((s) => s === linked) ?? null;
-  const [segment, setSegment] = useState<Segment>(linkedSegment ?? "tasks");
+  const mode = useSurfaceMode();
+  const segments = useMemo(() => SEGMENTS.filter((s) => mode.showsPage(SEGMENT_PAGES[s])), [mode]);
+  const linkedSegment = segments.find((s) => s === linked) ?? null;
+  const [chosen, setSegment] = useState<Segment>(linkedSegment ?? "tasks");
+  // A segment the mode hides (a switch to assistant mode while on Plans)
+  // falls back to Tasks rather than showing a page the mode has no door to.
+  const segment = segments.includes(chosen) ? chosen : "tasks";
   const [appliedLink, setAppliedLink] = useState(linkedSegment);
   if (linkedSegment !== appliedLink) {
     setAppliedLink(linkedSegment);
@@ -672,7 +681,7 @@ export default function TasksScreen() {
 
       <RNView style={styles.segmentBar}>
         <RNView style={styles.segmentContainer}>
-          {SEGMENTS.map((s) => (
+          {segments.map((s) => (
             <TouchableOpacity
               key={s}
               style={[styles.segmentBtn, segment === s && styles.segmentBtnActive]}

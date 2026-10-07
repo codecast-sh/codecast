@@ -1,3 +1,4 @@
+import { modePageLabel } from "./surfaceRules";
 /**
  * The trail, derived from the route.
  *
@@ -105,12 +106,14 @@ function entityCrumb(
  * returning it keeps this function's job "describe the location", and leaves the
  * display rule to the display.
  */
-export function buildBreadcrumbs(pathname: string, lookups: BreadcrumbLookups = {}): CrumbSpec[] {
+export function buildBreadcrumbs(pathname: string, lookups: BreadcrumbLookups = {}, hosted = false): CrumbSpec[] {
   const parts = (pathname || "").split("/").filter(Boolean);
   if (parts.length === 0) return [];
 
   const [head, ...rest] = parts;
-  const sectionLabel = SECTION_LABELS[head];
+  // A section named by mode (Docs are Notes in hosted mode) reads the one
+  // place pages are named by mode, as the rail and the tabs do.
+  const sectionLabel = SECTION_LABELS[head] && (modePageLabel(`/${head}`, hosted) ?? SECTION_LABELS[head]);
   if (!sectionLabel) return [];
 
   // The feed lives at /team/activity but reads as its own section, not as a

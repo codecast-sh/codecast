@@ -39,6 +39,13 @@ html body :where(.cc-btn-cyan) {
   --btn-tint: #2aa198;
   --btn-ink: #002b36;
 }
+/* Hosted mode's primary action is ink on paper, the family's one button,
+   so settings' Save never paints the developer teal. */
+html.hosted-mode body :where(.cc-btn-cyan) {
+  --btn-tint: var(--pd-ink);
+  --btn-ink: var(--pd-bg);
+  color: var(--pd-bg);
+}
 
 html body :where(.cc-btn-fill) {
   --btn-fill: var(--btn-tint);

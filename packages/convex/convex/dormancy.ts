@@ -11,7 +11,7 @@
 // something warrants input" case, so they surface the home instead of parking
 // it. Standing loops (recurring / event) and `once` follow-ups park with
 // different strength — see ArmedTriggerHomes — so the loader keeps them apart.
-import { isLoopFresh, isMachineDeliveredMessage } from "@codecast/shared/contracts";
+import { isHostedAgentType, isLoopFresh, isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
@@ -85,11 +85,18 @@ export function isMachineDeliveredPreview(preview: string | null | undefined): b
 // message whatever the agent said afterwards — the same field the web reads
 // as last_user_message.
 export function isArmedTriggerHome(
-  conv: { _id: { toString(): string }; last_message_preview?: string | null },
+  conv: { _id: { toString(): string }; last_message_preview?: string | null; agent_type?: string | null },
   armedHomes: Set<string>,
 ): boolean {
   if (!armedHomes.has(conv._id.toString())) return false;
-  return lastTurnAllowsPark(conv);
+  return triggerMayPark(conv) && lastTurnAllowsPark(conv);
+}
+
+// A hosted conversation's routine delivers each run's answer into it, so it
+// never parks there: the answer files like any turn. The same rule as the
+// shared projection's (inboxProjection placeProjectableRow, v20).
+function triggerMayPark(conv: { agent_type?: string | null }): boolean {
+  return !isHostedAgentType(conv.agent_type);
 }
 
 // The machine-delivered-last-turn half of isArmedTriggerHome, shared with the
@@ -123,11 +130,11 @@ export function armedTriggerKindFor(tasks: InjectTriggerTask[]): ArmedTriggerKin
 // isArmedTriggerHome over the row's own denormalized field instead of a loaded
 // set — same last-turn rule, no reads.
 export function isArmedTriggerHomeOfKind(
-  conv: { armed_trigger_kind?: string | null; last_message_preview?: string | null },
+  conv: { armed_trigger_kind?: string | null; last_message_preview?: string | null; agent_type?: string | null },
   kind: Exclude<ArmedTriggerKind, "none">,
 ): boolean {
   if ((conv.armed_trigger_kind ?? "none") !== kind) return false;
-  return lastTurnAllowsPark(conv);
+  return triggerMayPark(conv) && lastTurnAllowsPark(conv);
 }
 
 // Per-query memo over loadArmedTriggerHomes for callers that classify rows

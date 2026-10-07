@@ -15,6 +15,7 @@ import {
 } from "@codecast/shared/contracts/assistant";
 import type { RuleDecision, ToolRisk, TurnReason } from "@codecast/shared/contracts/assistant";
 import type { GateVerdict, StopReason, ToolRisk as HarnessToolRisk } from "@platform/agent";
+import { convexTables } from "@platform/tidemark/stores/convex";
 
 // The contract's lists restate unions the harness (@platform/agent) defines,
 // so clients can read them without depending on the harness. This fails to
@@ -64,6 +65,10 @@ export const assistantTables = {
     input_tokens: v.optional(v.number()),
     output_tokens: v.optional(v.number()),
     started_at: v.optional(v.number()),
+    // When a run took the turn (turns.ts begin). A turn has two possible
+    // runners, the scheduled run and the person's own kick (entry.kick);
+    // whichever begins first sets this and the other stands down.
+    run_claimed_at: v.optional(v.number()),
     ended_at: v.optional(v.number()),
     error: v.optional(v.string()),
     // The turn this one resumes (after an approval was answered).
@@ -162,4 +167,37 @@ export const assistantTables = {
     .index("by_user_at", ["user_id", "at"])
     .index("by_turn", ["turn_id"])
     .index("by_external_id", ["external_id"]),
+
+  // A long conversation's history past the newest rows a turn replays
+  // (assistant/longHistory.ts): tidemark's log, leaves and merged blocks, one
+  // scope per conversation, one partition per person.
+  ...convexTables("tidemark_"),
+
+  // How far a conversation's messages are logged into tidemark: the newest
+  // message logged, by (timestamp, _creationTime), the index order. `outside`
+  // is set once a logged row called a tool that reads outside content, so the
+  // taint check still sees it after it left the replayed window.
+  assistant_history: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    logged_ts: v.number(),
+    logged_ct: v.number(),
+    logged: v.number(),
+    outside: v.boolean(),
+    // When a summary pass last checked that the conversation still exists
+    // (longHistory.ts forgetDeleted): the oldest checks go first.
+    checked_at: v.optional(v.number()),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_checked", ["checked_at"]),
+
+  // What history summaries spent, per UTC day, for everyone (`who` "all")
+  // and per person (`who` a user id): the caps every pass reads.
+  assistant_history_spend: defineTable({
+    day: v.string(),
+    who: v.string(),
+    usd: v.number(),
+    calls: v.number(),
+    failures: v.number(),
+  }).index("by_day_who", ["day", "who"]),
 };

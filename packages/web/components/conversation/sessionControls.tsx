@@ -1,5 +1,6 @@
 import { LogoIcon } from "../Logo";
 import { AssistantIntro } from "../AssistantIntro";
+import { LANE_COPY } from "../simple/lane";
 import { useReviewComposer } from "../reviewContext";
 import { useRef, useState, useMemo, useCallback, Fragment } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -1122,7 +1123,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
  *  both bridge it) takes a starter's request. */
 function HostedComposeIntro() {
   const populate = useReviewComposer()?.populate;
-  return <AssistantIntro onStarter={populate && ((text) => populate(text, { append: true }))} />;
+  return <AssistantIntro title={LANE_COPY.intro.sheetTitle} onStarter={populate && ((text) => populate(text, { append: true }))} />;
 }
 
 export function NewSessionView({ conversation, agentControls }: { conversation: ConversationData; agentControls?: NewSessionAgentControls }) {

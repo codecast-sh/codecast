@@ -323,6 +323,17 @@ A hosted conversation is an ordinary `conversations` row with
 1. **Something wakes the conversation**: the person sends a message, a
    routine (trigger) fires into it, or an approval is answered. Each path
    calls one function, `assistant/entry.ts: wake(conversationId, cause)`.
+   `wake` is scheduled, so it waits behind Convex's scheduler, which on prod
+   ran 1 to 4 minutes late (2026-10-07). So the person's client, once a write
+   that gives a hosted conversation input lands (`lib/hostedKick.ts`, wrapped
+   around the store's dispatch: a send, a hosted create, a release, a retry),
+   calls the public action `entry.kick`, which takes the same lease and runs
+   the turn in that action (`turns.ts runTurn`), then the conversation's next
+   turn when input arrived meanwhile, while time allows (`KICK_CHAIN_MS`).
+   The scheduled wake and run stay the fallback: `begin` claims a turn
+   (`run_claimed_at`), so whichever runner begins first runs it and the other
+   stands down. Measured on prod: first token 1.8 to 2.6 s after a send with
+   the kick, 43 to 220 s without.
 2. **Lease.** A mutation inserts a `running` turn only if none is running for
    the conversation; otherwise it leaves the new input queued and the
    running turn picks it up before it stops.
@@ -555,7 +566,13 @@ names below are its `src/`. Codecast keeps storage and wiring:
   `list_tasks`, `create_task`, `update_task`, `read_doc`, `write_doc` (create
   or append), `remember`, `recall`, `list_routines`, `cancel_routine` are
   `read`. `replace_doc` is `write`, since docs keep no old versions, and
-  `schedule_routine` is `write`, since it spends usage later unattended. They
+  `schedule_routine` is `write`, since it spends usage later unattended. A
+  routine on days of the week takes `days` and a clock `time` (and
+  `starts_on` only for a later start), never a date: the server finds the
+  first day in the person's zone (`@platform/assistant` `firstCadenceRun`,
+  which the approval card reads too). Asked for a date, Haiku counted
+  "every Saturday" a day late in every sample (0/32; 48/48 with this shape,
+  2026-10-07). `first_run` is for once and for repeats within a day. They
   run the web's own write paths (`tasks.createTaskAs` / `updateTaskAs`,
   `docs.createDocAs` / `updateDocAs`, `agentTasks.insertTask`) and touch only
   rows keyed to the person's own workspace (`user:<id>`), never a team's.
@@ -803,21 +820,26 @@ How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
   composer, sent through `startHostedConversation`, with no machine, folder,
   model or context rows; where only the assistant can answer, the agent row
   is not offered. An empty inbox in hosted mode shows the same intro
-  (`empty.installCli`), and project chips follow `gitChips`.
+  (`empty.installCli`), with its starters and the new conversation button as
+  the only ways in, and project chips follow `gitChips`.
 - **A hosted conversation** is the session screen (`app/session/[id].tsx
   SessionScreen`), the same one every conversation opens in, so it keeps
   rename, share, search, the message navigator, deep links to a message
   (`?message=`) and focus after a create (`?focus=1`). The screen reads the
   row's agent (`isHostedAgentType`) and drops what a conversation with no
-  machine has no use for: the model, device and context chips, Restart and
-  Copy Resume Command, slash command pills, image attach and stop. Each
+  machine has no use for: the model, device and context chips, slash command
+  pills, image attach and stop. What a mode hides on any conversation comes
+  from the registry, as on the web: `conversation.internals` (Restart, Copy
+  Resume Command, Expand/Collapse Messages, the token chip) and `diff` (View
+  Diff), so a local session opened in hosted mode hides them too. Each
   tool call reads as one plain line in `@platform/assistant/steps` wording
   with a mark for how it came out (`components/hosted/Steps.tsx HostedStep`,
   the phone's counterpart of the web's `lib/hostedReceipt.ts`); nothing
   opens to the raw call. The approvals it waits on sit at the foot of the
   transcript with the actual draft (`components/hosted/ApprovalCard.tsx`,
-  the one hosted part of the screen; the decision screen's `AnswerControls`
-  for a pick-several, ranking or form), and the reply box says "Reply", or
+  the one hosted part of the screen; a long draft folds through the shared
+  `CollapsibleBody`; the decision screen's `AnswerControls` for a
+  pick-several, ranking or form), and the reply box says "Reply", or
   "Or tell me what to change" while one is open. "On it" shows in the
   composer while the turn runs (`useLane.ts useConversationWorking`, over
   `lane.ts conversationState`: a turn's own "done" ends it at once, without
@@ -858,8 +880,19 @@ How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
   every later write parked. The session screen no longer does.
 - **Tasks** gains a routines segment, named by mode ("Triggers" or
   "Routines"), listing every armed trigger in the shared roster order
-  (`triggerTasks.ts compareTriggerRoster`) with pause, open and delete
-  (`components/hosted/Routines.tsx`).
+  (`triggerTasks.ts compareTriggerRoster`) with pause, open and cancel
+  (`components/hosted/Routines.tsx`). An armed trigger is cancelled, never
+  deleted: `triggerTasks.ts triggerEndVerb` is the one rule for the phone's
+  list, the inbox dock and the web triggers page, and `triggerEndWords` names
+  it in the mode's noun. A row says its schedule in the web routine row's
+  words (`lane.ts routineSchedule` over `hostedSchedule.ts
+  describeHostedCadence` and `hostedNextWords`), reading the routine's
+  wall-clock `cadence`: "Weekdays at 8:00 AM. Tomorrow". An empty list in hosted mode shows the web's routine
+  examples (`hostedSchedule.ts routineExamples`); each opens the inbox's new
+  conversation sheet with the ask typed in (`/(tabs)/inbox?ask=`). Each
+  segment is the phone's view of a web page (`SEGMENT_PAGES`), so the
+  registry's page rule (`SurfaceMode.showsPage`) decides which show: hosted
+  mode has no Plans.
 - **Settings** has an Assistant group: Plan (`components/hosted/PlanPage.tsx`,
   the web plan page's sections over `usePlanFigures`, `useBilling`, checkout
   and portal in the browser) and Mail and calendar
@@ -875,7 +908,9 @@ How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
   (`lib/laneRedirect.ts`) and on to the phone's screen (`lib/linkRoutes.ts
   PAGE_ROUTES`): home to the inbox, approvals to `/decisions`, routines to
   the Tasks tab's routines segment (`?segment=routines`, which the tab
-  reads), plan and connections to their settings pages.
+  reads), plan and connections to their settings pages. The web's short
+  page names (`/approvals`, `/plan`, `/mail`, `/integrations`, `/routines`)
+  resolve through the same alias table (`pageAliasTarget`).
 
 How onboarding is wired (`packages/web/app/welcome/`):
 
@@ -984,6 +1019,174 @@ How onboarding is wired (`packages/web/app/welcome/`):
   in (`EmailStep`'s reset mode). The flow is `useResetRequest` and
   `useResetConfirm` in `hooks/useEmailAuth.ts`, which `/forgot-password` and
   `/reset-password` run too.
+
+### Polish round 6 (2026-10-06)
+
+- **Titles.** A hosted conversation is named from its first full answer:
+  `assistant/turns.ts finish` calls `titleGeneration.ts titleAfterHostedAnswer`
+  while no title pass has written a subtitle. The message-2 milestone fires
+  while the reply is still streaming, and its 5-minute floor used to leave the
+  ask itself as the title for good.
+- **Approval card.** What Yes does sits under the plan, above both buttons.
+  `answerDecision` returns its dispatch, so a refused answer re-enables the card
+  with `APPROVAL_REFUSED`. The plan box fades at its cut while more is below
+  (`useOverflows`, `clipFade`).
+- **Inbox row.** A wait for an OK says "Needs your OK" once, after the title.
+
+### Polish round 7 (2026-10-07)
+
+- **Approvals settle.** A hosted conversation asks only through its decision
+  row: `lib/decisionQueue.ts sessionHasOpenQuestion` and the server's
+  `conversations.ts ownAsk` leave hosted rows out, since their
+  permission_blocked status lags an answer. The queue is `buildDecisionQueue`
+  (`hooks/useDecisionQueue.ts`), tested in
+  `store/__tests__/hostedApprovalSettles.test.ts`. The "Getting the card
+  ready" line shows only while the transcript ends on the parked call.
+- **Drafts.** A new conversation with nothing sent is a draft
+  (`inboxStore.ts isUnsentConversation`) in its own quiet line under Done,
+  never under Working on it. Put away reads Archived.
+- **Routines.** `schedule_routine` takes a `summary` written to the person;
+  the card shows it in place of the instruction (`@platform/assistant`
+  `approvalContext`) and it is the routine's `display_summary`. The first run
+  reads from today everywhere (`relativeDay`, `firstRunWords`: "tomorrow,
+  Thursday, at 8:00 AM"); the tool result carries it and `ROUTINE_SHOWS_UP`
+  (where it arrives), and the yes on the card says where it arrives.
+- **Sendable text.** The prompt puts text to send in the reply as a quote;
+  `lib/sendableText.ts` finds it and a hosted answer offers Copy under it.
+  A note's header leads with a labelled Copy in hosted mode.
+- **Mail search.** A query with no letter or digit is refused, and a search
+  that finds nothing names the mailboxes it looked in and says it is not an
+  empty mailbox (`mail.ts noMatch`). Receipts drop wildcard tokens.
+- **Gates by mode, not style.** Layouts and the palette's docked composer and
+  Layouts group (`actions.fleet`), Workspaces (`nav.projects`), the running
+  agents pill (`machineChips`), a conversation's message count and duration
+  (`conversation.internals`), Agent features and Capabilities
+  (`pages.devTools`) and the Chrome extension block (now `developer`).
+
+### Polish round 8 (2026-10-07)
+
+- **Reach, not promise.** Integrations lists in hosted mode only services
+  whose descriptor says `assistantReaches` (`appDescriptors.ts`); today that
+  is none, so the page is the Whisk row. `developerOnly` and `hostedTagline`
+  are gone.
+- **Wallet.** Send is held only when the allowance and the extra credit are
+  both spent (`lane.ts meterOut`, the `full` of `usePlanMeter`); a spent
+  allowance with credit reads "Allowance used, on extra credit". With top-ups
+  closed the held line offers "See your plan" (`TopUpLink`).
+  `TYPICAL_REQUEST_USD` is $0.005, the rounded-up mean of 76 charged prod
+  turns, so Free says about 400 everyday requests.
+- **Approvals.** After an answer the card holds its place as one settled line
+  read from the store's answered decision row (`HostedApprovalSettled`,
+  `ConversationView parkedCallAt`). A routine's question names it without a
+  colon (`set up the routine "X"`), its summary is the card's own paragraph,
+  and the yes says when it starts from today, that it runs until paused on
+  Routines, and where it arrives (`turns.ts approveWords` with the person's
+  zone).
+- **Steps in flight** read in the present progressive (`@platform/assistant
+  stepOngoing`: "Searching the web for ..."); "Waiting for your go-ahead to"
+  only while the conversation is parked (`HostedAskingContext` into the
+  receipt). The status line says "Writing..." once reply text streams.
+- **Lists.** To-dos follow the Assistant scope (`assistantScope.ts
+  isAssistantTask`: no project or plan, made by hand or in an assistant
+  conversation; `create_task` now stamps `created_from_conversation`) and on
+  Personal start ungrouped, newest first (`hostedPersonalView`). Saved views
+  that arrange by person or agents are hidden in hosted mode and start
+  collapsed (`savedViews.ts fitsHostedMode`). Routines say "Next: today at
+  8:00 AM", hide a row's second line when it has no summary, and show search
+  and kind filters only from six routines. Notes drop the sync badge and call
+  hidden agent docs "notes from coding agents".
+- **Rail.** Unread is a neutral dot and a 600 title, read titles muted; the
+  accent stays for rows waiting on the person. Drafts drop the dot and chip,
+  the working dot is ink with a soft pulse, Done shows six then "Show N
+  more", and Archived lines up with Done. The scope switch shows only when
+  Everything adds rows. Hosted rows take their name from the conversation
+  row the header reads.
+- **Chrome.** `transcriptNav` hides the minimap, jump to top and progress
+  rail; the empty palette leads with the Create group; the compose sheet
+  offers chips (a routine among them), a plain close when docking is off,
+  and no Escape hint (`escapeCloses`); the conversation hint reads "Esc for
+  shortcuts"; an answered conversation's composer says "Reply, or ask a
+  follow-up". The phone's + is a ghost button. List selection and inline
+  links use the family accent and ink (`data-list-row-state`,
+  `data-cc-inline-link`).
+- **Funnel.** `/pricing` through the assistant's door sets its hero and
+  assistant section in the family faces and takes the mail promise from
+  `assistantPromise`; the home page scopes "never resells tokens" to coding
+  agents.
+
+### Polish round 9 (2026-10-07)
+
+- **One name.** `conversationTitle.ts ownTitle` prefers `title` over
+  `short_title`, so the rail, header, tabs and palette name a hosted
+  conversation the same way whichever store home fed the row. Hosted titles
+  come from their own prompt (`titleGeneration.ts buildHostedTitlePrompt`,
+  chosen by `agent_type` in `selectTitleInput`): everyday words, no
+  "session", "task" or "setup". Measured on 8 hosted freezes (tag
+  `hosted-title`): 48/48 pass, mean 0.95 against 0.73 for the developer
+  prompt (separated, p=0.004 for the first variant).
+- **Approvals.** A hosted conversation's card renders in the transcript's
+  tail item (`ConversationView hostedTailCard`), not docked above the
+  composer; while it shows, the receipt leaves out the step waiting on it
+  (`HostedCardShownContext`, `hostedReceipt cardShown`), and the plan drops a
+  "When" line the summary already says (`HostedApprovalCard planForCard`).
+  After a no the composer says "Tell me what to change"
+  (`decisionQueue.ts hostedDeclinedSince`); a lagging permission_blocked
+  status shows "Thinking…" once the card is answered. Approvals' empty state
+  says the answer ("You said no: set up the routine ...",
+  `answerSaid`, `questionAsStatement`). Yes on a routine is worded once,
+  `routineYesWords` (shared contracts), for the engine and the marketing still.
+- **Lists.** A hosted list header (`GenericListView`) shows its views,
+  search, filter and display only from six items, or while one is in use;
+  To-dos add through the quick-add row, Notes through "New note"
+  (`createLabel`). Hosted Notes leave role docs out (`isOnNotesShelf`) and
+  drop the coding-agents footer. `fitsHostedMode` also refuses sort by
+  person, any `source`, and workflow statuses.
+- **Search.** `/search` and the top bar follow the Assistant scope; the page
+  hides operators and team segments behind `search.internals`. Snippets drop
+  machine wrappers (`searchHighlight.tsx stripSnippetMarkup`). The palette
+  scopes favorites, leaves drafts and visited rows out of recents, never
+  folds same-name conversations, and gives Cmd+Enter one owner row.
+- **Rail.** A just-sent stub is Working on it from the first frame
+  (`pendingSendIdsOf`); unread titles are 600 in ink and read ones muted at
+  the span; the needs-input section is "Your move".
+- **Funnel.** `HostedWordmark` is the one hosted wordmark (rail, /welcome,
+  the assistant-door nav `MarketingNav door="assistant"`). Pricing through
+  that door sits on the family paper and says each thing once.
+
+### Polish round 10 (2026-10-07)
+
+- **Routines deliver.** A hosted routine's frame is its instruction alone
+  (`triggerLifecycle.ts triggerRunFrame`, `hosted_home`), drawn in the
+  transcript as one line, "Routine · Morning to-do review · 8:01 AM"
+  (`triggerRunBlock.tsx HostedRoutineRunLine`). A routine never parks its
+  hosted conversation: each run's answer files as done or needs_input
+  (projection v20, `inboxProjection.ts` and `dormancy.ts triggerMayPark`),
+  and hosted mode has no "Scheduled for later" (`hostedStatusSections`).
+  Next runs read one way everywhere, "Next: tomorrow at 8:00 AM"
+  (`hostedSchedule.ts plainNextRun`, the rail footer through
+  `firstRunWords`); stopped routines read "Stopped · Never ran" or
+  "Finished Oct 3" (`plainEndedWords`), and History drops the success bar.
+- **Where it arrives.** `ROUTINE_SHOWS_UP` promises only the inbox; the card
+  says when this device's notifications are off and offers to turn them on
+  (`RoutineNotifyLine`).
+- **One rule for to-dos.** `isAssistantTask` lives in `@codecast/shared/tasks`;
+  `list_tasks` reads it, so the assistant and the To-dos page agree.
+- **Search finds your own work.** The palette and /search match the store's
+  tasks and docs over the mention index (`universalSearch.ts searchIndexOf`,
+  `matchRoutines`); `webMentionList` fills personal rows first. /search shows
+  To-dos, Notes and Routines groups in hosted mode (`search/ObjectMatches`).
+- **Calmer waits and words.** The budget line offers only what Plan can do
+  (`billing.ts billingStatus`) and a routine firing while the allowance is out
+  repeats it once. A decision answer is never the sticky prompt. Opening a
+  hosted conversation shows a transcript skeleton (`TranscriptSkeleton`). An
+  auth blip returns to the page it left (`lib/authReturn.ts`), and /welcome
+  sends someone with conversations to their inbox.
+- **Rail and receipts.** One step that made one thing is one line with a live
+  link and state (`HostedMadeLine`); same-name rows get a muted day or time
+  (`sameNameSuffix.ts`); "Needs your OK" is a dot and "OK?". Pages is a
+  developer surface (`nav.pages`). The selected nav row is a filled pill,
+  group labels are tracked mono, and send is one ink disc in the app and on
+  /welcome.
 
 ## Working in this tree
 

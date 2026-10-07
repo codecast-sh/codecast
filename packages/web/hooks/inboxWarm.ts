@@ -2,6 +2,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { shareTokenArg } from "../lib/shareTokenScope";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 
 // Background warming of inbox conversations so opening one is instant.
 //
@@ -54,6 +55,8 @@ export type WarmRow = {
   hasMoreAbove: boolean;
   /** Newest cached message timestamp (stored rows > 0). */
   newestTs: number | null;
+  /** Where a delta read starts (see rereadAnchor); defaults to newestTs - 1. */
+  rereadFrom?: number | null;
   /** Last message_count we synced up to, if any. */
   syncedCount: number | undefined;
   inFlight: boolean;
@@ -85,12 +88,49 @@ export function planWarm(rows: WarmRow[]): WarmAction[] {
       return;
     }
     if (row.serverCount <= (row.syncedCount ?? 0) || row.newestTs === null) return;
-    actions.push({ kind: "delta", id: row.id, after: row.newestTs, serverCount: row.serverCount });
+    actions.push({ kind: "delta", id: row.id, after: row.rereadFrom ?? row.newestTs - 1, serverCount: row.serverCount });
   });
   return actions;
 }
 
 type ConvexClient = { query: (fn: any, args: any) => Promise<any> };
+
+/**
+ * Where a forward read of a cached window starts. Usually one ms before the
+ * newest row, so a row cached mid-stream comes back whole. A hosted turn
+ * streams into one row and then adds more after it, so its stale copy can sit
+ * anywhere in the window: a hosted conversation (short by nature) re-reads
+ * its whole cached window, and mergeMessages replaces every changed copy.
+ */
+export function rereadAnchor(msgs: readonly { timestamp: number }[] | undefined, agentType: string | null | undefined): number | null {
+  if (!msgs?.length) return null;
+  const from = isHostedAgentType(agentType) ? msgs[0] : msgs[msgs.length - 1];
+  return from.timestamp - 1;
+}
+
+/**
+ * Every row after `after`, paged forward and merged into the store. The one
+ * forward read the warm delta, the open path's recovery and the hosted heal
+ * share. Returns how many rows arrived, or null when the server refused
+ * (no access yet, auth still loading).
+ */
+export async function readForward(convex: ConvexClient, conversationId: string, after: number, maxPages = 40): Promise<number | null> {
+  let cursor = after;
+  let fetched = 0;
+  for (let i = 0; i < maxPages; i++) {
+    const result = await convex.query(api.conversations.getNewMessages, {
+      conversation_id: conversationId as Id<"conversations">,
+      after_timestamp: cursor,
+    });
+    if (result === null) return fetched > 0 ? fetched : null;
+    if (!result.messages?.length) break;
+    useInboxStore.getState().mergeMessages(conversationId, result.messages, "append", { initialized: true });
+    fetched += result.messages.length;
+    if (!result.has_more || result.last_timestamp == null) break;
+    cursor = result.last_timestamp;
+  }
+  return fetched;
+}
 
 // Module state (not hook refs): the personal sync, the team sync, the
 // recovery polls and the open path all drive the same loop and must share one
@@ -210,16 +250,7 @@ function runCold(convex: ConvexClient, action: Extract<WarmAction, { kind: "cold
 function runDelta(convex: ConvexClient, action: Extract<WarmAction, { kind: "delta" }>) {
   const { id, serverCount } = action;
   inFlight.add(id);
-  const fetchPage = async (after: number): Promise<void> => {
-    const result = await convex.query(api.conversations.getNewMessages, {
-      conversation_id: id as Id<"conversations">,
-      after_timestamp: after,
-    });
-    if (!result?.messages?.length) return;
-    useInboxStore.getState().mergeMessages(id, result.messages, "append", { initialized: true });
-    if (result.has_more && result.last_timestamp != null) await fetchPage(result.last_timestamp);
-  };
-  fetchPage(action.after)
+  readForward(convex, id, action.after)
     .then(() => syncedCount.set(id, serverCount))
     .catch((err: unknown) => { console.warn("[inboxWarm] delta warm failed", { id, err }); })
     .finally(() => inFlight.delete(id));
@@ -248,6 +279,7 @@ export function warmRowsFromState(st: ReturnType<typeof useInboxStore.getState>)
       storedCount,
       hasMoreAbove: st.pagination[id]?.hasMoreAbove ?? false,
       newestTs: storedCount > 0 ? msgs[storedCount - 1].timestamp : null,
+      rereadFrom: rereadAnchor(msgs, st.sessions[id]?.agent_type ?? (session as any).agent_type),
       syncedCount: syncedCount.get(id),
       inFlight: inFlight.has(id),
     });

@@ -4107,17 +4107,15 @@ pre[class*="language-"] {
   box-shadow: none !important;
 }
 
-/* Hosted mode's New conversation on a phone: the bar's one filled control,
-   a disc in the family accent. It needs the same weight as the rule above,
-   which clears every top bar button's fill. */
+/* Hosted mode's New conversation on a phone: the same ghost button as the
+   bell and the gear, in ink with a 36px reach. The accent is kept for what
+   waits on the person (an approval's dot, Yes). */
 @media (max-width: 767px) {
   html.hosted-mode [data-cc-topbar-group] > button[data-cc-compose],
   html.hosted-mode [data-cc-topbar-group] > div > button[data-cc-compose] {
-    width: 32px;
-    height: 32px;
-    border-radius: 9999px;
-    background: var(--pd-accent) !important;
-    color: var(--pd-accent-ink) !important;
+    min-width: 36px;
+    min-height: 36px;
+    color: var(--pd-ink, var(--sol-text)) !important;
   }
 }
 
@@ -4640,7 +4638,7 @@ pre[class*="language-"] {
   line-height: 16px;
 }
 .minimal-style [data-sv-rail] [data-sv-sec] > span {
-  font-size: 10.5px;
+  font-size: var(--t-mark);
   font-weight: 600;
   letter-spacing: 0.08em;
 }
@@ -6575,6 +6573,11 @@ pre[class*="language-"] {
   .page-embed[data-pinning] .page-embed__reveal { opacity: 0; pointer-events: none; }
   .page-embed[data-controls] .page-embed__grip { opacity: 1; }
 }
+/* A shortcut key hinted beside a control (the add row's "c") means nothing
+   on a screen with no keyboard. */
+@media (hover: none) and (pointer: coarse) {
+  [data-key-hint] { display: none !important; }
+}
 @media (prefers-reduced-motion: reduce) {
   .page-embed__edge, .page-embed[data-loaded] .page-embed__stage, .page-embed__bar, .page-embed__reveal, .page-embed__frame { transition: none; }
   .page-embed__shimmer { animation: none; }
@@ -6609,6 +6612,13 @@ pre[class*="language-"] {
 [data-cc-conversation][data-reveal-chrome="host"] .cc-changes-pill,
 [data-cc-conversation][data-reveal-chrome="host"] [data-cc-edge="up"] {
   display: none;
+}
+/* In the org screen's embedded thread (components/org/OrgConversation) the
+   "earlier messages" pill keeps its place at the top of the loaded window
+   instead of pinning: pinned, it sat over the first lines and over a record
+   group's head row and its Approve / Reject / Reply. */
+[data-org-conversation] [data-cc-edge="up"] {
+  position: static;
 }
 [data-cc-conversation][data-reveal-chrome]:not(:has([data-sv-composer]:focus-within)) [data-sv-composer] {
   max-height: 58px;
@@ -7101,6 +7111,12 @@ html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-me
 html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] {
   font-size: 14px;
 }
+/* A proposal card reads in that same face wherever it is mounted (the thread,
+   the open proposals strip, a doc), so one proposal never changes voice
+   between two places on one screen. */
+html.hosted-mode.minimal-style .entity-card[data-entity-card="proposal"] {
+  font-family: var(--pd-font-read);
+}
 
 /* A note reads like the assistant's answers: the reading face at a reading
    size, a title set like a page's rather than a poster's, and lists held
@@ -7134,7 +7150,9 @@ html.hosted-mode.minimal-style [data-sv-convhead] [data-cc-conv-title] {
 
 /* The composer, as /welcome draws it: a raised sheet on a hairline with the
    family's soft shadow, and a round send in ink that takes the accent once
-   there is something to send. */
+   there is something to send. The round form is the icon send only: with a
+   label ("Send and apply 3") the button is the pill its own classes draw,
+   wide enough for its words. */
 html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
   border-color: var(--pd-rule);
   background: var(--pd-bg-raised);
@@ -7143,27 +7161,27 @@ html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:no
 html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div:focus-within {
   border-color: var(--pd-rule-strong);
 }
-html.hosted-mode.minimal-style [data-cc-send] {
+html.hosted-mode.minimal-style [data-cc-send]:not([data-cc-send-label]) {
   width: 40px;
   height: 40px;
   border: 0;
   background: var(--pd-ink);
   color: var(--pd-bg-raised);
-  transition: background-color var(--pd-t-fast), opacity var(--pd-t-fast);
+  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
-html.hosted-mode.minimal-style [data-cc-send]:not(:disabled) {
+/* One send in hosted mode and on /welcome: an ink disc with a paper arrow
+   once there is something to send, the accent only under the pointer or the
+   press. Empty, it is a hairline ring with the arrow in muted ink at full
+   strength, so the target is findable before typing, in light and dark. */
+html.hosted-mode.minimal-style [data-cc-send]:not([data-cc-send-label]):not(:disabled):is(:hover, :active) {
   background: var(--pd-accent);
   color: var(--pd-accent-ink);
 }
-html.hosted-mode.minimal-style [data-cc-send]:disabled {
-  opacity: 0.28;
-}
-/* On dark paper a faded ink disc all but vanishes: an empty send reads as a
-   quiet raised disc with a faint arrow instead. */
-html.hosted-mode.dark.minimal-style [data-cc-send]:disabled {
+html.hosted-mode.minimal-style [data-cc-send]:not([data-cc-send-label]):disabled {
   opacity: 1;
-  background: var(--pd-bg-hover);
-  color: var(--pd-ink-faint);
+  background: transparent;
+  color: var(--pd-ink-muted);
+  box-shadow: inset 0 0 0 1px var(--pd-rule-strong);
 }
 
 /* The conversations panel's section captions read as quiet headings, not a
@@ -7247,6 +7265,48 @@ html.hosted-mode.minimal-style [data-cc-page-count] {
   font-size: 13px;
   color: var(--pd-ink-faint);
 }
+/* The full search page's field and its selected hit take the family accent,
+   not the developer's amber. */
+html.hosted-mode.minimal-style [data-cc-search-field]:focus {
+  border-color: color-mix(in srgb, var(--pd-accent) 45%, transparent);
+  --tw-ring-color: color-mix(in srgb, var(--pd-accent) 30%, transparent);
+}
+html.hosted-mode.minimal-style .group:focus-within [data-cc-search-icon],
+html.hosted-mode.minimal-style [data-cc-search-icon].animate-spin {
+  color: var(--pd-accent);
+}
+html.hosted-mode.minimal-style [data-cc-search-result="selected"] {
+  border-color: color-mix(in srgb, var(--pd-accent) 55%, transparent);
+  --tw-ring-color: color-mix(in srgb, var(--pd-accent) 25%, transparent);
+}
+
+/* Hosted list pages (To-dos, Notes) on the Routines measure: the header and
+   the rows share one centred column instead of running the screen's width
+   with the time at the far edge. The header's rule still spans the pane. */
+html.hosted-mode.minimal-style [data-list-view] .cq-header,
+html.hosted-mode.minimal-style [data-list-view] [data-list-scroll] > * {
+  max-width: 950px;
+  margin-inline: auto;
+}
+/* On a phone the title gets the family's 20px edge, not the toolbar's 8px. */
+@container (max-width: 440px) {
+  html.hosted-mode.minimal-style [data-list-view] .cq-header-pad {
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+  }
+}
+
+/* An empty queue's words sit under the page title, so they read quieter
+   than it: the same reading face, no larger, in muted ink. */
+html.hosted-mode.minimal-style [data-queue-empty-title] {
+  font-family: var(--pd-font-read);
+  font-size: 22px;
+  line-height: 1.25;
+  color: var(--pd-ink-muted);
+}
+html.hosted-mode.minimal-style [data-queue-empty-title] + div {
+  font-size: 14px;
+}
 
 /* A list's group headings (the tasks list's people and statuses) in sentence
    case, with a bare mono count instead of a bracketed one. */
@@ -7294,39 +7354,62 @@ html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count] > * {
   font-size: 11px;
   color: var(--pd-ink-faint) !important;
 }
-html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [href="/questions"]) [data-sv-count] {
+html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [href="/questions"]) [data-sv-count],
+html.hosted-mode.minimal-style [data-sv-nav] [data-sv-new-results] {
   color: var(--pd-accent) !important;
 }
 html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count="mention"] {
   color: var(--pd-danger) !important;
 }
 /* Every row is one box, open or not: inset from the rail's edges, rounded,
-   with its words at the same place, so hovering a row and opening it only
-   change its fill and never its geometry. The open row adds Whisk's thin
-   accent bar on its left edge, drawn inside the box. */
+   with its words at the same place and the same width whether or not it has a
+   chevron, so hovering a row and opening it only change its fill and never its
+   geometry. The open row is a filled pill, as Whisk's nav draws it; the accent
+   bar is kept for the selected row of a list (the inbox rail, To-dos, Notes). */
 html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center) {
+  width: auto;
   margin-inline: 8px;
-  border-radius: 6px;
+  border-radius: 8px;
   border-left-color: transparent;
 }
 html.hosted-mode.minimal-style [data-sv-nav] :is(a, button).border-l-2:not(.justify-center),
 html.hosted-mode.minimal-style [data-sv-nav] div.border-l-2 > [data-nav-row]:not(.justify-center) {
   padding-left: 8px;
 }
-html.hosted-mode.minimal-style [data-sv-nav] .border-l-2.bg-sol-bg-highlight {
-  background: var(--pd-bg-hover);
-  box-shadow: inset 2px 0 0 var(--pd-accent);
+/* Rows at rest read in muted ink, so the open page is the one row in full
+   ink; hover lifts a row to ink on the hover paper. */
+html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center):not(.bg-sol-bg-highlight) {
+  color: var(--pd-ink-muted);
+}
+html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center):not(.bg-sol-bg-highlight):hover {
   color: var(--pd-ink);
-  font-weight: 500;
+  background: var(--pd-bg-hover);
+}
+/* The app's one selected look (the rail's open conversation and a list's
+   open row use it too): a neutral warm fill, as Whisk selects. The accent is
+   kept for what is new or waits on the person, never for what is open. */
+html.hosted-mode { --hosted-selected: #ebe4d8; }
+html.hosted-mode.dark { --hosted-selected: color-mix(in srgb, var(--pd-ink) 8%, var(--pd-bg-raised)); }
+html.hosted-mode.minimal-style [data-sv-nav] .border-l-2.bg-sol-bg-highlight {
+  background: var(--hosted-selected);
+  box-shadow: none;
+  color: var(--pd-ink);
+  font-weight: 550;
+  /* The bar is the only mark, in both themes: the accent border class the
+     developer rail paints with must not outline the box in dark. */
+  border-color: transparent !important;
+  outline: none;
 }
 
-/* A group's label reads as a label, not a row: smaller than the rows, the
-   faint ink, air above and a little below. */
+/* A group's label reads as a label, not a row: the family's small tracked
+   mono capitals (Whisk's LANES, TOPICS) in faint ink, air above and a little
+   below. */
 html.hosted-mode.minimal-style [data-sv-nav] [data-rail-heading] {
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: none;
+  font-family: var(--pd-font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--pd-ink-faint);
   margin-top: 20px;
   margin-bottom: 6px;
@@ -7337,8 +7420,8 @@ html.hosted-mode.minimal-style [data-sv-nav] [data-rail-heading]:first-child { m
 html.hosted-mode.minimal-style [data-cc-rail-wordmark] {
   font-family: var(--pd-font-read);
   font-size: 17px;
-  font-weight: 500;
-  letter-spacing: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--pd-ink);
 }
 
@@ -7367,6 +7450,10 @@ html.hosted-mode.minimal-style [data-cc-sec-count] {
   font-size: 11px;
   font-weight: 400;
   color: var(--pd-ink-faint);
+  /* The caption is tracked wide; a count inherits none of it, or "13" reads
+     as "1 3". */
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The shortcuts sheet's section headings in sentence case, as the palette's. */
@@ -7396,11 +7483,98 @@ html.hosted-mode.minimal-style [data-cc-list-section] > span {
    rust rule on its left edge, and a settled row carries no idle dot, since
    "nothing is happening" needs no mark. */
 html.hosted-mode.minimal-style [data-sv-rail] [data-session-id][data-active="true"] {
-  background: var(--pd-bg-raised) !important;
-  box-shadow: inset 2px 0 0 var(--pd-accent), 0 1px 3px color-mix(in srgb, var(--pd-ink) 10%, transparent) !important;
+  background: var(--hosted-selected) !important;
+  box-shadow: none !important;
   border-left-color: transparent;
 }
 html.hosted-mode.minimal-style [data-sv-idle-dot] { display: none; }
+/* Every row keeps one gutter for the unread dot, drawn or not, so titles share
+   one left edge. Unread is said as Whisk's list says it: the title in full ink
+   at 600 and a dot in the accent, while a read row's title sits in the muted
+   ink. Quick saves are filed as read, so the accent marks only what is new. */
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-titlerow] {
+  position: relative;
+  padding-left: 12px;
+}
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-titlerow] > [aria-label="Unread"] {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--pd-accent);
+}
+html.hosted-mode.minimal-style div:has(> :is([data-inbox-section="needs_input"], [data-inbox-section="questions"])) [data-sv-titlerow] > [aria-label="Unread"],
+html.hosted-mode.minimal-style [data-sv-titlerow]:has([data-sv-asks-ok]) > [aria-label="Unread"] {
+  background: var(--pd-accent);
+}
+html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:not([data-active="true"]) [data-sv-titlerow]:not(:has(> [aria-label="Unread"])) {
+  color: var(--pd-ink-muted);
+}
+/* The title span carries its own colour and weight from the minimal rail
+   rule (400, secondary ink), which beat the card's font-semibold and the
+   muted line above, so read and unread rows painted the same. Said here at
+   the span, the unread and read titles finally differ. */
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-titlerow]:has(> [aria-label="Unread"]) [data-sv-title] > span.truncate {
+  font-weight: 600;
+  color: var(--pd-ink);
+}
+html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:not([data-active="true"]) [data-sv-titlerow]:not(:has(> [aria-label="Unread"])) [data-sv-title] > span.truncate {
+  color: var(--pd-ink-muted);
+}
+/* The rail's extras ("Show N more", "N more in Everything") start on the
+   titles' edge (the row's 22px padding plus the 12px dot gutter), so the rail
+   reads on one left edge rather than three. */
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-show-more] { padding-left: 34px; }
+html.hosted-mode.minimal-style [data-sv-rail] [data-cc-more-everything] { padding-left: 22px; }
+/* A row the assistant is working on shows one dot, the working one. */
+html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:has([data-sv-working-dot]) [data-sv-titlerow] > [aria-label="Unread"] {
+  visibility: hidden;
+}
+/* Drafts say so by their section: no unread dot, no Draft chip per row. */
+html.hosted-mode.minimal-style div:has(> [data-inbox-section="drafts"]) :is([data-sv-titlerow] > [aria-label="Unread"], [data-sv-draft] > span:first-child) {
+  display: none;
+}
+/* The assistant at work moves in quiet ink: a soft pulse, not a green ping. */
+html.hosted-mode.minimal-style [data-sv-working-dot] > span { background: var(--pd-ink-muted); }
+html.hosted-mode.minimal-style [data-sv-working-dot] > .animate-ping {
+  animation: pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  opacity: 0.35;
+}
+
+/* A list's open or focused row (ListRowShell) as Whisk marks its selected
+   row: a rust rule on the left edge over the hover paper, never the
+   developer's cyan, which hosted mode spends on outcomes. Inline links read
+   in ink and underline on hover. */
+/* One language with the rail and the nav, as Whisk keeps it: hover is a
+   plain paper shift, the open row the accent's 12% tint with no bar, and
+   the keyboard cursor raised paper with an inset hairline, drawn only once
+   the keyboard has moved it (lib/keyboardCursor sets data-kbd-cursor), so a
+   touch screen never shows a cursor nobody placed. */
+html.hosted-mode.minimal-style [data-list-row-state] {
+  border-left-color: transparent !important;
+}
+html.hosted-mode.minimal-style [data-list-row-state="active"] {
+  background: var(--hosted-selected) !important;
+}
+html.hosted-mode.minimal-style[data-kbd-cursor] [data-list-row-state="focused"] {
+  background: var(--pd-bg-raised) !important;
+  box-shadow: inset 0 0 0 1px var(--pd-rule-strong);
+}
+html.hosted-mode.minimal-style:not([data-kbd-cursor]) [data-list-row-state="focused"] {
+  background: transparent !important;
+}
+html.hosted-mode.minimal-style:not([data-kbd-cursor]) [data-list-row-state="focused"]:hover {
+  background: var(--pd-bg-hover) !important;
+}
+html.hosted-mode.minimal-style [data-list-row-state="selected"] {
+  background: color-mix(in srgb, var(--hosted-selected) 60%, transparent) !important;
+}
+html.hosted-mode.minimal-style [data-cc-inline-link] {
+  color: var(--pd-ink);
+  text-decoration-color: var(--pd-rule-strong);
+  text-underline-offset: 2px;
+}
+html.hosted-mode.minimal-style [data-cc-inline-link]:hover { text-decoration-line: underline; }
 
 /* A message on its way reads as the ordinary bubble, a little faded, with a
    quiet "Sending" under it, rather than the developer hatch that looked
@@ -7471,11 +7645,11 @@ html.hosted-mode.minimal-style [data-inbox-section="hosted_stopped"] > span::bef
   vertical-align: 1px;
 }
 
-/* A row's time, as Whisk's time column: mono numerals in faint ink, the
-   accent where the row waits on the person. */
+/* A row's time, as Whisk's time column: the interface face with tabular
+   numerals in faint ink, the accent where the row waits on the person. */
 html.hosted-mode.minimal-style [data-sv-time] {
-  font-family: var(--pd-font-mono);
-  font-size: var(--t-mark);
+  font-family: var(--pd-font-ui);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   color: var(--pd-ink-faint);
 }
@@ -7491,6 +7665,11 @@ html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] {
   border-bottom: 0;
   background: var(--sol-bg-alt);
 }
+/* Archived lines up with Done above it: the same caption inset and the same
+   chevron slot (the section headers' 22px and 16px). */
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] > button:first-child { padding-left: 22px; }
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] > button:last-child { padding-right: 16px; }
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] > button:last-child svg { width: 12px; height: 12px; opacity: 0.6; color: var(--pd-ink-muted); }
 html.hosted-mode.minimal-style [data-sv-hidden-head] [data-sv-hidden-label] {
   color: var(--pd-ink-muted);
   font-size: 12px;
@@ -7538,3 +7717,56 @@ html.hosted-mode.minimal-style [data-cc-sheet-title] {
 }
 html.hosted-mode.minimal-style [data-cc-settings-icon] { display: none; }
 
+
+/* The note a hosted turn wrote (HostedNoteCard): a quiet card in the reply's
+   column, hairline on raised paper, its title in the reading face and its
+   opening in muted ink fading out, so the thing asked for is the most
+   visible thing the turn made rather than the least. */
+[data-cc-made-note-card] {
+  border-color: var(--pd-rule);
+  background: var(--pd-bg-raised);
+  transition: border-color 120ms ease;
+}
+[data-cc-made-note]:hover [data-cc-made-note-card] { border-color: var(--pd-rule-strong); }
+[data-cc-made-note-title] {
+  font-family: var(--pd-font-read);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--pd-ink);
+}
+[data-cc-made-note-body] {
+  max-height: 6.4em;
+  font-family: var(--pd-font-ui);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--pd-ink-muted);
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+[data-cc-made-note-body] table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+[data-cc-made-note-body] td {
+  padding: 1px 12px 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+[data-cc-made-note-body] tr[data-head] td { color: var(--pd-ink); font-weight: 500; }
+[data-cc-made-note-open] {
+  font-family: var(--pd-font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--pd-ink);
+}
+[data-cc-made-note-open]::after { content: " \2192"; }
+
+/* The assistant's compose sheet is one surface: raised paper from the mark to
+   the composer, with no second band of page paper under the starters. */
+html.hosted-mode [data-cc-compose-sheet] {
+  background: var(--pd-bg-raised);
+  border-color: var(--pd-rule);
+}
+html.hosted-mode [data-cc-compose-sheet] :is([data-sv-composer], [data-sv-composer] > *, form) {
+  background: transparent;
+}

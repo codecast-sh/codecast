@@ -6,6 +6,11 @@
  * the store knows it, so opening a session reads as its header appearing and
  * the buttons coming alive, not as one bar giving way to another.
  *
+ * In hosted mode the body is a quiet transcript skeleton at the reading
+ * measure, never the logo and progress bar: opening a conversation is the
+ * most frequent wait a hosted person sees, and the splash reads as the app
+ * restarting. The splash stays for a cold boot (BootFallback).
+ *
  * The id may be anything a conversation link carries: the Convex id, the short
  * id, or the CLI's own session id. None of those is a name, so an unknown id
  * leaves a quiet bar in the title slot rather than printing the handle.
@@ -14,6 +19,8 @@ import { AlignJustify, Link2, MoreVertical, Search } from "lucide-react";
 import { useInboxStore, isConvexId, type InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { AppLoader } from "./AppLoader";
+import { useHostedMode } from "../lib/surfaces";
+import { TranscriptSkeleton } from "./conversation/TranscriptSkeleton";
 
 function knownTitle(
   sessions: Record<string, InboxSession>,
@@ -37,6 +44,7 @@ const ACTION_CLASS = "p-1 rounded text-sol-text-dim";
 export function ConversationPlaceholder({ id }: { id?: string }) {
   const rawTitle = useInboxStore((s) => knownTitle(s.sessions, s.conversations, id));
   const title = rawTitle ? cleanTitle(rawTitle) : "";
+  const hosted = useHostedMode();
 
   return (
     <div className="cc-panel h-full">
@@ -60,7 +68,7 @@ export function ConversationPlaceholder({ id }: { id?: string }) {
           </div>
         </div>
       </header>
-      <AppLoader className="min-h-0 flex-1 bg-transparent" size={32} />
+      {hosted ? <TranscriptSkeleton /> : <AppLoader className="min-h-0 flex-1 bg-transparent" size={32} />}
     </div>
   );
 }

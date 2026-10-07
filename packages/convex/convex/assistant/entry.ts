@@ -7,14 +7,19 @@
 // Every producer of input (the composer, `cast send`, a routine firing, an
 // approval answered) goes through enqueuePendingMessage, which schedules
 // `wake` for a hosted conversation. `wake` is the one door into the turn
-// engine.
+// engine. It is scheduled, so it is also only as fast as the scheduler: the
+// person's own client therefore calls `kick` right after a send, which runs
+// the turn at once, and the scheduled wake and run stay as the fallback.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, internalMutation } from "../functions";
+import { action, mutation, internalMutation } from "../functions";
+import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { startHostedConversationFor } from "./start";
 import { wakeCauseValidator } from "../assistantSchema";
-import { leaseTurn } from "./turns";
+import { leaseTurn, leaseExpired, runTurn, stopRunningTurn } from "./turns";
+import { turnsIn } from "./input";
+import { TURN_DEADLINE_MS } from "@codecast/shared/contracts/assistant";
 
 /** Start a hosted conversation for the signed-in person, optionally with its
  *  first message, which is queued like any composer send and so wakes the
@@ -73,5 +78,63 @@ export const wake = internalMutation({
   handler: async (ctx, args): Promise<null> => {
     await leaseTurn(ctx, args.conversation_id);
     return null;
+  },
+});
+
+/** How long a kick keeps carrying on with the conversation's next turn (input
+ *  that came in while one ran): a further turn may take TURN_DEADLINE_MS, and
+ *  the whole action must end inside Convex's ten minute action limit. */
+export const KICK_CHAIN_MS = 10 * 60_000 - TURN_DEADLINE_MS - 30_000;
+
+/** The person's client calls this right after it gives a hosted conversation
+ *  input (a send, a first message, an approval's answer), so the turn starts
+ *  in about a second however far behind the scheduler is. It is the same
+ *  lease as `wake`, then runs the leased turn in this action instead of
+ *  waiting for the scheduled run; whichever of the two begins first claims
+ *  the turn (turns.ts begin) and the other stands down. When the turn ends
+ *  with the next one leased (input arrived meanwhile), it runs that one too,
+ *  while there is time. Nothing to run, or a conversation that is not the
+ *  caller's, is a quiet no-op: the scheduled path stays the fallback. */
+export const kick = action({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<{ ran: number }> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const startedAt = Date.now();
+    let ran = 0;
+    do {
+      const turnId = await ctx.runMutation(internal.assistant.entry.wakeNow, { conversation_id: args.conversation_id, user_id: userId });
+      if (!turnId || !(await runTurn(ctx, turnId))) break;
+      ran++;
+    } while (Date.now() - startedAt < KICK_CHAIN_MS);
+    return { ran };
+  },
+});
+
+/** kick's lease: wakes the conversation as `wake` does and returns its
+ *  running turn when no run has begun it yet, else null. */
+export const wakeNow = internalMutation({
+  args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
+  handler: async (ctx, args): Promise<Id<"assistant_turns"> | null> => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || conversation.user_id !== args.user_id) return null;
+    await leaseTurn(ctx, args.conversation_id);
+    const now = Date.now();
+    const turn = (await turnsIn(ctx, args.conversation_id, "running")).find((t) => t.run_claimed_at === undefined && !leaseExpired(t, now));
+    return turn?._id ?? null;
+  },
+});
+
+/** The person's Stop on a hosted conversation that is working
+ *  (turns.ts stopRunningTurn). Only the conversation's owner may stop it;
+ *  false when nothing was running. */
+export const stop = mutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || conversation.user_id !== userId) return false;
+    return await stopRunningTurn(ctx, args.conversation_id);
   },
 });

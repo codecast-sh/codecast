@@ -10,6 +10,7 @@ import { changeGuideValidator } from "./lib/changeGuideValidator";
 import { followViewValidator } from "./lib/followView";
 import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
+import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
@@ -939,6 +940,12 @@ export default defineSchema({
     // cleared in lockstep with pending_api_error; the web blocked-sessions
     // banner and session rows render "Xm ago" from it.
     pending_api_error_at: v.optional(v.number()),
+    // A hosted assistant conversation whose last turn ended on a stop notice:
+    // the notice's kind (NOTICE_KINDS in contracts/assistant). Written by
+    // assistant/turns.ts tellStopped and cleared when the next turn starts,
+    // so the inbox files a failed turn under "Couldn't finish" from the row
+    // alone, without its transcript loaded.
+    hosted_stop: v.optional(v.string()),
     session_error: v.optional(v.string()),
     active_plan_id: v.optional(v.id("plans")),
     active_task_id: v.optional(v.id("tasks")),
@@ -5042,6 +5049,12 @@ export default defineSchema({
     // the arming after the run returns to the cadence. Absent otherwise:
     // run_at is then the slot.
     cadence_slot_at: v.optional(v.number()),
+    // A hosted routine said as a time of day (assistant/routines.ts
+    // hostedWallCadence): the minutes past local midnight in `zone` and the
+    // weekdays (0 is Sunday) it runs on. When set, each run is found on that
+    // clock (@platform/assistant nextCadenceRun) and interval_ms is only the
+    // nominal spacing the plan check reads. Absent for interval triggers.
+    cadence: v.optional(v.object({ zone: v.string(), minutes: v.number(), weekdays: v.array(v.number()) })),
     event_filter: v.optional(eventFilterValidator),
     // Events fired at this trigger since its last claim, newest last and
     // capped at PENDING_EVENTS_CAP (external-data.md X4). Two firings before a
@@ -5129,6 +5142,11 @@ export default defineSchema({
     // explicit human title.
     display_title: v.optional(v.string()),
     display_summary: v.optional(v.string()),
+    // display_summary is written to the person (a hosted routine's summary
+    // from schedule_routine, or the summarizer's person prompt), not the
+    // developer gist of an agent's instruction. Hosted surfaces show only
+    // such a summary (web triggerTasks.ts routineSummaryForPerson).
+    summary_for_person: v.optional(v.boolean()),
     // Set when this schedule was canceled as a side effect of killing the
     // session it injects into (cancelTasksBoundToConversation) — distinguishes
     // that from a natural completion, so restoring the session can re-arm
@@ -5934,13 +5952,10 @@ export default defineSchema({
     // parks it), what kind of change it needs, how much review it needs, and
     // whether it can be worked as it stands.
     goal_ref: v.optional(v.string()),
-    category: v.optional(v.union(
-      v.literal("code"),
-      v.literal("prompt"),
-      v.literal("ux"),
-      v.literal("infra"),
-      v.literal("data"),
-    )),
+    // Derived from LINE_CATEGORIES, the ground prompt's own list, so the
+    // stored field, the ground validator and the prompt cannot disagree.
+    // `line` is a change to the project's line itself (line-map.md LX6).
+    category: v.optional(v.union(...LINE_CATEGORIES.map((c) => v.literal(c)))),
     risk: v.optional(v.union(v.literal("low"), v.literal("review"), v.literal("plan"))),
     readiness: v.optional(v.union(
       v.literal("ready"),
@@ -6023,8 +6038,12 @@ export default defineSchema({
     observed_at: v.number(),
     created_at: v.number(),
     task_id: v.id("tasks"),
-    // The project the signal was filed into, or its cause's (line-profile.md LP1).
+    // The project of the cause it reached, else the one it was filed into
+    // (line-profile.md LP1).
     project_id: v.optional(v.id("projects")),
+    // Set when the finder filed it for a project other than its cause's: a
+    // fingerprint attaches across the workspace (the-line-end-to-end.md LE4).
+    filed_for_project_id: v.optional(v.id("projects")),
     attach: v.union(v.literal("fingerprint"), v.literal("judge"), v.literal("new"), v.literal("person")),
     // Set when this signal reopened a cause in watch (LE12).
     reopened: v.optional(v.boolean()),
@@ -7404,8 +7423,15 @@ export default defineSchema({
     merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()) })),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)
+    // The machine whose runner drives the run (its device id): where the run
+    // is resumed when that runner dies (cli workflow/runResume.ts).
+    runner_device: v.optional(v.string()),
+    // The last time a person asked for the run to be resumed (the trace's Resume).
+    resume_requested_at: v.optional(v.number()),
   })
     .index("by_share_token", ["share_token"])
+    // A daemon's sweep for its own live runs whose runner is gone.
+    .index("by_runner_device_status", ["runner_device", "status"])
     .index("by_user_id", ["user_id"])
     .index("by_workflow_id", ["workflow_id"])
     .index("by_external_run", ["external_run_id"])

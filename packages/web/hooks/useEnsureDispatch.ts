@@ -1,11 +1,12 @@
 import { useRef } from "react";
 import { useSyncDeliveryReceipts } from "./useSyncDeliveryReceipts";
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useWatchEffect } from "./useWatchEffect";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 import { applyDispatchFailure, makeDispatchBinding, newDispatchAckState } from "../lib/dispatchBinding";
+import { withHostedKick } from "../lib/hostedKick";
 
 // Sync-log ack opt-in latch, shared by every mount for the page session: it
 // flips false the first time the server rejects the ack_positions arg (see
@@ -51,11 +52,18 @@ export function useEnsureDispatch() {
   const dispatchRef = useRef(dispatchMutation);
   const ownerRef = useRef<object>({});
   dispatchRef.current = dispatchMutation;
+  // Runs a hosted turn now instead of when the scheduler gets to it (lib/hostedKick).
+  const kick = useAction(api.assistant.entry.kick);
+  const kickRef = useRef(kick);
+  kickRef.current = kick;
 
   useWatchEffect(() => {
     _setDispatchError(applyDispatchFailure);
     // One binding per mount; it reads the latest mutation through the ref.
-    const dispatch = makeDispatchBinding((args) => dispatchRef.current(args as any), ackState);
+    const dispatch = withHostedKick(
+      makeDispatchBinding((args) => dispatchRef.current(args as any), ackState),
+      (conversationId) => kickRef.current({ conversation_id: conversationId as any }),
+    );
     const bindDispatch = () => {
       _setDispatch(dispatch, { owner: ownerRef.current });
       return true;

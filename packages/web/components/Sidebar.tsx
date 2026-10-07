@@ -1,4 +1,5 @@
 import { SlackLogo } from "./SlackLogo";
+import { HostedWordmark } from "./HostedWordmark";
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature } from "../lib/teamFeatures";
 import Link from "next/link";
@@ -16,9 +17,9 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore, isConvexId, showInboxHome } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
-import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
+import { useNeedsInputCount, useNewResultsCount } from "../hooks/useNeedsInputCount";
 import { useScopedDecisionQueue } from "../hooks/useDecisionQueue";
 import { waitingOnPerson } from "../lib/decisionQueue";
 import { chatUnreadTotals, useChatRail, useChatMembers, supersededChannelId } from "../hooks/useChatSync";
@@ -35,7 +36,7 @@ import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
 import { ModSidebarSections } from "./mods/ModSidebarSections";
-import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
+import { activeViewId, currentViewId, fitsHostedMode, VIEW_ID_KEY } from "../lib/savedViews";
 import { projectDotClass } from "../lib/projectColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { toast } from "sonner";
@@ -50,7 +51,6 @@ import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type S
 import { ShellUsageMeter } from "./plan/UsageMeter";
 import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "./sidebar/SidebarNav";
 import { Surface, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
-import { LogoMark } from "./Logo";
 import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -107,7 +107,18 @@ function getShortPath(projectPath: string): string {
 // in DashboardLayout. Only mounted in the non-narrow rail, so no work when narrow.
 const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
   const needsInputCount = useNeedsInputCount();
-  return <NeedsInputCount n={needsInputCount} />;
+  // Hosted mode shows one number here: finished results not yet read (the
+  // rail's New), in the new-results accent. What waits on the person is
+  // Approvals' number alone, so an open approval is never counted twice.
+  const hosted = useHostedMode();
+  const newResults = useNewResultsCount();
+  if (!hosted) return <NeedsInputCount n={needsInputCount} />;
+  if (newResults <= 0) return null;
+  return (
+    <span data-sv-new-results data-sv-count="" title={`${newResults} new result${newResults === 1 ? "" : "s"}`} className="text-[11px] tabular-nums text-sol-text-muted">
+      {newResults > 99 ? "99+" : newResults}
+    </span>
+  );
 });
 
 // The decision queue's row. Same isolation rule as the badge above: the count
@@ -723,7 +734,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const updateSavedView = useInboxStore((s) => s.updateSavedView);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   // Saved views nest under their page's nav row instead of a separate section.
-  const taskViews = useMemo(() => savedViews.filter((v: any) => v.page === "tasks"), [savedViews]);
+  // Hosted mode keeps only the views that still mean something there.
+  const taskViews = useMemo(
+    () => savedViews.filter((v: any) => v.page === "tasks" && (!surfaceMode.hosted || fitsHostedMode(v.prefs))),
+    [savedViews, surfaceMode.hosted],
+  );
   const docViews = useMemo(() => savedViews.filter((v: any) => v.page === "docs" || v.page === "plans"), [savedViews]);
 
   // Which view the list is currently arranged as — a view is a set of prefs, not
@@ -833,8 +848,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     ],
     onSelect: () => applyView(v),
   })), [applyView, deleteSavedView, updateSavedView, activeTeamId, pinned]);
-  const taskViewItems = useMemo(() => viewItems(taskViews, activeTaskViewId), [viewItems, taskViews, activeTaskViewId]);
-  const docViewItems = useMemo(() => viewItems(docViews, activeDocViewId), [viewItems, docViews, activeDocViewId]);
+  // Saved views are a developer's list machinery (nav.savedViews): hosted
+  // mode's To-dos and Notes are single rows like Inbox and Approvals.
+  const savedViewsShown = surfaceMode.shows("nav.savedViews");
+  const taskViewItems = useMemo(() => (savedViewsShown ? viewItems(taskViews, activeTaskViewId) : []), [savedViewsShown, viewItems, taskViews, activeTaskViewId]);
+  const docViewItems = useMemo(() => (savedViewsShown ? viewItems(docViews, activeDocViewId) : []), [savedViewsShown, viewItems, docViews, activeDocViewId]);
 
   // The projects themselves nest under the Projects row, so a project is one
   // click from anywhere — the whole point of putting it at the top of the rail.
@@ -986,9 +1004,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       <div className="flex-1 flex flex-col min-h-0">
         {/* Hosted mode opens with its name, as Whisk's rail does. */}
         {!isNarrow && surfaceMode.hosted && (
-          <div data-cc-rail-wordmark className="flex items-center gap-2 px-4 pb-3">
-            <LogoMark size={18} monochrome className="shrink-0" />
-            <span>Codecast</span>
+          <div data-cc-rail-wordmark className="flex items-center px-4 pt-4 pb-3">
+            <HostedWordmark />
           </div>
         )}
         {/* Pins lead the developer rail; hosted mode's leads with the inbox and
@@ -1006,10 +1023,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               badge={<NeedsInputCountBadge />}
               onClick={() => {
                 useInboxStore.getState().setShowFavorites(false);
-                if (isInbox) {
-                  useInboxStore.getState().setShowMySessions(true);
-                  useInboxStore.getState().clearSelection();
-                }
+                if (isInbox) showInboxHome();
                 router.push("/inbox");
               }}
             />
@@ -1071,7 +1085,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             windows: !!isWindows,
           }}
           projects={{ items: projectItems, expanded: viewSectionOverride.projects ?? isProjects, onToggle: () => setViewSectionOverride((o) => ({ ...o, projects: !(o.projects ?? isProjects) })) }}
-          tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? isTasks, onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) })) }}
+          // Hosted mode opens a page's saved views only when pinned open, so
+          // the rail stays the pages themselves.
+          tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? (isTasks && !surfaceMode.hosted), onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? (isTasks && !surfaceMode.hosted)) })) }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
           changesOn={changesOn}
@@ -1200,9 +1216,13 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         {/* Saved layouts (store/workbench.ts): name the current arrangement,
             switch to it, update it in place. Lives down here with the other
             environment-level sections — it configures the frame, not the work. */}
-        <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
+        {/* Both are developer machinery (a fleet's layouts, its repo folders),
+            gated on the mode rather than on the visual style. */}
+        <Surface name="actions.fleet">
+          <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
+        </Surface>
 
-        {!isNarrow && computedDirectories.length > 0 && (
+        {!isNarrow && computedDirectories.length > 0 && surfaceMode.shows("nav.projects") && (
           <div data-rail-group="workspaces" className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
               <span>Workspaces</span>

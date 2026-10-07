@@ -4,6 +4,8 @@ import {
   placementDecisionsSig,
   pendingSendWakeSig,
   resolveShowOld,
+  sessionUnreadMap,
+  sessionUnreadWakeSig,
   sessionsWakeSig,
   useTrackedStore,
   type PlacedInbox,
@@ -30,6 +32,11 @@ import { hostedStopsSig, splitHostedStops } from "../lib/hostedNotice";
 // left out: the assistant failed there, the person owes no reply. The panel
 // files those under "Couldn't finish" by the same rule (splitHostedStops).
 export function useNeedsInputCount(enabled = true): number {
+  return useWaitingOnPerson(enabled).length;
+}
+
+/** The rows the count counts, questions first: hosted mode's home lists them. */
+export function useWaitingOnPerson(enabled = true): readonly PlacedInbox["needsInput"][number][] {
   const placed = useMinePlacement(enabled);
   const scope = useTrackedStore([
     (s) => assistantScopeOnly(s.clientState.ui),
@@ -38,11 +45,30 @@ export function useNeedsInputCount(enabled = true): number {
   const only = assistantScopeOnly(scope.clientState.ui);
   const stops = hostedStopsSig(scope.sessions, scope.messages);
   return useMemo(() => {
-    if (!placed) return 0;
+    if (!placed) return [];
     const asks = splitHostedStops(placed.needsInput, (id) => scope.messages[id]).asks;
-    return withinScope(asks, only, bySessionAgent).length + withinScope(placed.questions, only, bySessionAgent).length;
+    return [...withinScope(placed.questions, only, bySessionAgent), ...withinScope(asks, only, bySessionAgent)];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placed, only, stops]);
+}
+
+// Hosted mode's finished results the person has not read yet: the rail's New
+// section (hostedStatusSections), counted over the same placement and scope,
+// for the Inbox row and the tab title. Zero outside hosted mode's scope.
+export function useNewResultsCount(enabled = true): number {
+  const placed = useMinePlacement(enabled);
+  const s = useTrackedStore([
+    (st) => assistantScopeOnly(st.clientState.ui),
+    (st) => sessionUnreadWakeSig(st),
+  ]);
+  const only = assistantScopeOnly(s.clientState.ui);
+  const unreadSig = sessionUnreadWakeSig(s);
+  return useMemo(() => {
+    if (!placed || !only) return 0;
+    const unread = sessionUnreadMap(s);
+    return withinScope([...placed.done, ...placed.dormant], only, bySessionAgent).filter((row) => unread[row._id]).length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placed, only, unreadSig]);
 }
 
 // The mine-scoped placement itself, for a surface that renders more than the

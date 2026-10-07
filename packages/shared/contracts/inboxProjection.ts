@@ -103,7 +103,12 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // v15, v16: a fresh start held NEW for its first half hour (v16: only while
 // working). v17 removes it again, so placement equals v14: holding a just
 // started session in view is a moment of web presentation, not a placement.
-export const INBOX_PROJECTION_VERSION = 17 as const;
+// v18: a dormant row sorts by when it parked, oldest first, not by its wake.
+// v19: a hosted conversation settles the moment its engine says so, with no
+// idle grace (isSessionIdle), so a finished answer files under done at once.
+// v20: a hosted conversation's armed routine never parks it as dormant: each
+// run's answer files as done or needs_input like any other turn.
+export const INBOX_PROJECTION_VERSION = 20 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -1156,6 +1161,8 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   inbox_dormant_at?: number | null;
   anchor_id?: unknown;
   armed_trigger_kind?: string | null;
+  /** conversations.agent_type: a hosted conversation's routine never parks it. */
+  agent_type?: string | null;
   // The pull request this session shepherds (prShepherd.refreshConversationPrStatus).
   // Presentation only: no bucket or work-state rule reads it.
   pr_status?: {
@@ -1225,6 +1232,10 @@ export interface SessionIdleInput {
   recentlyUpdated: boolean;
   daemonAlive: boolean;
   now: number;
+  /** conversations.agent_type. A hosted conversation's status is written by
+   *  the turn engine in the transaction that ends the turn, so it settles at
+   *  once (see below). */
+  agentType?: string | null;
 }
 
 // Whether a top-level session is idle (agent finished its turn, ball in the
@@ -1256,6 +1267,10 @@ export function isSessionIdle(input: SessionIdleInput): boolean {
     if (ACTIVE_AGENT_STATUSES.has(agentStatus)) return false;
     if (hasPending) return false; // queued work — agent isn't waiting on the user
     if (agentStatus === "hibernated") return true;
+    // A hosted turn's settle is the engine's own word, written as the turn
+    // ends; there is no hook between tool calls to flicker, so no grace. A
+    // finished answer stopped reading as "Working on it" for 45 seconds.
+    if (isHostedAgentType(input.agentType)) return true;
     const settled =
       agentStatusUpdatedAt !== undefined &&
       now - agentStatusUpdatedAt >= AGENT_IDLE_GRACE_MS;
@@ -1351,6 +1366,7 @@ export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
     recentlyUpdated,
     daemonAlive,
     now: t,
+    agentType: row.agent_type,
   });
   // An open AskUserQuestion poll is the agent blocking on the user: needs
   // input, never working. The poll fact is the probe's answer; a row from an
@@ -1437,9 +1453,12 @@ export function placeProjectableRow(
     snoozed: !!row.inbox_snoozed_until && row.inbox_snoozed_until > epoch,
     snoozeDue: !!row.inbox_snoozed_until && row.inbox_snoozed_until <= epoch,
     userRest: userRestOf(row),
-    armedTriggerHome: (row.armed_trigger_kind ?? "none") === "standing" && park,
+    // A hosted conversation's routine delivers each run's answer into it, so
+    // the answer files like any finished turn (done, or the person's move
+    // when it asks them), never parked behind the next firing.
+    armedTriggerHome: (row.armed_trigger_kind ?? "none") === "standing" && park && !isHostedAgentType(row.agent_type),
     armedLoopHome: !!loop && loop.status === "armed" && isLoopFresh(loop, epoch) && park,
-    armedOnceTriggerHome: (row.armed_trigger_kind ?? "none") === "once" && park,
+    armedOnceTriggerHome: (row.armed_trigger_kind ?? "none") === "once" && park && !isHostedAgentType(row.agent_type),
     childProducing: childProducingAt(row, epoch),
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,
@@ -1578,7 +1597,7 @@ export const INBOX_ROW_FIELDS = [
   "inbox_pinned_at", "is_pinned", "inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden",
   "inbox_snoozed_until", "inbox_killed_at", "is_deferred", "inbox_deferred_at", "inbox_rest", "inbox_rest_at", "user_rest",
   "settle_verdict", "is_favorite",
-  "has_pending", "last_user_message", "pending_api_error", "pending_api_error_at", "pending_api_error_kind", "session_error",
+  "has_pending", "last_user_message", "pending_api_error", "pending_api_error_at", "pending_api_error_kind", "session_error", "hosted_stop",
   "idle_summary", "thread_state", "thread_state_at", "thread_state_msg_count", "thread_state_status",
   "open_comment_threads", "last_comment_at", "last_comment_author", "last_comment_author_id", "last_comment_excerpt",
   "active_plan", "active_task", "agent_task_id", "armed_trigger_kind", "loop_state", "pr_status",

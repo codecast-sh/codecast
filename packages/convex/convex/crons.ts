@@ -1,9 +1,14 @@
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
+import { LINE_SWEEP_ON } from "./lib/lineSweep";
 
 const crons = cronJobs();
 
 crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any).syncOutbox.recover, {});
+
+// Summarize hosted conversations' history past the replayed window
+// (assistant/longHistory.ts): bounded by its own deadline and spend caps.
+crons.interval("summarize long assistant conversations", { minutes: 10 }, internal.assistant.longHistory.compress, {});
 
 crons.interval(
   "fill short titles for tasks and plans",
@@ -372,10 +377,10 @@ crons.interval(
   {}
 );
 
-// The line sweep (the-line.md L9) is off for now: it started a run on every
-// open task assigned to a direct-trust role's agent, within caps. To turn it
-// back on, register (internal as any).orgLine.sweep every 2 minutes as
-// "start the line for scoped tasks".
+// The line sweep (the-line.md L9): starts the top causes of every line whose
+// role's switch is on, within caps. Registered only while orgLine.LINE_SWEEP_ON
+// is true, the one switch the line map reads too.
+if (LINE_SWEEP_ON) crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as any).orgLine.sweep, {});
 
 crons.interval(
   // A new cause names its goal, category, risk and readiness before the line

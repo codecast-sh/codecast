@@ -92,6 +92,18 @@ async function upsertMark(
   return project({ ...existing, ...next } as Doc<"session_reads">);
 }
 
+/** The server's own read mark, for a moment the person needs no telling
+ *  about: the hosted engine files a turn that only saved what they asked for
+ *  (shared/contracts turnIsQuickSave) as read, at the turn's own stamp. */
+export async function markReadBySystem(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  at: number,
+): Promise<void> {
+  await upsertMark(ctx, userId, conversationId, { acknowledgedAt: at });
+}
+
 /** Resolve what the caller named — a conversation id or a short id — and
  *  refuse a session they cannot read. */
 async function requireConversation(

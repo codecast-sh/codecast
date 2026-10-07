@@ -9,7 +9,7 @@
 // visibly reads as progressing.
 
 import { activityLine, formatToolName } from "@codecast/shared/render";
-import { stepAsk, stepText } from "@platform/assistant/steps";
+import { stepOngoing, stepText } from "@platform/assistant/steps";
 
 // Below this much elapsed silence we show a plain "Working"; past it the live clock
 // appears. Keeps normal fast turns clean and only surfaces a ticking time for a
@@ -68,7 +68,20 @@ export function formatElapsedClock(ms: number): string {
 
 type TimelineItemLike = { type: string; data: unknown };
 type ToolCallLike = { name?: unknown; input?: unknown };
-type MessageLike = { role?: string; tool_calls?: Array<ToolCallLike> | null };
+type MessageLike = { role?: string; content?: unknown; tool_calls?: Array<ToolCallLike> | null };
+
+/** The turn's latest message, when the agent wrote it: null once the person
+ *  spoke last. System rows are skipped. */
+function lastAgentMessage(timeline: ReadonlyArray<TimelineItemLike>): MessageLike | null {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const item = timeline[i];
+    if (item.type !== "message") continue;
+    const msg = item.data as MessageLike;
+    if (msg.role === "system") continue;
+    return msg.role === "assistant" ? msg : null;
+  }
+  return null;
+}
 
 // The tool call currently in flight (see deriveRunningTool for the rule), with
 // its input, so the phrase library can name the subject.
@@ -94,13 +107,16 @@ function deriveRunningToolCall(timeline: ReadonlyArray<TimelineItemLike>): { nam
 // has no phrase (unparsed input). This is the composer's fallback for a row
 // whose server side activity stamp is absent or stale.
 /** A hosted conversation's step in flight, in the assistant's own words:
- *  "Search the web for flights" while it runs, "Waiting for your go-ahead to
- *  send an email to Dana" while it waits on the person. */
+ *  "Searching the web for flights" while it runs, "Waiting for your go-ahead
+ *  to send an email to Dana" while it waits on the person, and "Writing…"
+ *  once the reply itself is coming in. */
 export function deriveHostedRunningPhrase(timeline: ReadonlyArray<TimelineItemLike>, asking: boolean): string | undefined {
+  const last = lastAgentMessage(timeline);
+  if (!asking && last && !last.tool_calls?.length && typeof last.content === "string" && last.content.trim()) return "Writing…";
   const tc = deriveRunningToolCall(timeline);
   if (!tc) return undefined;
   const call = { name: tc.name, input: tc.input };
-  return asking ? stepText(call, undefined, { asking: true }) : stepAsk(call) ?? undefined;
+  return asking ? stepText(call, undefined, { asking: true }) : stepOngoing(call);
 }
 
 export function deriveRunningPhrase(timeline: ReadonlyArray<TimelineItemLike>): string | undefined {

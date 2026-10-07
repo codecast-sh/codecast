@@ -120,6 +120,7 @@ import {
   pendingRowsUnsettled,
   isInterruptControlMessage,
   sessionsWithPendingSend,
+  pendingSendIdsOf,
   freshReviveRequestIds,
   type DeclaredInboxOverlay,
   type InboxOverlayDeps,
@@ -136,12 +137,13 @@ export {
   convHasPendingSend,
   isInterruptControlMessage,
   sessionsWithPendingSend,
+  pendingSendIdsOf,
   freshReviveRequestIds,
   type DeclaredInboxOverlay,
   type InboxOverlayDeps,
 } from "./inboxOverlays";
 export { monotonicNow } from "./syncActivity";
-import { decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
+import { awaitingOkIds, decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
@@ -288,6 +290,7 @@ import { createInitiativeSlice, type InitiativeSliceActions } from "./initiative
 import { createProjectUpdatesSlice, type ProjectUpdatesSliceActions } from "./projectUpdatesSlice";
 import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
 import { createLineSlice, type LineSliceActions } from "./lineSlice";
+import { taskCreateStub, taskStubId } from "./taskStub";
 import { createExpectationsSlice, type ExpectationsSliceActions } from "./expectationsSlice";
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
@@ -745,6 +748,9 @@ export type InboxSession = {
   // When the block landed (the newest banner message's timestamp) — renders
   // the ticking "Xm ago" on the blocked-sessions banner and its rows.
   pending_api_error_at?: number | null;
+  /** A hosted conversation whose last turn ended on a stop notice: the
+   *  notice's kind (conversations.hosted_stop). lib/hostedNotice hostedStopOf. */
+  hosted_stop?: string | null;
   context_tokens?: number | null;
   last_model_call_at?: number | null;
   implementation_session?: { _id: string; title?: string };
@@ -1782,6 +1788,9 @@ export type ClientUI = {
   // to everything the developer inbox holds (hostedOnlyInbox). Ctrl+, and the
   // panel's Assistant / Everything switch flip it.
   hosted_inbox_everything?: boolean;
+  // Hosted mode's "Esc for shortcuts" under the composer has been shown: it
+  // is said once, then lives in the shortcuts sheet (HostedStatusLine).
+  hosted_esc_hint_seen?: boolean;
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
   // Show a session's checkout position (its branch, or the short sha of a
@@ -4006,15 +4015,37 @@ export function yourMoveOf(placed: PlacedInbox): (s: InboxSession) => boolean {
  *  new conversation is already being worked on, and Done reads newest first.
  *  A presentation fold of the placed buckets, shared by the panel and the
  *  keyboard walk (visualOrderSessions), so the two cannot disagree. */
-export function hostedStatusSections<T extends { _id: string; updated_at?: number }>(placed: {
+/** A conversation nothing was sent in yet: a draft, not work in progress.
+ *  `sending` is true while its first message is queued or optimistic: the
+ *  stub has no message_count or last_user_message until the server echoes,
+ *  yet it is plainly running from the first frame. */
+export function isUnsentConversation(s: { message_count?: number; last_user_message?: string | null }, sending = false): boolean {
+  return !sending && !(s.message_count ?? 0) && !s.last_user_message;
+}
+
+export function hostedStatusSections<T extends { _id: string; updated_at?: number; message_count?: number; last_user_message?: string | null }>(placed: {
   pinned: T[]; questions: T[]; needsInput: T[]; newSessions: T[]; working: T[]; done: T[]; dormant: T[];
-}): Array<[T[], "pinned" | "needs_input" | "working" | "done" | "dormant"]> {
+}, awaitsOk: (id: string) => boolean = () => false, sending: (id: string) => boolean = () => false, unread: (id: string) => boolean = () => false): Array<[T[], "pinned" | "needs_input" | "working" | "new_results" | "done" | "drafts"]> {
+  // A conversation with a pending decision row (awaitingOkIds) is the
+  // person's turn from the moment the row lands, whatever bucket the
+  // placement has caught up to.
+  const waiting = (rows: T[]) => rows.filter((s) => awaitsOk(s._id));
+  const rest = (rows: T[]) => rows.filter((s) => !awaitsOk(s._id));
+  // A new conversation with nothing sent is a draft: the assistant is not
+  // working on it, so it waits in its own quiet line under Done.
+  const fresh = rest(placed.newSessions);
+  // Nothing waits "for later" in hosted mode: a routine's answer files like
+  // any turn (projection v20), and the Routines page says what is scheduled,
+  // so any other parked row reads as finished. Finished work splits on
+  // whether the person has read it: New (every row shown) above Earlier.
+  const finished = [...rest(placed.done), ...rest(placed.dormant)].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   return [
     [placed.pinned, "pinned"],
-    [[...placed.questions, ...placed.needsInput], "needs_input"],
-    [[...placed.newSessions, ...placed.working], "working"],
-    [[...placed.done].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)), "done"],
-    [placed.dormant, "dormant"],
+    [[...placed.questions, ...waiting(placed.newSessions), ...waiting(placed.working), ...waiting(placed.done), ...waiting(placed.dormant), ...placed.needsInput], "needs_input"],
+    [[...fresh.filter((s) => !isUnsentConversation(s, sending(s._id))), ...rest(placed.working)], "working"],
+    [finished.filter((s) => unread(s._id)), "new_results"],
+    [finished.filter((s) => !unread(s._id)), "done"],
+    [fresh.filter((s) => isUnsentConversation(s, sending(s._id))), "drafts"],
   ];
 }
 
@@ -4034,13 +4065,19 @@ export function visualOrderSessions(
     yourMove?: boolean;
     // Hosted mode's assistant-only inbox (hostedOnlyInbox).
     hostedOnly?: boolean;
+    // Which rows wait on a pending decision (awaitingOkIds), for the hosted fold.
+    awaitsOk?: (id: string) => boolean;
+    // Which rows have a first message on its way (pendingSendIdsOf).
+    sending?: (id: string) => boolean;
+    // Which rows hold a result the person has not read (sessionUnreadMap).
+    unread?: (id: string) => boolean;
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
   // Same order the status view renders: questions, pinned, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
-  const sections: Array<[InboxSession[], string]> = opts.hostedOnly ? hostedStatusSections(placed) : [
+  const sections: Array<[InboxSession[], string]> = opts.hostedOnly ? hostedStatusSections(placed, opts.awaitsOk, opts.sending, opts.unread) : [
     [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
@@ -4484,7 +4521,9 @@ export type ScheduleNavSets = {
 // other viewer gets their own pick. Every reader of the style goes through
 // here, so hosted mode reaches the shell, the layout defaults and the feed.
 export function resolveVisualStyle(ui: { visual_style?: "classic" | "minimal"; hosted_visual_style?: "classic" | "minimal"; lane?: string } | undefined): "classic" | "minimal" {
-  if (isHostedUi(ui)) return ui?.hosted_visual_style ?? "minimal";
+  // Hosted mode is always Minimal: the family look is the product's identity
+  // there, so a stored hosted_visual_style (an older Style pick) is ignored.
+  if (isHostedUi(ui)) return "minimal";
   return ui?.visual_style === "minimal" ? "minimal" : "classic";
 }
 
@@ -4532,6 +4571,28 @@ export function resolveCloudStartFrom(ui: { cloud_start_from?: "checkout" | "ori
 // Resolve what the inbox opens on when no conversation is selected: the fleet
 // board (default) or the chronological feed. Shared by the boot adoption below
 // and the inbox stage so they can't land on different surfaces.
+// Hosted mode's home (the assistant's start, with what waits on the person)
+// is a place the person asks for: an explicit /inbox URL with no ?s= link
+// opens it rather than the last conversation. A bare app open (/) still comes
+// back to where they were.
+export function hostedHomeAsked(ui: { lane?: string } | undefined, path?: string): boolean {
+  if (!isHostedUi(ui)) return false;
+  if (path === undefined) {
+    if (typeof window === "undefined" || !window.location) return false;
+    path = window.location.pathname + window.location.search;
+  }
+  const [page, query = ""] = path.split("#")[0].split("?");
+  return page.replace(/\/+$/, "") === "/inbox" && !new URLSearchParams(query).has("s");
+}
+
+/** Asking for the inbox from inside it shows its home (the board, or hosted
+ *  mode's start) with nothing open. The Inbox nav row and hosted Cmd+1 share it. */
+export function showInboxHome(): void {
+  const st = useInboxStore.getState();
+  st.setShowMySessions(true);
+  st.clearSelection();
+}
+
 export function resolveInboxHome(ui: { inbox_home?: "board" | "feed" } | undefined): "board" | "feed" {
   return ui?.inbox_home ?? "board";
 }
@@ -4898,6 +4959,9 @@ export function computeVisualOrder(state: {
   // Local answered/dismissed marks — same map the panel renders with, so nav
   // walks exactly the QUESTIONS section on screen.
   questionResolutions?: QuestionResolutions;
+  // Read marks, for hosted mode's New and Earlier (sessionUnreadMap).
+  sessionReads?: Record<string, SessionReadItem>;
+  _lastViewedAt?: Record<string, number>;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; lane?: string; hosted_inbox_everything?: boolean } };
 }, opts: {
   // Only the rows that are the user's move (questions, NEEDS INPUT, DONE), in
@@ -4951,6 +5015,13 @@ export function computeVisualOrder(state: {
     collapsedSections: mode === "grouped" ? collapsed : undefined,
     yourMove: opts.yourMove,
     hostedOnly: hostedOnlyInbox(state.clientState.ui),
+    awaitsOk: (id) => awaitingOkIds(state.sessionDecisions).has(id),
+    sending: (() => { const ids = pendingSendIdsOf(state); return (id: string) => ids.has(id); })(),
+    unread: (() => {
+      if (!state.sessionReads || !state._lastViewedAt) return undefined;
+      const map = sessionUnreadMap({ sessions: state.sessions, sessionReads: state.sessionReads, _lastViewedAt: state._lastViewedAt });
+      return (id: string) => !!map[id];
+    })(),
   });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
@@ -5533,12 +5604,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // started a moment ago): resolves the real id first, then sends under the
   // same client id as the optimistic bubble.
   sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
-  /** A message from the staffing pane into the thread bound to a proposal
-   *  (org-staffing.md S18): the person's words plus the change they were
-   *  looking at. The bubble paints at once in that thread; dispatch runs
-   *  orgProposals.say, which wraps it and enqueues it on the message rail
-   *  under the same client id, so the echo retires the bubble. */
-  sayOnOrgProposal: (threadConvId: string, proposalShortId: string, changeSeq: number | null, body: string, clientId: string, askIndex?: number | null) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   startResourceOffload: (args: ResourceOffloadIntent) => Promise<any>;
@@ -5906,6 +5971,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     focus?: string,
   ) => void;
   deleteTrigger: (taskId: string) => void;
+  /** A hosted conversation's Stop: the row settles at once, and the engine
+   *  ends its running turn (dispatch stopHostedTurn). */
+  stopHostedTurn: (conversationId: string) => void;
   // A recurring trigger's cadence, changed in place (the org page's area rows
   // and the Head of People's review, org-staffing.md S29): the row's interval
   // flips on the draft, the named side effect runs agentTasks.webUpdate.
@@ -5960,8 +6028,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   decisionDetails: Record<string, DecisionDetailItem>;
   // Resolve a decision locally (status flips instantly; patch rides the
   // outbox) and, for answers, send the chosen option into the session as a
-  // normal user message. `text` is the free-form escape hatch.
-  answerDecision: (decisionId: string, answer: DecisionAnswerInput) => void;
+  // normal user message. `text` is the free-form escape hatch. The promise is
+  // the dispatch's: a card that held its buttons reads a refusal from it.
+  answerDecision: (decisionId: string, answer: DecisionAnswerInput) => Promise<unknown>;
   adoptDecision: (decisionId: string) => void;
   startShip: (target: { kind: "task" | "conversation" | "pull_request"; id: string }, clientKey: string, decisionId?: string) => void;
   // "Disagree and reopen" (D2): the row goes back to pending held by the
@@ -6189,6 +6258,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // persisted): which window you are in is not a preference.
   peopleWallOpen: boolean;
   openPeopleWall: () => void;
+  // -- The wide leaf (components/org/OrgPage, components/stage) --
+  // The stage leaf that takes its tab's width while it is mounted: its
+  // sibling panes and the session rail fold to a thin rail, and come back when
+  // the leaf leaves or the rail is clicked. `leafId` is null for a plain
+  // (unsplit) tab. Ephemeral, per window (never persisted or replicated): the
+  // arrangement underneath is not rewritten, so leaving restores it exactly.
+  stageWide: { tabId: string; leafId: string | null } | null;
+  setStageWide: (wide: { tabId: string; leafId: string | null } | null) => void;
   // -- Saved-account sign-in dialog (components/ProfileSignInDialog) --
   // Window level, not inside the hover panel that opens it: the sign-in
   // happens in a browser, and the panel closes the moment the pointer leaves.
@@ -6489,6 +6566,17 @@ function prunePendingEchoes(draft: any, convId: string, incoming: Message[]) {
   if (kept.length !== pending.length) {
     draft.pendingMessages[convId] = kept;
   }
+}
+
+/** Whether the server's copy of a row differs from the local one in what a
+ *  transcript draws from it. */
+function serverRowChanged(local: Message, server: Message): boolean {
+  return local.content !== server.content
+    || local.thinking !== server.thinking
+    || local.subtype !== server.subtype
+    || JSON.stringify(local.tool_calls ?? null) !== JSON.stringify(server.tool_calls ?? null)
+    || JSON.stringify(local.tool_results ?? null) !== JSON.stringify(server.tool_results ?? null)
+    || JSON.stringify(local.images ?? null) !== JSON.stringify(server.images ?? null);
 }
 
 function dedupeReplayedMessages(messages: Message[]): Message[] {
@@ -6928,7 +7016,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
         // home, boot lands on the board (showMySessions) instead of adopting a
         // conversation — "what is happening" before "where was I". A deep link
         // or any real navigation still wins (hasViewNavigated above).
-        if (resolveInboxHome(draft.clientState.ui) === "board") {
+        if (resolveInboxHome(draft.clientState.ui) === "board" || hostedHomeAsked(draft.clientState.ui)) {
           draft.showMySessions = true;
           return;
         }
@@ -8991,6 +9079,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.agentTasks as any)[taskId];
     delete (this.foreignTriggers as any)[taskId];
   }),
+  stopHostedTurn: action(function (this: Draft, conversationId: string) {
+    const row = (this.sessions as any)[conversationId];
+    if (row) row.agent_status = "idle";
+  }),
   setTriggerInterval: action(function (this: Draft, taskId: string, intervalMs: number) {
     const t = (this.agentTasks as any)[taskId] ?? (this.foreignTriggers as any)[taskId];
     if (!t || t.schedule_type !== "recurring") return;
@@ -10255,14 +10347,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
   retryPendingMessage: asyncAction(function (this: Draft, _convId: string, _ref: { messageId?: string; clientId?: string }) {}),
-
-  sayOnOrgProposal: action(function (this: Draft, threadConvId: string, _proposalShortId: string, _changeSeq: number | null, body: string, clientId: string, _askIndex?: number | null) {
-    appendOptimisticMessage(this, threadConvId, body, undefined, clientId);
-    notePendingMessageSendRequested(clientId);
-    for (const target of [this.sessions[threadConvId], this.conversations[threadConvId]]) {
-      if (target && hasThreadState(target)) Object.assign(target, clearedThreadStateFields());
-    }
-  }),
 
   // Drop the optimistic bubble (and the conversation's pending-status row if
   // it is this message) so Cancel is instant, then dispatch the same identity
@@ -11727,7 +11811,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
   mergeMessages: sync(function (this: Draft, convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) {
     msgs = dedupeReplayedMessages(msgs);
     prunePendingEchoes(this, convId, msgs);
-    const existing = this.messages[convId] || [];
+    // A row the server sends again is the server's newer copy: a row fetched
+    // mid-stream (a hosted turn's first words) is patched in place with its
+    // full text and tool calls, and the delta reads re-fetch the newest local
+    // row to pick that up. Replaced only when it changed, so refs stay stable.
+    const incomingById = new Map(msgs.map((m: Message) => [m._id, m]));
+    let refreshed = false;
+    const existing = (this.messages[convId] || []).map((m: Message) => {
+      const next = incomingById.get(m._id);
+      if (!next || !serverRowChanged(m, next)) return m;
+      refreshed = true;
+      return next;
+    });
     const existingIds = new Set(existing.map((m: Message) => m._id));
     const existingReplayKeys = new Set(existing.map(messageReplayKey).filter((key): key is string => !!key));
     const unique = msgs.filter((m: Message) => {
@@ -11735,7 +11830,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       const key = messageReplayKey(m);
       return !key || !existingReplayKeys.has(key);
     });
-    if (unique.length === 0 && !meta) return;
+    if (unique.length === 0 && !meta && !refreshed) return;
 
     const merged = direction === "prepend"
       ? [...unique, ...existing]
@@ -12556,16 +12651,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // a fallback keeps a bare call safe.
   createTask: asyncAction(function (this: Draft, opts: any) {
     if (!opts.client_key) opts.client_key = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    const tempId = `temp_task_${opts.client_key}`;
+    const tempId = taskStubId(opts.client_key);
     // A subtask stub inherits its parent's containers so it renders in place
     // (same group, same board scope) instead of jumping on the server echo.
     const parentRow = opts.parent
       ? (Object.values(this.tasks).find((t: any) => t.short_id === opts.parent || t._id === opts.parent) as TaskItem | undefined)
       : undefined;
-    this.tasks[tempId] = {
-      _id: tempId,
-      client_key: opts.client_key,
-      short_id: "ct-…",
+    this.tasks[tempId] = taskCreateStub(opts.client_key, {
       title: opts.title,
       description: opts.description,
       task_type: opts.task_type || "task",
@@ -12580,9 +12672,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       project_id: opts.project_id ?? (parentRow as any)?.project_id,
       team_id: opts.team_id ?? parentRow?.team_id,
       from_call: opts.from_call,
-      created_at: Date.now(),
-      updated_at: Date.now(),
-    } as any as TaskItem;
+    }) as any as TaskItem;
   }),
 
   // Remove a create-stub whose server create was permanently refused (depth
@@ -12603,7 +12693,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   removeTaskStub: sync(function (this: Draft, clientKey: string) {
-    const tempId = `temp_task_${clientKey}`;
+    const tempId = taskStubId(clientKey);
     if (!this.tasks[tempId]) return;
     delete this.tasks[tempId];
     delete (this.pending as any)[`tasks:${tempId}`];
@@ -13362,6 +13452,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   peopleWallOpen: false,
   openPeopleWall: () => set({ peopleWallOpen: true }),
+  stageWide: null,
+  setStageWide: (wide: { tabId: string; leafId: string | null } | null) => set({ stageWide: wide }),
   profileSignIn: null,
   openProfileSignIn: (target: { deviceId: string; profile: string; start?: boolean }) => set({ profileSignIn: target }),
   closeProfileSignIn: () => set({ profileSignIn: null }),
@@ -14722,9 +14814,12 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
       const remembered = ownId ?? st.clientState?.current_conversation_id;
       // A link opens what it names; a remembered position comes back only
       // when the Assistant scope would list it (restorableIn).
+      const homeAsked = linked === undefined && hostedHomeAsked(st.clientState?.ui);
       const restoreId = linked !== undefined ? linked
-        : remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null;
-      if (restoreId && st.sessions[restoreId]) {
+        : !homeAsked && remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null;
+      if (homeAsked) {
+        useInboxStore.setState({ showMySessions: true });
+      } else if (restoreId && st.sessions[restoreId]) {
         // The divider anchor (_seenUpToAt) is persisted, so reopening the app to
         // this session naturally shows what arrived while it was closed — no
         // special seeding needed here.

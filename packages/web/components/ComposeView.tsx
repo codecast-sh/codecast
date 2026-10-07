@@ -26,7 +26,7 @@ import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ReviewComposerContext, type ReviewComposer } from "./reviewContext";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
-import { MODE_WORDS } from "../lib/surfaces";
+import { MODE_WORDS, useSurface } from "../lib/surfaces";
 // Every keep/confirm/prune decision reads through here, so it flushes the
 // composer's debounced write first: the last keystrokes count.
 const draftContentFor = (id: string | null) => {
@@ -302,6 +302,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   // than MessageInput's create-then-send.
   const liveAgentType = useInboxStore((s) => (sessionId ? (s.sessions[s.resolveLiveSessionId(sessionId)]?.agent_type as string | undefined) : undefined)) ?? skillCtx.agentType;
   const hosted = isHostedAgentType(liveAgentType);
+  const canDock = useSurface("actions.fleet");
   const hostedRef = useRef(hosted);
   hostedRef.current = hosted;
 
@@ -583,6 +584,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       role="dialog"
       aria-modal={docked ? undefined : "true"}
       aria-label="New session"
+      data-cc-compose-sheet={hosted && !docked ? "" : undefined}
       // Clicking dead space inside the dialog must not blur the composer (a
       // blurred dialog leaks keyboard focus to the app). preventDefault on
       // mousedown keeps focus where it is; interactive targets keep native
@@ -597,7 +599,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       className={`relative border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
         // The assistant needs no project, agent or model pickers, so its
         // sheet is sized to one ask rather than to the developer's form.
-        !docked ? `w-[94vw] ${hosted ? "max-w-[640px] [--frame-h:min(80vh,460px)]" : "max-w-[960px] [--frame-h:min(88vh,680px)]"} h-[var(--frame-h)] [--composer-max-h:calc(var(--frame-h)*0.45)] rounded-xl zoom-in-95 slide-in-from-top-2`
+        // The assistant's sheet is sized to its content (mark, heading,
+        // starters, composer) up to the frame, so no empty paper sits above.
+        !docked ? `w-[94vw] ${hosted ? "max-w-[640px] [--frame-h:min(80vh,460px)] max-h-[var(--frame-h)]" : "max-w-[960px] [--frame-h:min(88vh,680px)] h-[var(--frame-h)]"} [--composer-max-h:calc(var(--frame-h)*0.45)] rounded-xl zoom-in-95 slide-in-from-top-2`
           : collapsed ? "w-[280px] max-w-full rounded-t-lg border-b-0 slide-in-from-bottom-4"
           : "w-[460px] max-w-full [--frame-h:calc(100vh-5rem)] max-h-[var(--frame-h)] rounded-t-xl border-b-0 slide-in-from-bottom-4"
       }`}
@@ -610,11 +614,11 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           </div>
         </div>
       )}
-      {instance && <ComposeChrome instance={instance} stubId={sessionId} recipientName={recipient?.name} onRequestClose={requestClose} keys={!hosted} />}
+      {instance && <ComposeChrome instance={instance} stubId={sessionId} recipientName={recipient?.name} onRequestClose={requestClose} keys={!hosted} canDock={canDock} />}
       {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
-      <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : "flex-1 min-h-0 pt-6"}`}>
+      <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : hosted ? "min-h-0 pt-7" : "flex-1 min-h-0 pt-6"}`}>
         {conversation && !onlyHosted && (
           <div className={`w-full shrink-0 ${docked ? "mb-2" : "mb-3 pr-16"}`}>
             <ComposeRolePicker picked={recipient} onPick={setRecipient} onDone={refocusComposer} />
@@ -649,6 +653,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
           escapeOwnedRef={escapeOwnedRef}
           clearInputRef={clearInputRef}
+          escapeCloses
         />
       )}
       {confirmClose && (
@@ -683,7 +688,7 @@ const chromeButton = "p-1 rounded text-sol-text-dim/70 hover:text-sol-text hover
 // title bar naming the target project and, once collapsed, the draft it holds;
 // clicking the bar collapses or restores it. Subscribes to the two strings it
 // shows, so typing re-renders this bar and not the composer around it.
-function ComposeChrome({ instance, stubId, recipientName, onRequestClose, keys = true }: { instance: ComposeInstance; stubId: string | null; recipientName?: string; onRequestClose: () => void; /** The minimize button's keycaps; the footer already lists the keys. */ keys?: boolean }) {
+function ComposeChrome({ instance, stubId, recipientName, onRequestClose, keys = true, canDock = true }: { instance: ComposeInstance; stubId: string | null; recipientName?: string; onRequestClose: () => void; /** The minimize button's keycaps; the footer already lists the keys. */ keys?: boolean; /** The docked composer is fleet machinery (actions.fleet); without it the modal offers a plain close. */ canDock?: boolean }) {
   const projectName = useInboxStore((s) => {
     const row = stubId ? s.sessions[stubId] : undefined;
     return (row?.project_path || row?.git_root)?.split("/").filter(Boolean).pop();
@@ -691,6 +696,13 @@ function ComposeChrome({ instance, stubId, recipientName, onRequestClose, keys =
   const snippet = useInboxStore((s) => (instance.collapsed ? composeDraftContent(s, stubId)?.text.slice(0, 80) : undefined));
   const { dockCompose, expandCompose, setComposeCollapsed } = useInboxStore.getState();
 
+  if (instance.mode === "modal" && !canDock) {
+    return (
+      <button onClick={onRequestClose} className={`absolute top-2 right-2 z-10 flex items-center gap-1.5 ${chromeButton}`} aria-label="Close" title="Close (Esc)">
+        <X className="w-3.5 h-3.5" />
+      </button>
+    );
+  }
   if (instance.mode === "modal") {
     return (
       <button onClick={() => dockCompose(instance.id)} className={`absolute top-2 right-2 z-10 flex items-center gap-1.5 ${chromeButton}`} aria-label="Minimize to a docked composer">

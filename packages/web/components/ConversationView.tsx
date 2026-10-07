@@ -3,6 +3,7 @@ import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
 import { familyHeading, firstUserPromptOf } from "../hooks/useForkTree";
 import { conversationTitle } from "./simple/lane";
+import { hostedTitle } from "../lib/conversationTitle";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { knownPullRequestIds, madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -35,6 +36,7 @@ import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenS
 import { foldHostedRetries, type RetryFoldRow } from "../lib/hostedNotice";
 import { ApprovalAnswerLine, HostedNotice, MailConnectChip, RoutineOfferChip, approvalAnswerAddsToReceipt, hostedNoticeKind, offersMailConnect, routineOffer } from "./conversation/HostedNotice";
 import { agentSupportsFork, agentForksFromAnyMessage, isHostedAgentType, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId, isMidWorkReviveNotice } from "@codecast/shared/contracts";
+import { hostedApprovalAnswer, hostedApprovalState, hostedAsks, type HostedApprovalState } from "../lib/hostedApproval";
 import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
 import { isAskTool } from "@codecast/shared/render";
@@ -48,7 +50,7 @@ import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useR
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
 import { toast } from "sonner";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle } from "./conversationScroll";
 import { deriveHostedRunningPhrase, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
@@ -82,7 +84,7 @@ import { SessionDaemonChip, SessionHooksOffChip } from "./DaemonStatusChip";
 import { BrowserWatchSplit } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
-import { HostedApprovalCard } from "./conversation/HostedApprovalCard";
+import { HostedApprovalCard, HostedApprovalPending, HostedApprovalSettled } from "./conversation/HostedApprovalCard";
 import { DecisionStepperContext, usePendingDecisionItem } from "../hooks/useDecisionQueue";
 import { copyToClipboard, shareOrigin, inferHomeDir } from "../lib/utils";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
@@ -128,7 +130,7 @@ import { useAskSession } from "../hooks/useAskSession";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
 import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
-import { Maximize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree } from "lucide-react";
+import { Maximize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
 import { filesHref } from "../lib/vault/vaultHref";
 import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
@@ -146,7 +148,7 @@ import { useSessionRestart, ghostRestartContextFor } from "../hooks/useSessionRe
 import { devRenderCount, devCountElements } from "../lib/devRenderCount";
 import { MessageInput } from "./MessageInput";
 import { PlanBlock } from "./conversation/blocks/planBlock";
-import { CastBrowserRowContext, ChatWakeContext } from "../lib/conversationBlockContexts";
+import { CastBrowserRowContext, ChatWakeContext, HostedAskingContext, HostedCardShownContext } from "../lib/conversationBlockContexts";
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
 import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
@@ -249,126 +251,13 @@ function recordVirtHeight(key: string, size: number) {
   VIRT_HEIGHT_CACHE.set(key, size);
 }
 
-// Scroll a virtualized timeline item to a fixed offset from the container top,
-// settling across re-measures: items above the target report estimated heights
-// until they actually render, so a single scrollToIndex lands off-target. The
-// retry loop first waits for the item's element to mount, nudges scrollTop
-// each frame until the offset holds, then keeps watching for `watchMs` —
-// freshly mounted markdown/images above re-measure for a couple of seconds
-// after the first convergence and would otherwise drag the target away.
-// `onSettled` fires once at the first convergence. The watch aborts the moment
-// the user scrolls, and starting a new settle cancels the previous one.
-let cancelActiveItemSettle: (() => void) | null = null;
-function settleTimelineItemAtOffset(
-  container: HTMLElement,
-  virtualizer: { scrollToIndex: (index: number, opts: { align: "start" }) => void },
-  itemIndex: number,
-  offsetPx: number,
-  opts?: {
-    initialDelayMs?: number;
-    watchMs?: number;
-    onSettled?: () => void;
-    // Identity of the target row (its data-vkey — the stable message key).
-    // The index is a snapshot of ONE timeline: a same-session jump starts on
-    // the tail timeline, then the target-mode window replaces it and every
-    // index shifts, so an index-only settle pins whatever row inherited the
-    // number (measured: every decision-card jump landed the same six rows
-    // late). The key survives the swap; resolveIndex re-derives the index on
-    // the CURRENT timeline for the scrollToIndex that brings the row into
-    // the render window.
-    itemKey?: string;
-    resolveIndex?: () => number;
-  },
-) {
-  cancelActiveItemSettle?.();
-  let cancelled = false;
-  const cancel = () => {
-    cancelled = true;
-    container.removeEventListener("wheel", cancel);
-    container.removeEventListener("touchstart", cancel);
-    if (cancelActiveItemSettle === cancel) cancelActiveItemSettle = null;
-  };
-  cancelActiveItemSettle = cancel;
-  container.addEventListener("wheel", cancel, { passive: true });
-  container.addEventListener("touchstart", cancel, { passive: true });
-
-  const currentIndex = () => {
-    const i = opts?.resolveIndex ? opts.resolveIndex() : itemIndex;
-    return i >= 0 ? i : itemIndex;
-  };
-  const findEl = (idx: number) => {
-    if (opts?.itemKey) {
-      // With an identity, the index lookup is only a fallback — an index hit
-      // that isn't the keyed row is exactly the wrong-row pin this guards
-      // against, so verify before trusting it.
-      const byKey = container.querySelector(`[data-vkey="${CSS.escape(opts.itemKey)}"]`);
-      if (byKey) return byKey;
-      const byIndex = container.querySelector(`[data-index="${idx}"]`);
-      return byIndex?.getAttribute("data-vkey") === opts.itemKey ? byIndex : null;
-    }
-    return container.querySelector(`[data-index="${idx}"]`);
-  };
-  virtualizer.scrollToIndex(currentIndex(), { align: "start" });
-  const scrollElToOffset = (el: Element) => {
-    const elRect = el.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    // Rect deltas are screen px; scrollTop is layout px — divide by CSS zoom.
-    container.scrollTop += (elRect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
-  };
-  const watchMs = opts?.watchMs ?? 2500;
-  const start = performance.now();
-  let findAttempts = 0;
-  let settledFired = false;
-  const attempt = () => {
-    if (cancelled) return;
-    findAttempts++;
-    const idx = currentIndex();
-    const el = findEl(idx);
-    if (el) {
-      scrollElToOffset(el);
-      // Pin the DOM node, not the index: rows are keyed by stable message key,
-      // so the node survives re-renders, while data-index shifts whenever the
-      // loaded window grows (target mode pages in above the anchor).
-      let settleCount = 0;
-      const settle = () => {
-        if (cancelled) return;
-        settleCount++;
-        if (!el.isConnected) {
-          // The row unmounted (a window swap re-rendered the list). The jump
-          // isn't done — re-find the row by identity while time remains.
-          if (performance.now() - start < watchMs && findAttempts < 20) setTimeout(attempt, 100);
-          else cancel();
-          return;
-        }
-        const rect = el.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        const off = (rect.top - containerRect.top) / cssZoomOf(container) - offsetPx;
-        if (Math.abs(off) > 2) scrollElToOffset(el);
-        if (!settledFired && (Math.abs(off) <= 2 || settleCount >= 15)) {
-          settledFired = true;
-          opts?.onSettled?.();
-        }
-        if (performance.now() - start < watchMs) requestAnimationFrame(settle);
-        else cancel();
-      };
-      requestAnimationFrame(settle);
-    } else if (findAttempts < 20) {
-      virtualizer.scrollToIndex(idx, { align: "start" });
-      requestAnimationFrame(() => setTimeout(attempt, 100));
-    } else {
-      cancel();
-    }
-  };
-  setTimeout(attempt, opts?.initialDelayMs ?? 300);
-}
-
 // The forwardRef render function itself. Never call it as a plain function
 // from another component: its hooks would then run on the caller's fiber, and
 // Fast Refresh signs the caller, whose own hook list never changes, so an edit
 // that adds a hook here keeps the fiber and crashes on the shifted hook slot
 // ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns = false, openAtTop = false, composerPlaceholder }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, onTargetSettled, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns = false, openAtTop = false, composerPlaceholder }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
   const renderStart = performance.now();
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
@@ -650,7 +539,7 @@ const ConversationViewInner = (
     dismissedStickyIdsRef.current = new Set();
     // A settle-watcher from the previous conversation corrects against stale
     // data-index rows — kill it before the new conversation paints.
-    cancelActiveItemSettle?.();
+    cancelActiveItemSettle();
   }
 
   // Reset scroll target tracking when the jump request changes — a new message
@@ -663,6 +552,9 @@ const ConversationViewInner = (
       hasScrolledToTarget.current = false;
     }
   }
+  // The settle outlives the render that started it; it reports to the latest host callback.
+  const onTargetSettledRef = useRef(onTargetSettled);
+  onTargetSettledRef.current = onTargetSettled;
 
   const convLink = useCallback((id: string) => `/conversation/${id}`, []);
 
@@ -2966,6 +2858,12 @@ const ConversationViewInner = (
     }
 
     const jump = jumpRowForMessage(targetMessageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf }, foldWorkingTurns ? { expanded: expandedGroups, lastTextOf: turnAggregates.lastTextOf } : undefined);
+    // A target folded inside a turn or a receipt group opens its group, and
+    // the settle below lands on the row in the same pass: the row exists
+    // folded too, the opening only grows what sits under its head, and the
+    // settle re-measures for a while anyway. Waiting for the opened render
+    // instead left the jump stranded whenever the groups were reset under
+    // it (a window of rows landing at the same moment).
     if (jump.expandKey && !expandedGroups.has(jump.expandKey)) {
       setExpandedGroups((prev) => {
         if (prev.has(jump.expandKey!)) return prev;
@@ -2973,7 +2871,6 @@ const ConversationViewInner = (
         next.add(jump.expandKey!);
         return next;
       });
-      return;
     }
 
     const itemIndex = timeline.findIndex(item => {
@@ -3006,6 +2903,7 @@ const ConversationViewInner = (
           if (window.location.hash) {
             history.replaceState(null, "", window.location.pathname + window.location.search);
           }
+          onTargetSettledRef.current?.(targetMessageId, targetNonce);
         },
       });
     }
@@ -3070,7 +2968,7 @@ const ConversationViewInner = (
   // assistant names it), so a turn that failed before naming it never reads
   // "New Session".
   const title = isHostedAgentType(conversation?.agent_type)
-    ? conversationTitle({ title: conversation?.title, last_user_message: firstUserPromptOf(messages) })
+    ? hostedTitle(conversation as any, null, () => firstUserPromptOf(messages)) || conversationTitle(null)
     : cleanTitle(conversation?.title || "New Session");
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
   const latestMessageTimestamp = useMemo(() => {
@@ -3108,7 +3006,36 @@ const ConversationViewInner = (
   // timeline. See deriveRunningPhrase.
   // A hosted conversation says its step in the assistant's own words, and a
   // step parked on an approval as waiting for the person's go-ahead.
-  const hostedAsking = isHostedAgentType(conversation?.agent_type) ? managedSession?.agent_status === "permission_blocked" : null;
+  // Read from the transcript and the decision row (lib/hostedApproval), never
+  // the lagging permission_blocked status alone: once the store holds an
+  // answer the step reads in progress, not "Waiting for your go-ahead".
+  const isHostedConv = isHostedAgentType(conversation?.agent_type);
+  const hostedApproval = useInboxStore((st): HostedApprovalState => {
+    if (!isHostedConv || !conversation?._id) return "none";
+    const id = String(conversation._id);
+    return hostedApprovalState(st.messages[id] as Message[] | undefined, Object.values(st.sessionDecisions) as any[], id);
+  });
+  const hostedStatusParked = managedSession?.agent_status === "permission_blocked";
+  const hostedAsking = isHostedConv ? hostedAsks(hostedApproval, hostedStatusParked) : null;
+  // The parked turn's decision row has not landed yet: hold the card's place.
+  const hostedCardPending = hostedApproval === "pending" && hostedStatusParked;
+  // The answer to this conversation's parked approval, while the transcript
+  // still ends on the parked call: the card was answered (the store's row
+  // says so at once) and the turn has not moved on yet. The settled card
+  // holds its place meanwhile. Its label is the stored one (APPROVAL_ANSWERS).
+  const hostedSettledAnswer = hostedApprovalAnswer(hostedApproval);
+  // A hosted conversation's own approval, drawn in the transcript right
+  // after the step it belongs to rather than docked above the composer, where
+  // a short transcript left a screen of empty paper between the two and the
+  // card read as a second input. The queue's stepper keeps the decision sheet.
+  const hostedOwnCard = !!decisionItem && isHostedAgentType(conversation?.agent_type) && !decisionStepper && decisionItem.source === "decide";
+  const hostedTailCard = !conversation || onSendOverride ? null
+    : hostedOwnCard ? <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />
+    // The turn parked on an approval before its decision row arrived: hold
+    // the card's place in one quiet line.
+    : !decisionItem && hostedSettledAnswer ? <HostedApprovalSettled label={hostedSettledAnswer} />
+    : !decisionItem && hostedCardPending ? <HostedApprovalPending />
+    : null;
   const workingPhrase = useMemo(
     () => (hostedAsking === null ? deriveRunningPhrase(timeline) : deriveHostedRunningPhrase(timeline, hostedAsking)),
     [timeline, hostedAsking],
@@ -3205,6 +3132,7 @@ const ConversationViewInner = (
   const hasLocalAgent = !guest && !!conversation?.session_id && !cloudAgentActions.cloud && !isHostedAgentType(conversation?.agent_type);
   // The menu's working parts (short id, resume commands, the model and agent panel, token counts) and the mode's words.
   const internalsShown = useSurface("conversation.internals");
+  const transcriptNav = useSurface("transcriptNav");
   const words = useModeWords();
   usePaletteSessionCommands(conversation?._id, [
     ...cloudAgentActions.palette,
@@ -3523,6 +3451,10 @@ const ConversationViewInner = (
           return <BashCommandBlock key={msg._id} messageId={msg._id} stdout={kind.stdout} stderr={kind.stderr} timestamp={msg.timestamp} userName={bashSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={bashSender ? bashSender.avatar_url : conversation?.user?.avatar_url} />;
         }
         case 'interrupt':
+          // A hosted conversation's stop is told by its own notice
+          // (HostedStatusLine); a plain "user interrupted" says nothing to
+          // someone who only stopped typing.
+          if (isHostedAgentType(conversation?.agent_type)) return kind.tone === 'amber' ? <InterruptStatusLine key={msg._id} label="You stopped this" /> : null;
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
         case 'machine_move':
           if (commandExpansionMap.consumed.has(msg._id)) return null;
@@ -3542,7 +3474,7 @@ const ConversationViewInner = (
         case 'task_notification':
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
-          return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+          return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} />;
         case 'role_brief':
           return <FoldedPromptBlock key={msg._id} label="Role brief" preview={stripSystemTags(msg.content!).trim().split("\n")[0].replace(/\*\*/g, "")} content={stripSystemTags(msg.content!).trim()} timestamp={msg.timestamp} />;
         case 'session_message':
@@ -3856,6 +3788,8 @@ const ConversationViewInner = (
     <BrowserSessionContext.Provider value={browserSession}>
     <RevealAncestryCtx.Provider value={revealAncestry}>
     <ChatWakeContext.Provider value={chatWakeMap}>
+    <HostedAskingContext.Provider value={hostedAsking === true}>
+    <HostedCardShownContext.Provider value={hostedOwnCard}>
     <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById} quotable={showMessageInput && effectiveIsOwner}>
     <ReviewComposerContext.Provider value={reviewComposer}>
     <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={inRevealBand ? "band" : hostingReveal ? "host" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -3884,6 +3818,13 @@ const ConversationViewInner = (
               </ShortcutTooltip>
             )}
             {headerLeft}
+            {/* On a phone a hosted conversation has a plain way back to the
+                inbox, rather than only the menu. */}
+            {!embedded && isHostedAgentType(conversation?.agent_type) && (
+              <Link href="/inbox" aria-label="Back to Inbox" data-cc-conv-back className="sm:hidden -ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text">
+                <ChevronLeft className="h-4 w-4" aria-hidden />
+              </Link>
+            )}
             {identityRow && (
               <IdentityFace
                 row={identityRow}
@@ -4476,7 +4417,7 @@ const ConversationViewInner = (
           {conversation?._id && !guest && <DeviceMoveStatusStrip conversationId={conversation._id} />}
         </>}
       >
-        {conversation && (
+        {conversation && transcriptNav && (
           <div className="absolute top-full right-3 mt-24 z-30">
             <MessageNavButton
               conversationId={conversation._id}
@@ -4779,9 +4720,11 @@ const ConversationViewInner = (
               const isTail = virtualItem.index === timeline.length - 1;
               const showNewRule = virtualItem.index === newRuleIndex;
               const rulesHere = handoffRulesAt(virtualItem.index);
-              const showIdleGap = isTail && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status });
+              // A hosted transcript never ends on a time rule: below the last
+              // reply it read as the divider of a message that never came.
+              const showIdleGap = isTail && !isHostedConv && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status });
               const tailRules = isTail && !hasMoreBelow ? handoffRulesAt(timeline.length) : undefined;
-              const visible = !!content || showNewRule || !!rulesHere || showIdleGap || !!tailRules;
+              const visible = !!content || showNewRule || !!rulesHere || showIdleGap || !!tailRules || (isTail && !hasMoreBelow && !!hostedTailCard);
               return (
                 <div
                   key={virtualItem.key}
@@ -4811,6 +4754,7 @@ const ConversationViewInner = (
                         </TimelineRule>
                       )}
                       {tailRules}
+                      {isTail && !hasMoreBelow && hostedTailCard}
                     </div>
                   )}
                 </div>
@@ -4891,12 +4835,10 @@ const ConversationViewInner = (
           It renders nothing when the agent has not pinned a state. */}
       {!ownerComposerMounted && !onSendOverride && threadStatePanel}
 
-      {decisionItem && conversation && !onSendOverride && (
-        // A hosted conversation's own approval is a card at the end of its
-        // transcript; the queue's stepper keeps the decision sheet.
-        isHostedAgentType(conversation.agent_type) && !decisionStepper && decisionItem.source === "decide"
-          ? <HostedApprovalCard key={decisionItem.key} item={decisionItem} />
-          : <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} />
+      {/* A hosted conversation's own approval lives in the transcript's
+          flow (hostedTailCard); the rest dock above the composer. */}
+      {decisionItem && conversation && !onSendOverride && !hostedOwnCard && (
+        <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} />
       )}
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
@@ -4983,7 +4925,7 @@ const ConversationViewInner = (
       {timeline.length > 0 && (
         <div data-cc-scroll-tools className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115), transform: commentRailW ? `translateX(-${commentRailW}px)` : undefined, transition: "transform 160ms ease" }}>
           <div className="flex flex-col gap-2">
-              <button
+              {transcriptNav && <button
                 onClick={() => {
                   if (jumpPending === 'start') {
                     handleCancelJump();
@@ -5018,7 +4960,7 @@ const ConversationViewInner = (
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
                   </svg>
                 )}
-              </button>
+              </button>}
               <button
                 onClick={() => {
                   if (jumpPending === 'end') {
@@ -5035,7 +4977,7 @@ const ConversationViewInner = (
                     scrollToEdgeRef.current('bottom');
                   }
                 }}
-                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg transition-all ${transcriptNav ? "hover:bg-sol-cyan hover:text-white" : "text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text"} ${(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label={jumpPending === 'end' ? "Cancel jump to bottom" : "Scroll to bottom"}
                 title={jumpPending === 'end' ? "Cancel" : undefined}
               >
@@ -5064,7 +5006,7 @@ const ConversationViewInner = (
                 )}
               </button>
           </div>
-          {(isScrollable || hasMoreAbove || hasMoreBelow) && (
+          {transcriptNav && (isScrollable || hasMoreAbove || hasMoreBelow) && (
             <div className="hidden sm:block w-2 self-stretch bg-sol-base02 rounded-full overflow-hidden">
               <div
                 data-cc-scroll-progress
@@ -5151,6 +5093,8 @@ const ConversationViewInner = (
     </main>
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
+    </HostedCardShownContext.Provider>
+    </HostedAskingContext.Provider>
     </ChatWakeContext.Provider>
     </RevealAncestryCtx.Provider>
     </BrowserSessionContext.Provider>

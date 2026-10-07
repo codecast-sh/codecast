@@ -190,7 +190,9 @@ export function UserMenu() {
         active={open}
         aria-label="User menu"
       >
-        <Settings className={isLocal ? "text-sol-green" : undefined} />
+        {/* Green marks the local dev server, a developer's cue; hosted mode
+            keeps the gear in ink. */}
+        <Settings className={isLocal && !hosted ? "text-sol-green" : undefined} />
       </TopbarButton>
       </ShortcutTooltip>
       {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}

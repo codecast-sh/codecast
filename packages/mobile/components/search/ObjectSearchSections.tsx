@@ -7,7 +7,7 @@ import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { matchMentionGroups, type MentionRecord } from '@codecast/web/lib/universalSearch';
+import { matchMentionGroups, searchIndexOf, type MentionRecord } from '@codecast/web/lib/universalSearch';
 import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -19,9 +19,18 @@ type IconName = React.ComponentProps<typeof FontAwesome>['name'];
 
 export function ObjectSearchSections({ query, chatHits }: { query: string; chatHits: any[] }) {
   const router = useRouter();
-  const index = useInboxStore((s) => s.mentionIndex);
+  // The cross-team index with the store's own collections over it, so the
+  // person's own tasks and docs are found even where the index's per-team
+  // sample left them out (searchIndexOf, the palette's rule).
+  const mentionIndex = useInboxStore((s) => s.mentionIndex);
+  const tasks = useInboxStore((s) => s.tasks);
+  const docs = useInboxStore((s) => s.docs);
+  const plans = useInboxStore((s) => s.plans);
   const teamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? undefined);
-  const groups = useMemo(() => matchMentionGroups(index as any, query, teamId as any, CAP), [index, query, teamId]);
+  const groups = useMemo(
+    () => (query.trim() ? matchMentionGroups(searchIndexOf({ mentionIndex, tasks, docs, plans }), query, teamId as any, CAP) : { tasks: [], docs: [], plans: [] }),
+    [mentionIndex, tasks, docs, plans, query, teamId],
+  );
 
   const open = (type: 'task' | 'plan' | 'doc', r: MentionRecord) => {
     const route = mobileEntityRoute(type, type === 'doc' ? r._id : r.short_id ?? r._id);

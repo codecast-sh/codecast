@@ -31,25 +31,33 @@ export function AssistantIntro({ onStarter, align = 'center', title, lede }: { o
       </Text>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: center ? 'center' : 'flex-start', gap: 8, marginTop: 4 }}>
         {LANE_COPY.home.starters(connected).map((starter) => (
-          <Pressable
-            key={starter.label}
-            accessibilityRole="button"
-            onPress={() => onStarter(starter.text)}
-            style={({ pressed }) => ({
-              paddingVertical: 7,
-              paddingHorizontal: 12,
-              borderRadius: 999,
-              borderWidth: 1,
-              borderColor: pressed ? c.lineStrong : c.line,
-              backgroundColor: pressed ? c.hover : c.sheet,
-              transform: [{ scale: pressed ? 0.97 : 1 }],
-            })}
-          >
-            <Text style={{ fontSize: 12.5, color: c.ink2 }}>{starter.label}</Text>
-          </Pressable>
+          <StarterChip key={starter.label} label={starter.label} onPress={() => onStarter(starter.text)} />
         ))}
       </View>
     </View>
+  );
+}
+
+/** One thing to ask, as a tappable chip: the intro's starters and the empty
+ *  Routines list's examples. */
+export function StarterChip({ label, onPress }: { label: string; onPress: () => void }) {
+  const { c } = useHostedTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => ({
+        paddingVertical: 7,
+        paddingHorizontal: 12,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: pressed ? c.lineStrong : c.line,
+        backgroundColor: pressed ? c.hover : c.sheet,
+        transform: [{ scale: pressed ? 0.97 : 1 }],
+      })}
+    >
+      <Text style={{ fontSize: 12.5, color: c.ink2 }}>{label}</Text>
+    </Pressable>
   );
 }
 

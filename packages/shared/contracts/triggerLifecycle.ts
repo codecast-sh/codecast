@@ -84,9 +84,14 @@ export function pendingEventsBlock(events: readonly PendingTriggerEvent[] | null
  *  server's one writer (agentTasks.triggerFrameFor) and the eval harness's
  *  role-wake fixtures render the same bytes. */
 export function triggerRunFrame(
-  task: { _id: string; short_id?: string; title?: string; prompt?: string | null; role_id?: string; event_filter?: { event_type?: string }; requested_run_focus?: string; role_focus?: string | null; pending_events?: readonly PendingTriggerEvent[] },
+  task: { _id: string; short_id?: string; title?: string; prompt?: string | null; role_id?: string; event_filter?: { event_type?: string }; requested_run_focus?: string; role_focus?: string | null; pending_events?: readonly PendingTriggerEvent[]; hosted_home?: boolean },
   read: { role: RoleCard | null; waiting?: WaitingSession | null; change?: AreaChange; stashed: boolean },
 ): string {
+  // A hosted routine (hosted_home) wakes the hosted assistant, which has no
+  // cast, no role and no stash: its frame is the person's instruction alone.
+  if (task.hosted_home === true) {
+    return formatScheduledTask({ title: task.title || "", task_id: String(task._id), trigger: task.short_id, role: null, waiting: null, body: task.prompt ?? "" });
+  }
   // A focus a person gave this run (orgReview.ts) leads the body: the run is
   // the routine's, narrowed, so the routine's own words still follow.
   const focus = orgReviewFocusOf(task.requested_run_focus);

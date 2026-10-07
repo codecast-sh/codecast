@@ -60,6 +60,8 @@ import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { startShipCore } from "./ship";
 import { personEditCore, resolveProposalCore } from "./expectations";
+import { fileLineCauseCore, startLineCauseCore } from "./lineCause";
+import { resumeRunCore } from "./workflow_runs";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -707,7 +709,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.starts_on_its_own !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, on: !!fields.starts_on_its_own });
     else if (fields.trust !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, trust: fields.trust });
     if (fields.caps !== undefined) {
-      await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
+      await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day, cards: fields.caps.cards });
     }
     // Who reports to the role (org-roles-run-work.md R6): the tab wrote the
     // whole list, and the mutation takes the difference against its own row.
@@ -811,31 +813,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setOrgTemplateLearning: async (ctx, _userId, [teamId, enabled]: [string | undefined, boolean]) => {
     return await ctx.runMutation!((api as any).orgTemplateLearning.setLearning, { ...(teamId ? { team_id: teamId } : {}), enabled });
   },
-  // `seen` (org-staffing.md S18): what the page showed when the verdict was
-  // pressed; the mutation refuses a verdict the author revised under the reader.
-  decideOrgProposalChange: async (ctx, _userId, [changeId, verdict, edits, seen]: [string, "accept" | "skip", any, { revised_at: number; seqs?: number[] } | undefined]) => {
-    return await ctx.runMutation!((api as any).orgProposals.decide, {
-      change_id: changeId,
-      verdict,
-      ...(edits && Object.keys(edits).length > 0 ? { edits } : {}),
-      ...(seen ? { seen } : {}),
-    });
-  },
-  // Withdraw from the pane (S4 supersession: the person takes the replaced
-  // proposal down; the human gate on the mutation is what allows it).
+  // Withdraw (S4 supersession: the person takes the replaced proposal down;
+  // the human gate on the mutation is what allows it).
   withdrawOrgProposal: async (ctx, _userId, [proposalRef]: [string]) => {
     return await ctx.runMutation!((api as any).orgProposals.withdraw, { proposal: proposalRef });
-  },
-  acceptAllOrgProposal: async (ctx, _userId, [proposalId, opts]: [string, { kinds?: string[]; seen?: { revised_at: number; seqs?: number[] } } | undefined]) => {
-    const kinds = Array.isArray(opts?.kinds) && opts!.kinds!.length > 0 ? opts!.kinds : undefined;
-    return await ctx.runMutation!((api as any).orgProposals.acceptAll, { proposal: proposalId, ...(kinds ? { kinds } : {}), ...(opts?.seen ? { seen: opts.seen } : {}) });
-  },
-  // One ask of a proposal, accepted or skipped whole (org-staffing.md S19):
-  // `ask` is the position the card had and `seen` what the page had painted
-  // (the latest revise, the card's seqs); the mutation reads the verdict
-  // against that and refuses one the author revised under the reader.
-  decideOrgProposalAsk: async (ctx, _userId, [proposalId, ask, verdict, seen, opts]: [string, number, "accept" | "skip", { revised_at: number; seqs?: number[] } | undefined, { leave_sessions?: boolean } | undefined]) => {
-    return await ctx.runMutation!((api as any).orgProposals.decideAsk, { proposal: proposalId, ask, verdict, ...(seen ? { seen } : {}), ...(opts?.leave_sessions && verdict === "accept" ? { leave_sessions: true } : {}) });
   },
   // A person's answers to a proposal, sent together (org-staffing.md S39):
   // approve, reject or a note per card, applied and kept by the mutation. The
@@ -1253,14 +1234,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   retryPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
     retryPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
 
-  // A person's message from the staffing pane into the thread bound to a
-  // proposal (org-staffing.md S18). orgProposals.say wraps it with the row it
-  // is about and enqueues it on the message rail under the pane's client id.
-  sayOnOrgProposal: async (ctx, _userId, [_threadConvId, proposal, changeSeq, body, clientId, askIndex]: [string, string, number | null, string, string, (number | null)?]) => {
-    return await ctx.runMutation!((api as any).orgProposals.say, {
-      proposal, body, client_id: clientId, ...(changeSeq != null ? { change: changeSeq } : {}), ...(askIndex != null ? { ask: askIndex } : {}),
-    });
-  },
   cancelPendingMessage: async (ctx, userId, [convId, ref]: [string, { messageId?: string; clientId?: string }]) =>
     cancelPendingMessageForUser(ctx, userId, convId as Id<"conversations">, ref),
   // A shared session's queue, steered by anyone who may send into it.
@@ -1604,12 +1577,46 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const project = await ctx.db.get(projectId as Id<"projects">);
     if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new ConvexError("Project not found");
     const lp = project.line_profile;
-    if (!lp?.root || !lp.device_id) throw new ConvexError("No machine has published this line's file yet: run cast line profile --publish in its checkout");
+    if (!lp?.root || !lp.device_id) {
+      // A line nothing has published yet (line-map.md LX5): the first edit
+      // writes the file on the viewer's own machine that last ran a session in
+      // the project's checkout, and that machine's republish makes it the
+      // line's. The daemon admits only a checkout it tracks.
+      const checkout = project.project_path;
+      if (lp || !checkout) throw new ConvexError("No machine has published this line's file yet: run cast line profile --publish in its checkout");
+      const last = await ctx.db.query("conversations")
+        .withIndex("by_user_git_root", (q: any) => q.eq("user_id", userId).eq("git_root", checkout))
+        .order("desc")
+        .filter((q: any) => q.neq(q.field("owner_device_id"), undefined))
+        .first();
+      if (!last?.owner_device_id) throw new ConvexError("None of your machines has run a session in this project's checkout yet: open one there, or run cast line profile --publish in it");
+      const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: checkout, edits }), last.owner_device_id, requestId);
+      return { command_id: commandId };
+    }
     // Only the publisher's own machine is ever a target: the row names who
     // published it, and enqueueConfigCommand refuses a device not the viewer's.
     if (lp.publisher_user_id && lp.publisher_user_id !== String(userId)) throw new ConvexError("The checkout is on a teammate's machine: its owner can edit this file");
     const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: lp.root, edits }), lp.device_id, requestId);
     return { command_id: commandId };
+  },
+
+  // A change to the line asked of an agent (line-map.md LX6): a cause in the
+  // project, category line, the person's words its first signal, written by
+  // the signal door's own commit (lineCause.ts). The store painted the cause
+  // under `temp_task_<clientKey>`; the row carries the key, so it supersedes.
+  fileLineCause: async (ctx, userId, [clientKey, projectId, input]: [string, string, any]) => {
+    if (!isServerId(projectId)) throw new ConvexError("This project is not saved yet");
+    return await fileLineCauseCore(ctx, userId, clientKey, projectId as Id<"projects">, input);
+  },
+  // "Start now" on a line cause: the project lead's line, started on it.
+  startLineCause: async (ctx, userId, [taskId]: [string]) => {
+    if (!isServerId(taskId)) throw new ConvexError("The cause is still being filed; start it in a moment");
+    return await startLineCauseCore(ctx, userId, taskId as Id<"tasks">);
+  },
+  // "Resume" on a run whose runner died: its machine continues it where it stands.
+  resumeLineRun: async (ctx, userId, [runId]: [string]) => {
+    if (!isServerId(runId)) throw new ConvexError("The run is still being created");
+    return await resumeRunCore(ctx, userId, runId as Id<"workflow_runs">);
   },
 
   // A project's expectations, changed where they are read (line-map.md LX3,
@@ -1770,6 +1777,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   stopOpsReplayImport: async (ctx, _userId, [id]: [string]) => {
     if (!opsRowId(ctx, "event_sources", id)) return null;
     await (ctx as any).runMutation(api.sources.replayBackfill.stop, { source: id });
+    return null;
+  },
+  // A watch's past values from its source (metrics.loadHistory): the same call `cast metrics backfill` makes.
+  loadOpsWatchHistory: async (ctx, _userId, [id]: [string]) => {
+    if (!opsRowId(ctx, "metric_watches", id)) return null;
+    await (ctx as any).runMutation(api.metrics.loadHistory, { watch: id });
     return null;
   },
   removeOpsSource: async (ctx, _userId, [id]: [string]) => {
@@ -1981,6 +1994,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   deleteTrigger: async (ctx, userId, [taskId]: [string]) => {
     await (ctx as any).runMutation(api.agentTasks.webDelete, { task_id: taskId });
+  },
+  // A hosted conversation's Stop (store stopHostedTurn): the client settled
+  // the row on its draft; the engine ends the running turn
+  // (assistant/turns.ts stopRunningTurn).
+  stopHostedTurn: async (ctx, userId, [conversationId]: [string]) => {
+    return await (ctx as any).runMutation(api.assistant.entry.stop, { conversation_id: conversationId });
   },
   setTriggerInterval: async (ctx, userId, [taskId, intervalMs]: [string, number]) => {
     return await (ctx as any).runMutation(api.agentTasks.webUpdate, { task_id: taskId, interval_ms: intervalMs });

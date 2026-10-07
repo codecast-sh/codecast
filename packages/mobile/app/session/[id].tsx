@@ -3513,6 +3513,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // the registry the web's header reads), and speaks in its words.
   const modelPicker = useSurface('modelPicker');
   const gitChips = useSurface('gitChips');
+  const internalsShown = useSurface('conversation.internals');
+  const diffSurface = useSurface('diff');
   const words = useModeWords();
   // The store's server dispatch is wired once, at the root (StoreSyncBridge
   // mounts useSyncCore above every screen), and must not be wired again here:
@@ -3645,6 +3647,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // resume, tool calls read as plain steps (HostedStep), and the approvals it
   // waits on sit at the foot of the transcript with the actual draft.
   const hosted = isHostedAgentType(conversation?.agent_type);
+  // The registry decides what a mode shows on any conversation (a local
+  // session opened in assistant mode too); `hosted` adds what a hosted
+  // conversation never has. Internals: restart, resume, folding, token counts.
+  const internals = internalsShown && !hosted;
+  const diffShown = diffSurface && !hosted;
   const approvals = useConversationApprovals(String(conversation?._id ?? id));
   const hostedApprovals = hosted ? approvals : NO_APPROVALS;
   // A failed send tries again through the store's one retry rule
@@ -4395,7 +4402,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const extraChipCount = [
     (conversation?.fork_count ?? 0) > 0,
     !!conversation && isConvexId(conversation._id) && !hosted,
-    !!latestUsage && !hosted,
+    !!latestUsage && internals,
     !!conversation?.parent_conversation_id,
     !!conversation?.forked_from_details,
   ].filter(Boolean).length;
@@ -4445,7 +4452,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     // git_diff lives off the conversation doc now and is fetched lazily on
     // expand; surface "View Diff" whenever there's a branch (panel stays empty
     // if there turns out to be no diff).
-    if (conversation?.git_branch) {
+    if (conversation?.git_branch && diffShown) {
       setDiffWanted(true);
       items.push({ label: diffExpanded ? 'Hide Diff' : 'View Diff', onPress: () => setDiffExpanded(d => !d) });
     }
@@ -4457,7 +4464,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     items.push({ label: 'Rename', onPress: () => setRenameVisible(true) });
     if (moveVerbs.includes('switch')) items.push({ label: 'Switch Agent…', onPress: () => pickAgentFor('switch') });
     items.push({ label: conversation?.is_favorite ? 'Unfavorite' : 'Favorite', onPress: handleToggleFavorite });
-    if (conversation && isConvexId(conversation._id) && !hosted) {
+    if (conversation && isConvexId(conversation._id) && internals) {
       items.push({ label: isRestarting ? 'Restarting…' : 'Restart Session', onPress: () => { if (!isRestarting) restartSession(); } });
     }
     const rare: SheetItem[] = [];
@@ -4465,15 +4472,15 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (moveVerbs.includes('fork') && conversation && isConvexId(conversation._id)) rare.push({ label: 'Fork as…', onPress: () => pickAgentFor('fork') });
     // Folding every message to a line is a way to skim a long agent run; a
     // hosted conversation is short prose with nothing to fold.
-    if (!hosted) rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
-    if (conversation?.session_id && !hosted) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
+    if (internals) rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
+    if (conversation?.session_id && internals) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
     if (rare.length > 0) items.push({ label: 'More…', onPress: () => showActionSheet(undefined, rare) });
     // The inbox row's own action under the inbox row's own name. Setting a
     // conversation aside is undone from the list, so in hosted words it is
     // not drawn as a delete.
     items.push(hosted ? { label: words.stash, onPress: handleDismiss } : { label: 'Dismiss', destructive: true, onPress: handleDismiss });
     showActionSheet(undefined, items);
-  }, [conversation, collapsed, diffExpanded, hasForkFamily, huddle, allSessionImages.length, boardHref, router, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting, hosted, words]);
+  }, [conversation, collapsed, diffExpanded, hasForkFamily, huddle, allSessionImages.length, boardHref, router, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting, hosted, internals, diffShown, words]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -4867,7 +4874,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                         showToast={showToast}
                       />
                     )}
-                    {latestUsage && !hosted && (
+                    {latestUsage && internals && (
                       <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
                         <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
                         <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>
@@ -4945,7 +4952,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 )}
               </RNView>
             )}
-            {diffExpanded && (gitDiffData?.git_diff?.trim() || gitDiffData?.git_diff_staged?.trim()) && (
+            {diffShown && diffExpanded && (gitDiffData?.git_diff?.trim() || gitDiffData?.git_diff_staged?.trim()) && (
               <RNView style={[styles.gitDiffPanel, { marginTop: 6, marginBottom: 2 }]}>
                 {gitDiffData.git_diff_staged && gitDiffData.git_diff_staged.trim().length > 0 && (
                   <RNView style={{ marginBottom: 8 }}>

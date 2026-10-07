@@ -117,7 +117,7 @@ function BudgetReturn() {
 }
 
 /** What the person answered an approval, as a receipt says it. */
-export function approvalAnswerWords(answer: string): string {
+function approvalAnswerWords(answer: string): string {
   if (answer === APPROVAL_ANSWERS.approve) return "You said yes";
   if (answer === APPROVAL_ANSWERS.always) return "You said yes, and not to ask again";
   if (answer === APPROVAL_ANSWERS.decline) return "You said no";
@@ -158,9 +158,15 @@ export type RoutineOffer = { label: string; ask: string };
  *  done once, and offering it weekly would read as a misunderstanding. */
 const REPEATABLE: readonly { shape: RegExp; when: string }[] = [
   { shape: /\b(news|headlines|weather|forecast|digest|briefing|summar(?:y|ise|ize))\b/i, when: "every morning" },
-  { shape: /\b(plan (?:my|the) week|weekly review|to-?dos?|checklist|what'?s (?:still )?open)\b/i, when: "every Monday" },
+  // The week's planning itself, not a list that happens to be inside an
+  // errand ("a short checklist for the night before" is part of one trip).
+  { shape: /\b(plan (?:my|the) week|weekly review|review my (?:to-?dos?|list)|what'?s (?:still )?open)\b/i, when: "every Monday" },
   { shape: /\b(prices?|deals?|sales?|check (?:on|for|if|whether)|keep an eye|track|status of)\b/i, when: "every week" },
 ];
+
+/** An errand tied to one date or one event happens once, whatever words it
+ *  shares with a repeating one. */
+const ONE_OFF = /\b(trip|vacation|holiday|party|wedding|birthday|event|move|moving|tomorrow|tonight|this (?:weekend|week|month)|next (?:week|month|weekend)|(?:in|on|for) (?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?))\b/i;
 
 /** The follow-up a first finished answer offers, or null: the same errand as
  *  a routine, worded with the cadence the errand suggests ("Do this every
@@ -171,7 +177,7 @@ export function routineOffer(reply: string | null | undefined, asked: string | u
   const text = reply?.trim() ?? "";
   if (working || personTurns !== 1 || !text || replyAsksPerson(text)) return null;
   const errand = asked ?? "";
-  if (/\b(every|each|daily|weekly|weekday|routine|remind)\b/i.test(errand)) return null;
+  if (/\b(every|each|daily|weekly|weekday|routine|remind)\b/i.test(errand) || ONE_OFF.test(errand)) return null;
   const match = REPEATABLE.find((r) => r.shape.test(errand));
   return match ? { label: `Do this ${match.when}?`, ask: `Do this for me ${match.when}.` } : null;
 }
@@ -180,7 +186,7 @@ const CHIP = "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius,8px)] b
 
 export function RoutineOfferChip({ offer, onAsk }: { offer: RoutineOffer; onAsk: (text: string) => void }) {
   return (
-    <div className="mx-auto conv-col px-2 sm:px-4 -mt-3 pb-3" data-hosted-routine-offer>
+    <div className="-mt-3 pb-3" data-hosted-routine-offer>
       <button type="button" onClick={() => onAsk(offer.ask)} className={CHIP}>
         <Repeat className="h-3.5 w-3.5" aria-hidden />
         {offer.label}
@@ -199,7 +205,7 @@ export function MailConnectChip() {
   const reconnect = mail.connected && mail.needsReconnect;
   if (!mail.known || (mail.connected && !reconnect) || (!reconnect && mail.available !== true)) return null;
   return (
-    <div className="mx-auto conv-col px-2 sm:px-4 -mt-3 pb-3" data-hosted-mail-connect>
+    <div className="-mt-3 pb-3" data-hosted-mail-connect>
       <button
         type="button"
         onClick={() => useInboxStore.getState().openSettingsModal("integrations")}

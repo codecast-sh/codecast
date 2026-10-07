@@ -11,11 +11,16 @@ import { useDesktopAppWindow, useHasAppWindow } from "../../hooks/useDesktopWind
 import { DESKTOP_APPS, type DesktopApp } from "../../lib/desktopApps";
 import { cn } from "../../lib/utils";
 import { popOutApp } from "../../lib/popOutApp";
+import { useSurface } from "../../lib/surfaces";
 
 export function AppPopOutButton({ app, className }: { app: DesktopApp; className?: string }) {
   const popped = useHasAppWindow(app);
+  const ownWindow = useDesktopAppWindow() === app;
+  // Separate windows are a developer's desk (the rail's Windows row);
+  // hosted mode keeps one window.
+  const windows = useSurface("nav.windows");
   // Inside the app's own window there is no gesture to make.
-  if (useDesktopAppWindow() === app) return null;
+  if (ownWindow || (!windows && !popped)) return null;
   const title = DESKTOP_APPS[app].title;
   // The label names what pressing does; the glyph alone carries the state.
   const label = popped ? `Raise the ${title} window` : `Open ${title} in its own window`;

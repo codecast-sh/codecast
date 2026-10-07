@@ -8994,6 +8994,7 @@ async function enrichInboxSessionRow(
     pending_api_error: conv.pending_api_error === true,
     pending_api_error_kind: conv.pending_api_error_kind ?? null,
     pending_api_error_at: conv.pending_api_error_at ?? null,
+    hosted_stop: conv.hosted_stop ?? null,
     // Size and last model call: what restarting it would cost (restart bar).
     ...wakeFieldsOf(conv),
     implementation_session: implementationSession,
@@ -9168,6 +9169,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     pending_api_error: child.pending_api_error === true,
     pending_api_error_kind: child.pending_api_error_kind ?? null,
     pending_api_error_at: child.pending_api_error_at ?? null,
+    hosted_stop: child.hosted_stop ?? null,
     // Size and last model call: what restarting it would cost (restart bar).
     ...wakeFieldsOf(child),
     // Same parent-link fields as the top-level scan (subagentLinkFields), so the
@@ -10288,9 +10290,13 @@ export async function buildAskingParents(
 // (lib/decisionQueue sessionHasOpenQuestion), so both sides share one rule.
 export function ownAsk(
   lv: { awaiting_input?: boolean | null; agent_status?: string | null },
-  conv?: { pending_api_error_kind?: string | null },
+  conv?: { pending_api_error_kind?: string | null; agent_type?: string | null },
 ): boolean {
   if (conv?.pending_api_error_kind && BLOCKED_BANNER_KINDS.has(conv.pending_api_error_kind)) return false;
+  // A hosted conversation asks only through its decision row (the pending
+  // decision ids every caller ORs in); its permission_blocked status lags an
+  // answer. The web queue applies the same rule.
+  if (isHostedAgentType(conv?.agent_type)) return false;
   return !!lv.awaiting_input || lv.agent_status === "permission_blocked";
 }
 
@@ -10299,7 +10305,7 @@ export function ownAsk(
 // same names, same meaning). Both the overlay and inboxForCLI go through here.
 export function placeConversationRow(
   conv: any,
-  lv: Partial<Pick<LivenessFields, "agent_status" | "is_idle" | "awaiting_input" | "is_unresponsive" | "agent_status_boundary" | "open_tasks" | "open_tasks_at" | "producing_until">>,
+  lv: Partial<Pick<LivenessFields, "agent_status" | "is_idle" | "awaiting_input" | "is_unresponsive" | "agent_status_boundary" | "open_tasks" | "open_tasks_at" | "producing_until" | "last_heartbeat">>,
   asking: boolean,
   lastUserMessage: string | null | undefined,
   now: number,
@@ -10321,6 +10327,8 @@ export function placeConversationRow(
       is_unresponsive: lv.is_unresponsive ?? null,
       open_tasks: lv.open_tasks ?? null,
       open_tasks_at: lv.open_tasks_at ?? null,
+      // The open-task vouch holds only while the row's own heartbeat lives.
+      last_heartbeat: lv.last_heartbeat ?? null,
       producing_until: lv.producing_until ?? null,
       last_message_preview: lastUserMessage ?? null,
       last_user_message: null,

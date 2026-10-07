@@ -14,8 +14,8 @@
 // No module here imports the harness; the tool definitions live beside it
 // (codecast.ts) and call these through ctx.runQuery / ctx.runMutation.
 import { v } from "convex/values";
-import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
-import { isActiveTask, isOnHumanBoard, isTerminalTaskStatus, TASK_PRIORITIES, TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks";
+import { HOSTED_AGENT_TYPE, ROUTINE_SHOWS_UP } from "@codecast/shared/contracts/assistant";
+import { isActiveTask, isAssistantTask, isOnHumanBoard, isTerminalTaskStatus, TASK_PRIORITIES, TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks";
 import { internalMutation, internalQuery } from "../../functions";
 import type { Doc, Id } from "../../_generated/dataModel";
 import { scopedFetch } from "../../data";
@@ -24,6 +24,8 @@ import { createTaskAs, updateTaskAs } from "../../tasks";
 import { createDocAs, ownDocsBySourceFile, updateDocAs } from "../../docs";
 import { applyCancel, insertTask, logVerb } from "../../agentTasks";
 import { hostedHomeStamp, hostedOwnerRefusal } from "../routines";
+import { cadenceOf, firstCadenceRun, plainCadence } from "@platform/assistant/cadence";
+import { firstRunWords } from "@platform/assistant/rules";
 
 type Ctx = { db: any };
 
@@ -108,11 +110,19 @@ export const listTasks = internalQuery({
     const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
     // The most recently changed rows, so an old open task that moved lately
     // is not cut off by newer ones, and only the rows the person's own board
-    // shows: no mined suggestions, no unpromoted insights.
+    // shows: no mined suggestions, no unpromoted insights. Of those, only the
+    // To-dos page's rows (isAssistantTask), so a coding agent's task never
+    // reads as one of the person's to-dos.
     const { records } = await scopedFetch(ctx, "tasks", { userId: args.user_id, workspace: "personal", limit: 500, updatedSince: 0 });
     const filter = args.filter ?? "open";
+    const madeIn = new Map<string, string | null>();
+    for (const t of records) {
+      const from = t.created_from_conversation as Id<"conversations"> | undefined;
+      if (from && !madeIn.has(from)) madeIn.set(from, (await ctx.db.get(from))?.agent_type ?? null);
+    }
     return records
       .filter((t) => isActiveTask(t) && isOnHumanBoard(t))
+      .filter((t) => isAssistantTask({ ...t, source_agent_type: t.created_from_conversation ? madeIn.get(t.created_from_conversation as string) : null }))
       .filter((t) => filter === "all" || isTerminalTaskStatus(t.status) === (filter === "done"))
       .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
       .slice(0, limit)
@@ -136,10 +146,13 @@ export const createTask = internalMutation({
     title: v.string(),
     description: v.optional(v.string()),
     priority: v.optional(taskPriority),
+    /** The conversation that asked for it, so the to-do links back there. */
+    conversation_id: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args) => {
-    const { user_id, ...fields } = args;
+    const { user_id, conversation_id, ...fields } = args;
     const created = await createTaskAs(ctx, user_id, { ...fields, workspace: "personal" });
+    if (conversation_id) await ctx.db.patch(created.id as Id<"tasks">, { created_from_conversation: conversation_id });
     return { id: created.short_id as string };
   },
 });
@@ -313,7 +326,7 @@ const routineView = (task: Doc<"agent_tasks">) => ({
   title: task.display_title ?? task.title,
   status: task.status,
   schedule: task.schedule_type,
-  ...(task.interval_ms ? { every_hours: Math.round((task.interval_ms / 3_600_000) * 100) / 100 } : {}),
+  ...(task.cadence ? { repeats: plainCadence(task.cadence) } : task.interval_ms ? { every_hours: Math.round((task.interval_ms / 3_600_000) * 100) / 100 } : {}),
   ...(task.run_at && task.status === "scheduled" ? { next_run: iso(task.run_at) } : {}),
   ...(task.last_run_at ? { last_run: iso(task.last_run_at) } : {}),
 });
@@ -324,13 +337,26 @@ export const scheduleRoutine = internalMutation({
     conversation_id: v.id("conversations"),
     title: v.optional(v.string()),
     prompt: v.string(),
-    run_at: v.number(),
+    /** The first run, or, for a routine on weekdays, `minutes` past midnight
+     *  on the person's clock and an optional date to start from: the first
+     *  listed day is then found here, in their zone. */
+    run_at: v.optional(v.number()),
+    minutes: v.optional(v.number()),
+    starts_on: v.optional(v.string()),
     interval_ms: v.optional(v.number()),
+    weekdays: v.optional(v.array(v.number())),
+    /** What it does, written to the person; shown as the routine's description. */
+    summary: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await hostedHome(ctx, args.user_id, args.conversation_id);
     const prompt = args.prompt.trim();
     if (!prompt) throw new Error("A routine needs something to do");
+    const timezone = (await ctx.db.get(args.user_id))?.timezone;
+    const run_at = args.minutes !== undefined && args.weekdays?.length
+      ? firstCadenceRun(cadenceOf(args.minutes, timezone, args.weekdays), Date.now(), args.starts_on)
+      : args.run_at;
+    if (run_at === undefined) throw new Error("A routine needs its first run, or its days and time");
     const created = await insertTask(ctx, args.user_id, {
       title: args.title?.trim() || prompt.slice(0, 60),
       prompt,
@@ -340,11 +366,19 @@ export const scheduleRoutine = internalMutation({
       // Any interval at all makes it recurring, so one too short to keep (or
       // rounded to 0) is refused by the plan rule rather than run once.
       schedule_type: args.interval_ms !== undefined ? "recurring" : "once",
-      run_at: args.run_at,
+      run_at,
       interval_ms: args.interval_ms,
+      weekdays: args.weekdays,
+      ...(args.summary?.trim() ? { display_summary: args.summary.trim() } : {}),
     });
     const row = (await ctx.db.get(created.id as Id<"agent_tasks">)) as Doc<"agent_tasks">;
-    return routineView(row);
+    // When it first runs and where it arrives, worded here once, so the
+    // reply says what the card and Routines say instead of its own paraphrase.
+    return {
+      ...routineView(row),
+      ...(row.run_at ? { first_run: firstRunWords(row.run_at, timezone) } : {}),
+      shows_up: ROUTINE_SHOWS_UP,
+    };
   },
 });
 

@@ -212,6 +212,24 @@ export function DocumentDetailLayout({
             </button>
           )}
           {draftingOn && <DraftingControls d={draft} overflowEnabled={overflowEnabled} />}
+          {/* Hosted mode leads with what a person does with a note: copy its
+              text, labelled, without the title line. */}
+          {!internals && (
+            <button
+              type="button"
+              onClick={() => {
+                const md = getMarkdownRef.current?.() ?? markdownContent;
+                copyToClipboard((titleInBody ? stripTitleHeading(md) : md).trim())
+                  .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); })
+                  .catch(() => toast.error("Couldn't copy that. Select the text and copy it instead."));
+              }}
+              data-cc-note-copy
+              className="mr-1 inline-flex h-7 items-center gap-1.5 rounded-md border border-sol-border px-2.5 text-xs text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          )}
           {topBarRight}
           {/* Shared controls in the detail's own header. Closing here is a
               navigation, so the slot's default hide is overridden — the

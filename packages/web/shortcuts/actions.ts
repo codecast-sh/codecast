@@ -8,7 +8,7 @@ import { resolvePaletteTarget } from "../lib/paletteTarget";
 import { useCallback } from "react";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
+import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, showInboxHome } from "../store/inboxStore";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
@@ -266,7 +266,10 @@ export function useGlobalShortcutActions() {
     toggleTriageBarCompact();
   }, []));
 
+  // Hosted mode's Cmd+1 is the Inbox nav row: its home, with nothing open,
+  // so a blank slate for the next errand is one key away.
   useShortcutAction('nav.inbox', useCallback(() => {
+    if (isHostedUi(useInboxStore.getState().clientState.ui)) showInboxHome();
     router.push("/inbox");
   }, [router]));
 

@@ -7,7 +7,7 @@
 import { useMemo } from "react";
 import { planOf } from "@codecast/shared/contracts/assistant";
 import { useWallet } from "../../hooks/useWallet";
-import { LANE_COPY, accountLine, meterFill, upgradesFrom } from "./lane";
+import { LANE_COPY, accountLine, meterFill, meterOut, upgradesFrom } from "./lane";
 import { useLaneConversations, useLaneTitles } from "./useLane";
 
 /** A day the way the plan screen says it: "October 21". */
@@ -34,7 +34,9 @@ export function usePlanMeter(feed = true) {
     month: plan.included_usd,
     figures,
     fill: meterFill(figures),
-    full: figures.used_usd >= figures.cap_usd,
+    /** No room for work at all (meterOut): the allowance and any extra
+     *  credit are spent. A spent allowance with credit left is not full. */
+    full: meterOut(figures),
     resets: planDay(figures.period_end),
   };
 }

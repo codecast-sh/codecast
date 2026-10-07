@@ -9,16 +9,23 @@ import { stepCount, stepText, visibleSteps, type ToolCallLike, type ToolResultLi
 /** How many steps a closed receipt names before "N more steps". */
 export const RECEIPT_STEPS = 3;
 
+/** `asking`: the conversation is parked on the person's approval, so a call
+ *  with no result yet waits on them rather than running (stepText).
+ *  `cardShown`: the approval's card is drawn under the receipt, so a step
+ *  still waiting on it is the card's to say and the receipt leaves it out. */
 export function hostedReceipt<C extends ToolCallLike>(
   calls: C[],
   resultFor: (call: C) => ToolResultLike | undefined,
-): { summary: string; counted: string; created: string[] } {
-  const lines = calls.map((call) => stepText(call, resultFor(call)));
+  opts: { asking?: boolean; cardShown?: boolean } = {},
+): { summary: string; counted: string; created: string[]; steps: number } {
+  const said = opts.asking && opts.cardShown ? calls.filter((call) => resultFor(call) !== undefined) : calls;
+  const lines = said.map((call) => stepText(call, resultFor(call), { asking: opts.asking }));
   const { shown, more } = visibleSteps(lines, false, RECEIPT_STEPS);
   return {
     summary: (more ? [...shown, stepCount(more, true)] : shown).join(" · "),
     counted: stepCount(lines.length),
     created: createdRefs(calls, resultFor),
+    steps: lines.length,
   };
 }
 

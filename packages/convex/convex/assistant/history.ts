@@ -73,10 +73,19 @@ export function isPersonRow(row: MessageRow): boolean {
   return row.role === "user" && !row.tool_results?.length && !!row.content?.trim();
 }
 
-/** The conversation's newest rows, oldest first, as the run replays them. The
- *  slice starts at the person's words, so it never opens on a tool result
- *  whose call fell outside it or on the model speaking first. */
-export async function loadHistory(ctx: QueryCtx, conversationId: Id<"conversations">): Promise<MessageRow[]> {
+/** Where a replayed window begins: its first message, by the index order
+ *  (timestamp, then _creationTime). Everything before it is the
+ *  conversation's longer history (longHistory.ts). */
+export interface WindowStart {
+  timestamp: number;
+  creationTime: number;
+}
+
+/** The conversation's newest rows, oldest first, as the run replays them, and
+ *  the message they start at. The slice starts at the person's words, so it
+ *  never opens on a tool result whose call fell outside it or on the model
+ *  speaking first. */
+export async function loadHistoryWindow(ctx: QueryCtx, conversationId: Id<"conversations">): Promise<{ rows: MessageRow[]; start: WindowStart | null }> {
   const newest = await ctx.db
     .query("messages")
     .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conversationId))
@@ -88,7 +97,13 @@ export async function loadHistory(ctx: QueryCtx, conversationId: Id<"conversatio
   const replayed = await withHostedReplay(ctx, said);
   const rows = replayed.map((doc) => toMessageRow(doc as unknown as Record<string, unknown>));
   const start = rows.findIndex(isPersonRow);
-  return start < 0 ? [] : rows.slice(start);
+  if (start < 0) return { rows: [], start: null };
+  return { rows: rows.slice(start), start: { timestamp: said[start].timestamp, creationTime: said[start]._creationTime } };
+}
+
+/** The conversation's newest rows, as loadHistoryWindow reads them. */
+export async function loadHistory(ctx: QueryCtx, conversationId: Id<"conversations">): Promise<MessageRow[]> {
+  return (await loadHistoryWindow(ctx, conversationId)).rows;
 }
 
 /** Writes rows into a hosted conversation's transcript through the batch
@@ -111,7 +126,7 @@ export function noticeUuid(turnKey: string): string {
   return `${NOTICE_UUID_PREFIX}${turnKey}`;
 }
 
-function isNoticeUuid(uuid: string | undefined): boolean {
+export function isNoticeUuid(uuid: string | undefined): boolean {
   return !!uuid?.startsWith(NOTICE_UUID_PREFIX);
 }
 

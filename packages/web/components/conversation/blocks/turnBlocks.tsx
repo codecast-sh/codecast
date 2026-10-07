@@ -17,6 +17,7 @@ import type { DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "../../DecisionAnswerFooter";
 import { describeSmallToolGroup, describeToolGroup, extractNestedActions, isAgentTool, isAskTool, isPlanModeTool, isPlanWriteToolCall, isTodoTool } from "@codecast/shared/render";
 import { hostedReceipt } from "../../../lib/hostedReceipt";
+import { HostedMadeLine, HostedNoteCard, wordsBeforeName } from "../HostedMadeLine";
 import { connectionChipCopy, useAppOffline } from "../../../hooks/useAppOffline";
 import { useThinkingAvailable } from "../../simple/assistantPromise";
 import { stepText } from "@platform/assistant/steps";
@@ -41,7 +42,8 @@ import { browserTabOf, type BrowserTabRef } from "../../castCommand";
 import { useInboxStore, isConvexId, retryPendingSend, type ForkChild } from "../../../store/inboxStore";
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { BranchSelector } from "../../BranchSelector";
-import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, SquareDashedMousePointer, X } from "lucide-react";
+import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, SquareDashedMousePointer, X } from "lucide-react";
+import { sendableText } from "../../../lib/sendableText";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
 import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
@@ -55,7 +57,7 @@ import { CastCommandBlock } from "./castBlocks";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
 import { useImageSrc } from "../../../hooks/useImageSrc";
 import { AssistantIcon, FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
-import { CastBrowserRowContext } from "../../../lib/conversationBlockContexts";
+import { CastBrowserRowContext, HostedAskingContext, HostedCardShownContext } from "../../../lib/conversationBlockContexts";
 import { assistantLabel } from "../../../lib/conversationBlockStyles";
 import { IdentityFace, IdentityHover } from "../../identity";
 import { AgentTypeIcon } from "../../AgentTypeIcon";
@@ -429,6 +431,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
   const chatOn = useTeamFeature("chat");
+  // Linking to, sharing and bookmarking single messages are a developer's
+  // tools; hosted mode keeps Copy.
+  const messageTools = useSurface("conversation.internals");
   const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   const handleToggleExpand = () => {
@@ -445,17 +450,17 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         {() => (
           <>
             <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
-            <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
+            {messageTools && <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>}
             {chatOn && <CtxItem icon={Forward} onSelect={handleForwardToChat}>Send to chat…</CtxItem>}
-            <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
+            {messageTools && <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
               {isBookmarked ? "Remove bookmark" : "Bookmark message"}
-            </CtxItem>
-            {(onForkFromMessage && messageUuid) || onStartShareSelection ? <CtxSeparator /> : null}
+            </CtxItem>}
+            {(onForkFromMessage && messageUuid) || (messageTools && onStartShareSelection) ? <CtxSeparator /> : null}
             {onForkFromMessage && messageUuid && (
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
             {onStartShareSelection && (
-              <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
+              messageTools && <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
             {isPending && (
               <>
@@ -471,7 +476,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         )}
       </ContextMenu>
       <div data-cc-user-message-toolbar className={`absolute -top-2 right-0 transition-opacity duration-150 ${TOOLBAR_SHELL} ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
-        {onStartShareSelection && (
+        {messageTools && onStartShareSelection && (
           <button
             onClick={() => onStartShareSelection(messageId)}
             className={TOOLBAR_BTN}
@@ -481,7 +486,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <SquareDashedMousePointer className="w-4 h-4" />
           </button>
         )}
-        <button
+        {messageTools && <button
           onClick={handleCopyLink}
           className={TOOLBAR_BTN}
           title="Copy link to message"
@@ -490,7 +495,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
           </svg>
-        </button>
+        </button>}
         {chatOn && (
           <button
             onClick={handleForwardToChat}
@@ -501,7 +506,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <Forward className="w-4 h-4" />
           </button>
         )}
-        <button
+        {messageTools && <button
           onClick={handleToggleBookmark}
           className={`${TOOLBAR_BTN_BASE} ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
           title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
@@ -510,7 +515,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
-        </button>
+        </button>}
         {onForkFromMessage && messageUuid && (
           <button
             onClick={() => onForkFromMessage(messageUuid)}
@@ -961,11 +966,13 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   agentType?: string;
 }) {
   const carriedBrowserRows = useContext(CastBrowserRowContext);
+  const hostedAsking = useContext(HostedAskingContext);
+  const hostedCardShown = useContext(HostedCardShownContext);
   // A hosted conversation opens onto its steps in the assistant's words; the
   // tools behind them show only where a conversation's internals do.
   const internalsShown = useSurface("conversation.internals");
   const hostedSteps = isHostedAgentType(agentType);
-  const { summary, counted, created, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
+  const { summary, counted, created, madeLine, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
     const counts = new Map<string, number>();
     const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
@@ -990,17 +997,19 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
         if (tab?.kind === "cast") droveCastBrowser = true;
       }
     }
-    const hosted = isHostedAgentType(agentType) ? hostedReceipt(entries.flatMap((e) => e.tools), resultFor) : null;
+    const hosted = isHostedAgentType(agentType) ? hostedReceipt(entries.flatMap((e) => e.tools), resultFor, { asking: hostedAsking, cardShown: hostedCardShown }) : null;
     const counted = hosted?.counted ?? [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
     return {
       summary: hosted?.summary ?? ((actions.length <= 2 && describeSmallToolGroup(actions)) || counted),
       created: hosted?.created ?? [],
+      // One step that made one thing reads as one line (HostedMadeLine).
+      madeLine: hosted && hosted.steps === 1 && hosted.created.length === 1 ? wordsBeforeName(hosted.summary) : null,
       counted,
       screenshots: shots,
       browserTabs: [...tabs.values()],
       droveCastBrowser,
     };
-  }, [entries, images, globalImageMap, resultFor, carriedBrowserRows, agentType]);
+  }, [entries, images, globalImageMap, resultFor, carriedBrowserRows, agentType, hostedAsking, hostedCardShown]);
   const header = (
     <div
       data-cc-tool-receipt
@@ -1025,7 +1034,9 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       // maps those to a bare var() with no <alpha-value> slot. Only the hex
       // accents (cyan, blue…) take one, which is why the fade is an opacity on
       // the row rather than alpha on each colour.
-      className={`flex items-center flex-wrap gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border px-2 py-1 text-[11px] transition ${
+      // A hosted receipt stays one line on a phone: the chevron keeps its
+      // place and a long step ends in an ellipsis rather than wrapping.
+      className={`flex items-center ${hostedSteps ? "flex-nowrap" : "flex-wrap"} gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border px-2 py-1 text-[11px] transition ${
         expanded
           ? "border-transparent text-sol-text-secondary hover:bg-[var(--cc-panel-head-bg)]"
           : "border-dashed border-sol-border text-sol-text-dim opacity-60 hover:opacity-100 hover:text-sol-text-secondary hover:border-sol-cyan/35 hover:bg-[var(--cc-panel-head-bg)]"
@@ -1033,7 +1044,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
       <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90 text-sol-cyan opacity-100" : ""}`} />
-      <span className="truncate tracking-tight">{expanded ? counted : summary}</span>
+      <span className="min-w-0 truncate tracking-tight">{expanded ? counted : summary}</span>
       {!expanded && browserTabs.map((tab) => <BrowserTabPill key={`${tab.kind}:${tab.tabId}`} tab={tab} />)}
       {!expanded && droveCastBrowser && conversationId && <BrowserWatchButton conversationId={conversationId} />}
       {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
@@ -1042,12 +1053,26 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   // What the assistant made (a to-do, a note), as live pills with their full
   // titles beside the receipt and at full ink: the receipt is the quiet
   // record, the pill is the thing to open (lib/hostedReceipt createdRefs).
-  const made = created.length > 0 && (
+  // A note it wrote shows as a card under the receipt (HostedNoteCard): the
+  // note is often the very thing the person asked for.
+  const notes = hostedSteps ? created.filter((ref) => /^doc:/i.test(ref)) : [];
+  const pills = notes.length ? created.filter((ref) => !notes.includes(ref)) : created;
+  const made = pills.length > 0 && (
     <span className="inline-flex flex-wrap items-center gap-1.5 text-[13px]" data-cc-made>
-      {created.map((ref) => <EntityIdPill key={ref} shortId={ref} />)}
+      {pills.map((ref) => <EntityIdPill key={ref} shortId={ref} />)}
     </span>
   );
-  if (!expanded) return <div className="not-prose mt-2 flex flex-wrap items-center gap-2">{header}{made}</div>;
+  const noteCards = notes.map((ref) => <HostedNoteCard key={ref} refId={ref} />);
+  // Every step here waits on the card drawn below: the card says it.
+  if (!expanded && hostedSteps && !summary && !made && !notes.length) return null;
+  if (!expanded && madeLine) return <HostedMadeLine words={madeLine} refId={created[0]} />;
+  // A hosted receipt keeps the transcript's block gap above the answer under it.
+  if (!expanded) return (
+    <>
+      <div className={`not-prose mt-2 flex flex-wrap items-center gap-2 ${hostedSteps && !notes.length ? "mb-3" : ""}`}>{header}{made}</div>
+      {noteCards}
+    </>
+  );
   return (
     <div className="not-prose mt-1 border-l-2 border-sol-cyan/50 pl-2">
       {header}
@@ -1056,7 +1081,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
           <ul data-cc-hosted-steps className="space-y-1 py-1">
             {entries.flatMap((entry) => entry.tools.map((tc) => (
               <li key={tc.id} className="text-[13px] leading-snug text-sol-text-muted">
-                <span>{stepText(tc, resultFor(tc))}</span>
+                <span>{stepText(tc, resultFor(tc), { asking: hostedAsking })}</span>
                 {internalsShown ? renderTool(tc, entry) : null}
               </li>
             )))}
@@ -1333,6 +1358,9 @@ function AssistantBlockImpl({
 
   const chatOn = useTeamFeature("chat");
   const ctxMenu = useContextMenu<void>();
+  // Linking to, sharing and bookmarking single messages are a developer's
+  // tools; hosted mode keeps Copy.
+  const messageTools = useSurface("conversation.internals");
 
   if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
     return null;
@@ -1375,16 +1403,16 @@ function AssistantBlockImpl({
         {() => (
           <>
             <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
-            <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
+            {messageTools && <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>}
             {chatOn && <CtxItem icon={Forward} onSelect={handleForwardToChat}>Send to chat…</CtxItem>}
-            <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
+            {messageTools && <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
               {isBookmarked ? "Remove bookmark" : "Bookmark message"}
-            </CtxItem>
-            {((onForkFromMessage && messageUuid && !onlyToolCalls) || onStartShareSelection) && <CtxSeparator />}
+            </CtxItem>}
+            {((onForkFromMessage && messageUuid && !onlyToolCalls) || (messageTools && onStartShareSelection)) && <CtxSeparator />}
             {onForkFromMessage && messageUuid && !onlyToolCalls && (
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
-            {onStartShareSelection && (
+            {messageTools && onStartShareSelection && (
               <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
             {onCollapseTurn && (
@@ -1419,7 +1447,7 @@ function AssistantBlockImpl({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
-          <button
+          {messageTools && <button
             onClick={handleCopyLink}
             className={TOOLBAR_BTN}
             title="Copy link to this message"
@@ -1428,7 +1456,7 @@ function AssistantBlockImpl({
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
             </svg>
-          </button>
+          </button>}
           {chatOn && (
             <button
               onClick={handleForwardToChat}
@@ -1439,7 +1467,7 @@ function AssistantBlockImpl({
               <Forward className="w-4 h-4" />
             </button>
           )}
-          {onStartShareSelection && (
+          {messageTools && onStartShareSelection && (
             <button
               onClick={() => onStartShareSelection(messageId)}
               className={TOOLBAR_BTN}
@@ -1449,7 +1477,7 @@ function AssistantBlockImpl({
               <SquareDashedMousePointer className="w-4 h-4" />
             </button>
           )}
-          <button
+          {messageTools && <button
             onClick={handleToggleBookmark}
             className={`${TOOLBAR_BTN_BASE} ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
             title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
@@ -1458,7 +1486,7 @@ function AssistantBlockImpl({
             <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
             </svg>
-          </button>
+          </button>}
         </div>
       )}
 
@@ -1550,6 +1578,10 @@ function AssistantBlockImpl({
           </>
         )}
 
+        {/* A hosted answer that holds text to send (the prompt sets it apart
+            as a quote) offers it whole in one press. */}
+        {hasContent && !parsedApiError && isHostedAgentType(agentType) && <CopySendable markdown={displayContent} />}
+
         {hasToolCalls && toolCalls?.filter(tc => tc.name === "SendUserFile").map(tc => (
           renderToolBlock(tc, toolResultMap[tc.id], { messageId, messageUuid, timestamp })
         ))}
@@ -1629,6 +1661,31 @@ function AssistantBlockImpl({
   );
 }
 export const AssistantBlock = memo(AssistantBlockImpl);
+
+/** "Copy" under a hosted answer, for the quoted text in it (sendableText):
+ *  the note or reply the person asked for, without the words around it. */
+function CopySendable({ markdown }: { markdown: string }) {
+  const text = useMemo(() => sendableText(markdown), [markdown]);
+  const [copied, setCopied] = useState(false);
+  if (!text) return null;
+  return (
+    <div data-cc-copy-sendable className="mt-2 flex items-center">
+      <button
+        type="button"
+        onClick={() => {
+          copyToClipboard(text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1600);
+          }).catch(() => toast.error("Couldn't copy that. Select the text and copy it instead."));
+        }}
+        className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius,8px)] border border-sol-border px-2.5 text-[12.5px] text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <CopyIcon className="h-3.5 w-3.5" />}
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
 
 function GitBranchBadge({
   gitBranch,

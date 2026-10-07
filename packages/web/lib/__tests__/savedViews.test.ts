@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { describe, expect, it } from "bun:test";
-import { activeViewId, currentViewId, isViewActive, isViewDirty, prefsForSaving, significantPrefs, VIEW_ID_KEY } from "../savedViews";
+import { activeViewId, currentViewId, fitsHostedMode, isViewActive, isViewDirty, prefsForSaving, significantPrefs, VIEW_ID_KEY } from "../savedViews";
 
 describe("significantPrefs", () => {
   it("drops every shape of 'not set' so they compare equal", () => {
@@ -117,5 +117,23 @@ describe("prefsForSaving", () => {
     // Presentation is ignored when COMPARING, but a view still restores it.
     expect(prefsForSaving({ status: "open", view: "kanban", dir: "asc" }))
       .toEqual({ status: "open", view: "kanban", dir: "asc" });
+  });
+});
+
+describe("fitsHostedMode", () => {
+  it("drops views arranged by who holds the work or by agents' rows", () => {
+    expect(fitsHostedMode({ group: "assignee", status: "open" })).toBe(false);
+    expect(fitsHostedMode({ group: "status+assignee" })).toBe(false);
+    expect(fitsHostedMode({ source: "agent" })).toBe(false);
+    expect(fitsHostedMode({ assignee: "_unassigned" })).toBe(false);
+    // The two developer views seen on a real account in hosted mode.
+    expect(fitsHostedMode({ sort: "assignee", statuses: "open,in_progress,in_review,backlog" })).toBe(false);
+    expect(fitsHostedMode({ sort: "assignee", source: "human" })).toBe(false);
+    expect(fitsHostedMode({ status: "st_k7x2" })).toBe(false);
+  });
+  it("keeps views a person's own list can use", () => {
+    expect(fitsHostedMode({ status: "done", sort: "created" })).toBe(true);
+    expect(fitsHostedMode({ group: "none", label: "home" })).toBe(true);
+    expect(fitsHostedMode(undefined)).toBe(true);
   });
 });

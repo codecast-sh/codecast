@@ -5,14 +5,13 @@
 // through the store's decision action, so the card leaves the moment it is
 // tapped and the conversation wakes with the answer. A pick-several, a
 // ranking or a form answers through the decision screen's own controls.
-import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { Text } from '@/components/Themed';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
+import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { useInboxStore, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
-import { APPROVAL_LABEL, LANE_COPY, answerNotes, answerTone, answersInline, approvalAsk, draftIsLong } from '@codecast/web/components/simple/lane';
+import { APPROVAL_LABEL, LANE_COPY, answerNotes, answerTone, answersInline, approvalAsk } from '@codecast/web/components/simple/lane';
 import { AnswerControls, type AnswerLook } from '@/components/decisions/AnswerControls';
 import { HostedButton, Rise } from './HostedUI';
 import { HOSTED_RADIUS, HOSTED_RADIUS_SM, useHostedTheme, type HostedColors } from './hostedTheme';
@@ -37,13 +36,13 @@ function hostedAnswerLook(c: HostedColors): AnswerLook {
   };
 }
 
-const FOLD_HEIGHT = 150;
+/** How much of a draft shows before its fold: enough for a routine's
+ *  instruction and its time, so only a long email or note folds. */
+const FOLD_HEIGHT = 220;
 
 export function ApprovalCard({ decision, index = 0 }: { decision: SessionDecisionItem; index?: number }) {
   const { c } = useHostedTheme();
   const draft = decision.context_md?.trim() ?? '';
-  const long = draftIsLong(draft);
-  const [open, setOpen] = useState(false);
   const inline = answersInline(decision);
   const notes = inline ? answerNotes(decision.options) : [];
   const answer = (i: number) => useInboxStore.getState().answerDecision(decision._id, { index: i });
@@ -62,41 +61,26 @@ export function ApprovalCard({ decision, index = 0 }: { decision: SessionDecisio
           {decision.question}
         </Text>
         {draft ? (
-          <>
-            <View
-              style={{
-                marginHorizontal: 10,
-                paddingVertical: 12,
-                paddingHorizontal: 13,
-                borderRadius: HOSTED_RADIUS_SM,
-                backgroundColor: c.sheet2,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: c.line,
-                overflow: 'hidden',
-                maxHeight: long && !open ? FOLD_HEIGHT : undefined,
-              }}
+          <View
+            style={{
+              marginHorizontal: 10,
+              paddingVertical: 12,
+              paddingHorizontal: 13,
+              borderRadius: HOSTED_RADIUS_SM,
+              backgroundColor: c.sheet2,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: c.line,
+            }}
+          >
+            <CollapsibleBody
+              fadeColor={c.sheet2}
+              height={FOLD_HEIGHT}
+              toggleColor={c.accent}
+              labels={[LANE_COPY.approval.showAll, LANE_COPY.approval.showLess]}
             >
               <MarkdownContent text={draft} plainTextFences baseStyle={{ fontSize: 13.5, lineHeight: 20, color: c.ink }} />
-              {long && !open ? (
-                <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 44 }}>
-                  <Svg width="100%" height="100%">
-                    <Defs>
-                      <LinearGradient id="fold" x1="0" y1="0" x2="0" y2="1">
-                        <Stop offset="0" stopColor={c.sheet2} stopOpacity={0} />
-                        <Stop offset="1" stopColor={c.sheet2} stopOpacity={1} />
-                      </LinearGradient>
-                    </Defs>
-                    <Rect width="100%" height="100%" fill="url(#fold)" />
-                  </Svg>
-                </View>
-              ) : null}
-            </View>
-            {long ? (
-              <Pressable onPress={() => setOpen((v) => !v)} hitSlop={8} accessibilityRole="button" style={{ marginHorizontal: 15, marginTop: 6 }}>
-                <Text style={{ fontSize: 13, fontWeight: '500', color: c.accent }}>{open ? LANE_COPY.approval.showLess : LANE_COPY.approval.showAll}</Text>
-              </Pressable>
-            ) : null}
-          </>
+            </CollapsibleBody>
+          </View>
         ) : null}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 11, paddingTop: 13, paddingBottom: notes.length ? 8 : 12 }}>
           {inline ? (

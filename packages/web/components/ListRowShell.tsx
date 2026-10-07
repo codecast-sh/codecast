@@ -38,6 +38,9 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
   return (
     <div
       data-list-focused={isFocused || undefined}
+      // The row's selection state for the hosted token layer (globals.css),
+      // which draws it in the family's accent rather than the developer cyan.
+      data-list-row-state={isActive ? "active" : isFocused ? "focused" : isSelected ? "selected" : undefined}
       onClick={state.onClick}
       onContextMenu={state.onContextMenu}
       {...dragProps}

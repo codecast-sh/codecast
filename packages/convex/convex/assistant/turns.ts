@@ -38,10 +38,14 @@ import {
 import {
   allowScopeIn,
   approvalContext,
+  cadenceOf,
+  clockMinutes,
+  firstCadenceRun,
+  firstRunWords,
   humanLabel,
   NEVER,
-  plainEvery,
   scopeMatch,
+  weekdayNumbers,
   stepAsk,
   systemPrompt as assistantPrompt,
   withRules as withRulesIn,
@@ -49,14 +53,16 @@ import {
   type RuleView,
   type SystemPromptArgs,
 } from "@platform/assistant";
-import { APPROVAL_ANSWERS, TURN_DEADLINE_MS, planOf, replyAsksPerson, type NoticeKind, type PlanSpec, type TurnReason } from "@codecast/shared/contracts/assistant";
+import { APPROVAL_ANSWERS, TURN_DEADLINE_MS, routineYesWords, planOf, replyAsksPerson, turnIsQuickSave, type NoticeKind, type PlanSpec, type TurnReason } from "@codecast/shared/contracts/assistant";
 import { isHostedAgentType, type AgentStatus } from "@codecast/shared/contracts";
-import { internalAction, internalMutation, type MutationCtx } from "../functions";
+import { internalAction, internalMutation, type ActionCtx, type MutationCtx } from "../functions";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { ensureWallet, money, reserve, settleTurn, walletPlan, walletRoom } from "../lib/wallet";
 import { isConversationSafetyBlocked } from "../conversationSafety";
+import { billingStatus } from "../billing";
 import { markPendingDelivered } from "../pendingMessages";
+import { markReadBySystem } from "../sessionReads";
 import { applyHostedAgentStatus } from "../managedSessions";
 import { askCore, withdrawCore } from "../sessionDecisions";
 import { messageValidator } from "../messages";
@@ -64,15 +70,18 @@ import { ALLOW_SCOPES, toolsFor, type ToolsForOptions } from "./tools";
 import { normalizeTimezone } from "../lib/teamDay";
 import { decisionAnswerOf, pendingInput, turnsIn, type Input, type Turn } from "./input";
 import { closeProviderIncident, noteProviderFault } from "./incidents";
+import { titleAfterHostedAnswer } from "../titleGeneration";
+import { earlierHistory, historyState, type LongHistory } from "./longHistory";
 import {
   isStorableRow,
-  loadHistory,
+  loadHistoryWindow,
   noticeUuid,
   strandedCalls,
   toStoredRow,
   writeNotice,
   writeRows,
   type StoredRow,
+  type WindowStart,
 } from "./history";
 
 /** The answers an approval card offers, in order: the first is the yes. */
@@ -227,6 +236,8 @@ export async function leaseTurn(
     await refuseForBudget(ctx, (await ctx.db.get(turnId))!, input);
     return "budget";
   }
+  // A new turn leaves the last one's stop behind.
+  if (conversation.hosted_stop) await ctx.db.patch(conversationId, { hosted_stop: undefined });
   await applyHostedAgentStatus(ctx, { conversation_id: conversationId, agent_status: "working" });
   await ctx.scheduler.runAfter(0, internal.assistant.turns.run, { turn_id: turnId });
   await ctx.scheduler.runAfter(turnDeps.deadlineMs + turnDeps.leaseMarginMs, internal.assistant.turns.expire, { turn_id: turnId });
@@ -261,7 +272,18 @@ async function refuseForBudget(ctx: MutationCtx, turn: Turn, input: Input): Prom
   }
   await takeTyped(ctx, turn.conversation_id, input.typed);
   for (const row of input.answers) await markPendingDelivered(ctx, row);
-  await stopTurn(ctx, turn, { status: "done", reason: "budget", costUsd: 0 }, { kind: "budget", line: () => budgetLine(ctx, turn.user_id, true) });
+  const end: TurnEnd = { status: "done", reason: "budget", costUsd: 0 };
+  // A routine firing while the allowance is still out says so once: the
+  // conversation already ends on the budget line (hosted_stop clears when a
+  // turn starts), so a daily routine does not repeat it every morning.
+  const conversation = await ctx.db.get(turn.conversation_id);
+  const byRoutineOnly = routineOnly(input.typed);
+  if (conversation?.hosted_stop === "budget" && byRoutineOnly) {
+    await endTurn(ctx, turn, end);
+    await setWorkState(ctx, turn.conversation_id, "idle");
+    return;
+  }
+  await stopTurn(ctx, turn, end, { kind: "budget", line: () => budgetLine(ctx, turn.user_id, true) });
 }
 
 /** Ends a running turn whose action died: it charges what the turn recorded
@@ -300,12 +322,15 @@ async function endTurn(ctx: MutationCtx, turn: Turn, end: TurnEnd): Promise<void
   await settleTurn(ctx, turn._id, end.costUsd, end.model ?? turn.model);
 }
 
-async function setWorkState(ctx: MutationCtx, conversationId: Id<"conversations">, status: AgentStatus): Promise<void> {
+/** Returns the turn_completed_at it stamped (none while working). */
+async function setWorkState(ctx: MutationCtx, conversationId: Id<"conversations">, status: AgentStatus): Promise<number | undefined> {
+  const completedAt = status === "working" ? undefined : Date.now();
   await applyHostedAgentStatus(ctx, {
     conversation_id: conversationId,
     agent_status: status,
-    ...(status === "working" ? {} : { turn_completed_at: Date.now() }),
+    ...(completedAt !== undefined ? { turn_completed_at: completedAt } : {}),
   });
+  return completedAt;
 }
 
 /** Why a turn stopped, as the transcript shows it: the line, and its kind
@@ -319,6 +344,15 @@ type Notice = { kind: NoticeKind; line: string | (() => Promise<string>) };
 async function tellStopped(ctx: MutationCtx, turn: Turn, notice: Notice): Promise<void> {
   const line = typeof notice.line === "string" ? notice.line : await notice.line();
   await writeNotice(ctx, turn.conversation_id, String(turn._id), line, notice.kind);
+  // The stop's one home on the row (conversations.hosted_stop): the inbox
+  // files the conversation under "Couldn't finish" without its transcript.
+  const conversation = await ctx.db.get(turn.conversation_id);
+  if (conversation) {
+    await ctx.db.patch(turn.conversation_id, { hosted_stop: notice.kind });
+    // A first turn that failed still gets a name from the person's ask, so
+    // the row they most need to find again is not their raw first message.
+    await titleAfterHostedAnswer(ctx, conversation);
+  }
   await setWorkState(ctx, turn.conversation_id, "idle");
 }
 
@@ -334,6 +368,32 @@ async function stopTurn(ctx: MutationCtx, turn: Turn, end: TurnEnd, notice: Noti
 async function afterTurn(ctx: MutationCtx, turn: Turn): Promise<void> {
   await leaseTurn(ctx, turn.conversation_id);
   await promoteQueued(ctx, turn.user_id);
+}
+
+/** What the transcript says after the person stops a turn. A write the run
+ *  had already started may still land, so it promises only what comes next. */
+export const STOPPED_LINE = "Stopped. I won't do anything more on this.";
+
+/** The person stopped the conversation's running turn (its Stop). The turn
+ *  ends as done with the cost recorded so far settled, so the run's next
+ *  write finds it over and aborts (record, toolStarted) and its finish stands
+ *  down. The transcript says so in one line, and anything the person typed
+ *  while it ran starts the next turn. False when nothing was running. */
+export async function stopRunningTurn(ctx: MutationCtx, conversationId: Id<"conversations">): Promise<boolean> {
+  const running = await turnsIn(ctx, conversationId, "running");
+  if (running.length === 0) return false;
+  // Stopped before its run began: the words it was leased for go into the
+  // transcript as asked, so they do not start the next turn over again.
+  if (running.some((turn) => turn.run_claimed_at === undefined)) {
+    await takeTyped(ctx, conversationId, (await pendingInput(ctx, conversationId)).typed);
+  }
+  for (const turn of running) {
+    await endTurn(ctx, turn, { status: "done", reason: "done", costUsd: turn.cost_usd ?? 0 });
+    await writeRows(ctx, conversationId, [{ role: "assistant", message_uuid: `stopped:${turn._id}`, content: STOPPED_LINE, timestamp: Date.now() }]);
+  }
+  await setWorkState(ctx, conversationId, "idle");
+  await afterTurn(ctx, running[0]);
+  return true;
 }
 
 const ERROR_NOTICE: Notice = { kind: "error", line: "Something went wrong on my side, so I stopped here. Nothing was used from your month." };
@@ -358,8 +418,17 @@ async function budgetLine(ctx: MutationCtx, userId: Id<"users">, atStart: boolea
   }
   const user = await ctx.db.get(userId);
   const reset = dayIn(wallet.period_end, user?.timezone);
-  const more = plan.id === "pro" ? "add usage from Plan" : "upgrade or add usage from Plan";
-  return `You've used ${atStart ? "all" : "nearly all"} the usage included in your ${plan.label} plan for now, so I can't ${atStart ? "work on this" : "go further"} yet. You can ${more}, or I'll be ready again on ${reset}.`;
+  // Offers only what Settings > Plan can do now (billing.ts billingStatus,
+  // the gate the Plan page reads through useUpgradesOpen).
+  const billing = billingStatus();
+  const offers = [
+    plan.id !== "pro" && billing.plans.length > 0 ? "move to a bigger plan" : null,
+    billing.topup ? "add extra credit" : null,
+  ].filter(Boolean).join(" or ");
+  const used = `You've used ${atStart ? "all" : "nearly all"} of this month's allowance, so I can't ${atStart ? "work on this" : "go further"} yet.`;
+  return offers
+    ? `${used} You can ${offers} from Plan, or it starts fresh on ${reset}.`
+    : `${used} It starts fresh on ${reset}, or write to us for more.`;
 }
 
 // ----------------------------------------------------------------- the gate
@@ -404,13 +473,35 @@ export function alwaysCovers(call: Pick<PendingCallView, "name" | "label">, scop
   return stepAsk({ name: call.name, input: {} }) ?? call.label ?? humanLabel(call.name);
 }
 
-/** What the yes on a card does, in the person's words. A routine's yes
- *  starts it, and says how long it keeps going; a write that could be always
- *  allowed is "just this time", set against the Always allow below it. */
-export function approveWords(call: Pick<PendingCallView, "name" | "input">, alwaysOffered: boolean): string {
+/** When a routine call would first run, read the way the tool reads it:
+ *  days and a time on the person's clock (firstCadenceRun), else first_run.
+ *  Null when the input names neither. */
+function routineFirstRun(input: Record<string, unknown>, timezone: string | null | undefined, now: number): number | null {
+  const weekdays = Array.isArray(input.days) ? weekdayNumbers(input.days.map(String)) : [];
+  const minutes = typeof input.time === "string" ? clockMinutes(input.time) : null;
+  if (weekdays.length && minutes !== null) {
+    return firstCadenceRun(cadenceOf(minutes, timezone, weekdays), now, typeof input.starts_on === "string" ? input.starts_on : undefined);
+  }
+  const at = typeof input.first_run === "string" ? Date.parse(input.first_run) : Number.NaN;
+  return Number.isNaN(at) ? null : at;
+}
+
+/** What the yes on a card does, in the person's words. A routine's yes says
+ *  when it starts, from today ("today at 8:00 AM"), that it keeps going until
+ *  paused on Routines, and where each run arrives; the card's When line
+ *  already says how often. A write that could be always allowed is "just this
+ *  time", set against the Always allow below it. */
+export function approveWords(
+  call: Pick<PendingCallView, "name" | "input">,
+  alwaysOffered: boolean,
+  opts: { timezone?: string | null; now?: number } = {},
+): string {
   if (call.name === "schedule_routine") {
+    const now = opts.now ?? Date.now();
+    const first = routineFirstRun(call.input, opts.timezone, now);
     const hours = call.input.repeat_every_hours;
-    return typeof hours === "number" && hours > 0 ? `Start it. Runs ${plainEvery(hours)} until you pause it.` : "Set it for that one time.";
+    const repeats = (Array.isArray(call.input.days) && call.input.days.length > 0) || (typeof hours === "number" && hours > 0);
+    return routineYesWords(first === null ? "" : firstRunWords(first, opts.timezone, now), repeats);
   }
   return alwaysOffered ? "Just this time." : "Go ahead.";
 }
@@ -422,8 +513,9 @@ async function askApproval(ctx: MutationCtx, conversation: Doc<"conversations">,
   // The step's own words, so the card and the receipt name the action one way.
   const label = stepAsk(call) ?? call.label ?? humanLabel(call.name);
   const scope = call.risk === "write" ? allowScope(call) : NEVER;
+  const timezone = (await ctx.db.get(conversation.user_id))?.timezone;
   const options = [
-    { label: APPROVE, description: approveWords(call, scope.kind !== "never") },
+    { label: APPROVE, description: approveWords(call, scope.kind !== "never", { timezone }) },
     ...(scope.kind === "never" ? [] : [{ label: ALWAYS_ALLOW, description: `${alwaysCovers(call, scope)} from now on without asking.` }]),
     { label: DECLINE, description: "Don't do it." },
   ];
@@ -434,7 +526,7 @@ async function askApproval(ctx: MutationCtx, conversation: Doc<"conversations">,
     options,
     // Times in the draft read on the person's own clock (their profile's
     // zone), and a short field the question already quotes is not repeated.
-    context_md: approvalContext(call.input, { timezone: (await ctx.db.get(conversation.user_id))?.timezone, question }),
+    context_md: approvalContext(call.input, { timezone, question }),
     blocking: true,
   });
   if (!asked?.id) throw new Error(asked?.error ?? "The approval could not be asked");
@@ -459,6 +551,11 @@ function approvalOf(decision: Doc<"session_decisions"> | null, ownerId: Id<"user
 /** The person's queued words, into the transcript as their rows (which also
  *  settles each pending row through the writer's echo match), then every row
  *  marked delivered. */
+/** Input that only a routine sent: no word from the person in it. */
+function routineOnly(typed: Doc<"pending_messages">[]): boolean {
+  return typed.length > 0 && typed.every((row) => row.origin === "scheduler");
+}
+
 async function takeTyped(ctx: MutationCtx, conversationId: Id<"conversations">, typed: Doc<"pending_messages">[]): Promise<void> {
   if (typed.length === 0) return;
   const now = Date.now();
@@ -545,16 +642,25 @@ export interface Begun {
   rules: RuleView[];
   name?: string;
   timezone?: string;
+  /** The conversation's history past the replayed rows (longHistory.ts), when any is logged. */
+  long: LongHistory | null;
+  /** Where the replayed rows begin: the run logs what came before (longHistory.ts). */
+  window_start: WindowStart | null;
+  /** Only a routine's firing started this turn (no word from the person). */
+  by_routine: boolean;
 }
 
 /** Starts a leased turn's run: takes the queued input, resolves an answered
  *  approval, and returns what the run needs. Null when the turn is no longer
- *  running (a stale schedule). */
+ *  running (a stale schedule), or another run already took it: a turn has
+ *  two runners (the scheduled run and the person's kick, entry.kick) and the
+ *  first to begin claims it in this mutation, so the loop runs once. */
 export const begin = internalMutation({
   args: { turn_id: v.id("assistant_turns") },
   handler: async (ctx, args): Promise<Begun | null> => {
     const turn = await ctx.db.get(args.turn_id);
-    if (!turn || turn.status !== "running") return null;
+    if (!turn || turn.status !== "running" || turn.run_claimed_at !== undefined) return null;
+    await ctx.db.patch(turn._id, { run_claimed_at: Date.now() });
     const conversation = await ctx.db.get(turn.conversation_id);
     // Deleted or safety-blocked after the lease: the run never starts, so no
     // tool acts, and the reservation goes back now rather than at lease
@@ -592,7 +698,8 @@ export const begin = internalMutation({
       if (fresh?.status === "pending") await markPendingDelivered(ctx, fresh);
     }
 
-    const history = await loadHistory(ctx, turn.conversation_id);
+    const window = await loadHistoryWindow(ctx, turn.conversation_id);
+    const history = window.rows;
     const resolving = new Set(resume.map((r) => r.call.id));
     for (const call of strandedCalls(history)) {
       if (resolving.has(call.id)) continue;
@@ -629,6 +736,10 @@ export const begin = internalMutation({
       rules,
       ...(user?.name ? { name: user.name } : {}),
       ...(user?.timezone ? { timezone: user.timezone } : {}),
+      long: await historyState(ctx, turn.conversation_id),
+      window_start: window.start,
+      // A routine's run is news the person did not just ask for.
+      by_routine: routineOnly(input.typed),
     };
   },
 });
@@ -678,144 +789,163 @@ export function systemPrompt(args: Omit<SystemPromptArgs, "workspace">): string 
 
 // --------------------------------------------------------------- the run
 
-/** One turn's run of the loop. Scheduled by leaseTurn; ends in finish. */
+/** One turn's run of the loop. Scheduled by leaseTurn as the fallback
+ *  runner; the person's kick (entry.kick) usually begins it first. */
 export const run = internalAction({
   args: { turn_id: v.id("assistant_turns") },
   handler: async (ctx, args): Promise<null> => {
-    const turnId = args.turn_id;
-    const failure = (error: unknown) => ({
-      turn_id: turnId,
-      reason: "error" as const,
-      error: error instanceof Error ? error.message : String(error),
-      cost_usd: Number.NaN,
-      pending: [],
-    });
-    let begun: Begun | null;
-    try {
-      begun = await ctx.runMutation(internal.assistant.turns.begin, { turn_id: turnId });
-    } catch (error) {
-      await ctx.runMutation(internal.assistant.turns.finish, failure(error));
-      return null;
-    }
-    if (!begun) return null;
-    const ready = begun;
-
-    try {
-      const set = await turnDeps.toolsFor(ctx, ready.user_id, ready.conversation_id, turnDeps.toolOptions);
-      const labels = new Map(set.tools.map((tool) => [tool.name, tool.label]));
-      // The gate reads every row the run works from: the history and each row it adds.
-      const rows: MessageRow[] = [...ready.history];
-      const controller = new AbortController();
-      let cost = 0;
-      // Each streamed message keeps the timestamp of its first write.
-      const stamps = new Map<string, number>();
-      const stamp = (uuid: string) => {
-        if (!stamps.has(uuid)) stamps.set(uuid, Date.now());
-        return stamps.get(uuid)!;
-      };
-      const write = async (messages: StoredRow[], costUsd?: number) => {
-        const live = await ctx.runMutation(internal.assistant.turns.record, {
-          turn_id: turnId,
-          messages,
-          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
-        });
-        if (!live) controller.abort();
-      };
-      let lastStream = 0;
-
-      const startedAt = Date.now();
-      const attempt = (model: string, spent: number) => runAssistant({
-        model: turnDeps.model(model),
-        system: systemPrompt({ name: ready.name, timezone: ready.timezone, now: Date.now(), note: set.note }),
-        // A second attempt works from every row the first one stored.
-        history: [...rows],
-        tools: set.tools,
-        gate: withRules(set.gate(rows), ready.rules, () => set.readOutside(rows)),
-        ceilingUsd: Math.max(0, ready.ceiling_usd - spent),
-        deadlineMs: Math.max(0, turnDeps.deadlineMs - (Date.now() - startedAt)),
-        apiKeys: turnDeps.apiKeys(),
-        signal: controller.signal,
-        resume: ready.resume,
-        startedCalls: ready.started_calls,
-        sessionId: String(ready.conversation_id),
-        onText: async (text, { messageUuid }) => {
-          const now = Date.now();
-          if (now - lastStream < turnDeps.streamEveryMs) return;
-          lastStream = now;
-          await write([{ role: "assistant", message_uuid: messageUuid, content: text, timestamp: stamp(messageUuid) }]);
-        },
-        onMessage: async (row, { costUsd }) => {
-          rows.push(row);
-          cost += costUsd;
-          const stored = isStorableRow(row)
-            ? [{ ...toStoredRow(row), ...(row.message_uuid ? { timestamp: stamp(row.message_uuid) } : {}) }]
-            : [];
-          await write(stored, cost);
-        },
-        onToolStart: async (call) => {
-          const live = await ctx.runMutation(internal.assistant.turns.toolStarted, { turn_id: turnId, call_id: call.id });
-          if (!live) {
-            controller.abort();
-            throw new Error("the turn ended");
-          }
-        },
-      });
-
-      // The model's provider could not serve it (no credit, a bad key, an
-      // outage): the turn moves to the fallback tier at once, with no retry
-      // ladder, as long as the person has seen nothing from the first try.
-      let result: RunResult = await attempt(ready.model, 0);
-      // The model id as the engine names it (`openai/...` for the fallback
-      // tier), so the turn row and the incident name its provider.
-      let model = ready.model;
-      let fellBack: { model: string; error: string } | undefined;
-      const fallback = turnDeps.fallbackModel(ready.model);
-      const said = result.messages.some((row) => row.role === "assistant" && isStorableRow(row));
-      if (result.reason === "error" && fallback && providerFault(result.error) && !said && !controller.signal.aborted) {
-        console.warn(`[assistant] ${ready.model} failed (${result.error?.slice(0, 200)}), moving turn ${turnId} to ${fallback}`);
-        const first = result;
-        fellBack = { model: ready.model, error: first.error ?? "" };
-        model = fallback;
-        const second = await attempt(fallback, first.costUsd);
-        result = {
-          ...second,
-          costUsd: first.costUsd + second.costUsd,
-          usage: {
-            input: first.usage.input + second.usage.input,
-            output: first.usage.output + second.usage.output,
-            cacheRead: first.usage.cacheRead + second.usage.cacheRead,
-            cacheWrite: first.usage.cacheWrite + second.usage.cacheWrite,
-          },
-        };
-      }
-
-      // A reply that asks the person something in its last paragraph waits on
-      // them: the inbox files it under what needs them, not under done.
-      const lastText = [...result.messages].reverse().find((row) => row.role === "assistant" && row.content?.trim())?.content?.trim();
-      await ctx.runMutation(internal.assistant.turns.finish, {
-        turn_id: turnId,
-        reason: result.reason,
-        ...(result.error ? { error: result.error } : {}),
-        ...(replyAsksPerson(lastText) ? { asks_person: true } : {}),
-        cost_usd: result.costUsd,
-        model,
-        ...(fellBack ? { fell_back_from: fellBack } : {}),
-        input_tokens: result.usage.input + result.usage.cacheRead + result.usage.cacheWrite,
-        output_tokens: result.usage.output,
-        pending: result.pending.map((call) => ({
-          id: call.id,
-          name: call.name,
-          input: call.input,
-          risk: call.risk,
-          ...(labels.get(call.name) ? { label: labels.get(call.name) } : {}),
-        })),
-      });
-    } catch (error) {
-      await ctx.runMutation(internal.assistant.turns.finish, failure(error));
-    }
+    await runTurn(ctx, args.turn_id);
     return null;
   },
 });
+
+/** Runs one leased turn to its finish, unless another runner began it first.
+ *  True when this call ran it. */
+export async function runTurn(ctx: ActionCtx, turnId: Id<"assistant_turns">): Promise<boolean> {
+  const failure = (error: unknown) => ({
+    turn_id: turnId,
+    reason: "error" as const,
+    error: error instanceof Error ? error.message : String(error),
+    cost_usd: Number.NaN,
+    pending: [],
+  });
+  let begun: Begun | null;
+  try {
+    begun = await ctx.runMutation(internal.assistant.turns.begin, { turn_id: turnId });
+  } catch (error) {
+    await ctx.runMutation(internal.assistant.turns.finish, failure(error));
+    return false;
+  }
+  if (!begun) return false;
+  const ready = begun;
+
+  try {
+    // The conversation's beginning and middle, past the replayed rows.
+    const earlier = await earlierHistory(ctx, { conversationId: ready.conversation_id, start: ready.window_start, long: ready.long, turnId: String(turnId), timezone: ready.timezone });
+    const set = await turnDeps.toolsFor(ctx, ready.user_id, ready.conversation_id, { ...turnDeps.toolOptions, outsideEarlier: earlier.outside });
+    const tools = [...set.tools, ...earlier.tools];
+    const labels = new Map(tools.map((tool) => [tool.name, tool.label]));
+    // The gate reads every row the run works from: the history and each row it adds.
+    const rows: MessageRow[] = [...ready.history];
+    const controller = new AbortController();
+    let cost = 0;
+    // Each streamed message keeps the timestamp of its first write.
+    const stamps = new Map<string, number>();
+    const stamp = (uuid: string) => {
+      if (!stamps.has(uuid)) stamps.set(uuid, Date.now());
+      return stamps.get(uuid)!;
+    };
+    const write = async (messages: StoredRow[], costUsd?: number) => {
+      const live = await ctx.runMutation(internal.assistant.turns.record, {
+        turn_id: turnId,
+        messages,
+        ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+      });
+      if (!live) controller.abort();
+    };
+    let lastStream = 0;
+
+    const startedAt = Date.now();
+    const attempt = (model: string, spent: number) => runAssistant({
+      model: turnDeps.model(model),
+      system: [systemPrompt({ name: ready.name, timezone: ready.timezone, now: Date.now(), note: set.note }), earlier.section].filter(Boolean).join("\n\n"),
+      // A second attempt works from every row the first one stored.
+      history: [...rows],
+      tools,
+      gate: withRules(set.gate(rows), ready.rules, () => set.readOutside(rows)),
+      ceilingUsd: Math.max(0, ready.ceiling_usd - spent),
+      deadlineMs: Math.max(0, turnDeps.deadlineMs - (Date.now() - startedAt)),
+      apiKeys: turnDeps.apiKeys(),
+      signal: controller.signal,
+      resume: ready.resume,
+      startedCalls: ready.started_calls,
+      sessionId: String(ready.conversation_id),
+      onText: async (text, { messageUuid }) => {
+        const now = Date.now();
+        if (now - lastStream < turnDeps.streamEveryMs) return;
+        lastStream = now;
+        await write([{ role: "assistant", message_uuid: messageUuid, content: text, timestamp: stamp(messageUuid) }]);
+      },
+      onMessage: async (row, { costUsd }) => {
+        rows.push(row);
+        cost += costUsd;
+        const stored = isStorableRow(row)
+          ? [{ ...toStoredRow(row), ...(row.message_uuid ? { timestamp: stamp(row.message_uuid) } : {}) }]
+          : [];
+        await write(stored, cost);
+      },
+      onToolStart: async (call) => {
+        const live = await ctx.runMutation(internal.assistant.turns.toolStarted, { turn_id: turnId, call_id: call.id });
+        if (!live) {
+          controller.abort();
+          throw new Error("the turn ended");
+        }
+      },
+    });
+
+    // The model's provider could not serve it (no credit, a bad key, an
+    // outage): the turn moves to the fallback tier at once, with no retry
+    // ladder, as long as the person has seen nothing from the first try.
+    let result: RunResult = await attempt(ready.model, 0);
+    // The model id as the engine names it (`openai/...` for the fallback
+    // tier), so the turn row and the incident name its provider.
+    let model = ready.model;
+    let fellBack: { model: string; error: string } | undefined;
+    const fallback = turnDeps.fallbackModel(ready.model);
+    const said = result.messages.some((row) => row.role === "assistant" && isStorableRow(row));
+    if (result.reason === "error" && fallback && providerFault(result.error) && !said && !controller.signal.aborted) {
+      console.warn(`[assistant] ${ready.model} failed (${result.error?.slice(0, 200)}), moving turn ${turnId} to ${fallback}`);
+      const first = result;
+      fellBack = { model: ready.model, error: first.error ?? "" };
+      model = fallback;
+      const second = await attempt(fallback, first.costUsd);
+      result = {
+        ...second,
+        costUsd: first.costUsd + second.costUsd,
+        usage: {
+          input: first.usage.input + second.usage.input,
+          output: first.usage.output + second.usage.output,
+          cacheRead: first.usage.cacheRead + second.usage.cacheRead,
+          cacheWrite: first.usage.cacheWrite + second.usage.cacheWrite,
+        },
+      };
+    }
+
+    // A reply that asks the person something in its last paragraph waits on
+    // them: the inbox files it under what needs them, not under done.
+    const lastText = [...result.messages].reverse().find((row) => row.role === "assistant" && row.content?.trim())?.content?.trim();
+    // A turn that only saved what the person asked for files as read: its
+    // receipt is not news. The calls are this run's and the approved ones it
+    // carried out from the turn before.
+    const calls = [
+      ...ready.resume.filter((r) => r.decision !== "decline").map((r) => r.call),
+      ...result.messages.flatMap((row) => row.tool_calls ?? []),
+    ];
+    const quickSave = result.reason === "done" && !ready.by_routine && turnIsQuickSave(calls, lastText);
+    await ctx.runMutation(internal.assistant.turns.finish, {
+      turn_id: turnId,
+      reason: result.reason,
+      ...(result.error ? { error: result.error } : {}),
+      ...(replyAsksPerson(lastText) ? { asks_person: true } : {}),
+      ...(quickSave ? { quick_save: true } : {}),
+      cost_usd: result.costUsd,
+      model,
+      ...(fellBack ? { fell_back_from: fellBack } : {}),
+      input_tokens: result.usage.input + result.usage.cacheRead + result.usage.cacheWrite,
+      output_tokens: result.usage.output,
+      pending: result.pending.map((call) => ({
+        id: call.id,
+        name: call.name,
+        input: call.input,
+        risk: call.risk,
+        ...(labels.get(call.name) ? { label: labels.get(call.name) } : {}),
+      })),
+    });
+  } catch (error) {
+    await ctx.runMutation(internal.assistant.turns.finish, failure(error));
+  }
+  return true;
+}
 
 const pendingCallViewValidator = v.object({
   id: v.string(),
@@ -887,6 +1017,8 @@ export const finish = internalMutation({
     fell_back_from: v.optional(v.object({ model: v.string(), error: v.string() })),
     // The reply ends on a question to the person.
     asks_person: v.optional(v.boolean()),
+    // The turn only saved what the person asked for (turnIsQuickSave).
+    quick_save: v.optional(v.boolean()),
     input_tokens: v.optional(v.number()),
     output_tokens: v.optional(v.number()),
     pending: v.array(pendingCallViewValidator),
@@ -978,7 +1110,10 @@ export const finish = internalMutation({
 
     if (args.model) await closeProviderIncident(ctx, args.model);
     await endTurn(ctx, turn, { ...common, status: "done", reason: "done" });
-    await setWorkState(ctx, turn.conversation_id, args.asks_person ? "idle" : "done");
+    const completedAt = await setWorkState(ctx, turn.conversation_id, args.asks_person ? "idle" : "done");
+    // Read at the turn's own stamp, so the row files under Earlier.
+    if (args.quick_save && conversation && completedAt !== undefined) await markReadBySystem(ctx, turn.user_id, turn.conversation_id, completedAt);
+    if (conversation) await titleAfterHostedAnswer(ctx, conversation);
     await afterTurn(ctx, turn);
     return null;
   },

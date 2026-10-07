@@ -984,6 +984,22 @@ describe("needs-input digest — one alert an hour", () => {
   });
 
 
+  // A hosted answer that settles is the person's to read, not a session
+  // waiting on them: nine finished answers rang as "9 conversations waiting
+  // for you" (pl-840). Its approvals ring through the decision row instead.
+  test("a hosted conversation's settle neither alerts nor joins the fold-up", async () => {
+    const { ctx, tables } = fleetWorld();
+    tables.conversations[0].agent_type = "codecast";
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res).toEqual({ notified: false, reason: "hosted" });
+    expect(tables.notifications.length).toBe(0);
+    // A row queued before the stand-down is left out of the fold-up too.
+    for (const id of ["conv2", "conv3"]) await performNeedsInputCheck(ctx as any, { conversation_id: id });
+    tables.conversations[2].agent_type = "codecast";
+    tables.users[0].idle_digest_state.last_alerted_at = Date.now() - IDLE_DIGEST_WINDOW_MS - 1;
+    expect(await performIdleDigestFlush(ctx as any, "u1")).toEqual({ notified: false, reason: "nothing_waiting" });
+  });
+
   test("a session the user already answered is not named", async () => {
     const { ctx, tables } = fleetWorld();
     for (const id of ["conv1", "conv2", "conv3"]) {

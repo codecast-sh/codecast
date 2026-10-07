@@ -19,6 +19,9 @@ import { carriedAsk, forgetCarriedAsk } from "./simple/carriedAsk";
 import "./simple/simple.css";
 import { TerminalSquare } from "lucide-react";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
+import { useWaitingOnPerson } from "../hooks/useNeedsInputCount";
+import { sessionCardTitle } from "../lib/sessionCard";
+import { LANE_COPY } from "./simple/lane";
 
 interface EmptyStateProps {
   title: string;
@@ -430,14 +433,45 @@ function HostedEmptyState() {
   });
   return (
     <div className="flex h-full min-h-[360px] flex-col py-16">
-      <AssistantIntro onAsk={ask}>
+      <AssistantIntro onAsk={ask} title={LANE_COPY.home.title}>
         {held ? null : (
           <div data-simple-lane="inline" className="mt-2 w-full max-w-md text-left">
             <Composer placeholder="Or ask in your own words" onSend={ask} seed={seed} />
           </div>
         )}
+        <HostedWaitingList />
       </AssistantIntro>
     </div>
+  );
+}
+
+/** Under the start: the conversations waiting on the person (an OK, a
+ *  reply), the same rows the Inbox count counts, so the home is a calm
+ *  start page that still says what needs them. Nothing waiting, no list. */
+const WAITING_SHOWN = 5;
+function HostedWaitingList() {
+  const rows = useWaitingOnPerson();
+  if (rows.length === 0) return null;
+  const open = (id: string) => useInboxStore.getState().navigateToSession(id);
+  return (
+    <section data-cc-home-waiting className="mt-6 w-full max-w-md text-left">
+      <h2 className="mb-1.5 px-1 text-xs font-medium text-sol-text-muted">{LANE_COPY.home.waiting}</h2>
+      <ul className="flex flex-col">
+        {rows.slice(0, WAITING_SHOWN).map((row) => (
+          <li key={row._id}>
+            <button
+              type="button"
+              onClick={() => open(row._id)}
+              className="flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-sm text-sol-text transition-colors hover:bg-sol-bg-alt"
+            >
+              <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-sol-orange" />
+              <span className="min-w-0 flex-1 truncate">{sessionCardTitle(row)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {rows.length > WAITING_SHOWN && <p className="px-1 pt-1 text-xs text-sol-text-dim">{LANE_COPY.home.showMore(rows.length - WAITING_SHOWN)} in the inbox</p>}
+    </section>
   );
 }
 

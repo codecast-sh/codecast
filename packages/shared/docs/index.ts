@@ -119,6 +119,23 @@ export function isOnHumanShelf(doc: {
   return isHumanDocOrigin(doc) || !!doc.pinned;
 }
 
+/** Docs an agent org keeps about its own roles (a role's charter and brief).
+ *  A charter is stamped human because a person may edit it, but it describes
+ *  how the agents work, not a note of the person's. */
+export const ROLE_DOC_TYPES: ReadonlySet<string> = new Set(["charter", "brief"]);
+
+/**
+ * The shelf in hosted mode, where the list is the person's own notes: the
+ * human shelf without the agent org's role docs.
+ */
+export function isOnNotesShelf(doc: {
+  source?: string | null;
+  pinned?: boolean | null;
+  doc_type?: string | null;
+}): boolean {
+  return isOnHumanShelf(doc) && !ROLE_DOC_TYPES.has(doc.doc_type ?? "");
+}
+
 /**
  * The doc source a plan-body doc should carry, derived from its plan's
  * source. Plans have their own source vocabulary (human, promoted, template,

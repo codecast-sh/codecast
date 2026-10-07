@@ -15,6 +15,7 @@ import {
   topupLabel,
   workedTimes,
   ledgerLines,
+  meterOut,
   meterShort,
   monthPercent,
   monthShare,
@@ -24,7 +25,6 @@ import {
   conversationPath,
   conversationState,
   conversationSubline,
-  draftIsLong,
   approvalAsk,
   accountLine,
   answerTone,
@@ -205,11 +205,15 @@ describe("routines", () => {
     expect(whenSaid(new Date(2026, 9, 6, 8, 0).getTime(), now)).toMatch(/^tomorrow at 8:00/);
   });
 
-  it("says a schedule in one sentence", () => {
+  it("says a schedule the way the web routine row does", () => {
     const tomorrow8 = new Date(2026, 9, 6, 8, 0).getTime();
-    expect(routineSchedule({ schedule_type: "recurring", interval_ms: 86_400_000, run_at: tomorrow8, status: "scheduled" }, now)).toMatch(/^Runs every day\. Next: tomorrow at 8:00/);
-    expect(routineSchedule({ schedule_type: "recurring", interval_ms: 86_400_000, status: "paused" }, now)).toBe("Paused. Runs every day when it's on");
-    expect(routineSchedule({ schedule_type: "once", run_at: tomorrow8, status: "scheduled" }, now)).toMatch(/^Runs once, tomorrow/);
+    expect(routineSchedule({ schedule_type: "recurring", interval_ms: 86_400_000, run_at: tomorrow8, status: "scheduled" }, now)).toMatch(/^Every day at 8:00\sAM\. Tomorrow$/);
+    // A weekday routine reads its wall clock, not "every day" from its interval.
+    const weekdays = { zone: "America/New_York", minutes: 480, weekdays: [1, 2, 3, 4, 5] };
+    expect(routineSchedule({ schedule_type: "recurring", interval_ms: 86_400_000, run_at: tomorrow8, cadence: weekdays, status: "scheduled" }, now)).toBe("Weekdays at 8:00 AM. Tomorrow");
+    expect(routineSchedule({ schedule_type: "recurring", interval_ms: 86_400_000, cadence: weekdays, status: "paused" }, now)).toBe("Paused. Weekdays at 8:00 AM when it's on");
+    expect(routineSchedule({ schedule_type: "once", run_at: tomorrow8, status: "scheduled" }, now)).toMatch(/^Once, Oct 6 at 8:00/);
+    expect(routineSchedule({ schedule_type: "event", event_filter: { event_type: "pr_comment" }, status: "scheduled" }, now)).toMatch(/^On /);
   });
 
 });
@@ -224,6 +228,16 @@ describe("usage", () => {
     expect(usageHeadline({ used_usd: 0, reserved_usd: 0, cap_usd: 2, topup_usd: 0 })).toBe("Nothing used yet this month");
     expect(usageHeadline({ used_usd: 0.5, reserved_usd: 0, cap_usd: 2, topup_usd: 0 })).toBe("25% of this month's allowance used");
     expect(usageHeadline({ used_usd: 2, reserved_usd: 0, cap_usd: 2, topup_usd: 0 })).toBe("You've used all of this month's allowance");
+  });
+
+  it("holds only when the allowance and the extra credit are both spent", () => {
+    const onCredit = { used_usd: 2, reserved_usd: 0, cap_usd: 2, topup_usd: 5 };
+    expect(meterOut(onCredit)).toBe(false);
+    expect(meterShort(onCredit)).toBe("Allowance used, on extra credit");
+    expect(usageHeadline(onCredit)).toBe("This month's allowance is used up, so your extra credit is in use");
+    const spent = { ...onCredit, topup_usd: 0 };
+    expect(meterOut(spent)).toBe(true);
+    expect(meterShort(spent)).toBe("All used this month");
   });
 
   it("rounds every percent of the month one way, so the sidebar and the Plan page agree", () => {
@@ -243,8 +257,8 @@ describe("usage", () => {
     }
     expect(planPrice(PLANS.free)).toBe("$0 a month");
     expect(planPrice(PLANS.plus)).toBe("$20 a month");
-    // The Free month is sized in measured everyday requests ($2 at $0.0032 each, 625, said as 600).
-    expect(planPoints(PLANS.free)[0]).toBe("Room for about 600 everyday requests a month");
+    // The Free month is sized in measured everyday requests ($2 at $0.005 each, said as 400).
+    expect(planPoints(PLANS.free)[0]).toBe("Room for about 400 everyday requests a month");
     expect(planPoints(PLANS.plus)[0]).toBe("6 times the Free allowance each month");
     expect(planPoints(PLANS.free)[1]).toBe("3 routines, at most every day");
     // The global hourly floor shows on every plan, so the card promises what the server allows.
@@ -347,13 +361,6 @@ describe("shared list and fold rules", () => {
     expect(conversationSubline(row, "waiting", 'Set up a routine: "Weekday weather"?')).toBe('Set up a routine: "Weekday weather"?');
     expect(conversationSubline(row, "working", "Send it?")).toBe("Working on it");
     expect(conversationSubline({}, "done")).toBe("");
-  });
-
-  it("folds a long draft by length or by lines", () => {
-    expect(draftIsLong("short")).toBe(false);
-    expect(draftIsLong("x".repeat(421))).toBe(true);
-    expect(draftIsLong(Array(10).fill("a").join("\n"))).toBe(true);
-    expect(draftIsLong(Array(9).fill("a").join("\n"))).toBe(false);
   });
 
   it("lists every lane surface once, home first", () => {

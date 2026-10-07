@@ -23,6 +23,10 @@ describe("the routine offer under a first answer", () => {
     expect(routineOffer("Here are three vacuums.", "Compare the three best rated robot vacuums", 1, false)).toBeNull();
     expect(routineOffer("Here is a note.", "Help me write a kind note saying no to an invitation", 1, false)).toBeNull();
     expect(routineOffer("Here is a plan.", "Plan a relaxed weekend away for two, with a rough budget", 1, false)).toBeNull();
+    // A list inside a one-off errand, or an errand tied to a date, is done once.
+    expect(routineOffer("Here it is.", "Make a packing list for a 3-day camping trip in October, with a short checklist for the night before", 1, false)).toBeNull();
+    expect(routineOffer("Here they are.", "Check the prices of flights for my trip tomorrow", 1, false)).toBeNull();
+    expect(routineOffer("Here they are.", "Add these to my to-dos", 1, false)).toBeNull();
   });
 
   test("not while working, after a second turn, on a question anywhere in the last paragraph, or when the ask was already a schedule", () => {

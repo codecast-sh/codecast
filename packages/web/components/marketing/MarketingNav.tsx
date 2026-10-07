@@ -11,6 +11,8 @@ import { RepoPulseChip } from "@/components/marketing/RepoPulseChip";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { visitorPlatform } from "@/lib/visitorPlatform";
 import { AssistantMark } from "@/components/simple/AssistantMark";
+import { HostedWordmark } from "@/components/HostedWordmark";
+import { LANE_PATHS } from "@/components/simple/lanePaths";
 
 /**
  * The one nav bar for every marketing page (landing, pricing, docs, blog...).
@@ -46,11 +48,32 @@ const WAY_FONT = { fontFamily: "var(--pd-font-ui, ui-sans-serif, system-ui, sans
 const INK = "#002b36";
 const MUTED = "#657b83";
 
+/** The bar a visitor sees after coming through the assistant's door: only
+ *  what someone who does not write code needs (the assistant's section, its
+ *  pricing, signing in), in the family's paper and faces, with the hosted
+ *  wordmark. The developer links (Docs, CLI, Changelog, stars, Download)
+ *  stay on the developer bar. */
+const DOOR_LINKS = [
+  { href: EVERYONE_HREF, label: "For everyone" },
+  { href: "/pricing?for=assistant", label: "Pricing", active: "/pricing" },
+] as const;
+const DOOR = {
+  ink: "var(--pd-ink, #201c17)",
+  muted: "var(--pd-ink-muted, #6b6355)",
+  rule: "var(--pd-rule, #e4ddce)",
+  accent: "var(--pd-accent, #c93a0e)",
+  accentInk: "var(--pd-accent-ink, #fdfbf6)",
+} as const;
+
 export function MarketingNav({
   active,
   crumb,
   containerClassName = "max-w-6xl",
+  door,
 }: {
+  /** "assistant": the visitor came through the assistant's door (pricing's
+   *  ?for=assistant), so the bar is the assistant's (DOOR_LINKS). */
+  door?: "assistant";
   /** Path of the page rendering the bar; that link paints in ink instead of muted. */
   active?: string;
   /** A "/ docs" style breadcrumb beside the logo (the reference pages use it). */
@@ -72,6 +95,48 @@ export function MarketingNav({
     setApple(p === "mac" || p === "ios");
     setMounted(true);
   });
+  if (door === "assistant") {
+    return (
+      <nav
+        className="backdrop-blur-sm sticky top-0 z-50"
+        style={{ borderBottom: `1px solid ${DOOR.rule}`, backgroundColor: "color-mix(in srgb, var(--pd-bg, #f6f3ec) 85%, transparent)", ...WAY_FONT }}
+      >
+        <div className={`${containerClassName} mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-2`}>
+          <Link href={EVERYONE_HREF} aria-label="Codecast for everyone">
+            <HostedWordmark size={20} className="text-[19px]" />
+          </Link>
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            {DOOR_LINKS.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="hidden sm:flex items-center px-2.5 py-1.5 text-[14px] font-medium transition-colors"
+                style={{ color: "active" in link && link.active === active ? DOOR.ink : DOOR.muted }}
+              >
+                {link.label}
+              </Link>
+            ))}
+            {!mounted ? (
+              <span aria-hidden className="block h-9 w-[7.5rem] shrink-0" />
+            ) : signedIn ? (
+              <Link href="/inbox" className="inline-flex h-9 items-center gap-1.5 rounded-[10px] px-4 text-[14px] font-semibold" style={{ background: DOOR.accent, color: DOOR.accentInk }}>
+                Open app <ArrowRight className="w-4 h-4" />
+              </Link>
+            ) : (
+              <>
+                <Link href="/login" className="hidden sm:flex items-center px-2.5 py-1.5 text-[14px] font-medium" style={{ color: DOOR.muted }}>
+                  Sign in
+                </Link>
+                <Link href={LANE_PATHS.welcome} className="inline-flex h-9 items-center rounded-[10px] px-4 text-[14px] font-semibold" style={{ background: DOOR.accent, color: DOOR.accentInk }}>
+                  Get started
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </nav>
+    );
+  }
   return (
     <nav
       className="backdrop-blur-sm sticky top-0 z-50"

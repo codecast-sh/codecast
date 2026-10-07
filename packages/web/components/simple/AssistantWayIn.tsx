@@ -12,7 +12,7 @@ import { assistantInvite, useConnectAvailable } from "./assistantPromise";
 import { LANE_PATHS } from "./lanePaths";
 
 /** The question that names who the path is for. */
-export const WAY_IN_QUESTION = "Don't write code?";
+const WAY_IN_QUESTION = "Don't write code?";
 
 /** `marketing` sits on the landing page's fixed Solarized light paper;
  *  `app` reads the themed `sol` tokens, as signup does. */

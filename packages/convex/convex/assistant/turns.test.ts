@@ -16,6 +16,7 @@ import type { Id } from "../_generated/dataModel";
 import { enqueuePendingMessage, healAndNotifyStuckMessages } from "../pendingMessages";
 import { finalizeAnswer } from "../sessionDecisions";
 import { decisionAnswerClientId } from "@codecast/shared/contracts";
+import { ROUTINE_SHOWS_UP } from "@codecast/shared/contracts/assistant";
 import { ensureWallet, LEAK_GRACE_MS, reserve } from "../lib/wallet";
 import { allModules as modules, loadPiAi } from "../testModules.testkit";
 import { toolsFor } from "./tools";
@@ -196,6 +197,95 @@ describe("a turn", () => {
     const s = await expectBalanced(t, started.conversation_id as Id<"conversations">, user);
     expect(s.turns.map((turn) => [turn.status, turn.reason])).toEqual([["done", "done"]]);
     expect(s.messages.map((m) => m.content)).toEqual(["Book a dentist", "On it."]);
+  });
+
+  test("the person's kick runs the turn at once, and the scheduled run stands down", async () => {
+    const { t, user, conversationId } = await setup();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let calls = 0;
+    faux.setResponses([
+      async () => {
+        calls++;
+        await gate;
+        return reply("On it.");
+      },
+      async () => {
+        calls++;
+        return reply("Twice.");
+      },
+    ]);
+    // A send: the wake is scheduled, and the scheduler is far behind.
+    await t.run(async (ctx) => enqueuePendingMessage(ctx, await ctx.db.get(conversationId), user, { content: "Book a dentist", human: true }));
+    const kicked = t.withIdentity({ subject: user }).action(api.assistant.entry.kick, { conversation_id: conversationId });
+    while (calls === 0) await pause(10);
+    // The backlog drains while the kicked turn runs: the scheduled wake finds
+    // the lease taken and the scheduled run finds its turn already begun.
+    await settle(t);
+    release();
+    expect(await kicked).toEqual({ ran: 1 });
+    await settle(t);
+    const s = await expectBalanced(t, conversationId, user);
+    expect(s.turns.map((turn) => [turn.status, turn.reason])).toEqual([["done", "done"]]);
+    expect(s.messages.map((m) => m.content)).toEqual(["Book a dentist", "On it."]);
+    expect(calls).toBe(1);
+  });
+
+  test("a turn the scheduler already began is not run again by a kick, and a stranger's kick runs nothing", async () => {
+    const { t, user, conversationId } = await setup();
+    faux.setResponses([reply("On it.")]);
+    await say(t, conversationId, user, "Book a dentist");
+    await settle(t);
+    const stranger = await t.run((ctx) => ctx.db.insert("users", {} as any));
+    await t.run(async (ctx) => enqueuePendingMessage(ctx, await ctx.db.get(conversationId), user, { content: "And a haircut", human: true }));
+    expect(await t.withIdentity({ subject: stranger }).action(api.assistant.entry.kick, { conversation_id: conversationId })).toEqual({ ran: 0 });
+    // The scheduler takes this one first; the owner's late kick finds it claimed.
+    faux.setResponses([reply("Booked.")]);
+    await settle(t);
+    expect(await t.withIdentity({ subject: user }).action(api.assistant.entry.kick, { conversation_id: conversationId })).toEqual({ ran: 0 });
+    const s = await expectBalanced(t, conversationId, user);
+    expect(s.messages.map((m) => m.content)).toEqual(["Book a dentist", "On it.", "And a haircut", "Booked."]);
+  });
+
+  test("input that lands during a kicked turn runs in the same kick", async () => {
+    const { t, user, conversationId } = await setup();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered = false;
+    faux.setResponses([
+      async () => {
+        entered = true;
+        await gate;
+        return reply("First answer.");
+      },
+      reply("Second answer."),
+    ]);
+    await t.run(async (ctx) => enqueuePendingMessage(ctx, await ctx.db.get(conversationId), user, { content: "First question", human: true }));
+    const kicked = t.withIdentity({ subject: user }).action(api.assistant.entry.kick, { conversation_id: conversationId });
+    while (!entered) await pause(10);
+    await t.run(async (ctx) => enqueuePendingMessage(ctx, await ctx.db.get(conversationId), user, { content: "Second question", human: true }));
+    release();
+    expect(await kicked).toEqual({ ran: 2 });
+    const s = await expectBalanced(t, conversationId, user);
+    expect(s.messages.map((m) => m.content)).toEqual(["First question", "First answer.", "Second question", "Second answer."]);
+  });
+
+  test("a finished answer names a conversation no title pass has named, past the pass floor", async () => {
+    const { t, user, conversationId } = await setup();
+    const titlePasses = () => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((job) => job.name.includes("generateTitle")).length);
+    // A pass a moment ago (the message-2 milestone, before the reply landed)
+    // holds the usual milestones behind their floor.
+    await t.run((ctx) => ctx.db.patch(conversationId, { title_gen_scheduled_at: Date.now() }));
+    faux.setResponses([reply("Here's your packing list, saved as a note.")]);
+    await say(t, conversationId, user, "Make a packing list for Chicago");
+    await settle(t);
+    expect(await titlePasses()).toBe(1);
+    // Once a pass has named it (it writes a subtitle), turns leave it to the milestones.
+    await t.run((ctx) => ctx.db.patch(conversationId, { subtitle: "Packing for a work trip", title_gen_scheduled_at: Date.now() }));
+    faux.setResponses([reply("Added a gym section.")]);
+    await say(t, conversationId, user, "Add gym clothes");
+    await settle(t);
+    expect(await titlePasses()).toBe(1);
   });
 
   test("a tool call and its result are stored as rows the transcript renders", async () => {
@@ -489,7 +579,7 @@ describe("approvals", () => {
     expect(tail[1].tool_results?.[0]).toMatchObject({ tool_use_id: "call_send", is_error: true });
     expect(tail[1].tool_results?.[0].content).toContain("no usage left");
     expect(tail[2]).toMatchObject({ role: "assistant" });
-    expect(tail[2].content).toContain("upgrade or add usage");
+    expect(tail[2].content).toContain("of this month's allowance");
     expect(s.managed?.agent_status).toBe("idle");
 
     // The period resets; the next message runs a turn that does not send.
@@ -520,7 +610,7 @@ describe("approvals", () => {
     expect(s.messages.slice(-3).map((m) => [m.role, m.tool_results?.[0]?.tool_use_id ?? m.content])).toEqual([
       ["user", "call_send"],
       ["user", "Never mind"],
-      ["assistant", expect.stringContaining("upgrade or add usage")],
+      ["assistant", expect.stringContaining("of this month's allowance")],
     ]);
     // The result names the real reason, as begin would: the person moved on.
     const result = s.messages[s.messages.length - 3].tool_results?.[0].content;
@@ -541,7 +631,7 @@ describe("approvals", () => {
     expect(s.turns.map((turn) => [turn.status, turn.reason])).toEqual([["done", "approval"], ["done", "budget"]]);
     const tail = s.messages.slice(-2);
     expect(tail[0].tool_results?.[0]).toEqual({ tool_use_id: "call_send", content: declineText("send_mail"), is_error: true });
-    expect(tail[1].content).toContain("upgrade or add usage");
+    expect(tail[1].content).toContain("of this month's allowance");
 
     // After the period resets, the model reads a declined call, not a usage limit.
     await t.run(async (ctx) => {
@@ -609,9 +699,35 @@ describe("limits", () => {
     const [asked, line] = s.messages;
     expect(asked).toMatchObject({ role: "user", content: "Plan my week" });
     expect(line.role).toBe("assistant");
-    expect(line.content).toContain("upgrade or add usage");
+    expect(line.content).toContain("of this month's allowance");
     expect(s.pending.every((row) => row.status === "delivered")).toBe(true);
     expect(s.managed?.agent_status).toBe("idle");
+  });
+
+  test("a routine firing again with the allowance still out does not repeat the line", async () => {
+    const { t, user, conversationId } = await setup();
+    await t.run(async (ctx) => {
+      const wallet = await ensureWallet(ctx, user);
+      await ctx.db.patch(wallet._id, { period_cost_usd: wallet.period_cap_usd });
+    });
+    const fire = (content: string) => t.run(async (ctx) => {
+      const conversation = await ctx.db.get(conversationId);
+      await enqueuePendingMessage(ctx, conversation, user, { content, origin: "scheduler" });
+    });
+    await fire("Morning review");
+    await settle(t);
+    await fire("Morning review, the next day");
+    await settle(t);
+    const s = await state(t, conversationId, user);
+    expect(s.turns.map((turn) => turn.reason)).toEqual(["budget", "budget"]);
+    expect(s.messages.filter((m) => m.role === "assistant" && m.content?.includes("allowance"))).toHaveLength(1);
+    expect(s.managed?.agent_status).toBe("idle");
+
+    // The person's own words still get the line.
+    await say(t, conversationId, user, "Why didn't you answer?");
+    await settle(t);
+    const after = await state(t, conversationId, user);
+    expect(after.messages[after.messages.length - 1].content).toContain("of this month's allowance");
   });
 
   test("a hold an ended turn leaked is freed for the next turn even when it is short of the ceiling", async () => {
@@ -739,6 +855,24 @@ describe("more limits", () => {
     await say(t, conversationId, user, "Ideas for Saturday");
     await settle(t);
     expect((await state(t, conversationId, user)).managed?.agent_status).toBe("idle");
+  });
+
+  test("a turn that only saves what was asked files as read; an answer stays new", async () => {
+    const { t, user, conversationId } = await setup();
+    const mark = () => t.run((ctx) => ctx.db.query("session_reads").withIndex("by_user_conversation", (q) => q.eq("user_id", user).eq("conversation_id", conversationId)).first());
+    faux.setResponses([callTool("create_task", { title: "Buy stamps" }), reply("Added \"Buy stamps\" to your to-dos.")]);
+    await say(t, conversationId, user, "Add a to-do: buy stamps");
+    await settle(t);
+    const s = await state(t, conversationId, user);
+    expect(s.managed?.agent_status).toBe("done");
+    const read = await mark();
+    expect(read?.acknowledged_at).toBe(s.managed?.turn_completed_at);
+    // A plain answer moves the conversation on and leaves it unread.
+    faux.setResponses([reply("Stamps are sold at any post office.")]);
+    await say(t, conversationId, user, "Where do I buy stamps?");
+    await settle(t);
+    const after = await state(t, conversationId, user);
+    expect((await mark())!.acknowledged_at).toBeLessThan(after.managed!.turn_completed_at!);
   });
 
   test("a provider that cannot serve fails the turn at once, charges nothing, alerts once and retries by itself", async () => {
@@ -1112,8 +1246,13 @@ describe("pieces", () => {
   });
 
   test("the yes says what it does: a routine starts and keeps going, a one-off write is just this time", () => {
-    expect(approveWords({ name: "schedule_routine", input: { repeat_every_hours: 168 } }, false)).toBe("Start it. Runs every week until you pause it.");
-    expect(approveWords({ name: "schedule_routine", input: {} }, false)).toBe("Set it for that one time.");
+    const now = Date.parse("2026-10-07T12:20:00Z");
+    const ny = { timezone: "America/New_York", now };
+    expect(approveWords({ name: "schedule_routine", input: { days: ["mon", "tue", "wed", "thu", "fri"], time: "18:00" } }, false, ny)).toBe(`I'll start today at 6:00 PM and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`);
+    expect(approveWords({ name: "schedule_routine", input: { days: ["mon", "tue", "wed", "thu", "fri"], time: "08:00" } }, false, ny)).toBe(`I'll start tomorrow, Thursday, at 8:00 AM and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`);
+    expect(approveWords({ name: "schedule_routine", input: { first_run: "2026-10-09T17:00:00-04:00", repeat_every_hours: 168 } }, false, ny)).toBe(`I'll start Friday, October 9, at 5:00 PM and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`);
+    expect(approveWords({ name: "schedule_routine", input: { first_run: "2026-10-07T14:00:00-04:00" } }, false, ny)).toBe(`I'll do it today at 2:00 PM. ${ROUTINE_SHOWS_UP}`);
+    expect(approveWords({ name: "schedule_routine", input: {} }, false, ny)).toBe(`I'll do it that one time. ${ROUTINE_SHOWS_UP}`);
     expect(approveWords({ name: "send_mail", input: {} }, true)).toBe("Just this time.");
     expect(approveWords({ name: "replace_doc", input: {} }, false)).toBe("Go ahead.");
   });

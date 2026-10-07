@@ -213,6 +213,18 @@ const PALETTE_LABEL_HIT = 1.5;
 // "New task"): below a label that starts with the query, above a keyword hit.
 const PALETTE_LABEL_WORDS = 1.25;
 const PALETTE_COMPOSE = 0.1;
+// A found row (a conversation, a to-do, a note, a routine) whose title holds
+// the query ranks above one found only in its words further in (a message
+// snippet), across kinds, and one whose title starts with it above both.
+// Both stay under a command the query names (PALETTE_LABEL_WORDS).
+const PALETTE_TITLE_WORDS = 0.1;
+const PALETTE_TITLE_START = 0.15;
+// The rows after every hit, in this order: "N more in Everything", then
+// "Open full search", then asking the assistant (PALETTE_COMPOSE).
+const PALETTE_MORE = 0.2;
+const PALETTE_FULL_SEARCH = 0.15;
+export const PALETTE_TAIL_MORE = "__more__";
+export const PALETTE_TAIL_SEARCH = "__search__page";
 
 /** Between a row's label and its keywords in a cmdk value (paletteValue). */
 const LABEL_END = "\u2063";
@@ -222,6 +234,19 @@ const LABEL_END = "\u2063";
  *  a hit in the label above a hit in the keywords. */
 export function paletteValue(label: string, keywords = ""): string {
   return `${label}${LABEL_END} ${keywords}`;
+}
+
+/** How much a found row's title matches the query: its title is the text
+ *  after the row's prefix up to the label end (paletteValue), or the whole
+ *  text when the row has none. */
+function titleHit(value: string, search: string): number {
+  const needle = search.trim().toLowerCase();
+  if (!needle) return 0;
+  const text = value.slice(value.indexOf("__", 2) + 2).trimStart();
+  const end = text.search(/\u2063|\|\|\|/);
+  const title = (end >= 0 ? text.slice(0, end) : text).toLowerCase();
+  if (title.startsWith(needle)) return PALETTE_TITLE_START;
+  return hasEveryWord(title, needle.split(/\s+/)) ? PALETTE_TITLE_WORDS : 0;
 }
 
 /** Every word of the query appears somewhere in the text, in any order. */
@@ -253,10 +278,14 @@ export function paletteItemScore(value: string, search: string): number {
   if (value.startsWith("__compose__")) return PALETTE_COMPOSE;
   if (value.startsWith("__filter__v")) return PALETTE_FILTER_VALUE;
   if (value.startsWith("__filter__o")) return PALETTE_FILTER_NAME;
+  if (value.startsWith(PALETTE_TAIL_MORE)) return PALETTE_MORE;
+  if (value.startsWith(PALETTE_TAIL_SEARCH)) return PALETTE_FULL_SEARCH;
   if (
     value.startsWith("__search__") ||
     value.startsWith("__recent__") ||
-    value.startsWith("__entity__") ||
+    value.startsWith("__entity__")
+  ) return PALETTE_MATCH + titleHit(value, search);
+  if (
     value.startsWith("__chat__") ||
     value.startsWith("__pick__") ||
     value.startsWith("__teammate__")

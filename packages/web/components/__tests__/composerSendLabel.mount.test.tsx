@@ -3,6 +3,8 @@
 // reading "Send and apply 3"; without one it is the icon as today; the bare
 // comment box ignores the label.
 import { afterAll, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
@@ -28,6 +30,11 @@ test("a label makes the send a violet pill that says what it applies; without on
     expect(b.className).toContain("bg-[var(--sol-violet)]");
     expect(b.className).toContain("text-[var(--sol-bg)]");
     expect(b.className).toContain("rounded-full");
+    // The pill is as wide as its words: a height and padding, never a fixed width (jsdom lays nothing out, so the classes stand in for the box).
+    expect(b.className).toContain("h-8");
+    expect(b.className).toContain("px-3");
+    expect(b.className).toContain("whitespace-nowrap");
+    expect(b.className).not.toMatch(/(^|\s)(w-\d|w-\[|aspect-)/);
     expect(b.disabled).toBe(false);
     expect(b.querySelector("svg")).not.toBeNull();
     // Held: the same pill, faded.
@@ -57,3 +64,19 @@ test("a label makes the send a violet pill that says what it applies; without on
     expect(b.className).toContain("w-6");
   } finally { await act(() => root.unmount()); host.remove(); }
 }, 60_000);
+
+// The hosted-mode stylesheet draws the icon send as a 40px disc with a rule on
+// [data-cc-send] that outranks the pill's classes; it once clipped "Send and
+// apply 15" to "Senc". Every rule that sizes [data-cc-send] must leave the
+// labelled form out.
+test("the stylesheet's round send rules are scoped to the icon form", () => {
+  const css = readFileSync(join(import.meta.dir, "../../app/globals.css"), "utf8");
+  const sizing: string[] = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = m[1].trim(), body = m[2];
+    if (!selector.includes("[data-cc-send]") || !/(^|;|\s)(width|height|min-width|aspect-ratio)\s*:/.test(body)) continue;
+    sizing.push(selector);
+    for (const part of selector.split(",")) expect(part.trim()).toContain("[data-cc-send]:not([data-cc-send-label])");
+  }
+  expect(sizing.length).toBeGreaterThan(0);
+});

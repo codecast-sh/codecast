@@ -1,5 +1,7 @@
 "use client";
-import { useHostedMode, useModeWords } from "../../lib/surfaces";
+import { useAssistantScope, useHostedMode, useModeWords } from "../../lib/surfaces";
+import { isAssistantTask } from "../../lib/assistantScope";
+import { AssistantScopeSwitch, MoreInEverything } from "../../components/AssistantScopeSwitch";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
 import { createTaskAndAdopt } from "../../lib/taskActions";
 import { useState, useCallback, useMemo } from "react";
@@ -424,7 +426,17 @@ function normalizeTaskSort(rawGroup: string, rawSort: string, rawDir: string) {
   return { group, sort, dir };
 }
 
-function useTaskUrlState() {
+/** The view a hosted person starts from, on Personal and on a team: open
+ *  to-dos, newest first, in one list. On Personal every to-do is theirs, so
+ *  grouping by who holds it would only file most of them under
+ *  "Unassigned"; on a team it put a person's header over each handful. A
+ *  link's own view and any grouping other than by person still win. */
+export function hostedPersonalView(view: { group: string; sort: string; dir: "asc" | "desc" }, rawGroup: string): { group: string; sort: string; dir: "asc" | "desc" } {
+  if (rawGroup && !/\b(assignee|chain)\b/.test(view.group)) return view;
+  return { group: "none", sort: "created", dir: "desc" };
+}
+
+function useTaskUrlState(hosted = false) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -443,7 +455,8 @@ function useTaskUrlState() {
   const rawGroup = (hasUrlParams ? searchParams.get("group") : taskView?.group) || "";
   const rawSort = (hasUrlParams ? searchParams.get("sort") : taskView?.sort) || "";
   const rawDir = (hasUrlParams ? searchParams.get("dir") : taskView?.dir) || "";
-  const { group, sort, dir } = normalizeTaskSort(rawGroup, rawSort, rawDir);
+  const normalized = normalizeTaskSort(rawGroup, rawSort, rawDir);
+  const { group, sort, dir } = hosted && !hasUrlParams ? hostedPersonalView(normalized, rawGroup) : normalized;
   const priority = hasUrlParams
     ? (searchParams.get("priority") || "")
     : (taskView?.priority ?? "");
@@ -583,7 +596,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const workspaceArgs = useWorkspaceArgs();
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode);
   const completionClock = useCoarseNow(60_000);
   const pendingCompletions = useInboxStore((s) => completedFilter ? pendingTaskCompletionsSig(s.pending) : "");
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
@@ -795,11 +808,26 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     });
   }, [wsTasks, taskOriginBadges, projectId, scope]);
 
+  // The Assistant scope (lib/assistantScope): the person's own errands and
+  // what the assistant added for them, not the to-dos coding work files. A
+  // project or role surface is already narrowed and ignores it.
+  const { only: assistantOnly } = useAssistantScope();
+  const scopeApplies = assistantOnly && !projectId && !scope;
+  const scopedTasksList = useMemo(
+    () => (scopeApplies ? tasksList.filter(isAssistantTask) : tasksList),
+    [scopeApplies, tasksList],
+  );
+  // What Everything adds to the board: human-board to-dos the scope leaves out.
+  const outOfScope = useMemo(
+    () => (scopeApplies ? tasksList.filter((t) => isActiveTask(t) && isOnHumanBoard(t) && !isAssistantTask(t)).length : 0),
+    [scopeApplies, tasksList],
+  );
+
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);
-    for (const t of tasksList) t.labels?.forEach((l: string) => set.add(l));
+    for (const t of scopedTasksList) t.labels?.forEach((l: string) => set.add(l));
     return [...set].sort();
-  }, [tasksList]);
+  }, [scopedTasksList]);
 
   // Source filtering applied before other filters.
   // Active tasks = not suggested-insight and not dismissed. A promoted mined
@@ -819,18 +847,18 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const onHumanBoard = isOnHumanBoard;
   const sourceFilteredTasks = useMemo(() => {
     if (sourceFilter === "agent") {
-      return tasksList.filter((t) => !onHumanBoard(t) && isActive(t));
+      return scopedTasksList.filter((t) => !onHumanBoard(t) && isActive(t));
     } else if (sourceFilter === "all") {
-      return tasksList.filter(isActive);
+      return scopedTasksList.filter(isActive);
     } else if (sourceFilter === "triage") {
-      return tasksList.filter(isTriage);
+      return scopedTasksList.filter(isTriage);
     } else if (sourceFilter === "dismissed") {
-      return tasksList.filter((t) => t.triage_status === "dismissed");
+      return scopedTasksList.filter((t) => t.triage_status === "dismissed");
     } else {
       // "" (default) and legacy "human" links both mean the human's board.
-      return tasksList.filter((t) => onHumanBoard(t) && isActive(t));
+      return scopedTasksList.filter((t) => onHumanBoard(t) && isActive(t));
     }
-  }, [tasksList, sourceFilter]);
+  }, [scopedTasksList, sourceFilter]);
 
 
   const completionTick = completedFilter ? completionClock : 0;
@@ -951,8 +979,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // "Assignee · Project" — comes out of one keyed grouper (lib/taskGrouping),
   // so an added axis or pairing costs a descriptor rather than a memo.
   const groupCtx = useMemo(
-    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser, initiativeOfProject }),
-    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser, initiativeOfProject]
+    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser, initiativeOfProject, plainHeaders: hostedMode }),
+    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser, initiativeOfProject, hostedMode]
   );
 
   const listGroups = useMemo(
@@ -1342,7 +1370,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           ]}
           paletteProps={{ teamMembers, currentUser: currentUser ?? undefined }}
           onItemEdit={handleTitleEdit}
-          listFooter={undefined}
+          headerExtra={!projectId && !scope ? <AssistantScopeSwitch label="Which to-dos this lists" hidden={outOfScope} /> : undefined}
+          listFooter={scopeApplies && outOfScope > 0 ? <div className="px-4 pb-3"><MoreInEverything hidden={outOfScope} /></div> : undefined}
           syncScope="tasks"
           dnd={{
             onDropOnGroup: handleDropOnGroup,

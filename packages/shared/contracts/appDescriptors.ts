@@ -86,12 +86,10 @@ export interface AppDescriptor {
   name: string;
   /** One line under the name: what connecting this service is for. */
   tagline: string;
-  /** The same line for hosted mode, where the assistant (not agents) acts;
-   *  absent where the developer line already reads right. */
-  hostedTagline?: string;
-  /** A service only code work uses (repositories, issues, errors, product
-   *  metrics): hosted mode leaves it off the Integrations page. */
-  developerOnly?: boolean;
+  /** The hosted assistant's tools read or act through this service. Hosted
+   *  mode lists only these, so no card promises the assistant a reach it
+   *  lacks; its mail and calendar arrive through Whisk, not here. */
+  assistantReaches?: boolean;
   /**
    * What an agent can concretely do once the service is connected. Three at
    * most, each a real action of the shipped (or planned) connector — never a
@@ -119,7 +117,6 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     id: "slack",
     name: "Slack",
     tagline: "Let agents answer and post where your team already talks.",
-    hostedTagline: "Let your assistant answer and post where your team already talks.",
     bullets: [
       "Post a summary to the channel you link",
       "Wake when someone @mentions it and reply in the thread",
@@ -132,7 +129,6 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     id: "github",
     name: "GitHub",
     tagline: "Give agents the repositories your team works in.",
-    developerOnly: true,
     bullets: [
       "Run triggers when a PR opens, gets a comment, or merges",
       "Import a repository's issues as tasks and write changes back",
@@ -145,10 +141,9 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     id: "gmail",
     name: "Gmail",
     tagline: "Point an agent at an inbox you own.",
-    hostedTagline: "Point your assistant at an inbox you own.",
     bullets: [
       "Summarize what arrived since you last looked",
-      "Draft replies for your review — never send on its own",
+      "Draft replies for your review, never sending on its own",
       "Label and file mail by rules you state",
     ],
     connectKind: "oauth-popup",
@@ -158,7 +153,6 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     id: "linear",
     name: "Linear",
     tagline: "Keep issues in step with the code agents ship.",
-    developerOnly: true,
     bullets: [
       "Import a team or project as a codecast project, issues as tasks",
       "Write a task's title, status, assignee and comments back to the issue",
@@ -170,10 +164,10 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
   notion: {
     id: "notion",
     name: "Notion",
-    tagline: "Hold the grant now; the reading and writing lands next.",
+    tagline: "Connect now. Reading and writing pages comes next.",
     bullets: [
       "Connect the workspace and pick the pages you share",
-      "No agent surface reads Notion yet — the grant just waits here",
+      "Nothing reads Notion yet, so the connection waits here until it does",
     ],
     connectKind: "oauth-popup",
     scopes: ["team", "personal"],
@@ -182,7 +176,6 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     id: "sentry",
     name: "Sentry",
     tagline: "Bring your product's errors to the agents that wrote the code.",
-    developerOnly: true,
     bullets: [
       "Mirror unresolved issues into Ops as error groups, with release and stack",
       "Wake a trigger when an error is new, regresses or spikes",
@@ -200,7 +193,6 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     id: "posthog",
     name: "PostHog",
     tagline: "Watch the product metrics a change was meant to move.",
-    developerOnly: true,
     bullets: [
       "Poll a HogQL query or insight and alert when it crosses a line",
       "Run a HogQL query on demand; nothing it returns is stored",
@@ -218,7 +210,6 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     id: "app",
     name: "Your app",
     tagline: "Let agents read and act through the routes your product declares.",
-    developerOnly: true,
     bullets: [
       "Call the readers your app's /codecast/manifest lists; responses are not stored",
       "Run a declared action only after a person grants it",

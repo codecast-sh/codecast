@@ -308,11 +308,14 @@ export function FoldedPromptBlock({ label, preview, content, timestamp, collapse
   );
 }
 
+// On theme tokens, so hosted mode's palette (html.hosted-mode.minimal-style)
+// recolours it like every other sol class: neutral is muted ink on a border
+// rule, amber the warning hue.
 export function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { label?: string; tone?: "sky" | "amber" }) {
   const lineClass = tone === "amber"
-    ? "flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent"
-    : "flex-1 h-px bg-gradient-to-r from-transparent via-sky-400/40 to-transparent";
-  const textClass = tone === "amber" ? "text-xs text-amber-500 font-medium" : "text-xs text-sky-400 font-medium";
+    ? "flex-1 h-px bg-gradient-to-r from-transparent via-sol-yellow/40 to-transparent"
+    : "flex-1 h-px bg-gradient-to-r from-transparent via-sol-border to-transparent";
+  const textClass = tone === "amber" ? "text-xs text-sol-yellow font-medium" : "text-xs text-sol-text-dim font-medium";
   return (
     <div className="my-6 flex items-center gap-3">
       <div className={lineClass} />

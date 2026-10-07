@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { isRefusalProse } from "./idleSummary";
-import { isToolResultCarrier, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
+import { isHostedAgentType, isToolResultCarrier, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
 import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { earlierTitlesAfter } from "./searchCore";
 import { redactSecrets } from "./redact";
@@ -42,6 +42,18 @@ export async function maybeScheduleTitleGeneration(
   await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
     conversation_id: conversation._id,
   });
+}
+
+/** A hosted turn's answer has landed in full: name the conversation from it
+ *  now. The count milestone at message 2 fires while the reply is still
+ *  streaming into its row, so that pass can see only the ask, and the floor
+ *  above then holds every later pass of a short conversation, which leaves the
+ *  ask itself as the title. Only while no pass has titled it (a pass always
+ *  writes a subtitle), so later turns follow the usual milestones. */
+export async function titleAfterHostedAnswer(ctx: MutationCtx, conversation: Doc<"conversations">): Promise<void> {
+  if (conversation.skip_title_generation || conversation.title_is_custom || conversation.subtitle !== undefined) return;
+  await ctx.db.patch(conversation._id, { title_gen_scheduled_at: Date.now() });
+  await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, { conversation_id: conversation._id });
 }
 
 export const setTitleAndSubtitle = internalMutation({
@@ -410,6 +422,9 @@ export type TitleInput = {
   recent: Array<{ role: string; content?: string }>;
   currentTitle?: string;
   messageCount: number;
+  /** A conversation with the hosted assistant: everyday errands, named in
+   *  the person's words rather than as engineering work. */
+  hosted?: boolean;
 };
 
 // The [t0, t1) time buckets the spine samples across. Empty when the prompts
@@ -448,7 +463,7 @@ export function pickSpineRows<R extends TitleRow>(rows: R[]): R[] {
 // newest 20 rows of any role, newest first.
 export function selectTitleInput(
   rows: { spine: TitleRow[]; latest: TitleRow[] },
-  conversation: { title?: string; subtitle?: string; title_is_custom?: boolean; message_count?: number },
+  conversation: { title?: string; subtitle?: string; title_is_custom?: boolean; message_count?: number; agent_type?: string },
 ): TitleInput {
   const isHumanText = (m: TitleRow) => !!m.content && !isToolResultCarrier(m);
 
@@ -491,6 +506,7 @@ export function selectTitleInput(
     recent: recent.map(text),
     currentTitle: llmTitled ? conversation.title : undefined,
     messageCount: conversation.message_count ?? 0,
+    ...(isHostedAgentType(conversation.agent_type) ? { hosted: true } : {}),
   };
 }
 
@@ -578,7 +594,7 @@ export function titleRequest(input: TitleInput): SurfaceRequest {
     // Deterministic: the same conversation state must yield the same
     // title, otherwise every regeneration re-rolls borderline keeps.
     temperature: 0,
-    prompt: buildTitlePrompt({
+    prompt: (input.hosted ? buildHostedTitlePrompt : buildTitlePrompt)({
       messageText: buildTitleMessageContext(input.spine, input.recent),
       currentTitle: input.currentTitle,
       messageCount: input.messageCount,
@@ -586,14 +602,46 @@ export function titleRequest(input: TitleInput): SurfaceRequest {
   };
 }
 
-export function buildTitlePrompt(input: {
+type TitlePromptInput = {
   messageText: string;
   currentTitle?: string;
   messageCount: number;
-}): string {
-  const anchor = input.currentTitle
-    ? `\nThe current title is ${JSON.stringify(input.currentTitle)}. Judge it against the user requests below: if it names the goal most of the requests serve, keep it VERBATIM — do not reword a correct title. If it names only a recent step or a minority topic while most requests serve a different goal, replace it with a title for that dominant goal. Requests that refine, polish, or extend the thing built earlier in the session serve that same goal — they are NOT a reason to retitle.`
+};
+
+/** Keep a correct title, replace one that names a minority step. */
+function titleAnchor(currentTitle: string | undefined, unit: string): string {
+  return currentTitle
+    ? `\nThe current title is ${JSON.stringify(currentTitle)}. Judge it against the user requests below: if it names the goal most of the requests serve, keep it VERBATIM — do not reword a correct title. If it names only a recent step or a minority topic while most requests serve a different goal, replace it with a title for that dominant goal. Requests that refine, polish, or extend the thing built earlier in the ${unit} serve that same goal — they are NOT a reason to retitle.`
     : "";
+}
+
+/** The title pass for a conversation with the hosted assistant. Its title is
+ *  the name a person reads in their inbox, their header and their approvals,
+ *  so it names the thing in their words: never the developer's vocabulary
+ *  ("session", "task", "setup") that the coding prompt's examples teach. */
+export function buildHostedTitlePrompt(input: TitlePromptInput): string {
+  return `Name this conversation between a person and their assistant. It is everyday life and work: errands, plans, reminders, notes, messages to write, things to compare or look up.
+
+Title: 2-5 words naming what the conversation AS A WHOLE is about, the thing the person wants, in their own words where they fit. Name the thing itself, not the act of arranging it. Never use the words "session", "task", "setup", "agent", "assistant", "implementation", "request" or "capabilities".${titleAnchor(input.currentTitle, "conversation")}
+Examples: "Italy trip", "Dentist reminder", "Declining Sam's dinner", "Robot vacuums compared", "Weeknight chickpea dinners", "Passport renewal"
+Anti-examples: "Vitamin reminder setup" (say "Vitamin reminder"), "Passport renewal task" (say "Passport renewal"), "Session capabilities" (say what they asked about, such as "What you can do"), "Weekend getaway planning request"
+When the person names a day, a place or a person that tells this conversation apart from a similar one, keep it in the title ("Declining Sam's dinner", "Friday plant watering").
+
+Short title: 1-2 words, under 20 characters and shorter than the title: its most specific noun, or the person or place it is about. Examples: "Italy" for "Italy trip", "Sam's dinner" for "Declining Sam's dinner", "Dentist" for "Dentist reminder". Never a generic word alone ("Tasks", "Reminder", "Plan").
+
+Subtitle: Bullet points (2-3 lines), each starting with "- ", saying what was asked and what was found, made or decided, in plain words a person would use.
+Example:
+"- Asked for three easy weeknight chickpea dinners\n- Got a curry, a sheet-pan bake and a salad with shopping list\n- Saved the list as a note"
+
+Conversation with ${input.messageCount} messages:
+${input.messageText}
+
+Do not respond to the conversation. Output ONLY the JSON object, no markdown, no preamble:
+{"title": "...", "short_title": "...", "subtitle": "..."}`;
+}
+
+export function buildTitlePrompt(input: TitlePromptInput): string {
+  const anchor = titleAnchor(input.currentTitle, "session");
 
   return `Generate a title and subtitle for this session. Most sessions are coding work, but some are not — research, planning, writing, travel, general questions. Title whatever the session is actually about, on its own terms. Never comment on the session's type: if it is not coding, just title the real topic — never emit a title like "Not a coding session".
 

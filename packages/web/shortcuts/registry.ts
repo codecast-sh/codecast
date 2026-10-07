@@ -41,6 +41,7 @@ export type ShortcutAction =
   | 'app.section2'
   | 'app.section3'
   | 'app.section4'
+  | 'app.section5'
   | 'pane.split'
   | 'pane.close'
   | 'pane.expand'
@@ -238,12 +239,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+shift+{', mac: 'meta+shift+{', action: 'tab.prev', skipInputCheck: true, description: 'Previous tab' },
   { key: 'ctrl+shift+]', mac: 'meta+shift+]', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
   { key: 'ctrl+shift+}', mac: 'meta+shift+}', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
-  // The Chat and Work windows: their sections by number (AppWindowBar). No
-  // handler in the main window, so the chords fall through there.
+  // The Chat and Work windows: their sections by number (AppWindowBar). In
+  // hosted mode the main window answers them too (HostedSectionKeys:
+  // Inbox, Approvals, To-dos, Notes, Routines); a developer's main window
+  // has no handler, so the chords fall through there.
   { key: 'ctrl+1', mac: 'meta+1', action: 'app.section1', skipInputCheck: true, description: 'First section (Chat or Work window)' },
   { key: 'ctrl+2', mac: 'meta+2', action: 'app.section2', skipInputCheck: true, description: 'Second section (Chat or Work window)' },
   { key: 'ctrl+3', mac: 'meta+3', action: 'app.section3', skipInputCheck: true, description: 'Third section (Chat or Work window)' },
   { key: 'ctrl+4', mac: 'meta+4', action: 'app.section4', skipInputCheck: true, description: 'Fourth section (Chat or Work window)' },
+  { key: 'ctrl+5', mac: 'meta+5', action: 'app.section5', skipInputCheck: true, description: 'Fifth section (hosted mode: Routines)' },
 
   // Stage panes (the tab's split layout). Handlers return false when the
   // stage isn't split so the chords fall through to whatever else owns them.

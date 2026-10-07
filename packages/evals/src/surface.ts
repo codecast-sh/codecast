@@ -36,6 +36,14 @@ export interface SurfaceMeta {
   /** Agent route: REFUSED lines matching one of these are allowed by the surface's harness note. */
   allowedRefusals?: string[];
   /**
+   * Agent route: UNSERVED lines matching one of these do not fail
+   * frozen-reads. A read the prompt itself asks for (a role's own `cast
+   * brief`) that a snapshot captured before the role existed cannot hold is
+   * refused, so nothing leaks, and the rep is not zeroed for a record that
+   * could not have it. A new capture serves it (frozenReads, servedAliases).
+   */
+  allowedUnserved?: string[];
+  /**
    * Agent route: a snapshot is the world as it stood at its capture. Its
    * served dir freezes every read, so one the capture did not hold is refused
    * rather than read from today's workspace, and git history is cut at the
@@ -61,6 +69,16 @@ export interface SnapshotCut {
  * `brief @x edit` is not this command, so both stay refused.
  */
 export const OWN_BRIEF_EDIT = '^(?!.*(?:^| )--for(?:[ =]|$))brief(?: --team[ =]\\S+)? edit(?: |$)';
+
+/**
+ * An UNSERVED pattern for an agent reading its own brief: bare `cast brief`,
+ * with `--json` or `--team`, and `cast brief show`, which is no command
+ * (commander reads `show` as a handle and prod answers that no role matches),
+ * so an agent that guesses it learns nothing either way. A brief named by
+ * handle is another role's, or the agent reaching for its own under a name
+ * the capture would hold, so it stays a snapshot defect.
+ */
+export const OWN_BRIEF_READ = '^brief(?: --team[ =]\\S+)?(?: show| --json)?$';
 
 /** The directory a surface's code lives in: its id in camelCase. */
 export const surfaceDir = (id: string): string => id.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());

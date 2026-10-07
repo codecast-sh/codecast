@@ -152,14 +152,12 @@ function SubGlyph() {
 /** A "Recent Sessions" row: face (state on its corner), identity line, label,
  *  where it is when that is news (set aside, another machine), project,
  *  whose, age. */
-export function PaletteSessionRow({ conv, bucket, standing, device, repeats = 1, onSelect }: {
+export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: {
   conv: PaletteSessionRowConv;
   bucket: { name: string } | null;
   standing?: SessionStanding;
   /** The machine it runs on, only when that differs from the usual one. */
   device?: Device;
-  /** How many recent rows share this title (hosted mode folds them into one). */
-  repeats?: number;
   onSelect: () => void;
 }) {
   const getLabelColor = useLabelColor();
@@ -193,9 +191,6 @@ export function PaletteSessionRow({ conv, bucket, standing, device, repeats = 1,
         title={sessionCardTitle(conv)}
         className={`flex-1 ${shelved || standing?.sub ? "opacity-60 group-data-[selected=true]:opacity-100" : ""}`}
       />
-      {repeats > 1 && (
-        <span className="text-[11px] text-sol-text-dim tabular-nums flex-shrink-0" title={`${repeats} recent conversations share this name`}>×{repeats}</span>
-      )}
       {shelfShown && standing?.shelf && (
         <span className="text-[10px] text-sol-text-dim/80 flex-shrink-0">{standing.shelf}</span>
       )}
@@ -246,7 +241,7 @@ export type PaletteSearchResult = {
 /** A "Search Results" row: face, identity line, author, first match, match count, age. */
 /** A message's words as one plain line: escaped line breaks and markdown
  *  marks out. */
-export function plainSnippet(text: string): string {
+function plainSnippet(text: string): string {
   return stripMarkdown(text.replace(/\\[nrt]/g, " ")).replace(/\s+/g, " ").trim();
 }
 
@@ -337,9 +332,13 @@ export function PaletteTaskRow({ task, status, onSelect }: {
       onSelect={onSelect}
       className={itemClass}
     >
-      <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
+      {/* Hosted mode draws a to-do with the rail's own glyph, and says its
+          state only once it is done, in ink: an open to-do is the default. */}
+      {hosted ? <span className="flex-shrink-0 text-sol-text-dim"><NavIcon type="check" /></span> : <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />}
       <span className="truncate flex-1">{task.title || "Untitled"}</span>
-      {status && <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>}
+      {status && (hosted
+        ? task.status === "done" && <span className="text-[10px] flex-shrink-0 text-sol-text-muted">Done</span>
+        : <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>)}
       {!hosted && <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />}
       <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>

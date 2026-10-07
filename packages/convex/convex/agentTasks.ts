@@ -30,7 +30,8 @@ import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
 import { armedTriggers } from "./lib/triggerMatch";
-import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
+import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, hostedWallCadence, type HostedRoutine } from "./assistant/routines";
+import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
 
@@ -75,6 +76,12 @@ export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: R
 // slot the trigger was armed for, so the arming after the run
 // (nextArmingAfterRun) returns to the cadence instead of restarting it from
 // wherever the detour ended.
+// The first cadence slot after `after`: on the wall clock when the routine
+// keeps one (hostedWallCadence), else one interval on.
+function nextRecurringRun(task: Pick<Doc<"agent_tasks">, "interval_ms"> & Partial<Pick<Doc<"agent_tasks">, "cadence">>, after: number): number {
+  return task.cadence ? nextCadenceRun(task.cadence, after) : after + (task.interval_ms ?? 0);
+}
+
 function offCadence(task: Doc<"agent_tasks">, runAt: number): { run_at: number; cadence_slot_at?: number } {
   return task.schedule_type === "recurring"
     ? { run_at: runAt, cadence_slot_at: task.cadence_slot_at ?? task.run_at }
@@ -186,7 +193,7 @@ export async function applyActivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   const interval = task.interval_ms;
   await patchTask(ctx, task, {
     status: "scheduled",
-    run_at: Date.now() + (task.schedule_type === "recurring" && interval ? interval : 0),
+    run_at: task.schedule_type === "recurring" && interval ? nextRecurringRun(task, Date.now()) : Date.now(),
     cadence_slot_at: undefined,
     ...(task.precheck === "exit 1" ? { precheck: undefined } : {}),
   });
@@ -231,7 +238,7 @@ export async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
       task.schedule_type === "event"
         ? undefined
         : task.schedule_type === "recurring" && task.interval_ms
-          ? Date.now() + task.interval_ms
+          ? nextRecurringRun(task, Date.now())
           : task.run_at && task.run_at > Date.now()
             ? task.run_at
             : Date.now() + 60_000,
@@ -568,6 +575,13 @@ interface NewTaskArgs {
   role_id?: Id<"org_roles">;
   /** Created paused (org-hire.md H8): a routine a person activates later. Never for event triggers. */
   status?: "scheduled" | "paused";
+  /** The weekdays (0 is Sunday) a hosted routine runs on, at run_at's time
+   *  of day (assistant/routines.ts hostedWallCadence). */
+  weekdays?: number[];
+  /** A description written for the person (a hosted routine's summary, as
+   *  its approval card showed it). Given, it is the row's display_summary
+   *  and no distillation runs. */
+  display_summary?: string;
 }
 
 export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
@@ -586,7 +600,12 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
   // A row created paused carries no run_at: activation (applyActivate) sets
   // the first run one interval out, so nothing fires until a person acts.
   const paused = args.status === "paused";
-  const run_at = args.schedule_type === "event" || paused ? undefined : (args.run_at || now);
+  const hosted = !!(await hostedHomeStamp(ctx, args.originating_conversation_id));
+  // A routine said as a time of day keeps it; its first run is the first slot
+  // on or after the one asked for (a weekdays routine asked for on a Saturday
+  // starts Monday).
+  const wall = await hostedWallCadence(ctx, { user_id: userId, hosted, schedule_type: args.schedule_type, interval_ms: args.interval_ms, run_at: args.run_at || now, weekdays: args.weekdays });
+  const run_at = args.schedule_type === "event" || paused ? undefined : (wall?.run_at ?? (args.run_at || now));
   await assertRoutineAllowed(ctx, {
     user_id: userId,
     originating_conversation_id: args.originating_conversation_id,
@@ -609,7 +628,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     originating_conversation_id: args.originating_conversation_id
       ? args.originating_conversation_id as Id<"conversations">
       : undefined,
-    hosted_home: await hostedHomeStamp(ctx, args.originating_conversation_id),
+    hosted_home: hosted || undefined,
     target_conversation_id: args.target_conversation_id
       ? args.target_conversation_id as Id<"conversations">
       : undefined,
@@ -625,6 +644,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     schedule_type: args.schedule_type,
     run_at,
     interval_ms: args.interval_ms,
+    cadence: wall?.cadence,
     event_filter,
     // Permissive by default: a schedule can act unless it explicitly opts into
     // safe (read-only) mode. Only an explicit "propose" restricts. Existing
@@ -639,13 +659,15 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
     run_count: 0,
     created_at: now,
+    ...(args.display_summary ? { display_summary: args.display_summary, summary_for_person: true } : {}),
   });
   if (args.originating_conversation_id) {
     await refreshArmedTriggerKind(ctx, args.originating_conversation_id as Id<"conversations">);
   }
   // Distill a readable display_title/display_summary from the prompt (the
   // summarizer section below) — the stored title is usually prompt.slice(0,60).
-  await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: taskId });
+  // A description written for the person already reads; it is kept as is.
+  if (!args.display_summary) await ctx.scheduler?.runAfter(0, internal.agentTasks.generateDisplaySummary, { task_id: taskId });
   return { id: taskId, short_id };
 }
 
@@ -1307,7 +1329,11 @@ function completedTaskRunFields(
 // day, until it landed just past the 24 hour window its evidence had to fall
 // in. A run that outlasts its interval skips the slots it missed, and a manual
 // run ahead of the next slot leaves that slot standing.
-export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type" | "interval_ms" | "run_at" | "cadence_slot_at"> & Partial<Pick<Doc<"agent_tasks">, "pending_events">>, now: number): Record<string, any> {
+export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type" | "interval_ms" | "run_at" | "cadence_slot_at"> & Partial<Pick<Doc<"agent_tasks">, "pending_events" | "cadence">>, now: number): Record<string, any> {
+  if (task.schedule_type === "recurring" && task.cadence) {
+    const slot = task.cadence_slot_at ?? task.run_at ?? now;
+    return { status: "scheduled", run_at: slot > now ? slot : nextCadenceRun(task.cadence, now), cadence_slot_at: undefined };
+  }
   if (task.schedule_type === "recurring" && task.interval_ms) {
     const slot = task.cadence_slot_at ?? task.run_at ?? now;
     const elapsed = slot > now ? 0 : Math.floor((now - slot) / task.interval_ms) + 1;
@@ -2414,6 +2440,7 @@ export async function applyTaskUpdate(
     // Stale distillations must not describe the old prompt.
     patch.display_title = undefined;
     patch.display_summary = undefined;
+    patch.summary_for_person = undefined;
   }
   if (args.mode !== undefined) patch.mode = args.mode === "apply" ? "apply" : "propose";
   if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
@@ -2465,6 +2492,15 @@ export async function applyTaskUpdate(
   // A new schedule is a new cadence: a slot kept from a detour under the old
   // one (offCadence) must not pull the next arming back onto it.
   if ("run_at" in patch) patch.cadence_slot_at = undefined;
+  // A schedule edit re-reads the wall clock (hostedWallCadence): a hosted
+  // daily or weekly routine keeps its time of day, and a daily one keeps the
+  // weekdays it had while its interval is unchanged. An interval edit drops it.
+  if ("run_at" in patch || "interval_ms" in patch || "schedule_type" in patch) {
+    const next = { schedule_type: (patch.schedule_type as string | undefined) ?? task.schedule_type, interval_ms: "interval_ms" in patch ? (patch.interval_ms as number | undefined) : task.interval_ms, run_at: "run_at" in patch ? (patch.run_at as number | undefined) : task.run_at };
+    const wall = await hostedWallCadence(ctx, { user_id: task.user_id, hosted: !!task.hosted_home, ...next, kept: next.interval_ms === task.interval_ms ? task.cadence : undefined });
+    patch.cadence = wall?.cadence;
+    if (wall && "run_at" in patch) patch.run_at = wall.run_at;
+  }
 
   // Which editable fields actually differ. The display_* resets ride along
   // with a prompt change but aren't edits themselves, so they never appear in
@@ -2860,11 +2896,32 @@ Do not respond to the instruction itself. Output ONLY the JSON object, no markdo
 {"title": "...", "subtitle": "..."}`;
 }
 
+/** The summarizer's prompt for a hosted routine (hosted_home): what the
+ *  person gets, said to them, in the words schedule_routine's summary uses
+ *  (assistant/tools/codecast.ts), since Routines and the routine's page show
+ *  it as the routine's description. The schedule is shown beside it, so it
+ *  leaves the timing out. */
+export function buildRoutineSummaryPrompt(input: { prompt: string }): string {
+  return `A person asked their assistant to do something for them on a schedule. Below is the instruction the assistant follows each time it runs. Describe the routine to the person.
+
+Title: 2-4 everyday words naming the routine as the person would, like "Morning to-do review" or "Bin night reminder". No trailing period.
+
+Subtitle: ONE sentence (at most about 140 characters), said by the assistant to the person as a promise in their terms, like "I'll send you your open to-dos so you can plan the day." Speak to them as "you", never "the user". Leave out when it runs; that is shown separately. Never use the words task, escalate, prompt, agent, session or instruction.
+
+Instruction:
+${input.prompt.slice(0, 4000)}
+
+Do not respond to the instruction itself. Output ONLY the JSON object, no markdown, no preamble:
+{"title": "...", "subtitle": "..."}`;
+}
+
 export const setDisplaySummary = internalMutation({
   args: {
     task_id: v.id("agent_tasks"),
     display_title: v.optional(v.string()),
     display_summary: v.string(),
+    // The summary is written to the person (buildRoutineSummaryPrompt).
+    summary_for_person: v.optional(v.boolean()),
     // The prompt the summary was generated FROM — skip the patch if the task
     // was edited while the action was in flight (the edit reschedules its own
     // generation, which must not be clobbered by this stale result).
@@ -2876,6 +2933,7 @@ export const setDisplaySummary = internalMutation({
     await ctx.db.patch(args.task_id, {
       ...(args.display_title ? { display_title: args.display_title } : {}),
       display_summary: args.display_summary,
+      summary_for_person: args.summary_for_person || undefined,
     });
   },
 });
@@ -2891,6 +2949,7 @@ export const getTaskForSummary = internalQuery({
       schedule_type: task.schedule_type,
       interval_ms: task.interval_ms,
       event_filter: task.event_filter,
+      hosted_home: task.hosted_home === true,
     };
   },
 });
@@ -2922,8 +2981,10 @@ export const generateDisplaySummary = internalAction({
     try {
       // The cheap model, at temperature 0: the same prompt must yield the
       // same summary.
+      // A hosted routine's summary is said to its person (Routines shows it
+      // as the description); any other schedule's is a developer's gist.
       const reply = await callModel({
-        prompt: buildTaskSummaryPrompt({ prompt: task.prompt, scheduleLine }),
+        prompt: task.hosted_home ? buildRoutineSummaryPrompt({ prompt: task.prompt }) : buildTaskSummaryPrompt({ prompt: task.prompt, scheduleLine }),
         max_tokens: 300,
         label: "Task summary Haiku",
       });
@@ -2948,6 +3009,7 @@ export const generateDisplaySummary = internalAction({
             ? title
             : undefined,
         display_summary: summary,
+        ...(task.hosted_home ? { summary_for_person: true } : {}),
         source_prompt: task.prompt,
       });
     } catch (error) {
@@ -2974,6 +3036,30 @@ export const backfillDisplaySummaries = internalMutation({
         await ctx.scheduler.runAfter(scheduled * 500, internal.agentTasks.generateDisplaySummary, {
           task_id: task._id,
         });
+        scheduled++;
+      }
+    }
+    return { scheduled };
+  },
+});
+
+// One-shot sweep for hosted routines whose description is not written to
+// their person: those armed before schedule_routine took a summary, whose
+// distilled gist reads as an internal note ("escalates if user wants...").
+// Each gets the person prompt (buildRoutineSummaryPrompt). Safe to re-run:
+// a routine already summarized for its person is skipped.
+export const backfillHostedRoutineSummaries = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let scheduled = 0;
+    for (const status of ["scheduled", "running", "paused", "completed", "failed"] as const) {
+      const tasks = await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_hosted_status_run_at", (q) => q.eq("hosted_home", true).eq("status", status))
+        .collect();
+      for (const task of tasks) {
+        if (task.summary_for_person) continue;
+        await ctx.scheduler.runAfter(scheduled * 500, internal.agentTasks.generateDisplaySummary, { task_id: task._id });
         scheduled++;
       }
     }

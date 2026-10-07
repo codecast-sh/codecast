@@ -372,8 +372,8 @@ describe("named sessions read alone classify as the full inbox does", () => {
     return rides ? rest : { ...rest, bucket };
   };
   // The schema's real indexes: the narrow path reads latestHeartbeat as the
-  // newest row of by_user_heartbeat, which only an index ordered by
-  // last_heartbeat answers the way convex does.
+  // newest daemon row of by_user_hosted_heartbeat, which only an index ordered
+  // by last_heartbeat answers the way convex does.
   const indexedDb = (world: GenWorld) => makeFakeDb(
     { users: [{ _id: ME, name: "Me", email: "me@example.com" }], messages: [], ...world },
     { indexes: schemaIndexes(schema as any) },
@@ -427,6 +427,6 @@ describe("named sessions read alone classify as the full inbox does", () => {
     // user wide managed_sessions read. None may run on the named path.
     const userWide = indexes.filter((i) => /conversations\.by_user_(plain_updated|pinned|live_)|session_owners\.by_user$|managed_sessions\.by_user_id$/.test(i));
     expect(userWide).toEqual([]);
-    expect(indexes).toContain("managed_sessions.by_user_heartbeat");
+    expect(indexes).toContain("managed_sessions.by_user_hosted_heartbeat");
   }, 120_000);
 });

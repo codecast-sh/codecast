@@ -21,7 +21,7 @@ const WEB = join(import.meta.dir, "..", "..");
  *  fall. Pinned at 54 when the rule widened to bespoke-fed keys (`writtenBy`)
  *  and to Convex client calls, with the team, org, PR and palette gestures it
  *  first caught moved onto store actions. */
-const PIN_DIRECT_SYNCED_WRITES = 52;
+const PIN_DIRECT_SYNCED_WRITES = 51;
 const CONVEX = join(WEB, "..", "convex", "convex");
 const DISPATCH = readFileSync(join(CONVEX, "dispatch.ts"), "utf8");
 
@@ -100,6 +100,8 @@ function ownedMutations(): Map<string, string[]> {
 const NOT_THE_ACTIONS_WRITE: Record<string, string> = {
   "app/settings/sync/page.tsx users.updateSyncSettings":
     "writes sync_mode and the project lists; setCloudSessionSync writes only the cloud session fields through the same mutation",
+  "app/triggers/page.tsx agentTasks.webCreate":
+    "creates a trigger; createSession shares only startHostedConversationFor, which webCreate runs to start a hosted routine's home conversation",
   "app/settings/migrate/page.tsx sessionMigrations.cancelBatch":
     "cancels a cast migrate batch; a resource offload batch cancels through cancelResourceOffload in the same handler",
   "components/ConfigEditor.tsx users.sendConfigCommand":

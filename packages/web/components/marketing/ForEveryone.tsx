@@ -11,11 +11,14 @@ import { ArrowRight, Check } from "lucide-react";
 import { track } from "../../lib/analytics";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useRef, useState } from "react";
-import { ASKS, ASSISTANT_HEADLINE, MAIL_COMING, assistantPromise, useConnectAvailable } from "../simple/assistantPromise";
+import { ASKS, ASSISTANT_HEADLINE, assistantPromise, useConnectAvailable } from "../simple/assistantPromise";
+import { AssistantPrivacyNote } from "../simple/AssistantPrivacyNote";
+import { APPROVAL_ANSWERS, approvalButtonLabel, routineYesWords } from "@codecast/shared/contracts/assistant";
+import { stepAsk } from "@platform/assistant/steps";
 import { LANE_PATHS, welcomeAskPath } from "../simple/lanePaths";
 import { AssistantMark } from "../simple/AssistantMark";
 
-export const EVERYONE_ANCHOR = "everyone";
+const EVERYONE_ANCHOR = "everyone";
 
 /** Errands that need nothing connected, worded to work as asked. */
 const ERRANDS = [ASKS.sayNo, ASKS.compare, ASKS.trip];
@@ -51,16 +54,22 @@ export function ForEveryone() {
         fontFamily: UI,
       }}
     >
+      {/* A rule and air between the developer buttons above and this
+          section's own way in, so the two "Get started" never compete. */}
+      <div aria-hidden className="mx-auto mb-16 h-px max-w-5xl" style={{ background: "var(--pd-rule, #e6dccb)" }} />
       <div className="mx-auto grid max-w-5xl gap-12 md:grid-cols-[1.05fr_1fr] md:items-center">
         <div>
-          <p className="mb-3 text-[14px] font-medium" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>For people who don&apos;t write code</p>
+          {/* Who is talking, before the headline speaks as "I". */}
+          <p className="mb-3 text-[14px] font-medium" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
+            <span style={{ color: "var(--pd-ink, #1f1a14)" }}>The Codecast assistant</span>, for people who don&apos;t write code
+          </p>
           <h2 className="text-[34px] leading-[1.12] sm:text-[42px]" style={{ fontFamily: READ, fontWeight: 500 }}>{ASSISTANT_HEADLINE}</h2>
           <p className="mt-4 max-w-md text-[16px] leading-relaxed" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
+            {/* What works today, said once; mail's arrival is /welcome's to
+                say, where connecting is offered and Whisk is named. */}
             {assistantPromise(mail)}
-            {/* Whisk is named where connecting is offered (/welcome's connect
-                screen), not to a reader who has never heard of it. */}
-            {mail ? null : <> {MAIL_COMING}</>}
           </p>
+          <AssistantPrivacyNote mail={mail} className="mt-3 max-w-md text-[13.5px] leading-relaxed" style={{ color: "var(--pd-ink-faint, #8f8676)" }} />
           <GetStarted className="mt-7" location="landing_everyone" />
           <p className="mt-8 text-[13px] font-medium" style={{ color: "var(--pd-ink-faint, #8f8676)" }}>Or start with one of these</p>
           <ul className="mt-2 flex flex-col gap-1.5" aria-label="Things to ask">
@@ -108,6 +117,13 @@ function GetStarted({ className, location, centered }: { className?: string; loc
   );
 }
 
+/** The drawn card's routine, worded by the real card's own helpers: the
+ *  question is the step's ask (stepAsk) and the yes line is routineYesWords,
+ *  so the promise and the product name the first approval the same way. */
+const PICTURE_ROUTINE = { name: "schedule_routine", input: { title: "Plan the week" } };
+const PICTURE_SUMMARY = "Every Monday at 9 AM I'll remind you to plan the week, with a short list to start from.";
+const PICTURE_YES = routineYesWords("Monday at 9:00 AM", true);
+
 /** A part of the still before and after its entrance: 8px down and clear,
  *  then in place over 240ms, ease-out. Delays stagger the parts by 120ms. */
 const ENTER = "opacity-0 translate-y-2 transition-[opacity,transform] duration-[240ms] ease-out group-data-[in]:opacity-100 group-data-[in]:translate-y-0 motion-reduce:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none";
@@ -135,7 +151,13 @@ function ConversationPicture() {
       }
     }, { threshold: 0.35 });
     io.observe(el);
-    return () => io.disconnect();
+    // A page that never reports the still in view (a background tab, a
+    // capture) must not leave it faded, where it reads as disabled.
+    const shown = window.setTimeout(() => setInView(true), 1500);
+    return () => {
+      io.disconnect();
+      window.clearTimeout(shown);
+    };
   });
   return (
     <figure
@@ -154,19 +176,22 @@ function ConversationPicture() {
         <AssistantMark size={26} />
         <div className="min-w-0 flex-1">
           <p className="text-[16.5px] leading-[1.55]" style={{ fontFamily: READ }}>
-            Happy to. I&apos;ll nudge you each Monday morning with a short list to start from.
+            Happy to. Here&apos;s the routine; say yes and it starts Monday.
           </p>
           <div className={`mt-4 rounded-[10px] border p-3.5 ${ENTER} delay-[240ms]`} style={{ borderColor: "var(--pd-rule, #e6dccb)", background: "var(--pd-bg, #f6f1e7)" }}>
-            <p className="text-[13.5px] font-semibold">Set up a routine?</p>
-            <p className="mt-1 text-[13px] leading-snug" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
-              Every Monday at 9:00 AM: remind you to plan the week.
+            <p className="text-[13.5px] font-semibold">{`${stepAsk(PICTURE_ROUTINE)}?`}</p>
+            <p className="mt-1.5 text-[13px] leading-snug" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
+              {PICTURE_SUMMARY}
+            </p>
+            <p className="mt-1.5 text-[12px] leading-snug" style={{ color: "var(--pd-ink-faint, #8f8676)" }}>
+              {PICTURE_YES}
             </p>
             <div className="mt-3 flex gap-2" aria-hidden>
               <span className="inline-flex h-8 items-center gap-1.5 rounded-[8px] px-3 text-[13px] font-semibold" style={{ background: "var(--pd-accent, #c93a0e)", color: "var(--pd-accent-ink, #fdfbf6)" }}>
-                <Check size={14} /> Yes
+                <Check size={14} /> {approvalButtonLabel(APPROVAL_ANSWERS.approve)}
               </span>
               <span className="inline-flex h-8 items-center rounded-[8px] border px-3 text-[13px] font-medium" style={{ borderColor: "var(--pd-rule, #e6dccb)" }}>
-                Not now
+                {approvalButtonLabel(APPROVAL_ANSWERS.decline)}
               </span>
             </div>
           </div>

@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD } from "../../lib/hostedPage";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
-import { AppLoader } from "../../components/AppLoader";
+import { PaneLoader } from "../../components/PaneLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { fmtDuration, fmtClock } from "../../components/triggerCadence";
 // The `--on <event>` vocabulary is shared with the CLI so the two cannot drift.
@@ -23,7 +24,7 @@ import { useLaneMailAbilities } from "../../components/simple/useLaneMail";
 import { usePlanMeter } from "../../components/simple/usePlanFigures";
 import { serverErrorText } from "../../lib/errorCause";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
-import { isTriggerFailing, taskDisplayTitle, groupTriggerRowsByHome, type TaskRow, type TriggerRow, type TriggerHomeGroup } from "../../components/triggerTasks";
+import { isTriggerFailing, isTriggerTerminal, taskDisplayTitle, groupTriggerRowsByHome, type TaskRow, type TriggerRow, type TriggerHomeGroup } from "../../components/triggerTasks";
 import { TriggerRowItem, TriggerHomeHeader } from "../../components/TriggerRow";
 import { HorizonRail } from "../../components/triggers/HorizonRail";
 import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
@@ -740,6 +741,10 @@ const TYPE_TOGGLES: { key: string; label: string; Icon: any; on: string }[] = [
 // draws its own box; the bar's rules are the only lines.
 type Grouping = "session" | "project" | "none";
 
+/** How many routines a hosted list holds before it offers search and the
+ *  kind filters. */
+const HOSTED_FILTERS_FROM = 6;
+
 function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouping, setGrouping, devFilters }: {
   filters: Filters;
   update: (patch: Partial<Filters>) => void;
@@ -755,8 +760,11 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
   devFilters: boolean;
 }) {
   const active = filtersActive(filters);
+  // A short hosted list needs no search or kind filters: every routine is in
+  // view already. They come back past a handful, or while one is set.
+  if (!devFilters && total < HOSTED_FILTERS_FROM && !active) return null;
   return (
-    <div className="sticky top-0 z-20 mb-2 bg-sol-bg/85 backdrop-blur border-b border-sol-border/40">
+    <div className={`sticky top-0 z-20 mb-2 bg-sol-bg/85 backdrop-blur ${devFilters ? "border-b border-sol-border/40" : ""}`}>
       <div className="relative border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors">
         <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
         <input
@@ -798,7 +806,7 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
               }`}
             >
               <Icon className="w-3 h-3" />
-              {label}
+              {devFilters ? label : label.charAt(0).toUpperCase() + label.slice(1)}
             </button>
           ))}
         </div>
@@ -881,7 +889,7 @@ function PageRow({ task, isNext, form, setForm, deepLinked }: {
     () => ({ task, openId: task.originating_conversation_id ?? task.last_run_conversation_id, unread: false }),
     [task],
   );
-  const terminal = task.status === "completed" || task.status === "failed";
+  const terminal = isTriggerTerminal(task.status);
   const mode = form?.id === task._id ? form.mode : null;
   return (
     <div ref={rowRef}>
@@ -1009,8 +1017,10 @@ function groupByDay(tasks: TaskRow[], now: number): [string, TaskRow[]][] {
 
 const HISTORY_PAGE = 25;
 
-function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
+function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId, fleet }: {
   tasks: TaskRow[];
+  /** Developer mode's run statistics; hosted mode says each row's own end. */
+  fleet: boolean;
   now: number;
   grouping: Grouping;
   form: RowForm;
@@ -1039,7 +1049,7 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
   return (
     <div className="flex flex-col">
       {/* success / failure proportion — a text line and a thin bar, no box */}
-      <div className="px-4 py-2.5 border-b border-sol-border/40">
+      {fleet && <div className="px-4 py-2.5 border-b border-sol-border/40">
         <div className="flex items-center justify-between text-[11px] mb-1.5">
           <span className="text-sol-text-dim">
             <span className="text-emerald-400">{succeeded} succeeded</span>
@@ -1051,9 +1061,9 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
           <div className="bg-emerald-500/70 h-full transition-all" style={{ width: `${(succeeded / Math.max(tasks.length, 1)) * 100}%` }} />
           <div className="bg-sol-red/70 h-full transition-all" style={{ width: `${(failed / Math.max(tasks.length, 1)) * 100}%` }} />
         </div>
-      </div>
+      </div>}
 
-      {failed > 0 && (
+      {fleet && failed > 0 && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
           <button
             onClick={() => setFailuresOnly((v) => !v)}
@@ -1198,7 +1208,7 @@ function TriggersContent() {
         }),
       paused: filtered.filter((t) => t.status === "paused"),
       history: filtered
-        .filter((t) => t.status === "completed" || t.status === "failed")
+        .filter((t) => isTriggerTerminal(t.status))
         .sort((a, b) => (b.last_run_at ?? b.created_at) - (a.last_run_at ?? a.created_at)),
     };
   }, [filtered]);
@@ -1240,8 +1250,8 @@ function TriggersContent() {
 
   return (
     <div className="h-full overflow-y-auto bg-sol-bg" data-main-scroll>
-      <div className="max-w-3xl mx-auto px-5 sm:px-6 py-8">
-        <div ref={titlebarRef} className="flex items-center gap-2 mb-5">
+      <div className={`${HOSTED_PAGE_FRAME} ${fleet ? "px-5 sm:px-6" : HOSTED_PAGE_PAD} py-8`}>
+        <div ref={titlebarRef} className={`flex items-center gap-2 ${fleet ? "mb-5" : "flex-wrap gap-y-2 mb-1.5"}`}>
           {fleet ? (
             <>
               <Zap className="w-4 h-4 text-sol-amber" />
@@ -1251,21 +1261,31 @@ function TriggersContent() {
           ) : (
             // Hosted mode counts what runs: the Active list. Paused routines
             // are their own titled section.
-            <PageHeading title={words.triggers} count={tasks?.length ? (fleet ? active.length + paused.length : active.length) : undefined} lede={words.triggersLede} />
+            // Its description goes on its own line below, so the heading
+            // line holds only the title, its count and the controls.
+            <PageHeading title={words.triggers} count={tasks?.length ? (fleet ? active.length + paused.length : active.length) : undefined} />
           )}
-          <AssistantScopeSwitch label="Which routines this lists" />
+          {/* Under the title on a phone, beside it from sm up. */}
+          <div className={fleet ? "contents" : "order-last basis-full sm:order-none sm:basis-auto"}>
+            <AssistantScopeSwitch label="Which routines this lists" hidden={outOfScope} />
+          </div>
           {/* One way to start a routine at a time: the empty state offers its
               own, and an open form is already the new routine. */}
           {!showForm && hasTasks && (
             <button
               data-tour="triggers-new"
               onClick={() => setShowForm(true)}
-              className="sol-btn-solid ml-auto shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg"
+              // Hosted mode keeps the page calm: a secondary button, not the
+              // heaviest thing on it.
+              className={fleet
+                ? "sol-btn-solid ml-auto shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg"
+                : "ml-auto shrink-0 whitespace-nowrap inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-sol-border bg-sol-bg text-sol-text hover:bg-sol-bg-highlight transition-colors"}
             >
               <Plus className="w-3.5 h-3.5" /> {words.newTrigger}
             </button>
           )}
         </div>
+        {!fleet && <p className="mb-5 text-xs text-sol-text-dim">{words.triggersLede}</p>}
 
         <FeatureUpsell
           slug="triggers"
@@ -1276,7 +1296,7 @@ function TriggersContent() {
         {showForm && <TriggerForm key={formSeed?.prompt ?? "new"} seedTask={formSeed ?? undefined} onClose={closeForm} />}
 
         {tasks === undefined ? (
-          <AppLoader className="min-h-[16rem] h-full" />
+          <PaneLoader />
         ) : tasks.length === 0 ? (
           // Nothing to filter or search yet: no bar, no filtered-empty line.
           showForm ? <MoreInEverything hidden={outOfScope} /> : (
@@ -1326,7 +1346,9 @@ function TriggersContent() {
               hasCodex={hasCodex}
               hasEvent={hasEvent}
               shown={filtered.length}
-              total={tasks.length}
+              // Hosted mode counts the routines the list shows, not the
+              // stopped ones under History, against its six-routine rule.
+              total={devFilters ? tasks.length : tasks.filter((t) => !isTriggerTerminal(t.status)).length}
               grouping={grouping}
               setGrouping={setGrouping}
               devFilters={devFilters}
@@ -1348,10 +1370,12 @@ function TriggersContent() {
                 <Section
                   title="History"
                   count={history.length}
-                  subtitle={historyFailed > 0 ? `${historyFailed} failed` : "all succeeded"}
+                  // Success rates are fleet health; hosted mode says only what
+                  // went wrong, in the person's words.
+                  subtitle={historyFailed > 0 ? (fleet ? `${historyFailed} failed` : `${historyFailed} didn't finish`) : fleet ? "all succeeded" : undefined}
                   defaultOpen={active.length === 0}
                 >
-                  <HistoryBody tasks={history} now={now} grouping={grouping} form={form} setForm={setForm} deepLinkId={deepLinkId} />
+                  <HistoryBody tasks={history} now={now} grouping={grouping} form={form} setForm={setForm} deepLinkId={deepLinkId} fleet={fleet} />
                 </Section>
               </div>
             )}

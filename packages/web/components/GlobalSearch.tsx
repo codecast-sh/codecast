@@ -19,7 +19,8 @@ import { SessionQuerySuggestList } from "./SessionQuerySuggestList";
 import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions";
 import { SearchField, SearchGlyph } from "./search/SearchField";
 import { SearchResultRow } from "./search/SearchResultRow";
-import { useModeWords, useSurface } from "../lib/surfaces";
+import { useAssistantScope, useModeWords, useSurface } from "../lib/surfaces";
+import { bySessionAgent, withinScope } from "../lib/assistantScope";
 
 export { parseSearchTerms, highlightMatch, getSnippet };
 
@@ -138,9 +139,15 @@ export function GlobalSearch() {
   const instantRows = useInstantSessionRows(query, 12);
 
   // Content-match rows win, title-only rows next, cache rows fill the tail.
+  // The Assistant scope holds here as it does in the palette and the inbox.
+  const { only: scopeOnly } = useAssistantScope();
   const groupedResults = useMemo(
-    () => mergeSearchRows(searchData?.results as any, titleData?.results as any, instantRows),
-    [searchData, titleData, instantRows]
+    () => withinScope(
+      mergeSearchRows(searchData?.results as any, titleData?.results as any, instantRows) as any[],
+      scopeOnly,
+      (r: any) => bySessionAgent({ agent_type: r.agentType }),
+    ) as any[],
+    [searchData, titleData, instantRows, scopeOnly]
   );
 
   // Nothing selected (or the selected session dropped out of the list) falls
@@ -314,7 +321,7 @@ export function GlobalSearch() {
                     onClick={goToFullSearch}
                     className="text-xs text-sol-text-secondary hover:text-sol-text px-2.5 py-1 rounded-md border border-sol-border bg-sol-bg-alt hover:bg-sol-bg-highlight transition-colors"
                   >
-                    Open full search — narrow by time or scope
+                    Open full search to narrow by time or scope
                   </button>
                 </div>
               ) : (

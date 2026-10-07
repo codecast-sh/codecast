@@ -82,23 +82,41 @@
 }
 
 /* Every step is named, so the rail says where the person is going as well
-   as where they are; the step they are on reads in full ink. */
+   as where they are. The step they are on reads a shade stronger but stays
+   muted, so the rail never competes with the page's own links. */
 .wl-rail-name {
   margin-right: 0.2rem;
   color: var(--sl-faint);
-  font-size: 0.82rem;
-  font-weight: 500;
+  font-family: var(--pd-font-mono);
+  font-size: 11px;
+  font-weight: 400;
 }
-.wl-rail li.is-done .wl-rail-name { color: var(--sl-soft); }
+.wl-rail li.is-done .wl-rail-name { color: var(--sl-faint); }
 
 .wl-rail li.is-here .wl-rail-name {
   color: var(--sl-ink);
-  font-weight: 600;
   animation: sl-rise 420ms var(--sl-ease) 200ms both;
 }
 
+.wl-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+/* On a phone the names do not fit, so the rail reads as a count instead. */
+.wl-rail-count {
+  display: none;
+  color: var(--sl-faint);
+  font-family: var(--pd-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 420px) {
-  .wl-rail li:not(.is-here) .wl-rail-name { display: none; }
+  .wl-rail-name { display: none; }
+  .wl-rail-count { display: inline; }
 }
 
 /* ── The stage ───────────────────────────────────────────────────────── */
@@ -113,7 +131,9 @@
   width: 100%;
   max-width: 31rem;
   margin: 0 auto;
-  padding: clamp(1.25rem, 14vh, 11rem) 0 1rem;
+  /* Half the old drop, so the starters and the ask field sit well above the
+     fold on a laptop. */
+  padding: clamp(1rem, 7vh, 5.5rem) 0 1rem;
   view-transition-name: wl-stage;
 }
 
@@ -284,6 +304,28 @@
    the quiet provider (GitHub) moves below it. */
 .wl-auth.is-email { text-decoration: none; }
 .wl-auth-list:not(.has-lead) .wl-auth.is-quiet { order: 1; }
+/* Without Google, GitHub means little to this reader: a quiet text link
+   under the buttons rather than a third button. */
+.wl-auth-list:not(.has-lead) .wl-auth.is-quiet {
+  min-height: 0;
+  margin-top: 0.15rem;
+  padding: 0.3rem 0;
+  border: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--sl-soft);
+}
+.wl-auth-list:not(.has-lead) .wl-auth.is-quiet:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  color: var(--sl-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.wl-auth-list:not(.has-lead) .wl-auth.is-quiet svg { width: 0.9rem; height: 0.9rem; }
+
+/* The promise sits a breath above the first button, never against it. */
+.wl-aside[data-cc-assistant-privacy] { margin-bottom: 1rem; }
 
 /* ── The email form ──────────────────────────────────────────────────── */
 
@@ -552,14 +594,11 @@ html[data-welcome-move="back"]::view-transition-new(wl-stage) { animation: wl-en
 @keyframes wl-dim { to { opacity: 0.35; filter: blur(1px); } }
 @keyframes wl-send { to { opacity: 0; transform: translateY(-14px) scale(0.98); } }
 
-/* The wordmark: the app's mark and its name, upright in the interface face,
-   so the door and the app read as one product. */
+/* The wordmark (HostedWordmark): the app's mark and its name in the reading
+   face, as in hosted mode's rail, so the door and the app read as one
+   product. Here it only takes the door's size. */
 .wl-brand {
-  font-family: var(--pd-font-ui);
-  font-style: normal;
-  font-weight: 600;
   font-size: 1.05rem;
-  letter-spacing: -0.01em;
   gap: 0.45rem;
 }
 

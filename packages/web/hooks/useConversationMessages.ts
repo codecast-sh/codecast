@@ -9,10 +9,11 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 import { parseMessageHash } from "../lib/messageHash";
 import { isHostedAgentType, isTaggedDecisionAnswer } from "@codecast/shared/contracts";
+import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { rowSigExcluding } from "../store/wakeSig";
 import { withClearedInboxStamps } from "../store/syncProtocol";
 import { shareTokenArg } from "../lib/shareTokenScope";
-import { deepenConversation, fetchMessagesAround, fetchOlderMessages, fetchOlderPage, WARM_DEEP_ROWS } from "./inboxWarm";
+import { deepenConversation, fetchMessagesAround, fetchOlderMessages, fetchOlderPage, readForward, rereadAnchor, WARM_DEEP_ROWS } from "./inboxWarm";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
@@ -238,6 +239,8 @@ export function useConversationMessages(
   const [trackedConvId, setTrackedConvId] = useState(conversationId);
   const [jumpTimestamp, setJumpTimestamp] = useState<number | null>(null);
   const [jumpMode, setJumpMode] = useState<"start" | "center" | null>(null);
+  // Declared here, above the jump-request block, which resets it.
+  const [targetIsLoadingOlder, setTargetIsLoadingOlder] = useState(false);
   // jump-to-end means "leave the target, go to the live tail". The page keeps
   // targetMessageId/highlight set for the WHOLE visit (cleared only on
   // navigate-away — see QueuePageClient scrollTarget), so without remembering
@@ -379,6 +382,26 @@ export function useConversationMessages(
     if (!useNormalMode || tailState.id !== conversationId || tailState.anchor === null) return;
     void deepenConversation(convex, conversationId, WARM_DEEP_ROWS);
   }, [useNormalMode, tailState.id, tailState.anchor, conversationId, convex]);
+
+  // A hosted visit re-reads its cached window once. A hosted turn streams
+  // into one row and keeps adding rows after it, so a copy cached mid-stream
+  // (a reply that reads "I", missing its tool calls) can sit anywhere in the
+  // window with the counts equal, where neither the tail nor the recovery
+  // loop looks. The window is short; mergeMessages replaces changed copies.
+  const hostedVisit = isHostedAgentType(
+    useInboxStore((st) => (st.conversations[conversationId] ?? st.sessions[conversationId])?.agent_type),
+  );
+  // eslint-disable-next-line no-restricted-syntax -- one-shot heal per visit; the tail subscription is the live path
+  useEffect(() => {
+    if (!useNormalMode || !hostedVisit || tailState.id !== conversationId || tailState.anchor === null) return;
+    const from = rereadAnchor(useInboxStore.getState().messages[conversationId], HOSTED_AGENT_TYPE);
+    if (from === null) return;
+    readForward(convex, convId, from).catch((err: unknown) => {
+      console.warn("[useConversationMessages] hosted heal failed", { conversationId, err });
+    });
+    // Once per visit: the anchor settling is the visit's start.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useNormalMode, hostedVisit, tailState.id, tailState.anchor === null, conversationId]);
 
   // The live tail. Anchored one ms before the newest known row so the
   // in-flight streaming row is always inside the subscribed range and its
@@ -522,36 +545,13 @@ export function useConversationMessages(
       if (local.length >= serverCount) return;
 
       recoveryInFlightRef.current = true;
-      const after = local.length > 0 ? local[local.length - 1].timestamp : 0;
       try {
-        let cursor = after;
-        let fetched = 0;
-        // Bound the inner pagination loop so a buggy server can't pin us here.
-        for (let i = 0; i < 40; i++) {
-          const result: any = await convex.query(api.conversations.getNewMessages, {
-            conversation_id: convId,
-            after_timestamp: cursor,
-          });
-          // getNewMessages returns null for unauth/no-access — treat as a
-          // transient failure and surface in logs so it doesn't silently
-          // strand the UI in the loading state.
-          if (result === null) {
-             
-            console.warn("[useConversationMessages] recovery got null (auth not ready?)", { conversationId });
-            break;
-          }
-          if (!result.messages?.length) break;
-          useInboxStore.getState().mergeMessages(conversationId, result.messages, "append", { initialized: true });
-          fetched += result.messages.length;
-          if (!result.has_more || result.last_timestamp == null) break;
-          cursor = result.last_timestamp;
-        }
-        if (fetched > 0) {
-           
-          console.log("[useConversationMessages] recovery fetched", { conversationId, fetched, serverCount });
-        }
+        const fetched = await readForward(convex, convId, rereadAnchor(local, (meta as any)?.agent_type) ?? 0);
+        // null is unauth/no-access: a transient failure, logged so it doesn't
+        // silently strand the UI in the loading state.
+        if (fetched === null) console.warn("[useConversationMessages] recovery got null (auth not ready?)", { conversationId });
+        else if (fetched > 0) console.log("[useConversationMessages] recovery fetched", { conversationId, fetched, serverCount });
       } catch (err) {
-         
         console.warn("[useConversationMessages] recovery fetch failed", { conversationId, err });
       } finally {
         recoveryInFlightRef.current = false;
@@ -649,15 +649,38 @@ export function useConversationMessages(
   // target mode re-engages even after an earlier jump completed or was
   // dismissed via jump-to-end.
   const targetReqKey = `${targetNonce ?? ""}:${effectiveTargetMessageId ?? ""}`;
-  const [trackedTargetReqKey, setTrackedTargetReqKey] = useState(targetReqKey);
+  // Starts unmatched on purpose: a request already set when the hook mounts
+  // (a host that remounted mid-jump) goes through the same block as a new one.
+  const [trackedTargetReqKey, setTrackedTargetReqKey] = useState("");
   if (trackedTargetReqKey !== targetReqKey) {
     jumpGenRef.current++;
     setTrackedTargetReqKey(targetReqKey);
     if (effectiveTargetMessageId) {
-      targetInitializedRef.current = false;
       targetArrivedRef.current = null;
-      dismissedTargetKeyRef.current = null;
-      if (!targetMode) setTargetMode(true);
+      // A message the loaded live tail already holds needs no window of its
+      // own: the view lands on its row where it is, the thread stays live
+      // (new messages keep streaming in under the card), and nothing later
+      // re-applies the jump. Only a message outside the tail opens the
+      // around-window; a window still open from an earlier jump closes here.
+      // The initialized flag reads "nothing to fetch" for the tail, which
+      // also keeps the around-window query off during the render that
+      // leaves target mode (the state flips one render later).
+      const inLoadedTail = (useInboxStore.getState().messages[conversationId] ?? EMPTY_MESSAGES).some((m) => m._id === effectiveTargetMessageId);
+      targetInitializedRef.current = inLoadedTail;
+      dismissedTargetKeyRef.current = inLoadedTail ? targetKey : null;
+      // Set outright, not only on a change: the render-time sync above this
+      // block already queued targetMode on for the new target (its dismissal
+      // mark is written here, after it ran), and the last write wins.
+      setTargetMode(!inLoadedTail);
+      // A message jump starts clean after a timestamp jump, as jumpToEnd
+      // leaves things: that jump set jumpMode "center", which gates the
+      // around-window query off, kept its window in targetAroundData, and
+      // (when still in flight) its loading flag, which its callbacks drop
+      // once the generation moved on.
+      if (jumpMode !== null) setJumpMode(null);
+      if (jumpTimestamp !== null) setJumpTimestamp(null);
+      if (targetAroundData) setTargetAroundData(null);
+      if (targetIsLoadingOlder) setTargetIsLoadingOlder(false);
     }
   }
 
@@ -690,7 +713,6 @@ export function useConversationMessages(
 
   const [targetLoadOlderTs, setTargetLoadOlderTs] = useState<number | undefined>(undefined);
   const [targetLoadNewerTs, setTargetLoadNewerTs] = useState<number | undefined>(undefined);
-  const [targetIsLoadingOlder, setTargetIsLoadingOlder] = useState(false);
   const [targetIsLoadingNewer, setTargetIsLoadingNewer] = useState(false);
 
   // eslint-disable-next-line no-restricted-syntax -- one-shot older page into the transient target window
@@ -1090,5 +1112,9 @@ export function useConversationMessages(
     targetMessageFound,
     effectiveTargetMessageId,
     isJumpingToTarget,
+    // True while the list is a window around a target rather than the live
+    // tail: no new message lands until a jump to the end, or a jump to a
+    // message the tail holds.
+    targetMode,
   };
 }

@@ -71,6 +71,7 @@ import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, ge
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectNotice";
 import { Surface, useHostedMode, useModeWords, useSurface } from "../lib/surfaces";
+import { useNewResultsCount } from "../hooks/useNeedsInputCount";
 import { agentFleetCounts } from "../lib/liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
@@ -81,6 +82,7 @@ import { FollowPill } from "./presence/FollowPill";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron, borrowsTabShell, isStandaloneCommunityPath } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
+import { StageRail } from "./stage/StageRail";
 import { FilePathMenuHost } from "./FilePathMenuHost";
 import { LinkMenuHost } from "./LinkMenuHost";
 import { EdgePeek } from "./EdgePeek";
@@ -97,6 +99,7 @@ import { RecentSwitcherHost } from "./RecentSwitcher";
 import { UndoTimelineHost } from "./undo/UndoTimeline";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { AppWindowBar } from "./desktop/AppWindowBar";
+import { HostedSectionKeys } from "./HostedSectionKeys";
 import { useAppWindowRegistry } from "../hooks/useAppWindowRegistry";
 import { DESKTOP_APPS, desktopAppWindow, routeElsewhere } from "../lib/desktopApps";
 import { routerNavigate } from "../lib/tabRoutes";
@@ -401,6 +404,10 @@ function WindowOnlyEffects() {
 // thing worth interrupting a different app for.
 function useWindowTitle(path: string) {
   const { mentions } = useChatUnread();
+  // Hosted mode also leads with results not yet read: a count that reaches
+  // zero as the person reads them, unlike a developer's busy fleet.
+  const hosted = useHostedMode();
+  const newResults = useNewResultsCount(hosted && !PANE_EMBED);
   const title = useInboxStore((s) => {
     const label = pathLabel(path, s.clientState.ui);
     // An inbox window titles by the session it is SHOWING (the store pointer);
@@ -408,12 +415,15 @@ function useWindowTitle(path: string) {
     const inboxish = path.startsWith("/inbox") || path.startsWith("/conversation");
     const sessionId = inboxish ? s.currentSessionId ?? undefined : undefined;
     const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels, undefined, undefined, undefined, undefined, s);
-    return appDocumentTitle(label, rest);
+    // Hosted mode names an open conversation by its title alone, as a
+    // browser tab names a page; the surface name is developer framing.
+    return appDocumentTitle(label, rest, PANE_EMBED || (hosted && inboxish && !!rest));
   });
   useWatchEffect(() => {
-    const next = mentions > 0 && !PANE_EMBED ? `(${mentions}) ${title}` : title;
+    const lead = PANE_EMBED ? 0 : mentions + newResults;
+    const next = lead > 0 ? `(${lead}) ${title}` : title;
     if (document.title !== next) document.title = next;
-  }, [title, mentions]);
+  }, [title, mentions, newResults]);
 }
 
 function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
@@ -464,6 +474,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.tabs.length,
     s => s.activeTabId,
     s => s.tabs.find(t => t.id === s.activeTabId)?.path,
+    // The leaf taking its tab's width (the org screen): the session rail folds.
+    s => s.stageWide?.tabId,
   ]);
   // The activity feed (/team/activity) carries the active workspace filter in its
   // URL as `?dir=`. The sidebar lives outside the tab's search-param context, so we
@@ -613,7 +625,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // it would overlay the whole flow on arrival, on desktop it stacks
   // unrelated inbox cards beside a focused step and pushes the centered
   // shell off axis. The persisted rail choice still applies everywhere else.
-  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow;
+  // A leaf taking its tab's width (store.stageWide, the org screen) folds the
+  // rail to a thin strip (StageRail below) for as long as it is there; the
+  // rail's own open state is untouched, so leaving brings it back as it was.
+  const stageWideHere = !!s.stageWide && s.stageWide.tabId === s.activeTabId;
+  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow && !stageWideHere;
   const showMobileSessionList = isMobileSessionListOpen && isMobile && !isOnSettingsPage && !appWindow;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
@@ -1150,6 +1166,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </Panel>
         </Group>
       </div>
+      {stageWideHere && railOpen && !isMobile && !isOnSettingsPage && !appWindow && (
+        <StageRail side="right" title="Inbox" path="/inbox" onRestore={() => useInboxStore.getState().setStageWide(null)} />
+      )}
     </div>
   );
 
@@ -1163,6 +1182,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           via useTitlebarHead, so no strip is needed above the page. An app
           window (Chat, Work) replaces it with the app's own bar below. */}
       {appWindow && <AppWindowBar app={appWindow} />}
+      {hostedMode && !appWindow && <HostedSectionKeys />}
       {/* Header spans full width */}
       <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
@@ -1247,7 +1267,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <AccountUsageChip />
               </ErrorBoundary>
             </Surface>
-            <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
+            {/* The running-agents pill counts a fleet; the assistant's own
+                work is the inbox's Working on it. */}
+            <Surface name="machineChips">
+              <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
+            </Surface>
             <Surface name="machineChips">
               <ErrorBoundary name="DaemonStatusChip" level="inline">
                 <DaemonStatusChip />
@@ -1263,10 +1287,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 }}
                 aria-label={words.newConversation}
                 // In hosted mode starting a conversation is the main thing,
-                // so the phone keeps it as the bar's one filled control. The
-                // fill is painted by globals.css ([data-cc-compose]), because
-                // the minimal style clears every top bar button's background
-                // with !important and no utility class can win against it.
+                // so the phone keeps it, as a ghost button in ink like its
+                // neighbours (globals.css [data-cc-compose]).
                 desktopOnly={!hostedMode}
                 data-cc-compose=""
               >

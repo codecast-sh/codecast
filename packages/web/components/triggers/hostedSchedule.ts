@@ -5,8 +5,17 @@
 // (schedule_type, run_at, interval_ms), so the backend and its plan check
 // (routineRefusal) see nothing new.
 
+import { plainCadence, type WallCadence } from "@platform/assistant/cadence";
+import { taskStateLabel } from "../triggerCadence";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
+
+/** A stored routine's schedule fields, as the helpers below read them. A
+ *  hosted routine said as a time of day carries its wall-clock `cadence`
+ *  (convex assistant/routines.ts hostedWallCadence), which wins over the
+ *  interval for words. */
+type ScheduleFields = { schedule_type?: string; interval_ms?: number; run_at?: number; cadence?: WallCadence };
 
 export type HostedRepeat = "daily" | "weekly" | "once" | "now";
 
@@ -113,7 +122,11 @@ function intervalWords(ms: number): string {
  *  uses: "Every day at 9:00 AM", "Every Monday at 9:00 AM", "Every 30
  *  minutes", "Once, Oct 9 at 9:00 AM". Null for a schedule this cannot say
  *  (an event), which the caller words its own way. */
-export function describeHostedCadence(task: { schedule_type?: string; interval_ms?: number; run_at?: number }): string | null {
+export function describeHostedCadence(task: ScheduleFields): string | null {
+  if (task.schedule_type === "recurring" && task.cadence) {
+    const line = plainCadence(task.cadence);
+    return line.charAt(0).toUpperCase() + line.slice(1);
+  }
   const at = task.run_at ? new Date(task.run_at) : null;
   const time = at ? at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
   if (task.schedule_type === "recurring" && task.interval_ms) {
@@ -133,7 +146,7 @@ export function describeHostedCadence(task: { schedule_type?: string; interval_m
  *  names its date already. A run within the hour reads "in 25 min" whatever
  *  the cadence, and any other interval says the time. Only for a scheduled
  *  routine with a run ahead; other states read their own word. */
-export function hostedNextWords(task: { schedule_type?: string; interval_ms?: number; run_at?: number }, now: number): string | null {
+export function hostedNextWords(task: ScheduleFields, now: number): string | null {
   if (!task.run_at || task.run_at <= now) return null;
   const until = task.run_at - now;
   if (until < 60 * 60 * 1000) return `in ${Math.max(1, Math.round(until / 60_000))} min`;
@@ -142,7 +155,7 @@ export function hostedNextWords(task: { schedule_type?: string; interval_ms?: nu
   const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((startOf(at) - startOf(new Date(now))) / DAY_MS);
   const day = days === 0 ? "today" : days === 1 ? "tomorrow" : null;
-  if (task.interval_ms === DAY_MS || task.interval_ms === WEEK_MS) return day;
+  if (task.cadence || task.interval_ms === DAY_MS || task.interval_ms === WEEK_MS) return day ?? (task.cadence && task.cadence.weekdays.length > 1 && task.cadence.weekdays.length < 7 ? WEEKDAYS[at.getDay()] : null);
   const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return day ? `next ${day} at ${time}` : `next ${at.toLocaleDateString([], { month: "short", day: "numeric" })} at ${time}`;
 }
@@ -160,6 +173,33 @@ export function firstRunWords(runAt: number, now: number): string {
   if (days === 1) return `tomorrow at ${time}`;
   if (days < 7) return `${WEEKDAYS[at.getDay()]} at ${time}`;
   return `${at.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} at ${time}`;
+}
+
+/** When a plain (hosted) routine runs next, labelled so it never reads as
+ *  the last run: "Next: today at 8:00 AM", in the words the form and the card
+ *  use for a first run. With no run ahead, the state word ("Paused").
+ *  The list row (TriggerRow), the routine's page and the rail's footer
+ *  (GlobalSessionPanel) read this one rule. */
+export function plainNextRun(task: ScheduleFields & { status: string; run_count?: number; last_run_at?: number }, now: number): string {
+  const ended = plainEndedWords(task);
+  if (ended) return ended;
+  const next = task.status === "scheduled" && task.run_at !== undefined && task.run_at > now
+    ? `Next: ${firstRunWords(task.run_at, now)}`
+    : taskStateLabel(task, now);
+  return next.charAt(0).toUpperCase() + next.slice(1);
+}
+
+/** How a routine that no longer runs reads in hosted mode, or null while it
+ *  still runs: a one-off that ran is "Finished"; anything else that ended
+ *  was stopped, never "Done", with its last run or "Never ran" so a routine
+ *  stopped before it fired says so. */
+export function plainEndedWords(task: { status: string; schedule_type?: string; run_count?: number; last_run_at?: number }): string | null {
+  const day = (at: number) => new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
+  const last = task.last_run_at ? `Last ran ${day(task.last_run_at)}` : (task.run_count ?? 0) > 0 ? null : "Never ran";
+  if (task.status === "failed") return last ? `Didn't finish · ${last}` : "Didn't finish";
+  if (task.status !== "completed" && task.status !== "cancelled") return null;
+  if (task.schedule_type === "once" && (task.run_count ?? 0) > 0) return task.last_run_at ? `Finished ${day(task.last_run_at)}` : "Finished";
+  return last ? `Stopped · ${last}` : "Stopped";
 }
 
 /** A routine a newcomer can start from: what it does, and when, as a choice

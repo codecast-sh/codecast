@@ -13,9 +13,12 @@ export function SearchOrigin({ row, query, className = "" }: {
   className?: string;
 }) {
   const earlier = row.origin?.earlier_titles ?? [];
-  const started = row.origin?.started_as;
   // Worker sessions are a fleet's machinery; hosted mode never names them.
-  const workers = useSurface("search.internals") ? row.workerCount ?? 0 : 0;
+  // Nor what a conversation began as: its first ask is the message the hit
+  // shows under it, so the line said it twice.
+  const internals = useSurface("search.internals");
+  const started = internals ? row.origin?.started_as : undefined;
+  const workers = internals ? row.workerCount ?? 0 : 0;
   if (!earlier.length && !started && !workers) return null;
   return (
     <div className={`text-[11px] leading-relaxed text-sol-text-dim space-y-0.5 ${className}`}>

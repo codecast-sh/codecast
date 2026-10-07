@@ -33,7 +33,8 @@ for (const [name, props] of cases) {
 }
 
 // The group header's markup as it stood inline in GenericListView's
-// renderGroupHeader, kept here as the reference the extracted view must match.
+// renderGroupHeader, kept here as the reference the extracted view must match,
+// plus the data hooks hosted mode styles the label and count by (globals.css).
 function InlineGroupHeader({ label, count, icon, badge, extra, collapsed, dropTarget }: { label: string; count: number; icon?: React.ReactNode; badge?: React.ReactNode; extra?: React.ReactNode; collapsed: boolean; dropTarget: boolean }) {
   return (
     <div
@@ -45,8 +46,8 @@ function InlineGroupHeader({ label, count, icon, badge, extra, collapsed, dropTa
           <path d="M6 4l8 6-8 6V4z" />
         </svg>
         {icon}
-        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">{label}</span>
-        <span className="text-xs text-sol-text-dim">({count})</span>
+        <span data-cc-group-label className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">{label}</span>
+        <span data-cc-group-count className="text-xs text-sol-text-dim tabular-nums"><span data-cc-bracket>(</span>{count}<span data-cc-bracket>)</span></span>
         {badge}
       </button>
       {extra}

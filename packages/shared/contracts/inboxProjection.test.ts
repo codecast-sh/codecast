@@ -1,3 +1,4 @@
+import { HOSTED_AGENT_TYPE } from "./assistant";
 import { DORMANT_CLAIM_TTL_MS } from "./agentStatus";
 import { deriveLiveAt, isUnderRole, rowLiveDeadlines, type LiveFactsRow } from "./inboxProjection";
 import { describe, expect, test } from "bun:test";
@@ -604,6 +605,14 @@ describe("placeProjectableRow — the park facts", () => {
     expect(placeProjectableRow(base, false, EPOCH).bucket).toBe("dormant"); // no last user turn at all
   });
 
+  test("a hosted conversation's routine never parks it: each run's answer files like any turn", () => {
+    for (const kind of ["standing", "once"] as const) {
+      const hosted = row("h", { is_idle: true, armed_trigger_kind: kind, last_turn_allows_park: true, agent_type: HOSTED_AGENT_TYPE });
+      expect(placeProjectableRow(hosted, false, EPOCH).bucket).not.toBe("dormant");
+      expect(placeProjectableRow({ ...hosted, thread_state_status: "done" }, false, EPOCH).bucket).toBe("done");
+    }
+  });
+
   test("armed loop home parks while fresh, un-parks when overdue", () => {
     const loop = (wakeupAt: number) => row("l", {
       is_idle: true,
@@ -628,7 +637,10 @@ describe("placeProjectableRow — the park facts", () => {
     expect(placeProjectableRow(claim(11 * HOUR, { armed_trigger_kind: "once" }), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(claim(11 * HOUR, { armed_trigger_kind: "standing" }), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(claim(11 * HOUR, { loop_state: { status: "armed", wakeup_at: EPOCH + HOUR, event_at: EPOCH - HOUR } }), false, EPOCH).bucket).toBe("dormant");
-    expect(placeProjectableRow(claim(11 * HOUR, { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("dormant");
+    // Open tasks vouch only while the daemon that reported them heartbeats.
+    const openTasks = { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 };
+    expect(placeProjectableRow(claim(11 * HOUR, { ...openTasks, last_heartbeat: EPOCH - 1_000 }), false, EPOCH).bucket).toBe("dormant");
+    expect(placeProjectableRow(claim(11 * HOUR, openTasks), false, EPOCH).bucket).toBe("needs_input");
     // A worker still producing: its result will wake the parent. Once it stops, the claim is judged again.
     expect(placeProjectableRow(claim(11 * HOUR, { producing_until: EPOCH + 60_000 }), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(claim(11 * HOUR, { producing_until: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("needs_input");
@@ -636,6 +648,23 @@ describe("placeProjectableRow — the park facts", () => {
     expect(placeProjectableRow(claim(11 * HOUR, { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 11 * HOUR }), false, EPOCH).bucket).toBe("needs_input");
     // A verified `waiting` (open work) has its own trust rule and is untouched.
     expect(placeProjectableRow(claim(11 * HOUR, { agent_status: "waiting", open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("dormant");
+  });
+
+  // A hosted turn's status is the engine's own settle, written as the turn
+  // ends. A finished answer used to sit under Working on it for the 45
+  // second idle grace, though the reply was on screen (pl-840 round 10).
+  test("a hosted row that just settled done files as done, without the idle grace", () => {
+    const hosted = (extra: Record<string, any>) => {
+      const facts = row("h", {
+        agent_type: "codecast", message_count: 4, updated_at: EPOCH - 2_000,
+        agent_status_updated_at: EPOCH - 1_000, is_idle: false, ...extra,
+      });
+      return placeProjectableRow({ ...facts, ...deriveLiveAt(facts, EPOCH) }, false, EPOCH).work_state;
+    };
+    expect(hosted({ agent_status: "done" })).toBe("done");
+    expect(hosted({ agent_status: "working" })).toBe("working");
+    // A daemon session in the same instant still waits out the grace.
+    expect(hosted({ agent_type: "claude_code", agent_status: "done" })).toBe("working");
   });
 
   // A lead that ended its turn while its subagents (a background workflow's
@@ -686,9 +715,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 17", () => {
+  test("the caps are the single source and the version is 20", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(17);
+    expect(INBOX_PROJECTION_VERSION).toBe(20);
   });
 });
 

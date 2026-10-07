@@ -263,8 +263,8 @@
       "doneoldturnz11000000000000000000": -10800000,
       "donerecentturnz14000000000000000": -300000,
       "dormunnamedwakez1500000000000000": -300000,
-      "dormwakelaterz130000000000000000": 10800000,
-      "dormwakesoonz1200000000000000000": 600000,
+      "dormwakelaterz130000000000000000": -240000,
+      "dormwakesoonz1200000000000000000": -180000,
       "newbornz700000000000000000000000": -60000,
       "newolderz80000000000000000000000": -7200000,
       "nifreshz700000000000000000000000": -60000,
@@ -282,9 +282,9 @@
         "doneoldturnz11000000000000000000"
       ],
       "dormant": [
-        "dormwakesoonz1200000000000000000",
+        "dormunnamedwakez1500000000000000",
         "dormwakelaterz130000000000000000",
-        "dormunnamedwakez1500000000000000"
+        "dormwakesoonz1200000000000000000"
       ],
       "needs_input": [
         "nifreshz700000000000000000000000",

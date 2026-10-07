@@ -52,6 +52,21 @@ describe("hosted stops in the inbox", () => {
     expect(hostedStopsSig({ a: rows[0], b: rows[1], c: rows[2] }, messages)).toBe("a:error,");
   });
 
+  // In the live store only a few hosted transcripts are loaded, so a stop
+  // read from messages filed a failed row as the person's move until it was
+  // opened, then moved it. The engine's stamp on the row decides.
+  test("the row's own stop stamp decides without the transcript, and a cleared stamp beats an old notice", () => {
+    const rows = [
+      { _id: "a", agent_type: "codecast", hosted_stop: "error" },
+      { _id: "b", agent_type: "codecast", hosted_stop: null },
+      { _id: "c", agent_type: "codecast" },
+    ];
+    const messages: Record<string, any[]> = { b: [own, notice], c: [own, notice] };
+    const { asks, stopped } = splitHostedStops(rows, (id) => messages[id]);
+    expect(stopped.map((r) => r._id)).toEqual(["a", "c"]);
+    expect(asks.map((r) => r._id)).toEqual(["b"]);
+  });
+
   test("Try again sends the person's last own words, past approval answers and system rows", () => {
     expect(lastAskOf([own, notice, { role: "user", content: "Approve" }, { role: "user", content: "<system>wake</system>" }])).toBe("keep basil alive?");
     expect(lastAskOf([])).toBeUndefined();

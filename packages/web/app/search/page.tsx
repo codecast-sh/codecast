@@ -23,7 +23,8 @@ import { toast } from "sonner";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "../../components/ui/context-menu";
 import { SessionMenuItems } from "../../components/menus/ObjectContextMenus";
 import { useInboxStore, type InboxSession } from "../../store/inboxStore";
-import { highlightMatch, getSnippet } from "../../lib/searchHighlight";
+import { highlightMatch, getSnippet, stripSnippetMarkup } from "../../lib/searchHighlight";
+import { ObjectMatches } from "../../components/search/ObjectMatches";
 import { SearchOrigin } from "../../components/search/SearchOrigin";
 import { searchedTermsText } from "@codecast/shared/search";
 import { useInstantSessionRows, mergeSearchRows } from "../../lib/instantSessionSearch";
@@ -34,6 +35,9 @@ import { parseSessionQuery, sessionQuerySearches, SESSION_QUERY_OPERATORS } from
 import { useSessionQueryAutocomplete } from "../../hooks/useSessionQuerySuggestions";
 import { SessionQuerySuggestList } from "../../components/SessionQuerySuggestList";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
+import { useAssistantScope, useModeWords, useSurface } from "../../lib/surfaces";
+import { bySessionAgent, withinScope } from "../../lib/assistantScope";
+import { AssistantScopeSwitch, MoreInEverything } from "../../components/AssistantScopeSwitch";
 
 // Right-click payloads: a session header row or one message match inside it.
 type SearchCtxPayload =
@@ -60,15 +64,18 @@ function SegmentedControl<T extends string>({
   value,
   options,
   onChange,
+  plain = false,
 }: {
   label: string;
   value: T;
   options: Array<{ value: T; label: string }>;
   onChange: (v: T) => void;
+  /** Hosted mode: the label in sentence case and the UI face, not a tracked cap. */
+  plain?: boolean;
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70">
+      <span className={plain ? "text-[12px] text-sol-text-muted" : "text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70"}>
         {label}
       </span>
       <div className="flex rounded-lg border border-sol-border/60 bg-sol-bg-alt/60 p-0.5">
@@ -133,6 +140,12 @@ export default function SearchPage() {
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Hosted mode searches the person's conversations in plain words: no
+  // operators, no team or role scopes, and the Assistant scope holds here as
+  // it does in the inbox and the palette.
+  const internals = useSurface("search.internals");
+  const words = useModeWords();
+  const { only: scopeOnly } = useAssistantScope();
   const autocomplete = useSessionQueryAutocomplete(query, setQuery, inputRef, true);
   const resultRefs = useRef<Array<HTMLDivElement | null>>([]);
   const debouncedQuery = useDebounce(query, 300);
@@ -223,11 +236,16 @@ export default function SearchPage() {
   // it cannot justify, exactly as the title tier does.
   const instantRows = useInstantSessionRows(userOnly ? "" : query, PAGE_SIZE, { mineOnly });
   // Content-match rows win; title-only rows next; cache rows fill the tail.
-  const results: any[] = useMemo(
+  const allResults: any[] = useMemo(
     () => mergeSearchRows(contentRows as any, titleData?.results as any, instantRows),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [searchData, titleData, instantRows]
   );
+  const results: any[] = useMemo(
+    () => withinScope(allResults, scopeOnly, (r: any) => bySessionAgent({ agent_type: r.agentType })) as any[],
+    [allResults, scopeOnly]
+  );
+  const hiddenByScope = allResults.length - results.length;
   // Instant rows match what is typed NOW; server rows match the debounced term.
   // Highlight against the live term so a fresh keystroke marks its own hits.
   const hlQuery = (query.trim().length >= 2 ? liveQuery : parsedQuery).text;
@@ -275,7 +293,7 @@ export default function SearchPage() {
   // Arrow keys drive selection while focus stays in the input — single-letter
   // keys never leave the field, so no global-shortcut leaks.
   const handleInputKeyDown = (e: React.KeyboardEvent) => {
-    if (autocomplete.onKeyDown(e as React.KeyboardEvent<HTMLInputElement>)) return;
+    if (internals && autocomplete.onKeyDown(e as React.KeyboardEvent<HTMLInputElement>)) return;
     if (!results.length) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -308,7 +326,7 @@ export default function SearchPage() {
           <div className="space-y-3">
             <div className="relative group">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <Search className="w-5 h-5 text-sol-text-dim group-focus-within:text-amber-500 transition-colors" />
+                <Search data-cc-search-icon className={`w-5 h-5 text-sol-text-dim transition-colors ${internals ? "group-focus-within:text-amber-500" : "group-focus-within:text-sol-text"}`} />
               </div>
               <input
                 ref={inputRef}
@@ -317,13 +335,14 @@ export default function SearchPage() {
                 onChange={(e) => { setQuery(e.target.value); autocomplete.trackCaret(e.target); }}
                 {...autocomplete.inputHandlers}
                 onKeyDown={handleInputKeyDown}
-                placeholder='Search sessions... "phrases", file: pr: commit:'
-                className="w-full pl-12 pr-12 py-3.5 bg-sol-bg-alt border border-sol-border rounded-xl text-[15px] text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500/40 transition-all shadow-sm"
+                placeholder={words.searchPagePlaceholder}
+                data-cc-search-field
+                className={`w-full pl-12 pr-12 py-3.5 bg-sol-bg-alt border border-sol-border rounded-xl text-[15px] text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 transition-all shadow-sm ${internals ? "focus:ring-amber-500/40 focus:border-amber-500/40" : "focus:ring-sol-text/15 focus:border-sol-text/30"}`}
                 autoFocus
               />
               <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
                 {isLoading ? (
-                  <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
+                  <Loader2 data-cc-search-icon className={`w-4 h-4 animate-spin ${internals ? "text-amber-500" : "text-sol-text-dim"}`} />
                 ) : (
                   query && (
                     <button
@@ -335,7 +354,7 @@ export default function SearchPage() {
                   )
                 )}
               </div>
-              {autocomplete.open && <SessionQuerySuggestList {...autocomplete.listProps} />}
+              {internals && autocomplete.open && <SessionQuerySuggestList {...autocomplete.listProps} />}
             </div>
 
             {queryErrors.length > 0 && (
@@ -345,7 +364,8 @@ export default function SearchPage() {
             )}
 
             <div className="flex items-center gap-x-5 gap-y-2 flex-wrap">
-              <SegmentedControl
+              <AssistantScopeSwitch label="Which conversations this searches" hidden={hiddenByScope} />
+              {internals && <SegmentedControl
                 label="Scope"
                 value={mineOnly ? "mine" : "everyone"}
                 options={[
@@ -353,8 +373,8 @@ export default function SearchPage() {
                   { value: "mine", label: "Only mine" },
                 ]}
                 onChange={(v) => setMineOnly(v === "mine")}
-              />
-              <SegmentedControl
+              />}
+              {internals && <SegmentedControl
                 label="Match in"
                 value={userOnly ? "prompts" : "everything"}
                 options={[
@@ -362,8 +382,9 @@ export default function SearchPage() {
                   { value: "prompts", label: "My prompts" },
                 ]}
                 onChange={(v) => setUserOnly(v === "prompts")}
-              />
+              />}
               <SegmentedControl
+                plain={!internals}
                 label="Time"
                 value={range}
                 options={[
@@ -375,6 +396,7 @@ export default function SearchPage() {
                 onChange={setRange}
               />
               <SegmentedControl
+                plain={!internals}
                 label="Sort"
                 value={sort}
                 options={[
@@ -394,12 +416,14 @@ export default function SearchPage() {
           {searchActive && searchData && (
             <div className="flex items-baseline justify-between text-sm">
               <span className="text-sol-text-secondary">
-                {parsedQuery.text && (
+                {/* Title matches count conversations but no message matches,
+                    so the match count leads only when it covers them all. */}
+                {parsedQuery.text && totalMatches >= totalSessions && (
                   <>
                     <span className="text-sol-text font-medium tabular-nums">{totalMatches}</span> match{totalMatches !== 1 ? "es" : ""} in{" "}
                   </>
                 )}
-                <span className="text-sol-text font-medium tabular-nums">{totalSessions}</span> session{totalSessions !== 1 ? "s" : ""}
+                <span className="text-sol-text font-medium tabular-nums">{totalSessions}</span> {(totalSessions !== 1 ? words.conversations : words.conversation).toLowerCase()}
                 {filterSummary.length > 0 && (
                   <span className="text-sol-text-dim"> · {filterSummary.join(" · ")}</span>
                 )}
@@ -420,18 +444,20 @@ export default function SearchPage() {
             <div className="flex items-center gap-2 text-xs text-sol-text-dim">
               {!searchError && <Loader2 className="w-3 h-3 animate-spin text-sol-cyan" />}
               {searchError
-                ? "Content search timed out — showing sessions matched by name. Try a more specific word or a quoted phrase."
-                : "Sessions matched by name — still searching message content…"}
+                ? `Content search timed out, so these are ${words.conversations.toLowerCase()} matched by name. Try a more specific word or a quoted phrase.`
+                : `${words.conversations} matched by name. Still searching what was said…`}
             </div>
           )}
 
           {/* The recent tier bounds content matches to a trailing window;
               titles cover all time. Only worth saying when the selected range
               exceeds the window. */}
-          {searchActive && parsedQuery.text && searchData?.contentTier === "recent" &&
+          {/* Hosted mode leaves the search window to the engine: the line
+              reads as a developer's caveat. */}
+          {internals && searchActive && parsedQuery.text && searchData?.contentTier === "recent" &&
             (range === "all" || RANGE_MS[range] > (searchData.contentWindowDays ?? 30) * 86_400_000) && (
             <div className="text-xs text-sol-text-dim">
-              Content matches cover the last {searchData.contentWindowDays ?? 30} days — older sessions match by title and summary.
+              Content matches cover the last {searchData.contentWindowDays ?? 30} days. Older {words.conversations.toLowerCase()} match by title and summary.
             </div>
           )}
 
@@ -459,6 +485,8 @@ export default function SearchPage() {
             )
           )}
 
+          {!internals && searchActive && <ObjectMatches query={debouncedQuery} scopeOnly={scopeOnly} />}
+
           {results.length > 0 && (
             <div className="space-y-4">
               {results.map((result: any, idx: number) => {
@@ -468,9 +496,10 @@ export default function SearchPage() {
                   <div
                     key={result.conversationId}
                     ref={(el) => { resultRefs.current[idx] = el; }}
+                    data-cc-search-result={isSelected ? "selected" : ""}
                     className={`bg-sol-bg-alt border rounded-xl overflow-hidden transition-all ${
                       isSelected
-                        ? "border-amber-500/60 ring-1 ring-amber-500/30 shadow-md"
+                        ? internals ? "border-amber-500/60 ring-1 ring-amber-500/30 shadow-md" : "border-sol-text/30 ring-1 ring-sol-text/10 shadow-md"
                         : "border-sol-border hover:border-sol-border/80"
                     }`}
                   >
@@ -505,13 +534,13 @@ export default function SearchPage() {
                           {highlightMatch(result.title, hlQuery)}
                         </h3>
                         <div className="flex items-center gap-2.5 text-[11px] text-sol-text-dim shrink-0 tabular-nums">
-                          {result.titleMatch && (
+                          {internals && result.titleMatch && (
                             <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
                               <Sparkles className="w-3 h-3" />
                               title
                             </span>
                           )}
-                          <span>{result.messageCount} msgs</span>
+                          {internals && <span>{result.messageCount} msgs</span>}
                           <span>{formatSearchTimestamp(result.updatedAt)}</span>
                         </div>
                       </div>
@@ -545,21 +574,26 @@ export default function SearchPage() {
                             }
                           >
                             <div className="flex items-center gap-2 mb-1">
-                              <span
-                                className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
-                                  match.role === "user"
-                                    ? "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30"
-                                    : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                                }`}
-                              >
-                                {match.role}
-                              </span>
+                              {/* Hosted mode names the speaker in words, quietly. */}
+                              {internals ? (
+                                <span
+                                  className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
+                                    match.role === "user"
+                                      ? "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30"
+                                      : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                                  }`}
+                                >
+                                  {match.role}
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-sol-text-muted">{match.role === "user" ? "You" : "Assistant"}</span>
+                              )}
                               <span className="text-[10px] text-sol-text-dim tabular-nums">
                                 {formatSearchTimestamp(match.timestamp)}
                               </span>
                             </div>
                             <p className="text-[13px] text-sol-text-secondary leading-relaxed line-clamp-3">
-                              {highlightMatch(match.content, hlQuery)}
+                              {highlightMatch(stripSnippetMarkup(match.content ?? ""), hlQuery)}
                             </p>
                           </Link>
                         ))}
@@ -568,7 +602,7 @@ export default function SearchPage() {
                             href={hrefFor(result, result.matches[0]?.messageId)}
                             className="block px-4 py-2 text-[11px] text-sol-text-dim hover:text-sol-text-secondary transition-colors"
                           >
-                            +{result.matchCount - result.matches.length} more match{result.matchCount - result.matches.length !== 1 ? "es" : ""} in this session
+                            +{result.matchCount - result.matches.length} more match{result.matchCount - result.matches.length !== 1 ? "es" : ""} in this {words.conversation.toLowerCase()}
                           </Link>
                         )}
                       </div>
@@ -578,6 +612,8 @@ export default function SearchPage() {
               })}
             </div>
           )}
+
+          {searchActive && <MoreInEverything hidden={hiddenByScope} centered />}
 
           {hasMore && (
             <button
@@ -603,7 +639,9 @@ export default function SearchPage() {
             <div className="text-center py-16 space-y-3">
               <Search className="w-8 h-8 text-sol-text-dim/40 mx-auto" />
               <p className="text-sol-text-dim text-sm">
-                Search titles and full message content across {mineOnly ? "your" : "your team's"} sessions.
+                {internals
+                  ? <>Search titles and full message content across {mineOnly ? "your" : "your team's"} sessions.</>
+                  : "Search the names and words of your conversations."}
               </p>
               <p className="text-[11px] text-sol-text-dim/70">
                 Tip: open this page from anywhere with{" "}
@@ -612,7 +650,7 @@ export default function SearchPage() {
               </p>
               {/* The operators `cast search` reads too; the URL keeps the
                   whole query, so a narrowed view is a link. */}
-              <div className="flex flex-wrap justify-center gap-1.5 pt-2 max-w-lg mx-auto">
+              {internals && <div className="flex flex-wrap justify-center gap-1.5 pt-2 max-w-lg mx-auto">
                 {SESSION_QUERY_OPERATORS.map((o) => (
                   <button
                     key={o.op}
@@ -627,7 +665,7 @@ export default function SearchPage() {
                     {o.op}
                   </button>
                 ))}
-              </div>
+              </div>}
             </div>
           )}
         </div>

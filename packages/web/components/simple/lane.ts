@@ -58,7 +58,8 @@ export function isLaneConversation(row: Pick<InboxSession, "agent_type"> & { inb
 export { conversationTitle } from "../../lib/conversationTitle";
 import { ownTitle, type TitleRow } from "../../lib/conversationTitle";
 import { allowancePoint, dollars, planPoints, planPrice, plural } from "./planWords";
-import { cadenceLabel } from "../../lib/cadence";
+import { describeHostedCadence, hostedNextWords } from "../triggers/hostedSchedule";
+import { describeTaskCadence } from "../triggerCadence";
 export { dollars, planPoints, planPrice } from "./planWords";
 
 /** Whether the title is the person's own ask, standing in until a real one
@@ -167,11 +168,6 @@ export function answerNote(answer: string | null | undefined): string | null {
   return LANE_COPY.transcript.answered(said);
 }
 
-/** Whether a card's draft is long enough to fold behind "Show all of it". */
-export function draftIsLong(draft: string): boolean {
-  return draft.length > 420 || draft.split("\n").length > 9;
-}
-
 // ── Tool steps ─────────────────────────────────────────────────────────────
 
 // Each call said as one plain line, and the fold rule, live in the platform
@@ -215,14 +211,17 @@ export function whenSaid(at: number, now: number): string {
   return `${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })} at ${clock(at)}`;
 }
 
-/** A routine's schedule as one sentence. */
-export function routineSchedule(t: Pick<TaskRow, "schedule_type" | "interval_ms" | "run_at" | "status">, now: number): string {
-  const cadence = t.schedule_type === "recurring" ? cadenceLabel(t.interval_ms) : "once";
-  if (t.status === "paused") return t.schedule_type === "recurring" ? `Paused. Runs ${cadence} when it's on` : "Paused";
-  if (t.status === "running") return t.schedule_type === "recurring" ? `Running now. Then ${cadence}` : "Running now";
-  if (!t.run_at) return t.schedule_type === "recurring" ? `Runs ${cadence}` : "Waiting to run";
-  const next = whenSaid(Math.max(t.run_at, now), now);
-  return t.schedule_type === "recurring" ? `Runs ${cadence}. Next: ${next}` : `Runs once, ${next}`;
+/** A routine's schedule as one line, in the web routine row's words
+ *  (TriggerRow: describeHostedCadence, else describeTaskCadence, then
+ *  hostedNextWords where the schedule does not already say when), so a
+ *  weekday routine reads "Weekdays at 8:00 AM. Tomorrow" on both clients. */
+export function routineSchedule(t: Pick<TaskRow, "schedule_type" | "interval_ms" | "run_at" | "status" | "cadence" | "event_filter">, now: number): string {
+  const upper = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+  const said = upper(describeHostedCadence(t) ?? describeTaskCadence(t));
+  if (t.status === "paused") return `Paused. ${said} when it's on`;
+  if (t.status === "running") return t.schedule_type === "recurring" ? `Running now. ${said}` : "Running now";
+  const next = t.status === "scheduled" ? hostedNextWords(t, now) : null;
+  return next ? `${said}. ${upper(next)}` : said;
 }
 
 // ── Usage and plans ────────────────────────────────────────────────────────
@@ -241,6 +240,14 @@ export function meterFill(w: MeterFigures): { used: number; held: number } {
   const used = Math.min(1, Math.max(0, w.used_usd / w.cap_usd));
   const held = Math.min(1 - used, Math.max(0, w.reserved_usd / w.cap_usd));
   return { used, held };
+}
+
+/** No room left for work: the month's allowance is spent and so is any extra
+ *  credit. A charge takes the allowance first and the credit after it
+ *  (splitCharge), so a spent allowance alone still leaves the server room
+ *  (walletRoom counts the credit), and only this holds Send. */
+export function meterOut(w: MeterFigures): boolean {
+  return w.used_usd >= w.cap_usd && w.topup_usd <= 0;
 }
 
 /** Money the person pays: plan prices and the top-up buttons. Never the
@@ -291,7 +298,7 @@ function capitalized(text: string): string {
 /** The meter's headline: how much of the month is left, in words. */
 export function usageHeadline(w: MeterFigures): string {
   const { used } = meterFill(w);
-  if (w.used_usd >= w.cap_usd && w.topup_usd <= 0) return "You've used all of this month's allowance";
+  if (meterOut(w)) return "You've used all of this month's allowance";
   if (w.used_usd >= w.cap_usd) return "This month's allowance is used up, so your extra credit is in use";
   if (used >= 0.8) return "Most of this month's allowance is used";
   if (used === 0) return "Nothing used yet this month";
@@ -301,7 +308,8 @@ export function usageHeadline(w: MeterFigures): string {
 /** The meter in a few words, for the sidebar: "25% used this month". */
 export function meterShort(w: MeterFigures): string {
   const { used } = meterFill(w);
-  if (used >= 1) return "All used this month";
+  if (meterOut(w)) return "All used this month";
+  if (used >= 1) return "Allowance used, on extra credit";
   if (w.used_usd <= 0) return "Nothing used this month";
   return `${capitalized(monthPercent(used))} used this month`;
 }
@@ -541,10 +549,16 @@ export const LANE_COPY = {
    *  mode and the new conversation sheet, on the web and the phone. */
   intro: {
     title: "Ask the Codecast assistant",
+    /** The compose sheet's heading: the person already chose to ask. */
+    sheetTitle: "What's next?",
     lede: (mailConnected: boolean) =>
-      mailConnected ? "Research, writing, planning, your mail and calendar. Ask in plain words." : "Research, writing, planning. Ask in plain words.",
+      mailConnected
+        ? "Research, writing, your mail and calendar, to-dos, notes and routines. Ask in plain words."
+        : "Research, writing, to-dos, notes and routines. Ask in plain words.",
   },
   home: {
+    /** The hosted inbox's start, as /welcome says it. */
+    title: "What can I take off your plate?",
     lede: (can: MailAbilities | null | undefined) => `Hand me anything on your list. ${askFirstFor(can)}`,
     /** The one resting line every hosted composer shows. */
     placeholder: MODE_WORDS.hosted.composerPlaceholder,
@@ -594,9 +608,9 @@ export const LANE_COPY = {
     pause: "Pause",
     resume: "Turn back on",
     open: "Open",
-    delete: "Delete",
-    deleteAsk: "Delete this routine?",
     keep: "Keep it",
+    /** Under the empty list's examples: a blank conversation to ask in. */
+    writeOwn: "Write your own",
   },
   connections: {
     title: "Connections",

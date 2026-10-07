@@ -15,7 +15,6 @@ import type { GithubInstallUser } from "../../lib/githubAppInstall";
 import { githubAppInstallTeam } from "../../lib/githubAppInstall";
 import { formatRelative } from "../../lib/utils";
 import { ConfirmButton, LedgerLine, QuietButton, StatusDot, type DotTone } from "./parts";
-import { useHostedMode } from "../../lib/surfaces";
 import { GithubInstallDetail } from "./GithubInstallDetail";
 import { IssueSyncSources } from "./IssueSyncSources";
 import { SlackMirrorsSummary } from "./SlackMirrorsSummary";
@@ -59,7 +58,6 @@ export function IntegrationCard({
   showSources?: boolean;
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
-  const hosted = useHostedMode();
   const { connect, connectToken, disconnect, busy, error } = useAppConnection(descriptor, connection, scope);
   // A token app connects through an inline form instead of a popup; the
   // Connect button opens it, and so does Replace token once connected.
@@ -120,7 +118,7 @@ export function IntegrationCard({
         />
       )}
 
-      <p className="mt-1.5 text-xs leading-relaxed text-sol-text-muted">{(hosted && descriptor.hostedTagline) || descriptor.tagline}</p>
+      <p className="mt-1.5 text-xs leading-relaxed text-sol-text-muted">{descriptor.tagline}</p>
 
       <ul className="mt-1.5 space-y-0.5">
         {descriptor.bullets.map((b) => (
@@ -140,7 +138,7 @@ export function IntegrationCard({
       <div className="mt-2.5 flex flex-wrap items-center gap-3">
         {comingSoon ? (
           <span className="text-[11px] text-sol-text-dim">
-            No connector yet — this card turns live when it lands.
+            No connector yet. This card turns live when it lands.
           </span>
         ) : connected ? (
           <>
@@ -175,7 +173,7 @@ export function IntegrationCard({
             // When the state query failed this app may already be connected;
             // offering Connect would overclaim.
             disabled={!connection && !loading}
-            title={!connection && !loading ? "Connection state didn't load — retry once it does" : undefined}
+            title={!connection && !loading ? "Connection state didn't load. Try again once it does." : undefined}
           >
             Connect
           </QuietButton>

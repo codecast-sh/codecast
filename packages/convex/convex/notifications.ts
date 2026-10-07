@@ -5,6 +5,7 @@ import {
   isAssignedAwayFromOwnerSet,
   IDLE_DIGEST_WINDOW_MS,
   summarizeIdleDigest,
+  isHostedAgentType,
 } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -951,6 +952,12 @@ export async function performNeedsInputCheck(
   // point, and those need a verdict too. It has its own entry off the same
   // status change (managedSessions.scheduleNeedsInputCheck →
   // idleSummary.classifySettle).
+  // A hosted assistant conversation asks only through its decision row (the
+  // approval card, which rings on its own), the same rule as the server's
+  // ownAsk and the web's sessionHasOpenQuestion. A settled answer is the
+  // person's to read, never "waiting for you": nine finished answers once
+  // rang as nine conversations needing them (pl-840).
+  if (isHostedAgentType(conv.agent_type)) return { notified: false, reason: "hosted" };
   if (state !== "needs_input") return { notified: false, reason: "not_needs_input" };
 
   const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
@@ -1088,6 +1095,8 @@ export async function performIdleDigestFlush(
   for (const row of waiting) {
     const conv = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
     if (!conv || conv.inbox_killed_at || conv.inbox_stashed_at || conv.inbox_dismissed_at) continue;
+    // Rows written before hosted conversations stood down above.
+    if (isHostedAgentType(conv.agent_type)) continue;
     // The episode this row announced, still current: the dedupe key names the
     // message count the session settled at, so a reply (which grows the count)
     // reads as answered.

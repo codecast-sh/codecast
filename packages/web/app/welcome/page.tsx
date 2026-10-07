@@ -13,6 +13,7 @@
 // (connects, skips, or starts) is moved to hosted mode
 // (`client_state.ui.lane`).
 import { LogoMark } from "../../components/Logo";
+import { HostedWordmark } from "../../components/HostedWordmark";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Link, useNavigate, useSearchParams } from "react-router";
@@ -27,6 +28,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 import { useInboxStore } from "../../store/inboxStore";
 import { ASSISTANT_HEADLINE, MAIL_COMING, THINKING_DOWN, assistantPromise, useConnectAvailable, useThinkingAvailable } from "../../components/simple/assistantPromise";
+import { AssistantPrivacyNote } from "../../components/simple/AssistantPrivacyNote";
 import { Composer } from "../../components/simple/Composer";
 import { ConnectNotice } from "../../components/simple/ConnectNotice";
 import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
@@ -34,7 +36,9 @@ import { LaneSync } from "../../components/simple/LaneSync";
 import { ASK_FIRST, LANE_COPY, LANE_PATHS, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
 import { HOSTED_HOME, WELCOME_ASK_PARAM, hostedConversationPath } from "../../components/simple/lanePaths";
 import { isHostedUi, writeLane } from "../../components/simple/lanePref";
-import { forgetCarriedAsk, keepCarriedAsk, takeCarriedAsk } from "../../components/simple/carriedAsk";
+import { carriedAsk, forgetCarriedAsk, keepCarriedAsk, takeCarriedAsk } from "../../components/simple/carriedAsk";
+import { takeAuthReturn } from "../../lib/authReturn";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { Service } from "../../components/simple/Service";
 import { startHostedConversation } from "../../lib/startHostedConversation";
 import "../../components/simple/laneLook";
@@ -51,7 +55,9 @@ const CONNECTED_PAUSE_MS = 1100;
 /** The tapped ask lifts away for this long before the conversation opens. */
 const SEND_OFF_MS = 260;
 
-const STEP_NAMES: Record<WelcomeStep, string> = { signin: "Sign in", connect: "Connect", start: "Start" };
+// Names read as progress, never as actions: the first step is not called
+// "Sign in", because the top corner is where a sign-in link usually sits.
+const STEP_NAMES: Record<WelcomeStep, string> = { signin: "Your account", connect: "Connect", start: "Start" };
 /** Connect says what Connections says, so the two screens never disagree. */
 const CONNECT_WORDS = LANE_COPY.connections;
 const rise = (i: number) => ({ ["--i" as any]: i }) as CSSProperties;
@@ -122,17 +128,17 @@ function Frame({ step, connected = false, children }: { step: WelcomeStep | null
       <header className="wl-top">
         {/* The app's own mark and name, as on codecast.sh and in the app; the
             ring is the assistant's, on the stage below. */}
-        <span className="sl-brand wl-brand">
-          <LogoMark size={20} monochrome className="shrink-0" />
-          <span>Codecast</span>
-        </span>
-        <ol className="wl-rail" aria-label={at >= 0 ? `Step ${at + 1} of ${trail.length}: ${STEP_NAMES[trail[at]]}` : `${trail.length} steps`}>
-          {trail.map((s, i) => (
-            <li key={s} className={at < 0 ? undefined : i < at ? "is-done" : i === at ? "is-here" : undefined}>
-              <span className="wl-rail-name">{STEP_NAMES[s]}</span>
-            </li>
-          ))}
-        </ol>
+        <HostedWordmark size={20} className="wl-brand" />
+        <div className="wl-progress">
+          <ol className="wl-rail" aria-label={at >= 0 ? `Step ${at + 1} of ${trail.length}: ${STEP_NAMES[trail[at]]}` : `${trail.length} steps`}>
+            {trail.map((s, i) => (
+              <li key={s} className={at < 0 ? undefined : i < at ? "is-done" : i === at ? "is-here" : undefined}>
+                <span className="wl-rail-name">{STEP_NAMES[s]}</span>
+              </li>
+            ))}
+          </ol>
+          {at >= 0 && <span className="wl-rail-count" aria-hidden>Step {at + 1} of {trail.length}</span>}
+        </div>
       </header>
       <ConnectNotice success={CONNECT_WORDS.success} />
       <main className="wl-stage" data-step={step ?? "loading"}>
@@ -185,6 +191,7 @@ function SignIn({ mail }: { mail: boolean }) {
     <section className="wl-screen" aria-labelledby="wl-signin-title">
       <h1 id="wl-signin-title" className="sl-hello sl-rise" style={rise(1)}>{ASSISTANT_HEADLINE}</h1>
       <p className="sl-lede sl-rise" style={rise(2)}>{assistantPromise(mail)}</p>
+      <AssistantPrivacyNote mail={mail} className="wl-aside sl-rise" style={rise(2)} />
       <div className="sl-rise" style={rise(3)}>
         <AuthProviderButtons
           verb="in"
@@ -220,8 +227,26 @@ function SignIn({ mail }: { mail: boolean }) {
 
 // ── Signed in: start, with connect beside it ───────────────────────────────
 
+/** Whether this person already has conversations with the assistant: they
+ *  belong in their inbox, not on the first-run starters. */
+function hasHostedConversations(sessions: Record<string, { agent_type?: string | null; message_count?: number }>): boolean {
+  for (const id in sessions) if (isHostedAgentType(sessions[id]?.agent_type) && (sessions[id]?.message_count ?? 0) > 0) return true;
+  return false;
+}
+
 function SignedIn() {
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
+  // Signed in again after a moment that only looked signed out: back to the
+  // page AuthGuard left (lib/authReturn). Someone who already talks to the
+  // assistant and came here with no step and nothing to ask goes to their
+  // inbox rather than the starters.
+  const returning = useInboxStore((s) => hasHostedConversations(s.sessions));
+  useWatchEffect(() => {
+    const back = takeAuthReturn();
+    if (back) { navigate(back, { replace: true }); return; }
+    if (returning && params.toString() === "" && !carriedAsk()) navigate(HOSTED_HOME, { replace: true });
+  }, [returning]);
   const connecting = params.get(STEP_PARAM) === CONNECT_VALUE;
   const mail = useLaneMail(LANE_PATHS.welcome);
   const { available } = mail;
@@ -249,8 +274,11 @@ function SignedIn() {
           can={mail.connected ? mail.can : null}
           // Connect is offered only where the deployment has said it works.
           onConnect={available === true && !mail.connected ? () => setParams({ [STEP_PARAM]: CONNECT_VALUE }) : null}
-          // Where mail cannot be connected yet, say so once.
-          mailComing={available === false}
+          // Where mail cannot be connected yet, say so once. A person already
+          // connected (a tester ahead of the opening) is not told it's coming.
+          // Only once the connection has answered: a read still in flight
+          // is not "not connected".
+          mailComing={mail.known && available === false && !mail.connected}
         />
       ) : (
         <div className="wl-skeleton" role="status">
@@ -340,7 +368,8 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
   // Asks show unless the deployment has said it cannot think: a slow answer
   // is not an outage, and a real one turns a send into its own notice. On a
   // no, a carried errand stays on screen, held, and stays saved for later.
-  const down = useThinkingAvailable() === false;
+  const thinking = useThinkingAvailable();
+  const down = thinking === false;
 
   // The conversation's code loads while the person reads, so the landing is instant.
   useMountEffect(() => {
@@ -356,11 +385,25 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
     window.setTimeout(() => navigate(hostedConversationPath(id)), SEND_OFF_MS);
   };
 
+  // The errand picked on the marketing page was the person's click: it is
+  // asked as soon as the assistant can think, with no second "Ask this".
+  // An outage holds it on screen (below) and keeps it saved.
+  // An account already working in developer mode chooses the switch itself:
+  // it is told what asking here does, and nothing is asked on arrival.
+  const developer = useInboxStore((s) => {
+    const lane = s.clientState?.ui?.lane;
+    return lane !== undefined && !isHostedUi(s.clientState?.ui);
+  });
+  useWatchEffect(() => {
+    if (carried && thinking === true && !developer && !leaving) begin(carried);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carried, thinking, developer]);
+
   let i = 1;
   return (
     <section className="wl-screen" aria-labelledby="wl-start-title" data-leaving={leaving ? "" : undefined}>
       <h1 id="wl-start-title" className="sl-page-title sl-rise" style={rise(i++)}>
-        {carried ? "Let's start with what you picked" : lead ? "Let's start with your week" : "What can I take off your plate?"}
+        {carried && leaving === carried ? "Starting on it" : carried ? "Let's start with what you picked" : lead ? "Let's start with your week" : "What can I take off your plate?"}
       </h1>
       <p className="sl-lede sl-rise" style={rise(i++)}>
         {carried && down
@@ -374,6 +417,7 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
             an ask the person carried in. */}
         {mailComing && !carried ? ` ${MAIL_COMING}` : null}
       </p>
+      {developer ? <p className="wl-aside sl-rise" style={rise(i++)}>Asking here switches Codecast to assistant mode. You can switch back in Settings.</p> : null}
       {down ? <p className="sl-callout is-sun sl-rise" role="status" style={rise(i++)}>{THINKING_DOWN}</p> : null}
       {/* While no provider can think, asks would only fail: a carried errand
           stays, held, and the rest wait with the composer. */}
@@ -432,7 +476,7 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
           onClick={() => joinLane()}
           className="wl-go"
         >
-          Go to my assistant <ArrowRight size={15} aria-hidden />
+          Go to your inbox <ArrowRight size={15} aria-hidden />
         </Link>
       </p>
     </section>

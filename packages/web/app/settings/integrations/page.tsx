@@ -17,7 +17,7 @@
 // connectors redirect back here with a confirm token in the URL fragment, which
 // is read once, spent in this signed-in session, and cleared.
 
-import { Surface, useModeWords, useSurface } from "../../../lib/surfaces";
+import { Surface, useHostedMode, useModeWords, useSurface } from "../../../lib/surfaces";
 import { Sparkles, User, Users } from "lucide-react";
 import {
   APP_DESCRIPTORS,
@@ -53,9 +53,13 @@ export default function IntegrationsPage() {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const notice = useConnectorReturn();
   const words = useModeWords();
-  // Hosted mode leaves off the services only code work uses.
+  const hosted = useHostedMode();
+  // Hosted mode lists only the services the assistant reaches, so a card
+  // never promises it mail or chat it cannot read.
   const devApps = useSurface("settings.devIntegrations");
-  const shownApp = (id: (typeof APP_IDS)[number]) => devApps || !APP_DESCRIPTORS[id].developerOnly;
+  const shownApp = (id: (typeof APP_IDS)[number]) => devApps || !!APP_DESCRIPTORS[id].assistantReaches;
+  const shownAt = (scope: AppConnectionScope) =>
+    APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes(scope) && shownApp(id));
 
   const result = connections.data as AppConnectionsResult | undefined;
   const loading = result === undefined && !connections.error;
@@ -65,6 +69,9 @@ export default function IntegrationsPage() {
   const teamKnown = result !== undefined;
   const teamEntries = entriesAt(result, "team");
   const personalEntries = entriesAt(result, "personal");
+
+  const showsTeam = !(hosted && teamKnown && !team) && shownAt("team").length > 0;
+  const onlyWhisk = !devApps && !showsTeam && shownAt("personal").length === 0;
 
   const errorCallout = connections.error && (
     <div className="px-4 py-3 sm:px-5">
@@ -85,8 +92,9 @@ export default function IntegrationsPage() {
       )}
 
       {/* The assistant's own connection: mail and calendar through Whisk,
-          personal, and first because it is what hosted mode runs on. */}
-      <SettingsSection title="Assistant" icon={Sparkles}>
+          personal, and first because it is what hosted mode runs on. When it
+          is the page's only section its heading would repeat the subtitle. */}
+      <SettingsSection title={onlyWhisk ? undefined : "Assistant"} icon={Sparkles}>
         <WhiskCard />
       </SettingsSection>
 
@@ -94,7 +102,9 @@ export default function IntegrationsPage() {
         <BrowserExtensionSetup />
       </Surface>
 
-      <SettingsSection
+      {/* Hosted mode on Personal has no team to connect for: the section
+          would only say so. A person in a team still sees it. */}
+      {showsTeam && <SettingsSection
         title="Team connections"
         icon={Users}
         // The picker names the team the cards below belong to and switches the
@@ -113,7 +123,7 @@ export default function IntegrationsPage() {
             </SettingsCallout>
           </div>
         ) : (
-          APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("team") && shownApp(id)).map((id) => (
+          shownAt("team").map((id) => (
             <IntegrationCard
               key={id}
               descriptor={APP_DESCRIPTORS[id]}
@@ -125,14 +135,14 @@ export default function IntegrationsPage() {
             />
           ))
         )}
-      </SettingsSection>
+      </SettingsSection>}
 
-      <SettingsSection
+      {shownAt("personal").length > 0 && <SettingsSection
         title="Personal connections"
         icon={User}
         description={words.personalConnectionsLede}
       >
-        {APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("personal") && shownApp(id)).map((id) => (
+        {shownAt("personal").map((id) => (
           <IntegrationCard
             key={id}
             descriptor={APP_DESCRIPTORS[id]}
@@ -143,7 +153,7 @@ export default function IntegrationsPage() {
             showSources={teamKnown && !team}
           />
         ))}
-      </SettingsSection>
+      </SettingsSection>}
 
       <Surface name="settings.devIntegrations">
         <SourcesSection />

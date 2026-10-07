@@ -101,3 +101,18 @@ export function activeViewId<T extends { id: string; prefs?: ViewPrefs }>(
 ): string | undefined {
   return views.find((v) => isViewActive(v.prefs, currentPrefs))?.id;
 }
+
+/** Whether a view still means something in hosted mode, where every to-do is
+ *  the person's own: one that arranges or filters by who holds the work, by
+ *  project, or by the agents' rows reads as a developer leftover there. */
+export function fitsHostedMode(prefs: ViewPrefs | undefined): boolean {
+  const p = significantPrefs(prefs);
+  if (/\b(assignee|chain|project|initiative|plan)\b/.test(p.group ?? "")) return false;
+  if (p.assignee || p.session || p.source) return false;
+  // Sort is a presentation field, so significantPrefs drops it; read it raw.
+  if (/\b(assignee|session|project)\b/.test(String(prefs?.sort ?? ""))) return false;
+  // A hosted to-do is open or done: a view naming a workflow stage (review,
+  // backlog, a team's custom st_ status) arranges work hosted mode never has.
+  const statuses = [p.status, p.statuses].filter(Boolean).join(",");
+  return !/\b(in_review|backlog|triage)\b|\bst_/.test(statuses);
+}

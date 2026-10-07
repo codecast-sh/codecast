@@ -17,8 +17,19 @@ import { ConfirmButton, LedgerLine, QuietButton, StatusDot } from "./parts";
 const WORDS = LANE_COPY.connections;
 const RETURN_TO = settingsPathFor("integrations") as WhiskReturnPath;
 
-/** "Mail and calendar (Whisk)": the row's name, the product and its mail app. */
-export const WHISK_CARD_TITLE = `${WORDS.mail} (Whisk)`;
+/** "Whisk: mail and calendar": the row is named by the family's mail app,
+ *  then what it brings. */
+const WHISK_CARD_TITLE = `Whisk: ${WORDS.mail.toLowerCase()}`;
+
+/** Whisk's own mark, as its rail draws it: the envelope in the family accent.
+ *  U+FE0E keeps the text presentation, never the colour emoji. */
+function WhiskMark() {
+  return (
+    <span aria-hidden className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-sol-border bg-sol-bg-alt text-[15px] leading-none" style={{ color: "var(--pd-accent, var(--sol-orange))" }}>
+      {"\u2709\uFE0E"}
+    </span>
+  );
+}
 
 function Ability({ icon: Icon, title, on, children }: { icon: typeof Mail; title: string; on: boolean | null; children: string }) {
   return (
@@ -35,7 +46,7 @@ function Ability({ icon: Icon, title, on, children }: { icon: typeof Mail; title
 
 /** The one way in when nothing is connected: the family's primary button,
  *  as /welcome draws the same action. */
-function ConnectButton({ onClick, busy, children }: { onClick: () => void; busy: boolean; children: string }) {
+function ConnectButton({ onClick, busy, children, disabledLabel }: { onClick: () => void; busy: boolean; children: string; disabledLabel?: string }) {
   return (
     <button
       type="button"
@@ -44,7 +55,7 @@ function ConnectButton({ onClick, busy, children }: { onClick: () => void; busy:
       className="inline-flex h-9 items-center rounded-[var(--pd-radius,8px)] px-4 text-[13px] font-semibold transition-[filter,opacity] hover:brightness-110 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[var(--pd-accent,var(--sol-orange))]"
       style={{ background: "var(--pd-accent, var(--sol-orange))", color: "var(--pd-accent-ink, #fff)" }}
     >
-      {busy ? LANE_COPY.connections.opening : children}
+      {busy ? disabledLabel ?? LANE_COPY.connections.opening : children}
     </button>
   );
 }
@@ -58,9 +69,7 @@ export function WhiskCard() {
   return (
     <div className="px-4 py-3.5 sm:px-5">
       <div className="flex items-center gap-2.5">
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-sol-border bg-sol-bg-alt text-sol-text-muted">
-          <Mail className="h-4 w-4" />
-        </span>
+        <WhiskMark />
         <span className="min-w-0 text-sm font-semibold leading-snug tracking-tight text-sol-text">{WHISK_CARD_TITLE}</span>
         <span className="flex-1" />
         <StatusDot tone={known && connected && !controls.reconnect ? "ok" : "idle"}>
@@ -80,12 +89,17 @@ export function WhiskCard() {
       {error ? <p className="mt-1.5 break-words text-[11px] leading-relaxed text-sol-red">{error}</p> : null}
 
       {/* Until the connection and the deployment have answered, the row
-          offers nothing it may have to withdraw: a quiet block holds the
-          button's place, so the card keeps its height when the answer lands. */}
-      {!known ? <div aria-hidden className="mt-2.5 h-9 w-44 rounded-[var(--pd-radius,8px)] bg-sol-bg-inset" /> : null}
+          offers nothing it may have to withdraw: the button's own shape holds
+          its place, disabled and breathing, so it reads as loading rather than
+          broken and the card keeps its height when the answer lands. */}
+      {!known ? (
+        <div className="mt-2.5 animate-pulse" aria-busy>
+          <ConnectButton onClick={() => {}} busy disabledLabel={WORDS.connect}>{WORDS.connect}</ConnectButton>
+        </div>
+      ) : null}
       {known ? (
         <div className="mt-2.5 flex flex-wrap items-center gap-3">
-          {controls.coming ? <span className="text-[11px] text-sol-text-dim">{WORDS.comingNote}</span> : null}
+          {/* "Coming soon" is the status pill's to say, once. */}
           {controls.connect ? <ConnectButton onClick={() => void actions.connect()} busy={actions.busy}>{WORDS.connect}</ConnectButton> : null}
           {controls.reconnect ? <ConnectButton onClick={() => void actions.connect()} busy={actions.busy}>{WORDS.reconnect}</ConnectButton> : null}
           {controls.allow ? <QuietButton onClick={() => void actions.connect()} busy={actions.busy}>{WORDS.allow}</QuietButton> : null}

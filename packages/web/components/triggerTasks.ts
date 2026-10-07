@@ -19,8 +19,32 @@
 import type { InboxSession } from "../store/inboxStore";
 import { classifySession, isSessionHardBlocked, isSessionHidden } from "../store/inboxStore";
 import { isMachineDeliveredMessage } from "./sessionMessage";
+import type { WallCadence } from "@platform/assistant/cadence";
 
 export const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
+
+/** A trigger that has finished: it ran out (completed) or gave up (failed). */
+export function isTriggerTerminal(status: string): boolean {
+  return status === "completed" || status === "failed";
+}
+
+/** How a list ends a trigger. An armed one is cancelled: that works for a
+ *  manager who does not own it, and keeps its run history. Only a finished one
+ *  is deleted. A cancelled one has nothing left to end. */
+export function triggerEndVerb(status: string): "cancel" | "delete" | null {
+  if (ARMED_STATUSES.has(status)) return "cancel";
+  return isTriggerTerminal(status) ? "delete" : null;
+}
+
+/** The words for ending a trigger, given the mode's noun for one (MODE_WORDS
+ *  `trigger`: "Trigger" or "Routine"): the button, the question it asks, and
+ *  the short answer that confirms it beside that question. */
+export function triggerEndWords(verb: "cancel" | "delete", noun: string): { label: string; ask: string; confirm: string } {
+  const thing = noun.toLowerCase();
+  return verb === "cancel"
+    ? { label: `Cancel ${thing}`, ask: `Cancel this ${thing}?`, confirm: "Cancel it" }
+    : { label: "Delete", ask: `Delete this ${thing}?`, confirm: "Delete it" };
+}
 
 // The agentTasks.webList payload fields the client reads.
 export type TaskRow = {
@@ -34,6 +58,9 @@ export type TaskRow = {
   schedule_type: "once" | "recurring" | "event";
   run_at?: number;
   interval_ms?: number;
+  /** A hosted routine said as a time of day: its wall clock (convex
+   *  assistant/routines.ts hostedWallCadence). Words read it over interval_ms. */
+  cadence?: WallCadence;
   event_filter?: { event_type: string } | null;
   project_path?: string;
   run_count: number;
@@ -68,6 +95,10 @@ export type TaskRow = {
   // explicit human title is left alone, so preferring display_title is safe.
   display_title?: string;
   display_summary?: string;
+  /** display_summary is written to the person (a hosted routine's summary,
+   *  agentTasks.ts summary_for_person); otherwise it describes an agent's
+   *  instruction and a hosted surface leaves it out. */
+  summary_for_person?: boolean;
   // Set when the schedule was canceled as a side effect of killing its home
   // conversation (vs. completing naturally). The server re-arms stamped tasks
   // when the session is restored; the client reads it to SAY so.
@@ -157,6 +188,14 @@ function promptOpening(prompt: string): string {
 // What each run does, in one sentence — the SECOND line of every trigger
 // row, on every surface. Always the standing description, never an outcome:
 // the outcome has its own line (lastRunHeadline).
+/** A routine's description as hosted mode shows it: only a summary written
+ *  to the person ("Each weekday at 8 AM I'll send you your open to-dos").
+ *  A summary distilled for a developer dashboard ("escalates if user wants
+ *  ...") reads as an internal note, so it is left out. */
+export function routineSummaryForPerson(t: Pick<TaskRow, "display_summary" | "summary_for_person">): string | null {
+  return (t.summary_for_person && t.display_summary?.trim()) || null;
+}
+
 export function taskGist(t: Pick<TaskRow, "display_summary" | "prompt">): string {
   const s = t.display_summary?.trim();
   return s ? cutLine(s, 200) : promptOpening(t.prompt || "");

@@ -16,3 +16,13 @@ export const CastBrowserRowContext = createContext<Record<string, BrowserRowStat
 // after the chat thread is deleted. Keyed by placeholder id, so identity is
 // stable across syncs that added no wake.
 export const ChatWakeContext = createContext<Record<string, ChatWakePrompt>>({});
+
+// A hosted conversation parked on the person's approval: its call with no
+// result yet is waiting on them, not running, so its step says "Waiting for
+// your go-ahead to ..." rather than the in-progress form.
+export const HostedAskingContext = createContext<boolean>(false);
+
+// The parked approval's own card is drawn right under the receipt: the card is
+// the ask, so the receipt leaves out the steps still waiting on it rather than
+// say the card's question a second time.
+export const HostedCardShownContext = createContext<boolean>(false);

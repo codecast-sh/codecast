@@ -51,7 +51,9 @@ describe("Minimal interface style", () => {
   });
 
   test("keeps the composer compact and conversation text readable", () => {
-    expect(css).toMatch(/\[data-sv-composer\] form:not\(\.w-full\) > div \{[\s\S]*?min-height: 52px;[\s\S]*?padding: 9px 12px 8px;/);
+    // The field's padding lives in --cc-field-pt / --cc-field-px so a strip
+    // inside it can bleed to the edge; together they still read 9px 12px 8px.
+    expect(css).toMatch(/\[data-sv-composer\] form:not\(\.w-full\) > div \{[\s\S]*?--cc-field-pt: 9px;[\s\S]*?--cc-field-px: 12px;[\s\S]*?min-height: 52px;[\s\S]*?padding: var\(--cc-field-pt\) var\(--cc-field-px\) 8px;/);
     // One scale: the list scans at --t-ui, its second lines at --t-sub.
     expect(css).toMatch(/--t-ui: 13px;/);
     expect(css).toMatch(/\.minimal-style \[data-sv-rail\] \[data-sv-title\] \{[\s\S]*?font-size: var\(--t-ui\);/);
@@ -83,7 +85,12 @@ describe("Minimal interface style", () => {
     const sizes = new Set(["15px", "13px", "12px", "11px"]);
     const weights = new Set(["400", "500", "600"]);
     const off: string[] = [];
-    for (const rule of css.matchAll(/(\.minimal-style[^{}]*)\{([^}]*)\}/g)) {
+    for (const rule of css.matchAll(/([^{}]*\.minimal-style[^{}]*)\{([^}]*)\}/g)) {
+      // Hosted mode sets the family's type from @platform/design (Newsreader
+      // at a reading size; hosted-assistant.md "Look"), not Minimal's scale.
+      let selector = rule[1].replace(/\/\*[\s\S]*?\*\//g, "");
+      while (/\([^()]*\)/.test(selector)) selector = selector.replace(/\([^()]*\)/g, "");
+      if (selector.split(",").every((s) => s.trim().startsWith("html.hosted-mode"))) continue;
       for (const [, prop, raw] of rule[2].matchAll(/(font-size|font-weight):\s*([^;]+);/g)) {
         const value = raw.trim();
         const ok = value.startsWith("var(--t-") || (prop === "font-size" ? sizes : weights).has(value);
@@ -108,7 +115,8 @@ describe("Minimal interface style", () => {
     expect(css).toContain("[data-cc-conv-actions] > :not([data-cc-keep])");
     // Hidden, not faded: nothing in Minimal appears on hover.
     expect(css).not.toMatch(/\.minimal-style[^{]*:hover[^{]*\{[^}]*opacity: 1/);
-    expect(conversationView).toContain("<button data-cc-keep aria-label=\"Session menu\"");
+    // The menu's name follows the mode's words (a session, or a conversation in hosted mode).
+    expect(conversationView).toContain("<button data-cc-keep aria-label={`${words.conversation} menu`}");
     // The name row of the pinned bubble is hidden by its own hook. A class
     // match here once hid the dismiss and expand buttons along with it.
     expect(css).not.toMatch(/\[data-sv-sticky\] > \.flex\.items-center/);

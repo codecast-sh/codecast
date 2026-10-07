@@ -17,6 +17,12 @@ export const LANE_SWITCH = {
   description: "Codecast for everyday work: new conversations go to the Codecast assistant, and code, terminals and machines step out of sight. Turn it off to bring them back",
   on: "Switch to assistant mode",
   off: "Switch to developer mode",
+  /** The web's two-way choice under Appearance. */
+  modeLabel: "Mode",
+  everyday: "Everyday",
+  developer: "Developer",
+  everydayHint: "Everyday work with the Codecast assistant. Developer adds code, terminals and the machines that run them.",
+  developerHint: "Code, terminals and machines. Everyday hides them and starts new conversations with the Codecast assistant.",
 } as const;
 
 /** Writes the preference through the store, so it shows at once and follows

@@ -10,7 +10,8 @@ import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
 import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
-import { palettePages } from "../lib/navPages";
+import { pagePath, palettePages } from "../lib/navPages";
+import { HOSTED_SECTION_KEYS } from "../lib/surfaceRules";
 import { useState, useCallback, useMemo, useRef, memo, lazy, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
@@ -35,10 +36,10 @@ import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary, isUnsentConversation } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { matchMentionGroups, type MentionRecord } from "../lib/universalSearch";
+import { matchMentionGroups, matchRoutines, searchIndexOf, type MentionRecord } from "../lib/universalSearch";
 import { useRemoteSearch } from "../hooks/useRemoteSearch";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
 import { RecentVisitGlyph } from "./RecentVisitRow";
@@ -95,7 +96,7 @@ const PaletteMessageInput = lazy(() =>
   import("./MessageInput").then((m) => ({ default: m.MessageInput })),
 );
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
-import { paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, paletteItemScore, paletteValue, queryAsksToCreate, type PaletteTargetType, type PalettePerson } from "../lib/paletteActions";
+import { PALETTE_TAIL_MORE, paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, paletteItemScore, paletteValue, queryAsksToCreate, type PaletteTargetType, type PalettePerson } from "../lib/paletteActions";
 import { useOpenDm } from "../hooks/useOpenDm";
 import { useLiveRoomOfMember } from "../hooks/useLiveRooms";
 import { useMemberHuddle } from "./presence/useMemberHuddle";
@@ -200,7 +201,7 @@ import { setTaskParent, closeTaskWithGuard, updateTasksAsOne } from "../lib/task
 import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../lib/palettePick";
 import { isHostedUi } from "./simple/lanePaths";
 import { actionShownNow, isHostedMode, modeWordsNow, useAssistantScope, useHostedMode, useModeWords, useSurfaceMode } from "../lib/surfaces";
-import { bySessionAgent, moreInEverything, withinScope } from "../lib/assistantScope";
+import { bySessionAgent, isAssistantRoutine, moreInEverything, withinScope } from "../lib/assistantScope";
 
 const NO_CHAT_HITS: any[] = [];
 import { LANE_SWITCH } from "./simple/lanePref";
@@ -271,7 +272,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   names?: readonly string[];
 }> = [
   { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: HeadOfPeopleFace, keywords: "agent assistant bot standing member ask personal team head of people", hidden: () => !workspaceHasFeatureNow("org") },
-  { action: "people.wall", label: "The team — hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
+  { action: "people.wall", label: "The team: hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
   { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
   { action: "sidebar.toggleLeft", label: "Toggle left sidebar", icon: PanelLeft, keywords: "nav collapse" },
@@ -1453,6 +1454,16 @@ const EMPTY_ROSTER: Device[] = [];
 
 /** A typed query as a row quotes it: trimmed, and cut short with an ellipsis
  *  so the closing quote survives the row's own truncation. */
+/** Cmd+Enter (Ctrl+Enter), drawn on the one row it runs. */
+function ModEnterCaps() {
+  return (
+    <span className="flex items-center gap-[2px]">
+      <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
+      <KeyCap size="xs">&#9166;</KeyCap>
+    </span>
+  );
+}
+
 /** The recents pool with the person's favorites added (once each), for a
  *  typed query that ranks them all together. */
 function withFavorites<T extends { _id: unknown }>(pool: T[], favorites: T[], exclude?: readonly string[]): T[] {
@@ -1497,6 +1508,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const { open: paletteOpen, targets: initialTargets, targetType: initialTargetType, initialMode, initialQuery: paletteInitialQuery, pick } = useInboxStore((s) => s.palette);
   const [drilled, setDrilled] = useState<{ type: PaletteTargetType; row: any; query: string } | null>(null);
+  // The empty hosted palette folds the rest of Create behind one row.
+  const [createOpen, setCreateOpen] = useState(false);
   const followLeaderId = useInboxStore((s) => s.followLeaderId);
   // A drilled teammate's follow state reads the store, not the row taken at
   // drill time, so the verb flips the moment the follow does.
@@ -1534,7 +1547,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const open = standalone || paletteOpen;
 
-  const favorites = useInboxStore((s) => s.favorites);
+  const allFavorites = useInboxStore((s) => s.favorites);
   const bookmarks = useInboxStore((s) => s.bookmarks);
 
   // The palette is a TRANSIENT overlay, so it SNAPSHOTS session-derived data once
@@ -1554,11 +1567,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   );
 
   // Globally-synced lightweight index of tasks/docs/plans (title + short_id +
-  // status), populated by DashboardLayout's useSyncMention* hooks. Captured at
-  // open (already pre-synced) so a closed palette ignores entity-sync churn and an
-  // open one doesn't re-render on it.
+  // status), populated by DashboardLayout's useSyncMention* hooks, with the
+  // store's own task, doc and plan collections over it (searchIndexOf): the
+  // index samples each team first, so the person's own to-dos and notes come
+  // from the store. Captured at open (already pre-synced) so a closed palette
+  // ignores entity-sync churn and an open one doesn't re-render on it.
   const mentionIndex = useMemo(
-    () => (open ? useInboxStore.getState().mentionIndex : EMPTY_MENTION_INDEX),
+    () => (open ? searchIndexOf(useInboxStore.getState()) : EMPTY_MENTION_INDEX),
     [open],
   );
   // Workspace scoping uses the active-team pointer alone: an unset pointer IS
@@ -1633,23 +1648,21 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Store-fed (hooks/useSyncTriggers): the palette searches the cached
   // roster; the feeder mounts only while a search is live.
   useSyncTriggers(open && query.trim().length >= 2);
+  // Hosted mode's Assistant scope (lib/assistantScope) holds here as in the
+  // inbox: the palette offers the assistant's conversations and routines
+  // unless widened.
+  const { only: scopeOnly, setEverything: setAssistantEverything } = useAssistantScope();
+  // Favorites follow the scope like recents do: the empty palette's Favorites
+  // group and the typed ranking both read this list, never the raw one.
+  const favorites = useMemo(
+    () => withinScope<any>(allFavorites ?? [], scopeOnly && !picking, bySessionAgent) as any[],
+    [allFavorites, scopeOnly, picking],
+  );
   const triggerList = useCollectionRows<any>("agentTasks", { sig: triggerSig });
-  const triggerMatches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q.length < 2 || !Array.isArray(triggerList)) return [];
-    const ranked: Array<{ t: any; rank: number }> = [];
-    for (const t of triggerList) {
-      if (t.status === "completed" || t.status === "cancelled") continue;
-      let rank = Math.min(score(t.title || "", q), score(t.prompt || "", q));
-      if (rank === Infinity) {
-        if (!t.short_id?.toLowerCase().includes(q)) continue;
-        rank = 50;
-      }
-      ranked.push({ t, rank });
-    }
-    ranked.sort((a, b) => a.rank - b.rank || (b.t.updated_at || b.t._creationTime || 0) - (a.t.updated_at || a.t._creationTime || 0));
-    return ranked.slice(0, 6).map((r) => r.t);
-  }, [triggerList, query]);
+  const triggerMatches = useMemo(
+    () => (Array.isArray(triggerList) ? matchRoutines<any>(withinScope<any>(triggerList, scopeOnly && !picking, isAssistantRoutine), query, 6) : []),
+    [triggerList, query, scopeOnly, picking],
+  );
 
   // Global command rows fire the same handlers their keyboard chords use.
   const { dispatchAction } = useShortcuts();
@@ -1657,10 +1670,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const hostedMode = useHostedMode();
   const modeWords = useModeWords();
   const recentVisits = useInboxStore((s) => (open ? s.recentVisits : EMPTY_RECENT_VISITS));
-  const recentVisitRows = useMemo(
-    () => (open ? resolveRecentVisits(useInboxStore.getState(), RECENT_VISITS_RENDER_CAP, { skipViews: standalone }) : []),
-    [recentVisits, open, standalone],
-  );
+  // The conversation already open is the palette's own context row, so it
+  // never repeats as a recent place.
+  const recentVisitRows = useMemo(() => {
+    if (!open) return [];
+    const st = useInboxStore.getState();
+    const here = st.currentSessionId;
+    return resolveRecentVisits(st, RECENT_VISITS_RENDER_CAP + 1, { skipViews: standalone })
+      .filter((row) => !here || row.sessionId !== here)
+      .slice(0, RECENT_VISITS_RENDER_CAP);
+  }, [recentVisits, open, standalone]);
 
   // A conversation's label (manual bucket) is a derived join, not a stored
   // field — resolve it live from the same assignment rows the session panel
@@ -1684,9 +1703,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // too, and so does a role's standing agent while the role has its own row.
   const { roles: orgRoles } = useOrgRoles();
   const { people: pickPeople, roles: pickRoles } = useRolesAndPeopleOptions(teamMembers ?? NO_MEMBERS);
-  // Hosted mode's Assistant scope (lib/assistantScope) holds here as in the
-  // inbox: the palette offers the assistant's conversations unless widened.
-  const { only: scopeOnly, setEverything: setAssistantEverything } = useAssistantScope();
   const recentPool = useMemo(() => {
     const skip = new Set(pick?.exclude ?? []);
     if (picking && pickAllows("role")) for (const r of orgRoles) if (r.standing?.conversation_id) skip.add(r.standing.conversation_id);
@@ -1718,21 +1734,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // directly the words name it, then where it stands and how recent it is.
     return rankSessions(scan, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
   }, [recentPool, query, standingOf, favorites, pick]);
-  // Hosted mode reads recents as a list of errands, not a fleet: rows with one
-  // title fold into the best ranked of them with a count, and workers under
-  // another conversation stay out.
+  // Hosted mode reads recents as a list of errands, not a fleet: workers under
+  // another conversation and unsent drafts stay out, and so does anything the
+  // empty palette's "Recently visited" already lists. Two conversations that
+  // share a name stay two rows, told apart by their dates.
   const recentShown = useMemo(() => {
-    if (!hostedMode) return recentMatches.map((conv: any) => ({ conv, repeats: 1 }));
-    const byTitle = new Map<string, { conv: any; repeats: number }>();
-    for (const conv of recentMatches as any[]) {
-      if (standingOf(conv)?.sub) continue;
-      const key = sessionCardTitle(conv).toLowerCase();
-      const seen = byTitle.get(key);
-      if (seen) seen.repeats++;
-      else byTitle.set(key, { conv, repeats: 1 });
-    }
-    return [...byTitle.values()];
-  }, [recentMatches, hostedMode, standingOf]);
+    if (!hostedMode) return recentMatches;
+    const visited = query.trim() ? null : new Set(recentVisitRows.slice(0, QUIET_RECENTS).map((r) => r.sessionId).filter(Boolean));
+    return (recentMatches as any[]).filter((conv) =>
+      !standingOf(conv)?.sub && !isUnsentConversation(conv) && !visited?.has(String(conv._id)));
+  }, [recentMatches, hostedMode, standingOf, query, recentVisitRows]);
   // The machine most recents run on goes unsaid; a row names its machine only
   // when it runs somewhere else (a cloud host, the other laptop).
   const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
@@ -1773,7 +1784,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     [allSearchRows, scopeOnly, picking],
   );
   const searchHiddenByScope = allSearchRows.length - scopedSearch.length;
-  const recentIdSig = recentShown.map(({ conv }) => String(conv._id)).join(",");
+  const recentIdSig = recentShown.map((conv: any) => String(conv._id)).join(",");
   const searchRows = useMemo(() => {
     const shown = new Set(recentIdSig.split(","));
     return scopedSearch.filter((r: any) => !shown.has(String(r.conversationId)));
@@ -1897,6 +1908,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (open) {
       setActionSearch("");
       setDrilled(null);
+      setCreateOpen(false);
       setQuery(paletteInitialQuery || "");
       setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
       setEnteredViaRoot(false);
@@ -2329,8 +2341,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   }, [open, picking, hasTargets, query, chatOn]);
 
   const showFavorites = favorites && favorites.length > 0;
+  const fleetCommands = surfaceMode.shows("actions.fleet");
   const showBookmarks = bookmarks && bookmarks.length > 0;
-  const showWorkspaces = projects.length > 0;
+  // Repo folders are developer machinery (the rail's Projects row).
+  const showWorkspaces = projects.length > 0 && surfaceMode.shows("nav.projects");
   // Rail order (yours first, then teammates'), the same order ⌥1-⌥9 index into.
   const layouts = useMemo(
     () => sortedWorkbenches({ savedViews: savedViewRows ?? {}, clientState: { ui: { active_team_id: activeTeamId } } }),
@@ -2361,6 +2375,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       ))}
     </CommandPrimitive.Group>
   );
+
+  // Read before the action and pick views return early, so the hook order
+  // holds whichever view renders.
+  const askHold = useHostedAskGate(!standalone);
 
   // Action submenu mode. The workspace modes ("view", layout CRUD) are global,
   // so they need no target entity — and show no entity header. The `open` check
@@ -2540,8 +2558,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // leads, so Enter opens it and the ask waits last on its own key
   // (Cmd+Enter); with nothing here to open, the ask leads and Enter sends it.
   // A held month or a thinking outage keeps the Ask row's words and says why,
-  // rather than starting a conversation that can only stop (useHostedAskGate).
-  const askHold = useHostedAskGate(!standalone);
+  // rather than starting a conversation that can only stop (askHold, above).
   const askable = hostedFirst && !standalone && !picking && !!commandQuery && !askHold;
   const localHit = askable && (
     createLeads || namedCommands.length > 0 || recentMatches.length > 0 || searchRows.length > 0 || taskMatches.length > 0 || docMatches.length > 0 ||
@@ -2580,8 +2597,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       className={itemClass}
     >
       <AgentTypeIcon agentType={HOSTED_AGENT_TYPE} className="w-4 h-4" />
-      <span className="truncate">Ask the assistant: &ldquo;{previewQuery(query)}&rdquo;</span>
-      {askHold && <AskHeldLine hold={askHold} className="ml-auto shrink text-xs" />}
+      <span className="truncate flex-1">Ask the assistant: &ldquo;{previewQuery(query)}&rdquo;</span>
+      {askHold ? <AskHeldLine hold={askHold} className="ml-auto shrink text-xs" /> : askable && <ModEnterCaps />}
     </CommandPrimitive.Item>
   );
 
@@ -2600,7 +2617,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <span className="truncate flex-1">{modeWords.newConversation}</span>
             <MenuKeyCaps action="session.compose" />
           </CommandPrimitive.Item>
-          {!standalone && (
+          {/* The docked composer is fleet machinery (actions.fleet). */}
+          {!standalone && surfaceMode.shows("actions.fleet") && (
           <CommandPrimitive.Item
             key="create-session-docked"
             value={paletteValue(`${modeWords.newConversation} (docked)`, "session conversation docked small composer minimize corner")}
@@ -2614,13 +2632,15 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           )}
           <CommandPrimitive.Item
             key="create-task"
-            value={paletteValue("New task", "create todo add")}
+            value={paletteValue(modeWords.newTask, "create todo to-do task add")}
             onSelect={() => { closePalette(); openCreateModal('task'); }}
             className={itemClass}
           >
             <ListTodo className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-            <span className="truncate flex-1">New task</span>
+            <span className="truncate flex-1">{modeWords.newTask}</span>
           </CommandPrimitive.Item>
+          {/* A plan is a company's page (pages.company), with no hosted page to land on. */}
+          {surfaceMode.shows("pages.company") && (
           <CommandPrimitive.Item
             key="create-plan"
             value={paletteValue("New plan", "create project")}
@@ -2630,14 +2650,15 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <MapIcon className="w-4 h-4 text-sol-yellow flex-shrink-0" />
             <span className="truncate flex-1">New plan</span>
           </CommandPrimitive.Item>
+          )}
           <CommandPrimitive.Item
             key="create-doc"
-            value={paletteValue("New document", "create note doc write")}
+            value={paletteValue(modeWords.newDoc, "create note doc document write")}
             onSelect={() => { closePalette(); openCreateModal('doc'); }}
             className={itemClass}
           >
             <FileText className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
-            <span className="truncate flex-1">New document</span>
+            <span className="truncate flex-1">{modeWords.newDoc}</span>
           </CommandPrimitive.Item>
           {chatOn && (
             <CommandPrimitive.Item
@@ -2658,7 +2679,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               className={itemClass}
             >
               <Headphones className="w-4 h-4 text-sol-violet flex-shrink-0" />
-              <span className="truncate flex-1">Start Huddle</span>
+              <span className="truncate flex-1">{hostedMode ? "Start a call" : "Start huddle"}</span>
             </CommandPrimitive.Item>
           )}
           <CommandPrimitive.Item
@@ -2689,16 +2710,20 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <NavIcon type={page.icon} />
               </span>
               <span className="truncate flex-1">{label}</span>
-              {page.action && <MenuKeyCaps action={page.action} />}
+              {/* Hosted mode's pages answer Cmd+1 to Cmd+5, as the rail's rows say. */}
+              {(() => {
+                const key = (hostedMode ? HOSTED_SECTION_KEYS.find((k) => k.path === pagePath(page))?.action : undefined) ?? page.action;
+                return key ? <MenuKeyCaps action={key} /> : null;
+              })()}
             </CommandPrimitive.Item>
             );
           })}
         </CommandPrimitive.Group>
   );
 
-  // Hosted mode's empty palette leads with the fastest moves: start a
-  // conversation, open this one's actions in one row, the last few places
-  // visited, then the pages. The fleet's views and layouts wait for a query.
+  // Hosted mode's empty palette leads with the fastest moves: what it can
+  // make (the Create group), this conversation's actions in one row, the
+  // last few places visited, then the pages. The fleet's views and layouts wait for a query.
   const quietRoot = hostedMode && !standalone && !picking && !drilled && !query.trim();
   const drillTarget = () => setDrilled({ type: targetType as PaletteTargetType, row: targets[0], query: "" });
 
@@ -2845,20 +2870,38 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {quietRoot && (
-          <CommandPrimitive.Group className={groupClass}>
-            <CommandPrimitive.Item value={paletteValue(modeWords.newConversation, "quiet start ask")} onSelect={() => startCompose("")} className={itemClass}>
-              <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+        {/* The empty palette leads with a new conversation and folds the
+            other things it can make (a to-do, a note, a routine) behind one
+            row, so the recents and the pages stay in view; then this
+            conversation's actions behind one row. */}
+        {quietRoot && (createOpen ? createGroup : (
+          <CommandPrimitive.Group heading="Create" className={groupClass}>
+            <CommandPrimitive.Item
+              value={paletteValue(modeWords.newConversation, "session conversation start agent compose run ask")}
+              onSelect={() => startCompose("")}
+              className={itemClass}
+            >
+              <MessageSquare className="w-4 h-4 text-sol-cyan flex-shrink-0" />
               <span className="truncate flex-1">{modeWords.newConversation}</span>
               <MenuKeyCaps action="session.compose" />
             </CommandPrimitive.Item>
-            {hasTargets && targets.length === 1 && (
-              <CommandPrimitive.Item value={paletteValue(`This ${modeWords.conversation.toLowerCase()}`, "quiet actions")} onSelect={drillTarget} className={itemClass}>
-                <ChevronRight className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                <span className="truncate flex-1">This {targetType === "session" ? modeWords.conversation.toLowerCase() : targetType}: <span className="text-sol-text-dim">{contextLabel}</span></span>
-                <KeyCap size="xs">→</KeyCap>
-              </CommandPrimitive.Item>
-            )}
+            <CommandPrimitive.Item
+              value={paletteValue("New to-do, note or routine", "create more")}
+              onSelect={() => setCreateOpen(true)}
+              className={itemClass}
+            >
+              <ChevronRight className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">{`${modeWords.newTask}, note or routine`}</span>
+            </CommandPrimitive.Item>
+          </CommandPrimitive.Group>
+        ))}
+        {quietRoot && hasTargets && targets.length === 1 && (
+          <CommandPrimitive.Group className={groupClass}>
+            <CommandPrimitive.Item value={paletteValue(`This ${modeWords.conversation.toLowerCase()}`, "quiet actions")} onSelect={drillTarget} className={itemClass}>
+              <ChevronRight className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+              <span className="truncate flex-1">This {targetType === "session" ? modeWords.conversation.toLowerCase() : targetType}: <span className="text-sol-text-dim">{contextLabel}</span></span>
+              <KeyCap size="xs">→</KeyCap>
+            </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}
 
@@ -2899,7 +2942,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <RecentVisitGlyph item={row} className="w-4 h-4 flex-shrink-0" />
                 <span className="truncate flex-1">{row.title}</span>
-                <span className="text-[10px] text-sol-text-dim flex-shrink-0">{visitObjectLabel(row.objectType, modeWords).toLowerCase()}</span>
+                {/* Hosted mode names a kind only where the glyph leaves it unsaid:
+                    a conversation's own icon already says it. */}
+                {!(hostedMode && row.objectType === "session") && <span className="text-[10px] text-sol-text-dim flex-shrink-0">{visitObjectLabel(row.objectType, modeWords).toLowerCase()}</span>}
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{visitTimeAgo(row.ts)}</span>
               </CommandPrimitive.Item>
             ))}
@@ -2931,7 +2976,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             gesture there (switch, save, update, rename, delete) has a row here.
             Switch rows carry the ⌥N keycap, and the list is in rail order so the
             hint matches the chord. */}
-        {!standalone && !picking && !quietRoot && (
+        {!standalone && !picking && !quietRoot && surfaceMode.shows("actions.fleet") && (
           <CommandPrimitive.Group heading="Layouts" className={groupClass}>
             {layouts.map((v, i) => (
               <CommandPrimitive.Item
@@ -3033,7 +3078,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   fallback={<span className="text-amber-400 flex-shrink-0"><NavIcon type="star" /></span>}
                 />
                 <SessionIdentityLine row={identityRowOf(fav)} title={sessionCardTitle(fav)} className="flex-1" />
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
+                {!hostedMode && <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>}
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(fav.updated_at)}</span>
               </CommandPrimitive.Item>
             ))}
@@ -3068,8 +3113,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
         {recentShown.length > 0 && pickAllows("session") && (
           <CommandPrimitive.Group heading={modeWords.recentConversations} className={groupClass}>
-            {recentShown.map(({ conv, repeats }) => (
-              <PaletteSessionRow key={`recent-${conv._id}`} conv={conv} bucket={labelForConv(conv._id)} standing={standingOf(conv)} device={deviceOfRecent(conv)} repeats={repeats} onSelect={() => chooseSession(conv)} />
+            {recentShown.map((conv: any) => (
+              <PaletteSessionRow key={`recent-${conv._id}`} conv={conv} bucket={labelForConv(conv._id)} standing={standingOf(conv)} device={deviceOfRecent(conv)} onSelect={() => chooseSession(conv)} />
             ))}
           </CommandPrimitive.Group>
         )}
@@ -3136,15 +3181,20 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 No conversations matched
               </CommandPrimitive.Item>
             )}
-            {(searchData || titleData) && moreInEverything(searchHiddenByScope) && (
-              <CommandPrimitive.Item
-                value="__search__ more-in-everything"
-                onSelect={() => setAssistantEverything(true)}
-                className="px-4 py-2 text-center text-[11px] text-sol-text-dim cursor-pointer data-[selected=true]:text-sol-text"
-              >
-                {moreInEverything(searchHiddenByScope)}
-              </CommandPrimitive.Item>
-            )}
+          </CommandPrimitive.Group>
+        )}
+
+        {/* Its own group, scored to sit after every hit (PALETTE_MORE), in
+            the rail's quiet left-aligned line. */}
+        {sessionSearchOn && pickAllows("session") && (searchData || titleData) && moreInEverything(searchHiddenByScope) && (
+          <CommandPrimitive.Group className={groupClass}>
+            <CommandPrimitive.Item
+              value={`${PALETTE_TAIL_MORE} more-in-everything`}
+              onSelect={() => setAssistantEverything(true)}
+              className="px-4 py-1.5 text-left text-[11px] text-sol-text-dim cursor-pointer data-[selected=true]:text-sol-text"
+            >
+              {moreInEverything(searchHiddenByScope)}
+            </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}
 
@@ -3189,7 +3239,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {taskMatches.length > 0 && (
-          <CommandPrimitive.Group heading="Tasks" className={groupClass}>
+          <CommandPrimitive.Group heading={modeWords.tasksPage} className={groupClass}>
             {taskMatches.map((t: any) => (
               <PaletteTaskRow key={`task-${t._id}`} task={t} status={TASK_STATUS_META[t.status]} onSelect={() => chooseEntity("task", t, `/tasks/${t._id}`)} />
             ))}
@@ -3206,9 +3256,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 onSelect={() => chooseEntity("doc", d, `/docs/${d._id}`)}
                 className={itemClass}
               >
-                <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                {hostedMode ? <span className="flex-shrink-0 text-sol-text-dim"><NavIcon type="file" /></span> : <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />}
                 <span className="truncate flex-1">{d.title || "Untitled"}</span>
-                {d.source_file && (
+                {/* A file name is a developer's detail; hosted mode keeps the time. */}
+                {!hostedMode && d.source_file && (
                   <span className="text-[10px] text-sol-text-dim/70 font-mono truncate max-w-[140px] flex-shrink-0">{d.source_file.split("/").pop()}</span>
                 )}
                 {/* Every hosted note is a note; the heading already says so. */}
@@ -3392,7 +3443,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {!standalone && !picking && (
           <CommandPrimitive.Group heading={namedCommands.length > 0 ? "More commands" : "Commands"} className={groupClass}>
             {otherCommands.map(renderCommand)}
-            {!isPeopleWindow() && (
+            {/* Faces over your work and pages in panes drive a team and a
+                fleet; hosted mode leaves them to developer mode. */}
+            {!isPeopleWindow() && fleetCommands && (
               <CommandPrimitive.Item
                 key="cmd-people"
                 value="People window buddy list roster presence pop out floating who is online"
@@ -3407,7 +3460,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 address bar — it already holds what you typed, so making you
                 retype it into the pane would be the worse answer. Otherwise
                 the pane opens blank with its own bar focused. */}
-            <CommandPrimitive.Item
+            {fleetCommands && <CommandPrimitive.Item
               key="cmd-browser-pane"
               // A typed address never fuzzy-matches the keywords ("3200" is in
               // none of them), so while one is typed the row takes the always
@@ -3428,7 +3481,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <span className="truncate flex-1">
                 {browserPaneUrl ? `Open ${displayHost(browserPaneUrl)} in a pane` : "Open a URL in a pane"}
               </span>
-            </CommandPrimitive.Item>
+            </CommandPrimitive.Item>}
             <CommandPrimitive.Item
               key="cmd-theme"
               value="Switch theme dark light mode appearance"
@@ -3509,10 +3562,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <span className="truncate flex-1">
                 Open full search for &ldquo;{previewQuery(query)}&rdquo;
               </span>
-              <span className="flex items-center gap-[2px]">
-                <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
-                <KeyCap size="xs">&#9166;</KeyCap>
-              </span>
+              {/* Cmd+Enter has one owner: the Ask row while asking is on offer. */}
+              {!askable && <ModEnterCaps />}
             </CommandPrimitive.Item>
             {vaultReady && surfaceMode.showsPage("/files") && (
               <CommandPrimitive.Item
@@ -3621,7 +3672,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {filterCompletion?.kind === "operator" && !searchAwaiting && filterGroup}
       </CommandPaletteList>
 
-      <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
+      {/* Key hints only where there is room and, usually, a keyboard: at
+          phone width they broke mid-word ("navigat e"). */}
+      <div className="px-3 py-2 border-t border-sol-border/60 hidden sm:flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40 whitespace-nowrap">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1">
             <KeyCap size="xs">&#8593;</KeyCap>
@@ -3632,9 +3685,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <KeyCap size="xs">&#9166;</KeyCap>
             open
           </span>
-          {/* Hosted mode keeps the legend to moving, opening and asking. */}
-          {!picking && !hostedMode && <span className="flex items-center gap-1"><KeyCap size="xs">→</KeyCap> actions</span>}
-          {!hostedMode && <span className="flex items-center gap-1"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">1–9</KeyCap> pick</span>}
+          {/* The palette's speed keys work in every mode, so every mode says them. */}
+          {!picking && <span className="flex items-center gap-1"><KeyCap size="xs">→</KeyCap> actions</span>}
+          <span className="flex items-center gap-1"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">1–9</KeyCap> pick</span>
           {drilled && <span className="flex items-center gap-1"><KeyCap size="xs">←</KeyCap> back</span>}
           {askable && !askLeads && (
             <span className="flex items-center gap-1">

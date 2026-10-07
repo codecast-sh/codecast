@@ -83,5 +83,10 @@ export function markLanePage(): void {
     document.title = LANE_BOOT_TITLE;
     return;
   }
-  if (location.pathname !== "/" && readLaneHint() === "simple") document.documentElement.setAttribute(HOSTED_BOOT_ATTR, "");
+  // A hosted device's app page loads under the plain name, never the
+  // developer marketing title, until the shell names what it shows.
+  if (location.pathname !== "/" && readLaneHint() === "simple") {
+    document.documentElement.setAttribute(HOSTED_BOOT_ATTR, "");
+    document.title = LANE_BOOT_TITLE;
+  }
 }

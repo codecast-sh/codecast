@@ -173,6 +173,25 @@ export function topupCredit(paidUsd: number): number {
  *  turn engine writes them on the card and reads the pick back by label
  *  (convex/assistant/turns.ts approvalOf); a transcript reads `decline` to
  *  know the declined step already says the answer (lane.ts answerNote). */
+/** Where a hosted routine's work arrives, said the same way on its approval
+ *  card, in the assistant's reply (the tool result carries it) and on its
+ *  row in Routines. A routine fires into its own conversation. */
+/** Promises only the inbox: whether a notification also arrives depends on
+ *  the device, which the card says for itself (web RoutineNotifyLine). */
+export const ROUTINE_SHOWS_UP = "Each run arrives in your inbox.";
+
+/** What Yes does on a routine's approval card: when it starts (`start`, a
+ *  phrase such as "tomorrow, Thursday, at 8:00 AM", empty when unknown), that
+ *  a repeating one runs until paused, and where it arrives. The card's words
+ *  (convex assistant/turns.ts approveWords) and the marketing page's drawn
+ *  card both say it through here. */
+export function routineYesWords(start: string, repeats: boolean): string {
+  const at = start ? ` ${start}` : "";
+  return repeats
+    ? `I'll start${at} and keep it going until you pause it on Routines. ${ROUTINE_SHOWS_UP}`
+    : `I'll do it${at || " that one time"}. ${ROUTINE_SHOWS_UP}`;
+}
+
 export const APPROVAL_ANSWERS = { approve: "Approve", always: "Always allow", decline: "Decline" } as const;
 
 /** What an approval's buttons say in hosted mode, where a card asks the way
@@ -184,13 +203,69 @@ export const APPROVAL_BUTTONS: Record<string, string> = {
   [APPROVAL_ANSWERS.decline]: "Not now",
 };
 
-/** Whether a reply leaves the next move to the person: a question anywhere
- *  in its last paragraph ("Which one appeals to you? I'll look into it
- *  next."), not only as its last character. The engine settles such a turn
- *  as the person's to answer, and the composer then reads "Reply…". */
+/** Whether a reply leaves the next move to the person. Two readings, either
+ *  enough: a question anywhere in its last paragraph ("Which one appeals to
+ *  you? I'll look into it next."), or a question line anywhere in it, a
+ *  line ending on "?" or a bolded question, since a reply that asks two
+ *  things and then signs off ("Once I know those, I can sketch a plan.")
+ *  still waits on them. Quoted lines and code are someone else's words and
+ *  never count. The engine settles such a turn as the person's to answer,
+ *  and the composer then reads "Reply…". */
 export function replyAsksPerson(text: string | null | undefined): boolean {
-  const parts = (text ?? "").trim().split(/\n\s*\n/);
-  return (parts[parts.length - 1] ?? "").includes("?");
+  const own = ownLines(text ?? "");
+  const paragraphs = own.join("\n").trim().split(/\n\s*\n/);
+  if ((paragraphs[paragraphs.length - 1] ?? "").includes("?")) return true;
+  return own.some((line) => /\?[*_)\]"'”’\s]*$/.test(line) || /(\*\*|__)[^*_]*\?\s*(\*\*|__)/.test(line));
+}
+
+/** Tools whose call is itself the whole answer to a quick ask: a to-do
+ *  added, a routine set, a short note written. */
+const QUICK_SAVE_TOOLS = new Set(["create_task", "schedule_routine", "write_doc"]);
+/** Tools a quick save may look around with first without changing its kind. */
+const QUICK_SAVE_READS = new Set(["list_tasks", "list_routines", "recall", "remember"]);
+/** A reply longer than this is an answer to read, whatever it saved. */
+export const QUICK_SAVE_REPLY_CHARS = 280;
+/** A note longer than this is the content the person asked for. */
+export const QUICK_SAVE_NOTE_CHARS = 400;
+
+/** Whether a finished turn only saved what the person asked for ("Add a
+ *  to-do: buy stamps"): at least one save, nothing else but looking around,
+ *  a short note if any, and a short reply that asks nothing and holds no
+ *  table. Such a turn files as read, since its receipt is not news; an
+ *  answer the person has not seen stays new. */
+export function turnIsQuickSave(calls: readonly { name: string; input: unknown }[], reply: string | null | undefined): boolean {
+  const text = (reply ?? "").trim();
+  if (!text || text.length > QUICK_SAVE_REPLY_CHARS || /^\s*\|/m.test(text) || replyAsksPerson(text)) return false;
+  let saved = false;
+  for (const call of calls) {
+    if (QUICK_SAVE_READS.has(call.name)) continue;
+    if (!QUICK_SAVE_TOOLS.has(call.name)) return false;
+    if (call.name === "write_doc" && noteText(call.input).length > QUICK_SAVE_NOTE_CHARS) return false;
+    saved = true;
+  }
+  return saved;
+}
+
+function noteText(input: unknown): string {
+  let value = input;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return value as string; }
+  }
+  const content = (value as { content?: unknown } | null)?.content;
+  return typeof content === "string" ? content : "";
+}
+
+/** A reply's lines in the assistant's own voice: block quotes and fenced
+ *  code dropped, and text inside quotation marks blanked. */
+function ownLines(text: string): string[] {
+  const lines: string[] = [];
+  let fenced = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    if (fenced || /^\s*>/.test(line)) continue;
+    lines.push(line.replace(/"[^"\n]*"|“[^”\n]*”/g, "\"\"").trimEnd());
+  }
+  return lines;
 }
 
 /** An approval option's label as hosted mode shows it; any other label as is. */
@@ -198,12 +273,14 @@ export function approvalButtonLabel(label: string): string {
   return APPROVAL_BUTTONS[label] ?? label;
 }
 
-/** What one everyday request costs the assistant, in US dollars: the median
- *  cost of a hosted turn on the Free plan's model, read from prod's
- *  assistant_turns on 2026-10-06 (13 turns, $0.0029 to $0.0066). The plan
- *  screen sizes the Free month with it ("Room for about 600 everyday
- *  requests"); remeasure as real usage grows. */
-export const TYPICAL_REQUEST_USD = 0.0032;
+/** What one everyday request costs the assistant, in US dollars. A turn is
+ *  one ask with every model call and tool it took. Prod's assistant_turns on
+ *  2026-10-07 (76 charged turns): median $0.0039, mean $0.0048, p75 $0.0047,
+ *  p90 $0.0075, a web search up to $0.035. A month mixes the two, so the
+ *  mean sizes it, rounded up so the count never promises more than it buys.
+ *  The plan screen sizes the Free month with it ("Room for about 400
+ *  everyday requests"); remeasure as real usage grows. */
+export const TYPICAL_REQUEST_USD = 0.005;
 
 /** Where Stripe sends a person back after checkout or the portal, and what
  *  `?<param>=` says happened. The server builds the URLs (convex/billing.ts)

@@ -65,10 +65,12 @@ export function FadeGradient({ colors, style, children, pointerEvents }: { color
  * once clipped the child re-reports the clipped height; latching the tallest
  * height ever measured keeps that from flipping the clip on and off.
  */
-export function CollapsibleBody({ fadeColor, height = 160, labels = ['Show all', 'Show less'], children }: {
+export function CollapsibleBody({ fadeColor, height = 160, labels = ['Show all', 'Show less'], toggleColor, children }: {
   fadeColor: string;
   height?: number;
   labels?: [string, string];
+  /** The toggle's colour where the surface has its own palette (a hosted card). */
+  toggleColor?: string;
   children: ReactNode;
 }) {
   const Theme = useTheme();
@@ -90,8 +92,8 @@ export function CollapsibleBody({ fadeColor, height = 160, labels = ['Show all',
       </RNView>
       {overflows && (
         <TouchableOpacity onPress={() => setExpanded((e) => !e)} style={styles.toggle} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={12} color={Theme.textDim} />
-          <RNText style={styles.toggleText}>{expanded ? labels[1] : labels[0]}</RNText>
+          <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={12} color={toggleColor ?? Theme.textDim} />
+          <RNText style={[styles.toggleText, toggleColor ? { color: toggleColor, fontWeight: '500' } : null]}>{expanded ? labels[1] : labels[0]}</RNText>
         </TouchableOpacity>
       )}
     </RNView>

@@ -215,6 +215,9 @@
 .sl-composer textarea::placeholder { color: var(--sl-faint); }
 .sl-composer textarea:focus-visible { outline: none; }
 
+/* The app's hosted send (globals.css [data-cc-send]): an ink disc with a
+   paper arrow, the accent only under the pointer or the press, and the same
+   disc at a quarter strength while there is nothing to send. */
 .sl-send {
   flex: none;
   display: grid;
@@ -223,23 +226,17 @@
   height: 2.6rem;
   border: 0;
   border-radius: 999px;
-  background: var(--sl-accent);
-  color: var(--sl-on-solid);
+  background: var(--sl-ink);
+  color: var(--sl-sheet);
   cursor: pointer;
   transition: transform 180ms var(--sl-ease), opacity 180ms var(--sl-ease), background-color 180ms var(--sl-ease);
 }
-
-/* Nothing to send yet: a quiet ink disc, never a faded accent. */
-/* Empty, the disc stays a send button waiting for words: a hairline in the
-   accent around a faint arrow, not a grey disc that reads as disabled. */
 .sl-send:disabled {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--pd-accent, var(--sl-accent-text)) 55%, transparent);
-  color: color-mix(in srgb, var(--pd-accent, var(--sl-accent-text)) 70%, transparent);
+  opacity: 0.25;
   cursor: default;
 }
-.sl-send:not(:disabled):hover { transform: translateY(-1px); }
-.sl-send:not(:disabled):active { transform: scale(0.94); }
+.sl-send:not(:disabled):hover { transform: translateY(-1px); background: var(--sl-accent); color: var(--sl-on-solid); }
+.sl-send:not(:disabled):active { transform: scale(0.94); background: var(--sl-accent); color: var(--sl-on-solid); }
 
 /* ── Cards, pills and callouts ───────────────────────────────────────── */
 

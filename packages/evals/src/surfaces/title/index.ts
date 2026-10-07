@@ -27,7 +27,7 @@ export interface TitleSnap {
   /** title mode: the spine reads and the newest 20 rows (newest first), cut at the moment. */
   spine?: Row[];
   latest?: Row[];
-  conversation?: { title?: string; subtitle?: string; title_is_custom?: boolean; message_count?: number };
+  conversation?: { title?: string; subtitle?: string; title_is_custom?: boolean; message_count?: number; agent_type?: string };
   /** short-title mode: the name-only input. */
   shortTitle?: { kind: 'session' | 'task' | 'plan'; title: string; context?: string };
   /** The session's title when it was captured, which may postdate the moment. */
@@ -77,7 +77,9 @@ const impl: SurfaceImpl = {
       // /cli/read carries no subtitle or title history, so the anchor a prior
       // LLM title gives is left out (selectTitleInput anchors only on a
       // subtitle), and the message count is the moment's line.
-      conversation: { message_count: m.line },
+      // The agent picks the prompt: a hosted conversation is named by the
+      // hosted title prompt (buildHostedTitlePrompt).
+      conversation: { message_count: m.line, ...(m.conversation.agent_type ? { agent_type: m.conversation.agent_type } : {}) },
       currentTitle: m.conversation.title,
       approximate: ['no current-title anchor: /cli/read has no title history', 'message_count is the /cli/read line, which skips empty rows'],
     };

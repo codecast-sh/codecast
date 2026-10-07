@@ -31,6 +31,10 @@ export interface ToolsForOptions {
    *  connected one) and a fake fetch. */
   whisk?: WhiskAccess;
   fetch?: typeof fetch;
+  /** Rows that left the replayed window called an outside tool
+   *  (longHistory.ts): their content still reaches the model through the
+   *  conversation's summaries, so the taint check counts it. */
+  outsideEarlier?: boolean;
 }
 
 export interface ToolSet {
@@ -56,7 +60,7 @@ export interface ToolSet {
  *  this deployment holds Whisk's settings, but Connect leads nowhere
  *  (whiskConnectOpen is false), so no Connect button shows anywhere. */
 export const MAIL_COMING_NOTE =
-  "Mail and calendar are coming soon through Whisk, so you cannot read or send the person's mail or see their calendar yet. If they ask for that, say plainly that it is coming soon. Do not offer to connect them, and do not mention a Connect button or a settings step.";
+  "Mail and calendar are coming soon through Whisk, so you cannot read or send the person's mail or see their calendar now. If they ask for that, say plainly that it is coming soon, and never say when. If this conversation already read their mail, say that mail is turned off for now rather than that their mailbox is empty. Do not offer to connect them, and do not mention a Connect button or a settings step.";
 
 /** The note for what is missing, in the words the assistant can pass on.
  *  `connectOpen` is the same gate every Connect button reads (whisk.ts
@@ -112,6 +116,21 @@ const NO_WHISK: WhiskCall = async () => {
   throw new Error("Mail and calendar are not connected.");
 };
 
+/** Every tool that reads outside content, whatever this person has
+ *  connected: built over no Whisk and a context nothing calls, since only the
+ *  definitions are read. */
+export function allOutsideToolNames(): Set<string> {
+  const none = async () => {
+    throw new Error("not callable");
+  };
+  return outsideToolNames([
+    ...mailTools(whiskMailbox(NO_WHISK, whiskWebUrl()), ALL_MAIL),
+    ...calendarTools(whiskCalendar(NO_WHISK)),
+    ...codecastTools({ runQuery: none, runMutation: none, userId: "" as Id<"users">, conversationId: "" as Id<"conversations"> }),
+    ...webTools({}),
+  ]);
+}
+
 /** Every tool the conversation's owner can use in this turn, and what they could still connect. */
 export async function toolsFor(
   ctx: { runQuery: (ref: any, args: any) => Promise<any>; runMutation: (ref: any, args: any) => Promise<any> },
@@ -132,8 +151,8 @@ export async function toolsFor(
   // Every outside tool, offered now or not: history read through a
   // connection the person has since narrowed or removed is still in front
   // of the model.
-  const outside = outsideToolNames([...mailTools(mailbox, ALL_MAIL), ...calendarTools(calendar), ...tools]);
-  const readOutside = (rows: readonly MessageRow[]) => readOutsideContent(rows, outside);
+  const outside = allOutsideToolNames();
+  const readOutside = (rows: readonly MessageRow[]) => !!options.outsideEarlier || readOutsideContent(rows, outside);
   return {
     tools,
     note: connectionNote(access),

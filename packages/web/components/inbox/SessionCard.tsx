@@ -1,10 +1,11 @@
+import { awaitingOkIds } from "../../lib/decisionQueue";
 import React, { useCallback, useMemo, useRef, memo } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { withSafetyBlock, isHostedAgentType } from "@codecast/shared/contracts";
-import { lastNoticeKind } from "../../lib/hostedNotice";
+import { hostedStopOf } from "../../lib/hostedNotice";
 import { assistantScopeOnly } from "../../lib/assistantScope";
 import { imageBytes } from "../../lib/imageByteCache";
 import { compressImage } from "../../lib/compressImage";
@@ -12,7 +13,8 @@ import { threadStateView } from "../../lib/threadState";
 import { sessionIdleAt, sessionLiveAt } from "../../lib/liveness";
 import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { roleLookingAfter } from "../../lib/sessionIdentity";
-import { useInboxStore, useTrackedStore, convHasPendingSend, resolveSessionAuthor, showsBlockedBadge, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
+import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { latestRestartRow, restartPending } from "../../lib/sessionCommands";
 import { useAckAssignment } from "../../hooks/useAckAssignment";
@@ -22,6 +24,8 @@ import { viewersOf, viewersSig } from "../presence/memberPresence";
 import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
 import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration } from "../../lib/sessionCard";
+import { hostedTitle } from "../../lib/conversationTitle";
+import { firstUserPromptOf } from "../../hooks/useForkTree";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { useSurface } from "../../lib/surfaces";
@@ -84,7 +88,7 @@ const paneDragStart = (sessionId: string) => (e: React.DragEvent, title: string)
 
 export type SessionCardProps = Pick<
   SessionCardViewProps,
-  | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "isFavorite" | "sessionLabel"
+  | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "titleSuffix" | "isFavorite" | "sessionLabel"
   | "variant" | "forkColorKey" | "subRow" | "roleSessions"
   | "onSelect" | "onDismiss" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
 > & {
@@ -92,6 +96,16 @@ export type SessionCardProps = Pick<
   onStash?: (id: string) => void;
   onPin?: (id: string) => void;
 };
+
+type TitleState = Pick<ReturnType<typeof useInboxStore.getState>, "conversations" | "sessions" | "messages" | "pendingMessages">;
+
+/** What a hosted rail row is called: hostedTitle over the conversation row,
+ *  the session row, and the first ask in the transcript (or the send still on
+ *  its way). The rail and its same-name suffix both read it. */
+export function hostedRowTitle(s: TitleState, id: string): string {
+  return hostedTitle(s.conversations[id] as any, s.sessions[id] as any, () =>
+    firstUserPromptOf([...(s.messages[id] ?? []), ...(s.pendingMessages[id] ?? [])]));
+}
 
 export const SessionCard = memo(function SessionCard({
   session: row,
@@ -111,6 +125,9 @@ export const SessionCard = memo(function SessionCard({
   const hasDraft = !!session._hasDraft;
   const cardId = session._id;
   const hosted = isHostedAgentType(session.agent_type);
+  // The hosted name rule (hostedRowTitle), so the rail and the header name a
+  // conversation the same way from its first seconds on.
+  const liveTitle = useInboxStore((s) => (hosted ? hostedRowTitle(s, cardId) : ""));
   // ONE subscription for the whole card (ct-49746). Every value below used to be
   // its own useInboxStore/hook subscription — 13 of them, so a sidebar showing 75
   // rows held ~1000 subscriptions and zustand ran ~1000 selectors on every
@@ -140,10 +157,12 @@ export const SessionCard = memo(function SessionCard({
     (s) => viewersSig(s.teamMembers, cardId, s.currentUser?._id?.toString?.() ?? null),
     // A hosted conversation that ended on a stop notice: the kind, a string,
     // so a streamed message wakes the card only when the answer changes.
-    (s) => (hosted ? lastNoticeKind(s.messages[cardId]) : null),
+    (s) => (hosted ? hostedStopOf(s.sessions[cardId] ?? session, s.messages[cardId]) : null),
+    (s) => (hosted ? awaitingOkIds(s.sessionDecisions).has(cardId) : false),
   ]);
   const meId = st.currentUser?._id?.toString?.() ?? null;
   const viewers = viewersOf(st.teamMembers, cardId, meId);
+  const stoppedKind = hosted ? hostedStopOf(st.sessions[cardId] ?? session, st.messages[cardId]) : null;
   // The amber blocked chip's revive stamp — read before the clock below so its
   // TTL participates in the clock's re-render signature.
   const reviveRequestedAt = st.blockedReviveRequestedAt[cardId];
@@ -270,25 +289,35 @@ export const SessionCard = memo(function SessionCard({
   const handlePaneDragStart = useMemo(() => paneDragStart(cardId), [cardId]);
   const selecting = useInboxSelection((sel) => sel.ids.length > 0);
 
+  // A hosted draft (nothing sent yet) is something the person started, not
+  // news: it never takes the unread weight, and it is named from what they
+  // typed, else "Untitled draft".
+  const unsentDraft = hosted && !liveTitle && isUnsentConversation(session);
+  const draftTitle = unsentDraft ? (promptTitle(st.drafts[cardId]?.draft_message as string | undefined) || "Untitled draft") : "";
+
   return (
     <SessionCardView
       {...rest}
+      {...(unsentDraft ? { isUnread: false } : {})}
       session={session}
+      liveTitle={draftTitle || liveTitle || undefined}
       roleAbove={roleAbove}
       now={coarseNow}
       chrome={chrome}
       liveness={{
         // A hosted conversation that stopped on a notice is settled: no live
         // dot, whatever the work state's heartbeat still says.
-        isLive: isLive && !(hosted && lastNoticeKind(st.messages[cardId])),
+        // So is one waiting on an OK: it is the person's turn, not work.
+        isLive: isLive && !(hosted && (stoppedKind || awaitingOkIds(st.sessionDecisions).has(cardId))),
         pendingSend: convHasPendingSend(st.pendingMessages[cardId]),
         blockedReviveAt: reviveRequestedAt,
         restarting,
         draft: hasDraft ? ((st.drafts[cardId]?.draft_message as string | undefined) ?? "") : "",
-        stopped: hosted ? lastNoticeKind(st.messages[cardId]) : null,
+        stopped: stoppedKind,
         // An approval waits on the person: said on the row, since hosted
         // mode files it under Your turn with the replies.
-        asksOk: hosted && session.agent_status === "permission_blocked",
+        // The pending decision row is the one home for that (awaitingOkIds).
+        asksOk: hosted && awaitingOkIds(st.sessionDecisions).has(cardId),
       }}
       viewerId={meId}
       author={author}

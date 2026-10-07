@@ -6,7 +6,8 @@ import { withSafetyBlock, isStashHidden, type UserRest } from "@codecast/shared/
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
+import { formatIdleDuration, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { AvatarImg } from "../../lib/avatarCache";
 import { ImageLightbox } from "../ImageGallery";
 import { FormattedSummary } from "../FormattedSummary";
@@ -32,6 +33,7 @@ import { BranchCodeLink } from "../repo/RepositoryLinks";
 import { PrStatusChip } from "../PrStatusChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { MetaDot } from "../entityDisplay";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
 import {
   AssignedPingStrip,
@@ -97,6 +99,12 @@ export type SessionCardViewProps = {
   /** Lit for this viewer: the session moved since they last acknowledged it,
    *  or they marked it unread by hand (store/inboxStore.sessionUnreadMap). */
   isUnread?: boolean;
+  /** The name the open conversation's header shows, when the container has
+   *  one fresher than the row's own (SessionCard reads it for hosted rows). */
+  liveTitle?: string;
+  /** A muted distinguisher after the title when another row in the list
+   *  reads the same name (lib/sameNameSuffix): the day, or the time. */
+  titleSuffix?: string;
   isFavorite: boolean;
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
@@ -164,6 +172,8 @@ export function SessionCardView({
   selecting = false,
   onToggleSelect,
   isUnread,
+  liveTitle,
+  titleSuffix,
   isFavorite,
   sessionLabel,
   variant = "default",
@@ -251,7 +261,7 @@ export function SessionCardView({
   const [thumbBroken, setThumbBroken] = useState(false);
   useWatchEffect(() => setThumbBroken(false), [session.image_preview_url]);
   const hasThumb = !!thumbSrc && !thumbBroken;
-  const displayTitle = sessionCardTitle(session);
+  const displayTitle = liveTitle || sessionCardTitle(session);
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
   // A kept compose draft (see ComposeView) is a blank session the user chose to
@@ -559,12 +569,8 @@ export function SessionCardView({
           {isUnread && !isActive && <UnreadDot />}
           {/* A stop is a small dot in the dot slot; its word follows the
               title in faint ink. The danger colour is said once, by the
-              Couldn't finish section, not by every row in it. */}
-          {liveness.asksOk && !liveness.stopped && (
-            <span data-sv-asks-ok className="flex-shrink-0 text-[12px] text-sol-orange" title="Your assistant is waiting for your OK. Open it to answer.">
-              Needs your OK
-            </span>
-          )}
+              Couldn't finish section, not by every row in it. A wait for an
+              OK says so after the title too, so the title keeps the room. */}
           {liveness.stopped && (
             <span data-sv-stopped-dot aria-hidden className={`flex-shrink-0 h-1.5 w-1.5 rounded-full ${NOTICE_DOT[liveness.stopped]}`} />
           )}
@@ -578,6 +584,8 @@ export function SessionCardView({
             nameClassName={isUnread && !isActive ? "font-semibold" : ""}
             titleClassName={`${isUnread && !isActive ? "font-semibold text-sol-text" : ""} ${isSlashCommand ? "font-mono text-sol-cyan" : ""}`}
             after={
+              <>
+              {titleSuffix && <span data-sv-title-suffix className="inline-flex flex-shrink-0 items-baseline gap-1.5 font-normal text-sol-text-dim"><MetaDot /><span>{titleSuffix}</span></span>}
               <ShortcutTooltip label={isFavorite ? "Unfavorite" : "Favorite"} action="conv.favorite">
                 <button
                   onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }}
@@ -591,11 +599,15 @@ export function SessionCardView({
                   <Star className="w-3 h-3" fill={isFavorite ? "currentColor" : "none"} />
                 </button>
               </ShortcutTooltip>
+              </>
             }
           />
           {liveness.asksOk && !liveness.stopped && (
-            <span data-sv-asks-ok className="flex-shrink-0 text-[12px] text-sol-orange" title="Your assistant is waiting for your OK. Open it to answer.">
-              Needs your OK
+            // Short, so the title keeps the row: the dot and "OK?" say it,
+            // the tooltip says it in full.
+            <span data-sv-asks-ok className="flex flex-shrink-0 items-center gap-1 text-[12px] text-sol-orange" title="Your assistant is waiting for your OK. Open it to answer.">
+              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-sol-orange" />
+              OK?
             </span>
           )}
           {liveness.stopped && (
@@ -677,7 +689,8 @@ export function SessionCardView({
             )}
           </div>
         )}
-        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && <div data-sv-startup className="contents"><CardStartupLine session={session} /></div>}
+        {/* A row waiting on an OK says only "OK?": the start line would claim work is under way. */}
+        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && !liveness.asksOk && <div data-sv-startup className="contents"><CardStartupLine session={session} /></div>}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
@@ -770,9 +783,13 @@ export function SessionCardView({
               isPendingWorking={isPendingWorking}
               isRowRestarting={isRowRestarting}
             />
-            <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
-              {formatIdleDuration(session.updated_at)}
-            </span>
+            {/* A row with a same-name suffix already says when; its time
+                gives the title its room. */}
+            {!titleSuffix && (
+              <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
+                {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
+              </span>
+            )}
           </div>
         </div>
         <CardParentLinks

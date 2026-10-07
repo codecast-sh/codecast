@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, foreignTriggerConvIds, groupSessionsByTrigger, groupTriggerRowsByHome, isTriggerFailing, lastRunHeadline, latestLoadedTriggerMessage, mergeTriggerRosters, partitionTriggerInbox, splitResultSummary, taskDisplayTitle, taskGist, type TaskRow } from "./triggerTasks";
+import { cleanPromptSliceTitle, foreignTriggerConvIds, groupSessionsByTrigger, groupTriggerRowsByHome, isTriggerFailing, lastRunHeadline, latestLoadedTriggerMessage, mergeTriggerRosters, partitionTriggerInbox, splitResultSummary, taskDisplayTitle, taskGist, triggerEndVerb, triggerEndWords, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, type InboxSession } from "../store/inboxStore";
 import { orderSections } from "../store/__tests__/placeTestHarness";
 
@@ -725,5 +725,19 @@ describe("groupTriggerRowsByHome", () => {
     expect(groups[0].homeId).toBeUndefined();
     expect(groups[0].projectPath).toBe("/p/one");
     expect(groups[0].rows.map((r) => r.task._id)).toEqual(["a", "d"]);
+  });
+});
+
+describe("triggerEndVerb / triggerEndWords", () => {
+  it("cancels an armed trigger and deletes only a finished one", () => {
+    for (const status of ["scheduled", "running", "paused"]) expect(triggerEndVerb(status)).toBe("cancel");
+    expect(triggerEndVerb("completed")).toBe("delete");
+    expect(triggerEndVerb("failed")).toBe("delete");
+    expect(triggerEndVerb("cancelled")).toBeNull();
+  });
+
+  it("names the ending in the mode's noun", () => {
+    expect(triggerEndWords("cancel", "Routine")).toEqual({ label: "Cancel routine", ask: "Cancel this routine?", confirm: "Cancel it" });
+    expect(triggerEndWords("delete", "Trigger")).toEqual({ label: "Delete", ask: "Delete this trigger?", confirm: "Delete it" });
   });
 });

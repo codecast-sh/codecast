@@ -21,7 +21,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMutation } from "convex/react";
 import { copyToClipboard } from "../../../lib/utils";
 import { AuthGuard } from "../../../components/AuthGuard";
-import { AppLoader } from "../../../components/AppLoader";
+import { PaneLoader } from "../../../components/PaneLoader";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ShortcutTooltip } from "../../../components/KeyboardShortcutsHelp";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
@@ -38,8 +38,10 @@ import {
   taskStateLabel,
   triggerEventLabel,
 } from "../../../components/triggerCadence";
-import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "../../../components/triggerTasks";
+import { ARMED_STATUSES, isTriggerTerminal, taskDisplayTitle, type TaskRow } from "../../../components/triggerTasks";
 import { isTriggerEditable } from "../../../lib/triggerEditable";
+import { useModeWords, useSurface } from "../../../lib/surfaces";
+import { HostedRoutineDetail } from "../../../components/triggers/HostedRoutineDetail";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -182,13 +184,16 @@ export default function TriggerDetailPage() {
   const [summarizing, setSummarizing] = useState(false);
 
   const taskId = trigger?._id;
-  const runs = useTriggerRuns(taskId ?? null);
+  // Hosted mode's routine page drops the fleet chrome (HostedRoutineDetail).
+  const fleet = useSurface("triggers.fleetChrome");
+  const words = useModeWords();
+  const runs = useTriggerRuns(fleet ? taskId ?? null : null);
 
   if (!id || trigger === undefined) {
     return (
       <AuthGuard>
         <DashboardLayout>
-          <AppLoader className="min-h-[16rem] h-full" />
+          <PaneLoader />
         </DashboardLayout>
       </AuthGuard>
     );
@@ -201,15 +206,15 @@ export default function TriggerDetailPage() {
           <div className="h-full flex items-center justify-center">
             <div className="text-center max-w-sm px-4">
               <Zap className="w-6 h-6 mx-auto text-sol-orange/50" />
-              <div className="mt-3 text-sm text-sol-text">This trigger isn't available</div>
+              <div className="mt-3 text-sm text-sol-text">This {words.trigger.toLowerCase()} isn't available</div>
               <p className="mt-1 text-xs text-sol-text-dim">
-                It was deleted, or it belongs to a session you don't have access to.
+                {fleet ? "It was deleted, or it belongs to a session you don't have access to." : "It was deleted, or it belongs to someone else."}
               </p>
               <Link
                 href="/triggers"
                 className="mt-4 inline-block px-3 py-1 rounded border border-sol-border text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors no-underline"
               >
-                All triggers
+                {fleet ? "All triggers" : words.triggers}
               </Link>
             </div>
           </div>
@@ -219,12 +224,21 @@ export default function TriggerDetailPage() {
   }
 
   const t = trigger;
+  if (!fleet) {
+    return (
+      <AuthGuard>
+        <DashboardLayout>
+          <HostedRoutineDetail task={t} now={now} />
+        </DashboardLayout>
+      </AuthGuard>
+    );
+  }
   // Verbs follow view access: whoever can see this page can manage the
   // trigger (founder decision 2026-08-30). The "runs as X" chip stays as
   // provenance for foreign triggers.
   const isForeign = t.is_own === false;
   const isArmed = ARMED_STATUSES.has(t.status);
-  const isTerminal = t.status === "completed" || t.status === "failed";
+  const isTerminal = isTriggerTerminal(t.status);
   const isEditable = isTriggerEditable(t.status);
   const msUntil = t.status === "scheduled" && t.run_at !== undefined ? t.run_at - now : undefined;
   const cycleProgress =

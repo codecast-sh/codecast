@@ -17,6 +17,7 @@
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
+import { useHostedMode } from "../lib/surfaces";
 import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
@@ -77,6 +78,7 @@ export function BreadcrumbBar() {
     return row.name;
   });
 
+  const hosted = useHostedMode();
   const specs = useMemo(() => {
     const lookups: BreadcrumbLookups = {
       project: () => ({ title: projectTitle }),
@@ -85,8 +87,8 @@ export function BreadcrumbBar() {
       plan: () => ({ title: planTitle, short_id: planShortId }),
       channel: () => ({ name: channelName }),
     };
-    return buildBreadcrumbs(pathname, lookups);
-  }, [pathname, projectTitle, taskTitle, taskShortId, docTitle, planTitle, planShortId, channelName]);
+    return buildBreadcrumbs(pathname, lookups, hosted);
+  }, [pathname, projectTitle, taskTitle, taskShortId, docTitle, planTitle, planShortId, channelName, hosted]);
 
   // A SPLIT stage has no single trail: the bar spans every pane while its
   // crumbs describe only the focused one, and each pane already names itself

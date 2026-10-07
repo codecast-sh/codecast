@@ -1,4 +1,6 @@
 import { captureException } from "@sentry/react";
+import { awaitingOkIds, hostedDeclinedSince } from "../lib/decisionQueue";
+import { hostedNoticeKind } from "../lib/hostedNotice";
 import { HostedStatusLine } from "./conversation/HostedStatusLine";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
 import { MODE_WORDS, useSurface } from "../lib/surfaces";
@@ -195,7 +197,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, composerFoot, bareComposer, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean> }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkSend, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, composerFoot, bareComposer, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onForkSend?: (content: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -317,16 +319,34 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // A hosted conversation whose month is used up says so at rest and holds
   // Send, rather than letting a message travel only to come back refused.
   const allowanceOut = useAllowanceOut(hostedConversation);
-  // The assistant just asked the person something: the composer invites the answer.
-  const hostedAsked = useInboxStore((s) => {
-    if (!hostedConversation) return false;
+  // A pending decision row waits on the person (awaitingOkIds, the one home
+  // the inbox and the card read too): the composer points at the card only
+  // while there is one, and clears with the optimistic answer.
+  const hostedAwaitsOk = useInboxStore((s) => hostedConversation && awaitingOkIds(s.sessionDecisions).has(conversationId));
+  // Where the conversation stands, from its last words: the assistant just
+  // asked the person something (the composer invites the answer), it has
+  // answered (a follow-up belongs here), the person said no to its card
+  // since their last message (it invites a change), or something was sent
+  // and nothing answered yet. Only an empty conversation invites a new chore.
+  // A stop notice (an error, an outage) points at its own Try again; a no
+  // invites a change only for DECLINE_HINT_MS, so a cold revisit reads as
+  // an answered conversation rather than an ask still pending.
+  const hostedLast = useInboxStore((s): "asked" | "answered" | "declined" | "stopped" | "sent" | null => {
+    if (!hostedConversation) return null;
     const rows = s.messages[conversationId] ?? [];
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i];
-      if (row?.role === "user" && row.content?.trim()) return false;
-      if (row?.role === "assistant" && row.content?.trim()) return replyAsksPerson(row.content);
+      if (row?.role === "assistant" && row.content?.trim()) {
+        const notice = hostedNoticeKind(row);
+        if (notice === "error" || notice === "unavailable") return "stopped";
+        return replyAsksPerson(row.content) ? "asked" : "answered";
+      }
+      if (row?.role === "user" && row.content?.trim()) {
+        const since = row.timestamp ?? 0;
+        return hostedDeclinedSince(s.sessionDecisions, conversationId, since, Date.now()) ? "declined" : "sent";
+      }
     }
-    return false;
+    return null;
   });
   const [stuckBannerRaised, setShowStuckBanner] = useState(false);
   const showStuckBanner = stuckBannerRaised && !hostedConversation;
@@ -2137,6 +2157,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         return;
       }
       const hasText = messageRef.current.trim().length > 0;
+      // A hosted conversation has no agent to send Escape to: an empty
+      // composer hands the keys back to the app, so its single-key layer
+      // (?, j/k, c) works without the mouse.
+      if (hostedConversation && !hasText && queuedMessages.length === 0) {
+        textareaRef.current?.blur();
+        return;
+      }
       if (escapeTimerRef.current) {
         clearTimeout(escapeTimerRef.current);
         escapeTimerRef.current = null;
@@ -2359,6 +2386,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     phrase={workingPhrase}
                     sending={!!(pendingMessageId || existingPending || hasPendingSend)}
                     allowanceOut={allowanceOut}
+                    escapeHint={!escapeCloses && isFocused && message.length === 0}
+                    awaitsOk={hostedAwaitsOk}
                   />
                 ) : ((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -2785,7 +2814,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (agentStatus === "permission_blocked" ? MODE_WORDS.hosted.composerApproval : hostedAsked ? "Reply…" : MODE_WORDS.hosted.composerPlaceholder) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? MODE_WORDS.developer.composerApproval : hasAskUserQuestion ? "Answer the question to continue..." : MODE_WORDS.developer.composerPlaceholder) : MODE_WORDS.developer.composerPlaceholder)}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (hostedAwaitsOk ? MODE_WORDS.hosted.composerApproval : hostedLast === "asked" ? "Reply…" : hostedLast === "declined" ? MODE_WORDS.hosted.composerDeclined : hostedLast === "stopped" ? MODE_WORDS.hosted.composerAfterStop : hostedLast ? MODE_WORDS.hosted.composerFollowUp : MODE_WORDS.hosted.composerPlaceholder) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? MODE_WORDS.developer.composerApproval : hasAskUserQuestion ? "Answer the question to continue..." : MODE_WORDS.developer.composerPlaceholder) : MODE_WORDS.developer.composerPlaceholder)}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (

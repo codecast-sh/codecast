@@ -1,5 +1,6 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { HOSTED_PAGE_FRAME } from "../lib/hostedPage";
 import { PageHeading } from "./PageHeading";
 import { useHostedMode, useSurface } from "../lib/surfaces";
 import { copyToClipboard } from "../lib/utils";
@@ -35,10 +36,13 @@ import {
   BookmarkPlus,
   Forward,
 } from "lucide-react";
-import { KeyCap } from "./KeyCap";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
+import { installKeyboardCursor } from "../lib/keyboardCursor";
+
+// Hosted lists draw their keyboard cursor only once the keyboard moves it.
+installKeyboardCursor();
 
 export interface ListTab {
   key: string;
@@ -463,6 +467,11 @@ export interface ListGroup<T> {
 const GROUP_INDENT_PX = 20;
 const MAX_GROUP_INDENT = 4;
 
+/** From how many items a hosted list's header offers its tools (views,
+ *  search, filter, display): the rule the Routines page keeps, so a short
+ *  list reads as a list rather than a toolbar. */
+const HOSTED_TOOLS_FROM = 6;
+
 export type { ItemRowState } from "./ListRowShell";
 
 export interface GenericListViewProps<T> {
@@ -523,6 +532,10 @@ export interface GenericListViewProps<T> {
   emptyMessage?: string;
 
   onCreate: () => void;
+  /** What the create button says in hosted mode ("New note"), drawn as a
+   *  labelled secondary button in place of the bare +. A list with a
+   *  quickAdd row needs neither: the row is the way to add one. */
+  createLabel?: string;
   /** An always-present add row at the head of the list: Enter adds what was
    *  typed and keeps the field for the next, and "c" focuses it in place of
    *  opening the create form. */
@@ -619,6 +632,7 @@ export function GenericListView<T>({
   emptyIcon,
   emptyMessage,
   onCreate,
+  createLabel,
   quickAdd,
   hasMore,
   isLoadingMore,
@@ -1166,9 +1180,21 @@ export function GenericListView<T>({
   const hosted = useHostedMode();
   const viewInternals = useSurface("lists.internals");
   const activeTabKey = activeTabOf(tabs, activeTab)?.key ?? null;
+  // Hosted mode keeps a short list's header to its title, scope and one way
+  // to add. The tools come back from HOSTED_TOOLS_FROM items on, and whenever
+  // one is already in use (another view, a filter, a grouping, a search), so it can be
+  // undone from where it was set.
+  const toolsShown = !hosted
+    || (tabs[0]?.count ?? flatItems.length) >= HOSTED_TOOLS_FROM
+    || (!!tabs[0] && activeTabKey !== tabs[0].key)
+    || !!filters?.defs.some(filterIsSet)
+    || (!!groupBy && groupBy !== "none")
+    || showSearch;
 
   return (
-    <div className="h-full flex flex-col">
+    // Hosted pages share one frame (lib/hostedPage), so To-dos and Notes
+    // keep the title where Routines and Approvals put it.
+    <div className={`h-full flex flex-col ${hosted ? HOSTED_PAGE_FRAME : ""}`} data-list-view>
       {/* Header. The outer wrapper is the container-query context; the inner
           .cq-header row is what adapts (wraps the toolbar below the tabs) as the
           panel narrows — a container can't query its own width, only a child's. */}
@@ -1179,9 +1205,15 @@ export function GenericListView<T>({
               the developer header keeps the name for screen readers only. */}
           {/* An empty list says so below; a 0 beside its title says nothing more. */}
           {hosted ? <PageHeading title={title} count={tabs[0]?.count || undefined} /> : <h1 className="sr-only">{title}</h1>}
-          {syncScope && <SyncProgressBadge scope={syncScope} />}
+          {/* Hosted mode's scope chips qualify the title, so they sit beside it. */}
+          {hosted && headerExtra}
+          {/* The crawl's progress is developer chrome: hosted mode paints
+              from the cache and says nothing while it fills in. */}
+          {syncScope && !hosted && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
+          {/* One tab is no choice (hosted Notes): the title's count says it. */}
+          {toolsShown && tabs.length > 1 && <>
           <div data-list-tabs className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
             {tabs.map((tab) => {
               const isActive = activeTabKey === tab.key;
@@ -1209,9 +1241,10 @@ export function GenericListView<T>({
               onChange={(key) => { onTabChange(key); setFocusIndex(0); }}
             />
           </div>
+          </>}
         </div>
         <div data-list-toolbar className="cq-header-toolbar flex flex-wrap items-center justify-end gap-1.5 ml-auto">
-          {headerExtra}
+          {!hosted && headerExtra}
           {selectedIds.size > 0 && (
             <span className="text-xs text-sol-cyan">{selectedIds.size} selected</span>
           )}
@@ -1227,7 +1260,7 @@ export function GenericListView<T>({
               className="text-xs w-40 h-7 px-2.5 rounded-md bg-sol-bg-alt border border-sol-cyan/40 text-sol-text placeholder:text-sol-text-dim focus:outline-none"
             />
           )}
-          {getSearchText && (
+          {toolsShown && getSearchText && (
             <button
               onClick={() => {
                 if (showSearch && searchQuery) { setSearchQuery(""); }
@@ -1243,8 +1276,10 @@ export function GenericListView<T>({
               <Search className="w-3.5 h-3.5" />
             </button>
           )}
-          {filters && <AddFilterMenu defs={filters.defs} variant="header" active={filters.defs.some(filterIsSet)} />}
-          <DisplayMenu
+          {/* A phone's hosted header keeps the title, the scope and one way
+              to add; filter and display wait for a wider screen. */}
+          {toolsShown && filters && <span className={hosted ? "max-sm:hidden contents" : "contents"}><AddFilterMenu defs={filters.defs} variant="header" active={filters.defs.some(filterIsSet)} /></span>}
+          {toolsShown && <span className={hosted ? "max-sm:hidden contents" : "contents"}><DisplayMenu
             groupBy={groupBy}
             groupOptions={groupOptions}
             onGroupChange={onGroupChange ? (v) => { onGroupChange(v); setFocusIndex(0); } : undefined}
@@ -1258,7 +1293,7 @@ export function GenericListView<T>({
             onSortDirChange={onSortDirChange ? () => { onSortDirChange(); setFocusIndex(0); } : undefined}
             extra={displayExtra}
             onCopyLink={shareUrl ? copyViewLink : undefined}
-          />
+          /></span>}
           {viewInternals && <button
             onClick={() => openPalette("root")}
             className="cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
@@ -1266,13 +1301,24 @@ export function GenericListView<T>({
           >
             <Command className="w-3 h-3" />K
           </button>}
-          <button
-            onClick={onCreate}
-            className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
-            title="Create new"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          {hosted && quickAdd ? null : hosted && createLabel ? (
+            <button
+              onClick={onCreate}
+              data-cc-list-create
+              className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/60 text-xs text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" aria-hidden />
+              {createLabel}
+            </button>
+          ) : (
+            <button
+              onClick={onCreate}
+              className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
+              title="Create new"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          )}
         </div>
         </div>
 
@@ -1426,7 +1472,7 @@ export function GenericListView<T>({
       {/* Content area */}
       {customContent ? customContent({ openPaletteForItems, openContextMenuForItems }) : (
         <div className="flex-1 flex overflow-hidden">
-          <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          <div ref={scrollRef} data-list-scroll className="flex-1 overflow-y-auto">
             {quickAdd && <QuickAddRow inputRef={quickAddRef} {...quickAdd} />}
             {rowModel.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
@@ -1497,7 +1543,6 @@ export function GenericListView<T>({
  *  the next. Esc leaves the field so the list's keys answer again. */
 function QuickAddRow({ placeholder, onAdd, inputRef }: { placeholder: string; onAdd: (title: string) => void; inputRef: React.RefObject<HTMLInputElement | null> }) {
   const [text, setText] = useState("");
-  const [focused, setFocused] = useState(false);
   return (
     <form
       data-cc-quick-add
@@ -1515,14 +1560,13 @@ function QuickAddRow({ placeholder, onAdd, inputRef }: { placeholder: string; on
         ref={inputRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
         onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.blur(); }}
         placeholder={placeholder}
         aria-label={placeholder}
         className="min-w-0 flex-1 bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none"
       />
-      {!focused && <KeyCap size="xs">c</KeyCap>}
+      {/* No "c" keycap: the row is hosted mode's, where the key works only
+          on the list page and a lone letter on the row read as stray text. */}
     </form>
   );
 }

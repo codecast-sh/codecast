@@ -9,6 +9,7 @@ import { useState } from "react";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { askFirstFor } from "./askFirst";
+import { MODE_WORDS } from "../../lib/surfaceRules";
 
 export type ConnectAvailability = {
   /** The deployment's answer; undefined until it has given one. */
@@ -75,9 +76,11 @@ export const ASKS = {
   focus: "Find a free hour for me to focus this week",
   morning: "Every weekday at 8, tell me what's on today",
   planWeek: "Help me plan my week. Ask me what's on my plate first.",
-  sayNo: "Help me write a kind note saying no to an invitation",
+  sayNo: "Write a kind note declining a friend's dinner invitation",
   compare: "Compare the three best rated robot vacuums for a small apartment",
-  trip: "Plan a relaxed weekend away for two, with a rough budget",
+  // An ask that carries its own assumptions, so the first answer is a plan
+  // rather than a list of questions back.
+  trip: "Plan a relaxed weekend away for two next month, a short drive from home, about $800 all in",
   mondays: "Every Monday at 9, remind me to plan the week",
 } as const;
 
@@ -100,5 +103,25 @@ export function assistantPromise(mail: boolean): string {
     : `I draft notes, compare options, keep your lists and run routines. ${askFirstFor(null)}`;
 }
 
+/** What happens to the person's data, said beside the promise on every door
+ *  (the marketing section, /welcome's sign in, the pricing door) and linked
+ *  to /privacy, whose "No AI training" line it repeats. Mail is named only
+ *  where it can be connected. */
+export function assistantPrivacy(mail: boolean): string {
+  return mail
+    ? "Your mail is read only when you ask, nothing is sent without your OK, and your data never trains AI models."
+    : "Nothing is sent or changed without your OK, and your data never trains AI models.";
+}
+
+/** What the plans count, said once under them: a request is one ask and its answer. */
+export const REQUEST_MEANS = "A request is one thing you ask and the answer you get back.";
+
 /** Said on the first ask where mail cannot be connected yet, so the gap reads as planned. */
 export const MAIL_COMING = "Mail and calendar are coming soon.";
+
+/** Integrations' subtitle in hosted mode, read from the same gate as the
+ *  Whisk row so the page never says mail works one line above "Coming soon".
+ *  The present tense only once Connect is open. */
+export function integrationsLedeFor(mailOpen: boolean): string {
+  return mailOpen ? MODE_WORDS.hosted.integrationsLede : "Mail and calendar are coming, through Whisk, our mail app";
+}

@@ -67,12 +67,12 @@ describe("hosted mode implies the calm presentation", () => {
     expect(resolveInboxCompact(ui)).toBe(true);
   });
 
-  test("a pick made in hosted mode wins there, and leaves the developer picks alone", () => {
-    const ui = { lane: "simple", visual_style: "minimal" as const, simple_view: false, hosted_visual_style: "classic" as const, hosted_inbox_compact: false };
-    expect(resolveVisualStyle(ui)).toBe("classic");
-    expect(resolveSimpleView(ui)).toBe(false);
+  test("hosted mode is always Minimal, and its picks leave the developer picks alone", () => {
+    const ui = { lane: "simple", visual_style: "classic" as const, simple_view: false, hosted_visual_style: "classic" as const, hosted_inbox_compact: false };
+    expect(resolveVisualStyle(ui)).toBe("minimal");
+    expect(resolveSimpleView(ui)).toBe(true);
     expect(resolveInboxCompact(ui)).toBe(false);
-    expect(resolveVisualStyle({ ...ui, lane: "full" })).toBe("minimal");
+    expect(resolveVisualStyle({ ...ui, lane: "full" })).toBe("classic");
   });
 
   test("leaving hosted mode restores the stored picks", () => {
@@ -177,7 +177,9 @@ describe("pages belong to surfaces", () => {
       for (const hidden of ["Changes", "Changes: risks only", "Code", "Files", "Ops", "Ops: issues", "Workflows", "Line", "Line settings", "Evals", "Memory"]) {
         expect(labels).not.toContain(hidden);
       }
-      expect(labels).toEqual(expect.arrayContaining(["Inbox", "To-dos", "Notes", "Routines", "Pages", "Search", "Settings"]));
+      expect(labels).toEqual(expect.arrayContaining(["Inbox", "To-dos", "Notes", "Routines", "Search", "Settings"]));
+      expect(labels).not.toContain("Shared links");
+      expect(labels).not.toContain("Pages");
     }
     // An account in hosted mode that runs a machine still reaches its pages.
     expect(palettePages(surfaceMode(true, false), allOn, true).map((r) => r.label)).toContain("Devices");
@@ -194,7 +196,7 @@ describe("pages belong to surfaces", () => {
 describe("one rule for actions in the palette and the shortcuts sheet", () => {
   const hosted = surfaceMode(true, true);
   test("fleet verbs, tabs and panes are developer only; a family is covered by its prefix", () => {
-    for (const action of ["tab.new", "tab.next", "pane.split", "workbench.3", "session.deferAdvance", "msg.fork", "terminal.toggle", "vault.quickSwitch"]) {
+    for (const action of ["tab.new", "tab.next", "pane.split", "workbench.3", "msg.queue", "msg.fork", "terminal.toggle", "vault.quickSwitch"]) {
       expect(actionSurface(action)).not.toBeNull();
       expect(actionShownIn(hosted, action)).toBe(false);
       expect(actionShownIn(DEVELOPER_MODE, action)).toBe(true);
@@ -204,6 +206,13 @@ describe("one rule for actions in the palette and the shortcuts sheet", () => {
     for (const action of ["session.next", "session.pin", "palette.toggle", "inbox.toggleFlatView"]) expect(actionShownIn(hosted, action)).toBe(true);
     expect(actionLabel("session.next", "Next session", true)).toBe("Next conversation");
     expect(actionLabel("session.next", "Next session", false)).toBe("Next session");
+  });
+  // Navigation and the triage loop are not about code: a hosted power user
+  // keeps the recent switch, send-and-next, defer-and-next and the page keys.
+  test("navigation and triage keys stay in hosted mode; the page keys name hosted pages", () => {
+    for (const action of ["session.mruSwitch", "msg.sendAdvance", "session.deferAdvance", "app.section1", "app.section5"]) expect(actionShownIn(hosted, action)).toBe(true);
+    expect(actionLabel("app.section3", "Third section", true)).toBe("Go to To-dos");
+    expect(actionLabel("app.section3", "Third section", false)).toBe("Third section");
   });
   test("shortcut sections bound only by developer pages hide", () => {
     expect(helpContextSurface("diff")).toBe("diff");

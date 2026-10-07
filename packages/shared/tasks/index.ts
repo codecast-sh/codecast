@@ -13,6 +13,7 @@
  *   of competing with it in a flat list.
  */
 
+import { isHostedAgentType } from "../contracts/agentClients";
 export * from "./statuses";
 export * from "./relatedDocs";
 export * from "./foreignText";
@@ -77,6 +78,26 @@ export function isHumanOrigin(task: { source?: string | null }): boolean {
  * role on the board's Assignee and Chain groupings with no change of Source.
  * Web and mobile both filter with this, so the two boards cannot disagree.
  */
+/**
+ * Hosted mode's to-dos: a task is the assistant's (or the person's own errand)
+ * when no coding work made it. It belongs to no project or plan, and it was
+ * either asked for in an assistant conversation or written by hand outside any
+ * session. `source_agent_type` is the agent of the conversation that created
+ * it. The To-dos page (web assistantScope) and the assistant's own list_tasks
+ * read this one rule, so "your to-dos" means the same rows in both.
+ */
+export function isAssistantTask(task: {
+  project_id?: unknown;
+  plan_id?: unknown;
+  created_from_conversation?: unknown;
+  conversation_ids?: readonly unknown[] | null;
+  source_agent_type?: string | null;
+}): boolean {
+  if (task.project_id || task.plan_id) return false;
+  if (task.created_from_conversation) return isHostedAgentType(task.source_agent_type);
+  return !task.conversation_ids?.length;
+}
+
 export function isOnHumanBoard(task: {
   source?: string | null;
   promoted?: boolean | null;

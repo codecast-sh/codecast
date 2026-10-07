@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { surfaceMode } from "../surfaceRules";
-import { paletteActions, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, paletteValue, queryAsksToCreate, type PaletteTargetType } from "../paletteActions";
+import { PALETTE_TAIL_MORE, PALETTE_TAIL_SEARCH, paletteActions, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, paletteValue, queryAsksToCreate, type PaletteTargetType } from "../paletteActions";
 import { resolvePaletteTarget } from "../paletteTarget";
+import { paletteSearchValue } from "../paletteRowValues";
 
 const session = { _id: "session-1", user_id: "me", agent_type: "claude_code", message_count: 3, title: "Example" };
 const keys = (type: PaletteTargetType, row: any = session, user = "me") => paletteActions(type, [row], user, true).map(a => a.key);
@@ -188,6 +189,23 @@ describe("command tree targeting", () => {
 });
 
 describe("palette item ranking", () => {
+  test("a title hit on any kind outranks a snippet hit, and the tail rows come last in order", () => {
+    const q = "passport";
+    const todo = paletteItemScore("__entity__ Renew passport before end of October |||t1", q);
+    const note = paletteItemScore("__entity__ Passports |||d1", q);
+    const titled = paletteItemScore(paletteSearchValue({ conversationId: "c1", title: "Passport renewal", matches: [{ content: "my passport" }] }), q);
+    const snippet = paletteItemScore(paletteSearchValue({ conversationId: "c2", title: "Add dentist task", matches: [{ content: "renew the passport" }] }), q);
+    const more = paletteItemScore(`${PALETTE_TAIL_MORE} more-in-everything`, q);
+    const full = paletteItemScore(PALETTE_TAIL_SEARCH, q);
+    const ask = paletteItemScore("__compose__ ask the codecast assistant hosted", q);
+    expect(todo).toBeGreaterThan(snippet);
+    expect(titled).toBeGreaterThan(snippet);
+    expect(note).toBeGreaterThan(todo);
+    expect(snippet).toBeGreaterThan(more);
+    expect(more).toBeGreaterThan(full);
+    expect(full).toBeGreaterThan(ask);
+  });
+
   test("a row that creates from the typed query loses to a real match", () => {
     const q = "emdash";
     const compose = paletteItemScore(`__compose__ vault new named note|||${q}`, q);

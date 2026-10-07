@@ -1,4 +1,5 @@
 import { AppLoader } from "../AppLoader";
+import { TranscriptSkeleton } from "./TranscriptSkeleton";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -31,6 +32,7 @@ import { formatDuration, formatFullTimestamp, formatRelativeTime, useRelativeTim
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
 import { DENSITY_OPTIONS } from "../../lib/conversationDensity";
+import { useHostedMode, useSurface } from "../../lib/surfaces";
 
 // The density dropdown's option list. Guests (unauthenticated share-link
 // viewers) get the local render densities only — the AI retellings need an
@@ -249,7 +251,14 @@ export function MessagesUnavailableState({
   // No "couldn't be loaded" panic — the recovery loop in useConversationMessages
   // keeps trying every second. Just show the loader; if it never lands the user
   // will see this indicator rather than a misleading error.
-  return <AppLoader className="min-h-0 bg-transparent py-10" size={32} />;
+  return <MessagesLoading />;
+}
+
+/** The loader a transcript shows while its messages are on the way: the
+ *  hosted skeleton (TranscriptSkeleton) in hosted
+ *  mode, the logo loader otherwise. */
+function MessagesLoading() {
+  return useHostedMode() ? <TranscriptSkeleton /> : <AppLoader className="min-h-0 bg-transparent py-10" size={32} />;
 }
 
 // Is the block this banner describes still in force? The conversation row's
@@ -668,13 +677,16 @@ export function ConversationMetadata({
  *  its last message), else it runs to now. */
 export function ConversationAgeFacts({ startedAt, endedAt, messageCount, conversationId }: { startedAt?: number; endedAt?: number; messageCount?: number; conversationId?: string }) {
   const relativeTime = useRelativeTime();
+  // The count and the running duration are a session's working parts; in
+  // hosted mode a conversation says only when it began, whatever the style.
+  const internals = useSurface("conversation.internals");
   if (!startedAt && !messageCount) return null;
   return (
     <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-shrink-0">
       {startedAt && (
         <span className="flex-shrink-0" title={formatFullTimestamp(startedAt)}>{relativeTime(startedAt)}</span>
       )}
-      {messageCount !== undefined && messageCount > 0 && (
+      {internals && messageCount !== undefined && messageCount > 0 && (
         <button
           className="hidden sm:flex items-center gap-1 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer"
           title="Copy conversation ID"
@@ -684,7 +696,7 @@ export function ConversationAgeFacts({ startedAt, endedAt, messageCount, convers
           <span>{messageCount} {messageCount === 1 ? "msg" : "msgs"}</span>
         </button>
       )}
-      {startedAt && (
+      {internals && startedAt && (
         <span className="hidden sm:flex items-center gap-1 flex-shrink-0 cq-sq1">
           <span className="text-sol-text-dim">&middot;</span>
           <span>{formatDuration(startedAt, endedAt)}</span>

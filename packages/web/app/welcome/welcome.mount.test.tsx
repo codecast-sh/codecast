@@ -260,6 +260,18 @@ describe("/welcome", () => {
     thinking = true;
   });
 
+  test("an errand carried in is asked at once, with no second tap, and lands", async () => {
+    setMail(false);
+    sessionStorage.setItem("codecast-welcome-ask", "Compare robot vacuums");
+    await open();
+    await settle(() => !!container().querySelector("[data-landed]"));
+    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/conversation/");
+    await settle(() => starts.length > 0);
+    expect(starts[starts.length - 1]).toMatchObject({ agent_type: "codecast", first_message: "Compare robot vacuums" });
+    expect(sessionStorage.getItem("codecast-welcome-ask")).toBeNull();
+    starts.length = 0;
+  });
+
   test("a connection read that never answers still reaches Start after the deadline", async () => {
     unanswered("whiskConnection");
     await open();

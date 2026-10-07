@@ -2,6 +2,7 @@
 // scheduled-task frame an inject run arrives in, the prompt header a spawned
 // run opens with, and a role's run with its card, folded to one line.
 import { useState } from "react";
+import Link from "next/link";
 import { ChevronDown, ChevronRight, CornerDownLeft, Zap } from "lucide-react";
 import { WORKER_SETTLE_WORDS, parseScheduledTask, roleCardInitiativeLine, withoutStashedRunNote, type ScheduledTaskFrame, type WaitingSession } from "@codecast/shared/contracts";
 import { AREA_STATUS_WORDS } from "@codecast/shared/contracts/orgAreas";
@@ -162,12 +163,30 @@ function WorkerReportBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; ti
   );
 }
 
-export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
+/** A hosted routine's run in its conversation: one quiet line naming the
+ *  routine and when it ran, linking to the routine's page. The instruction is
+ *  the routine's own words to the assistant, never shown as a message. */
+function HostedRoutineRunLine({ frame, timestamp }: { frame: ScheduledTaskFrame; timestamp: number }) {
+  const at = new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const id = frame.trigger || frame.task_id;
+  return (
+    <div className="mx-auto conv-col py-1" data-hosted-routine-run={id}>
+      <p className="text-[12.5px] leading-snug text-sol-text-dim" title={formatFullTimestamp(timestamp)}>
+        <span>Routine · </span>
+        {id ? <Link href={`/triggers/${id}`} data-cc-inline-link className="text-sol-text-muted no-underline hover:underline">{frame.title || "Routine"}</Link> : <span className="text-sol-text-muted">{frame.title || "Routine"}</span>}
+        <span>{` · ${at}`}</span>
+      </p>
+    </div>
+  );
+}
+
+export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false }: { content: string; timestamp: number; hosted?: boolean }) {
   const [showPlumbing, setShowPlumbing] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const spawned = parseSpawnedTaskPrompt(content);
   const frame = spawned ? null : parseScheduledTask(content);
+  if (hosted && frame) return <HostedRoutineRunLine frame={frame} timestamp={timestamp} />;
   if (frame?.role) return <RoleWakeBlock frame={frame} timestamp={timestamp} />;
   if (frame?.workers?.length) return <WorkerReportBlock frame={frame} timestamp={timestamp} />;
   const title = spawned?.title || frame?.title || "Trigger Run";

@@ -59,14 +59,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => setLock((cur) => (cur === locked ? null : cur));
   }, []);
   const shownTheme = lock ?? theme;
-  // Hosted mode keeps its own pick and starts Minimal (resolveVisualStyle);
-  // the developer pick is left alone, so leaving hosted mode restores it.
+  // Hosted mode is always Minimal (resolveVisualStyle); the developer pick is
+  // left alone, so leaving hosted mode restores it.
   // Hosted mode as the shell reads it: the preference, or until it is known
   // the device's last known mode (lib/surfaces isHostedMode).
   const hosted = useInboxStore(isHostedMode);
   const lane = hosted ? "simple" : "full";
-  const hostedStyle = useInboxStore((s) => s.clientState.ui?.hosted_visual_style);
-  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle, hosted_visual_style: hostedStyle, lane });
+  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle, lane });
 
   // One custom property on the root; the stylesheet mixes the fill from it.
   useWatchEffect(() => {
@@ -134,15 +133,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Written only once someone is signed in: a client state that hydrated with
   // nobody (a lapsed token, an empty cache) says nothing about their mode and
   // must not clear the flag for the next cold load.
-  const hostedMinimal = hosted && resolveVisualStyle({ visual_style: visualStyle, hosted_visual_style: hostedStyle, lane }) === "minimal";
   const signedIn = useInboxStore((s) => !!s.currentUser);
   useWatchEffect(() => {
     if (!styleReady || !signedIn || lock) return;
-    localStorage.setItem("codecast-hosted-look", hostedMinimal ? "1" : "0");
+    localStorage.setItem("codecast-hosted-look", hosted ? "1" : "0");
     // The boot's guess (laneBoot.ts markLanePage) has served its purpose:
     // from here the hosted-mode class says the mode.
     document.documentElement.removeAttribute(HOSTED_BOOT_ATTR);
-  }, [hostedMinimal, styleReady, signedIn, lock]);
+  }, [hosted, styleReady, signedIn, lock]);
 
   const toggleTheme = useCallback(() => {
     const current = useInboxStore.getState().clientState.ui?.theme ?? initialTheme;
@@ -150,10 +148,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [initialTheme, updateClientUI]);
 
   const setVisualStyle = useCallback((style: VisualStyle) => {
-    if (hosted) {
-      updateClientUI({ hosted_visual_style: style });
-      return;
-    }
+    if (hosted) return;
     setVisualStyleState(style);
     updateClientUI({ visual_style: style });
   }, [updateClientUI, hosted]);

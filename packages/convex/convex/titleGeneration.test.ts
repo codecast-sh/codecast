@@ -493,3 +493,17 @@ describe("a replaced title stays findable", () => {
     expect((await read()).first_prompt).toBe("build e2e a music video with a k pop song");
   });
 });
+
+describe("a hosted conversation's title pass", () => {
+  const rows = [{ _id: "m1", role: "user", content: "Every weekday at 7am remind me to take my vitamins", timestamp: 1 }];
+  test("asks for the person's words, not the developer's", () => {
+    const hosted = titleRequest(selectTitleInput({ spine: rows, latest: rows }, { agent_type: "codecast", message_count: 1 }));
+    expect(hosted.prompt).toStartWith("Name this conversation between a person and their assistant.");
+    expect(hosted.prompt).toContain('"Vitamin reminder setup" (say "Vitamin reminder")');
+    expect(hosted.prompt).not.toContain("git branch");
+  });
+  test("a coding session keeps the developer prompt", () => {
+    const coding = titleRequest(selectTitleInput({ spine: rows, latest: rows }, { agent_type: "claude_code", message_count: 1 }));
+    expect(coding.prompt).toStartWith("Generate a title and subtitle for this session.");
+  });
+});

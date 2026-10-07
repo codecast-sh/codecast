@@ -97,3 +97,13 @@ test("a new schedule starts a new cadence: a slot kept from a detour is dropped"
   expect(task.run_at).toBe(runAt);
   expect(task.cadence_slot_at).toBeUndefined();
 });
+
+test("a wall-clock cadence keeps its time through daylight saving and skips the days it leaves out", () => {
+  const cadence = { zone: "America/New_York", minutes: 8 * 60, weekdays: [1, 2, 3, 4, 5] };
+  const friday = Date.parse("2026-10-30T12:00:00Z"); // 8:00 AM EDT
+  const next = nextArmingAfterRun({ schedule_type: "recurring", interval_ms: D, run_at: friday, cadence }, friday + 40 * M);
+  // Monday, after the clocks went back on Sunday: still 8:00 AM, now EST.
+  expect(next).toEqual({ status: "scheduled", run_at: Date.parse("2026-11-02T13:00:00Z"), cadence_slot_at: undefined });
+  // A kept slot ahead of now still wins.
+  expect(nextArmingAfterRun({ schedule_type: "recurring", interval_ms: D, run_at: friday + 5 * M, cadence_slot_at: friday + D, cadence }, friday + 10 * M).run_at).toBe(friday + D);
+});

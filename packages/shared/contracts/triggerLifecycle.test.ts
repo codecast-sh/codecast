@@ -124,6 +124,18 @@ describe("triggerRunFrame", () => {
     expect(parseScheduledTask(frame)).toMatchObject({ trigger: "tr-1", role, body: "Check your area." });
   });
 
+  // A hosted routine wakes the hosted assistant, which has no cast to follow:
+  // its frame is the instruction alone, stashed or not.
+  test("a hosted routine's frame is its instruction alone", () => {
+    const hosted = { _id: "t3", short_id: "tr-3", title: "Morning to-do review", prompt: "List my open to-dos.", hosted_home: true };
+    for (const stashed of [false, true]) {
+      const frame = triggerRunFrame(hosted, { role: null, stashed });
+      expect(frame).not.toContain("Trigger lifecycle defaults");
+      expect(frame).not.toContain("STASHED");
+      expect(parseScheduledTask(frame)).toMatchObject({ trigger: "tr-3", title: "Morning to-do review", body: "List my open to-dos." });
+    }
+  });
+
   // A focus a person gave one run (orgReview.ts): named on the frame, its
   // words ahead of the routine's own, and gone from the next plain run.
   test("a focused run names its focus and leads with the focus's words; an unknown key is no focus", () => {

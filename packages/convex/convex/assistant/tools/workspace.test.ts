@@ -3,7 +3,7 @@
 // the person's own workspace, and the routine rules of their plan hold. Then
 // toolsFor: only the tools the person's Whisk connection allows, and a note
 // for what is missing.
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { allModules as modules } from "../../testModules.testkit";
 import { runTool, type Tool } from "@platform/agent";
@@ -84,6 +84,25 @@ describe("tasks", () => {
     const done = (await call("list_tasks", { filter: "done" })).text;
     expect(done).toContain(dropped);
     expect((await call("list_tasks", { filter: "all" })).details).toEqual({ tasks: 2 });
+  });
+
+  test("list_tasks lists the To-dos page's rows: no coding agent's task, no task in a project or plan", async () => {
+    const { t, user, call } = await setup();
+    await call("create_task", { title: "Buy stamps" });
+    const coding = await t.run((ctx) => ctx.db.insert("conversations", { user_id: user, agent_type: "claude_code", status: "active", started_at: Date.now(), updated_at: Date.now() } as any));
+    for (const title of ["Buy the CASA assessment", "Ship the plan step", "Written by hand"]) await call("create_task", { title });
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("tasks").collect()) {
+        if (row.title === "Buy the CASA assessment") await ctx.db.patch(row._id, { created_from_conversation: coding });
+        if (row.title === "Ship the plan step") await ctx.db.patch(row._id, { plan_id: "p1" as any });
+        if (row.title === "Written by hand") await ctx.db.patch(row._id, { created_from_conversation: undefined });
+      }
+    });
+    const open = (await call("list_tasks")).text;
+    expect(open).toContain("Buy stamps");
+    expect(open).toContain("Written by hand");
+    expect(open).not.toContain("CASA");
+    expect(open).not.toContain("plan step");
   });
 
   test("a task outside the person's own workspace is neither listed nor changed", async () => {
@@ -313,7 +332,7 @@ describe("memory doc lookup", () => {
 describe("routines", () => {
   test("a routine is a trigger bound to this conversation, listed and cancelled here", async () => {
     const { t, user, conversationId, call } = await setup();
-    const set = await call("schedule_routine", { instruction: "Summarize my unread mail", title: "Morning mail", first_run: "2030-01-02T08:00:00-08:00", repeat_every_hours: 24 });
+    const set = await call("schedule_routine", { instruction: "Summarize my unread mail", title: "Morning mail", first_run: "2030-01-02T08:00:00-08:00" });
     const id = set.details.routine_id;
     const row = await t.run(async (ctx) => (await ctx.db.query("agent_tasks").collect())[0]);
     expect(row).toMatchObject({
@@ -321,8 +340,6 @@ describe("routines", () => {
       originating_conversation_id: conversationId,
       created_by_conversation_id: conversationId,
       agent_type: HOSTED_AGENT_TYPE,
-      schedule_type: "recurring",
-      interval_ms: 24 * 3_600_000,
       run_at: Date.parse("2030-01-02T16:00:00Z"),
       status: "scheduled",
       title: "Morning mail",
@@ -331,6 +348,51 @@ describe("routines", () => {
     expect((await call("cancel_routine", { id })).text).toBe(`Cancelled routine ${id}.`);
     expect((await call("list_routines")).text).toContain("No routines on this conversation.");
     await expect(call("cancel_routine", { id: "tr-nope" })).rejects.toThrow("No routine tr-nope");
+  });
+
+  test("a routine at a time of day keeps it on their clock, and weekdays start on the next weekday", async () => {
+    const { t, user, call } = await setup();
+    await t.run((ctx) => ctx.db.patch(user, { timezone: "America/New_York" } as any));
+    // Saturday at 8 in New York, asked for weekdays: the first run is Monday at 8.
+    const set = await call("schedule_routine", { instruction: "Send you a short news summary", first_run: "2030-01-05T08:00:00-05:00", days: ["mon", "tue", "wed", "thu", "fri"] });
+    expect(set.text).toContain('"repeats": "weekdays at 8:00 AM"');
+    const row = await t.run(async (ctx) => (await ctx.db.query("agent_tasks").collect())[0]);
+    expect(row).toMatchObject({
+      schedule_type: "recurring",
+      interval_ms: 24 * 3_600_000,
+      run_at: Date.parse("2030-01-07T13:00:00Z"),
+      cadence: { zone: "America/New_York", minutes: 480, weekdays: [1, 2, 3, 4, 5] },
+    });
+    await expect(call("schedule_routine", { instruction: "x", first_run: "2030-01-05T08:00:00-05:00", days: ["mon"], repeat_every_hours: 24 })).rejects.toThrow("not both");
+    // A day or more apart is days plus time, never repeat_every_hours.
+    await expect(call("schedule_routine", { instruction: "x", first_run: "2030-01-05T08:00:00-05:00", repeat_every_hours: 24 })).rejects.toThrow("days plus time");
+  });
+
+  test("days and a time leave the first day to the server, which counts weekdays right", async () => {
+    // Wednesday, October 7, 2026, 8:35 AM in New York. Asked for "every
+    // Saturday", the model used to pass Sunday the 11th as first_run.
+    setSystemTime(new Date("2026-10-07T12:35:00Z"));
+    try {
+      const { t, user, call } = await setup();
+      await t.run((ctx) => ctx.db.patch(user, { timezone: "America/New_York" } as any));
+      const set = await call("schedule_routine", { instruction: "Remind you to water the plants", days: ["sat"], time: "09:00" });
+      expect(set.text).toContain('"repeats": "every Saturday at 9:00 AM"');
+      const row = await t.run(async (ctx) => (await ctx.db.query("agent_tasks").collect())[0]);
+      expect(row).toMatchObject({
+        schedule_type: "recurring",
+        interval_ms: 7 * 24 * 3_600_000,
+        run_at: Date.parse("2026-10-10T13:00:00Z"),
+        cadence: { zone: "America/New_York", minutes: 540, weekdays: [6] },
+      });
+      await call("schedule_routine", { instruction: "Remind you to submit your timesheet", days: ["tue"], time: "10:00", starts_on: "2026-11-01" });
+      const later = await t.run(async (ctx) => (await ctx.db.query("agent_tasks").collect()).find((r) => r.prompt.includes("timesheet")));
+      expect(later?.run_at).toBe(Date.parse("2026-11-03T15:00:00Z"));
+      await expect(call("schedule_routine", { instruction: "x", days: ["mon"] })).rejects.toThrow("needs its time");
+      await expect(call("schedule_routine", { instruction: "x", days: ["mon"], time: "6pm" })).rejects.toThrow("HH:MM");
+      await expect(call("schedule_routine", { instruction: "x" })).rejects.toThrow("first_run, or days and time");
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("the plan's rules hold: the free plan repeats at most daily", async () => {
@@ -450,7 +512,12 @@ describe("toolsFor", () => {
       expect(set.tools.map((x) => x.name)).toEqual(expect.arrayContaining(["search_mail", "suggest_reply", "send_mail", "list_events", "create_event"]));
       expect(set.note).toBe("");
       const result = await runTool(set.tools.find((x) => x.name === "search_mail")!, { query: "is:unread" }, { callId: "c" });
-      expect(posts).toEqual([{ url: "https://fox.convex.cloud/api/action", body: { path: "search:runFullSearch", args: { q: "is:unread", token: "app-token-123" }, format: "json" } }]);
+      // The search, then (finding nothing) the mailbox roster it names in its
+      // answer: both to Whisk, both with the token.
+      expect(posts).toEqual([
+        { url: "https://fox.convex.cloud/api/action", body: { path: "search:runFullSearch", args: { q: "is:unread", token: "app-token-123" }, format: "json" } },
+        { url: "https://fox.convex.cloud/api/query", body: { path: "sync:getAccount", args: { token: "app-token-123" }, format: "json" } },
+      ]);
       expect(JSON.stringify(result)).not.toContain("app-token-123");
     }));
 

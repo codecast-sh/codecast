@@ -53,6 +53,9 @@ export type TaskGroupContext = {
    *  projectInitiativeIndex): the Initiative axis reaches a task's initiative
    *  through its project, never from a field on the task. */
   initiativeOfProject?: Map<string, InitiativeRow> | null;
+  /** Hosted mode: a group header is its name and face, with no link out to
+   *  a profile or a role page. */
+  plainHeaders?: boolean;
 };
 
 const ctxStatuses = (ctx: TaskGroupContext | undefined): TeamTaskStatus[] =>
@@ -119,7 +122,7 @@ const assigneeAxis: TaskAxis = {
   compare: (a, b) => byTitle(a.sample?.assignee_info?.name, b.sample?.assignee_info?.name),
   header: (b, ctx) => {
     const info = assigneeOfKey(b.key, b.sample, ctx);
-    const href = isRoleAssignee(info)
+    const href = ctx.plainHeaders ? null : isRoleAssignee(info)
       ? { to: `/org/${info.role_short_id}`, label: "Open role" }
       : info?.github_username
         ? { to: `/team/${info.github_username}`, label: "Profile" }

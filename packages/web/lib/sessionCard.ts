@@ -1,6 +1,7 @@
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { cleanTitle } from "./conversationProcessor";
 import { conversationTitle } from "./conversationTitle";
+import { dayWords } from "./sameNameSuffix";
 
 // Small pure pieces of the inbox session card (components/inbox), shared with
 // its container.
@@ -25,4 +26,14 @@ export function formatIdleDuration(updatedAt: number | null | undefined): string
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+/** A row's time as the hosted rail says it, as Whisk's list does: "now"
+ *  within the minute, then a clock time today, "Yesterday", a weekday, a
+ *  date. The developer rail keeps its age (formatIdleDuration). */
+export function formatRowTime(updatedAt: number | null | undefined, hosted: boolean, now = Date.now()): string {
+  if (!hosted) return formatIdleDuration(updatedAt);
+  if (!updatedAt) return "";
+  if (now - updatedAt < 60_000) return "now";
+  return dayWords(updatedAt, now);
 }

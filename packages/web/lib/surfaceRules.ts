@@ -30,6 +30,12 @@ export const DEV_SURFACES = {
   "nav.threads": "developer",
   "nav.feed": "developer",
   "nav.initiatives": "developer",
+  // Saved views under To-dos and Notes in the rail. Hosted lists have no
+  // views to switch between, so each page is one plain row.
+  "nav.savedViews": "developer",
+  // Published pages: cast publish is a developer's tool and the hosted
+  // assistant has no publish step, so the page could only list an agent's work.
+  "nav.pages": "developer",
   // The rail's Agents group (workflows, the line, ops, the org and the
   // workspace's agent). In hosted mode Routines moves into Work and the
   // group goes, so the usage meter never sits under an empty heading.
@@ -52,6 +58,10 @@ export const DEV_SURFACES = {
   // A conversation's working parts in its menu: the resume commands, its
   // short id, restart, the model and agent panel, and the token counts.
   "conversation.internals": "developer",
+  // A transcript's navigation chrome: the message minimap, jump to top and
+  // the scroll progress rail. Hosted mode keeps only the arrow back to the
+  // latest message, shown while scrolled up.
+  transcriptNav: "developer",
   // The top bar's "Create Team" button for an account with no team. Settings'
   // Team page keeps the way in.
   "topbar.createTeam": "developer",
@@ -100,19 +110,32 @@ export const DEV_SURFACES = {
   // and the agent, model and message count. Without them a row is its title,
   // its time and one quiet line.
   "inbox.rowInternals": "developer",
+  // The inbox home with nothing open: the fleet board and the activity feed,
+  // with its Board/Feed toggle. Hosted mode's home is the assistant's start
+  // (EmptyState's hosted variant) with what waits on the person under it.
+  "inbox.fleetHome": "developer",
   // The conversations panel's head toggles for working a fleet: the team
   // board, old sessions and the favorites shelf. The view menu stays.
   "inbox.internals": "developer",
+  // The label and project chip strip in the conversations panel's head, with
+  // its "+N more" pill and New label button. Developer filing; hosted mode
+  // reaches labels through the palette if at all.
+  "inbox.labelStrip": "developer",
   // The routines strip at the foot of the conversations panel: counts,
   // running, overdue and needs-attention chips. Hosted mode shows one quiet
   // line naming the next routine instead.
   triageFooter: "developer",
-  // Integrations' services that only code work uses (GitHub, Linear, Sentry,
-  // PostHog, a product's own routes: AppDescriptor.developerOnly) and the
-  // product sources Ops reads.
+  // Integrations' services the hosted assistant does not reach (every one
+  // but those marked AppDescriptor.assistantReaches) and the product sources
+  // Ops reads.
   "settings.devIntegrations": "developer",
-  // Integrations' Chrome extension block, which pairs the extension with the CLI.
-  "settings.browserExtension": "machine",
+  // Settings' Sync & Privacy: which folders and coding-agent clouds sync and
+  // which repositories a team sees. Hosted mode's Privacy section says what
+  // happens to the person's data instead.
+  "settings.sync": "developer",
+  // Integrations' Chrome extension block, which pairs the extension with the
+  // CLI: a developer's setup step, even for an account that runs a machine.
+  "settings.browserExtension": "developer",
   // What mods add to the rail (an "Open bugs" list) and to the palette (a
   // "Bug Desk" group): a workspace's own tooling, not one person's errands.
   "mods.sidebar": "developer",
@@ -139,7 +162,9 @@ export const DEV_SURFACES = {
   "lists.internals": "developer",
   // A search result's working detail: the role chip on a hit, "user only",
   // the team picker, how many worker sessions matched too, and the match or
-  // title tag. Hosted mode shows the conversation, the words found and when.
+  // title tag; on the full search page also its operators (file:, pr:), the
+  // Everyone/Only mine and My prompts segments and a hit's message count.
+  // Hosted mode shows the conversation, the words found and when.
   "search.internals": "developer",
   // The verbs for driving a fleet of sessions from the keyboard and the
   // palette: tabs, split panes, saved layouts, inbox views, the defer, dormant
@@ -186,6 +211,7 @@ export const MODE_WORDS = {
     agentsGroup: "Agents",
     conversations: "Sessions",
     conversation: "Session",
+    searchPagePlaceholder: 'Search sessions... "phrases", file: pr: commit:',
     thisConversation: "this session",
     triggers: "Triggers",
     trigger: "Trigger",
@@ -210,10 +236,19 @@ export const MODE_WORDS = {
     creatingTrigger: "Setting…",
     triggerCreated: "Trigger set",
     triggerCreateFailed: "Failed to set trigger",
+    // Run again on a finished trigger, its retry note, and the arrow on a
+    // trigger row nested under its conversation.
+    triggerRerun: "Re-armed: runs within ~30s",
+    triggerRerunHint: "re-arms, runs within ~30s",
+    triggerRetryTip: "The last run errored; the daemon is retrying",
+    triggerChildArrow: "Trigger: fires into this session",
     // Putting a conversation away (the inbox's row menu, swipe and the two
     // folded lists under it): stash keeps it running out of sight, kill
     // stops it.
     stash: "Stash",
+    // The inbox row's hover actions, as their tooltips say them.
+    stashTip: "Stash: set aside, keeps running",
+    killTip: "Kill: done, tears the agent down",
     stashed: "Stashed",
     noStashed: "No stashed sessions",
     kill: "Kill Session",
@@ -238,7 +273,8 @@ export const MODE_WORDS = {
     // receipts say ("Wrote a note", "Added a to-do").
     tasksPage: "Tasks",
     docsPage: "Docs",
-    pagesPage: "Pages",
+    newTask: "New task",
+    newDoc: "New document",
     // An approval's way to put it away without answering.
     dismissAsk: "Dismiss",
     dismissAskTip: "Dismiss without answering — the agent is not told",
@@ -246,6 +282,9 @@ export const MODE_WORDS = {
     openAsk: "",
     // The composer's resting text.
     composerPlaceholder: "Send a message...",
+    composerFollowUp: "Send a message...",
+    composerDeclined: "Send a message...",
+    composerAfterStop: "Send a message...",
     // The composer while an approval card waits on the person.
     composerApproval: "Approve or deny permission to continue...",
     // The palette's verb that puts a conversation back in the person's queue.
@@ -280,18 +319,20 @@ export const MODE_WORDS = {
   hosted: {
     newConversation: "New conversation",
     conversationsPanel: "Toggle conversations panel",
-    search: "Search conversations",
+    search: "Search everything",
     recentConversations: "Recent conversations",
     agentsGroup: "Assistant",
     conversations: "Conversations",
     conversation: "Conversation",
+    // The full search page's field.
+    searchPagePlaceholder: "Search your conversations",
     thisConversation: "this conversation",
     triggers: "Routines",
     trigger: "Routine",
     triggersPlural: "routines",
     newTrigger: "New routine",
     noTriggers: "No routines yet",
-    triggersLede: "Work your assistant does on a schedule",
+    triggersLede: "Work your assistant does on a schedule. Each run arrives in your inbox.",
     freshPerRun: "A new conversation each time",
     freshPerRunTip: "Every run starts a new conversation",
     skippedRun: "nothing new",
@@ -309,14 +350,20 @@ export const MODE_WORDS = {
     creatingTrigger: "Creating…",
     triggerCreated: "Routine created",
     triggerCreateFailed: "Couldn't create the routine",
+    triggerRerun: "Scheduled again",
+    triggerRerunHint: "Runs again in a moment",
+    triggerRetryTip: "The last run hit a problem, trying again",
+    triggerChildArrow: "Routine: runs in this conversation",
     stash: "Set aside",
+    stashTip: "Set aside: out of the list until you look for it",
+    killTip: "Close: done with it, kept under Archived",
     stashed: "Set aside",
     noStashed: "Nothing set aside",
     kill: "Close conversation",
     killConfirm: "Close",
     killAsk: "Close this conversation? You can still find it under Closed.",
     killed: "Closed",
-    putAway: "Put away",
+    putAway: "Archived",
     noKilled: "No closed conversations",
     killAllStashed: "Close everything set aside",
     killAllAsk: "Close every conversation you set aside?",
@@ -326,27 +373,42 @@ export const MODE_WORDS = {
     loadOlderKilledFailed: "Couldn't load older closed conversations",
     questionsPage: "Approvals",
     questionsTip: "Things waiting for your OK",
-    queueEmptyTitle: "Nothing needs your OK right now.",
+    queueEmptyTitle: "Nothing needs your OK right now",
     queueEmptyLede: "Before I send, change or delete anything, I'll ask here first.",
     tasksPage: "To-dos",
     docsPage: "Notes",
-    // Published pages, by what they are to someone who never wrote one: a
-    // link they shared, and never confused with a note.
-    pagesPage: "Shared links",
-    dismissAsk: "Not now",
+    newTask: "New to-do",
+    newDoc: "New note",
+    dismissAsk: "Later",
     dismissAskTip: "Puts this away without an answer. The assistant isn't told, and the question stays in its conversation.",
     openAsk: "Open",
-    composerPlaceholder: "Ask me anything, or tell me what to take off your plate",
+    composerPlaceholder: "Ask anything, or hand me a chore",
+    // A conversation that has its answer: what goes here follows from it.
+    // New chores start from + or the inbox.
+    composerFollowUp: "Reply, or ask a follow-up",
+    // After a no on an approval card: the next step is a change, not a new chore.
+    composerDeclined: "Tell me what to change",
+    // Under a stop notice (an error, an outage): the card carries its own
+    // action (Try again), so the composer offers only the other way on.
+    composerAfterStop: "Or ask something else",
     composerApproval: "Answer the card above, or tell me what to change",
     markNeedsInput: "Mark as waiting on me",
-    agentDoc: "assistant note",
-    agentDocs: "assistant notes",
-    integrationsLede: "Mail and calendar through Whisk, and the apps your assistant can use",
+    // The docs coding agents wrote: in hosted mode "assistant" is the
+    // person's own helper, whose notes are already in the list, and no
+    // hosted word names the agents themselves.
+    agentDoc: "technical note",
+    agentDocs: "technical notes",
+    // Integrations' subtitle once Connect is open; the settings header reads
+    // the gate (assistantPromise.ts integrationsLedeFor) and says "coming"
+    // until it is.
+    integrationsLede: "Your assistant reaches your mail and calendar through Whisk",
     teamConnectionsLede: "Shared by everyone on the team picked here. The keys stay with Codecast: your assistant asks Codecast to act and never holds them.",
     personalConnectionsLede: "Yours alone. Your assistant uses these wherever you work, unless a team has its own.",
     sectionQuestions: "Needs your answer",
     sectionNew: "New",
-    sectionNeedsInput: "Your turn to reply",
+    // A reply or an OK: both are the person's move. Never a row's own state
+    // words ("Waiting on you"), so a section and a row never read alike.
+    sectionNeedsInput: "Your move",
     sectionDormant: "Scheduled for later",
     sectionWorking: "Working on it",
     decisionsBadge: "to answer",
@@ -423,6 +485,8 @@ const PAGE_SURFACES: Record<string, DevSurface> = {
   // The team activity dashboard, the feed's page by another door.
   "/team/activity": "nav.feed",
   "/goals": "nav.initiatives",
+  "/pages": "nav.pages",
+  "/artifacts": "nav.pages",
   // The goals page's old address (lib/renamedPages.ts), which stored visits still carry.
   "/initiatives": "nav.initiatives",
   "/org": "nav.agentsGroup",
@@ -435,9 +499,13 @@ const PAGE_SURFACES: Record<string, DevSurface> = {
   // Agents talking among themselves.
   "/crosstalk": "nav.feed",
   // The pages behind settings' Machines group, and the machine views.
-  "/agent-features": "settings.machines",
-  "/config": "settings.machines",
-  "/capabilities": "settings.machines",
+  // Agent Config edits a coding agent's settings: no page for hosted mode,
+  // machine or not.
+  "/config": "pages.devTools",
+  // Tuning what agents can do (snippets, skills, MCP): developer pages even
+  // for an account that runs a machine.
+  "/agent-features": "pages.devTools",
+  "/capabilities": "pages.devTools",
   "/sessions": "settings.machines",
   "/resources": "settings.machines",
   "/settings/harness": "settings.machines",
@@ -458,21 +526,18 @@ const ACTION_SURFACES: Record<string, DevSurface> = {
   "tab.": "tabStrip",
   "pane.": "actions.fleet",
   "workbench.": "actions.fleet",
-  "app.section1": "actions.fleet",
-  "app.section2": "actions.fleet",
-  "app.section3": "actions.fleet",
-  "app.section4": "actions.fleet",
+  // The section keys (app.section1..5), the recent-conversation switch and
+  // the triage loop (send and go to the next, defer and advance) are plain
+  // navigation, so every mode keeps them; hosted mode's sections are its
+  // pages (HOSTED_SECTION_KEYS).
   "view.switch": "actions.fleet",
   "inbox.toggleTriageBar": "triageBar",
   "session.stashHide": "actions.fleet",
-  "session.deferAdvance": "actions.fleet",
   "session.dormantAdvance": "actions.fleet",
   "session.composeDock": "actions.fleet",
-  "session.mruSwitch": "actions.fleet",
   "msg.fork": "actions.fleet",
   "msg.forkSend": "actions.fleet",
   "msg.queue": "actions.fleet",
-  "msg.sendAdvance": "actions.fleet",
   "msg.sendDismiss": "actions.fleet",
   "msg.handoff": "composer.handoff",
   "conv.toggleTree": "actions.fleet",
@@ -481,8 +546,21 @@ const ACTION_SURFACES: Record<string, DevSurface> = {
   "compose.richToggle": "actions.fleet",
   "conv.toggleDiff": "diff",
   "terminal.toggle": "terminal",
+  // The team's faces and the comments rail are for working alongside others
+  // on a fleet; hosted mode's palette leaves them out.
+  "people.wall": "actions.fleet",
+  "sidebar.toggleComments": "actions.fleet",
   "anchor.toggle": "nav.agentsGroup",
   "vault.": "nav.files",
+  // Team chat's keys, a doc's developer type, assigning to a teammate, the
+  // product tours and the second inbox chord beside Cmd+1: none has a place
+  // in hosted mode's pages, so its sheet and palette leave them out.
+  "chat.search": "actions.fleet",
+  "chat.pushToTalk": "actions.fleet",
+  "doc.type": "actions.fleet",
+  "task.assign": "actions.fleet",
+  "ui.openTours": "actions.fleet",
+  "nav.inbox": "actions.fleet",
 };
 
 /** The surface an action belongs to, or null for one every mode offers. */
@@ -512,7 +590,19 @@ export function helpContextSurface(when: string | undefined): DevSurface | null 
 
 /** What an action is called in hosted mode, where the developer words would
  *  confuse. An action missing here reads the same in both modes. */
+/** Hosted mode's pages by number, Cmd+1 to Cmd+5 (HostedSectionKeys), in
+ *  the rail's order. The shortcuts sheet and the rail's hover keycaps read
+ *  the same list. */
+export const HOSTED_SECTION_KEYS: ReadonlyArray<{ action: "app.section1" | "app.section2" | "app.section3" | "app.section4" | "app.section5"; path: string; label: string }> = [
+  { action: "app.section1", path: "/inbox", label: "Inbox" },
+  { action: "app.section2", path: "/questions", label: "Approvals" },
+  { action: "app.section3", path: "/tasks", label: "To-dos" },
+  { action: "app.section4", path: "/docs", label: "Notes" },
+  { action: "app.section5", path: "/triggers", label: "Routines" },
+];
+
 export const HOSTED_ACTION_WORDS: Record<string, string> = {
+  ...Object.fromEntries(HOSTED_SECTION_KEYS.map((k) => [k.action, `Go to ${k.label}`])),
   "session.next": "Next conversation",
   "session.prev": "Previous conversation",
   "session.jumpIdle": "Next conversation waiting on you",
@@ -549,7 +639,7 @@ export function pageSurface(path: string): DevSurface | null {
  *  named by mode: the rail rows (SurfaceMode.page), the palette's Pages rows,
  *  tabs, the window title and the recent list (pathLabel, modePathLabel) all
  *  read it. */
-const MODE_PAGES: Record<string, keyof ModeWords> = { "/triggers": "triggers", "/questions": "questionsPage", "/tasks": "tasksPage", "/docs": "docsPage", "/pages": "pagesPage" };
+const MODE_PAGES: Record<string, keyof ModeWords> = { "/triggers": "triggers", "/questions": "questionsPage", "/tasks": "tasksPage", "/docs": "docsPage" };
 
 /** The mode's name for the page at `path`, or null when the page's name is
  *  the same in both modes. */

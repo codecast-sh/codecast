@@ -3,7 +3,7 @@
 // Every surface that lists work by who did it reads this module: the inbox
 // panel and its keyboard walk (chipMatchesSession), the rail and dock badges
 // (hooks/useNeedsInputCount), Approvals and its rail count, Routines and the
-// panel's next-routine strip. One rule, so none of them can drift.
+// panel's next-routine strip, To-dos and Notes. One rule, so none of them can drift.
 //
 // A leaf: no store, no React, so the pure placement code and the views share it.
 import { isHostedAgentType } from "@codecast/shared/contracts";
@@ -42,7 +42,30 @@ export const bySessionAgent = (row: { agent_type?: string | null }): boolean => 
 /** A routine is the assistant's when its home is a hosted conversation. */
 export const isAssistantRoutine = (task: { hosted_home?: boolean | null }): boolean => task.hosted_home === true;
 
+/** A to-do is the assistant's: one rule with the assistant's own list_tasks
+ *  (@codecast/shared/tasks isAssistantTask). */
+export { isAssistantTask } from "@codecast/shared/tasks";
+
+/** A note is the assistant's (or the person's own) when no coding work made
+ *  it: it belongs to no project or plan, it is a plain note rather than a
+ *  plan, spec or investigation an agent filed, and it was either written in
+ *  an assistant conversation or by hand outside any session. Read over the
+ *  notes shelf (@codecast/shared/docs isOnNotesShelf). `assistantConversations`
+ *  holds the assistant's conversation ids (useAssistantConversationIds). */
+export function isAssistantDoc(
+  doc: { project_id?: unknown; plan_id?: unknown; doc_type?: string | null; conversation_id?: unknown },
+  assistantConversations: ReadonlySet<string>,
+): boolean {
+  if (doc.project_id || doc.plan_id) return false;
+  if (doc.doc_type && doc.doc_type !== "note") return false;
+  return !doc.conversation_id || assistantConversations.has(String(doc.conversation_id));
+}
+
 /** The quiet line under a scoped list that says what Everything adds. */
 export function moreInEverything(hidden: number): string | null {
-  return hidden > 0 ? `${hidden.toLocaleString("en-US")} more in Everything` : null;
+  // A developer's fleet runs to four digits; past a handful the number only
+  // tells someone with a few of their own that a crowd of unknown work
+  // exists, so it is named without one.
+  if (hidden <= 0) return null;
+  return hidden < 10 ? `${hidden} more in Everything` : "More in Everything";
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useRouteMeta } from "../pageMeta";
 import { earlyAccessMailto } from "@/lib/siteLinks";
@@ -9,6 +10,14 @@ import { ComparisonList } from "../compare/ComparisonList";
 import { PLANS } from "@codecast/shared/contracts/assistant";
 import { planPoints, planPrice } from "@/components/simple/planWords";
 import { useUpgradesOpen } from "@/components/simple/billing";
+import { REQUEST_MEANS, assistantPromise, useConnectAvailable } from "@/components/simple/assistantPromise";
+import { AssistantPrivacyNote } from "@/components/simple/AssistantPrivacyNote";
+
+/** The family's faces and accent (@platform/design), as the marketing
+ *  page's assistant section and /welcome set them, for the assistant's door. */
+const READ = "var(--pd-font-read, Georgia, serif)";
+const UI = "var(--pd-font-ui, ui-sans-serif, system-ui)";
+const ACCENT = "var(--pd-accent, #cb4b16)";
 
 function CheckIcon({ className, color }: { className?: string; color: string }) {
   return (
@@ -67,7 +76,7 @@ const TIERS: Tier[] = [
       "Share and message sessions across members",
       "cast blame across the whole team",
       "Admin controls",
-      "Privacy controls — per-conversation visibility (full / summary / hidden)",
+      "Privacy controls: per-conversation visibility (full, summary or hidden)",
     ],
     cta: {
       label: "Request early access",
@@ -96,37 +105,36 @@ const TIERS: Tier[] = [
   },
 ];
 
+const TRACK_LINKS = [
+  { href: "#assistant", label: "The assistant" },
+  { href: "#teams", label: "For teams running coding agents" },
+] as const;
+
+/** Whether the visitor came through the assistant's door: its own anchor or
+ *  query on this page, or a referral from /welcome. */
+function cameForAssistant(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.location.hash === "#assistant" || new URLSearchParams(window.location.search).get("for") === "assistant") return true;
+  try {
+    return new URL(document.referrer).pathname.startsWith("/welcome");
+  } catch {
+    return false;
+  }
+}
+
 export default function PricingPage() {
   // Real page metadata in this SPA means writing document.title on mount; reuse the
   // blog surface's shared hook rather than duplicating the effect.
   useRouteMeta("/pricing");
   const upgradesOpen = useUpgradesOpen();
+  const [assistantFirst] = useState(cameForAssistant);
+  // The same promise about mail as #everyone and /welcome, behind the same gate.
+  const mail = useConnectAvailable().available === true;
 
-  return (
-    <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: "#fdf6e3" }}>
-      <MarketingNav active="/pricing" />
-
-      {/* Hero */}
-      <section className="max-w-4xl mx-auto px-6 pt-20 pb-8 text-center">
-        <div
-          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-6"
-          style={{ backgroundColor: "rgba(133,153,0,0.1)", color: "#859900" }}
-        >
-          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#859900" }}></span>
-          <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Pricing</span>
-        </div>
-        <h1 className="text-5xl md:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono" style={{ color: "#002b36" }}>
-          Honest pricing,<br />
-          <span style={{ color: "#93a1a1" }}>free where it counts</span>
-        </h1>
-        <p className="text-xl leading-relaxed max-w-2xl mx-auto" style={{ color: "#657b83" }}>
-          Free forever for individuals. A flat $20 per seat when your team is ready.
-          We are pre-revenue and say so — no invented tiers, no lock-in.
-        </p>
-      </section>
-
-      {/* Bring your own subscriptions — the differentiator, given weight */}
-      <section className="max-w-4xl mx-auto px-6 pb-14">
+  const teamsTrack = (
+    <>
+      {/* Bring your own subscriptions: the developer track's differentiator, given weight */}
+      <section id="teams" className="max-w-4xl mx-auto px-6 pb-14 scroll-mt-24">
         <div
           className="rounded-2xl p-8 md:p-10"
           style={{ backgroundColor: "#002b36", border: "1px solid #094959" }}
@@ -145,9 +153,9 @@ export default function PricingPage() {
                 Bring your own agent subscriptions
               </h2>
               <p className="text-lg leading-relaxed" style={{ color: "#93a1a1" }}>
-                Your Claude, OpenAI, and Gemini plans stay yours. Codecast never resells or marks up
-                model usage — you pay your model providers directly, at their price. We charge for the
-                shared memory and mission control on top, and nothing for the tokens underneath.
+                For your coding agents, your Claude, OpenAI, and Gemini plans stay yours. Codecast never
+                resells or marks up their model usage: you pay those providers directly, at their price. We
+                charge for the shared memory and mission control on top, and nothing for the tokens underneath.
               </p>
             </div>
           </div>
@@ -243,29 +251,37 @@ export default function PricingPage() {
         </div>
 
         <p className="text-center text-sm mt-8" style={{ color: "#93a1a1" }}>
-          Prefer to run it all yourself? Codecast is MIT licensed and self-hostable — clone it,
+          Prefer to run it all yourself? Codecast is MIT licensed and self-hostable: clone it,
           deploy it, own the whole stack.
         </p>
       </section>
 
+    </>
+  );
+
+  const assistantTrack = (
+    <>
       {/* The Codecast assistant: the hosted plans for people who do not
           write code. Every figure and word comes from the PLANS catalog
           through the same plan words Settings > Plan shows. */}
-      <section id="assistant" className="max-w-6xl mx-auto px-6 pb-20">
-        <div className="text-center max-w-2xl mx-auto mb-10">
-          <h2 className="text-3xl font-bold mb-3 font-mono" style={{ color: "#002b36" }}>
+      <section id="assistant" className="max-w-6xl mx-auto px-6 pb-20 scroll-mt-24">
+        <div className="text-center max-w-2xl mx-auto mb-10" style={{ fontFamily: UI }}>
+          <h2 className="text-[32px] leading-tight mb-3" style={{ color: "var(--pd-ink, #1f1a14)", fontFamily: READ, fontWeight: 500 }}>
             The Codecast assistant
           </h2>
-          <p className="text-lg leading-relaxed" style={{ color: "#657b83" }}>
-            For everyone, nothing to install. It runs your errands, notes and routines, and your mail
-            through Whisk, asking before anything goes out. We run the AI, so a plan covers it all.
+          <p className="text-lg leading-relaxed" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
+            {/* What it does, once: the hero (or the developer hero) already
+                says there is nothing to install and that plans include the
+                AI, and /welcome is where mail's arrival is said. */}
+            {assistantPromise(mail)}
           </p>
+          <AssistantPrivacyNote mail={mail} className="mt-3 text-[14px] leading-relaxed" style={{ color: "var(--pd-ink-faint, #8f8676)" }} />
         </div>
         <div className="grid md:grid-cols-3 gap-6 items-start">
           {Object.values(PLANS).map((plan) => (
-            <div key={plan.id} className="rounded-2xl p-7 h-full flex flex-col" style={{ backgroundColor: "#fdf6e3", border: "1px solid #eee8d5" }}>
+            <div key={plan.id} className="rounded-2xl p-7 h-full flex flex-col" style={{ backgroundColor: "var(--pd-bg-raised, #fdfbf6)", border: "1px solid var(--pd-rule, #e6dccb)", fontFamily: UI }}>
               <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="text-xl font-semibold font-mono" style={{ color: "#002b36" }}>{plan.label}</h3>
+                <h3 className="text-xl" style={{ color: "var(--pd-ink, #1f1a14)", fontFamily: READ, fontWeight: 500 }}>{plan.label}</h3>
                 {/* A paid plan says so while it cannot be bought yet, as the
                     app's Plan settings do (useUpgradesOpen). */}
                 {plan.price_usd > 0 && !upgradesOpen ? (
@@ -273,13 +289,13 @@ export default function PricingPage() {
                 ) : null}
               </div>
               <div className="flex items-baseline gap-2 mb-6">
-                <span className="text-4xl font-bold font-mono" style={{ color: "#002b36" }}>{planPrice(plan).replace(/ a month$/, "")}</span>
-                <span className="text-sm" style={{ color: "#657b83" }}>a month</span>
+                <span className="text-4xl tabular-nums" style={{ color: "var(--pd-ink, #1f1a14)", fontFamily: READ, fontWeight: 500 }}>{planPrice(plan).replace(/ a month$/, "")}</span>
+                <span className="text-sm" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>a month</span>
               </div>
               <ul className="space-y-3 flex-1">
                 {planPoints(plan).map((point) => (
-                  <li key={point} className="flex items-start gap-3 text-sm" style={{ color: "#586e75" }}>
-                    <CheckIcon className="w-5 h-5 shrink-0 mt-px" color="#cb4b16" />
+                  <li key={point} className="flex items-start gap-3 text-sm" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
+                    <CheckIcon className="w-5 h-5 shrink-0 mt-px" color={ACCENT} />
                     <span>{point}</span>
                   </li>
                 ))}
@@ -287,14 +303,80 @@ export default function PricingPage() {
             </div>
           ))}
         </div>
+        {/* The plans count requests; say once what one is. */}
+        <p className="mt-6 text-center text-[13.5px]" style={{ color: "var(--pd-ink-faint, #8f8676)", fontFamily: UI }}>{REQUEST_MEANS}</p>
         <div className="flex justify-center mt-8">
           <Link href="/welcome">
-            <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0" style={{ background: "#cb4b16" }}>
+            <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0" style={{ background: ACCENT, fontFamily: UI }}>
               Get started with the assistant
             </Button>
           </Link>
         </div>
       </section>
+
+    </>
+  );
+
+  return (
+    // Through the assistant's door the page sits on the family's paper
+    // (@platform/design), as the app and Whisk do, not Solarized cream.
+    <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: assistantFirst ? "var(--pd-bg, #f6f3ec)" : "#fdf6e3" }}>
+      <MarketingNav active="/pricing" door={assistantFirst ? "assistant" : undefined} />
+
+      {/* Hero. Through the assistant's door it speaks for the assistant in
+          the family's faces, as #everyone and /welcome do; otherwise it
+          names both products. */}
+      {assistantFirst ? (
+        <section className="max-w-3xl mx-auto px-6 pt-20 pb-8 text-center" style={{ fontFamily: UI }}>
+          <p className="mb-4 text-[14px] font-medium" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>Pricing</p>
+          <h1 className="text-[40px] md:text-[52px] leading-[1.1] mb-5" style={{ color: "var(--pd-ink, #1f1a14)", fontFamily: READ, fontWeight: 500 }}>
+            Free to start, nothing to install.
+          </h1>
+          <p className="text-lg leading-relaxed max-w-xl mx-auto" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
+            The assistant runs on our AI, so its plans include it. Free covers everyday asks each month,
+            with no card. Codecast for teams running coding agents has its own plans below.
+          </p>
+        </section>
+      ) : (
+      <section className="max-w-4xl mx-auto px-6 pt-20 pb-8 text-center">
+        <div
+          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-6"
+          style={{ backgroundColor: "rgba(133,153,0,0.1)", color: "#859900" }}
+        >
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#859900" }}></span>
+          <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Pricing</span>
+        </div>
+        <h1 className="text-5xl md:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono" style={{ color: "#002b36" }}>
+          Honest pricing,<br />
+          <span style={{ color: "#93a1a1" }}>free where it counts</span>
+        </h1>
+        <p className="text-xl leading-relaxed max-w-2xl mx-auto" style={{ color: "#657b83" }}>
+          Two products on one page. The assistant runs on our AI, so its plans include it. Codecast
+          for teams running coding agents is free for individuals and a flat $20 per seat for teams.
+        </p>
+      </section>
+      )}
+
+      {/* Two products, two tracks, labelled up top. Whoever came from the
+          assistant's door (its #assistant link, /welcome, or ?for=assistant)
+          reads its plans first; everyone else starts with the developer
+          product. */}
+      <nav aria-label="Pricing tracks" className="max-w-4xl mx-auto px-6 pb-12 flex flex-wrap justify-center gap-3">
+        {(assistantFirst ? TRACK_LINKS : [...TRACK_LINKS].reverse()).map((track) => (
+          <a
+            key={track.href}
+            href={track.href}
+            className="rounded-full px-4 py-2 text-sm font-medium"
+            style={assistantFirst
+              ? { border: "1px solid var(--pd-rule, #e4ddce)", color: "var(--pd-ink-muted, #6b6355)", backgroundColor: "var(--pd-bg-raised, #fdfbf6)", fontFamily: UI, fontSize: 14 }
+              : { border: "1px solid #eee8d5", color: "#586e75", backgroundColor: "#fdf6e3" }}
+          >
+            {track.label}
+          </a>
+        ))}
+      </nav>
+
+      {assistantFirst ? <>{assistantTrack}{teamsTrack}</> : <>{teamsTrack}{assistantTrack}</>}
 
       {/* CTA */}
       <section className="max-w-4xl mx-auto px-6 pb-20">

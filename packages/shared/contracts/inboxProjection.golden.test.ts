@@ -85,6 +85,14 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   16: "a4c19200765bdfca",
   // v17: the fresh hold removed; placement is v14's again.
   17: "d036ac035b87a1bb",
+  // v18: a dormant row sorts by when it parked, oldest first, rather than by
+  // the wake it sleeps on. In `buckets` and `sort-classes` only the dormant
+  // sort_at and sort_order moved; no placement did.
+  18: "842058368e90ebf4",
+  // v19: a hosted row settles without the idle grace. No fixture holds a
+  // hosted row, so none moved.
+  19: "842058368e90ebf4",
+  20: "842058368e90ebf4",
 };
 
 type Expected = {
