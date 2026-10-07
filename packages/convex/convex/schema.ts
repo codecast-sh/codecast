@@ -5937,6 +5937,8 @@ export default defineSchema({
       v.literal("ux"),
       v.literal("infra"),
       v.literal("data"),
+      // A change to the project's line itself (line-map.md LX6).
+      v.literal("line"),
     )),
     risk: v.optional(v.union(v.literal("low"), v.literal("review"), v.literal("plan"))),
     readiness: v.optional(v.union(

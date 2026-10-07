@@ -72,6 +72,8 @@ export const nodeFields = (id: string) => (NODE_FIELDS[id] ?? []).map((k) => LIN
 
 const isStationKind = (n: MapNode) => n.kind === "station" || n.kind === "decide" || n.kind === "ship" || n.kind === "watch";
 
+const ITEM_WORDS: Record<MapItem["kind"], string> = { signal: "signal", cause: "cause", run: "run", decision: "card" };
+
 const LEFT_WORDS: Record<MapLeft, string> = {
   moved: "moved on", failed: "failed", live: "still here", held: "held", reopened: "reopened", dissolved: "dissolved", dropped: "dropped", stopped: "stopped", parked: "parked",
 };
@@ -195,7 +197,8 @@ function kindWords(n: MapNode): string {
 }
 
 function emptyNow(n: MapNode): string {
-  if (n.kind === "source" || n.kind === "signals" || n.kind === "expectations") return "Signals do not wait here; they pass straight on.";
+  if (n.kind === "expectations") return "Expectations hold no work. Finders that judge behavior grade against them; Definition lists them.";
+  if (n.kind === "source" || n.kind === "signals") return "Signals do not wait here; they pass straight on.";
   if (n.kind === "end") return "An end holds nothing; Through lists what ended here.";
   if (n.kind === "causes") return "No cause waits to be built.";
   return "Nothing is at this step now.";
@@ -220,11 +223,11 @@ function Items({ items, now, tracing, onTrace, ageWord, right }: { items: MapIte
               {right ? right(it) : <>{ageShort(Math.max(0, now - it.at))}{ageWord ? ` ${ageWord}` : " ago"}</>}
             </span>
             <span className="lmap-item-sub">
-              <span>{it.kind === "run" ? "run" : it.kind}</span>
+              <span>{ITEM_WORDS[it.kind]}</span>
               {it.stuck && <span className="lmap-chip" data-tone="warn">stuck</span>}
               {it.stalled && <span className="lmap-chip" data-tone="warn">silent a day</span>}
               <span className="flex-1" />
-              <Link href={lineTraceHref(it.ref)} onClick={(e) => e.stopPropagation()} data-map-trace-link>its story</Link>
+              <Link href={lineTraceHref(it.ref)} onClick={(e) => e.stopPropagation()} data-map-trace-link title="Every step it took, from the first signal on">trace</Link>
               {href && <Link href={href} onClick={(e) => e.stopPropagation()}>open</Link>}
             </span>
           </li>
@@ -298,6 +301,7 @@ function Health({ node: n, label, sense, now }: { node: MapNode; label: string; 
 function healthyWords(n: MapNode, label: string): string {
   if (n.through === 0 && n.now.length === 0) return `Quiet: nothing reached it in the last ${label}.`;
   if (n.kind === "source") return "Filing as expected.";
+  if (n.kind === "end") return `${n.through} ended here in the last ${label}.`;
   return `Nothing wrong in the last ${label}.`;
 }
 
@@ -317,16 +321,12 @@ function Definition({ node: n, projectId, flow, now }: { node: MapNode; projectI
 }
 
 function ProfileValues({ node: n, projectId, flow, now }: { node: MapNode; projectId: string; flow: LineFlow; now: number }) {
-  const published = useInboxStore((s) => ((s.projects as Record<string, { line_profile?: PublishedLineProfile | null }>)[projectId]?.line_profile ?? null));
-  const roster = useInboxStore((s) => (s.machineRosterLive ? (s.machineRoster as RosterDevice[]) : null));
-  const edits = useLineProfileEdits(projectId, published);
-  const gate = useMemo(() => lineWriteGate(published, roster), [published, roster]);
+  const { edits, gate, device } = useLineProfileEditor(projectId);
   const lp = edits.lp;
   const fields = nodeFields(n.id);
   const finders = n.kind === "source" || n.kind === "signals";
   if (!fields.length && !finders) return null;
   if (!lp) return <p className="lmap-empty">This project has published no line profile, so its values are the defaults. In its checkout, run <code>cast line profile --publish</code>.</p>;
-  const device = gate.device ?? "the machine";
   const shown = n.kind === "source" ? { ...lp, finders: lp.finders.filter((f) => f.source.toLowerCase() === n.source?.toLowerCase()) } : lp;
   const sense = n.kind === "source" ? flow.sense.items.filter((s) => s.source.toLowerCase() === n.source?.toLowerCase()) : flow.sense.items;
   return (
@@ -357,8 +357,8 @@ function EdgePanel({ map, edge: e, byId, now, tracing, onTrace, onSelectNode, on
       data={{ "data-map-panel": e.id }}
     >
       <div className="flex gap-3 pt-3 text-[12px]">
-        {from && <button type="button" className="text-sol-blue hover:underline" onClick={() => onSelectNode(from.id)}>{from.label}</button>}
-        {to && <button type="button" className="text-sol-blue hover:underline" onClick={() => onSelectNode(to.id)}>{to.label}</button>}
+        {from && <button type="button" className="text-sol-text-dim hover:text-sol-text" onClick={() => onSelectNode(from.id)}>From <span className="text-sol-blue">{from.label}</span></button>}
+        {to && <button type="button" className="text-sol-text-dim hover:text-sol-text" onClick={() => onSelectNode(to.id)}>To <span className="text-sol-blue">{to.label}</span></button>}
       </div>
       <Section id="crossed" title="Crossed" aside={`${plural(e.count, "crossing")} in the last ${map.window.label}`}>
         {items.length ? <Items items={items} now={now} tracing={tracing} onTrace={onTrace} /> : <p className="lmap-empty">Nothing crossed in the last {map.window.label}.</p>}

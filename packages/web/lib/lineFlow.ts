@@ -148,8 +148,6 @@ export type BuildRow = {
   workflow: string | null;
   /** The step it is at (the node label), null when the run names none. */
   step: string | null;
-  /** Where a line run sits in LINE_STEPS (0 to 4), null for any other workflow. */
-  stepIndex: number | null;
   /** The shipped line, a project's customized copy, or null for another workflow. */
   line: LineRunKind | null;
 };
@@ -219,22 +217,6 @@ function runStep(run: LineFlowRun, node: LiveNode | null): string | null {
   return live?.phase ?? node?.label ?? null;
 }
 
-/** The line workflow's nodes folded into five steps, so In build can show
- *  how far along a run is. Gates and closing nodes fold into the step they
- *  belong to; a node outside the map (or another workflow) has no place. */
-export const LINE_STEPS = ["Plan", "Prove", "Build", "Check", "Card"] as const;
-const LINE_STEP_OF: Record<string, number> = {
-  ground: 0, park: 0, plan: 0, plan_gate: 0, analyze: 0,
-  prove: 1, red: 1, dissolve: 1,
-  implement: 2,
-  verify: 3, green: 3, eval: 3, review: 3,
-  card_draft: 4, card_write: 4, card: 4, decide: 4,
-};
-export function lineStepIndex(line: LineRunKind | null, node: Pick<LiveNode, "id"> | null): number | null {
-  if (!line || !node) return null;
-  return LINE_STEP_OF[node.id] ?? null;
-}
-
 /** A run's name: its task, its goal, its first phase, its workflow when that
  *  is a real name, and only then its step and a short id. */
 export function runName(run: LineFlowRun, task?: { title: string }, step?: string | null): { name: string; workflow: string | null } {
@@ -264,6 +246,15 @@ export const isGateCard = (d: LineDecision) => isLineCard(d) && d.gate_node_id =
 /** LE12: the quiet watch end stamps resolved_at; a close after it is a later
  *  ship of a reopened cause. */
 const resolvedQuietly = (t: LineCauseTask) => typeof t.resolved_at === "number" && t.resolved_at >= (t.closed_at ?? 0);
+
+/** When a closed cause's watch ended quiet (LE12), or null: swept, it carries
+ *  resolved_at; not swept yet, it still holds its past watch_until. The one
+ *  rule /line, the map and a trace read "held" by. */
+export function quietWatchEnd(t: LineCauseTask, now: number): number | null {
+  if (!terminal(t.status) || inWatch(t, now)) return null;
+  if (resolvedQuietly(t)) return t.resolved_at!;
+  return typeof t.watch_until === "number" ? t.watch_until : null;
+}
 
 /** The goal a cause names (LE5): an initiative ref ("in-3" or
  *  "in-3:metric"), a project ref, "none" (parked), or nothing yet. */
@@ -396,7 +387,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
     const node = runLiveNode(run);
     const step = runStep(run, node);
     const line = lineRunKind(run, forks);
-    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, stepIndex: lineStepIndex(line, node), line, ...runName(run, task, step) });
+    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, line, ...runName(run, task, step) });
   }
   buildItems.sort((a, b) => Number(a.stalled) - Number(b.stalled) || a.since - b.since);
   const fresh = buildItems.filter((b) => !b.stalled);
@@ -428,11 +419,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
     }
     if (terminal(t.status)) {
       const at = t.closed_at ?? t.updated_at ?? 0;
-      // A watch that ended quiet is resolved (LE12): swept, it carries
-      // resolved_at; not yet swept, it still holds its past watch_until.
-      const resolved = resolvedQuietly(t) || typeof t.watch_until === "number";
-      const outcome: ClosedOutcome = t.status === "dropped" || lineEnd.get(t._id)?.kind === "dissolved" ? "dissolved" : resolved ? "resolved" : "shipped";
-      const closedAt = outcome === "resolved" ? (t.resolved_at ?? t.watch_until ?? at) : at;
+      const quiet = quietWatchEnd(t, now);
+      const outcome: ClosedOutcome = t.status === "dropped" || lineEnd.get(t._id)?.kind === "dissolved" ? "dissolved" : quiet != null ? "resolved" : "shipped";
+      const closedAt = outcome === "resolved" ? quiet! : at;
       if (closedAt >= weekAgo) closedItems.push({ task: t, outcome, at: closedAt });
       continue;
     }
@@ -566,35 +555,6 @@ export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
   if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached the line yet", tone: "calm" }];
   if (awaiting.count === 0) parts.push({ text: parts.length ? "nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "clear" });
   return parts;
-}
-
-/** A block of In build rows: a step holding two or more runs gets a labelled
- *  group; runs alone at their step sit in an unlabelled block and carry the
- *  step as a chip. order is the row's keyboard index across blocks. */
-export type BuildBlock = { label: string | null; stalled: boolean; rows: Array<BuildRow & { order: number; chip: string | null }> };
-
-export function groupBuild(items: BuildRow[]): BuildBlock[] {
-  const labelOf = (b: BuildRow) => (b.stalled ? "stalled, silent a day" : b.step ?? (b.run.status === "pending" ? "starting" : null));
-  const counts = new Map<string, number>();
-  for (const b of items) { const l = labelOf(b); if (l) counts.set(l, (counts.get(l) ?? 0) + 1); }
-  const blocks: BuildBlock[] = [];
-  const byLabel = new Map<string, BuildBlock>();
-  for (const b of items) {
-    const l = labelOf(b);
-    const grouped = !!l && (counts.get(l) ?? 0) >= 2;
-    if (grouped) {
-      let block = byLabel.get(l!);
-      if (!block) { block = { label: l, stalled: b.stalled, rows: [] }; byLabel.set(l!, block); blocks.push(block); }
-      block.rows.push({ ...b, order: 0, chip: null });
-      continue;
-    }
-    const last = blocks[blocks.length - 1];
-    const block = last && last.label === null ? last : (blocks.push({ label: null, stalled: false, rows: [] }), blocks[blocks.length - 1]);
-    block.rows.push({ ...b, order: 0, chip: l });
-  }
-  let order = 0;
-  for (const block of blocks) for (const r of block.rows) r.order = order++;
-  return blocks;
 }
 
 // ── One project's line (line-profile.md LP1) ──
