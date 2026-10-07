@@ -14,15 +14,12 @@ import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfil
 import { useInboxStore } from "../../../store/inboxStore";
 import { useSyncDevices } from "../../../hooks/useSyncDevices";
 import { ALL_PROJECTS, NO_PROJECT, buildLineFlow, scopeLine } from "../../../lib/lineFlow";
-import {
-  LINE_SECTIONS, commandNote, editForField, fieldText, lineSettingsTarget, lineSource, lineValue, lineWriteGate,
-  type LineField, type RosterDevice,
-} from "../../../lib/lineSettings";
+import { LINE_SECTIONS, lineSettingsTarget, lineWriteGate, type RosterDevice } from "../../../lib/lineSettings";
 import { KeyCap } from "../../KeyboardShortcutsHelp";
 import { LineProjectSwitcher } from "../LineProjects";
 import { useLineFloor } from "../useLineFloor";
 import { LineFinders } from "./LineFinders";
-import { EditStatus, InlineEdit, LineValueRow } from "./LineValueRow";
+import { ProfileFieldRow } from "./ProfileFieldRow";
 import { useLineProfileEdits } from "./useLineProfileEdits";
 import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { LineStations } from "./LineStations";
@@ -31,9 +28,12 @@ import "./settings.css";
 
 const NAV = [...LINE_SECTIONS.map((s) => ({ id: s.id, title: s.title })), { id: "stations", title: "Stations" }];
 
-export function LineSettingsPage() {
+/** `embedded` is the line's settings as a panel of the map (line-map.md LX1):
+ *  the map holds the project switcher and the way back, so the panel drops its
+ *  own header and key footer, and `project` names the map's project. */
+export function LineSettingsPage({ project: pinned, embedded = false }: { project?: string; embedded?: boolean } = {}) {
   useSyncDevices();
-  const { now, projects, lineRows, rollup, line } = useLineFloor();
+  const { now, projects, lineRows, rollup, line } = useLineFloor(pinned);
   const project = useMemo(() => projects.find((p) => p._id === line.key) ?? null, [projects, line.key]);
   // The published copy by reference (the floor's project signature watches
   // only part of it), shown with the edits still travelling laid over it.
@@ -93,25 +93,18 @@ export function LineSettingsPage() {
     if (id !== inView) setInView(id);
   };
 
-  const commitField = (field: LineField) => (text: string) => {
-    const r = editForField(field, text, lp);
-    if ("error" in r) return r.error;
-    if (r.edit) edits.send([r.edit]);
-    return null;
-  };
-
   const lineHref = `/line${line.href.slice(line.href.indexOf("?"))}`;
 
   return (
     <div className="line-floor lset-floor h-full flex flex-col min-h-0" data-line-settings>
-      <header className="shrink-0 px-4 sm:px-6 pt-5 pb-3 flex flex-col gap-3">
+      {!embedded && <header className="shrink-0 px-4 sm:px-6 pt-5 pb-3 flex flex-col gap-3">
         <div className="flex items-baseline gap-3 min-w-0">
           <h1 className="text-[13px] font-semibold text-sol-text leading-none">Line settings</h1>
           <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">what one project's line listens to, holds work to, checks and limits</span>
           <Link href={lineHref} className="ml-auto text-[11.5px] text-sol-text-muted hover:text-sol-text whitespace-nowrap" data-lset-back>Back to the line</Link>
         </div>
         <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={line.select} />
-      </header>
+      </header>}
 
       {!project || !lp ? (
         <Unset lineKey={line.key} titled={project?.title} hasLines={rollup.length > 0} />
@@ -141,37 +134,9 @@ export function LineSettingsPage() {
                     />
                   ) : (
                     <div className="lset-rows">
-                      {section.fields.map((field) => {
-                        const value = lineValue(lp, field.key);
-                        const source = lineSource(lp, field.key);
-                        const s = edits.states[field.key];
-                        const reset = source === "file" && gate.writable ? () => edits.send([{ op: "remove", key: field.key }]) : undefined;
-                        return (
-                          <LineValueRow
-                            key={field.key}
-                            label={field.label}
-                            what={field.what}
-                            unit={field.unit}
-                            source={source}
-                            refused={s?.state === "refused"}
-                            note={value == null && field.key.startsWith("commands.") ? commandNote(lp, field.key) : null}
-                            status={<EditStatus s={s} device={device} now={now} onDismiss={() => edits.clear(field.key)} />}
-                            onReset={reset}
-                            defaultText={fieldText(field, lineValue(null, field.key))}
-                          >
-                            <InlineEdit
-                              text={fieldText(field, value)}
-                              label={field.label}
-                              placeholder={field.placeholder}
-                              multiline={field.kind === "list"}
-                              disabled={!gate.writable}
-                              display={field.kind === "list" && Array.isArray(value) && value.length ? <span className="lset-list">{value.map((v) => <span key={v}>{v}</span>)}</span> : undefined}
-                              onCommit={commitField(field)}
-                              onReset={reset}
-                            />
-                          </LineValueRow>
-                        );
-                      })}
+                      {section.fields.map((field) => (
+                        <ProfileFieldRow key={field.key} field={field} lp={lp} writable={gate.writable} states={edits.states} device={device} now={now} send={edits.send} clear={edits.clear} />
+                      ))}
                     </div>
                   )}
                 </section>
@@ -190,7 +155,7 @@ export function LineSettingsPage() {
 
       {/* The keys only where a value can be edited, and only where there is a
           keyboard to press them (settings.css hides it on narrow floors). */}
-      {project && lp && gate.writable && (
+      {!embedded && project && lp && gate.writable && (
         <footer className="lset-footer shrink-0 flex items-center gap-4 px-4 sm:px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim" data-lset-footer>
           <span className="flex items-center gap-1" title="Move between values"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap><span className="line-hint-text">values</span></span>
           <span className="flex items-center gap-1" title="Edit a value, then save it"><KeyCap size="xs">↵</KeyCap><span className="line-hint-text">edit, then save</span></span>

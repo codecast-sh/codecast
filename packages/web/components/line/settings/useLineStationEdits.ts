@@ -48,6 +48,8 @@ export function useLineStationEdits(projectId: string | null) {
   const clear = useCallback((station: string) => edits.clear(`stations.${station}`), [edits]);
 
   return {
+    /** A machine has published the project's profile, so the repo is the line's home (LX5). */
+    inRepo: !!published?.root && !!published?.device_id,
     /** Edits go to the machine that published the profile; false sends nothing (gate.reason says why). */
     writable: gate.writable,
     gate,

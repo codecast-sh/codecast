@@ -48,9 +48,11 @@ const asWorkflow = (row: any): LineWorkflow => ({
 const minutes = (seconds: number | undefined) => (seconds ? String(Math.round((seconds / 60) * 10) / 10) : "");
 const roles = (n: number) => `${n} ${n === 1 ? "role" : "roles"}`;
 
-/** focusStation (a link in, ?station=) opens that station's panel, opens the
- *  graph around it, and scrolls the panel into view. */
-export function LineStations({ projectId, focusStation }: { projectId: string; focusStation?: string | null }) {
+/** One project's stations and the way each is written: the repo's line once a
+ *  machine has published the project's profile (LX5), else the viewer's
+ *  customized copy, else the shipped line read only. The settings section and
+ *  a station's panel on the map (line-map.md LX3) read the same model. */
+export function useProjectStations(projectId: string) {
   const project = useInboxStore((s) => (s.projects?.[projectId] ?? null) as ProjectLike | null);
   const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const save = useInboxStore((s) => s.saveLineWorkflow);
@@ -59,7 +61,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const slug = useMemo(() => lineForkSlug(project ?? { _id: projectId }), [project, projectId]);
   // The repo is the line's home once a machine has published its profile (LX5).
   const repo = useLineStationEdits(projectId);
-  const inRepo = !!repo.published?.root && !!repo.published?.device_id;
+  const inRepo = repo.inRepo;
   // undefined while the server has not said; null once it said there is none.
   const forkRow = useWorkflowBySlug(slug);
   const fork = inRepo ? null : forkRow;
@@ -76,17 +78,6 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const edges = inRepo ? repo.edges : fork?.edges ?? SHIPPED_LINE.edges;
   const forkDiffs = useMemo(() => (fork ? stationDiffs(fork.nodes ?? [], SHIPPED_LINE) : {}), [fork]);
   const diffs = inRepo ? repo.diffs : forkDiffs;
-  const marked = useMemo(() => new Set(Object.keys(diffs)), [diffs]);
-  const changedCount = marked.size;
-
-  const [selectedId, setSelectedId] = useState<string | null>(focusStation ?? null);
-  useWatchEffect(() => { if (focusStation) setSelectedId(focusStation); }, [focusStation]);
-  const selected = nodes.find((n) => n.id === selectedId) ?? null;
-  const panel = useRef<HTMLDivElement>(null);
-  const arrived = !!focusStation && selected?.id === focusStation;
-  useEffect(() => {
-    if (arrived) panel.current?.scrollIntoView({ block: "center" });
-  }, [arrived, focusStation]);
 
   const customize = () => save(forkShippedLine(SHIPPED_LINE, project ?? { _id: projectId }), { create: true });
   const write = (next: Pick<LineWorkflow, "nodes"> & Partial<Pick<LineWorkflow, "edges">>) => {
@@ -101,6 +92,57 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
     for (const { role } of onFork) setRoleLine(role._id, "line");
     removeFork(slug);
   };
+  return { slug, repo, inRepo, fork, customized, rows, hostedHere, onFork, nodes, edges, diffs, customize, patchStation, resetOne, resetAll, stopCustomizing, setRoleLine };
+}
+
+/** One station's prompt, script and timeout, read and edited in place: the
+ *  Definition of a station's panel on the map (line-map.md LX3, LX5). */
+export function StationDefinition({ projectId, stationId }: { projectId: string; stationId: string }) {
+  const m = useProjectStations(projectId);
+  const node = m.nodes.find((n) => n.id === stationId);
+  if (!node) return <p className="lset-empty">This station is not on this project's line.</p>;
+  const { repo } = m;
+  return (
+    <div className="space-y-2" data-station-definition={stationId}>
+      <StationPanel
+        node={node}
+        line={m.inRepo && repo.source.kind === "repo" ? repo.source.line : SHIPPED_LINE}
+        editable={m.inRepo ? repo.writable : m.customized}
+        runsIt={m.inRepo || m.onFork.length > 0}
+        changed={m.diffs[node.id] ?? []}
+        onPatch={(patch) => m.patchStation(node.id, patch)}
+        onReset={() => m.resetOne(node.id)}
+        {...(m.inRepo ? {
+          status: <EditStatus s={repo.stateOf(node.id)} device={repo.gate.device ?? "the machine"} now={repo.now} onDismiss={() => repo.clear(node.id)} />,
+          pending: isTravelling(repo.stateOf(node.id)),
+        } : {})}
+      />
+      <p className="text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-station-home>
+        {m.inRepo
+          ? (repo.writable ? `Edits are written to the repo on ${repo.gate.device}, checked, and republished. Each run records the version it ran.` : repo.gate.reason)
+          : m.customized
+            ? (m.onFork.length ? "Edits save to this project's customized copy, which a role runs." : "Edits save to this project's customized copy. No role runs it yet.")
+            : <>This project runs the shipped line, read only here. <button type="button" className="underline underline-offset-2" onClick={m.customize} data-customize-line>Customize this line</button> to edit its stations.</>}
+      </p>
+    </div>
+  );
+}
+
+/** focusStation (a link in, ?station=) opens that station's panel, opens the
+ *  graph around it, and scrolls the panel into view. */
+export function LineStations({ projectId, focusStation }: { projectId: string; focusStation?: string | null }) {
+  const { slug, repo, inRepo, fork, customized, rows, hostedHere, onFork, nodes, edges, diffs, customize, patchStation, resetOne, resetAll, stopCustomizing, setRoleLine } = useProjectStations(projectId);
+  const marked = useMemo(() => new Set(Object.keys(diffs)), [diffs]);
+  const changedCount = marked.size;
+
+  const [selectedId, setSelectedId] = useState<string | null>(focusStation ?? null);
+  useWatchEffect(() => { if (focusStation) setSelectedId(focusStation); }, [focusStation]);
+  const selected = nodes.find((n) => n.id === selectedId) ?? null;
+  const panel = useRef<HTMLDivElement>(null);
+  const arrived = !!focusStation && selected?.id === focusStation;
+  useEffect(() => {
+    if (arrived) panel.current?.scrollIntoView({ block: "center" });
+  }, [arrived, focusStation]);
 
   const copy = <code style={{ color: "var(--sol-violet)" }}>{slug}</code>;
   if (inRepo) {
@@ -254,7 +296,7 @@ function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsI
   changed: string[];
   onPatch: (patch: StationPatch) => void;
   onReset: () => void;
-  onClose: () => void;
+  onClose?: () => void;
   /** The line the station's files are named from: the repo's when it has one. */
   line?: Pick<ShippedLine, "files">;
   /** The edit's journey to the repo, said in place of the copy's save note. */
@@ -295,7 +337,7 @@ function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsI
         <span className="flex-1" />
         <span className="inline-flex items-center gap-4">
           {editable && changed.length > 0 && <button type="button" className="lset-ghost" onClick={onReset} data-reset-station>Reset to shipped</button>}
-          <button type="button" className="lset-ghost" onClick={onClose} aria-label="Close station">Close</button>
+          {onClose && <button type="button" className="lset-ghost" onClick={onClose} aria-label="Close station">Close</button>}
         </span>
       </div>
 
