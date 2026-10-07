@@ -294,9 +294,11 @@ export function lineEditStatus(row: LineEditRow, lp: Facts, now: number): LineEd
   try { reply = JSON.parse(row.result ?? "{}"); } catch {}
   if (reply.changed === false) return { ...base, at, state: "saved" };
   if (reply.published?.ok === false) return { ...base, at, state: "saved", note: `Written to the file, but the republish failed: ${reply.published.detail ?? "no detail"}. This page shows the last published copy until the next publish.` };
-  // The republished copy is stamped after the write, so a row published since
-  // the answer already says what the file says.
-  if ((lp?.published_at ?? 0) >= at) return { ...base, at, state: "saved" };
+  // A copy published since the answer already says what the file says. When
+  // the machine republished as part of the edit, it stamps that copy before it
+  // answers, so any copy published since the request carries the edit.
+  const since = reply.published?.ok === true ? row.requested_at : at;
+  if ((lp?.published_at ?? 0) >= since) return { ...base, at, state: "saved" };
   if (now - at > LINE_EDIT_REPUBLISH_MS) return { ...base, at, state: "saved", note: "Written to the file. The republished copy has not arrived, so this page still shows the last one." };
   return { ...base, at, state: "publishing", slow: false };
 }
