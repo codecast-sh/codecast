@@ -985,6 +985,19 @@ How onboarding is wired (`packages/web/app/welcome/`):
   `useResetConfirm` in `hooks/useEmailAuth.ts`, which `/forgot-password` and
   `/reset-password` run too.
 
+### Polish round 6 (2026-10-06)
+
+- **Titles.** A hosted conversation is named from its first full answer:
+  `assistant/turns.ts finish` calls `titleGeneration.ts titleAfterHostedAnswer`
+  while no title pass has written a subtitle. The message-2 milestone fires
+  while the reply is still streaming, and its 5-minute floor used to leave the
+  ask itself as the title for good.
+- **Approval card.** What Yes does sits under the plan, above both buttons.
+  `answerDecision` returns its dispatch, so a refused answer re-enables the card
+  with `APPROVAL_REFUSED`. The plan box fades at its cut while more is below
+  (`useOverflows`, `clipFade`).
+- **Inbox row.** A wait for an OK says "Needs your OK" once, after the title.
+
 ## Working in this tree
 
 - The main checkout carries other sessions' uncommitted work. Never revert,

@@ -5,8 +5,8 @@
 // buildLineFlow), so both pages say the same thing about a finder.
 import { useState } from "react";
 import { splitFinderKind, type LineFinderInput, type LineProfileEdit, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
-import { ageShort, silentText, type SenseSource } from "../../../lib/lineFlow";
-import { finderInput } from "../../../lib/lineSettings";
+import { ageShort, isBuiltInSource, silentText, type SenseSource } from "../../../lib/lineFlow";
+import { finderInput, suggestFinder } from "../../../lib/lineSettings";
 import { ConfirmButton } from "../../integrations/parts";
 import { EditStatus, InlineEdit, SourceTag } from "./LineValueRow";
 import type { EditState } from "./useLineProfileEdits";
@@ -18,6 +18,16 @@ const kindText = (k: Finder["kind"]) => (k === "any" ? "any" : k.join(", "));
 /** The parts of a finder, what each is, and an example. The add form asks
  *  for the first four (the loader needs them); an existing finder edits the
  *  rest in place, its id being its name in the file. */
+/** A finder's grouping in plain words: `union:<key>` groups signals that
+ *  share a Union key. Anything else reads as its own pattern. */
+export function groupingWords(fingerprint: string): string {
+  const m = fingerprint.match(/^([\w.-]+):<([\w ]+)>$/);
+  if (!m) return `groups signals by ${fingerprint}`;
+  const [, prefix, key] = m;
+  const name = prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  return `groups signals that share ${/^[aeio]/i.test(name) ? "an" : "a"} ${name} ${key}`;
+}
+
 const FINDER_FIELDS: Array<{ key: "id" | "source" | "kind" | "fingerprint" | "runs"; what: string; placeholder: string; required: boolean }> = [
   { key: "id", what: "its name in the file", placeholder: "sentry-web", required: true },
   { key: "source", what: "the tool its reports come from", placeholder: "sentry", required: true },
@@ -41,7 +51,8 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
   clear: (key: string) => void;
 }) {
   const bySource = new Map(sense.map((s) => [s.source.toLowerCase(), s]));
-  const undeclared = sense.filter((s) => s.undeclared);
+  // Filing here without a declaration, declared finders or none (a person and lessons need none).
+  const undeclared = sense.filter((s) => !s.finder && s.week > 0 && !isBuiltInSource(s.source));
   const canEdit = writable && !readOnlyWhy;
   const [adding, setAdding] = useState(false);
 
@@ -49,9 +60,8 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
 
   return (
     <div className="lset-finders" data-lset-finders>
-      {lp.finders.length === 0 && (
-        <p className="lset-empty">Nothing files into this line on its own yet. A person can still file with <code>cast signal add</code>; a finder files for you.</p>
-      )}
+      {/* An undeclared finder's own box below says it once, with the action; no sentence repeats it. */}
+      {lp.finders.length === 0 && undeclared.length === 0 && <p className="lset-empty" data-lset-finders-empty>Nothing files into this line on its own yet. A person can still file with <code>cast signal add</code>; a finder files for you.</p>}
       {lp.finders.map((f, i) => {
         const health = bySource.get(f.source.toLowerCase());
         const key = `finders.${f.id}`;
@@ -100,16 +110,21 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
           </div>
         );
       })}
-      {undeclared.length > 0 && (
-        <p className="lset-undeclared" data-lset-undeclared>
-          Also filing here without a finder: {undeclared.map((s) => s.source).join(", ")}.
-        </p>
-      )}
-      <div className="lset-finders-foot">
+      {undeclared.map((s) => {
+        const f = suggestFinder(s);
+        return (
+          <div key={s.source} className="lset-declare" data-lset-undeclared={s.source}>
+            <span className="lset-declare-words"><b>{s.source}</b> filed {s.week} in 7d without a finder{canEdit ? `; declaring it ${groupingWords(f.fingerprint)}, which you can change after` : ""}.</span>
+            {canEdit && <button type="button" className="lset-add" onClick={() => send([{ op: "set_finder", finder: f }])} data-lset-declare={s.source}>Declare {s.source} as a finder</button>}
+          </div>
+        );
+      })}
+      {/* While a declare box is the whole story, the foot waits; with finders declared it sits in one row. */}
+      {!(lp.finders.length === 0 && undeclared.length > 0 && !adding) && <div className="lset-finders-foot">
         <SourceTag source={lp.sources?.finders ?? null} />
         {readOnlyWhy && <span className="lset-dim">{readOnlyWhy}</span>}
         {canEdit && !adding && <button type="button" className="lset-add" onClick={() => setAdding(true)} data-lset-focus>add a finder</button>}
-      </div>
+      </div>}
       {canEdit && adding && <AddFinder taken={lp.finders.map((f) => f.id)} onCancel={() => setAdding(false)} onAdd={(finder) => { setAdding(false); send([{ op: "set_finder", finder }]); }} />}
     </div>
   );
