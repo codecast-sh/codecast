@@ -82,6 +82,9 @@ signals {
   goal_hint     optional: the initiative metric key the finder believes it threatens
   observed_at, created_at
   task_id       the cause it attached to (LE4)
+  project_id    the cause's project, else the one it was filed for (LP1)
+  filed_for_project_id  set when the finder filed it for a project other
+                than its cause's (LE4)
   attach        "fingerprint" | "judge" | "new" | "person"
 }
 ```
@@ -93,8 +96,12 @@ line: the line starts at attach.
 
 `signals.ingest` attaches in order and records how:
 
-1. **Fingerprint.** An open cause already holding a signal with the same
-   `fingerprint` takes it. Deterministic.
+1. **Fingerprint.** An open cause in the workspace already holding a signal
+   with the same `fingerprint` takes it, in whatever project it sits.
+   Deterministic. One key is one problem even when a finder files it for a
+   different project later (a cluster whose top expectation moves): the cause
+   stays where it is, and the signal records `filed_for_project_id` so the
+   trace can say it was filed for another project.
 2. **Judge.** Otherwise the five closest open causes (text match on title and
    subject) go to one small call: "same cause as one of these, or none?". It
    answers with a task id, `none`, or `unsure`. `unsure` is `none`.

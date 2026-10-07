@@ -3,8 +3,9 @@
 //
 // A finder (a cron, a trigger, a person at `cast signal add`) types what it
 // saw and calls `ingest`. The door attaches the signal to one cause task, in
-// order: an open cause already holding the same fingerprint; else the cause
-// one small model call names among the five closest open causes; else a new
+// order: an open cause of the workspace already holding the same fingerprint,
+// in whatever project it sits; else the cause one small model call names among
+// the five closest open causes of the project; else a new
 // cause (source "signal", triage "suggested"). A cause still in watch
 // (tasks.watch_until in the future) that receives a signal reopens.
 //
@@ -147,12 +148,13 @@ async function authed(ctx: any, apiToken: string): Promise<Id<"users">> {
 }
 
 /**
- * The cause that already holds this fingerprint in the workspace (in the
- * project, when one is given): an open one, or one still in watch (which the
- * commit reopens). The newest signal wins when a fingerprint has reached more
- * than one cause.
+ * The cause that already holds this fingerprint in the workspace, in whatever
+ * project it sits: an open one, or one still in watch (which the commit
+ * reopens). A finder may file one key for different projects over time (a
+ * cluster whose top expectation moves), and one key is still one problem. The
+ * newest signal wins when a fingerprint has reached more than one cause.
  */
-export async function fingerprintCause(ctx: any, workspace: string, fingerprint: string, now: number, projectId: Id<"projects"> | null = null): Promise<Doc<"tasks"> | null> {
+export async function fingerprintCause(ctx: any, workspace: string, fingerprint: string, now: number): Promise<Doc<"tasks"> | null> {
   const rows = await ctx.db
     .query("signals")
     .withIndex("by_workspace_fingerprint", (q: any) => q.eq("workspace", workspace).eq("fingerprint", fingerprint))
@@ -164,7 +166,7 @@ export async function fingerprintCause(ctx: any, workspace: string, fingerprint:
     if (seen.has(key)) continue;
     seen.add(key);
     const task = await ctx.db.get(row.task_id);
-    if (task && task.workspace === workspace && inProject(task, projectId) && (isOpenCause(task) || inWatch(task, now))) return task;
+    if (task && task.workspace === workspace && (isOpenCause(task) || inWatch(task, now))) return task;
   }
   return null;
 }
@@ -277,7 +279,7 @@ export const attachInputs = internalQuery({
     const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
     const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, args.project))?._id ?? null;
     const signal = normalizeSignal(args.signal);
-    const hit = await fingerprintCause(ctx, db.workspaceKey, signal.fingerprint, Date.now(), projectId);
+    const hit = await fingerprintCause(ctx, db.workspaceKey, signal.fingerprint, Date.now());
     if (hit) return { fingerprint_hit: true, candidates: [] as CauseCandidate[] };
     return { fingerprint_hit: false, candidates: await nearestCauses(ctx, db.workspaceKey, signal, projectId) };
   },
@@ -305,15 +307,16 @@ function scopeOf(args: { workspace?: "personal" | "team"; team_id?: Id<"teams">;
 type WorkDb = Awaited<ReturnType<typeof createDataContext>>;
 
 /**
- * The attach decision and the writes, in one transaction. With a project, the
- * cause is found or opened inside it; the signal carries the project it was
- * filed into, else its cause's.
+ * The attach decision and the writes, in one transaction. A fingerprint hit
+ * attaches across the workspace; with a project, the judge's candidates and a
+ * new cause stay inside it. The signal carries its cause's project, else the
+ * one it was filed into, and names the filed project when the two differ.
  */
-export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null) {
+export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null, newCause: { category?: "line"; client_key?: string } = {}) {
   const workspace = db.workspaceKey;
   const observedAt = signal.observed_at ?? now;
   let attach: SignalAttach;
-  let task: Doc<"tasks"> | null = await fingerprintCause(ctx, workspace, signal.fingerprint, now, projectId);
+  let task: Doc<"tasks"> | null = await fingerprintCause(ctx, workspace, signal.fingerprint, now);
   if (task) {
     attach = "fingerprint";
   } else {
@@ -365,6 +368,9 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
       source: "signal",
       triage_status: "suggested",
       ...(projectId ? { project_id: projectId } : {}),
+      // A cause filed against the line itself (line-map.md LX6) names its
+      // category and the client's key for its optimistic row at birth.
+      ...newCause,
       attempt_count: 0,
       retry_count: 0,
       max_retries: 3,
@@ -388,7 +394,8 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     observed_at: observedAt,
     created_at: now,
     task_id: taskId,
-    project_id: projectId ?? task?.project_id,
+    project_id: task ? task.project_id : projectId ?? undefined,
+    ...(task && projectId && task.project_id !== projectId ? { filed_for_project_id: projectId } : {}),
     attach,
     reopened: reopened || undefined,
     role_id: signal.role_id ?? (await roleIdByHandle(ctx, signal.role_handle)),
@@ -625,6 +632,7 @@ function signalView(row: Doc<"signals">, task: Doc<"tasks"> | null) {
     reopened: row.reopened ?? false,
     task_id: row.task_id,
     project_id: row.project_id,
+    filed_for_project_id: row.filed_for_project_id,
     task_short_id: task?.short_id,
     task_title: task?.title,
     task_status: task?.status,
@@ -744,6 +752,7 @@ export const webList = query({
       created_at: row.created_at,
       task_id: row.task_id,
       project_id: row.project_id,
+      filed_for_project_id: row.filed_for_project_id,
       attach: row.attach,
       reopened: row.reopened ?? false,
     }));

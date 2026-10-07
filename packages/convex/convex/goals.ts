@@ -92,3 +92,12 @@ export const brief = query({
     return gatherGoalsBrief(ctx, { workspaceKey: db.workspaceKey, teamId, only, projectRows });
   },
 });
+
+/** The brief a cause is grounded against: its project's when it names one in its own workspace, else its workspace's. */
+export async function causeBrief(ctx: { db: any }, task: { workspace?: string; project_id?: unknown }): Promise<GoalsBrief> {
+  const workspaceKey = task.workspace!;
+  const teamId = workspaceKey.startsWith("team:") ? workspaceKey.slice("team:".length) : undefined;
+  const projectRows = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspaceKey)).take(2000);
+  const only = task.project_id ? projectRows.find((p: any) => String(p._id) === String(task.project_id)) ?? null : null;
+  return gatherGoalsBrief(ctx, { workspaceKey, teamId, only, projectRows });
+}
