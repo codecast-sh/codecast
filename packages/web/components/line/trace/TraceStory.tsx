@@ -68,7 +68,7 @@ export function TraceStory({ trace, rows, compact = false, onFocusNode }: TraceS
   const runById = useMemo(() => new Map(rows.runs.map((r) => [r._id, r as unknown as ReportRun])), [rows.runs]);
   const runBlocks = blocks.filter((b): b is RunBlockData => b.kind === "run");
   const lastRunId = runBlocks[runBlocks.length - 1]?.runId ?? null;
-  const focusSignal = rows.signals.find((s) => s._id === trace.focusId) ?? null;
+  const focusSignal = rows.signals.find((s) => s._id === trace.focusSignalId) ?? null;
   const ctx: Ctx = { trace, compact, onFocusNode, projectId: (trace.cause as { project_id?: string }).project_id ?? null };
   return (
     <ol className={cn("relative", compact ? "text-[12px]" : "text-[13px]")} data-trace-story={trace.cause.short_id ?? trace.cause._id} data-trace-outcome={trace.outcome} data-compact={compact ? "" : undefined}>
