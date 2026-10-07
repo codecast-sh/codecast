@@ -33,6 +33,7 @@ import { listSessionOwnerIds } from "./sessionOwners";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
+import { settleCardWaiting } from "./lineNotices";
 import { settleExpectationCard } from "./lib/expectationsApply";
 import { validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
@@ -642,6 +643,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await closeStackIfDone(ctx, row.stack_id, row._id, now);
   // An answered card gate is recorded and learned from (LE12).
   await learnFromCardGate(ctx, row, verdict, by.user_id);
+  // Its "card waiting" notice stops claiming a card waits (LE16).
+  await settleCardWaiting(ctx, row);
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
   // A dismissal delivers no message, so a hosted turn parked on this

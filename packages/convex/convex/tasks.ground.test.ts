@@ -42,4 +42,21 @@ describe("tasks.update ground fields", () => {
     expect(tables.tasks[0].goal_ref).toBe("pj-a");
     expect(tables.tasks[0].risk).toBe("low");
   });
+
+  test("a cause's goal must be one its own goals brief offers: its project, not another's", async () => {
+    const cause = { _id: "tasks_1", short_id: "ct-1", title: "t", user_id: OWNER, status: "open", source: "signal", workspace: "team:teams_u", team_id: "teams_u", project_id: "projects_me" };
+    const { ctx, tables } = await makeCtx(cause);
+    tables.projects = [
+      { _id: "projects_me", short_id: "pj-me", title: "Matching Engine", workspace: "team:teams_u", team_id: "teams_u", status: "active", goal: "More intros" },
+      { _id: "projects_aq", short_id: "pj-aq", title: "Agent Quality", workspace: "team:teams_u", team_id: "teams_u", status: "active", goal: "Zero clusters" },
+    ];
+    tables.initiatives = [];
+    tables.initiative_projects = [];
+    await expect(run(ctx, { goal_ref: "pj-aq" })).rejects.toThrow(/not one of ct-1's goals/);
+    expect(tables.tasks[0].goal_ref).toBeUndefined();
+    await run(ctx, { goal_ref: "pj-me" });
+    expect(tables.tasks[0].goal_ref).toBe("pj-me");
+    await run(ctx, { goal_ref: "none" });
+    expect(tables.tasks[0].goal_ref).toBe("none");
+  });
 });

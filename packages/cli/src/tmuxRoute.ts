@@ -53,13 +53,13 @@ export function hasSessionServer(session: string, env: NodeJS.ProcessEnv = proce
 }
 
 let enabledCache: { at: number; value: boolean } | null = null;
-/** Whether new agent sessions get their own server: macOS, and `tmux_server_per_session` in config.json. */
+/** Whether new agent sessions get their own server: on macOS unless `tmux_server_per_session` is false in config.json. */
 export function perSessionServersEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.CODECAST_TMUX_PER_SESSION) return env.CODECAST_TMUX_PER_SESSION === "1";
   if (process.platform !== "darwin") return false;
   const now = Date.now();
   if (!enabledCache || now - enabledCache.at > 10_000) {
-    enabledCache = { at: now, value: readLocalConfig()?.tmux_server_per_session === true };
+    enabledCache = { at: now, value: readLocalConfig()?.tmux_server_per_session !== false };
   }
   return enabledCache.value;
 }

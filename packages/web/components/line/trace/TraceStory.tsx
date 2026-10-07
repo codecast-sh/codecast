@@ -9,13 +9,15 @@
 // the version the map's panel holds.
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowUpRight, ChevronRight, RotateCcw } from "lucide-react";
+import { ArrowRight, ArrowUpRight, ChevronRight, RotateCcw } from "lucide-react";
 import { lineTabHref } from "../../../lib/lineSettings";
 import { runHref } from "../../../lib/decisionLinks";
 import { cn } from "../../../lib/utils";
 import { lineTraceHref as traceHref } from "../../../lib/line/lineMapUrl";
-import { traceBlocks, type LineTrace, type TraceArtifact, type TraceBlock, type TraceRows, type TraceRunRow, type TraceStatus, type TraceStep } from "../../../lib/line/lineTrace";
-import type { ReportRun, StepState } from "../../../lib/line/runReport";
+import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
+import { finderName, replacedWords, traceBlocks, type LineTrace, type TraceArtifact, type TraceBlock, type TraceRows, type TraceRun, type TraceRunRow, type TraceStatus, type TraceStep } from "../../../lib/line/lineTrace";
+import { runOutcome, type ReportRun, type StepState } from "../../../lib/line/runReport";
+import { useProjectExpectations, useSyncProjectExpectations } from "../../../hooks/useSyncProjectExpectations";
 import { ReportChip, RunOutcomeText, StepMark } from "../RunReport";
 
 /** "Sep 16, 2:05 PM": when a step happened. */
@@ -35,23 +37,25 @@ const STAGE_LABEL: Record<TraceStep["stage"], string> = {
   finding: "Finding", group: "Group", cause: "Cause", ground: "Ground", station: "Run", card: "Card", ship: "Ship", watch: "Watch", outcome: "Outcome",
 };
 
-/** The rail's dot: a step that happened is solid, one under way rings, one
- *  that has not happened is hollow. */
-const DOT: Record<TraceStatus, string> = {
-  done: "bg-sol-text-muted border-sol-text-muted",
+/** The rail's dot, and the path strip's: a step that passed is green, one
+ *  that stopped is red, one under way rings blue, one that has not happened
+ *  is hollow. One set of tokens, so the strip and the story read as one. */
+export const DOT: Record<TraceStatus, string> = {
+  done: "bg-sol-green border-sol-green",
   failed: "bg-sol-red border-sol-red",
-  current: "bg-sol-cyan/30 border-sol-cyan animate-pulse",
+  current: "bg-sol-blue/30 border-sol-blue animate-pulse",
   waiting: "bg-transparent border-sol-text-dim/60 border-dashed",
   skipped: "bg-transparent border-sol-border",
+  noted: "bg-sol-text-dim/50 border-sol-text-dim/70",
 };
 const TITLE_TONE: Record<TraceStatus, string> = {
-  done: "text-sol-text", failed: "text-sol-red", current: "text-sol-cyan", waiting: "text-sol-text-muted", skipped: "text-sol-text-dim",
+  done: "text-sol-text", failed: "text-sol-red", current: "text-sol-blue", waiting: "text-sol-text-muted", skipped: "text-sol-text-dim", noted: "text-sol-text-muted",
 };
 /** The outcome's own tone: a held fix is the line's good news. */
 const OUTCOME_DOT: Partial<Record<LineTrace["outcome"], string>> = { held: "bg-sol-green border-sol-green", dissolved: "bg-sol-text-dim border-sol-text-dim", dropped: "bg-sol-text-dim border-sol-text-dim" };
 const OUTCOME_TONE: Partial<Record<LineTrace["outcome"], string>> = { held: "text-sol-green" };
 
-const STEP_STATE: Record<TraceStatus, StepState> = { done: "done", failed: "failed", current: "live", waiting: "waiting", skipped: "noted" };
+const STEP_STATE: Record<TraceStatus, StepState> = { done: "done", failed: "failed", current: "live", waiting: "waiting", skipped: "noted", noted: "noted" };
 
 export type TraceStoryProps = {
   trace: LineTrace;
@@ -68,24 +72,85 @@ export function TraceStory({ trace, rows, compact = false, onFocusNode }: TraceS
   const runById = useMemo(() => new Map(rows.runs.map((r) => [r._id, r as unknown as ReportRun])), [rows.runs]);
   const runBlocks = blocks.filter((b): b is RunBlockData => b.kind === "run");
   const lastRunId = runBlocks[runBlocks.length - 1]?.runId ?? null;
-  const focusSignal = rows.signals.find((s) => s._id === trace.focusId) ?? null;
+  const focusSignal = rows.signals.find((s) => s._id === trace.focusSignalId) ?? null;
   const ctx: Ctx = { trace, compact, onFocusNode, projectId: (trace.cause as { project_id?: string }).project_id ?? null };
+  const endById = useMemo(() => new Map(trace.runs.map((r) => [r.runId, r])), [trace.runs]);
+  const repeats = useMemo(() => runRepeats(blocks, runById, endById), [blocks, runById, endById]);
+  // A step in the same minute as the one before it leaves its time unsaid (Finding, Group and Cause often share one).
+  const sameMinute = useMemo(() => {
+    const out = new Set<number>();
+    let prev: number | null = null;
+    blocks.forEach((b, i) => {
+      const at = b.kind === "run" ? b.at : b.step.at;
+      if (at == null) return;
+      const m = Math.floor(at / 60_000);
+      if (m === prev && b.kind === "step") out.add(i);
+      prev = m;
+    });
+    return out;
+  }, [blocks]);
   return (
     <ol className={cn("relative", compact ? "text-[12px]" : "text-[13px]")} data-trace-story={trace.cause.short_id ?? trace.cause._id} data-trace-outcome={trace.outcome} data-compact={compact ? "" : undefined}>
       {blocks.map((b, i) => {
         const last = i === blocks.length - 1;
         const nextFuture = !last && isFuture(blocks[i + 1]);
         if (b.kind === "run") {
+          const rep = repeats.get(b.runId);
+          // A run folded into the one before it is told there.
+          if (rep?.into) return null;
           const run = runById.get(b.runId) ?? null;
-          return <RunBlock key={b.runId} block={b} numbered={runBlocks.length > 1} run={run} superseded={b.runId !== lastRunId} last={last} nextFuture={nextFuture} ctx={ctx} />;
+          return <RunBlock key={b.runId} block={b} numbered={runBlocks.length > 1} run={run} superseded={b.runId !== lastRunId && !rep?.rounds.includes(runBlocks[runBlocks.length - 1]?.round ?? -1)} last={last} nextFuture={nextFuture} ctx={ctx} rounds={rep?.rounds} sameAs={rep?.sameAs} end={endById.get(b.runId)} />;
         }
         const s = b.step;
         const full = s.stage === "finding" && !compact && focusSignal?.detail_md ? focusSignal.detail_md : null;
-        return <StepItem key={s.id} step={s} last={last} nextFuture={nextFuture} ctx={ctx} fullWords={full} />;
+        return <StepItem key={s.id} step={s} title={stepTitle(s, trace, focusSignal?.source)} last={last} nextFuture={nextFuture} ctx={ctx} fullWords={full} hideAt={sameMinute.has(i)} />;
       })}
     </ol>
   );
 }
+
+/** A step's headline, never the cause's title again: the header already
+ *  says it. The finding is told as who saw it, the cause as the task it was
+ *  filed as, its kind and risk on the line under it (LX4). Every other step keeps its own words. */
+export function stepTitle(s: TraceStep, trace: LineTrace, source?: string | null): string {
+  const same = s.title.trim() === trace.cause.title.trim();
+  if (s.stage === "finding" && same) return `${finderName(source)} saw this`;
+  if (s.stage === "cause" && same) {
+    return `Filed as ${trace.cause.short_id || "a cause"}`;
+  }
+  return s.title;
+}
+
+/** Runs that ended the same way through the same steps. A run right after
+ *  its twin folds into it ("Runs 1 and 2"); a later one says which run it
+ *  repeats and keeps its steps folded, so six runs read as what differed.
+ *  Replaced runs (LX4) are twins by their end alone: each passed its steps
+ *  and lost its card to a newer run, which is the part worth reading. */
+type RunRepeat = { rounds: number[]; into?: string; sameAs?: number };
+function runRepeats(blocks: TraceBlock[], runById: Map<string, ReportRun>, endById: Map<string, TraceRun>): Map<string, RunRepeat> {
+  const out = new Map<string, RunRepeat>();
+  const firstBySig = new Map<string, number>();
+  let prev: { runId: string; sig: string } | null = null;
+  for (const b of blocks) {
+    if (b.kind !== "run") { prev = null; continue; }
+    const run = runById.get(b.runId);
+    // A live run is still writing its story; it never folds.
+    if (!run || b.status === "current") { prev = null; continue; }
+    const sig = endById.get(b.runId)?.end === "replaced" ? "replaced" : [runOutcome(run, null, 0, true).text, ...b.rows.flatMap((r) => (r.kind === "station" && !r.routine ? [`${r.step.nodeId}|${r.step.status}|${r.step.detail}`] : []))].join("\n");
+    if (prev && prev.sig === sig) {
+      out.get(prev.runId)!.rounds.push(b.round);
+      out.set(b.runId, { rounds: [b.round], into: prev.runId });
+      continue;
+    }
+    const seen = firstBySig.get(sig);
+    out.set(b.runId, { rounds: [b.round], ...(seen != null ? { sameAs: seen } : {}) });
+    if (seen == null) firstBySig.set(sig, b.round);
+    prev = { runId: b.runId, sig };
+  }
+  return out;
+}
+
+const roundsWords = (r: number[]) => (r.length === 2 ? `${r[0]} and ${r[1]}` : `${r.slice(0, -1).join(", ")} and ${r[r.length - 1]}`);
 
 type Ctx = { trace: LineTrace; compact: boolean; onFocusNode?: (id: string | null) => void; projectId: string | null };
 
@@ -102,7 +167,7 @@ function Rail({ dot, last, dashed, compact }: { dot: string; last: boolean; dash
   );
 }
 
-function StepItem({ step: s, last, nextFuture, ctx, fullWords }: { step: TraceStep; last: boolean; nextFuture: boolean; ctx: Ctx; fullWords: string | null }) {
+function StepItem({ step: s, title, last, nextFuture, ctx, fullWords, hideAt }: { step: TraceStep; title: string; last: boolean; nextFuture: boolean; ctx: Ctx; fullWords: string | null; hideAt?: boolean }) {
   const { trace, compact } = ctx;
   const outcome = s.stage === "outcome";
   const dot = (outcome && OUTCOME_DOT[trace.outcome]) || DOT[s.status];
@@ -110,6 +175,14 @@ function StepItem({ step: s, last, nextFuture, ctx, fullWords }: { step: TraceSt
   const future = s.status === "waiting" || s.status === "skipped";
   const [open, setOpen] = useState(false);
   const artifacts = s.artifacts.filter((a) => !(a.kind === "signal" && s.stage === "finding"));
+  // The page is the cause's own trace, so its step does not link to it again;
+  // the other causes a group names read as a list of titles, below.
+  const links = s.stage === "group" || (s.stage === "cause" && !compact) ? [] : s.links;
+  // The finding's source and kind are meta on its time line; its two links
+  // (where it was seen, the expectation it breaks) read as text links (LX4, LX7).
+  const finding = s.stage === "finding";
+  const meta = finding ? s.artifacts.find((a) => a.kind === "signal")?.label ?? null : null;
+  const breaks = finding ? s.artifacts.find((a) => a.kind === "expectation" && a.ref) ?? null : null;
   return (
     <li
       className={cn("grid gap-x-3", compact ? "grid-cols-[12px_1fr] pb-3" : "grid-cols-[14px_1fr] pb-5")}
@@ -119,8 +192,8 @@ function StepItem({ step: s, last, nextFuture, ctx, fullWords }: { step: TraceSt
     >
       <Rail dot={dot} last={last} dashed={nextFuture || future} compact={compact} />
       <div className="min-w-0">
-        <StepHead label={STAGE_LABEL[s.stage]} at={s.at} durationMs={s.durationMs} status={s.status} compact={compact} />
-        <div className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[14px] font-medium", tone)} data-trace-title>{s.title}</div>
+        <StepHead label={STAGE_LABEL[s.stage]} at={hideAt ? null : s.at} durationMs={s.durationMs} status={s.status} compact={compact} meta={meta} />
+        <div className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[14px] font-medium", tone)} data-trace-title>{title}</div>
         {s.detail && <p className={cn("mt-0.5 leading-snug", future ? "text-sol-text-dim" : "text-sol-text-muted", compact && "line-clamp-2")} data-trace-detail>{s.detail}</p>}
         {fullWords && fullWords.trim() !== s.detail && (
           <div className="mt-1">
@@ -131,13 +204,28 @@ function StepItem({ step: s, last, nextFuture, ctx, fullWords }: { step: TraceSt
             {open && <div className="mt-1 whitespace-pre-wrap rounded-md border border-sol-border/30 bg-sol-bg-alt/40 px-3 py-2 text-[12.5px] leading-relaxed text-sol-text-muted" data-trace-finder-text>{finderText(fullWords)}</div>}
           </div>
         )}
-        {(s.links.length > 0 || (!compact && artifacts.length > 0) || (s.stage === "finding" && s.artifacts.length > 0)) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {s.links.map((l) => <ReportChip key={l.href} href={l.href} external={l.external}>{l.label}</ReportChip>)}
-            {s.stage === "finding" && s.artifacts.filter((a) => a.kind === "signal").map((a) => <span key={a.label} className="text-[11.5px] text-sol-text-dim" data-trace-source>{a.label}</span>)}
-            {!compact && s.stage !== "group" && artifacts.map((a) => <ArtifactChip key={`${a.kind}:${a.label}`} a={a} projectId={ctx.projectId} />)}
-            {compact && s.stage === "finding" && artifacts.map((a) => <ArtifactChip key={`${a.kind}:${a.label}`} a={a} projectId={ctx.projectId} />)}
+        {finding && (links.length > 0 || breaks) && (
+          <div className="mt-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1" data-trace-finding-links>
+            {links.map((l) => <TextLink key={l.href} href={l.href} external={l.external}>{l.label}</TextLink>)}
+            {breaks && <BreaksLink id={breaks.ref!} projectId={ctx.projectId} />}
           </div>
+        )}
+        {!finding && (links.length > 0 || (!compact && artifacts.length > 0)) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {links.map((l) => <ReportChip key={l.href} href={l.href} external={l.external}>{l.label}</ReportChip>)}
+            {!compact && s.stage !== "group" && artifacts.map((a) => <ArtifactChip key={`${a.kind}:${a.label}`} a={a} projectId={ctx.projectId} />)}
+          </div>
+        )}
+        {s.stage === "group" && s.links.length > 0 && (
+          <ul className="mt-1.5 space-y-0.5" data-trace-other-causes>
+            {s.links.map((l) => (
+              <li key={l.href} className="flex items-baseline gap-2 min-w-0 text-[12px]" data-trace-other-cause={l.ref}>
+                <span className="w-1 h-1 shrink-0 self-center rounded-full bg-sol-border" aria-hidden />
+                <Link href={l.href} className="min-w-0 truncate text-sol-text-muted hover:text-sol-blue hover:underline decoration-sol-blue/40 underline-offset-2" title={`Trace ${l.ref ?? "this cause"}`}>{l.label}</Link>
+                {l.ref && <span className="shrink-0 text-[11px] text-sol-text-dim" data-trace-other-cause-where><span className="font-mono text-[10.5px]">{l.ref}</span>{l.note ? `, ${l.note}` : ""}</span>}
+              </li>
+            ))}
+          </ul>
         )}
         {s.stage === "group" && artifacts.length > 0 && <SiblingList artifacts={artifacts} compact={compact} focusRef={trace.via === "signal" || trace.via === "fingerprint" ? trace.focusId : null} />}
         {s.stage === "watch" && s.status === "failed" && artifacts.length > 0 && compact && <SiblingList artifacts={artifacts} compact />}
@@ -146,16 +234,39 @@ function StepItem({ step: s, last, nextFuture, ctx, fullWords }: { step: TraceSt
   );
 }
 
-/** The step's kicker: its stage, when it happened and how long it took. */
-function StepHead({ label, at, durationMs, status, compact, aside }: { label: ReactNode; at: number | null; durationMs: number | null; status: TraceStatus; compact: boolean; aside?: ReactNode }) {
+/** The step's kicker: its stage, when it happened, how long it took, and plain meta (a finding's source and kind). */
+function StepHead({ label, at, durationMs, status, compact, aside, meta }: { label: ReactNode; at: number | null; durationMs: number | null; status: TraceStatus; compact: boolean; aside?: ReactNode; meta?: string | null }) {
   return (
     <div className={cn("flex items-baseline gap-2 min-w-0", compact ? "text-[10.5px]" : "text-[11px]")}>
-      <span className={cn("shrink-0 font-semibold uppercase tracking-wider", status === "failed" ? "text-sol-red" : status === "current" ? "text-sol-cyan" : "text-sol-text-dim")}>{label}</span>
+      <span className={cn("shrink-0 font-semibold uppercase tracking-wider", status === "failed" ? "text-sol-red" : status === "current" ? "text-sol-blue" : "text-sol-text-dim")}>{label}</span>
       {at != null && <span className="shrink-0 text-sol-text-dim tabular-nums" data-trace-at>{when(at)}</span>}
       {durationMs != null && durationMs > 0 && <span className="shrink-0 text-sol-text-dim tabular-nums" data-trace-took>{status === "current" ? `${took(durationMs)} so far` : `took ${took(durationMs)}`}</span>}
+      {meta && <span className="min-w-0 truncate text-sol-text-dim" data-trace-source>{meta}</span>}
       {aside && <span className="ml-auto shrink-0">{aside}</span>}
     </div>
   );
+}
+
+/** A quiet text link with its arrow: out of the app (external) or to another page here. */
+function TextLink({ href, external, title, children }: { href: string; external?: boolean; title?: string; children: ReactNode }) {
+  const cls = "inline-flex items-baseline gap-0.5 min-w-0 text-[11.5px] text-sol-text-muted hover:text-sol-blue hover:underline decoration-sol-blue/40 underline-offset-2";
+  const body = <><span className="min-w-0 truncate">{children}</span>{external ? <ArrowUpRight className="w-3 h-3 shrink-0 self-center" /> : <ArrowRight className="w-3 h-3 shrink-0 self-center" />}</>;
+  return external
+    ? <a href={href} target="_blank" rel="noreferrer" className={cls} title={title} data-trace-link>{body}</a>
+    : <Link href={href} className={cls} title={title} data-trace-link>{body}</Link>;
+}
+
+/** The expectation a finding breaks, named by its own sentence from the
+ *  project's expectations (the store), never by its id; the id waits in the tooltip. */
+function BreaksLink({ id, projectId }: { id: string; projectId: string | null }) {
+  useSyncProjectExpectations(projectId);
+  const row = useProjectExpectations(projectId);
+  const text = row?.doc?.items.find((e) => e.id === id)?.text?.trim().replace(/[.\s]+$/, "") ?? null;
+  // The sentence's head is its short label ("An introduction email reaches both people and gives each what they need to act").
+  const label = text ? text.split(/[:;]\s/)[0].trim() : null;
+  const words = label ? `Breaks: ${label}` : "Breaks an expectation";
+  if (!projectId) return <span className="text-[11.5px] text-sol-text-dim" title={id} data-trace-breaks={id}>{words}</span>;
+  return <span data-trace-breaks={id} className="min-w-0 max-w-full inline-flex"><TextLink href={`${lineTabHref(projectId)}#${id}`} title={`${text ?? "This expectation"} (${id}). Open it in the project's expectations`}>{words}</TextLink></span>;
 }
 
 /** A finder's markdown without its heading marks: the words, not the labels. */
@@ -197,29 +308,52 @@ function SiblingList({ artifacts, compact, focusRef }: { artifacts: TraceArtifac
 
 type RunBlockData = Extract<TraceBlock, { kind: "run" }>;
 
-function RunBlock({ block: b, numbered, run, superseded, last, nextFuture, ctx }: { block: RunBlockData; numbered: boolean; run: ReportRun | null; superseded: boolean; last: boolean; nextFuture: boolean; ctx: Ctx }) {
+function RunBlock({ block: b, numbered, run, superseded, last, nextFuture, ctx, rounds, sameAs, end }: { block: RunBlockData; numbered: boolean; run: ReportRun | null; superseded: boolean; last: boolean; nextFuture: boolean; ctx: Ctx; rounds?: number[]; sameAs?: number; end?: TraceRun }) {
   const { compact } = ctx;
   const [showRoutine, setShowRoutine] = useState(false);
+  // A repeat of an earlier run keeps its steps folded until asked.
+  const [showSteps, setShowSteps] = useState(sameAs == null);
   const routine = b.rows.filter((r) => r.kind === "station" && r.routine && r.step.status === "done").length;
   const rows = showRoutine ? b.rows : b.rows.filter((r) => !(r.kind === "station" && r.routine && r.step.status === "done"));
-  const label = numbered ? `Run ${b.round}` : "Run";
+  const many = (rounds?.length ?? 0) > 1;
+  const label = many ? `Runs ${roundsWords(rounds!)}` : numbered ? `Run ${b.round}` : "Run";
+  // A replaced run passed its steps: its dot is a pass, its headline says what happened to the card.
+  const replaced = end?.end === "replaced" ? end : null;
   return (
     <li className={cn("grid gap-x-3", compact ? "grid-cols-[12px_1fr] pb-3" : "grid-cols-[14px_1fr] pb-5")} data-trace-run={b.runId} data-trace-status={b.status} data-trace-rounds={b.rounds}>
-      <Rail dot={DOT[b.status]} last={last} dashed={nextFuture} compact={compact} />
+      <Rail dot={DOT[replaced ? "done" : b.status]} last={last} dashed={nextFuture} compact={compact} />
       <div className="min-w-0">
         <StepHead
           label={label} at={b.at} durationMs={b.durationMs} status={b.status} compact={compact}
           aside={<Link href={runHref(b.runId)} className="inline-flex items-center gap-0.5 text-sol-text-dim hover:text-sol-blue" data-trace-run-link>Open run<ArrowUpRight className="w-3 h-3" /></Link>}
         />
-        {run && <div className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[14px] font-medium")}><RunOutcomeText run={run} muted={superseded} brief={compact} /></div>}
+        {replaced ? (
+          <>
+            <div className={cn("leading-snug text-sol-text-muted", compact ? "text-[12.5px]" : "text-[14px] font-medium")} data-trace-replaced={replaced.by}>{replacedWords(replaced)}</div>
+            {replaced.why && <p className="mt-0.5 leading-snug text-sol-text-dim" data-trace-replaced-why>{replaced.why}.</p>}
+          </>
+        ) : run && <div className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[14px] font-medium")}><RunOutcomeText run={run} muted={superseded} brief={compact} /></div>}
+        {(many || sameAs != null) && (
+          <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-[11.5px] text-sol-text-dim" data-trace-run-repeat={many ? rounds!.join(",") : `same-as-${sameAs}`}>
+            <span>{replaced
+              ? many ? "Each reached a card and was replaced before anyone answered." : `Like run ${sameAs}, it reached a card and was replaced before anyone answered.`
+              : many ? "Each ended the same way, through the same steps." : `The same steps and end as run ${sameAs}.`}</span>
+            {sameAs != null && (
+              <button type="button" onClick={() => setShowSteps((o) => !o)} className="inline-flex items-center gap-1 hover:text-sol-text-muted" aria-expanded={showSteps} data-trace-run-steps>
+                <ChevronRight className={cn("w-3 h-3 transition-transform", showSteps && "rotate-90")} />{showSteps ? "Hide its steps" : "Show its steps"}
+              </button>
+            )}
+          </div>
+        )}
         {b.rounds > 1 && (
           <div className="mt-0.5 inline-flex items-center gap-1 text-[11.5px] text-sol-yellow" data-trace-loops>
             <RotateCcw className="w-3 h-3" />
             {b.rounds} rounds through build
           </div>
         )}
-        <ul className={cn("mt-1.5 rounded-md border border-sol-border/25 bg-sol-bg-alt/20", compact ? "px-2 py-1 space-y-0.5" : "px-2.5 py-1.5 space-y-1")} data-trace-stations>
-          {rows.map((r, i) => <RunRow key={r.kind === "station" ? r.step.id : `loop-${i}`} row={r} ctx={ctx} />)}
+        {showSteps && <ul className={cn("mt-1.5 rounded-md border border-sol-border/25 bg-sol-bg-alt/20", compact ? "px-2 py-1 space-y-0.5" : "px-2.5 py-1.5 space-y-1")} data-trace-stations>
+          {rows.map((r, i) => <RunRow key={r.kind === "station" ? r.step.id : `loop-${i}`} row={r} ctx={ctx} card={r.kind === "station" && r.step.nodeId === CARD_GATE_NODE_ID ? b.card : undefined} />)}
+          {b.card && !rows.some((r) => r.kind === "station" && r.step.nodeId === CARD_GATE_NODE_ID) && <CardRow card={b.card} compact={compact} />}
           {routine > 0 && (
             <li>
               <button type="button" onClick={() => setShowRoutine((o) => !o)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted" aria-expanded={showRoutine} data-trace-routine={routine}>
@@ -228,15 +362,35 @@ function RunBlock({ block: b, numbered, run, superseded, last, nextFuture, ctx }
               </button>
             </li>
           )}
-        </ul>
+        </ul>}
       </div>
     </li>
   );
 }
 
-const ROW_TONE: Record<TraceStatus, string> = { done: "text-sol-text", failed: "text-sol-red", current: "text-sol-cyan", waiting: "text-sol-yellow", skipped: "text-sol-text-dim" };
+const ROW_TONE: Record<TraceStatus, string> = { done: "text-sol-text", failed: "text-sol-red", current: "text-sol-blue", waiting: "text-sol-yellow", skipped: "text-sol-text-dim", noted: "text-sol-text-muted" };
 
-function RunRow({ row, ctx }: { row: TraceRunRow; ctx: Ctx }) {
+/** A replaced run's card, as one row of its run: the card's title and where to open it. */
+function CardRow({ card, compact }: { card: NonNullable<RunBlockData["card"]>; compact: boolean }) {
+  return (
+    <li className="flex items-baseline gap-2 min-w-0 text-[12px]" data-trace-run-card>
+      <StepMark state="noted" className="self-center" />
+      <span className={cn("shrink-0 text-sol-text-dim", compact ? "w-16 text-[11px]" : "w-20 text-[11.5px]")}>Card</span>
+      <CardWords card={card} />
+    </li>
+  );
+}
+
+function CardWords({ card }: { card: NonNullable<RunBlockData["card"]> }) {
+  return (
+    <>
+      <span className="min-w-0 truncate text-sol-text-muted" title={card.title} data-trace-run-card-title>{card.title}</span>
+      {card.href && <Link href={card.href} className="ml-auto shrink-0 inline-flex items-center gap-0.5 text-[11px] text-sol-text-dim hover:text-sol-blue" data-trace-run-card-open>Open the card<ArrowUpRight className="w-3 h-3" /></Link>}
+    </>
+  );
+}
+
+function RunRow({ row, ctx, card }: { row: TraceRunRow; ctx: Ctx; card?: RunBlockData["card"] }) {
   const { compact } = ctx;
   if (row.kind === "loop") {
     return (
@@ -260,16 +414,16 @@ function RunRow({ row, ctx }: { row: TraceRunRow; ctx: Ctx }) {
     >
       <StepMark state={STEP_STATE[s.status]} className="self-center" />
       <span className={cn("shrink-0 truncate text-sol-text-dim", compact ? "w-16 text-[11px]" : "w-20 text-[11.5px]")} title={s.title}>{s.title}</span>
-      <span className={cn("min-w-0", compact ? "truncate" : "", ROW_TONE[s.status])} data-trace-result>{s.detail}</span>
+      {card ? <CardWords card={card} /> : <span className={cn("min-w-0", compact ? "truncate" : "", ROW_TONE[s.status])} data-trace-result>{s.detail}</span>}
       {row.visit > 1 && <span className="shrink-0 rounded px-1 text-[10.5px] text-sol-yellow border border-sol-yellow/30" title="This station ran again in this run" data-trace-visit-chip>visit {row.visit}</span>}
-      <span className="ml-auto shrink-0 flex items-baseline gap-2">
+      {!card && <span className="ml-auto shrink-0 flex items-baseline gap-2">
         {!compact && s.durationMs != null && s.durationMs > 0 && <span className="text-[11px] text-sol-text-dim tabular-nums">{took(s.durationMs)}</span>}
         {session?.href && (
           <Link href={session.href} className="inline-flex items-center gap-0.5 text-[11px] text-sol-text-dim hover:text-sol-blue" title={session.label} data-trace-session>
             {session.kind === "decision" ? "card" : "session"}<ArrowUpRight className="w-3 h-3" />
           </Link>
         )}
-      </span>
+      </span>}
     </li>
   );
 }
