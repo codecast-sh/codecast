@@ -40,71 +40,73 @@ const byShortId = (tables: Record<string, any[]>, shortId: string) =>
 
 describe("create dependency mirror", () => {
   test("blocked_by populates each referenced task's blocks", async () => {
-    const { ctx, tables } = await makeCtx([bare("ct-b"), bare("ct-c")]);
+    const { ctx, tables } = await makeCtx([bare("ct-12"), bare("ct-13")]);
     const { short_id } = await (create as any)._handler(ctx, {
       api_token: TOKEN,
       title: "New task",
-      blocked_by: ["ct-b", "ct-c"],
+      blocked_by: ["ct-12", "ct-13"],
     });
-    expect(byShortId(tables, short_id).blocked_by).toEqual(["ct-b", "ct-c"]);
-    expect(byShortId(tables, "ct-b").blocks).toEqual([short_id]);
-    expect(byShortId(tables, "ct-c").blocks).toEqual([short_id]);
+    expect(byShortId(tables, short_id).blocked_by).toEqual(["ct-12", "ct-13"]);
+    expect(byShortId(tables, "ct-12").blocks).toEqual([short_id]);
+    expect(byShortId(tables, "ct-13").blocks).toEqual([short_id]);
   });
 
   test("an unresolvable reference is skipped, not a failure", async () => {
-    const { ctx, tables } = await makeCtx([bare("ct-b")]);
+    const { ctx, tables } = await makeCtx([bare("ct-12")]);
     const { short_id } = await (create as any)._handler(ctx, {
       api_token: TOKEN,
       title: "New task",
-      blocked_by: ["ct-nope", "ct-b"],
+      blocked_by: ["ct-99", "ct-12"],
     });
-    expect(byShortId(tables, "ct-b").blocks).toEqual([short_id]);
+    expect(byShortId(tables, "ct-12").blocks).toEqual([short_id]);
   });
 });
 
 describe("update dependency mirror", () => {
   test("adding and removing a blocked_by entry patches both referenced tasks", async () => {
     const { ctx, tables } = await makeCtx([
-      bare("ct-a", { blocked_by: ["ct-b"] }),
-      bare("ct-b", { blocks: ["ct-a"] }),
-      bare("ct-c"),
+      bare("ct-11", { blocked_by: ["ct-12"] }),
+      bare("ct-12", { blocks: ["ct-11"] }),
+      bare("ct-13"),
     ]);
-    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-a", blocked_by: ["ct-c"] });
-    expect(byShortId(tables, "ct-a").blocked_by).toEqual(["ct-c"]);
-    expect(byShortId(tables, "ct-b").blocks).toEqual([]);
-    expect(byShortId(tables, "ct-c").blocks).toEqual(["ct-a"]);
+    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-11", blocked_by: ["ct-13"] });
+    expect(byShortId(tables, "ct-11").blocked_by).toEqual(["ct-13"]);
+    expect(byShortId(tables, "ct-12").blocks).toEqual([]);
+    expect(byShortId(tables, "ct-13").blocks).toEqual(["ct-11"]);
   });
 
   test("overwriting blocks patches referenced tasks' blocked_by symmetrically", async () => {
     const { ctx, tables } = await makeCtx([
-      bare("ct-a", { blocked_by: ["ct-b"] }),
-      bare("ct-b", { blocks: ["ct-a"] }),
-      bare("ct-d"),
+      bare("ct-11", { blocked_by: ["ct-12"] }),
+      bare("ct-12", { blocks: ["ct-11"] }),
+      bare("ct-14"),
     ]);
-    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-b", blocks: ["ct-d"] });
-    expect(byShortId(tables, "ct-b").blocks).toEqual(["ct-d"]);
-    expect(byShortId(tables, "ct-a").blocked_by).toEqual([]);
-    expect(byShortId(tables, "ct-d").blocked_by).toEqual(["ct-b"]);
+    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-12", blocks: ["ct-14"] });
+    expect(byShortId(tables, "ct-12").blocks).toEqual(["ct-14"]);
+    expect(byShortId(tables, "ct-11").blocked_by).toEqual([]);
+    expect(byShortId(tables, "ct-14").blocked_by).toEqual(["ct-12"]);
   });
 
   test("an unchanged entry is left alone", async () => {
     const { ctx, tables } = await makeCtx([
-      bare("ct-a", { blocked_by: ["ct-b"] }),
-      bare("ct-b", { blocks: ["ct-a"] }),
-      bare("ct-c"),
+      bare("ct-11", { blocked_by: ["ct-12"] }),
+      bare("ct-12", { blocks: ["ct-11"] }),
+      bare("ct-13"),
     ]);
-    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-a", blocked_by: ["ct-b", "ct-c"] });
-    expect(byShortId(tables, "ct-b").blocks).toEqual(["ct-a"]);
-    expect(byShortId(tables, "ct-c").blocks).toEqual(["ct-a"]);
+    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-11", blocked_by: ["ct-12", "ct-13"] });
+    expect(byShortId(tables, "ct-12").blocks).toEqual(["ct-11"]);
+    expect(byShortId(tables, "ct-13").blocks).toEqual(["ct-11"]);
   });
 
-  test("a reference the caller cannot access is skipped silently", async () => {
+  // Readiness never reads across workspaces, so the edge could never clear.
+  test("a reference into another workspace is refused and nothing is written", async () => {
     const { ctx, tables } = await makeCtx([
-      bare("ct-a"),
-      bare("ct-x", { user_id: "u_other", blocks: [] }),
+      bare("ct-11"),
+      bare("ct-24", { user_id: "u_other", blocks: [] }),
     ]);
-    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-a", blocked_by: ["ct-x"] });
-    expect(byShortId(tables, "ct-a").blocked_by).toEqual(["ct-x"]);
-    expect(byShortId(tables, "ct-x").blocks).toEqual([]);
+    await expect((update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-11", blocked_by: ["ct-24"] }))
+      .rejects.toThrow("dependency task belongs to another workspace");
+    expect(byShortId(tables, "ct-11").blocked_by).toBeUndefined();
+    expect(byShortId(tables, "ct-24").blocks).toEqual([]);
   });
 });
