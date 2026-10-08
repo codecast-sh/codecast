@@ -5,9 +5,9 @@
 
 import { priceFor, usageCost } from "@platform/agent/meter";
 import { replyText, type MessagesRequest } from "@platform/assistant/messages";
+import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 
-/** The small model the server's summaries and briefs run on. */
-export const CHEAP_MODEL = "claude-haiku-4-5-20251001";
+export { CHEAP_MODEL };
 /** The current Sonnet, for work the cheap model is too small for. It refuses any temperature. */
 export const STRONG_MODEL = "claude-sonnet-5-5";
 
@@ -34,21 +34,41 @@ export interface MeteredCall {
  * One Messages API request, as the server sends it. The evals replay the same
  * object, so a prompt measured offline is the prompt prod posts.
  */
-export type SurfaceRequest = MessagesRequest;
+export type SurfaceRequest = MessagesRequest & {
+  /** Images sent after the prompt, each introduced by its label, so the model can see what the prompt names by that label. */
+  images?: Array<{ label: string; url: string }>;
+};
+
+/** The user turn: the prompt alone, or the prompt followed by each labelled image. */
+function userContent(req: SurfaceRequest) {
+  if (!req.images?.length) return req.prompt;
+  return [
+    { type: "text" as const, text: req.prompt },
+    ...req.images.flatMap((img) => [
+      { type: "text" as const, text: `${img.label}:` },
+      { type: "image" as const, source: { type: "url" as const, url: img.url } },
+    ]),
+  ];
+}
 
 /**
  * The JSON body prod posts for a request. Key order is model, max_tokens,
- * temperature, system, messages, tools: every server call site uses that
- * order, so JSON.stringify of this object is byte-identical to what each site
- * sent.
+ * temperature, thinking, system, messages, tools: every server call site uses
+ * that order, so JSON.stringify of this object is byte-identical to what each
+ * site sent.
+ *
+ * The cheap model thinks by default, and its thinking spends the reply's
+ * max_tokens. Its prompts are short single answers sized for a model that
+ * did not think, so it runs with thinking off.
  */
 export function anthropicBody(req: SurfaceRequest) {
   return {
     model: req.model,
     max_tokens: req.max_tokens,
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+    ...(req.model === CHEAP_MODEL ? { thinking: { type: "disabled" as const } } : {}),
     ...(req.system ? { system: req.system } : {}),
-    messages: [{ role: "user" as const, content: req.prompt }],
+    messages: [{ role: "user" as const, content: userContent(req) }],
     ...(req.tools ? { tools: req.tools } : {}),
   };
 }
@@ -101,10 +121,8 @@ export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
         system: args.system,
         prompt: args.prompt,
         max_tokens: args.max_tokens,
-        // The cheap model runs deterministic unless asked otherwise. Newer
-        // models refuse any temperature ("deprecated for this model"), so
-        // they get one only when a caller passes it.
-        temperature: args.temperature ?? ((args.model ?? CHEAP_MODEL) === CHEAP_MODEL ? 0 : undefined),
+        temperature: args.temperature,
+        images: args.images,
       },
       { signal: abort.signal },
     );

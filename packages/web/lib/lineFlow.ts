@@ -20,7 +20,7 @@
 // (LP3, published onto the project row) join Sense, so a silent one shows.
 import { LINE_SIGNAL_WINDOW_MS, type LineFinderDecl, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
-import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
+import { LINE_GOAL, NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { CARD_GATE_NODE_ID, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode } from "./taskLine";
@@ -119,7 +119,7 @@ export type StageKind = "running" | "ask" | "paused" | "starved" | "failing" | "
 /** `run`: the run the state speaks about (the failed one), so its words can open its report. */
 export type StageState = { kind: StageKind; since?: number | null; why: string; run?: string };
 
-export type GoalChip = { ref: string; label: string; kind: "initiative" | "project" | "unknown" | "parked" | "ungrounded" };
+export type GoalChip = { ref: string; label: string; kind: "initiative" | "project" | "line" | "unknown" | "parked" | "ungrounded" };
 
 export type SenseSource = {
   source: string;
@@ -356,11 +356,13 @@ export function quietWatchEnd(t: LineCauseTask, now: number): number | null {
 }
 
 /** The goal a cause names (LE5): an initiative ref ("in-3" or
- *  "in-3:metric"), a project ref, "none" (parked), or nothing yet. */
+ *  "in-3:metric"), a project ref, "line" (a change to the line itself, which
+ *  serves the line's own health), "none" (parked), or nothing yet. */
 export function goalChip(ref: string | null | undefined, initiatives: GoalRow[], projects: GoalRow[]): GoalChip & { priority: "p0" | "p1" | "p2" | "p3" | "unranked" | null } {
   const raw = ref?.trim();
   if (!raw) return { ref: "", label: "not grounded", kind: "ungrounded", priority: null };
   if (raw === NO_GOAL) return { ref: raw, label: "no goal", kind: "parked", priority: null };
+  if (raw === LINE_GOAL) return { ref: raw, label: "the line itself", kind: "line", priority: "unranked" };
   const [head, metric] = raw.split(":");
   const initiative = initiatives.find((i) => i.short_id === head);
   if (initiative) return { ref: raw, label: metric ? `${initiative.title} · ${metric}` : initiative.title, kind: "initiative", priority: initiative.priority ?? "unranked" };
