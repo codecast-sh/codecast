@@ -126,7 +126,7 @@ export type RecordGroupCard = {
 
 // ---------------------------------------------------------------- words
 
-const PURPOSE = "the purpose";
+const PURPOSE = "the mission";
 const bare = (handle: string) => handle.replace(/^@/, "").trim().toLowerCase();
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -354,7 +354,7 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
     roles: all.map(edited).flatMap((ch) => (ch.kind === "role" ? [{ handle: ch.handle, name: ch.name }] : [])),
     sessions: (ref) => offered.get(ref),
   })!;
-  // A goal named as a parent reads as "the purpose" when it is the one (the subject's own name is always passed in).
+  // A goal named as a parent reads as "the mission" when it is the one (the subject's own name is always passed in).
   const names: OrgAskNames = { ...base, initiative: (ref) => (purposeId !== null && goals.find((row) => refMatches(ref, row))?.id === purposeId ? PURPOSE : base.initiative?.(ref)) };
   const fieldNames = (c: OrgProposalChange): OrgAskNames => (seated.has(c._id) ? { ...names, session: (ref) => offered.get(ref) ?? seated.get(c._id) } : names);
   const projectName = (ref: string) => names.project?.(ref) ?? ref;
