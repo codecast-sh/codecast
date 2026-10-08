@@ -280,7 +280,7 @@ export function storyPromptInput(
   };
 }
 
-const PROMPT_IMAGES = 6;
+const PROMPT_IMAGES = 10;
 const PROMPT_EDITS = 3;
 const PROMPT_EMBEDS = 4;
 
@@ -416,6 +416,10 @@ Fields:
 {"headline": "...", "dek": "...", "body": "...", "kind": "...", "importance": 3, "why_source": "...", "risk_lines": {}}`;
   return { model: PROSE_MODEL, max_tokens: STORY_MAX_TOKENS, system: STORY_SYSTEM, prompt };
 }
+
+/** The story's screenshots as images the model can see, each under its ref. */
+export const storyImages = (input: Pick<StoryPromptInput, "images" | "image_urls">) =>
+  input.images.map((img) => ({ label: img.ref, url: input.image_urls[img.ref] })).filter((img) => !!img.url);
 
 export type StoryProse = {
   headline: string;
@@ -767,18 +771,39 @@ export const mediaAudit = internalQuery({
 });
 
 /** A pending story with the sessions that pass the gate now and its pull requests; null once it is no longer pending. */
+async function loadStoryRead(ctx: { db: any; storage?: any }, story: Doc<"change_stories">): Promise<StoryRead> {
+  const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, story);
+  const prs: StoryRead["prs"] = [];
+  for (const prId of story.pr_ids) {
+    const pr = await ctx.db.get(prId);
+    if (pr && String(pr.team_id) === String(story.team_id)) prs.push({ number: pr.number, title: pr.title, body: clipToSentence(pr.body ?? "", PR_BODY_CHARS) });
+  }
+  return { story, sessions, prs };
+}
+
 export const readStory = internalQuery({
   args: { story_id: v.id("change_stories") },
   handler: async (ctx, args): Promise<StoryRead | null> => {
     const story = await ctx.db.get(args.story_id);
     if (!story || story.prose_status !== "pending") return null;
-    const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, story);
-    const prs: StoryRead["prs"] = [];
-    for (const prId of story.pr_ids) {
-      const pr = await ctx.db.get(prId);
-      if (pr && String(pr.team_id) === String(story.team_id)) prs.push({ number: pr.number, title: pr.title, body: clipToSentence(pr.body ?? "", PR_BODY_CHARS) });
+    return await loadStoryRead(ctx, story);
+  },
+});
+
+/** The prompt input any story would be written from now, written or not. Read-only, for replaying real stories in prompt ablations. */
+export const storyInputAudit = internalQuery({
+  args: { story_key: v.string() },
+  handler: async (ctx, args) => {
+    const story: Doc<"change_stories"> | null = await ctx.db.query("change_stories").withIndex("by_story_key", (q) => q.eq("story_key", args.story_key)).first();
+    if (!story) return null;
+    const { sessions, prs } = await loadStoryRead(ctx, story);
+    const commits: ChangeCommit[] = [];
+    for (const sha of new Set(story.commit_shas)) {
+      const rows = await ctx.db.query("commits").withIndex("by_sha", (q) => q.eq("sha", sha)).take(10);
+      const row = rows.find((c) => String(c.team_id) === String(story.team_id) && normalizeRepository(c.repository) === normalizeRepository(story.repository));
+      if (row) commits.push(projectCommit(row));
     }
-    return { story, sessions, prs };
+    return { story_key: story.story_key, headline: story.headline, input: storyPromptInput(story, commits, sessions, prs) };
   },
 });
 

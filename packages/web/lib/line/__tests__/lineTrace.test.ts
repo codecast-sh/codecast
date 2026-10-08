@@ -99,7 +99,8 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
 
   test("ship, watch and the outcome", () => {
     const by = (stage: string) => t.steps.find((s) => s.stage === stage)!;
-    expect(by("ship")).toMatchObject({ title: "Shipped", detail: "Merged", nodeId: "merge" });
+    // The run merged at a station today's line no longer has: the step points at Ship on the map.
+    expect(by("ship")).toMatchObject({ title: "Shipped", detail: "Merged", nodeId: "ship" });
     expect(by("watch")).toMatchObject({ title: "The watch ended quiet", status: "done" });
     expect(by("outcome")).toMatchObject({ title: "Held: the fix stayed fixed through its watch", nodeId: "end:held" });
     expect(t.where.text).toMatch(/The watch ended quiet\.$/);
@@ -110,7 +111,8 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
     expect(p.slice(0, 5)).toEqual(["expectations", "source:agentwatch", "signals", "causes", "ground"]);
     expect(p.filter((x) => x === "implement")).toHaveLength(2);
     expect(p.filter((x) => x === "decide")).toHaveLength(2);
-    expect(p.slice(-4)).toEqual(["ship", "merge", "watch", "end:held"]);
+    // The run's merge station is gone from today's line, so the path skips it.
+    expect(p.slice(-4)).toEqual(["decide", "ship", "watch", "end:held"]);
   });
 
   test("every path node is a node on the map", () => {
