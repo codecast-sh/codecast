@@ -35,6 +35,18 @@ function world() {
 }
 
 describe("the fleet cap", () => {
+  test("a workflow station's hand under its run starts at once, even with the machine full: its run paces it", async () => {
+    const w = world();
+    for (let i = 0; i < 24; i++) await w.spawn(`worker ${i}`, { subagent_caps: { per_session: 50, per_machine: 24 } });
+    const full = await w.spawn("one more worker", { subagent_caps: { per_session: 50, per_machine: 24 } });
+    expect(full.queued).toBe(true);
+    // The runner's spawn: nested under the run's session, on this machine, no fleet limits declared.
+    const hand = await w.spawn("Prove line", { subagent_caps: undefined, spawn_device_id: undefined, device: undefined, merge_back: undefined });
+    expect(hand.queued).toBeUndefined();
+    expect((await w.db.get(hand.conversation_id)).subagent_slot).toBeUndefined();
+    expect(w.pendingFor(hand.conversation_id).map((m: any) => m.content)).toEqual(["Prove line"]);
+  });
+
   test("a spawn past the session's limit queues without starting, and starts when a worker ends done", async () => {
     const w = world();
     const a = await w.spawn("task a");
