@@ -99,3 +99,16 @@ export function workspaceRefOf(row: WorkspaceScoped): { kind: "team" | "user"; i
   const m = key?.match(/^(team|user):(.+)$/);
   return m ? { kind: m[1] as "team" | "user", id: m[2] } : null;
 }
+
+/** The one row a ref names, in whatever workspace holds it: a LOOKUP that
+ *  crosses workspaces on purpose, never a list. For a surface that resolves
+ *  the row an address names to say where it lives (useForeignWorkspace) and
+ *  offer the switch. `find` matches the ref (id, short id, client key). */
+export function lookupInAnyWorkspace<T>(
+  collection: Record<string, T> | null | undefined,
+  ref: string,
+  find: (rows: readonly T[], ref: string) => T | undefined,
+): T | undefined {
+  if (!collection) return undefined;
+  return collection[ref] ?? find(Object.values(collection), ref);
+}
