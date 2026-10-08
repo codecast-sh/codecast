@@ -19,6 +19,15 @@ export type RunNodeSession = {
   updated_at?: number;
   agent_type?: string;
   parent_conversation_id?: string;
+  /** The session's pin (`cast state`): its first line is what the station says it did. */
+  state?: string;
+  state_status?: string;
+  /** The pin's json block, whole: what the station reported for its edges. */
+  result?: string;
+  /** The session was killed; with no message, it never started. */
+  killed?: boolean;
+  /** Its last `cast task handoff` on the run's task: how a builder ended. */
+  handoff?: { status: string; note?: string; at?: number };
 };
 
 export type RunNodeRow = {
@@ -41,6 +50,37 @@ export type RunNodeRow = {
 };
 
 export type RunNodeGroup = { title?: string; detail?: string; rows: RunNodeRow[] };
+
+type SyncedRun = { _id: string; node_statuses?: Array<{ node_id: string; session_id?: string; session?: unknown }> };
+
+/**
+ * Every run feed attaches each node's session under a read budget
+ * (workflow_runs.withAgentSessions), so a wide feed (the line floor) hands back
+ * older runs with bare nodes while the cause's own feed attached them. A bare
+ * node keeps the session the store already holds for the same node and hand,
+ * so the feeds overlay without stripping what a station reported. Returns the
+ * same array when nothing was carried.
+ */
+export function carryNodeSessions<T extends SyncedRun>(rows: T[], prev: Record<string, SyncedRun | undefined> | undefined): T[] {
+  if (!prev || !Array.isArray(rows)) return rows;
+  let changed = false;
+  const out = rows.map((r) => {
+    const old = r && prev[r._id]?.node_statuses;
+    if (!old?.length || !Array.isArray(r.node_statuses)) return r;
+    let nodes: NonNullable<SyncedRun["node_statuses"]> | null = null;
+    r.node_statuses.forEach((n, i) => {
+      if (n.session || !n.session_id) return;
+      const was = old.find((o) => o.node_id === n.node_id && o.session_id === n.session_id && o.session);
+      if (!was) return;
+      nodes ??= [...r.node_statuses!];
+      nodes[i] = { ...n, session: was.session };
+    });
+    if (!nodes) return r;
+    changed = true;
+    return { ...r, node_statuses: nodes };
+  });
+  return changed ? out : rows;
+}
 
 const HIDDEN_TYPES = new Set(["start", "exit"]);
 

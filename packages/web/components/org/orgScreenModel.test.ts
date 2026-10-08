@@ -3,7 +3,7 @@
 // Run: bun test --timeout 240000 components/org/orgScreenModel.test.ts
 import { describe, expect, test } from "bun:test";
 import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
-import { findProposalCardMessage, missionOf, OPEN_PROPOSAL_FEED_CAP, openProposalsToFeed, ORG_STACK_BELOW, orgScreenParams, orgScreenPath, stripCount, stripRows, stripTotals } from "./orgScreenModel";
+import { findProposalCardMessage, healthRedirect, missionOf, OPEN_PROPOSAL_FEED_CAP, openProposalsToFeed, ORG_STACK_BELOW, orgScreenParams, orgScreenPath, stripCount, stripRows, stripTotals } from "./orgScreenModel";
 import type { OrgProposalRow } from "./orgStaffingTypes";
 import type { PendingComment } from "../../lib/quoteFormat";
 
@@ -39,14 +39,17 @@ describe("orgScreenParams", () => {
     expect(orgScreenParams("compose=%20").compose).toBeNull();
     expect(orgScreenParams("panel=history").history).toBe(true);
     expect(orgScreenParams("panel=other").history).toBe(false);
+    expect(orgScreenParams("week=1").week).toBe(true);
+    expect(orgScreenParams("week=yes").week).toBe(false);
+    expect(orgScreenParams("").week).toBe(false);
   });
 
   test("all together, from a string or a URLSearchParams", () => {
-    const all = "proposal=op-7&focus=2&show=map&beside=conv-1&lens=goals&proposed=0&compose=hi&panel=history";
-    const want = { proposal: "op-7", focus: 2, show: "map", beside: "conv-1", lens: "goals", proposed: false, compose: "hi", history: true };
+    const all = "proposal=op-7&focus=2&show=map&beside=conv-1&lens=goals&proposed=0&week=1&compose=hi&panel=history";
+    const want = { proposal: "op-7", focus: 2, show: "map", beside: "conv-1", lens: "goals", proposed: false, week: true, compose: "hi", history: true };
     expect(orgScreenParams(all)).toEqual(want);
     expect(orgScreenParams(new URLSearchParams(all))).toEqual(want);
-    expect(orgScreenParams(null)).toEqual({ proposal: null, focus: null, show: null, beside: null, lens: "everything", proposed: true, compose: null, history: false });
+    expect(orgScreenParams(null)).toEqual({ proposal: null, focus: null, show: null, beside: null, lens: "everything", proposed: true, week: false, compose: null, history: false });
   });
 });
 
@@ -56,6 +59,21 @@ describe("orgScreenPath", () => {
     expect(orgScreenPath({ proposal: "op-7", show: "map" })).toBe("/org?proposal=op-7&show=map");
     expect(orgScreenPath({ beside: "conv-hop", show: "map", lens: "people", focus: 4, proposal: "op-8" })).toBe("/org?proposal=op-8&focus=4&lens=people&show=map&beside=conv-hop");
     expect(orgScreenPath({ proposal: "op-8", focus: "4", lens: "everything", beside: null })).toBe("/org?proposal=op-8&focus=4");
+    expect(orgScreenPath({ lens: "people", week: true })).toBe("/org?lens=people&week=1");
+    expect(orgScreenPath({ week: false })).toBe("/org");
+  });
+});
+
+describe("healthRedirect", () => {
+  test("the retired health page lands on the People map with This week on, other parameters kept", () => {
+    expect(healthRedirect("view=health")).toBe("/org?lens=people&week=1");
+    expect(healthRedirect("?view=health&lens=goals&proposal=op-3")).toBe("/org?lens=people&proposal=op-3&week=1");
+    expect(healthRedirect(new URLSearchParams("view=health&preview=1"))).toBe("/org?preview=1&lens=people&week=1");
+  });
+  test("any other address is not redirected", () => {
+    expect(healthRedirect("")).toBeNull();
+    expect(healthRedirect(null)).toBeNull();
+    expect(healthRedirect("view=chart&lens=people")).toBeNull();
   });
 });
 
@@ -124,9 +142,8 @@ describe("stripRows", () => {
     expect(stripTotals(proposal(5))).toBe("");
     expect(stripTotals(proposal(6, { changes: [change("p6", 1, ROLE)] }))).toBe(proposalTotals([change("p6", 1, ROLE)]).count);
   });
-  test("the row's count is the helper's count, the list count while loading, nothing with neither", () => {
-    expect(rows[1].count).toBe(proposalTotals(withRole.changes).count);
-    expect(rows[1].count).toBe("2 changes");
+  test("the row's count is the words its card leads with, the list count while loading, nothing with neither", () => {
+    expect(rows[1].count).toBe("2 to decide");
     expect(rows[2].count).toBe("9 changes");
     expect(stripCount(proposal(5))).toBe("");
   });
@@ -147,5 +164,24 @@ describe("missionOf", () => {
     expect(missionOf([goal(1), goal(2, "g1"), goal(3, "g1")])).toEqual({ title: "Goal 1", shortId: "in-1" });
     expect(missionOf([goal(1), goal(2, "g1"), goal(3)])).toBeNull();
     expect(missionOf([goal(1)])).toBeNull();
+  });
+});
+
+test("the filter reads every lens the company pane offers; anything else is everything", () => {
+  expect(orgScreenParams("lens=projects").lens).toBe("projects");
+  expect(orgScreenParams("lens=goals").lens).toBe("goals");
+  expect(orgScreenParams("lens=people").lens).toBe("people");
+  expect(orgScreenParams("lens=health").lens).toBe("everything");
+  expect(orgScreenPath({ lens: "projects", proposal: "op-3" })).toBe("/org?proposal=op-3&lens=projects");
+});
+
+describe("proposedMissionOf", () => {
+  test("a new goal at the top that the proposal puts others under is the mission it would set", async () => {
+    const { proposedMissionOf } = await import("./orgScreenModel");
+    const { UNION_GOALS_PROPOSAL } = await import("./goalsFixture");
+    expect(proposedMissionOf([UNION_GOALS_PROPOSAL])).toEqual({ title: "Broker high-value introductions that become real transactions", proposal: "op-54", seq: 1 });
+    // Nothing gathered under it, or nothing proposed at all: no mission.
+    expect(proposedMissionOf([{ ...UNION_GOALS_PROPOSAL, changes: UNION_GOALS_PROPOSAL.changes.slice(0, 1) }])).toBeNull();
+    expect(proposedMissionOf([])).toBeNull();
   });
 });
