@@ -55,6 +55,13 @@ describe("removeDep", () => {
     expect(tables.tasks[0].blocked_by).toEqual([]);
   });
 
+  test("an older plan row's blocker, stored by _id, is removed by the short id show prints", async () => {
+    const { ctx, tables } = await makeCtx([{ ...taskA(), blocked_by: ["task_b"] }, taskB()]);
+    await (removeDep as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-a", blocked_by: "ct-b" });
+    expect(tables.tasks[0].blocked_by).toEqual([]);
+    expect(tables.tasks[1].blocks).toEqual([]);
+  });
+
   test("only touches the named edge", async () => {
     const a = { ...taskA(), blocked_by: ["ct-b", "ct-c"] };
     const c = { _id: "task_c", short_id: "ct-c", user_id: USER, status: "open", blocks: ["ct-a"] };

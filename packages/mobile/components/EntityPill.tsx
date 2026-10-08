@@ -8,8 +8,10 @@ import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEnti
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
-import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, type EntityType } from '@codecast/shared/entities';
+import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, entityRoute, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, CODECAST_BASE_URL, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
+import { openWebPage } from '@/lib/links';
+import { replayTitle } from '@codecast/web/components/ops/opsModel';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
 import { MobileIdentityFace } from '@/components/identity';
@@ -37,6 +39,8 @@ const TYPE_LABEL: Record<EntityType, string> = {
   call: 'Call',
   source: 'Source',
   replay: 'Replay',
+  role: 'Role',
+  person: 'Person',
 };
 
 // Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
@@ -56,6 +60,8 @@ const TYPE_COLOR: Record<EntityType, string> = {
   call: Theme.red,
   source: Theme.orange,
   replay: Theme.magenta,
+  role: Theme.violet,
+  person: Theme.green,
 };
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
@@ -72,7 +78,9 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   commit: 'git-commit',
   call: 'phone',
   source: 'radio',
-  replay: 'play-circle',
+  replay: 'film',
+  role: 'hexagon',
+  person: 'user',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the
@@ -147,8 +155,11 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const callRef = type === 'call' ? parseCallRef(rawId) : null;
   const call = useQueryNoThrow(api.transcripts.webGetCallRef, callRef && !named ? { ref: callRef.call } : 'skip').data;
   const source = useQueryNoThrow(api.ingest.webGetSource, type === 'source' && !named ? { ref: rawId } : 'skip').data;
+  // A replay, or a moment of it (`rp-12@1:23`): the replay is the row, the time rides the label.
+  const replayRef = type === 'replay' ? parseReplayRef(rawId) : null;
+  const replay = useQueryNoThrow(api.replays.webGetReplay, type === 'replay' && !named ? { ref: replayRef?.replay ?? rawId } : 'skip').data;
 
-  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : undefined;
+  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : type === 'replay' ? replay : undefined;
 
   const entity: any = served ?? seed;
 
@@ -161,7 +172,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   // One label rule for every type, shared with web: the pill reads as the
   // object's NAME.
   const resolvedTitle: string | undefined =
-    (type === 'trigger' ? entity?.display_title : undefined) || entity?.title || entity?.display_title || entity?.name;
+    (type === 'trigger' ? entity?.display_title : undefined) || (type === 'replay' ? replayTitle(entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
   // One change of a proposal (`op-55#3`) reads as the proposal's name and the
   // change's number. A proposal this phone does not hold has no name, so the
   // pill shows the reference as written, which already carries the number.
@@ -170,7 +181,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
-  }) +callRefLabelSuffix(callRef) + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
+  }) +callRefLabelSuffix(callRef) + (entity ? replayRefLabelSuffix(replayRef) : '') + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
   // A session that wears a character or a role is named as that person, the
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.
@@ -188,11 +199,14 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   // reads inline, it just isn't tappable. The type → screen table is shared
   // with the link opener and the deep-link handler (lib/links).
   const route = targetId ? mobileEntityRoute(type, targetId) : null;
+  // A replay has no screen on the phone: it opens the web replay page, at the
+  // moment it names, in the in-app browser (the player needs a real page).
+  const webPage = !route && type === 'replay' && entity ? entityRoute('replay', rawId) : null;
 
   return (
     <RNText
       style={[styles.pill, { backgroundColor: color + '1a', color }]}
-      onPress={route ? () => router.push(route as any) : undefined}
+      onPress={route ? () => router.push(route as any) : webPage ? () => void openWebPage(`${CODECAST_BASE_URL}${webPage}`) : undefined}
       suppressHighlighting
     >
       {type === 'task' ? (
