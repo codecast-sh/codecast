@@ -55,6 +55,12 @@ export interface Config extends CloudSessionSyncSettings {
   // silence the loop without unwinding the code.
   wip_snapshots_enabled?: boolean;
 
+  // --- Level sweep (daemon.ts sweepLevelCheckouts, land/levelSweep.ts) ---
+  // Shared checkouts whose repo sets `[ship] level = true` follow their
+  // upstream in place every minute. Set false to stop this machine doing it
+  // for every repo, whatever the repo says.
+  level_checkouts_enabled?: boolean;
+
   // --- Device identity ---
   // Explicit name for THIS machine, replacing the derived "macOS - <hostname>".
   // Set it on a provisioned box whose hostname is a UUID (a Scaleway Mac reads as

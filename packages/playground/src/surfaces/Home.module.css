@@ -10,7 +10,7 @@
 .top { height: 76px; display: flex; align-items: center; justify-content: space-between; }
 .wordmark {
   display: flex; align-items: center; gap: 10px; text-decoration: none;
-  font: 700 20px/1 var(--voice); font-variation-settings: var(--voice-axes);
+  font: 700 20px/1 var(--ui);
 }
 .you {
   display: flex; align-items: center; gap: 9px; padding: 4px 12px 4px 4px; border-radius: 12px;
@@ -24,7 +24,7 @@
 
 .hero { display: grid; grid-template-columns: 1fr 380px; gap: var(--s12); align-items: start; padding: var(--s8) 0 var(--s4); }
 .make { min-width: 0; }
-.headline { font: var(--t-hero); font-variation-settings: var(--voice-axes); letter-spacing: -.02em; }
+.headline { font: var(--t-hero); letter-spacing: -.02em; }
 .lede { margin: 12px 0 var(--s6); max-width: 560px; font: var(--t-lede); color: var(--ink-2); }
 
 .feed { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-sm), 0 0 0 1px var(--line); padding: 10px 14px 4px; }
