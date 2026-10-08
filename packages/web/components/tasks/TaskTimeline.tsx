@@ -12,6 +12,8 @@
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { ArrowRight, History, Link2, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
+import { WAIT_STATE_STYLE } from "./TaskBlockedMark";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { SessionTag } from "../identity/SessionTag";
@@ -22,6 +24,8 @@ import { groupByDay } from "../../lib/timelineRail";
 import { RailBare, RailDay, RailRow, StatusWord } from "../timeline/Rail";
 import { TaskCommentItem, UserBadge, type TaskCommentRow } from "./TaskCommentStream";
 import type { TaskLinkedSession } from "./TaskSessionList";
+import { EntityIdPill } from "../EntityIdPill";
+import { findStoredWaitTime, formatWaitTime, graphChange, type GraphTone } from "@codecast/shared/tasks";
 
 type Person = { name: string; image?: string; github_username?: string };
 
@@ -71,7 +75,30 @@ function changeStyle(row: HistoryRow) {
   if (SYNC_ACTIONS.has(row.action)) return { icon: Link2, color: "text-sol-cyan" };
   if (row.field === "status") return { icon: ArrowRight, color: "text-sol-yellow" };
   if (row.field === "assignee") return { icon: UserRound, color: "text-sol-cyan" };
+  const graph = graphChange(row);
+  if (graph) return GRAPH_STYLE[graph.tone];
   return { icon: Pencil, color: "text-sol-text-dim" };
+}
+
+const waitStyle = ({ icon, text }: { icon: typeof Pencil; text: string }) => ({ icon, color: text });
+const GRAPH_STYLE: Record<GraphTone, { icon: typeof Pencil; color: string }> = {
+  blocked: waitStyle(WAIT_STATE_STYLE.waiting),
+  met: waitStyle(WAIT_STATE_STYLE.met),
+  failed: waitStyle(WAIT_STATE_STYLE.failed),
+  link: { icon: Link2, color: "text-sol-cyan" },
+};
+
+/** A graph change's text, its stored UTC time (TG11) shown in the viewer's
+ *  zone, as the Blocked by row shows it, the stored words on hover. */
+function GraphText({ text }: { text: string }) {
+  const now = useCoarseNow(60_000);
+  const t = findStoredWaitTime(text);
+  if (!t) return <span className="text-sol-text min-w-0">{text}</span>;
+  return (
+    <span className="text-sol-text min-w-0" title={text}>
+      {text.slice(0, t.start)}{formatWaitTime(t.at, { now })}{text.slice(t.end)}
+    </span>
+  );
 }
 
 /** A linked session named inline, opening it on click. */
@@ -122,6 +149,21 @@ function ChangeBody({ row, provider, origin, openLinkedSession }: { row: History
         {row.new_value && (row.new_value_resolved
           ? <Who person={row.new_value_resolved} />
           : <span className="text-sol-text-muted italic">someone who has since left</span>)}
+      </>
+    );
+  }
+  const graph = graphChange(row);
+  if (graph) {
+    return (
+      <>
+        <Who person={row.actor} />
+        {graph.clauses.map((c, i) => (
+          <span key={i} className="inline-flex items-center flex-wrap gap-x-1.5 gap-y-0.5 min-w-0">
+            <span className={dim}>{c.verb}</span>
+            {c.refs?.map((ref) => <EntityIdPill key={ref} type="task" shortId={ref} />)}
+            {c.text && <GraphText text={c.text} />}
+          </span>
+        ))}
       </>
     );
   }

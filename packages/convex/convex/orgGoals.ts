@@ -151,13 +151,14 @@ export async function computeReportingPeople(
   return out;
 }
 
-/** The one line a person reads about their stalled goals, in the role's voice. */
+/** The one line a person reads when the high items of their focus stall, in
+ *  the role's voice. A person has focus, never goals, in what they read. */
 export function stallNoticeLine(roleHandle: string, goals: BriefGoal[], now: number): string {
   const days = (g: BriefGoal) => Math.max(1, Math.floor((now - (g.moved_at ?? now)) / DAY_MS));
   const named = goals.map((g) => `"${g.text}"${g.moved_at ? ` (${days(g)}d)` : " (nothing matched yet)"}`);
   return goals.length === 1
-    ? `@${roleHandle}: your high priority goal ${named[0]} has not moved. Open the role to see what is matched to it.`
-    : `@${roleHandle}: ${goals.length} of your high priority goals have not moved: ${named.join(", ")}.`;
+    ? `@${roleHandle}: ${named[0]}, high on your focus, has not moved. Open the role to see what is matched to it.`
+    : `@${roleHandle}: ${goals.length} of your high-priority focus items have not moved: ${named.join(", ")}.`;
 }
 
 const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10);
