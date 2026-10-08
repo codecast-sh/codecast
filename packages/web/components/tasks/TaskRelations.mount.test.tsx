@@ -1,0 +1,137 @@
+// The task page's relation rows (task-graph.md TG12), mounted over fixture
+// rows: one Blocked by row holding task blockers and waits with their state,
+// a missing blocker named and removable, the link rows only when they have
+// something, removal through the store actions, and the superseded banner.
+// Pills are stubbed to their reference: their own resolution is EntityIdPill's.
+import { afterAll, expect, mock, test } from "bun:test";
+import { act } from "react";
+import { JSDOM } from "jsdom";
+import { replaceGlobals } from "../../test-helpers/globals";
+import { closeDomWindow } from "../../test-helpers/domGlobals";
+
+const dom = new JSDOM("<!doctype html><html><body></body></html>");
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  HTMLElement: dom.window.HTMLElement,
+  Element: dom.window.Element,
+  Node: dom.window.Node,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+
+const realPill = await import("../EntityIdPill");
+mock.module("../EntityIdPill", () => ({
+  ...realPill,
+  EntityIdPill: ({ shortId, id, type }: any) => <span data-pill={type}>{shortId ?? id}</span>,
+}));
+// The server has answered for every reference: one the store lacks is gone.
+const realDisplay = await import("../../lib/entityDisplay");
+mock.module("../../lib/entityDisplay", () => ({
+  ...realDisplay,
+  useEntityResolution: () => ({ entity: null, served: true }),
+}));
+
+const { createRoot } = await import("react-dom/client");
+const { useInboxStore } = await import("../../store/inboxStore");
+const { SupersededBanner, TaskRelations } = await import("./TaskRelations");
+
+const before = useInboxStore.getState();
+afterAll(() => {
+  useInboxStore.setState(before, true);
+  closeDomWindow(dom);
+  restoreGlobals();
+});
+
+const WS = "team:t1";
+const task = (n: number, over: Record<string, any> = {}) => ({
+  _id: `id${n}`, short_id: `ct-${n}`, title: `Task ${n}`, status: "open", priority: "medium", task_type: "task", source: "human",
+  workspace: WS, created_at: n, updated_at: n, ...over,
+}) as any;
+const HOUR = 3_600_000;
+
+const page = task(1, {
+  blocked_by: ["ct-2", "ct-3", "ct-404"],
+  blocks: ["ct-5"],
+  related: ["ct-6"],
+  found_during: "ct-7",
+  waits: [
+    { id: "w1", kind: "pr_merged", repository: "o/r", pr_number: 42, state: "waiting", created_at: 0 },
+    { id: "w2", kind: "pr_checks_green", repository: "o/r", pr_number: 43, state: "failed", created_at: 0, note: "closed without merging" },
+    { id: "w3", kind: "decision", decision: "sd-4", state: "met", created_at: 0, note: "answered: Ship it" },
+    { id: "w4", kind: "time", at: Date.now() + 2 * HOUR + 60_000, state: "waiting", created_at: 0 },
+  ],
+});
+const tasks = Object.fromEntries(
+  [page, task(2, { status: "in_progress" }), task(3, { status: "done" }), task(5), task(6), task(7), task(8, { found_during: "ct-1" })].map((t) => [t._id, t]),
+);
+
+async function mount(node: React.ReactNode) {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => { root.render(node); });
+  return { container, root };
+}
+
+const rowOf = (c: HTMLElement, label: string) => c.querySelector(`[data-relation="${label}"]`) as HTMLElement | null;
+
+test("one Blocked by row: tasks then waits, each with its state and a word on where it stands", async () => {
+  const removed: string[] = [];
+  useInboxStore.setState({
+    removeBlocker: (a: string, b: string) => removed.push(`blocker ${a} ${b}`),
+    removeWait: (a: string, w: string) => removed.push(`wait ${a} ${w}`),
+    unrelateTasks: (a: string, b: string) => removed.push(`unrelate ${a} ${b}`),
+  } as any);
+  let asked = 0;
+  const { container, root } = await mount(<TaskRelations task={page} tasks={tasks} onAddBlocker={() => asked++} />);
+
+  const blocked = rowOf(container, "Blocked by")!;
+  const lines = [...blocked.querySelectorAll("[data-blocker-state]")] as HTMLElement[];
+  expect(lines.map((l) => l.dataset.blockerState)).toEqual(["waiting", "met", "missing", "waiting", "failed", "met", "waiting"]);
+  expect(lines.map((l) => l.textContent)).toEqual([
+    "ct-2",
+    "ct-3done",
+    "ct-404not found",
+    "o/r#42to merge",
+    "o/r#43closed without merging",
+    "sd-4answered: Ship it",
+    expect.stringMatching(/in 2h$/),
+  ]);
+  // Met reads as done, failed as red.
+  expect(lines[1]!.className).toContain("opacity-60");
+  expect(lines[4]!.querySelector("span.text-sol-red")!.textContent).toBe("closed without merging");
+
+  // Remove: the missing task blocker, a wait, a Blocks edge (from the
+  // dependent's side) and a related link, each through its store action.
+  const remove = (scope: HTMLElement, label: string) => (scope.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement).click();
+  await act(async () => {
+    remove(lines[2]!, "Remove blocker ct-404");
+    remove(lines[3]!, "Remove this wait");
+    remove(rowOf(container, "Blocks")!, "ct-5 stops waiting on ct-1");
+    remove(rowOf(container, "Related")!, "Unlink ct-6");
+  });
+  expect(removed).toEqual(["blocker ct-1 ct-404", "wait ct-1 w1", "blocker ct-5 ct-1", "unrelate ct-1 ct-6"]);
+
+  expect(rowOf(container, "Found during")!.textContent).toContain("ct-7");
+  expect(rowOf(container, "Found here")!.textContent).toContain("ct-8");
+
+  const add = [...blocked.querySelectorAll("button")].find((b) => b.textContent?.includes("Add blocker"))!;
+  await act(async () => { add.click(); });
+  expect(asked).toBe(1);
+  root.unmount();
+});
+
+test("a task with no relations shows only the Blocked by row's add affordance", async () => {
+  const lone = task(9);
+  const { container, root } = await mount(<TaskRelations task={lone} tasks={{ id9: lone }} onAddBlocker={() => {}} />);
+  expect([...container.querySelectorAll("[data-relation]")].map((r) => (r as HTMLElement).dataset.relation)).toEqual(["Blocked by"]);
+  expect(rowOf(container, "Blocked by")!.textContent).toBe("Blocked byAdd blocker…");
+  root.unmount();
+});
+
+test("a superseded task names its replacement at the top", async () => {
+  const { container, root } = await mount(<><SupersededBanner task={{ superseded_by: "ct-12" }} /><SupersededBanner task={{}} /></>);
+  expect(container.querySelectorAll("[data-superseded]")).toHaveLength(1);
+  expect(container.textContent).toBe("Superseded byct-12");
+  root.unmount();
+});
