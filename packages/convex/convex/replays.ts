@@ -468,61 +468,83 @@ async function putChunk(bucket: R2Bucket, key: string, body: Uint8Array): Promis
 }
 
 /**
- * Split a DOM capture into gzipped chunks: events packed until their JSON
- * passes chunk_target_raw_bytes, so one chunk's text is held at a time. A
- * chunk that gzips past chunk_max_bytes is halved; a single event past it
- * (a page too heavy to keep) is dropped and counted.
+ * A DOM capture as gzipped chunks, produced one at a time: events packed
+ * until their JSON passes chunk_target_raw_bytes, each event serialized once.
+ * A chunk that gzips past chunk_max_bytes is halved; a single event past it
+ * (a page too heavy to keep) comes out as "dropped". The import runs in the
+ * default runtime's 64 MiB beside the parsed recording, so a caller that
+ * uploads each chunk as it comes holds one chunk's text and bytes at a time.
  */
-export function chunkDomEvents(events: readonly RrwebEvent[]): { chunks: Uint8Array[]; dropped: number } {
-  const chunks: Uint8Array[] = [];
-  let dropped = 0;
-  const pack = (slice: readonly RrwebEvent[]) => {
-    if (!slice.length) return;
-    const gz = gzipSync(strToU8(JSON.stringify(slice)));
+export function* domChunkStream(events: readonly RrwebEvent[]): Generator<Uint8Array | "dropped"> {
+  function* pack(parts: string[]): Generator<Uint8Array | "dropped"> {
+    if (!parts.length) return;
+    const gz = gzipSync(strToU8(`[${parts.join(",")}]`));
     if (gz.length <= REPLAY_DOM_LIMITS.chunk_max_bytes) {
-      chunks.push(gz);
+      yield gz;
       return;
     }
-    if (slice.length === 1) {
-      dropped++;
+    if (parts.length === 1) {
+      yield "dropped";
       return;
     }
-    const half = Math.ceil(slice.length / 2);
-    pack(slice.slice(0, half));
-    pack(slice.slice(half));
-  };
-  let from = 0;
+    const half = Math.ceil(parts.length / 2);
+    yield* pack(parts.slice(0, half));
+    yield* pack(parts.slice(half));
+  }
+  let parts: string[] = [];
   let raw = 0;
-  for (let i = 0; i < events.length; i++) {
-    raw += JSON.stringify(events[i]).length;
+  for (const event of events) {
+    const part = JSON.stringify(event);
+    parts.push(part);
+    raw += part.length + 1;
     if (raw >= REPLAY_DOM_LIMITS.chunk_target_raw_bytes) {
-      pack(events.slice(from, i + 1));
-      from = i + 1;
+      yield* pack(parts);
+      parts = [];
       raw = 0;
     }
   }
-  pack(events.slice(from));
-  return { chunks: chunks.slice(0, REPLAY_DOM_LIMITS.max_chunks_per_replay), dropped: dropped + Math.max(0, chunks.length - REPLAY_DOM_LIMITS.max_chunks_per_replay) };
+  yield* pack(parts);
+}
+
+/** Every chunk of a capture at once (domChunkStream), held to max_chunks_per_replay; chunks past it count as dropped. */
+export function chunkDomEvents(events: readonly RrwebEvent[]): { chunks: Uint8Array[]; dropped: number } {
+  const chunks: Uint8Array[] = [];
+  let dropped = 0;
+  for (const c of domChunkStream(events)) {
+    if (c === "dropped" || chunks.length >= REPLAY_DOM_LIMITS.max_chunks_per_replay) dropped++;
+    else chunks.push(c);
+  }
+  return { chunks, dropped };
 }
 
 /**
  * Store a recording's DOM capture (already masked, prepareDomCapture) beside
  * its stream: content addressed under the recording's `dom/` prefix, so a
- * re-import uploads only what changed. Answers what saveImported records.
+ * re-import uploads only what changed. Each chunk is uploaded as it is
+ * packed, and packing stops at max_chunks_per_replay (the rest of a capture
+ * that long is not kept). Answers what saveImported records.
  */
 export async function storeReplayDom(
   bucket: R2Bucket,
   input: { source_id: string; external_id: string; events: readonly RrwebEvent[] },
 ): Promise<{ dom_chunk_keys: string[]; dom_bytes: number; dom_t0: number; dropped: number }> {
-  const { chunks, dropped } = chunkDomEvents(input.events);
   const replay = safeReplayPathSegment(input.external_id);
   const keys: string[] = [];
   let bytes = 0;
-  for (let seq = 0; seq < chunks.length; seq++) {
-    const key = replayDomChunkKey({ sourceId: input.source_id, replay, seq, sha256: await sha256Hex(chunks[seq]) });
-    await putChunk(bucket, key, chunks[seq]);
+  let dropped = 0;
+  for (const chunk of domChunkStream(input.events)) {
+    if (chunk === "dropped") {
+      dropped++;
+      continue;
+    }
+    if (keys.length >= REPLAY_DOM_LIMITS.max_chunks_per_replay) {
+      dropped++;
+      break;
+    }
+    const key = replayDomChunkKey({ sourceId: input.source_id, replay, seq: keys.length, sha256: await sha256Hex(chunk) });
+    await putChunk(bucket, key, chunk);
     keys.push(key);
-    bytes += chunks[seq].length;
+    bytes += chunk.length;
   }
   return { dom_chunk_keys: keys, dom_bytes: bytes, dom_t0: input.events[0]?.timestamp ?? 0, dropped };
 }
@@ -560,6 +582,7 @@ export const saveImported = internalMutation({
       timeline_at: now,
       imported_at: now,
       converter_version: VENDOR_CONVERTER_VERSION,
+      vendor_refresh_after: undefined,
       counts: args.counts,
       duration_ms: args.duration_ms,
       ...(args.url ? { url: args.url } : {}),
@@ -642,7 +665,15 @@ export const recordingForImport = internalQuery({
     const userId = await requireUserOrToken(ctx, args.api_token);
     const row = await readableReplay(ctx, userId, args.replay);
     if (!row) notFound("Replay not found");
-    return { replay_id: row!._id, short_id: row!.short_id, source_id: row!.source_id, provider: row!.provider, external_id: row!.external_id, imported_at: row!.imported_at ?? null, converter_version: row!.converter_version ?? null };
+    return { replay_id: row!._id, short_id: row!.short_id, source_id: row!.source_id, provider: row!.provider, external_id: row!.external_id, imported_at: row!.imported_at ?? null, converter_version: row!.converter_version ?? null, vendor_refresh_after: row!.vendor_refresh_after ?? null };
+  },
+});
+
+/** A refresh of an older copy failed: hold off asking the vendor again until `retry_at`. The copy keeps serving. */
+export const deferVendorRefresh = internalMutation({
+  args: { replay_id: v.id("replays"), retry_at: v.number() },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.replay_id, { vendor_refresh_after: args.retry_at });
   },
 });
 
@@ -673,6 +704,7 @@ function replayView(row: Doc<"replays">, sourceName: string | null) {
     has_timeline: row.timeline_at !== undefined,
     imported_at: row.imported_at ?? null,
     converter_version: row.converter_version ?? null,
+    vendor_refresh_after: row.vendor_refresh_after ?? null,
     updated_at: row.updated_at,
   };
 }
