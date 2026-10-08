@@ -109,8 +109,8 @@ export function assistantPromise(mail: boolean): string {
  *  where it can be connected. */
 export function assistantPrivacy(mail: boolean): string {
   return mail
-    ? "Your mail is read only when you ask, nothing is sent without your OK, and your data never trains AI models."
-    : "Nothing is sent or changed without your OK, and your data never trains AI models.";
+    ? "Your mail is read only when you ask. Nothing is sent, and no site you didn't name is opened, without your OK. Your data never trains AI models."
+    : "Nothing is sent or changed, and no site you didn't name is opened, without your OK. Your data never trains AI models.";
 }
 
 /** What the plans count, said once under them: a request is one ask and its answer. */
