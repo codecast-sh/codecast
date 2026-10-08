@@ -1,0 +1,26 @@
+{
+  "name": "ground failed-prove-has-no-route",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:failed-prove-has-no-route"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "ground:failed-prove-has-no-route",
+    "title": "ground failed-prove-has-no-route"
+  },
+  "asOf": "2026-10-07T12:00:00.000Z",
+  "trigger": {
+    "type": "ground"
+  },
+  "meta": {
+    "surface": "ground",
+    "visibility": "public",
+    "snapshot": "fixtures/ground/failed-prove-has-no-route.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "992ddc58-d415-4002-b196-08b569c23e82",
+  "createdAt": "2026-10-07T17:29:34.151Z"
+}
