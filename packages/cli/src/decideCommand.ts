@@ -523,12 +523,13 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--mine", "ls: every pending decision you hold, across sessions")
     .option("--note <text>", stdinText("recommend: a short note for the card"))
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
+    .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
     .option("--json", "Machine-readable output")
     .action(async (question: string | undefined, rest: string[], options: any) => {
       // `answer` is the one verb a person runs from a plain shell: without a
       // session the server treats the caller as the person; with one, only
-      // the holder role under a grant may answer (a session never answers
-      // as a person).
+      // the holder role under a grant may answer, or the session's human at
+      // their explicit word (--for-human).
       const sessionId: string | null = options.session || deps.detectCurrentSessionId();
       if (!sessionId && question !== "answer") fail("No session detected. Run inside a codecast session or pass --session <id>.");
 
@@ -628,11 +629,12 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         }
         // No session means a person at a plain shell: omit the key rather
         // than send null, which the route's validator refuses.
-        const result = await decideApi(deps, { decision_id: target, ...(sessionId ? { session_id: sessionId } : {}), ...parsed }, "/cli/decide/answer");
+        if (options.forHuman && !sessionId) fail("--for-human answers from a session for its human; at a plain shell you are the person, so drop it.");
+        const result = await decideApi(deps, { decision_id: target, ...(sessionId ? { session_id: sessionId } : {}), ...(options.forHuman ? { for_human: true } : {}), ...parsed }, "/cli/decide/answer");
         if (options.json) console.log(JSON.stringify(result, null, 2));
         else if (result.already_resolved) console.log(fmt.muted(`${decisionHandle(result)} was already resolved; the first answer stands.`));
         else {
-          console.log(`${fmt.success("Answered:")} ${decisionHandle(result)} → ${result.answer_label ?? "recorded"} (as ${result.answered_by?.kind === "role" ? "the holder role under a grant" : "a person"}).`);
+          console.log(`${fmt.success("Answered:")} ${decisionHandle(result)} → ${result.answer_label ?? "recorded"} (as ${result.answered_by?.kind === "role" ? "the holder role under a grant" : result.answered_by?.via ? "your human, at their word" : "a person"}).`);
           if (result.resumed_run) console.log(fmt.muted("  The paused run takes this answer and resumes."));
           else if (result.delivered !== false) console.log(fmt.muted("  The answer is delivered to the asking session as a message."));
         }

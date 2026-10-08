@@ -215,6 +215,26 @@ export function byRef<T extends { _id: string; short_id?: string }>(rows: T[], r
   return rows.find((r) => r.short_id === ref || r._id === ref);
 }
 
+/**
+ * One row a detail page names (short id or _id), from the whole collection.
+ * The lists above show the active workspace; a page opened by a link or a
+ * reference shows the row its detail feeder synced, whichever workspace it
+ * is in, the way a task page does: the feeder's read is the access check,
+ * and a refusal drops the row (dropGoneRow).
+ */
+function useOpsRow<T extends { _id: string; short_id?: string }>(key: "opsGroups" | "opsReplays", ref: string | null, sig: (row: T) => string): T | undefined {
+  const where = useMemo(() => (r: T) => !!ref && (r.short_id === ref || r._id === ref), [ref]);
+  return useCollectionRows<T>(key, { where, sig })[0];
+}
+
+export function useOpsGroup(ref: string | null): OpsGroup | undefined {
+  return useOpsRow<OpsGroup>("opsGroups", ref, groupSig);
+}
+
+export function useOpsReplay(ref: string | null): OpsReplay | undefined {
+  return useOpsRow<OpsReplay>("opsReplays", ref, replaySig);
+}
+
 const sampleSig = (s: OpsSample) => `${s.at}`;
 
 /** A group's newest samples, capped where the server caps them. */
