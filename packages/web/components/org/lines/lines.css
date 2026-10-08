@@ -1,0 +1,180 @@
+/* The one line grid (docs/architecture/initiatives-projects-role-page.md I5,
+ * cohesive build spec §6). Every goal, project, role and person line sits on
+ * these columns, so a filter that swaps one kind for another keeps every
+ * column where the eye left it:
+ *
+ *   [chev][glyph][title][owner][state][measure][date]
+ *
+ * The grid answers to its container, the document's article or the sheet
+ * body that wears `.ol-scope`, never to the window: the Org screen's seam
+ * moves the pane. From 860px every column shows; below it the owner column
+ * folds into a face after the name, so the title keeps its room; under 640px
+ * the measure goes too; under 480px (a phone) the name takes two lines and
+ * the state keeps its dot and word, its date left to the body and the sheet.
+ * Depth indents inside the chevron column, so nested lines keep their
+ * columns aligned with the lines above them. The fixed columns are sized for
+ * the app's monospace face at 11.5px (0.6em a glyph): "Ashot Petrosian"
+ * beside its face, "on track Oct 5", "640 of 10,000 a day", "since Jun". */
+
+.ol-scope { container: ol / inline-size; }
+
+.ol-line {
+  --ol-indent: 0px;
+  position: relative;
+  display: grid;
+  grid-template-columns: calc(14px + var(--ol-indent)) 20px minmax(170px, 1fr) 116px 172px;
+  grid-template-areas: "chev glyph title state measure";
+  align-items: center;
+  column-gap: 8px;
+  min-height: 34px;
+  padding: 5px 6px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--sol-text-muted);
+  cursor: default;
+  outline: none;
+  transition: background-color 120ms ease;
+}
+/* Every line is ruled from the one above it, whatever wraps it (a goal's
+ * group, a person's), so each section reads as the same table. A sheet's
+ * lines are siblings, and rule the same way. */
+.ol-line + .ol-line,
+.ol-body + .ol-line,
+[role="tree"] .ol-line { border-top: 1px solid color-mix(in srgb, var(--sol-border) 22%, transparent); }
+[role="tree"] > .ol-line:first-child,
+[role="tree"] > :first-child > .ol-line:first-child,
+[role="tree"] h3 + .ol-line { border-top: 0; }
+.ol-line[data-expandable] { cursor: pointer; }
+.ol-line:hover,
+.ol-line[aria-expanded="true"] { background: var(--sol-bg-alt); }
+.ol-line:focus-visible { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--sol-cyan) 60%, transparent); }
+.ol-line[data-selected] {
+  background: color-mix(in srgb, var(--sol-cyan) 9%, transparent);
+  box-shadow: inset 2px 0 0 var(--sol-cyan);
+}
+
+.ol-chev { grid-area: chev; justify-self: end; display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; color: var(--sol-text-dim); background: none; border: 0; padding: 0; border-radius: 3px; cursor: pointer; }
+.ol-chev svg { transition: transform 160ms cubic-bezier(.2, .7, .2, 1); }
+.ol-line[aria-expanded="true"] .ol-chev svg { transform: rotate(90deg); }
+.ol-chev:hover { color: var(--sol-text); }
+.ol-glyph { grid-area: glyph; display: inline-flex; align-items: center; justify-content: center; min-width: 0; }
+.ol-title { grid-area: title; display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+/* The name ends where its text ends and gives way first; a short word after
+ * it ("new", "you", "added here") is kept whole, 6px after the name, and a
+ * long one gives way too, down to a few words. */
+.ol-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--sol-text); text-decoration: none; }
+.ol-name:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.ol-sub { flex: 0 0 auto; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--sol-text-dim); }
+/* A long sub (where a goal would move) gives way to the name, down to a few words. */
+.ol-sub:has([data-sub-long]) { flex: 0 1 auto; min-width: 8ch; }
+/* The owner's face after the name: only where the owner column is gone. */
+.ol-face { display: inline-flex; flex: 0 0 auto; align-items: center; }
+.ol-owner, .ol-state, .ol-measure { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.ol-owner { grid-area: owner; display: none; }
+.ol-owner > *, .ol-state > * { min-width: 0; max-width: 100%; }
+.ol-state { grid-area: state; }
+.ol-measure { grid-area: measure; font-variant-numeric: tabular-nums; }
+.ol-date { grid-area: date; display: none; justify-self: end; font-size: 11.5px; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* A proposal's line: violet, a dashed rule on the left drawn inside the
+ * padding (so every column stays where the live lines put it), and where to
+ * answer it in place of the columns it cannot fill yet. Without an owner the
+ * name takes the owner's and the state's room too. */
+.ol-line[data-ghost] { background: color-mix(in srgb, var(--sol-violet) 7%, transparent); border-radius: 0 5px 5px 0; }
+.ol-line[data-ghost]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-left: 2px dashed color-mix(in srgb, var(--sol-violet) 70%, transparent);
+  pointer-events: none;
+}
+.ol-line[data-ghost]:hover,
+.ol-line[data-ghost][data-lit] { background: color-mix(in srgb, var(--sol-violet) 13%, transparent); }
+.ol-line[data-ghost] .ol-name { color: var(--sol-violet); }
+/* :where() keeps these spans at the specificity of the plain ghost rule, so
+ * the narrow grid's own placement below wins. */
+.ol-line[data-ghost]:where(:not([data-owned])) .ol-title { grid-column: title-start / state-end; }
+.ol-answer { grid-column: measure-start / -1; justify-self: end; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--sol-violet); text-decoration: none; }
+/* "answer in the conversation" only where the measure and date leave room; the title says it at every width. */
+.ol-answer-words { display: none; }
+.ol-answer:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* What a line opens to in place: its text starts on the title column (the
+ * line's 6px padding plus chevron, gap, glyph and gap, less the rule and the
+ * 13px before the text), and quieter than the lines around it, so the lines
+ * stay the layer the eye reads. */
+.ol-body {
+  margin: 0 0 4px calc(14px + 20px + 8px + var(--ol-indent, 0px));
+  padding: 6px 0 8px 13px;
+  max-width: 68ch;
+  font-size: 12.5px;
+  color: var(--sol-text-muted);
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  animation: ol-open 200ms cubic-bezier(.2, .7, .2, 1);
+}
+@keyframes ol-open { from { opacity: 0; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .ol-body { animation: none; } }
+
+/* Compact: a sheet's Carried by, where the line is a name, who answers for
+ * it and how it stands. Nothing in it opens in place, so the chevron column
+ * folds away and the glyph lines up with the section's heading. The line
+ * bleeds the same 14px past the text on both sides, and the state word ends
+ * on the edge the section's own controls end on. */
+.ol-compact .ol-line {
+  grid-template-columns: var(--ol-indent) 20px minmax(0, 1fr) 128px 116px;
+  grid-template-areas: "chev glyph title owner state";
+  margin-left: -14px;
+  margin-right: -14px;
+  padding-right: 20px;
+}
+.ol-compact .ol-state { justify-self: end; justify-content: flex-end; text-align: right; }
+.ol-compact .ol-measure, .ol-compact .ol-date, .ol-compact .ol-face { display: none; }
+.ol-compact .ol-owner { display: flex; }
+.ol-compact .ol-line[data-ghost]:where(:not([data-owned])) .ol-title { grid-column: title-start / owner-end; }
+/* A line under its own lead's sheet names no owner: the title takes the owner column. */
+.ol-compact .ol-line[data-no-owner] .ol-title { grid-column: title-start / owner-end; }
+.ol-compact .ol-answer { grid-column: state-start / -1; }
+
+@container ol (min-width: 860px) {
+  .ol-line {
+    grid-template-columns: calc(14px + var(--ol-indent)) 20px minmax(0, 1fr) 140px 124px 184px 64px;
+    grid-template-areas: "chev glyph title owner state measure date";
+  }
+  .ol-date { display: block; }
+  .ol-owner { display: flex; }
+  .ol-face { display: none; }
+  .ol-answer-words { display: inline; }
+  .ol-compact .ol-line { grid-template-columns: var(--ol-indent) 20px minmax(0, 1fr) 140px 124px; grid-template-areas: "chev glyph title owner state"; }
+  .ol-compact .ol-date { display: none; }
+}
+/* A narrow pane: the name and how it stands, with who answers for it as a
+ * face after the name, so "who" survives where its column cannot. */
+@container ol (max-width: 639px) {
+  .ol-line, .ol-compact .ol-line {
+    grid-template-columns: calc(14px + var(--ol-indent)) 20px minmax(0, 1fr) 112px;
+    grid-template-areas: "chev glyph title state";
+  }
+  .ol-compact .ol-line { grid-template-columns: var(--ol-indent) 20px minmax(0, 1fr) 112px; }
+  .ol-owner, .ol-measure, .ol-compact .ol-owner { display: none; }
+  .ol-face, .ol-compact .ol-face { display: inline-flex; }
+  .ol-line[data-ghost] .ol-title,
+  .ol-compact .ol-line[data-ghost] .ol-title { grid-column: title; }
+  .ol-answer, .ol-compact .ol-answer { grid-column: state; }
+}
+/* A phone: the name may take two lines, so goals that share their first
+ * words stay apart, and every cell sits on the first line. The state keeps
+ * its dot and word; the date is in the opened body and on the sheet. */
+@container ol (max-width: 479px) {
+  .ol-line, .ol-compact .ol-line { align-items: start; }
+  .ol-line { grid-template-columns: calc(14px + var(--ol-indent)) 20px minmax(0, 1fr) 84px; }
+  .ol-compact .ol-line { grid-template-columns: var(--ol-indent) 20px minmax(0, 1fr) 84px; }
+  /* The first line box is 12.5px at 1.35: the chevron, glyph, face and state centre on it. */
+  .ol-glyph, .ol-state, .ol-face { min-height: calc(12.5px * 1.35); }
+  .ol-chev { margin-top: calc((12.5px * 1.35 - 14px) / 2); }
+  .ol-title { align-items: flex-start; }
+  .ol-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .ol-state [data-health-date] { display: none; }
+}

@@ -1,15 +1,16 @@
-// The company document (docs/architecture/initiatives-projects-role-page.md
-// I5), mounted in jsdom against the Union shaped fixture. Proves: the four
-// sections in reading order; a goal's heading with its owner, status, health,
-// number with its trend, next milestone and target, then why and done when; a
-// goal that feeds another under it; projects as rows with lead, status, last
-// change and counts; the projects no goal carries; roles and people with what
-// they lead and own, every name a link; the contents list, beside the article
-// in a wide document and a line that opens in a narrower one; an open
-// proposal's goals and projects placed where they would sit, each proposed
-// name a link to the org screen where the proposal is answered (no card and
-// no reply box here); and the layout a narrow pane gets, chosen by the
-// document's own width.
+// The Org screen's Read lens (cohesive build spec §4.3, WP4), mounted in
+// jsdom against the Union shaped fixture. Proves: the name and one state
+// line, then Goals, Projects not under a goal and People and roles, every row
+// one of the four lines on the one grid; a goal line's metric with its trend
+// and no task bar; the document opening on its most pressing goal, a line
+// opened in place (why, latest update, its project and goal lines one level
+// in) and that choice written to the person's own synced UI state, read back
+// by a second window; an owner or status picked on a line painting in the
+// same tick; the title opening the object (a sheet in the screen, its address
+// elsewhere) and Enter doing the same; the Goals, Projects and People filters
+// keeping every line on the same cells; and an open proposal's goals,
+// projects and roles in violet, each saying where it is answered, lighting
+// its card on hover, with nothing to approve here.
 // Run: bun test components/company/CompanyDocument.mount.test.tsx
 import { test } from "bun:test";
 import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
@@ -21,32 +22,38 @@ import type { OrgTree } from "../org/orgTypes";
 async function verifyCompany() {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
-  for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
+  for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "MouseEvent", "KeyboardEvent", "FocusEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
     Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true });
   }
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  (globalThis as any).ResizeObserver = class { observe() {} disconnect() {} unobserve() {} };
   const { mock } = await import("bun:test");
   const React = await import("react");
   const { act } = React;
 
   // ── the world the document reads ──
   const fx = await import("./companyFixture");
-  // `width` is the document's own (its scroller's clientWidth); the window stays desktop sized throughout.
-  const env = { width: 1280, counted: true, tree: fx.COMPANY_FIXTURE_TREE as OrgTree | null };
-  Object.defineProperty((dom.window as any).HTMLElement.prototype, "clientWidth", { get() { return env.width; }, configurable: true });
+  const { UNION_GOALS_UPDATES } = await import("../org/goalsFixture");
+  const env = { counted: true, tree: fx.COMPANY_FIXTURE_TREE as OrgTree | null };
   const calls: string[] = [];
-  const collections: Record<string, any[]> = { initiatives: fx.COMPANY_FIXTURE_INITIATIVES, projects: fx.COMPANY_FIXTURE_PROJECTS, tasks: fx.COMPANY_FIXTURE_TASKS };
+  const collections: Record<string, any[]> = { initiatives: fx.COMPANY_FIXTURE_INITIATIVES.map((g) => ({ ...g })), projects: fx.COMPANY_FIXTURE_PROJECTS, tasks: fx.COMPANY_FIXTURE_TASKS, initiativeUpdates: UNION_GOALS_UPDATES };
   const TEAM = fx.COMPANY_FIXTURE_TREE.workspace.id;
   const state: any = {
     currentUser: { _id: "fixture-user-me", name: "Ashot Petrosian" },
-    clientState: { ui: { active_team_id: TEAM } },
+    clientState: { ui: { active_team_id: TEAM } as Record<string, any> },
     teams: [{ _id: TEAM, name: "Union" }],
+    teamMembers: fx.COMPANY_FIXTURE_ROSTER,
     get orgTree() { return env.tree; },
     orgProposals: {} as Record<string, any>,
     orgProposalChanges: {} as Record<string, any>,
     currentSessionId: null,
     sessions: {},
     reviewComments: {} as Record<string, any[]>,
+    // The stand-ins do what the store's actions do to the draft: the line
+    // reads the row back in the same tick (store/initiativeSlice.ts and
+    // updateClientUI are proven on the real store in their own tests).
+    updateInitiative: (id: string, fields: any) => { calls.push(`update:${id}:${JSON.stringify(fields)}`); collections.initiatives = collections.initiatives.map((r) => (r._id === id ? { ...r, ...fields } : r)); },
+    updateClientUI: (partial: Record<string, any>) => { calls.push(`ui:${JSON.stringify(partial)}`); state.clientState = { ...state.clientState, ui: { ...state.clientState.ui, ...partial } }; },
   };
   const propose = () => {
     state.orgProposals = Object.fromEntries(fx.COMPANY_FIXTURE_PROPOSALS.map(({ changes: _changes, ...row }) => [row._id, row]));
@@ -65,244 +72,305 @@ async function verifyCompany() {
     useSyncOrgProposals: () => { calls.push("feed:proposals"); return { ready: true, missing: false }; },
     useSyncOrgProposal: (ref: string | null) => { calls.push(`feed:proposal:${ref}`); return { ready: !!ref, missing: false }; },
   }));
-  mock.module("../../hooks/useSyncCollection", () => ({ useSyncCollection: () => ({ ready: true, refused: false, retry: () => {} }) }));
+  mock.module("../../hooks/useSyncCollection", () => ({ useSyncCollection: (key: string, _q: unknown, args: any) => { calls.push(`feed:${key}:${args?.initiative_id ?? ""}`); return { ready: true, refused: false, retry: () => {} }; } }));
+  mock.module("../../hooks/useCollectionRows", () => ({ useCollectionRows: (key: string, opts: any = {}) => (collections[key] ?? []).filter(opts.where ?? (() => true)).sort(opts.sort ?? (() => 0)) }));
   const realWorkspace = { ...(await import("../../hooks/useWorkspaceCollection")) };
   mock.module("../../hooks/useWorkspaceCollection", () => ({ ...realWorkspace, useWorkspaceCollection: (key: string) => collections[key] ?? [] }));
   const realInitiatives = { ...(await import("../../hooks/useInitiatives")) };
-  mock.module("../../hooks/useInitiatives", () => ({ ...realInitiatives, useTasksBackfilled: () => env.counted }));
+  mock.module("../../hooks/useInitiatives", () => ({ ...realInitiatives, useInitiatives: () => collections.initiatives, useTasksBackfilled: () => env.counted }));
   const realNow = { ...(await import("../../hooks/useCoarseNow")) };
   mock.module("../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => fx.COMPANY_FIXTURE_NOW, useNowWhen: () => fx.COMPANY_FIXTURE_NOW }));
   const realOrgRoles = { ...(await import("../../hooks/useOrgRoles")) };
   mock.module("../../hooks/useOrgRoles", () => ({ ...realOrgRoles, useOrgRoles: () => ({ roles: env.tree?.roles ?? [], workspace: env.tree?.workspace ?? null, roleBotUserIds: new Set<string>() }) }));
   const realRoster = await import("../../hooks/useTeamRoster");
   mock.module("../../hooks/useTeamRoster", () => ({ ...realRoster, useTeamRosterIdentity: () => fx.COMPANY_FIXTURE_ROSTER }));
-  mock.module("next/navigation", () => ({ useRouter: () => ({ replace: () => {}, push: () => {} }), useSearchParams: () => new URLSearchParams(""), usePathname: () => "/company" }));
+  const realNav = { ...(await import("next/navigation")) };
+  mock.module("next/navigation", () => ({ ...realNav, useRouter: () => ({ replace: (u: string) => calls.push(`replace:${u}`), push: (u: string) => calls.push(`push:${u}`) }), useSearchParams: () => new URLSearchParams(""), usePathname: () => "/org" }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
-  const realPill = { ...(await import("../EntityIdPill")) };
-  mock.module("../EntityIdPill", () => ({ ...realPill, EntityIdPill: ({ id, type }: any) => React.createElement("span", { "data-pill": `${type}:${id}` }, id) }));
   const realLeadChip = { ...(await import("../charter/ProjectLeadChip")) };
-  mock.module("../charter/ProjectLeadChip", () => ({ ...realLeadChip, ProjectLeadChip: ({ projectId, size }: any) => React.createElement("span", { "data-project-lead-chip": projectId, "data-size": size }) }));
+  mock.module("../charter/ProjectLeadChip", () => ({ ...realLeadChip, ProjectLeadChip: ({ projectId, size, editable }: any) => React.createElement("span", { "data-project-lead-chip": projectId, "data-size": size, "data-editable": editable ? "1" : "0" }) }));
   const realRoleFace = { ...(await import("../org/RoleFace")) };
   mock.module("../org/RoleFace", () => ({ ...realRoleFace, RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
   const realAssignee = { ...(await import("../identity/AssigneeFace")) };
   mock.module("../identity/AssigneeFace", () => ({ ...realAssignee, AssigneeFace: ({ info }: any) => React.createElement("span", { "data-face": info.kind === "role" ? `role:${info.handle}` : `person:${info.name}` }) }));
+  // A popover that is simply open: the picker's list is what the test reads.
+  const realPopover = { ...(await import("../ui/popover")) };
+  mock.module("../ui/popover", () => ({ ...realPopover, Popover: ({ children }: any) => children, PopoverTrigger: ({ children }: any) => children, PopoverAnchor: ({ children }: any) => children, PopoverContent: ({ children }: any) => React.createElement("div", { "data-popover": true }, children) }));
 
   const { createRoot } = await import("react-dom/client");
   const { CompanyDocument } = await import("./CompanyDocument");
+  const { OrgOpenContext } = await import("../org/company/orgOpenContext");
+  const { useChangeLit } = await import("../org/lines/changeLight");
   let root = createRoot(document.getElementById("root")!);
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
   const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
-  const mount = async () => {
+  const lit: Record<string, boolean> = {};
+  /** What a card in the conversation would read: is one of its changes lit. */
+  const Card = ({ id }: { id: string }) => { lit[id] = useChangeLit([id]); return null; };
+  let opener: any = null;
+  const mount = async (props: Record<string, any> = {}) => {
     await act(async () => root.unmount());
     root = createRoot(document.getElementById("root")!);
-    await act(async () => root.render(React.createElement(CompanyDocument)));
+    const doc = React.createElement(React.Fragment, null, React.createElement(CompanyDocument, props), React.createElement(Card, { id: "union-purpose" }), React.createElement(Card, { id: "union-staff-outreach" }));
+    await act(async () => root.render(opener ? React.createElement(OrgOpenContext.Provider, { value: opener }, doc) : doc));
   };
-  // An element that must not be there, compared as a boolean: a failing `assert.equal(<element>, null)` inspects the whole jsdom graph and never returns.
+  const rerender = async () => { await act(async () => {}); await mount(lastProps); };
+  let lastProps: Record<string, any> = {};
+  const show = async (props: Record<string, any> = {}) => { lastProps = props; await mount(props); };
+  const click = async (el: Element | null | undefined, msg = "missing element") => { assert.ok(el, msg); await act(async () => { (el as HTMLElement).dispatchEvent(new (dom.window as any).MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })); }); };
+  const key = async (el: Element | null, k: string) => { assert.ok(el); await act(async () => { el!.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); }); };
+  const hover = async (el: Element | null, on: boolean) => { assert.ok(el); await act(async () => { el!.dispatchEvent(new (dom.window as any).MouseEvent(on ? "mouseover" : "mouseout", { bubbles: true, relatedTarget: on ? document.body : document.body })); }); };
   const none = (el: Element | null | undefined, msg: string) => assert.equal(el == null, true, msg);
   const sections = () => qa("[data-company-section]").map((s) => s.getAttribute("data-company-section"));
-  const goalIds = (sel: string) => qa(sel).map((g) => g.getAttribute("data-company-goal"));
+  const line = (id: string) => q(`[data-line-id='${id}']`);
+  /** A line's cells, by the column each sits in. */
+  const cells = (el: Element) => [...el.children].map((c) => c.className.split(" ").find((k) => k.startsWith("ol-"))).filter(Boolean);
+  const GRID = ["ol-chev", "ol-glyph", "ol-title", "ol-owner", "ol-state", "ol-measure", "ol-date"];
 
-  // ── the document as the store holds it: four sections, in reading order ──
-  await mount();
-  assert.equal(q("[data-company-document]")!.getAttribute("data-company-layout"), "wide");
-  assert.deepEqual(sections(), ["company", "goals", "projects", "people"]);
+  // ── the document as the store holds it ──
+  await show();
   assert.ok(calls.includes("feed:projects") && calls.includes("feed:proposals"), "mounts the projects and proposals feeders");
-  assert.ok(calls.includes("feed:roles") && !calls.includes("feed:tree"), "the roles feeder, never the full tree: nothing here draws a session");
+  assert.ok(calls.includes("feed:roles") && !calls.includes("feed:tree"), "the roles feeder; the screen's map feeds the live tree into the same home");
+  assert.match(q("[data-company-article]")!.className, /\bol-scope\b/, "the article is the container its lines answer to: the room inside its padding, not the pane");
+  assert.doesNotMatch(q("[data-company-document]")!.className, /\bol-scope\b/);
+  assert.deepEqual(qa("[data-company-state] > span").map((c) => c.textContent), ["4 goals: 2 on track,", "1 at risk,", "1 with no update ·", "9 projects,", "1 with work moving ·", "2 people,", "2 agent roles"], "each comma part wraps whole, so a narrow pane breaks at a comma and never inside a word");
+  assert.ok(qa("[data-company-state] > span").every((c) => c.className === "whitespace-nowrap"));
   assert.equal(q("[data-company-name]")!.textContent, "Union");
-  assert.equal(qa("[data-company-purpose] p").length, 3, "why each top level goal matters");
-  assert.equal(q("[data-company-tally]")!.textContent, "4 goals, 9 projects, 2 people, 2 roles");
-  assert.equal(q("[data-company-proposals]"), null, "no proposal, no word about one");
-  assert.equal(qa("[data-subject]").length, 0);
+  assert.equal(q("[data-company-state]")!.textContent, "4 goals: 2 on track, 1 at risk, 1 with no update · 9 projects, 1 with work moving · 2 people, 2 agent roles");
+  assert.deepEqual(sections(), ["company", "goals", "unfiled", "people"]);
+  none(q("[data-company-toc], [data-company-proposals], [data-company-purpose]"), "no contents, no proposal banner, no purpose block: the header and the strip say those");
 
-  // A top level goal: its heading links to its page; who drives it stands beside it.
-  assert.deepEqual(goalIds("[data-company-section='goals'] > [data-company-goal]"), ["in-2", "in-4", "in-1"]);
-  const network = q("[data-company-goal='in-2']")!;
-  assert.equal(network.getAttribute("data-company-depth"), "1");
-  assert.equal(network.querySelector("h3[data-company-goal-title] a")!.getAttribute("href"), "/goals/in-2");
-  assert.equal(network.querySelector("h3")!.textContent, "Win the private network");
-  assert.ok(network.querySelector(":scope > header [data-company-byline] [data-face='person:Ashot Petrosian']"), "the owner's face by the heading");
-  assert.equal(network.querySelector("[data-company-byline] a[data-company-owner='user']")!.getAttribute("href"), "/team/ashot", "the owner is a link to the person");
-  const chips = network.querySelector(":scope > [data-company-chips]")!;
-  assert.equal(chips.querySelector("[data-initiative-owner]"), null, "on a wide page the owner is the byline, not a chip");
-  assert.equal(chips.querySelector("[data-company-status]")!.getAttribute("data-company-status"), "active");
-  assert.equal(chips.querySelector("[data-initiative-health]")!.getAttribute("data-initiative-health"), "on_track");
-  const metric = chips.querySelector("[data-metric='brokers']")!;
+  // Goals: one line each, the top level in the outline's order.
+  assert.deepEqual(qa("[data-company-section='goals'] [data-company-depth='1'] > [data-line='goal']").map((l) => l.getAttribute("data-line-ref")), ["in-2", "in-4", "in-1"]);
+  const network = line("union-in-2")!;
+  assert.deepEqual(cells(network), GRID, "a goal line fills every column of the grid");
+  assert.equal(network.querySelector("[data-line-title]")!.getAttribute("href"), "/org/in-2");
+  assert.ok(network.querySelector("[data-line-owner] [data-initiative-pick='owner'] [data-face='person:Ashot Petrosian']"), "the owner, as the picker the sheet uses");
+  assert.equal(network.querySelector("[data-line-state] [data-initiative-health]")!.getAttribute("data-initiative-health"), "on_track");
+  const metric = network.querySelector("[data-line-measure] [data-metric='brokers']")!;
   assert.equal(metric.getAttribute("data-metric-size"), "line");
-  assert.match(metric.textContent!, /Brokers onboarded.*17 of 40/);
-  assert.equal(metric.querySelector("[data-metric-trend]")!.getAttribute("data-metric-trend"), "up", "the trend, read from the history");
-  assert.equal(metric.querySelector("[data-metric-trend]")!.getAttribute("data-metric-toward"), "yes");
-  assert.equal(chips.querySelector("[data-initiative-milestone]")!.getAttribute("data-initiative-milestone"), "next");
-  assert.match(chips.querySelector("[data-initiative-milestone]")!.textContent!, /Twenty five brokers onboarded/);
-  assert.equal(chips.querySelector("[data-initiative-target]")!.getAttribute("data-initiative-target"), "ahead");
-  assert.match(network.querySelector(":scope > [data-company-words] > [data-company-why]")!.textContent!, /^Brokers place the deals/);
-  assert.match(network.querySelector(":scope > [data-company-words] > [data-company-done-when]")!.textContent!, /^Done when Forty brokers/);
-  // A goal with no why reads the first sentence of its description; one with neither says nothing.
-  assert.equal(q("[data-company-goal='in-1'] > [data-company-words] > [data-company-done-when]"), null);
+  assert.match(metric.textContent!, /^17 of 40/, "now of target, with no name: the column names it");
+  assert.doesNotMatch(metric.textContent!, /Brokers onboarded/);
+  assert.equal(metric.querySelector("[data-metric-trend]")!.getAttribute("data-metric-trend"), "up");
+  assert.ok(metric.querySelector("svg"), "the sparkline");
+  assert.equal(network.querySelector("[data-line-date] [data-initiative-target]")!.getAttribute("data-initiative-target"), "ahead");
+  none(q("[data-initiative-progress]"), "a goal's progress is its metric: no task bar");
+  // A goal without a metric or a target day leaves those cells out rather than drawing filler.
+  none(line("union-in-1")!.querySelector("[data-line-measure], [data-line-date]"), "no empty measure or date cell");
 
-  // What feeds it is a sub heading under it, with the same line of chips.
-  assert.deepEqual(goalIds("[data-company-goal='in-2'] > [data-company-subgoals] > [data-company-goal]"), ["in-5"]);
-  const ten = q("[data-company-goal='in-5']")!;
-  assert.equal(ten.getAttribute("data-company-depth"), "2");
-  assert.ok(ten.querySelector("h4[data-company-goal-title]"));
-  assert.ok(ten.querySelector("[data-company-byline] [data-face='person:Samvit Ramadurgam']"));
-  assert.ok(ten.querySelector("[data-company-chips] [data-metric='top_ten']"));
-  // A role owner wears the role's face.
-  assert.ok(q("[data-company-goal='in-4'] [data-company-byline] [data-face='role:agent-quality']"));
-  assert.equal(q("[data-company-goal='in-4'] [data-company-byline] a[data-company-owner='role']")!.getAttribute("href"), "/org/or-36", "a role owner links to the role");
-  assert.equal(q("[data-company-goal='in-4'] [data-metric-trend]")!.getAttribute("data-metric-toward"), "yes", "down toward a stay under target");
+  // It opens on the goal at the worst health; the rest are folded.
+  assert.deepEqual(qa("[data-company-open]").map((g) => g.getAttribute("data-company-goal")), ["in-4"]);
+  assert.equal(line("union-in-4")!.getAttribute("aria-expanded"), "true");
+  assert.equal(line("union-in-4")!.querySelector("[data-line-state] [data-initiative-health]")!.getAttribute("data-initiative-health"), "at_risk", "the line says the word the state line counts and the document opens on, whatever its status");
+  assert.equal(network.getAttribute("aria-expanded"), "false");
+  assert.match(q("[data-company-goal-body='in-4'] [data-company-why]")!.textContent!, /^One careless message/);
+  assert.ok(q("[data-company-goal-body='in-4'] [data-company-update='union-upd-2']"), "the owner's latest word");
+  assert.ok(calls.some((c) => c.startsWith("feed:initiativeUpdates")), "its updates are fed while it is open");
 
-  // Projects under a goal: a row each, with lead, status, last change and counts.
-  const row = network.querySelector(":scope > [data-company-projects] > [data-company-project='pr-6']")!;
-  assert.equal(row.querySelector("a")!.getAttribute("href"), "/projects/union-proj-network");
-  assert.equal(row.querySelector("a")!.textContent, "Broker / Private Network");
-  // Only the whole workspace role covers it: that names no lead for this project.
-  assert.equal(row.querySelector("[data-company-project-lead]")!.getAttribute("data-company-project-lead"), "none");
-  assert.equal(q("[data-company-project='pr-12'] [data-company-project-lead]")!.getAttribute("data-company-project-lead"), "agent-quality", "a role the project names is its lead");
-  assert.equal(q("[data-company-project='pr-12'] [data-company-project-lead]")!.getAttribute("href"), "/org/" + fx.COMPANY_FIXTURE_TREE.roles.find((r: any) => r.handle === "agent-quality")!.short_id);
-  assert.equal(row.querySelector("[data-company-project-status]")!.textContent, "active");
-  assert.ok(row.querySelector("[data-company-project-activity]")!.textContent);
-  assert.equal(row.querySelector("[data-company-project-counts]")!.textContent, "9 open, 12 done", "the board's count: dropped and agent rows are not in it");
-  assert.equal(row.querySelector("[data-company-project-meta]"), null, "one line on a wide page");
-  // A project two goals carry is listed once, and named on the other.
-  assert.equal(network.querySelectorAll(":scope > [data-company-projects] > [data-company-project]").length, 1);
-  assert.match(network.querySelector(":scope > [data-company-refs]")!.textContent!, /^Also carries Broker Outreach, listed under the goal nearest the work\.$/);
-  assert.ok(ten.querySelector("[data-company-project='pr-7']"));
+  // A click on the row opens it in place, and the choice is the person's, written to their synced UI state.
+  await click(network.querySelector(".ol-measure"), "the row's background");
+  assert.equal(calls.at(-1), `ui:${JSON.stringify({ org_expanded: ["union-in-4", "union-in-2"] })}`);
+  await rerender();
+  assert.equal(line("union-in-2")!.getAttribute("aria-expanded"), "true");
+  assert.match(q("[data-company-goal-body='in-2'] [data-company-why]")!.textContent!, /^Brokers place the deals/);
+  assert.ok(q("[data-company-goal-body='in-2'] [data-company-update='union-upd-1']"));
+  none(q("[data-company-refs]"), "no run-on sentence of the projects listed under other goals: each is a line where it is listed");
+  // What carries it, one level in: its project line, then the goal that feeds it, each on the same columns.
+  const pr6 = line("union-proj-network")!;
+  assert.equal(pr6.getAttribute("aria-level"), "2");
+  assert.deepEqual(cells(pr6), GRID);
+  assert.match(pr6.getAttribute("style")!, /--ol-indent: 18px/, "depth indents inside the first column, so every other column holds");
+  assert.equal(pr6.querySelector("[data-line-measure]")!.textContent, "12 of 21 tasks", "the board's count: dropped and agent rows are not in it");
+  assert.equal(pr6.querySelector("[data-line-owner] [data-project-lead-chip]")!.getAttribute("data-editable"), "1", "the lead, as the chip the board uses");
+  assert.match(pr6.querySelector("[data-project-glyph]")!.className, /bg-sol-blue/, "a diamond in the project's colour");
+  assert.equal(line("union-in-5")!.getAttribute("aria-level"), "2");
+  // The chevron folds it back.
+  await click(line("union-in-2")!.querySelector("[data-line-chev]"));
+  assert.equal(calls.at(-1), `ui:${JSON.stringify({ org_expanded: ["union-in-4"] })}`);
+  // A second window reads the same synced state and opens the same lines.
+  state.clientState.ui.org_expanded = ["union-in-2", "union-in-5", "gone-goal"];
+  await rerender();
+  assert.deepEqual(qa("[data-company-open]").map((g) => g.getAttribute("data-company-goal")), ["in-2", "in-5"], "what was opened elsewhere is open here; the stale id opens nothing");
 
-  // Projects no goal carries, by name.
-  assert.deepEqual(qa("[data-company-section='projects'] [data-company-project]").map((p) => p.getAttribute("data-company-project")), ["pr-2", "pr-3", "pr-4", "pr-1", "pr-9", "pr-8"]);
-  assert.equal(q("[data-company-section='projects'] [data-company-project='pr-4'] [data-company-project-counts]"), null, "no tasks counted, no counts");
+  // An owner or status picked on a line paints in the same tick.
+  const pick = (id: string, which: string, label: RegExp) => [...line(id)!.querySelectorAll(`[data-line-${which}] [data-popover] button`)].find((b) => label.test(b.textContent ?? ""));
+  await click(pick("union-in-2", "state", /^Planned$/), "the status list");
+  assert.equal(calls.at(-1), `update:union-in-2:${JSON.stringify({ status: "planned" })}`);
+  await rerender();
+  assert.equal(collections.initiatives.find((g: any) => g._id === "union-in-2")!.status, "planned", "the pick is in the store at once");
+  assert.equal(line("union-in-2")!.querySelector("[data-line-state] [data-initiative-health]")!.getAttribute("data-initiative-health"), "on_track", "a planned goal its owner has spoken on still shows their word");
+  assert.ok([...line("union-in-2")!.querySelectorAll("[data-line-state] [data-popover] button")].some((b) => b.textContent === "Not started"), "the status that is not a proposal says so plainly");
+  assert.equal(line("union-in-2")!.getAttribute("aria-expanded"), "true", "a pick is the control's own click, never the row's");
+  await click(pick("union-in-2", "owner", /Samvit/), "the owner list");
+  assert.equal(calls.at(-1), `update:union-in-2:${JSON.stringify({ owner: { kind: "user", user_id: "fixture-user-samvit" } })}`);
+  await rerender();
+  assert.ok(line("union-in-2")!.querySelector("[data-line-owner] [data-face='person:Samvit Ramadurgam']"));
+  collections.initiatives = fx.COMPANY_FIXTURE_INITIATIVES.map((g) => ({ ...g }));
 
-  // Roles, then people: every name a link, what each leads and owns.
-  const people = q("[data-company-section='people']")!;
-  assert.deepEqual(qa("[data-company-role]").map((r) => r.getAttribute("data-company-role")), ["or-35", "or-36"]);
-  const quality = q("[data-company-role='or-36']")!;
-  assert.ok(quality.querySelector("[data-role-face='agent-quality']"));
-  assert.equal(quality.querySelector("h4 a")!.getAttribute("href"), "/org/or-36");
-  assert.match(quality.textContent!, /@agent-quality/);
-  assert.match(quality.textContent!, /reports to Ashot Petrosian/);
-  assert.equal(quality.querySelector("a[data-company-reports-to]")!.getAttribute("href"), "/team/ashot", "who it reports to is a link");
-  assert.equal(quality.querySelector("[data-company-charter]")!.textContent, "Every conversation an agent runs is one we would be proud of.");
-  assert.equal(quality.querySelector("[data-company-leads='pr-12']")!.getAttribute("href"), "/projects/union-proj-quality");
-  assert.ok(quality.querySelector("[data-pill='initiative:in-4']"), "the goal it owns, as a live pill");
-  assert.ok(q("[data-company-role='or-35'] [data-pill='initiative:in-1']"));
-  assert.equal(q("[data-company-role='or-35'] [data-company-leads]"), null, "covering every project by the rule is not a lead to name");
-  const ashot = people.querySelector("[data-company-person='fixture-user-me']")!;
-  assert.ok(ashot.querySelector("[data-face='person']"));
-  assert.equal(ashot.querySelector("h4 a")!.getAttribute("href"), "/team/ashot");
-  assert.deepEqual([...ashot.querySelectorAll("[data-company-reports]")].map((a) => a.getAttribute("href")), ["/org/or-35", "/org/or-36"]);
-  assert.ok(ashot.querySelector("[data-pill='initiative:in-2']"));
-  assert.ok(people.querySelector("[data-company-person='fixture-user-samvit'] [data-pill='initiative:in-5']"));
+  // Outside the screen a line's title is an address and Enter navigates to it.
+  await key(line("union-in-1"), "Enter");
+  assert.equal(calls.at(-1), "push:/org/in-1");
+  // Inside the screen the title and Enter open the sheet, and neither folds the line.
+  const opened: string[] = [];
+  opener = { open: (kind: string, ref: string) => opened.push(`${kind}:${ref}`), openProposal: (s: string, n?: number) => opened.push(`proposal:${s}#${n}`) };
+  await rerender();
+  await click(line("union-in-2")!.querySelector("[data-line-title]"));
+  await key(line("union-proj-network"), "Enter");
+  assert.deepEqual(opened, ["initiative:in-2", "project:pr-6"]);
+  assert.equal(line("union-in-2")!.getAttribute("aria-expanded"), "true");
+  // Space and the arrows open and fold in place.
+  await key(line("union-in-1"), "ArrowRight");
+  assert.equal(calls.at(-1), `ui:${JSON.stringify({ org_expanded: ["union-in-2", "union-in-5", "gone-goal", "union-in-1"] })}`);
+  opener = null;
 
-  // The contents list beside a wide document: the sections and every goal, a goal that feeds another under it.
-  const toc = q("[data-company-toc]")!;
-  assert.equal(toc.getAttribute("data-company-toc"), "beside");
-  assert.deepEqual([...toc.querySelectorAll("a")].map((a) => a.getAttribute("href")), ["#company", "#goals", "#goal-union-in-2", "#goal-union-in-5", "#goal-union-in-4", "#goal-union-in-1", "#projects", "#people"]);
-  assert.deepEqual(qa("[data-company-toc-goal]").map((a) => a.getAttribute("data-company-toc-depth")), ["1", "2", "1", "1"]);
-  assert.ok(document.getElementById("goal-union-in-5"), "each entry names a part of the page");
-  // A pane too narrow for it (the window is as wide as before): the contents fold to a line under the header, still naming every part.
-  env.width = 900;
-  await mount();
-  assert.equal(q("[data-company-document]")!.getAttribute("data-company-layout"), "page");
-  const folded = q<HTMLDetailsElement>("details[data-company-toc='compact']")!;
-  assert.equal(folded.querySelector("summary")!.textContent, "Contents");
-  assert.deepEqual([...folded.querySelectorAll("a")].map((a) => a.getAttribute("href")), ["#goals", "#goal-union-in-2", "#goal-union-in-5", "#goal-union-in-4", "#goal-union-in-1", "#projects", "#people"]);
-  assert.match(q("[data-company-project='pr-6']")!.className, /grid/, "the page still has room for a project's columns");
-  env.width = 1280;
+  // Projects no goal carries: lines too, and one that says something against itself opens to it.
+  assert.deepEqual(qa("[data-company-section='unfiled'] [data-line='project']").map((l) => l.getAttribute("data-line-ref")), ["pr-2", "pr-3", "pr-4", "pr-1", "pr-9", "pr-8"]);
+  const callers = line("union-proj-callers")!;
+  assert.equal(callers.getAttribute("data-expandable"), "true", "past its target with work left");
+  assert.equal(line("union-proj-cameron")!.getAttribute("data-expandable"), null, "nothing to say, nothing to open");
+  state.clientState.ui.org_expanded = ["union-proj-callers", "union-proj-infra"];
+  await rerender();
+  assert.equal(q("[data-project-body='pr-2'] [data-project-trouble]")!.textContent, "Past its target");
+  assert.equal(q("[data-project-body='pr-4'] [data-project-trouble]")!.textContent, "1 risk in its charter");
+  none(q("[data-line-id='union-proj-infra'] [data-line-measure]"), "no tasks counted, no count");
 
-  // A cold task cache: a count read now would be partial, so the row says it is counting.
-  env.counted = false;
-  await mount();
-  assert.equal(q("[data-company-project='pr-6'] [data-company-project-counts]")!.textContent, "counting");
-  env.counted = true;
+  // People and roles: the reporting outline, a person then the roles under them.
+  assert.deepEqual(qa("[data-company-section='people'] [data-line]").map((l) => `${l.getAttribute("data-line")}:${l.getAttribute("aria-level")}`), ["person:1", "role:2", "role:2", "person:1"]);
+  assert.equal(q("[data-company-section='people'] [data-company-count]")!.textContent, "2 people · 2 roles");
+  const ashot = line("fixture-user-me")!;
+  assert.deepEqual(cells(ashot), GRID);
+  assert.equal(ashot.querySelector("[data-line-title]")!.getAttribute("href"), "/org/@ashot");
+  assert.equal(ashot.querySelector("[data-line-sub]")!.textContent, "you");
+  assert.equal(ashot.querySelector("[data-person-access]")!.textContent, "owner");
+  assert.equal(ashot.querySelector("[data-person-presence]")!.getAttribute("data-person-presence"), "online");
+  assert.equal(ashot.querySelector("[data-person-carries]")!.textContent, "1 goal · 5 sessions at work, 4 waiting on input", "the roles are the lines right under it: not counted again; only live sessions count");
+  assert.equal(ashot.querySelector("[data-person-since]")!.textContent, "since Jan");
+  const quality = line("fixture-role-agent-quality")!;
+  assert.deepEqual(cells(quality), GRID.filter((c) => c !== "ol-owner"), "the owner cell left empty, every other column held");
+  assert.equal(quality.querySelector("[data-line-title]")!.getAttribute("href"), "/org/or-36");
+  none(quality.querySelector("[data-role-reports-to]"), "it sits right under whom it reports to: the line does not name them again");
+  assert.equal(quality.querySelector("[data-role-state]")!.getAttribute("data-role-state"), "dormant", "its standing agent's own word");
+  assert.equal(quality.querySelector("[data-role-carries]")!.textContent, "leads Agent Quality");
+  assert.equal(line("fixture-role-head-of-people")!.querySelector("[data-role-carries]")!.textContent, "owns Every project has a lead and every goal an owner");
+  // A person opens in place to the goals they own, as goal lines.
+  await click(ashot.querySelector("[data-line-chev]"));
+  await rerender();
+  assert.ok(q("[data-company-person='fixture-user-me'] [data-line-id='union-in-2'][aria-level='2']"));
 
-  // ── with the open proposals: every goal and project in its place; the proposal itself is a link to the org screen ──
+  // ── the filters narrow the same document, and every line keeps the same cells ──
+  // A line draws only the cells it has something for, always in the grid's order: the columns hold still.
+  const lineCells = () => qa("[data-line]:not([data-ghost])").map((l) => cells(l) as string[]);
+  const onGrid = (c: string[]) => c.slice(0, 3).join(" ") === "ol-chev ol-glyph ol-title" && c.every((k, i) => i === 0 || GRID.indexOf(k) > GRID.indexOf(c[i - 1]));
+  await show({ filter: "goals" });
+  assert.deepEqual(sections(), ["company", "goals", "unfiled"]);
+  assert.ok(lineCells().every(onGrid));
+  await show({ filter: "projects" });
+  assert.deepEqual(sections(), ["company", "projects"]);
+  assert.deepEqual(qa("[data-company-project-group]").map((g) => g.getAttribute("data-company-project-group")), ["in-2", "in-5", "in-1", "unfiled"]);
+  assert.equal(qa("[data-company-section='projects'] [data-line='project']").length, 9, "every project once");
+  assert.equal(qa("[data-line='goal']").length, 0, "goals are headings here, not lines");
+  assert.ok(lineCells().every(onGrid));
+  await show({ filter: "people" });
+  assert.deepEqual(sections(), ["company", "people"]);
+  assert.ok(lineCells().every(onGrid));
+  // The line under the top sheet is marked, so the document stays live beside it.
+  await show({ selected: "or-36" });
+  assert.equal(line("fixture-role-agent-quality")!.getAttribute("data-selected"), "true");
+
+  // ── with the open proposals: each in its place, in violet, answered in the conversation ──
   propose();
-  await mount();
+  state.clientState.ui.org_expanded = undefined;
+  await show();
   assert.ok(calls.includes("feed:proposal:op-54") && calls.includes("feed:proposal:op-55"), "one feeder for each open proposal");
-  assert.ok(!calls.includes("feed:tree"), "cards read their before from the records in hand, never the full tree");
-  // Every loose project is placed by the proposal, so the section that lists loose ones is gone.
-  assert.deepEqual(sections(), ["company", "goals", "people"]);
-  assert.equal(q("[data-company-proposals]")!.getAttribute("data-company-proposals"), "13");
-  assert.deepEqual([...q("[data-company-proposals]")!.querySelectorAll("a")].map((a) => a.getAttribute("href")), ["/org?proposal=op-54", "/org?proposal=op-55"]);
-  assert.equal(q("[data-company-tally]")!.textContent, "4 goals, 9 projects, 2 people, 2 roles", "nothing proposed is counted as held");
-  // The changes are answered on the org screen: no card, no answer controls and no reply box here.
-  assert.equal(qa("[data-subject]").length, 0, "no cards in the document");
-  none(q("[data-subject-approve], [data-subject-reject], [data-subject-reply]"), "nothing to answer here");
-  none(q("[data-company-replies], [data-proposal-reply-box]"), "no reply box");
-  // The purpose it sets stands at the top as the heading, in the proposal's colour.
-  const top = qa("[data-company-section='goals'] > [data-company-goal]");
-  assert.equal(top.length, 1);
-  assert.equal(top[0].getAttribute("data-company-goal-kind"), "proposed");
-  const purposeHead = top[0].querySelector(":scope > h3[data-company-goal-ghost='union-purpose']")!;
-  assert.equal(purposeHead.textContent, "Broker high-value introductions that become real transactions");
-  assert.equal(purposeHead.querySelector("a")!.getAttribute("href"), "/org?proposal=op-54", "a proposed goal's name opens the proposal that sets it");
-  assert.equal(q("[data-company-purpose]")!.getAttribute("data-company-purpose"), "proposed", "the proposed purpose reads as proposed, not as missing");
-  assert.equal(q("[data-company-purpose-line]")!.textContent, "Union is a curated relationship network that brokers high-value introductions. proposed");
-  assert.equal(q("[data-company-toc-goal]")!.textContent, "Broker high-value introductions that become real transactions");
-  const under = top[0].querySelectorAll(":scope > [data-company-subgoals] > [data-company-goal]");
-  assert.equal(under.length, 9);
-  // A proposed goal under its parent: its heading, opening the proposal that sets it.
-  assert.equal(under[0].getAttribute("data-company-depth"), "2");
-  assert.equal(under[0].querySelector(":scope > h4[data-company-goal-ghost='union-revenue']")!.textContent, "Make revenue");
-  assert.equal(under[0].querySelector(":scope > h4 a")!.getAttribute("href"), "/org?proposal=op-54");
-  const carried = top[0].querySelector(":scope > details[data-company-refs]")!;
-  assert.match(carried.querySelector("summary")!.textContent!, /^Also carries 9 projects, listed under the goals nearest the work\.$/, "a purpose over every project counts them");
-  assert.equal(carried.querySelectorAll("a[href^='/projects/']").length, 9, "and opens to each by name");
-  // A project only a proposed goal would carry says so, in the one quiet word.
-  const wouldCarry = under[0].querySelector("[data-company-project='pr-9']")!;
-  assert.equal(wouldCarry.getAttribute("data-company-project-ghost"), "proposed");
-  assert.equal(wouldCarry.querySelector("[data-ghost-tag]")!.getAttribute("data-ghost-tag"), "proposed");
-  none(q("[data-company-goal='in-2'] [data-company-project='pr-6'] [data-ghost-tag]"), "a project a live goal carries is filed");
-  // A live goal the proposal moves keeps its heading, under the purpose.
-  const moved = q("[data-company-goal='in-2']")!;
-  assert.equal(moved.getAttribute("data-company-depth"), "2");
-  assert.equal(moved.getAttribute("data-company-goal-kind"), "live");
-  assert.ok(moved.querySelector(":scope > header h4[data-company-goal-title] a[href='/goals/in-2']"), "the live heading stays");
-  assert.ok(document.getElementById("goal-union-purpose"));
-  // A project the proposal places is drawn under its goal, and is not listed again as carried by nothing.
-  assert.equal(qa("[data-company-section='projects'] [data-company-project]").length, 0);
-  // A role the proposal would hire is not drawn here: the people section holds the roles that exist.
-  assert.deepEqual(qa("[data-company-role]").map((r) => r.getAttribute("data-company-role")), ["or-35", "or-36"]);
+  assert.equal(q("[data-company-state]")!.textContent, "4 goals: 2 on track, 1 at risk, 1 with no update · 9 projects, 1 with work moving · 2 people, 2 agent roles", "nothing proposed is counted as held");
+  // The company as it is stays the base: the counts are the live ones, with what the proposal would add said apart.
+  assert.deepEqual(sections(), ["company", "goals", "unfiled", "people"], "a project only a proposal places is still loose");
+  assert.equal(q("[data-company-section='goals'] [data-company-count]")!.textContent, "4 · 7 proposed");
+  assert.deepEqual(qa("[data-company-section='goals'] [data-company-depth='1'] > [data-line='goal']:first-child").map((l) => l.getAttribute("data-line-id")), ["union-in-2", "union-in-4", "union-in-1", "union-purpose"]);
+  const purpose = line("union-purpose")!;
+  assert.equal(purpose.getAttribute("data-ghost"), "");
+  assert.equal(purpose.querySelector("[data-line-title]")!.textContent, "Broker high-value introductions that become real transactions");
+  assert.equal(purpose.querySelector("[data-line-title]")!.tagName, "SPAN", "a proposed goal has no sheet to open yet");
+  const answer = purpose.querySelector("[data-line-answer]")!;
+  assert.equal(answer.textContent, "op-54 · answer in the conversation");
+  assert.equal(answer.getAttribute("href"), "/org?proposal=op-54&focus=1");
+  assert.equal(purpose.getAttribute("aria-expanded"), "false", "it opens on the live goal at the worst health, never on a proposal");
+  // A live goal the proposal would move keeps its place, and its own line says where it would go.
+  assert.equal(line("union-in-2")!.getAttribute("data-ghost"), null);
+  const move = line("union-in-2")!.querySelector("[data-company-goal-move]")!;
+  assert.equal(move.textContent, "", "an arrow, not words: the line it moves to says \"moves here\"");
+  assert.match(move.getAttribute("aria-label")!, /^moves under Broker high-value/);
+  assert.match(move.getAttribute("title")!, /^op-54 would move it under Broker high-value/);
+  // Opened, the proposed goal names the live goals that would come under it (each opens) and the goals it sets.
+  await click(purpose.querySelector("[data-line-chev]"));
+  await rerender();
+  assert.deepEqual(qa("[data-company-arriving]").map((a) => a.getAttribute("data-company-arriving")), ["in-2", "in-4", "in-1"]);
+  const arriving = line("arriving:union-in-2")!;
+  assert.equal(arriving.querySelector("[data-line-title]")!.getAttribute("href"), "/org/in-2", "a real goal a proposal would move opens like any other");
+  assert.equal(arriving.querySelector("[data-line-sub]")!.textContent, "moves here");
+  assert.equal(arriving.querySelector("[data-line-answer]")!.getAttribute("href"), null, "the line above already says where it is answered");
+  assert.equal(line("union-revenue")!.getAttribute("data-ghost"), "");
+  none(q("[data-company-change='union-network']"), "a goal's own move is never a line under it");
+  // Hovering a proposal's line lights its card in the conversation; leaving puts it out.
+  assert.equal(lit["union-purpose"], false);
+  await hover(line("union-purpose"), true);
+  assert.equal(lit["union-purpose"], true);
+  await hover(line("union-purpose"), false);
+  assert.equal(lit["union-purpose"], false);
+  // A role it would hire stands under who it would report to.
+  const hire = q("[data-company-ghost-role='union-staff-outreach'] [data-line='role']")!;
+  assert.equal(hire.getAttribute("aria-level"), "2");
+  assert.equal(hire.querySelector("[data-line-title]")!.textContent, "Broker Outreach Lead");
+  // The change just above it is the same proposal's and says where to answer it; this one does not repeat it.
+  assert.equal(q("[data-company-ghost-role='union-staff-quality-scope'] [data-line-answer]")!.getAttribute("href"), "/org?proposal=op-55&focus=2");
+  assert.equal(hire.querySelector("[data-line-answer]")!.getAttribute("href"), null);
+  const scope = q("[data-company-ghost-role='union-staff-quality-scope'] [data-line][aria-level='3']")!;
+  assert.ok(scope, "a change on a role, one level under it");
+  assert.equal(scope.querySelector("[data-line-title]")!.textContent, "would lead Callers & Call Management", "said from the role's line, which already names the role");
+  none(scope.querySelector("[data-line-sub]"), "no repeated role name");
+  assert.ok(scope.querySelector("[data-project-glyph]"), "the project glyph, not the role's face again");
+  await hover(hire, true);
+  assert.equal(lit["union-staff-outreach"], true);
+  await hover(hire, false);
+  // Inside the screen the answer scrolls the conversation to the card, without leaving.
+  opener = { open: () => {}, openProposal: (s: string, n?: number) => calls.push(`answer:${s}#${n}`) };
+  await rerender();
+  await click(line("union-purpose")!.querySelector("[data-line-answer]"));
+  assert.equal(calls.at(-1), "answer:op-54#1");
+  opener = null;
+  none(q("[data-subject-approve], [data-subject-reject], [data-subject-reply], [data-subject]"), "nothing to answer here");
 
-  // ── a narrow pane: one column, the chips under the heading, a project's facts under its name ──
-  env.width = 390;
-  state.orgProposals = {}; state.orgProposalChanges = {};
-  await mount();
-  assert.equal(q("[data-company-document]")!.getAttribute("data-company-layout"), "narrow");
-  assert.equal(q("[data-company-toc]")!.getAttribute("data-company-toc"), "compact", "the contents stay, folded");
-  assert.deepEqual(sections(), ["company", "goals", "projects", "people"]);
-  const phoneGoal = q("[data-company-goal='in-2']")!;
-  assert.equal(phoneGoal.querySelector("[data-company-byline]"), null);
-  assert.ok(phoneGoal.querySelector(":scope > [data-company-chips] [data-face='person:Ashot Petrosian']"), "the owner joins the line of chips under the heading");
-  assert.match(phoneGoal.querySelector(":scope > [data-company-chips]")!.className, /flex-wrap/);
-  const phoneRow = phoneGoal.querySelector("[data-company-project='pr-6']")!;
-  assert.doesNotMatch(phoneRow.className, /grid/);
-  assert.ok(phoneRow.querySelector("[data-company-project-meta] [data-company-project-lead]"));
-  assert.ok(phoneRow.querySelector("[data-company-project-meta] [data-company-project-counts]"));
-  env.width = 1280;
+  // A project under two goals is two lines in the Projects filter: each opens on its own, and the second says where it first appeared.
+  state.clientState.ui.org_expanded = [];
+  await show({ filter: "projects" });
+  const twice = qa("[data-company-section='projects'] [data-line='project']").filter((l) => l.getAttribute("data-line-ref") === "pr-12");
+  assert.equal(twice.length, 2, "listed under both goals");
+  assert.equal(twice[0].querySelector("[data-company-also-under]"), null);
+  assert.match(twice[1].querySelector("[data-company-also-under]")!.textContent!, /^also under Every relationship/);
+  await click(twice[0].querySelector("[data-line-chev]"));
+  await rerender();
+  assert.deepEqual(qa("[data-company-section='projects'] [data-line-ref='pr-12']").map((l) => l.getAttribute("aria-expanded")), ["true", "false"], "keyed by where it is drawn, not by the project alone");
 
   // ── before the org tree arrives: the plain outline under the team's name ──
   env.tree = null;
-  propose();
-  await mount();
+  await show();
   assert.equal(q("[data-company-name]")!.textContent, "Union");
-  assert.deepEqual(goalIds("[data-company-section='goals'] > [data-company-goal]"), ["in-2", "in-4", "in-1"]);
-  assert.equal(qa("[data-subject]").length, 0, "no tree, no cards");
-  assert.equal(qa("[data-company-role]").length, 0);
-  assert.equal(qa("[data-company-person]").length, 2, "the roster's people");
+  assert.deepEqual(qa("[data-company-section='goals'] [data-company-depth='1'] > [data-line='goal']").map((l) => l.getAttribute("data-line-ref")), ["in-2", "in-4", "in-1"]);
+  assert.equal(qa("[data-line='role']").length, 0);
+  assert.equal(qa("[data-line='person']").length, 2, "the roster's people");
+  none(q("[data-ghost]"), "no tree, no ghosts");
 
-  // ── an empty workspace reads as one, quietly ──
+  // ── an empty workspace: no empty sections, and a filter with nothing says so in two words ──
   collections.initiatives = []; collections.projects = [];
-  await mount();
-  assert.equal(q("[data-company-purpose]")!.getAttribute("data-company-purpose"), "none");
-  assert.match(q("[data-company-purpose]")!.textContent!, /^No purpose written yet$/);
-  assert.match(q("[data-company-section='goals']")!.textContent!, /No goals yet/);
-  assert.equal(q("[data-company-section='goals'] a")!.getAttribute("href"), "/goals");
-  assert.match(q("[data-company-section='projects']")!.textContent!, /No projects yet/);
+  await show();
+  assert.deepEqual(sections(), ["company", "people"]);
+  await show({ filter: "goals" });
+  assert.deepEqual(sections(), ["company"]);
+  assert.equal(q("[data-company-empty]")!.textContent, "No goals.");
 
   await act(async () => root.unmount());
 }
 
-test("company document mount: the sections, a goal's chips, every name a link, proposals placed and linked, a narrow pane", async () => {
+test("company document mount: lines on one grid, opened in place and synced, edits paint at once, filters line up, proposals in violet", async () => {
   await verifyCompany();
 }, 600_000);

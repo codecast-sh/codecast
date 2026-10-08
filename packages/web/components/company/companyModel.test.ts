@@ -1,9 +1,11 @@
 // The company document's joins (components/company/companyModel.ts), on the
-// Union shaped fixture: the outline's order, the projects no goal carries,
-// who leads and owns what, and where a proposal's changes land.
+// Union shaped fixture: the outline's order, the line of how the company
+// stands, the goal it opens on, the projects no goal carries, who leads and
+// owns what, the people and roles in reporting order, and where a proposal's
+// changes land and are answered.
 // Run: cd packages/web && bun test components/company/companyModel.test.ts
 import { describe, expect, test } from "bun:test";
-import { changeAnchor, companyDoc, firstSentence, flatGoals, goalAnchor, goalPurpose, tallyLine } from "./companyModel";
+import { companyDoc, defaultOpenGoal, firstSentence, flatGoals, goalProjects, goalPurpose, stateClauses, stateLine } from "./companyModel";
 import { COMPANY_FIXTURE_CHANGES, COMPANY_FIXTURE_INITIATIVES, COMPANY_FIXTURE_PROJECTS, COMPANY_FIXTURE_PROPOSALS, COMPANY_FIXTURE_ROSTER, COMPANY_FIXTURE_TASKS, COMPANY_FIXTURE_TREE, COMPANY_STAFF_PROPOSAL } from "./companyFixture";
 import { UNION_GOALS_CHANGES } from "../org/goalsFixture";
 
@@ -13,29 +15,35 @@ const titles = (goals: { title: string }[]) => goals.map((g) => g.title);
 describe("the plain outline", () => {
   const doc = companyDoc(base);
 
-  test("names the company and tallies what it holds", () => {
+  test("names the company and says how it stands in one line", () => {
     expect(doc.name).toBe("Union");
-    expect(doc.tally).toEqual({ goals: 4, projects: 9, people: 2, roles: 2 });
-    expect(tallyLine(doc.tally)).toBe("4 goals, 9 projects, 2 people, 2 roles");
-    expect(tallyLine({ goals: 1, projects: 1, people: 1, roles: 1 })).toBe("1 goal, 1 project, 1 person, 1 role");
+    expect(doc.state).toEqual({ goals: { total: 4, health: { on_track: 2, at_risk: 1, none: 1 } }, projects: { total: 9, moving: 1 }, people: 2, roles: 2, proposed: { goals: 0, projects: 0 } });
+    expect(stateLine(doc.state)).toBe("4 goals: 2 on track, 1 at risk, 1 with no update · 9 projects, 1 with work moving · 2 people, 2 agent roles");
+    // One of each, and nothing moving: the words agree and the empty part says nothing.
+    expect(stateLine({ goals: { total: 1, health: { off_track: 1 } }, projects: { total: 1, moving: 0 }, people: 1, roles: 1 })).toBe("1 goal: 1 off track · 1 project · 1 person, 1 agent role");
+    // Goals nobody has said anything about are counted without a health word.
+    expect(stateLine({ goals: { total: 2, health: { none: 2 } }, projects: { total: 0, moving: 0 }, people: 3, roles: 0 })).toBe("2 goals · 3 people");
     expect(doc.waiting).toBe(0);
   });
 
-  test("the purpose is why each top level goal matters, in the goals' order", () => {
-    expect(doc.purpose).toHaveLength(3);
-    expect(doc.purpose[0].text).toMatch(/^Brokers place the deals/);
-    expect(doc.purpose.every((p) => p.status === undefined)).toBe(true);
+  test("opens on the top level goal at the worst health, the nearest target breaking a tie", () => {
+    expect(defaultOpenGoal(doc.goals)).toBe("union-in-4");
+    const level = companyDoc({ ...base, initiatives: COMPANY_FIXTURE_INITIATIVES.map((g) => (g.short_id === "in-4" ? { ...g, health: "on_track" as const, target_date: undefined } : g)) });
+    expect(defaultOpenGoal(level.goals)).toBe("union-in-2");
+    expect(defaultOpenGoal([])).toBeNull();
+  });
+
+  test("each top level goal says why it matters", () => {
+    expect(doc.goals[0].purpose).toMatch(/^Brokers place the deals/);
   });
 
   test("a goal's purpose is read one way: why it matters, else the first sentence of what it is", () => {
     expect(goalPurpose("  Because.  ", "What it is. And more.")).toBe("Because.");
     expect(goalPurpose(undefined, "What it is. And more.")).toBe("What it is.");
     expect(goalPurpose("", undefined)).toBeNull();
-    // A goal with a description and no why still says a purpose, in the header and on its own line.
+    // A goal with a description and no why still says a purpose on its own line.
     const described = companyDoc({ ...base, initiatives: base.initiatives.map((g) => (g.short_id === "in-2" ? { ...g, why: undefined, description: "Win the brokers who place the deals. Then the rest." } : g)) });
-    expect(described.purpose[0].text).toBe("Win the brokers who place the deals.");
     expect(described.goals[0].purpose).toBe("Win the brokers who place the deals.");
-    expect(doc.goals[0].purpose).toBe(doc.purpose[0].text);
   });
 
   test("top level goals in list order, each followed by what feeds it", () => {
@@ -82,27 +90,58 @@ describe("the plain outline", () => {
     expect(head.leads).toEqual([]);
     expect(head.goals.map((g) => g.short_id)).toEqual(["in-1"]);
     expect(head.charter).toBe("Keeps every project led and every goal owned.");
-    expect(head.reportsTo).toEqual({ name: "Ashot Petrosian", href: "/team/ashot" });
+    expect(head.reportsTo).toEqual({ kind: "person", id: "fixture-user-me", name: "Ashot Petrosian", ref: "ashot" });
     expect(quality.leads.map((p) => p.title)).toEqual(["Agent Quality"]);
     expect(quality.goals.map((g) => g.short_id)).toEqual(["in-4"]);
   });
 
-  test("a person with the roles that report to them and the goals they own", () => {
+  test("a person with the roles that report to them, the goals they own, and what their line says", () => {
     const [ashot, samvit] = doc.people;
-    expect(ashot).toMatchObject({ name: "Ashot Petrosian", me: true, href: "/team/ashot" });
+    expect(ashot).toMatchObject({ name: "Ashot Petrosian", me: true, ref: "ashot", access: "owner", presence: "online", joined_at: COMPANY_FIXTURE_ROSTER[0].joined_at });
+    // The server's whole tally, not the few sessions the tree carries under them.
+    expect(ashot.sessions).toEqual({ working: 5, needs_input: 4, done: 4, dormant: 5, idle: 4 });
     // A person the roster has no username for is reached by id.
-    expect(companyDoc({ ...base, roster: [] }).people[0].href).toBe("/team/fixture-user-me");
+    expect(companyDoc({ ...base, roster: [] }).people[0].ref).toBe("fixture-user-me");
     expect(ashot.roles.map((r) => r.handle)).toEqual(["head-of-people", "agent-quality"]);
     expect(ashot.goals.map((g) => g.short_id)).toEqual(["in-2"]);
     expect(samvit.roles).toEqual([]);
     expect(samvit.goals.map((g) => g.short_id)).toEqual(["in-5"]);
   });
 
+  test("people and roles in reporting order: each person, then the roles under them", () => {
+    expect(doc.outline.map((r) => [r.kind, r.id, r.depth])).toEqual([
+      ["person", "fixture-user-me", 0],
+      ["role", "fixture-role-head-of-people", 1],
+      ["role", "fixture-role-agent-quality", 1],
+      ["person", "fixture-user-samvit", 0],
+    ]);
+    // A role that reports to a role sits under it, one level in.
+    const tree = { ...COMPANY_FIXTURE_TREE, roles: COMPANY_FIXTURE_TREE.roles.map((r) => (r.handle === "agent-quality" ? { ...r, reports_to: { kind: "role" as const, role_id: "fixture-role-head-of-people" } } : r)) };
+    expect(companyDoc({ ...base, tree }).outline.map((r) => [r.id, r.depth])).toEqual([["fixture-user-me", 0], ["fixture-role-head-of-people", 1], ["fixture-role-agent-quality", 2], ["fixture-user-samvit", 0]]);
+    // One that reports to nobody here sits under the person who hosts it; one nobody hosts comes last.
+    const away = { ...COMPANY_FIXTURE_TREE, roles: COMPANY_FIXTURE_TREE.roles.map((r) => (r.handle === "agent-quality" ? { ...r, reports_to: { kind: "user" as const, user_id: "gone" }, host_user_id: "fixture-user-samvit" } : r.handle === "head-of-people" ? { ...r, reports_to: { kind: "user" as const, user_id: "gone" }, host_user_id: "gone" } : r)) };
+    expect(companyDoc({ ...base, tree: away }).outline.map((r) => [r.id, r.depth])).toEqual([["fixture-user-me", 0], ["fixture-user-samvit", 0], ["fixture-role-agent-quality", 1], ["fixture-role-head-of-people", 0]]);
+    // Only a role that sits under whom it reports to leaves its line's owner cell empty.
+    const under = (d: ReturnType<typeof companyDoc>) => d.outline.flatMap((r) => (r.kind === "role" ? [[r.id, r.underReportsTo]] : []));
+    expect(under(doc)).toEqual([["fixture-role-head-of-people", true], ["fixture-role-agent-quality", true]]);
+    expect(under(companyDoc({ ...base, tree }))).toEqual([["fixture-role-head-of-people", true], ["fixture-role-agent-quality", true]]);
+    expect(under(companyDoc({ ...base, tree: away }))).toEqual([["fixture-role-agent-quality", false], ["fixture-role-head-of-people", false]]);
+  });
+
+  test("the state line's clauses, each kept whole", () => {
+    expect(stateClauses(doc.state)).toEqual([["4 goals: 2 on track,", "1 at risk,", "1 with no update"], ["9 projects,", "1 with work moving"], ["2 people,", "2 agent roles"]]);
+    expect(stateLine(doc.state)).toBe(stateClauses(doc.state).map((c) => c.join(" ")).join(" · "));
+  });
+
+  test("the Projects filter's groups: each project under the goal it is listed under", () => {
+    expect(goalProjects(doc.goals).map((g) => [g.goal.short_id, g.projects.map((p) => p.short_id)])).toEqual([["in-2", ["pr-6"]], ["in-5", ["pr-7"]], ["in-1", ["pr-12"]]]);
+  });
+
   test("an ended goal is history: not in the outline, not on its owner", () => {
     const ended = companyDoc({ ...base, initiatives: COMPANY_FIXTURE_INITIATIVES.map((g) => (g.short_id === "in-5" ? { ...g, status: "completed" as const } : g)) });
     expect(flatGoals(ended.goals).map((g) => g.short_id)).toEqual(["in-2", "in-4", "in-1"]);
     expect(ended.people[1].goals).toEqual([]);
-    expect(ended.tally.goals).toBe(3);
+    expect(ended.state.goals.total).toBe(3);
   });
 });
 
@@ -119,10 +158,10 @@ describe("before the org tree arrives", () => {
     expect(doc.waiting).toBe(0);
   });
 
-  test("every owner leads somewhere: a person to their page, a role to its page", () => {
+  test("every owner is a face: a person or a role", () => {
     const doc = companyDoc(base);
-    const byId = Object.fromEntries(flatGoals(doc.goals).map((g) => [g.short_id, g.ownerHref]));
-    expect(byId).toEqual({ "in-2": "/team/ashot", "in-5": "/team/samvit", "in-4": "/org/or-36", "in-1": "/org/or-35" });
+    const byId = Object.fromEntries(flatGoals(doc.goals).map((g) => [g.short_id, g.owner && `${g.owner.kind}:${g.owner.name}`]));
+    expect(byId).toEqual({ "in-2": "person:Ashot Petrosian", "in-5": "person:Samvit Ramadurgam", "in-4": "role:Agent Quality", "in-1": "role:Head of People" });
   });
 
   test("a workspace with no name anywhere is the personal one", () => {
@@ -132,50 +171,65 @@ describe("before the org tree arrives", () => {
 
 describe("with the open proposals", () => {
   const doc = companyDoc({ ...base, changes: COMPANY_FIXTURE_CHANGES });
-  const [purpose] = doc.goals;
+  const purpose = doc.goals.find((g) => !g.row)!;
 
-  test("a proposed goal stands where it would sit: the purpose at the top, the goals it gathers beneath", () => {
-    expect(titles(doc.goals)).toEqual(["Broker high-value introductions that become real transactions"]);
+  test("the company as it is stays the base: live goals in their live places, the proposal's new goals beside them", () => {
+    // The live goals keep their order and their parents; the purpose a proposal sets is a goal of its own after them.
+    expect(titles(doc.goals)).toEqual([
+      "Win the private network", "Every relationship the agents run is one we'd be proud of", "Every project has a lead and every goal an owner",
+      "Broker high-value introductions that become real transactions",
+    ]);
+    expect(doc.goals.slice(0, 3).every((g) => !!g.row)).toBe(true);
     expect(purpose.row).toBeUndefined();
     expect(purpose.proposed).toMatchObject({ proposal_id: "fixture-union-goals-proposal", row: { change_id: "union-purpose", kind: "initiative", status: "proposed", tag: "new" } });
     expect(purpose.owner).toMatchObject({ kind: "person", name: "Ashot Petrosian" });
-    expect(purpose.changes).toEqual([]);
+    // The goals it sets sit under it; the live goals it would gather are named there, and stay where they are.
     expect(titles(purpose.goals)).toEqual([
       "Make revenue", "Increase top of funnel", "Improve funnel conversion rate", "Decrease cost per match",
-      "Win the private network", "Fundraise and then public launch", "Build a team of intense and aligned people",
-      "Every relationship the agents run is one we'd be proud of", "Every project has a lead and every goal an owner",
+      "Fundraise and then public launch", "Build a team of intense and aligned people",
     ]);
-    expect(purpose.goals.every((g) => g.depth === 2)).toBe(true);
+    expect(purpose.goals.every((g) => !g.row && g.depth === 2)).toBe(true);
+    expect(purpose.arriving.map((a) => a.goal.short_id)).toEqual(["in-2", "in-4", "in-1"]);
   });
 
-  test("a proposed goal under a parent is a ghost in the parent's list", () => {
+  test("a live goal a proposal would move keeps its place and says where it would go", () => {
+    const network = doc.goals[0];
+    expect(network.row?.short_id).toBe("in-2");
+    expect(network.depth).toBe(1);
+    expect(network.move).toMatchObject({ row: { change_id: "union-network", tag: "moves here" }, under: "Broker high-value introductions that become real transactions" });
+    // The move is said on the goal's own line, never as a line under it.
+    expect(network.changes).toEqual([]);
+    // What fed it still does.
+    expect(network.goals.map((g) => [g.short_id, g.depth])).toEqual([["in-5", 2]]);
+    const quality = flatGoals(doc.goals).find((g) => g.short_id === "in-4")!;
+    expect(quality.move?.row.change_id).toBe("union-quality-shape");
+    // A project a change adds is a violet line under the goal; the change is said by that line.
+    expect(quality.projects.map((p) => [p.title, p.ghost?.tag ?? null])).toEqual([["Agent Quality", "added"]]);
+    // A move that also sets its numbers still says the numbers as a line.
+    expect(quality.changes.map((c) => c.row.change_id)).toEqual(["union-quality-shape"]);
+  });
+
+  test("a proposed goal under a parent carries the loose projects it would take, as violet lines", () => {
     const revenue = purpose.goals[0];
-    expect(revenue.row).toBeUndefined();
     expect(revenue.unknown).toBe(false);
     expect(revenue.proposed!.row).toMatchObject({ change_id: "union-revenue", parent: { kind: "goal", name: "Broker high-value introductions that become real transactions" }, owner: { name: "Samvit Ramadurgam" } });
     expect(revenue.projects.map((p) => [p.title, !!p.ghost])).toEqual([["People & Deals", true]]);
     expect(revenue.measures).toEqual(["Fees collected \u2192 The first dollar"]);
+    // A project a live goal carries today stays with it: the purpose names none again.
+    expect(purpose.projects).toEqual([]);
   });
 
-  test("a live goal keeps its row and wears each change as a line: its new place, its numbers, its projects", () => {
-    const network = purpose.goals.find((g) => g.short_id === "in-2")!;
-    expect(network.row?.short_id).toBe("in-2");
-    expect(network.proposed).toBeUndefined();
-    expect(network.changes.map((c) => [c.row.change_id, c.row.tag, c.under])).toEqual([["union-network", "moves here", "Broker high-value introductions that become real transactions"]]);
-    expect(network.measures).toEqual([]);
-    // What fed it still does.
-    expect(network.goals.map((g) => [g.short_id, g.depth])).toEqual([["in-5", 3]]);
-    const quality = purpose.goals.find((g) => g.short_id === "in-4")!;
-    expect(quality.changes.map((c) => [c.row.change_id, c.row.kind])).toEqual([["union-quality-shape", "initiative_shape"], ["union-quality-projects", "initiative_projects"]]);
-    expect(quality.changes[1].row.detail).toBe("Agent Quality");
-  });
-
-  test("a project an open proposal places is not listed as carried by nothing", () => {
-    // op-54 puts every loose project under a goal it sets: the proposal's rows draw them there.
-    expect(doc.unfiled.map((p) => p.title)).toEqual([]);
-    // Once the proposal is skipped they are loose again.
-    const skipped = companyDoc({ ...base, changes: UNION_GOALS_CHANGES.map((c) => ({ ...c, status: "skipped" as const })) });
-    expect(skipped.unfiled.map((p) => p.title)).toContain("Public Launch & Fundraise");
+  test("a project only a proposal places is still loose: listed with the projects no goal carries", () => {
+    expect(doc.unfiled.map((p) => p.title)).toEqual(["Callers & Call Management", "camerons ideas", "Infrastructure", "Matching Engine & Funnel", "People & Deals", "Public Launch & Fundraise"]);
+    expect(doc.unfiled.every((p) => !p.ghost)).toBe(true);
+    // The counts are the live ones; what the proposal would add is counted apart.
+    expect(doc.state.goals.total).toBe(4);
+    expect(doc.state.projects.total).toBe(9);
+    expect(doc.state.proposed).toEqual({ goals: 7, projects: 0 });
+    // Each live project is a live line once, under a goal or loose.
+    const live = [...flatGoals(doc.goals).flatMap((g) => g.projects.filter((p) => !p.ghost)), ...doc.unfiled];
+    expect(new Set(live.map((p) => p.id)).size).toBe(live.length);
+    expect(live.length).toBe(9);
   });
 
   test("a whole workspace role is nobody's lead; a role the project names is", () => {
@@ -184,22 +238,11 @@ describe("with the open proposals", () => {
     expect(all.find((p) => p.title === "Infrastructure")!.lead).toBeNull();
   });
 
-  test("a top level goal a proposal sets says the purpose, in its change's status, until the store carries it", () => {
-    const sentence = "Union is a curated relationship network that brokers high-value introductions.";
-    expect(doc.purpose).toEqual([{ text: sentence, status: "proposed" }]);
-    // Accepting it keeps the sentence in the header: it never falls back to "none written".
-    const accepted = companyDoc({ ...base, changes: UNION_GOALS_CHANGES.map((c) => (c._id === "union-purpose" ? { ...c, status: "accepted" as const } : c)) });
-    expect(accepted.purpose).toEqual([{ text: sentence, status: "accepted" }]);
-    // Applied: the goal is in the store with its description, and the header reads the same words off it.
-    const { change } = UNION_GOALS_CHANGES[0];
-    const applied = companyDoc({ ...base, initiatives: [...base.initiatives.map((g) => (g.parent_initiative_id ? g : { ...g, parent_initiative_id: "union-in-9" })), { ...base.initiatives[0], _id: "union-in-9", short_id: "in-9", title: (change as { title: string }).title, description: (change as { description: string }).description, why: undefined, parent_initiative_id: undefined, project_ids: [] }] });
-    expect(applied.purpose).toEqual([{ text: sentence }]);
-    // A proposed goal that writes why it matters says that, before and after.
+  test("a goal a proposal sets carries the record it would write", () => {
     const withWhy = companyDoc({ ...base, changes: UNION_GOALS_CHANGES.map((c) => (c._id === "union-purpose" ? { ...c, change: { ...c.change, why: "Introductions are the business." } } : c)) });
-    expect(withWhy.purpose[0]).toEqual({ text: "Introductions are the business.", status: "proposed" });
-    expect(withWhy.goals[0].record).toEqual({ why: "Introductions are the business.", milestones: [] });
-    // Nothing proposed at the top: the written purpose stands alone.
-    expect(companyDoc(base).purpose.some((p) => p.status)).toBe(false);
+    const set = withWhy.goals.find((g) => !g.row)!;
+    expect(set.record).toEqual({ why: "Introductions are the business.", milestones: [] });
+    expect(set.purpose).toBe("Introductions are the business.");
   });
 
   test("a change that only writes a goal's record says so in words: its sentence and the words it writes", () => {
@@ -211,51 +254,68 @@ describe("with the open proposals", () => {
     expect(c.sentence).toBe("Record on this goal: why it matters, what done looks like and the milestone Portal open");
     expect(c.record).toEqual({ why: "Brokers see the deals first.", done_when: "Forty brokers send us theirs.", milestones: ["Portal open"] });
     // A change that only places a goal is said whole by its tag: no sentence beside it.
-    expect(flatGoals(doc.goals).find((g) => g.short_id === "in-2")!.changes[0].sentence).toBeUndefined();
+    expect(flatGoals(doc.goals).find((g) => g.short_id === "in-2")!.move!.sentence).toBeUndefined();
     // One that places it and writes its record says the place in its tag and only the record in the sentence.
     const both = flatGoals(companyDoc({ ...base, changes: [{ ...record, change: { ...record.change, parent: "in-4" } }] }).goals).find((g) => g.short_id === "in-2")!.changes[0];
     expect([both.row.tag, both.under]).toEqual(["moves here", "Every relationship the agents run is one we'd be proud of"]);
     expect(both.sentence).toMatch(/^Record on this goal: why it matters/);
   });
 
-  test("every name on a change leads somewhere: a live thing to its page, a proposed one to its place on this page", () => {
+  test("every change knows where it is answered: its proposal and its number there", () => {
     const network = flatGoals(doc.goals).find((g) => g.short_id === "in-2")!;
-    expect(network.changes[0].hrefs).toEqual({ node: "/goals/in-2", parent: `#${goalAnchor("union-purpose")}`, proposal: "/org?proposal=op-54" });
+    expect(network.move!.proposal).toEqual({ short_id: "op-54", seq: 6 });
     const revenue = purpose.goals[0];
-    expect(revenue.ownerHref).toBe("/team/samvit");
-    expect(revenue.proposed!.hrefs).toMatchObject({ owner: "/team/samvit", parent: `#${goalAnchor("union-purpose")}`, proposal: "/org?proposal=op-54" });
-    expect(doc.staffing[0].hrefs).toEqual({ node: `#${changeAnchor("union-staff-outreach")}`, parent: "/team/ashot", proposal: "/org?proposal=op-55" });
-    expect(doc.roles.find((r) => r.role.handle === "agent-quality")!.changes[0].hrefs.node).toBe("/org/or-36");
-    // A skipped goal is not on the page: nothing links to where it would have been.
-    const skipped = companyDoc({ ...base, changes: UNION_GOALS_CHANGES.map((c) => (c._id === "union-purpose" ? { ...c, status: "skipped" as const } : c)) });
-    expect(flatGoals(skipped.goals).find((g) => g.short_id === "in-2")!.changes[0]?.hrefs.parent).toBeUndefined();
+    expect(revenue.proposed!.proposal).toEqual({ short_id: "op-54", seq: 2 });
+    // A project only a proposed goal would carry is answered with that goal.
+    expect(revenue.projects[0].ghost!.proposal).toEqual({ short_id: "op-54", seq: 2 });
+    expect(doc.staffing[0].proposal).toEqual({ short_id: "op-55", seq: 1 });
+    expect(doc.roles.find((r) => r.role.handle === "agent-quality")!.changes[0].proposal).toEqual({ short_id: "op-55", seq: 2 });
+    // Before the proposal's own row arrives there is nowhere to send the reader yet.
+    expect(companyDoc({ ...base, proposals: [], changes: COMPANY_FIXTURE_CHANGES }).staffing[0].proposal).toBeUndefined();
+  });
+
+  test("a role a proposal would hire stands under who it would report to; a change on a role, under the role", () => {
+    expect(doc.outline.map((r) => [r.kind, r.id, r.depth])).toEqual([
+      ["person", "fixture-user-me", 0],
+      ["role", "fixture-role-head-of-people", 1],
+      ["role", "fixture-role-agent-quality", 1],
+      ["ghost", "union-staff-quality-scope", 2],
+      ["ghost", "union-staff-outreach", 1],
+      ["person", "fixture-user-samvit", 0],
+    ]);
   });
 
   test("role changes land on the role they change; a role to hire stands on its own", () => {
     const quality = doc.roles.find((r) => r.role.handle === "agent-quality")!;
     expect(quality.changes.map((c) => [c.row.change_id, c.proposal_id])).toEqual([["union-staff-quality-scope", COMPANY_STAFF_PROPOSAL._id]]);
+    // Said from the role's own line, which already names the role.
+    expect(quality.changes[0].sentence).toBe("would lead Callers & Call Management");
     expect(doc.staffing.map((c) => [c.row.change_id, c.row.tag, c.row.node.name])).toEqual([["union-staff-outreach", "new role", "Broker Outreach Lead"]]);
     expect(doc.waiting).toBe(13);
     // Nothing proposed is counted as held.
-    expect(doc.tally).toEqual({ goals: 4, projects: 9, people: 2, roles: 2 });
+    const { proposed: _p, ...held } = doc.state;
+    const { proposed: _q, ...plain } = companyDoc(base).state;
+    expect(held).toEqual(plain);
   });
 
   test("an accepted change still draws; a skipped or applied one draws nothing", () => {
     const decided = UNION_GOALS_CHANGES.map((c) => (c._id === "union-revenue" ? { ...c, status: "accepted" as const } : c._id === "union-funnel" ? { ...c, status: "skipped" as const } : c._id === "union-quality-projects" ? { ...c, status: "applied" as const } : c));
     const after = companyDoc({ ...base, changes: decided });
-    const goals = after.goals[0].goals;
+    const goals = after.goals.find((g) => !g.row)!.goals;
     expect(goals.find((g) => g.title === "Make revenue")!.proposed!.row.status).toBe("accepted");
-    // Accepted is as good as placed: its project is no longer unfiled.
-    expect(after.unfiled.map((p) => p.title)).not.toContain("People & Deals");
+    // Accepted is not applied: the project stays loose until the store carries the goal.
+    expect(after.unfiled.map((p) => p.title)).toContain("People & Deals");
     expect(titles(goals)).not.toContain("Increase top of funnel");
-    expect(goals.find((g) => g.short_id === "in-4")!.changes.map((c) => c.row.change_id)).toEqual(["union-quality-shape"]);
+    const quality = flatGoals(after.goals).find((g) => g.short_id === "in-4")!;
+    expect(quality.changes.map((c) => c.row.change_id)).toEqual(["union-quality-shape"]);
+    expect(quality.projects.filter((p) => p.ghost)).toEqual([]);
     expect(after.waiting).toBe(8);
   });
 
   test("a failed change carries what the apply said", () => {
     const failed = UNION_GOALS_CHANGES.map((c) => (c._id === "union-network" ? { ...c, status: "failed" as const, applied_note: "in-2 was cancelled" } : c));
     const network = flatGoals(companyDoc({ ...base, changes: failed }).goals).find((g) => g.short_id === "in-2")!;
-    expect(network.changes[0]).toMatchObject({ note: "in-2 was cancelled", row: { status: "failed" } });
+    expect(network.move).toMatchObject({ note: "in-2 was cancelled", row: { status: "failed" } });
   });
 
   test("a change that names a goal nothing answers to is drawn at the top as unknown", () => {

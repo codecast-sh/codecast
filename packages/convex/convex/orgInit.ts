@@ -68,6 +68,7 @@ import { roleRoutineFor } from "./lib/orgRoutine";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
 import { handTask, recalcPlanProgress, resolveStatusWrite } from "./tasks";
+import { mintProjectShortId } from "./lib/projectShortId";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an
@@ -1288,6 +1289,7 @@ export async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Bou
           user_id: userId,
           team_id: boundary.team_id,
           workspace: key,
+          short_id: await mintProjectShortId(ctx, now),
           title: c.title.trim(),
           description: [c.description?.trim(), note].filter(Boolean).join("\n\n") || undefined,
           status: "active",

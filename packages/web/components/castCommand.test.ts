@@ -887,6 +887,17 @@ describe("extractDecideArgs", () => {
     expect(parse("cast decide ls")).toMatchObject({ verb: "ls", options: [] });
   });
 
+  test("show, answer and recommend name one decision and the choice, never a question", () => {
+    expect(parse("cast decide show sd-494")).toMatchObject({ verb: "show", ref: "sd-494", question: null });
+    expect(parse("cast decide show sd-494 --json")).toMatchObject({ verb: "show", ref: "sd-494" });
+    expect(parse("cast decide answer sd-494 1")).toMatchObject({ verb: "answer", ref: "sd-494", choice: "1" });
+    expect(parse(`cast decide answer sd-12 "2>1>3"`)).toMatchObject({ verb: "answer", ref: "sd-12", choice: "2>1>3" });
+    expect(parse("cast decide answer sd-12 --form k=v")).toMatchObject({ verb: "answer", ref: "sd-12", choice: "form" });
+    expect(parse("cast decide recommend sd-7 2 --note -")).toMatchObject({ verb: "recommend", ref: "sd-7", choice: "2" });
+    expect(isDecideCastCommand(parseCastCommandString("cast decide show sd-494"))).toBe(false);
+    expect(isDecideCastCommand(parseCastCommandString("cast decide answer sd-494 1"))).toBe(true);
+  });
+
   test("an ask or edit is a decide cast; ls is not", () => {
     expect(isDecideCastCommand(parseCastCommandString(`cast decide "Q?" -o A -o B --context why`))).toBe(true);
     expect(isDecideCastCommand(parseCastCommandString("cast decide edit --question Q"))).toBe(true);

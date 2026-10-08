@@ -11,6 +11,8 @@ import * as fs from "node:fs";
 import type {
   BrowserSpec,
   HostSpec,
+  ShipDeployStep,
+  ShipSpec,
   SyncSpec,
   PortSpec,
   ServiceSpec,
@@ -45,6 +47,9 @@ export class ManifestError extends Error {
  * Parse a manifest file. Returns the parsed manifest, or `null` if the file
  * does not exist. Throws ManifestError on malformed TOML or schema violations.
  */
+/** Conventional location of the workspace manifest within a repo. */
+export const MANIFEST_REL_PATH = ".codecast/workspace.toml";
+
 export function parseManifest(filePath: string): WorkspaceManifest | null {
   if (!fs.existsSync(filePath)) return null;
   const text = fs.readFileSync(filePath, "utf-8");
@@ -80,11 +85,12 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   const browser = validateBrowser(raw["browser"], file);
   const host = validateHost(raw["host"], file);
   const sync = validateSync(raw["sync"], file);
+  const ship = validateShip(raw["ship"], file);
 
   // Reject unknown top-level keys so typos in manifest are surfaced loudly.
   const known = new Set([
     "setup", "ports", "services", "env", "teardown", "verify", "browser",
-    "backend", "detected", "host", "sync",
+    "backend", "detected", "host", "sync", "ship",
   ]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) {
@@ -103,7 +109,7 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   }
   const backend = backendRaw ?? "local";
 
-  return { ...(host ? { host } : {}), ...(sync ? { sync } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
+  return { ...(ship ? { ship } : {}), ...(host ? { host } : {}), ...(sync ? { sync } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
 }
 
 /** An apt package or systemd unit name: nothing a shell would read as more than one word. */
@@ -140,6 +146,40 @@ function validateSync(raw: unknown, file?: string): SyncSpec | undefined {
     if (key !== "always" && key !== "never") throw new ManifestError(`unknown key in [sync]: '${key}'`, file, `sync.${key}`);
   }
   return { always: validateStringArray(raw["always"], "sync.always", file), never: validateStringArray(raw["never"], "sync.never", file) };
+}
+
+function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPlainObject(raw)) throw new ManifestError("'ship' must be a table", file, "ship");
+  const known = new Set(["mode", "check", "tests", "level", "deploy"]);
+  for (const key of Object.keys(raw)) {
+    if (!known.has(key)) throw new ManifestError(`unknown key in [ship]: '${key}'`, file, `ship.${key}`);
+  }
+  const mode = raw["mode"] ?? "pr";
+  if (mode !== "pr" && mode !== "direct") throw new ManifestError("'ship.mode' must be \"pr\" or \"direct\"", file, "ship.mode");
+  const check = raw["check"] ?? "cast check";
+  if (typeof check !== "string") throw new ManifestError("'ship.check' must be a string", file, "ship.check");
+  for (const key of ["tests", "level"] as const) {
+    if (raw[key] !== undefined && typeof raw[key] !== "boolean") throw new ManifestError(`'ship.${key}' must be true or false`, file, `ship.${key}`);
+  }
+  const deployRaw = raw["deploy"] ?? [];
+  if (!Array.isArray(deployRaw)) throw new ManifestError("'ship.deploy' must be an array of tables ([[ship.deploy]])", file, "ship.deploy");
+  const deploy = deployRaw.map((step, i): ShipDeployStep => {
+    const at = `ship.deploy[${i}]`;
+    if (!isPlainObject(step)) throw new ManifestError(`'${at}' must be a table`, file, at);
+    for (const key of Object.keys(step)) {
+      if (!["name", "when", "run", "stage"].includes(key)) throw new ManifestError(`unknown key in [[ship.deploy]]: '${key}'`, file, `${at}.${key}`);
+    }
+    const run = step["run"];
+    if (typeof run !== "string" || !run.trim()) throw new ManifestError(`'${at}.run' must be a non-empty string`, file, `${at}.run`);
+    const stage = step["stage"] ?? "after_push";
+    if (stage !== "before_push" && stage !== "after_push") throw new ManifestError(`'${at}.stage' must be "before_push" or "after_push"`, file, `${at}.stage`);
+    const name = step["name"] ?? run.split(/\s+/)[0];
+    if (typeof name !== "string") throw new ManifestError(`'${at}.name' must be a string`, file, `${at}.name`);
+    const when = typeof step["when"] === "string" ? [step["when"]] : validateStringArray(step["when"], `${at}.when`, file);
+    return { name, when, run, stage };
+  });
+  return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy };
 }
 
 function validateVerify(raw: unknown, file?: string): VerifySpec | undefined {
