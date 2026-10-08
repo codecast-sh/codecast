@@ -10,6 +10,12 @@ const DAY = 86_400_000;
 /** Relative stamps become calendar dates past this age. */
 export const RELATIVE_WINDOW_MS = 7 * DAY;
 
+/** This runtime's IANA zone, so a typed "2026-10-14 09:00" means 09:00 where
+ *  the person is, not in UTC. */
+export function localTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 // A target day (an initiative's `target_date`) is a calendar day, not a
 // moment: "2026-12-31" must read back as the same day in every timezone. It
 // is stored as the last instant of that day in UTC and read back as the UTC
@@ -151,17 +157,17 @@ export function parseEndDate(input: string, now: number = Date.now()): number | 
   return parsed;
 }
 
-// "24h", "90m", "1.5h", "2d", "30s", "500ms" → milliseconds; the long unit
-// spellings ("30min", "2hours", "1day") read the same. The one duration
+// "24h", "90m", "1.5h", "2d", "1w", "30s", "500ms" → milliseconds; the long
+// unit spellings ("30min", "2hours", "1day", "2weeks") read the same. The one duration
 // grammar for a length of time a person or a manifest writes: `cast trigger
 // --in/--every`, `cast stack --policy`, `cast connector grant --until`, an app
 // connector watch's `every`. Throws with a message that names the input.
 export function parseDuration(raw: string): number {
-  const m = raw.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)$/i);
-  if (!m) throw new Error(`"${raw}" is not a duration (use 30m, 24h, 2d)`);
+  const m = raw.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?|w|wks?|weeks?)$/i);
+  if (!m) throw new Error(`"${raw}" is not a duration (use 30m, 24h, 2d, 1w)`);
   const n = parseFloat(m[1]);
   const unit = m[2].toLowerCase();
-  const ms = unit === "ms" ? 1 : unit[0] === "s" ? 1000 : unit[0] === "m" ? MINUTE : unit[0] === "h" ? HOUR : DAY;
+  const ms = unit === "ms" ? 1 : unit[0] === "s" ? 1000 : unit[0] === "m" ? MINUTE : unit[0] === "h" ? HOUR : unit[0] === "w" ? 7 * DAY : DAY;
   const out = Math.round(n * ms);
   if (out <= 0) throw new Error("A duration must be positive");
   return out;

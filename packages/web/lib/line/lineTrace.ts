@@ -328,7 +328,9 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     const looped = loopedStation(run as ReportRun);
     const loopRows = looped ? visits.filter((v) => v.node === looped.node).length : 0;
     for (const [j, v] of visits.entries()) {
-      path.push(v.node);
+      // The path is drawn on today's map: a station the line has since lost
+      // (an old run's merge) keeps its story step but no place on the path.
+      if (graph.nodes.some((n) => n.id === v.node)) path.push(v.node);
       if (v.node === "ground") continue;
       const s = report.get(v.node);
       // The newest visit of a station is the one the run row keeps.
@@ -340,7 +342,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
         status: newest ? STATUS_OF[newest.state] : STATUS_OF[v.state],
         detail: newest ? [newest.result, newest.note].filter(Boolean).join(": ") : "An earlier round: the line keeps the details of a station's newest visit only",
         links: [], artifacts: newest ? sessionArtifacts(s) : [],
-        nodeId: v.node, runId: run._id, round, ...(v.inferred ? { inferred: true } : {}),
+        nodeId: graph.nodes.some((n) => n.id === v.node) ? v.node : null, runId: run._id, round, ...(v.inferred ? { inferred: true } : {}),
         ...(newest && looped?.node === v.node && looped.times > loopRows ? { visits: looped.times } : {}),
       });
     }
@@ -406,7 +408,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       id: "ship", stage: "ship", title: runOutcome(ship.run as ReportRun, cause, now, true).text.replace(/\.$/, ""),
       at: visit?.completed_at ?? ship.at, durationMs: visit?.started_at != null && visit.completed_at != null ? visit.completed_at - visit.started_at : null,
       status: "done", detail: landed ? [landed.result, landed.note].filter(Boolean).join(": ") : "",
-      links: landed?.href ? [{ label: landed.hrefTitle ?? "Open", href: landed.href }] : [], artifacts: [], nodeId: landed?.id ?? "ship",
+      links: landed?.href ? [{ label: landed.hrefTitle ?? "Open", href: landed.href }] : [], artifacts: [], nodeId: landed && graph.nodes.some((n) => n.id === landed.id) ? landed.id : "ship",
     });
   } else {
     // Titled by what it waits on: the kicker already says Ship.

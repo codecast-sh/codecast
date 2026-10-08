@@ -146,6 +146,7 @@ export type ShortcutAction =
   | 'task.status'
   | 'task.priority'
   | 'task.labels'
+  | 'task.blocker'
   | 'task.assign'
   | 'task.back'
   | 'doc.type'
@@ -486,6 +487,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
   { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
   { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },
+  { key: 'b', action: 'task.blocker', when: 'tasks', description: 'Add blocker (detail page)' },
   { key: 'a', action: 'task.assign', when: 'tasks', description: 'Assign (task list)' },
   { key: 'backspace', action: 'task.back', when: 'tasks', description: 'Back to task list (detail page)' },
   { key: 't', action: 'doc.type', when: 'docs', description: 'Set doc type' },
