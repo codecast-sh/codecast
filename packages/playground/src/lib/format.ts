@@ -9,9 +9,13 @@ export function chatTime(at: number, now: number): string {
   const age = now - at;
   if (age < MIN) return "now";
   if (age < HOUR) return `${Math.floor(age / MIN)}m`;
-  const d = new Date(at);
-  if (age < DAY) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(/\s?[AP]M$/i, "");
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (age < DAY) return timeOfDay(at);
+  return new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+/** "7:23": the hour and minute, the half of the day left to context. */
+function timeOfDay(at: number): string {
+  return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).replace(/\s?[AP]M$/i, "");
 }
 
 /** History: "just now", "6 min ago", "3 h ago", "yesterday", "Oct 2". */
@@ -24,10 +28,10 @@ export function ago(at: number, now: number): string {
   return new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-/** "since Sunday", "since today", "since Oct 2". */
+/** "since 5:49" (today), "since Sunday", "since Oct 2". */
 export function since(at: number, now: number): string {
   const age = now - at;
-  if (age < DAY && new Date(at).getDate() === new Date(now).getDate()) return "since today";
+  if (age < DAY && new Date(at).getDate() === new Date(now).getDate()) return `since ${timeOfDay(at)}`;
   if (age < 6 * DAY) return `since ${new Date(at).toLocaleDateString([], { weekday: "long" })}`;
   return `since ${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}`;
 }

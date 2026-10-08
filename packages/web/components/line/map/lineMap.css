@@ -267,6 +267,11 @@
 .lmap-now-item { font-size: 11.5px; line-height: 1.4; color: var(--sol-text-muted); padding-left: 13px; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .lmap-note { margin: 2px 16px 6px; font-size: 11.5px; color: var(--sol-text-muted); }
 .lmap-note code { color: var(--sol-text); }
+/* The line's three quality numbers over the window, one sentence under the bar. */
+.lmap-quality { margin-top: 0; }
+.lmap-quality b { font-weight: 600; color: var(--sol-text); }
+.lmap-quality [data-empty] { color: var(--sol-text-dim); }
+.lmap-quality-lead, .lmap-quality-sep { color: var(--sol-text-dim); }
 .lmap-trace-bar {
   display: flex; align-items: center; gap: 10px; margin: 2px 16px 6px; padding: 6px 10px;
   border-radius: 8px; font-size: 12px; min-width: 0;
