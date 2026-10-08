@@ -280,7 +280,7 @@ export function storyPromptInput(
   };
 }
 
-const PROMPT_IMAGES = 6;
+const PROMPT_IMAGES = 10;
 const PROMPT_EDITS = 3;
 const PROMPT_EMBEDS = 4;
 
