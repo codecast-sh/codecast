@@ -3,14 +3,16 @@
 // in the line page's header, the URL that holds the choice, and the "all
 // projects" roll-up, which only counts. Every number comes from lib/lineFlow
 // (lineRollup builds each project's flow the way its own page does).
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ArrowRight } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
-import { ALL_PROJECTS, NO_PROJECT, defaultLineKey, type LineProject, type RollupRow } from "../../lib/lineFlow";
+import { ALL_PROJECTS, NO_PROJECT, type LineProject, type RollupRow } from "../../lib/lineFlow";
 import { cn } from "../../lib/utils";
 import { lineProjectParam } from "../../lib/line/lineStations";
 import { centerInRow, edgeAttrs, useScrollEdges, type ScrollEdges } from "./useScrollEdges";
 import { EdgeArrows } from "./EdgeArrows";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 /** The URL names a line by its project's short id (or id), "none" or "all". */
 const paramOf = (key: string, projects: LineProject[]) => {
@@ -29,15 +31,15 @@ export function useLineProject(rollup: RollupRow[], projects: LineProject[], fix
   const router = useRouter();
   const pathname = usePathname();
   const search = useSearchParams();
-  const repoPath = useInboxStore((s) => s.activeProjectPath || s.currentConversation?.gitRoot || s.currentConversation?.projectPath || null);
   const asked = search?.get("project") ?? null;
   const key = useMemo(() => {
     if (fixed) return fixed;
     if (asked === ALL_PROJECTS || asked === NO_PROJECT) return asked;
     const named = asked ? projects.find((p) => p.short_id === asked || p._id === asked) : undefined;
     if (named) return named._id;
-    return defaultLineKey(rollup, projects, repoPath);
-  }, [fixed, asked, projects, rollup, repoPath]);
+    // With nothing asked, /line opens on every project's line at once.
+    return ALL_PROJECTS;
+  }, [fixed, asked, projects]);
   const select = useCallback((next: string) => {
     if (fixed) return;
     const params = new URLSearchParams(search?.toString() ?? "");
@@ -60,7 +62,7 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
   const edges = useScrollEdges(row, rollup.length > 0);
   // The selected pill sits at the row's center on mount and on every pick,
   // whole and clear of both faded edges.
-  useEffect(() => {
+  useWatchEffect(() => {
     const nav = row.current;
     const pill = nav?.querySelector<HTMLElement>("[data-active=true]");
     if (nav && pill) centerInRow(nav, pill);
@@ -71,7 +73,7 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
   return (
     <div className="relative -mx-4 sm:-mx-6 min-w-0">
     <nav ref={row} className="line-edge-fade line-scroll-quiet flex items-center gap-1 overflow-x-auto px-4 sm:px-6 pb-0.5" aria-label="Projects" data-line-projects {...edgeAttrs(edges)}>
-      <Pill active={selected === ALL_PROJECTS} onClick={() => onSelect(ALL_PROJECTS)} label="All projects" count={total} />
+      <Pill active={selected === ALL_PROJECTS} onClick={() => onSelect(ALL_PROJECTS)} label="All lines" count={total} />
       {rollup.map((r) => (
         <Pill
           key={r.key}
@@ -82,7 +84,7 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
           count={r.causes}
           awaiting={r.awaiting}
           silent={r.silent}
-          tip={[r.short_id, `${r.causes} in the queue`, r.awaiting ? `${r.awaiting} card${r.awaiting === 1 ? "" : "s"} waiting on you` : null, r.finders ? `${r.finders} finder${r.finders === 1 ? "" : "s"}${r.silent ? `, ${r.silent} silent 24h` : ""}` : null].filter(Boolean).join(" · ")}
+          tip={[`${r.causes} ${r.causes === 1 ? "problem waits" : "problems wait"} to start`, r.awaiting ? `${r.awaiting} finished ${r.awaiting === 1 ? "fix waits" : "fixes wait"} for your decision` : null, r.silent ? `${r.silent} ${r.silent === 1 ? "source has" : "sources have"} gone quiet` : null].filter(Boolean).join(" · ")}
         />
       ))}
     </nav>
@@ -95,7 +97,7 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
  *  row (under the fade counts as clipped), so the arrow can carry them. */
 function useClippedWaiting(row: RefObject<HTMLElement | null>, edges: ScrollEdges, rows: unknown) {
   const [waiting, setWaiting] = useState({ left: 0, right: 0 });
-  useEffect(() => {
+  useWatchEffect(() => {
     const nav = row.current;
     if (!nav) return;
     const measure = () => {
@@ -136,79 +138,86 @@ function Pill({ active, onClick, label, count, awaiting = 0, silent, muted, tip 
     >
       <span>{label}</span>
       {awaiting > 0
-        ? <span className="text-sol-yellow tabular-nums font-semibold" aria-label={`${awaiting} waiting on you, ${count} in the queue`} data-line-pill-awaiting>{awaiting}</span>
-        : <span className="tabular-nums" data-zero={count === 0 ? "true" : undefined} aria-label={`${count} in the queue`}>{count}</span>}
-      {!!silent && <span className="line-silent-dot" role="img" aria-label={`${silent} silent finder${silent === 1 ? "" : "s"}`} data-line-pill-silent />}
+        ? <span className="text-sol-yellow tabular-nums font-semibold" aria-label={`${awaiting} waiting for your decision, ${count} waiting to start`} data-line-pill-awaiting>{awaiting}</span>
+        : <span className="tabular-nums" data-zero={count === 0 ? "true" : undefined} aria-label={`${count} waiting to start`}>{count}</span>}
+      {!!silent && <span className="line-silent-dot" role="img" aria-label={`${silent} quiet source${silent === 1 ? "" : "s"}`} data-line-pill-silent />}
     </button>
   );
 }
 
-const COLS: Array<{ key: keyof RollupRow; label: string; tip: string }> = [
-  { key: "signalsDay", label: "Sense 24h", tip: "Signals filed in the last 24 hours" },
-  { key: "causes", label: "Causes", tip: "Open causes waiting to be admitted" },
-  { key: "build", label: "In build", tip: "Live runs on a cause" },
-  { key: "awaiting", label: "Awaiting you", tip: "Change cards waiting on your answer" },
-  { key: "watching", label: "Watching", tip: "Shipped causes inside their watch" },
-  { key: "closed", label: "Closed 7d", tip: "Causes shipped, dissolved or resolved this week" },
-];
-
-/** "All projects": every line counted, nothing listed. A row opens that line. */
-export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect: (key: string) => void }) {
-  const sum = (k: keyof RollupRow) => rollup.reduce((n, r) => n + (r[k] as number), 0);
-  const findersTotal = sum("finders");
-  const silentTotal = sum("silent");
-  return (
-    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5" data-line-rollup>
-      {/* A narrow screen scrolls the table sideways; the scroller's edge shadow
-          says more columns sit past the edge (line.css). */}
-      <div className="line-rollup-scroll overflow-x-auto max-w-[1100px]">
-      <table className="w-full min-w-[640px] border-separate border-spacing-0 text-[13px]">
-        <thead>
-          <tr className="text-[11px] text-sol-text-dim">
-            <th className="text-left font-normal py-2 pr-4 border-b border-sol-border/40">Project</th>
-            {COLS.map((c) => <th key={c.key} title={c.tip} className="text-right font-normal py-2 px-3 border-b border-sol-border/40 whitespace-nowrap">{c.label}</th>)}
-            <th className="text-right font-normal py-2 pl-3 border-b border-sol-border/40 whitespace-nowrap" title="Finders the project's line profile declares, and how many filed nothing in 24 hours">Finders</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rollup.map((r) => (
-            <tr key={r.key} onClick={() => onSelect(r.key)} className="line-row cursor-pointer" data-line-rollup-row={r.key}>
-              <td className="py-2.5 pr-4 border-b border-sol-border/20">
-                <div className={cn("text-sol-text", r.key === NO_PROJECT && "italic text-sol-text-muted")}>{r.title}</div>
-                {r.short_id && <div className="mt-0.5 font-mono text-[11px] text-sol-text-dim whitespace-nowrap">{r.short_id}</div>}
-              </td>
-              {COLS.map((c) => <Cell key={c.key} value={r[c.key] as number} ask={c.key === "awaiting"} />)}
-              <td className="py-2.5 pl-3 border-b border-sol-border/20 text-right tabular-nums whitespace-nowrap text-[11px]">
-                {/* What files here without a declaration reads as itself, so a busy source never shows as "none" (LX7). */}
-                {r.finders > 0 && <><span className="text-sol-text-muted">{r.finders}</span>{r.silent > 0 && <span className="text-sol-orange">, {r.silent} silent</span>}</>}
-                {r.undeclared.length > 0 && (
-                  <span className="text-sol-text-dim" title={`${r.undeclared.join(", ")} filed signals this week without a finder in the project's line profile. Declare one from the source's node on the map.`} data-line-rollup-undeclared>
-                    {r.finders > 0 && <span> · </span>}{r.undeclared.slice(0, 2).join(", ")}{r.undeclared.length > 2 && ` +${r.undeclared.length - 2}`}
-                    <span className="opacity-60">, not declared</span>
-                  </span>
-                )}
-                {r.finders === 0 && r.undeclared.length === 0 && <span className="text-sol-text-dim opacity-60" title="No finders declared: cast line profile --publish in the project's repo">none</span>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="text-sol-text-muted">
-            <td className="pt-2.5 pr-4 text-[11px] text-sol-text-dim">{rollup.length} line{rollup.length === 1 ? "" : "s"}</td>
-            {COLS.map((c) => <Cell key={c.key} value={sum(c.key)} ask={c.key === "awaiting"} foot />)}
-            <td className="pt-2.5 pl-3 text-right tabular-nums text-[11px] text-sol-text-dim">{findersTotal}{silentTotal > 0 && <span className="text-sol-orange">, {silentTotal} silent</span>}</td>
-          </tr>
-        </tfoot>
-      </table>
-      </div>
-    </div>
-  );
+/** One project's line in words, for the overview (LineOverview): what it is
+ *  doing, what waits on the reader, and what is stuck, each a short sentence. */
+export function overviewWords(r: RollupRow, sharedHold: string | null = null): { needsYou: string | null; stuck: string | null; doing: string } {
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const needsYou = r.awaiting > 0 ? `${n(r.awaiting, "finished fix waits", "finished fixes wait")} for your decision` : null;
+  // A reason every line shares is said once, above the cards (LineOverview).
+  const stuck = r.hold ? `${n(r.causes, "problem waits", "problems wait")} to start${r.hold === sharedHold ? "" : `: ${r.hold}`}`
+    : r.stalled > 0 ? `${n(r.stalled, "run has", "runs have")} said nothing for a day`
+    : r.failing ? "The latest run failed"
+    : null;
+  const doing = [
+    r.build > 0 ? `${n(r.build, "problem", "problems")} being worked on` : "nothing being worked on",
+    r.causes > 0 && !r.hold ? `${r.causes} waiting to start` : null,
+    r.watching > 0 ? `${n(r.watching, "shipped fix", "shipped fixes")} being watched` : null,
+    r.closed > 0 ? `${r.closed} closed this week` : null,
+  ].filter(Boolean).join(", ");
+  return { needsYou, stuck, doing: doing.charAt(0).toUpperCase() + doing.slice(1) };
 }
 
-function Cell({ value, ask, foot }: { value: number; ask?: boolean; foot?: boolean }) {
+/** Projects that need the reader first, then the stuck, then the busiest. */
+const overviewRank = (r: RollupRow) => (r.awaiting > 0 ? 0 : overviewWords(r).stuck ? 1 : r.build > 0 ? 2 : 3);
+
+/** Every project's line, one card each, saying what it is doing, what waits
+ *  on you and what is stuck, and which lines its work runs through. A card
+ *  opens that project's line. */
+export function LineOverview({ rollup, onSelect }: { rollup: RollupRow[]; onSelect: (key: string) => void }) {
+  const rows = [...rollup].sort((a, b) => Number(a.key === NO_PROJECT) - Number(b.key === NO_PROJECT) || overviewRank(a) - overviewRank(b) || b.causes - a.causes);
+  const asks = rollup.reduce((n, r) => n + r.awaiting, 0);
+  // One reason held by most lines (starting switched off everywhere) is said once.
+  const holds = rollup.filter((r) => r.key !== NO_PROJECT && r.hold).map((r) => r.hold!);
+  const top = [...new Set(holds)].map((h) => [h, holds.filter((x) => x === h).length] as const).sort((a, b) => b[1] - a[1])[0];
+  const sharedHold = top && top[1] >= 2 ? top[0] : null;
+  const stuck = rollup.filter((r) => r.key !== NO_PROJECT && overviewWords(r).stuck).length;
+  const summary = [
+    asks > 0 ? `${asks} finished ${asks === 1 ? "fix waits" : "fixes wait"} for your decision` : "nothing waits for your decision",
+    stuck > 0 ? `${stuck} ${stuck === 1 ? "line is" : "lines are"} stuck` : null,
+  ].filter(Boolean).join(", ");
   return (
-    <td className={cn("px-3 text-right tabular-nums line-num", foot ? "pt-2.5" : "py-2.5 border-b border-sol-border/20")}>
-      <span className={cn(value === 0 ? "text-sol-text-dim opacity-50" : ask ? "text-sol-yellow" : foot ? "text-sol-text-muted" : "text-sol-text")}>{value}</span>
-    </td>
+    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-8" data-line-overview data-line-rollup>
+      <p className="line-overview-summary" data-line-overview-summary>
+        <span className={asks > 0 ? "text-sol-yellow" : "text-sol-text"}>{summary.charAt(0).toUpperCase() + summary.slice(1)}.</span>
+        {sharedHold && <span className="block text-[12.5px] text-sol-orange mt-0.5" data-line-overview-shared-hold>On {top![1]} of them, nothing starts on its own: {sharedHold}.</span>}
+      </p>
+      <ul className="line-overview-grid">
+        {rows.map((r, i) => {
+          const w = overviewWords(r, sharedHold);
+          return (
+            <li key={r.key} style={{ "--i": i } as React.CSSProperties}>
+              <button type="button" onClick={() => onSelect(r.key)} className="line-overview-card" data-line-overview-card={r.key} data-line-rollup-row={r.key} data-tone={w.needsYou ? "ask" : w.stuck ? "warn" : undefined}>
+                <span className="line-overview-head">
+                  <b className={r.key === NO_PROJECT ? "italic" : undefined}>{r.key === NO_PROJECT ? "Problems under no project" : r.title}</b>
+                  <span className="line-overview-open">Open its line<ArrowRight className="w-3 h-3" aria-hidden /></span>
+                </span>
+                {w.needsYou && <span className="line-overview-ask" data-line-overview-ask>{w.needsYou}</span>}
+                {w.stuck && <span className="line-overview-stuck" data-line-overview-stuck>{w.stuck}</span>}
+                <span className="line-overview-doing">{w.doing}.</span>
+                {r.graphs.length > 0 && (
+                  <span className="line-overview-graphs" data-line-overview-graphs>
+                    <span className="text-sol-text-dim">Runs through </span>
+                    {r.graphs.map((g, j) => (
+                      <span key={g.key}>{j > 0 && <span className="text-sol-text-dim">{j === r.graphs.length - 1 ? " and " : ", "}</span>}<span className="text-sol-text-muted">{g.title}</span><span className="text-sol-text-dim"> ({g.work})</span></span>
+                    ))}
+                  </span>
+                )}
+                <span className="line-overview-sources">
+                  {r.signalsDay > 0 ? `${r.signalsDay} new ${r.signalsDay === 1 ? "signal" : "signals"} in the last day` : "No new signals in the last day"}
+                  {r.silent > 0 && <span className="text-sol-orange">, {r.silent} {r.silent === 1 ? "source has" : "sources have"} gone quiet</span>}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
