@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEV_SURFACES, DEVELOPER_MODE, MODE_WORDS, actionSurface, helpContextSurface, modePageLabel, pageSurface, shownFor, surfaceMode, type DevSurface } from "../surfaceRules";
+import { DEV_SURFACES, DEVELOPER_MODE, MODE_WORDS, SURFACE_PAGE_PATHS, actionSurface, helpContextSurface, hiddenPageRedirect, modePageLabel, pageSurface, shownFor, surfaceMode, type DevSurface } from "../surfaceRules";
 import { actionLabel, actionShownIn } from "../surfaces";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { NAV_PAGES, pagePath, palettePages } from "../navPages";
@@ -123,6 +123,9 @@ describe("a page named by a mode word", () => {
 
   test("no hosted word names the developer machinery", () => {
     for (const [key, word] of Object.entries(MODE_WORDS.hosted)) {
+      // Names what a coding agent wrote, for the person who also runs one
+      // (hosted-assistant.md polish round 8): the one place "agent" is meant.
+      if (key === "agentDoc" || key === "agentDocs") continue;
       expect({ key, word }).toEqual({ key, word: expect.not.stringMatching(/session|precheck|skip|trigger|agent|daemon|prompt|stash|kill/i) });
     }
   });
@@ -220,8 +223,18 @@ describe("one rule for actions in the palette and the shortcuts sheet", () => {
     expect(helpContextSurface(undefined)).toBeNull();
   });
   test("the palette's pages hide what the rail hides", () => {
-    for (const path of ["/threads", "/plans", "/community", "/team/charts", "/company", "/org", "/goals", "/initiatives"]) expect(hosted.showsPage(path)).toBe(false);
-    for (const path of ["/inbox", "/tasks", "/docs", "/triggers", "/team"]) expect(hosted.showsPage(path)).toBe(true);
+    for (const path of ["/threads", "/plans", "/community", "/team", "/team/charts", "/company", "/org", "/goals", "/initiatives"]) expect(hosted.showsPage(path)).toBe(false);
+    // The roster is a company page; a teammate's profile under it is not.
+    for (const path of ["/inbox", "/questions", "/tasks", "/docs", "/triggers", "/team/samvit"]) expect(hosted.showsPage(path)).toBe(true);
+  });
+  test("a person's Org address opens their profile in hosted mode too", () => {
+    // Every person link is /org/@handle; it leads to /team/<handle>, which
+    // hosted mode shows, so the Org screen's gate never sends it to the inbox.
+    for (const path of ["/org/@samvit", "/org/@samvit?tab=work"]) {
+      expect(hosted.showsPage(path)).toBe(true);
+      expect(hiddenPageRedirect(path, hosted)).toBeNull();
+    }
+    expect(hosted.showsPage("/org/or-3")).toBe(false);
   });
 });
 
@@ -236,5 +249,31 @@ describe("hosted mode's inbox scope", () => {
     expect(chipMatchesSession(row("jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HOSTED_AGENT_TYPE), opts)).toBe(true);
     // A mid-create stub stays reachable, as under every chip.
     expect(chipMatchesSession(row("pending-1", "claude_code"), opts)).toBe(true);
+  });
+});
+
+describe("the route guard reads the rail's rule", () => {
+  const hosted = surfaceMode(true, true);
+
+  test("every page the registry hides is replaced in hosted mode, and its replacement shows", () => {
+    for (const path of SURFACE_PAGE_PATHS) {
+      const to = hiddenPageRedirect(path, hosted);
+      expect(to).not.toBeNull();
+      expect(hosted.showsPage(to!)).toBe(true);
+      expect(hiddenPageRedirect(to!, hosted)).toBeNull();
+    }
+  });
+
+  test("routines and workflows land on hosted Routines, plans on To-dos, the rest on the inbox", () => {
+    expect(hiddenPageRedirect("/routines", hosted)).toBe("/triggers");
+    expect(hiddenPageRedirect("/workflows/runs/abc", hosted)).toBe("/triggers");
+    expect(hiddenPageRedirect("/plans", hosted)).toBe("/tasks");
+    expect(hiddenPageRedirect("/settings/devices", hosted)).toBe("/settings");
+    expect(hiddenPageRedirect("/ops/issues?x=1", hosted)).toBe("/inbox");
+  });
+
+  test("developer mode and the pages hosted mode keeps never redirect", () => {
+    for (const path of SURFACE_PAGE_PATHS) expect(hiddenPageRedirect(path, DEVELOPER_MODE)).toBeNull();
+    for (const path of ["/inbox", "/triggers", "/tasks", "/docs", "/questions", "/settings", "/team/samvit"]) expect(hiddenPageRedirect(path, hosted)).toBeNull();
   });
 });

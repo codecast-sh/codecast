@@ -13,7 +13,8 @@ import { enqueueStartSession } from "./devices";
 import { resolveCallRef } from "./transcripts";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
-import { docRelatesToTask } from "@codecast/shared/tasks";
+import { docRelatesToTask, topologicalOrder } from "@codecast/shared/tasks";
+import { readyTasks } from "./lib/taskGraph";
 import {
   MAX_TASK_DEPTH,
   TASK_STATUS_CATEGORIES,
@@ -32,7 +33,7 @@ import {
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { briefGoalRefs, LINE_CATEGORIES, LINE_READINESS, LINE_RISKS } from "@codecast/shared/contracts/goalsBrief";
 import { causeBrief } from "./goals";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import type { SubscriptionVia } from "./notificationRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, createWorkContext, scopeByProject, explicitWorkspace } from "./data";
@@ -1847,39 +1848,16 @@ export const list = query({
       );
     }
 
-    // Ready = open + no blockers. Subtasks of a parent that is actively being
-    // worked are NOT ready by default: that decomposition belongs to the
-    // session driving the parent, and a second agent claiming one mid-flight
-    // splits the work. Orphaned subtasks (parent open/closed/absent) stay
-    // ready — that is the rescue path for abandoned trees. `include_subtasks`
-    // (CLI --subtasks) lifts the rule. The parent status is resolved by db.get,
-    // NOT from the filtered page: a query/assignee/project filter could have
-    // dropped the parent, and inferring "orphan" from its absence would leak an
-    // in-flight subtask back into ready.
-    let readyParentShortIds: Map<string, string> | undefined;
+    // Ready is graph.ts's rule (task-graph.md TG1). Blockers and parents the
+    // filtered page dropped are read from the database: a finished blocker is
+    // exactly what the default page leaves out. `include_subtasks` (CLI
+    // --subtasks) counts subtasks of a parent being worked.
+    let readyParents: Map<string, Doc<"tasks"> | null> | undefined;
     if (args.ready) {
-      const parentStatus = new Map<string, string | null>();
-      readyParentShortIds = new Map<string, string>();
-      for (const t of tasks) {
-        if (t.parent_id && !parentStatus.has(String(t.parent_id))) {
-          const p: any = await ctx.db.get(t.parent_id);
-          parentStatus.set(String(t.parent_id), p ? p.status : null);
-          if (p) readyParentShortIds.set(String(t.parent_id), p.short_id);
-        }
-      }
-      tasks = tasks.filter((t: any) => {
-        if (t.status !== "open") return false;
-        if (t.parent_id && !args.include_subtasks) {
-          const ps = parentStatus.get(String(t.parent_id));
-          if (ps === "in_progress" || ps === "in_review") return false;
-        }
-        if (!t.blocked_by || t.blocked_by.length === 0) return true;
-        // Check if all blockers are done
-        return t.blocked_by.every((bid: string) => {
-          const blocker = tasks.find((bt: any) => bt.short_id === bid);
-          return blocker && (blocker.status === "done" || blocker.status === "dropped");
-        });
-      });
+      ({ ready: tasks, parents: readyParents } = await readyTasks(ctx, tasks, {
+        viewer: String(auth.userId),
+        includeSubtasks: args.include_subtasks,
+      }));
     }
 
     tasks.sort((a: any, b: any) => (b.updated_at || b._creationTime || 0) - (a.updated_at || a._creationTime || 0));
@@ -1895,7 +1873,7 @@ export const list = query({
       // The contract's shape (orgAssignee.ts), so the CLI tells a role from a
       // person by `kind`, never by the look of a label.
       assignee_info: t.assignee ? (assigneeInfo[t.assignee] ?? null) : null,
-      parent_short_id: t.parent_id ? readyParentShortIds?.get(String(t.parent_id)) : undefined,
+      parent_short_id: t.parent_id ? readyParents?.get(String(t.parent_id))?.short_id : undefined,
     }));
   },
 });
@@ -3119,28 +3097,8 @@ export const webList = query({
     }
 
     if (args.ready) {
-      // Same subtask rule as the CLI list: open subtasks of an actively-worked
-      // parent are that session's decomposition, not up-for-grabs work. Parent
-      // status resolved by db.get, not from the filtered page (see list()).
-      const parentStatus = new Map<string, string | null>();
-      for (const t of tasks) {
-        if (t.parent_id && !parentStatus.has(String(t.parent_id))) {
-          const p: any = await ctx.db.get(t.parent_id);
-          parentStatus.set(String(t.parent_id), p ? p.status : null);
-        }
-      }
-      tasks = tasks.filter((t) => {
-        if (t.status !== "open") return false;
-        if (t.parent_id) {
-          const ps = parentStatus.get(String(t.parent_id));
-          if (ps === "in_progress" || ps === "in_review") return false;
-        }
-        if (!t.blocked_by || t.blocked_by.length === 0) return true;
-        return t.blocked_by.every((bid: string) => {
-          const blocker = tasks.find((bt: any) => bt.short_id === bid);
-          return blocker && (blocker.status === "done" || blocker.status === "dropped");
-        });
-      });
+      // The same rule as the CLI list (TG1), blockers and parents read from the database.
+      tasks = (await readyTasks(ctx, tasks, { viewer: String(userId) })).ready;
     }
 
     // Return ALL tasks — no server-side pagination.
@@ -4611,70 +4569,11 @@ export const heartbeat = mutation({
 
 type TaskNode = { short_id: string; blocked_by?: string[]; status?: string };
 
-function getTopologicalOrder(tasks: TaskNode[]): { sorted: string[]; cycles: string[][] } {
-  const taskMap = new Map<string, TaskNode>();
-  for (const t of tasks) taskMap.set(t.short_id, t);
-
-  const inDegree = new Map<string, number>();
-  const adjacency = new Map<string, string[]>();
-  for (const t of tasks) {
-    inDegree.set(t.short_id, 0);
-    adjacency.set(t.short_id, []);
-  }
-
-  for (const t of tasks) {
-    if (t.blocked_by) {
-      for (const dep of t.blocked_by) {
-        if (taskMap.has(dep)) {
-          adjacency.get(dep)!.push(t.short_id);
-          inDegree.set(t.short_id, (inDegree.get(t.short_id) || 0) + 1);
-        }
-      }
-    }
-  }
-
-  const queue: string[] = [];
-  for (const [id, deg] of inDegree) {
-    if (deg === 0) queue.push(id);
-  }
-
-  const sorted: string[] = [];
-  while (queue.length > 0) {
-    const node = queue.shift()!;
-    sorted.push(node);
-    for (const neighbor of adjacency.get(node) || []) {
-      const newDeg = (inDegree.get(neighbor) || 1) - 1;
-      inDegree.set(neighbor, newDeg);
-      if (newDeg === 0) queue.push(neighbor);
-    }
-  }
-
-  const cycles: string[][] = [];
-  if (sorted.length < tasks.length) {
-    const remaining = new Set(tasks.map(t => t.short_id).filter(id => !sorted.includes(id)));
-    const visited = new Set<string>();
-    for (const start of remaining) {
-      if (visited.has(start)) continue;
-      const cycle: string[] = [];
-      let current: string | undefined = start;
-      while (current && !visited.has(current)) {
-        visited.add(current);
-        cycle.push(current);
-        const node = taskMap.get(current);
-        current = node?.blocked_by?.find(dep => remaining.has(dep) && !visited.has(dep));
-      }
-      if (cycle.length > 0) cycles.push(cycle);
-    }
-  }
-
-  return { sorted, cycles };
-}
-
 function getCriticalPath(tasks: TaskNode[]): string[] {
   const taskMap = new Map<string, TaskNode>();
   for (const t of tasks) taskMap.set(t.short_id, t);
 
-  const { sorted, cycles } = getTopologicalOrder(tasks);
+  const { sorted, cycles } = topologicalOrder(tasks);
   if (cycles.length > 0) return [];
 
   const dist = new Map<string, number>();
@@ -4752,19 +4651,7 @@ export const getReadyTasks = query({
       tasks = await db.query("tasks").collect();
     }
 
-    const allTasks = tasks;
-    const statusMap = new Map<string, string>();
-    for (const t of allTasks) statusMap.set(t.short_id, t.status);
-
-    return allTasks.filter((t: any) => {
-      if (t.status !== "open") return false;
-      if (t.triage_status && t.triage_status !== "active") return false;
-      if (!t.blocked_by || t.blocked_by.length === 0) return true;
-      return t.blocked_by.every((bid: string) => {
-        const status = statusMap.get(bid);
-        return status === "done" || status === "dropped";
-      });
-    });
+    return (await readyTasks(ctx, tasks, { viewer: String(auth.userId) })).ready;
   },
 });
 
@@ -4827,7 +4714,7 @@ export const getDependencyChain = query({
     const chainIds = new Set([...ancestors, args.short_id, ...descendants]);
     const chainTasks = allTasks.filter((t: any) => chainIds.has(t.short_id));
 
-    const { sorted, cycles } = getTopologicalOrder(chainTasks);
+    const { sorted, cycles } = topologicalOrder(chainTasks);
     const criticalPath = getCriticalPath(chainTasks);
 
     return {

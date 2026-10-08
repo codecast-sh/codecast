@@ -89,6 +89,9 @@ import {
   foreignProse,
   renderFencedPlanRecord,
   renderFencedPlanTasks,
+  blockersOf,
+  blockerLabel,
+  isBlocking,
 } from "@codecast/shared/tasks";
 import { buildEventFilter, narrowingWithoutOn } from "./triggerEventFilter.js";
 import { describeDates, describeDatesFull, formatDateSmart, parseDuration as parseSharedDuration, parseEndDate, parseRelativeDate, wasEdited } from "@codecast/shared/time";
@@ -115,7 +118,7 @@ import {
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
-import { agentDisplayName, normalizeSubagentCaps } from "@codecast/shared/contracts";
+import { agentDisplayName, CHEAP_MODEL, normalizeSubagentCaps } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
@@ -124,7 +127,7 @@ import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
-import { planReadiness, resolvedTaskIds, isUnblocked } from "./planReadiness.js";
+import { planReadiness } from "./planReadiness.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
@@ -156,7 +159,7 @@ import { parseSessionFile, extractSlug, extractCwd } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import type { DoctorDeps } from "./doctor.js";
-import { CHECK_CONFIG_REL_PATH, checkProject, listWatchers, repoRoot, resolveProjects, runWatcher } from "./check.js";
+import { CHECK_CONFIG_REL_PATH, checkProject, gitLines, listWatchers, projectsTouching, repoRoot, resolveProjects, runWatcher } from "./check.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
@@ -2710,145 +2713,24 @@ async function promptStableEnablement(): Promise<void> {
   }
 }
 
+// Bare `cast sync`: the daemon's unsynced sweep uploads whatever trails its
+// synced position, with the daemon's own ingest (subagents nest under their
+// parent, secrets are redacted, the conversation cache is shared). A stopped
+// daemon runs that sweep on start; a running one on SIGUSR2, unless its build
+// is stale and the bounce restarts it into the same startup sweep.
 async function runSync(): Promise<void> {
   const config = readConfig();
-
   if (!config?.auth_token || !config?.user_id) {
     console.error("Not authenticated. Run 'cast auth' first.");
     process.exit(1);
   }
-
-  const projectsPath = path.join(process.env.HOME || "", ".claude", "projects");
-
-  if (!fs.existsSync(projectsPath)) {
-    console.log("No Claude Code projects found at:", projectsPath);
-    return;
+  const pid = getDaemonPid();
+  if (pid === null) {
+    startDaemon();
+  } else if (!bounceDaemonIfBuildChanged(true)) {
+    process.kill(pid, "SIGUSR2");
   }
-
-  console.log(`\n${fmt.muted("Finding unsynced conversations...")}\n`);
-
-  const sessionFiles = await glob("**/*.jsonl", {
-    cwd: projectsPath,
-    absolute: true,
-  });
-
-  if (sessionFiles.length === 0) {
-    console.log("No session files found.");
-    return;
-  }
-
-  const unsyncedFiles: Array<{ path: string; size: number; position: number }> = [];
-
-  for (const filePath of sessionFiles) {
-    try {
-      // Manual sync is not an escape hatch around selected-project privacy.
-      // Keep its candidate set identical to the daemon and reconciliation.
-      if (!isTranscriptFileInSyncScope(filePath, config)) continue;
-      const stats = fs.statSync(filePath);
-      const position = getPosition(filePath);
-
-      if (position < stats.size) {
-        unsyncedFiles.push({
-          path: filePath,
-          size: stats.size,
-          position,
-        });
-      }
-    } catch (err) {
-      continue;
-    }
-  }
-
-  if (unsyncedFiles.length === 0) {
-    console.log(`${fmt.success(icons.check)} ${fmt.muted("All conversations are already synced.")}`);
-    return;
-  }
-
-  console.log(`${fmt.muted("Syncing")} ${fmt.number(unsyncedFiles.length)} ${fmt.muted("conversations...")}\n`);
-
-  const syncService = new SyncService({
-    convexUrl: config.convex_url || CONVEX_URL,
-    authToken: config.auth_token,
-    userId: config.user_id,
-  });
-
-  let syncedCount = 0;
-  let errorCount = 0;
-
-  for (const file of unsyncedFiles) {
-    try {
-      const content = fs.readFileSync(file.path, "utf-8");
-      const lines = content.split("\n");
-      const newLines = lines.slice(Math.floor(file.position / (file.size / lines.length)));
-
-      if (newLines.length === 0) {
-        continue;
-      }
-
-      const messages = parseSessionFile(newLines.join("\n"));
-
-      if (messages.length === 0) {
-        continue;
-      }
-
-      const sessionId = path.basename(file.path, ".jsonl");
-      const projectDir = path.basename(path.dirname(file.path));
-      const projectPath = readProjectPathFromSession(file.path) || ("/" + projectDir.slice(1).replace(/-/g, "/"));
-      const slug = extractSlug(content);
-
-      let conversationId: string | null = null;
-
-      try {
-        conversationId = await syncService.createConversation({
-          userId: config.user_id!,
-          teamId: config.team_id,
-          sessionId,
-          agentType: "claude_code",
-          projectPath,
-          slug,
-          startedAt: messages[0]?.timestamp || Date.now(),
-        });
-      } catch (err) {
-        const errorMsg = (err as Error).message;
-        if (errorMsg.includes("already exists")) {
-          continue;
-        }
-        throw err;
-      }
-
-      if (conversationId) {
-        for (const msg of messages) {
-          await syncService.addMessage({
-            conversationId,
-            messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: msg.content,
-            timestamp: msg.timestamp,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            files: msg.files,
-            subtype: msg.subtype,
-          });
-        }
-      }
-
-      setPosition(file.path, file.size);
-      syncedCount++;
-
-      process.stdout.write(`\rSynced ${syncedCount}/${unsyncedFiles.length} conversations...`);
-    } catch (err) {
-      errorCount++;
-    }
-  }
-
-  console.log(`\n\n${fmt.success(icons.check)} ${c.bold}Sync complete!${c.reset}`);
-  console.log(`  ${fmt.muted("Synced")}  ${fmt.number(syncedCount)} ${fmt.muted("conversations")}`);
-
-  if (errorCount > 0) {
-    console.log(`  ${fmt.error("Errors")}  ${fmt.number(errorCount)}`);
-  }
+  console.log(`${fmt.success(icons.check)} ${fmt.muted("The daemon is uploading unsynced conversations; progress is in")} ${fmt.cmd("~/.codecast/daemon.log")}`);
 }
 
 async function syncSingleSession(sessionId: string, projectRoot: string): Promise<boolean> {
@@ -5526,12 +5408,25 @@ program
     "without one, the tsconfig nearest your directory. A project is also any directory or tsconfig path."
   )
   .option("--fresh", "Restart the watcher before asking (the escape hatch for a watcher that lost track)")
+  .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
   .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
-  .action(async (projects: string[], o: { fresh?: boolean; json?: boolean }) => {
+  .action(async (projects: string[], o: { fresh?: boolean; json?: boolean; changedSince?: string }) => {
     const root = repoRoot();
     let wanted;
     try {
       wanted = resolveProjects(root, projects);
+      if (o.changedSince) {
+        const changed = [
+          ...gitLines(root, ["diff", "--name-only", o.changedSince, "--"]),
+          ...gitLines(root, ["ls-files", "--others", "--exclude-standard"]),
+        ].filter(Boolean);
+        wanted = projectsTouching(root, wanted, changed);
+        if (!wanted.length) {
+          if (o.json) console.log("[]");
+          else console.log(`${fmt.success("✓")} no project's program changed since ${o.changedSince}`);
+          return;
+        }
+      }
     } catch (err) {
       console.error(`${fmt.error("✗")} ${(err as Error).message}`);
       process.exit(2);
@@ -5721,6 +5616,8 @@ program
 const syncCommand = program
   .command("sync")
   .description("Sync a cloud session's folder with the laptop (status, pull, push, diff, start, stop, keep); bare, upload unsynced conversations")
+  // An unknown verb (`cast sync ls`) is an error, never the bare upload.
+  .allowExcessArguments(false)
   .action(async () => {
     await runSync();
   });
@@ -5737,7 +5634,7 @@ program
     "  cast config set subagents.per_session 6   # workers one session runs at once (default 10)\n" +
     "  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer, tmux_server_per_session, subagents.per_session, subagents.per_machine)")
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer, tmux_server_per_session, level_checkouts_enabled, subagents.per_session, subagents.per_machine)")
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
   .allowExcessArguments()
@@ -5916,10 +5813,10 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"] as const;
     const sensitiveKeys = ["auth_token"];
     // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
-    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session"]);
+    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -12713,9 +12610,9 @@ program
     let llmSearchTerms: string[] = [];
     try {
       const expansion = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: CHEAP_MODEL,
         max_tokens: 128,
-        temperature: 0.2,
+        thinking: { type: "disabled" },
         messages: [
           {
             role: "user",
@@ -12911,8 +12808,9 @@ Question: ${query}`,
 
       // Call Haiku for RAG
       const response = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: CHEAP_MODEL,
         max_tokens: 1024,
+        thinking: { type: "disabled" },
         messages: [
           {
             role: "user",
@@ -19384,17 +19282,13 @@ plan
       }
 
       // Find ready tasks (dropped dependencies count as resolved)
-      const resolvedIds = resolvedTaskIds(allTasks);
+      const { ready: planReady } = planReadiness<any>(allTasks);
       const taskOutcomes = new Map<string, string>();
       for (const t of allTasks) {
         if (t.status === "done") taskOutcomes.set(t.short_id, t.execution_status || "done");
         else if (t.status === "dropped") taskOutcomes.set(t.short_id, "dropped");
       }
-      const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
-      const readyTasks = openTasks.filter((t: any) => {
-        if (activeAgents.has(t.short_id)) return false;
-        return isUnblocked(t, resolvedIds) && evaluateCondition(t, taskOutcomes);
-      });
+      const readyTasks = planReady.filter((t: any) => !activeAgents.has(t.short_id) && evaluateCondition(t, taskOutcomes));
 
       const slots = maxAgents - activeAgents.size;
       const toSpawn = readyTasks.slice(0, Math.max(0, slots));
@@ -19625,7 +19519,7 @@ plan
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
     const tasks = plan.tasks || [];
-    const { open, ready, blocked } = planReadiness<any>(tasks);
+    const { open, ready, blocked, statusOf } = planReadiness<any>(tasks);
     const inProgress = tasks.filter((t: any) => t.status === "in_progress");
 
     console.log(`\n  ${c.bold}${plan.title}${c.reset} ${c.dim}(${planId})${c.reset}\n`);
@@ -19648,7 +19542,7 @@ plan
     if (blocked.length > 0) {
       console.log(`\n  ${c.dim}Blocked${c.reset} (${blocked.length}):`);
       for (const t of blocked.slice(0, 10)) {
-        const deps = (t.blocked_by || []).join(", ");
+        const deps = blockersOf(t, statusOf).filter(isBlocking).map((b) => blockerLabel(b)).join(", ");
         console.log(`  ${c.dim}x${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(waiting: ${deps})${c.reset}`);
       }
       if (blocked.length > 10) console.log(fmt.muted(`  ... and ${blocked.length - 10} more`));
@@ -20014,8 +19908,9 @@ plan
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: CHEAP_MODEL,
           max_tokens: 1000,
+          thinking: { type: "disabled" },
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -20841,6 +20736,7 @@ workflow
         if (createResult?.run_id) {
           runOpts.runId = createResult.run_id;
           runOpts.runSession = createResult.primary_conversation_id;
+          runOpts.spawnerSession ??= createResult.spawner_conversation_id || undefined;
         }
       } catch (err: any) {
         if (runRegistrationIsFatal({ detach: options.detach, taskId: runOpts.taskId, planId: runOpts.planId })) {

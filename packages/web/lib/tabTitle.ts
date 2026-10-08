@@ -3,7 +3,8 @@ import { isHostedAgentType } from "@codecast/shared/contracts";
 import { conversationTitle } from "./conversationTitle";
 import { pathLabel, inboxTabSessionId, modePathLabel } from "./pathLabel";
 import { isBrowserRoutePath } from "./browserPane";
-import { isConvexId } from "./entityLinks";
+import { isConvexId, orgObjectOfRef } from "./entityLinks";
+import { findEntityInStore } from "./liveEntities";
 import { vaultNoteTitle } from "./vault/noteTitle";
 import { channelDisplayName } from "./chatViews";
 import { filterByWorkspace, inWorkspace, type WorkspaceKey } from "./workspaceScope";
@@ -50,7 +51,10 @@ export function tabSessionId(tab: Pick<AppTab, "sessionId" | "path">): string | 
 export function initiativeTabTitle(path: string, initiatives: Record<string, { short_id?: string; title?: string; workspace?: string; team_id?: string }> | undefined, workspaceKey: WorkspaceKey | null | undefined): string | null {
   const current = currentPagePath(path);
   const ref = current.split("?")[0].split("/")[2];
-  if (!initiatives || !current.startsWith("/goals/") || !ref) return null;
+  if (!initiatives || !current.startsWith("/org/") || !ref) return null;
+  // A goal's sheet, by `in-N` or by its key; any other object under /org is not one.
+  const object = orgObjectOfRef(ref);
+  if (object && object.kind !== "initiative") return null;
   const row = initiatives[ref] ?? filterByWorkspace(Object.values(initiatives), workspaceKey).find((r) => r?.short_id === ref.toLowerCase());
   return row && inWorkspace(row, workspaceKey) ? row.title || null : null;
 }
@@ -58,17 +62,27 @@ export function initiativeTabTitle(path: string, initiatives: Record<string, { s
 /** The records a tab can be titled by, read by key only (never a scan, so
  *  the window title can derive on every store tick), and the client state
  *  whose mode names a page whose name is a mode word (modePathLabel). */
-export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; clientState?: { ui?: { lane?: string } } };
+export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; orgTree?: { roles?: readonly unknown[] } | null; teamMembers?: readonly unknown[]; clientState?: { ui?: { lane?: string } } };
 
-/** A task, project or run tab reads its record's name once the store holds
- *  the row: the task's title, the project's title, and a run as its cause
- *  ("ct-56750 run"). Until then pathLabel names the kind, never the id. */
+/** A task, project, run, role or person tab reads its record's name once the
+ *  store holds the row: the task's title, the project's title (by Convex id
+ *  or `pj-…`), the role's name, the person's name, and a run as its cause
+ *  ("ct-56750 run"). Until then pathLabel names the kind, never the id. A
+ *  short id is read through the store's memoized short id index, never a scan
+ *  per tick. */
 export function recordTabTitle(path: string, records: TabRecords | undefined): string | null {
   if (!records) return null;
-  const [, kind, ref, sub] = path.split("?")[0].split("#")[0].split("/");
+  const [, kind, ref, sub] = currentPagePath(path.split("#")[0]).split("?")[0].split("/");
   if (!ref) return null;
   if (kind === "tasks") return records.tasks?.[ref]?.title || null;
-  if (kind === "projects") return records.projects?.[ref]?.title || null;
+  if (kind === "projects") return (records.projects?.[ref] ?? findEntityInStore(records, "project", ref))?.title || null;
+  if (kind === "org") {
+    const object = orgObjectOfRef(ref);
+    if (object?.kind === "project") return findEntityInStore(records, "project", object.ref)?.title || null;
+    if (object?.kind === "role") return findEntityInStore(records, "role", object.ref)?.name || null;
+    if (object?.kind === "person") return findEntityInStore(records, "person", object.ref)?.name || null;
+    return null;
+  }
   if (kind === "workflows" && ref === "runs" && sub) {
     const run = records.workflowRuns?.[sub];
     if (!run) return null;
