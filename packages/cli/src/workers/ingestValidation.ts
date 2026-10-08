@@ -102,7 +102,7 @@ function* schema(value: unknown, job: IngestJob): Generator<void> {
     requireValue(value.handoffParents[i] === null || typeof value.handoffParents[i] === 'string' && (value.handoffParents[i] === '' || /^[0-9a-f-]{36}$/.test(value.handoffParents[i])));
   }
   const meta = value.metadata;
-  fields(meta,['slug','parentUuid','cwd','cliFlags','summaryTitle','headMessages','teamInfo','planTools','subagent','appServerHead','codex','forkRoot','completedReview','backupAttempted','title','formerTitles','parentSessionId','agentName','forkOf','forkAtUuid','cloudArchived','internal','sessionExists','turn','permissionPrompt','warnings']);
+  fields(meta,['slug','parentUuid','cwd','cliFlags','summaryTitle','headMessages','teamInfo','planTools','subagent','sidechain','appServerHead','codex','forkRoot','completedReview','backupAttempted','title','formerTitles','parentSessionId','agentName','forkOf','forkAtUuid','cloudArchived','internal','sessionExists','turn','permissionPrompt','warnings']);
   strings(meta,['slug','parentUuid','cwd','summaryTitle','appServerHead','forkRoot','title','parentSessionId','agentName','forkOf','forkAtUuid']);
   requireValue(meta.cliFlags === undefined || meta.cliFlags === null || typeof meta.cliFlags === 'string');
   for (const key of ['completedReview','backupAttempted','internal','cloudArchived']) requireValue(meta[key] === undefined || typeof meta[key] === 'boolean');
@@ -124,6 +124,7 @@ function* schema(value: unknown, job: IngestJob): Generator<void> {
     yield;
   }
   if (meta.subagent !== undefined) { fields(meta.subagent,['description','agentType']); strings(meta.subagent,['description','agentType']); }
+  if (meta.sidechain !== undefined) { fields(meta.sidechain,['parentSessionId']); strings(meta.sidechain,['parentSessionId']); }
   if (meta.codex !== undefined) codex(meta.codex);
   if (meta.permissionPrompt !== undefined && meta.permissionPrompt !== null) {
     fields(meta.permissionPrompt,['tool_name','arguments_preview']);
