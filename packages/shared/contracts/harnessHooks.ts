@@ -107,6 +107,16 @@ export const HARNESS_HOOKS: readonly HarnessHook[] = [
     withoutIt: "Agents bound to a task forget to post progress on it.",
   },
   {
+    file: "task-context.sh",
+    events: ["SessionStart"],
+    kind: "hook",
+    feature: "tasks",
+    affectsAgent: true,
+    name: "Task context after compaction",
+    purpose: "When an agent bound to a task compacts or resumes, puts the task back in front of it: its status, what still blocks it, the last progress note and the plan's next ready step. Codex gets the same through its own hooks file.",
+    withoutIt: "After compaction an agent loses which task it was on and what was left, until it thinks to run cast task context.",
+  },
+  {
     file: "stable-feed.sh",
     events: ["SessionStart"],
     kind: "hook",

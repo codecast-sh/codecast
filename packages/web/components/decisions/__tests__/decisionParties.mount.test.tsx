@@ -7,7 +7,7 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 // and what its category means. The old header said "See the conversation",
 // a bare red "unknown" and a plain name — none of which identified anyone.
 mock.module("next/link", () => ({ default: ({ children, href, ...rest }: any) => <a href={typeof href === "string" ? href : "#"} {...rest}>{children}</a> }));
-mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true }));
+mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true, locateDecisionAsk: async () => null }));
 import { useInboxStore } from "../../../store/inboxStore";
 import { AskingSession, PersonChip, CategoryNote } from "../DecisionParties";
 import { categoryMeaning } from "../../../lib/decisionCategory";

@@ -40,8 +40,8 @@ const get = (path: string, headers: Record<string, string> = {}) => fetch(SITE +
 const register = (args: { secret: string; nonce: number }) => client.mutation(api.visitors.register, args);
 const credsA = await mintVisitor(register);
 const credsB = await mintVisitor(register);
-const app = await client.mutation(api.apps.create, { ...credsA, name: "Runtime check" });
-const other = await client.mutation(api.apps.create, { ...credsA, name: "Other app" });
+const app = await client.mutation(api.apps.create, { ...credsA, name: "Runtime check", unlisted: true });
+const other = await client.mutation(api.apps.create, { ...credsA, name: "Other app", unlisted: true });
 console.log(`app ${app.slug} (${app.app_id})`);
 
 // ---- Serving ----------------------------------------------------------------
@@ -160,7 +160,7 @@ if (failed()) process.exit(1);
 // ---- Stand-in shell for the browser check ------------------------------------
 
 if (process.argv.includes("--serve")) {
-  const fresh = await client.mutation(api.apps.create, { ...credsA, name: "Browser check" });
+  const fresh = await client.mutation(api.apps.create, { ...credsA, name: "Browser check", unlisted: true });
   const avatarDir = join(ROOT, "../web/components/org/avatars");
   const dataUrl = async (k: string) => `data:image/webp;base64,${Buffer.from(await Bun.file(join(avatarDir, `${k}.webp`)).arrayBuffer()).toString("base64")}`;
   const avatars = Object.fromEntries(await Promise.all(AVATAR_KEYS.map(async (k) => [k, await dataUrl(k)])));

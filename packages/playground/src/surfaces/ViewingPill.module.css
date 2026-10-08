@@ -15,7 +15,7 @@
 .bar .actions { margin-left: auto; }
 .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .what { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.v { flex: none; font: 650 14px/1.2 var(--voice); font-variation-settings: var(--voice-axes); }
+.v { flex: none; font: 650 14px/1.2 var(--ui); }
 .summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 500 13.5px/1.25 var(--ui); }
 /* The second line: you cannot use the past, and who else is in it. When the
    app tries to write, it lights up once to say why nothing happened. */

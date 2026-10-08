@@ -61,6 +61,11 @@ export interface CcProfileMeta {
   // daemon's usage refresh, cleared by any re-save of the profile (a fresh
   // /login re-snapshots it). Readers treat it as "not a switch target".
   login_expired_at?: number;
+  // Anthropic refused the ACCOUNT, not a token: its organization disallows
+  // subscription OAuth (403 oauth_not_allowed_for_organization), so neither
+  // the login nor a setup token can carry a session and signing in again does
+  // not help. Set by the daemon's usage refresh, cleared by its next good probe.
+  access_refused_at?: number;
   active: boolean;
 }
 
@@ -1820,6 +1825,8 @@ export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: num
 }
 
 const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
+// Haiku 4.5, not 5.5: on a subscription token claude-haiku-5-5 answers a bare
+// call 429 with no window headers (three accounts, 2026-10-07).
 const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-20251001";
 
 /** One-token model call whose only purpose is the rate-limit headers. Costs a
@@ -2278,6 +2285,33 @@ export async function rotateOauthCredential(
       },
     },
   };
+}
+
+/** The account's organization refuses subscription OAuth: the 403 Claude
+ *  Code shows as "Your organization has disabled Claude subscription access".
+ *  The usage endpoint throws it as a CloudApiError, the model probe as a
+ *  CcAccountError quoting the body; both carry the provider's wording. */
+export function isOrgAccessRefusal(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /oauth_not_allowed_for_organization|not allowed for this organization/i.test(message);
+}
+
+/** Stamp (or clear, with `at` null) an account's org refusal on every profile
+ *  covering it. Returns the profile names whose stamp changed. */
+export function setAccessRefused(key: string, at: number | null): string[] {
+  const index = readProfileIndex();
+  const changed: string[] = [];
+  for (const [name, meta] of Object.entries(index.profiles)) {
+    if ((meta.uuid || meta.email) !== key || !!meta.access_refused_at === (at !== null)) continue;
+    const { access_refused_at: _prev, ...rest } = meta;
+    index.profiles[name] = at === null ? rest : { ...rest, access_refused_at: at };
+    changed.push(name);
+  }
+  if (changed.length) {
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+  }
+  return changed;
 }
 
 /** Stamp a profile dead in the index (see CcProfileMeta.login_expired_at). */
