@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { applyOps, autoApplies, expectationPrefix, followsFromQuote, holdsQuote, parseProposal, renderExpectations, renderProposal, type Expectation, type ExpectationsVersion,
   expectationIdPrefix,
   isExpectationId,
+  citationFromInput, opErrors, personEditApplies, personEditSummary, personOp,
 } from "./expectations";
 
 const QUOTED = { kind: "call" as const, ref: "cl-96:58", quote: "the information should hold true", when: "2026-09-30" };
@@ -218,5 +219,42 @@ describe("a line's id", () => {
   test("carries the prefix that names its project", () => {
     expect(expectationIdPrefix("ex-agent-quality-3")).toBe("agent-quality");
     expect(expectationIdPrefix("ex-matching-engine2-14")).toBe("matching-engine2");
+  });
+});
+
+describe("a person's edits by hand", () => {
+  const NOW = Date.UTC(2026, 9, 7);
+  test("a line with a source keeps the person's words first and the source beside them", () => {
+    const op = personOp({ op: "add", text: "Callbacks name who asked.", part: "Calls", source: { kind: "task", ref: "ct-9", quote: "say who asked", when: "2026-10-05" } }, "u1", NOW);
+    expect(op).toMatchObject({ op: "add", citations: [{ kind: "person", ref: "u1", quote: "Callbacks name who asked.", when: "2026-10-07" }, { kind: "task", ref: "ct-9", quote: "say who asked" }] });
+  });
+  test("a change cites what the person said about it; settling a question empties the note", () => {
+    const op = personOp({ op: "edit", id: "ex-a-1", note: "", why: "Every caller, ruled on the call" }, "u1", NOW);
+    expect(op).toEqual({ op: "edit", id: "ex-a-1", note: "", citations: [{ kind: "person", ref: "u1", quote: "Every caller, ruled on the call", when: "2026-10-07" }] });
+    expect(opErrors(op)).toEqual([]);
+    expect(personEditSummary({ op: "edit", id: "ex-a-1", note: "", why: "Every caller" }, "Ashot")).toBe("Ashot settled the open question on ex-a-1: Every caller");
+    expect(personEditSummary({ op: "edit", id: "ex-a-1", text: "New words." }, "Cam")).toBe("Cam changed ex-a-1: New words.");
+    expect(personEditSummary({ op: "edit", id: "ex-a-1", note: "Cold or warm?" }, "Cam")).toBe("Cam raised a question on ex-a-1: Cold or warm?");
+  });
+  test("a change applies only for the project's person", () => {
+    const op = personOp({ op: "edit", id: "ex-a-1", text: "New words." }, "u1", NOW);
+    expect(personEditApplies(op, true)).toBe(true);
+    expect(personEditApplies(op, false)).toBe(false);
+  });
+});
+
+describe("citationFromInput", () => {
+  test("reads codecast ids and links", () => {
+    expect(citationFromInput("ct-512")).toEqual({ kind: "task", ref: "ct-512" });
+    expect(citationFromInput("CL-96:58")).toEqual({ kind: "call", ref: "cl-96:58" });
+    expect(citationFromInput("https://codecast.sh/decisions/sd-346")).toEqual({ kind: "decision", ref: "sd-346" });
+    expect(citationFromInput("https://codecast.sh/tasks/ct-77")).toEqual({ kind: "task", ref: "ct-77" });
+    expect(citationFromInput("jx7c6zk")).toEqual({ kind: "session", ref: "jx7c6zk" });
+    expect(citationFromInput("union-mobile@6422863a35")).toEqual({ kind: "commit", ref: "union-mobile@6422863a35" });
+    expect(citationFromInput("https://codecast.sh/chat/team?m=j57abcdefghijklmnopqrstu")).toEqual({ kind: "chat", ref: "#team/j57abcdefghijklmnopqrstu" });
+  });
+  test("anything else is a link of its own, and nothing is nothing", () => {
+    expect(citationFromInput("https://example.com/spec")).toEqual({ kind: "other", ref: "https://example.com/spec" });
+    expect(citationFromInput("  ")).toBeNull();
   });
 });

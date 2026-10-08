@@ -71,6 +71,8 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("card_waiting"),
   v.literal("change_shipped"),
   v.literal("cause_reopened"),
+  // Someone outside a decision's people answered it for them.
+  v.literal("decision_answered_for_you"),
   // Finding a team by work email: a request to its admins, then the approval.
   v.literal("team_join_request"),
   v.literal("team_join_approved")

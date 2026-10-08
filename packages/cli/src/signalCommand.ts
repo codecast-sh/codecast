@@ -6,6 +6,7 @@
 //   cast signal add --source <s> --kind <k> --title <t> [--fingerprint <f>] [--project <ref>] [--detail -] [--url] [--subject] [--goal-hint] [--json]
 //   cast signal ls [--task ct-N | --fingerprint <f>] [--project <ref>] [--source <s>] [--json]
 //   cast signal show sg-N [--json]
+//   cast signal move --fingerprint <f> --from ct-N [--to ct-M | --title <t> --project <ref>] [--json]
 //
 // Routes: /cli/signal/{add,ls,show} in http.ts (signals.ts). A signal lands in
 // a project (line-profile.md LP1): --project, else the repo profile's
@@ -197,6 +198,28 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
       }, { read: true });
       const rows: SignalRow[] = result.signals ?? [];
       console.log(options.json ? JSON.stringify(rows, null, 2) : formatSignalList(rows));
+    });
+
+  signal
+    .command("move")
+    .description("Move one fingerprint's signals off a cause: to another cause, or to a new cause of their own")
+    .requiredOption("--fingerprint <key>", "The fingerprint whose signals move")
+    .requiredOption("--from <ct>", "The cause they are attached to now")
+    .option("--to <ct>", "The cause they move to (default: a new cause)")
+    .option("--title <text>", "A new cause's title (default: the newest signal's)")
+    .option("--project <ref>", "A new cause's project: id, short id or title")
+    .option("--team <name|id|personal>", "Workspace (default: the active one)")
+    .option("--json", "Machine-readable output")
+    .action(async (options: { fingerprint: string; from: string; to?: string; title?: string; project?: string; team?: string; json?: boolean }) => {
+      const result = await apiPost(deps, "/cli/signal/move", {
+        fingerprint: options.fingerprint,
+        from: options.from,
+        to: options.to,
+        title: options.title,
+        ...(await scopeFor(deps, options.team, true, options.project)),
+      });
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`${fmt.success(String(result.moved))} signal${result.moved === 1 ? "" : "s"} moved ${result.from} → ${result.to}${result.created ? " (new cause)" : ""}`);
     });
 
   signal
