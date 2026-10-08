@@ -1,6 +1,6 @@
 import { captureException } from "@sentry/react";
-import { awaitingOkIds, hostedDeclinedSince } from "../lib/decisionQueue";
-import { hostedNoticeKind } from "../lib/hostedNotice";
+import { awaitingOkIds } from "../lib/decisionQueue";
+import { hostedComposerWords, hostedLastExchange, type HostedLast } from "../lib/hostedComposer";
 import { HostedStatusLine } from "./conversation/HostedStatusLine";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
 import { MODE_WORDS, useSurface } from "../lib/surfaces";
@@ -14,10 +14,11 @@ import { armJointSend, jointSendReady, takeJointSend } from "../lib/jointSend";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { createPortal } from "react-dom";
 import { compressImage } from "../lib/compressImage";
+import { captureError } from "../lib/analytics";
 import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, isHostedAgentType, type AgentStatus } from "@codecast/shared/contracts";
-import { HOSTED_IMAGE_REFUSAL, replyAsksPerson } from "@codecast/shared/contracts/assistant";
+import { HOSTED_IMAGE_REFUSAL } from "@codecast/shared/contracts/assistant";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
@@ -293,7 +294,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     30_000,
   );
   // Suggestion pills pref — off by default; the strip mounts only when on.
-  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  const suggestionShown = useSurface("composer.suggestion");
+  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true) && suggestionShown;
   const memberTeams = useInboxStore((s) => s.teams);
   const mentionScope = useMemo(() => {
     const teamId = mentionTeamId
@@ -331,23 +333,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // A stop notice (an error, an outage) points at its own Try again; a no
   // invites a change only for DECLINE_HINT_MS, so a cold revisit reads as
   // an answered conversation rather than an ask still pending.
-  const hostedLast = useInboxStore((s): "asked" | "answered" | "declined" | "stopped" | "sent" | null => {
-    if (!hostedConversation) return null;
-    const rows = s.messages[conversationId] ?? [];
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const row = rows[i];
-      if (row?.role === "assistant" && row.content?.trim()) {
-        const notice = hostedNoticeKind(row);
-        if (notice === "error" || notice === "unavailable") return "stopped";
-        return replyAsksPerson(row.content) ? "asked" : "answered";
-      }
-      if (row?.role === "user" && row.content?.trim()) {
-        const since = row.timestamp ?? 0;
-        return hostedDeclinedSince(s.sessionDecisions, conversationId, since, Date.now()) ? "declined" : "sent";
-      }
-    }
-    return null;
-  });
+  const hostedLast = useInboxStore((s): HostedLast => (hostedConversation ? hostedLastExchange(s.messages[conversationId], s.sessionDecisions, conversationId, Date.now()) : null));
   const [stuckBannerRaised, setShowStuckBanner] = useState(false);
   const showStuckBanner = stuckBannerRaised && !hostedConversation;
   const [isResuming, setIsResuming] = useState(false);
@@ -977,6 +963,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           useInboxStore.getState().markServerDeleted(conversationId);
           toast.error("This conversation no longer exists on the server", { description: "Use Restore to bring its session back." });
         } else {
+          captureError(err instanceof Error ? err : new Error(msg), { source: "auto-restart-undeliverable", conversationId });
           toast.error(`Session restart failed: ${msg}`);
         }
       });
@@ -1511,6 +1498,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         return storageId as string;
       }
       console.error("[uploadImage] failed after retries");
+      captureError(new Error("image upload failed after retries"), { source: "uploadImage", conversationId, bytes: uploaded.size, type: uploaded.type });
       toast.error("Failed to upload image");
       settleDraftImageUpload(previewUrl, null);
       clearImageByPreview(previewUrl);
@@ -2283,7 +2271,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // match the tray so it reads as "this sends the quotes".
   const quotesOnlySend = !hasContent && reviewCount > 0;
   const { colWidth, colClass } = composerColumn({ inline, expanded: isExpanded });
-  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} />;
+  // A hosted turn at work with an empty box: the disc is the visible Stop
+  // (store stopHostedTurn), so stopping never rests on a key a person who
+  // does not code would not know.
+  const hostedStop = hostedConversation && (agentStatus === "working" || agentStatus === "thinking") && !canSubmit
+    ? { label: MODE_WORDS.hosted.stopWorking, onStop: () => useInboxStore.getState().stopHostedTurn(conversationId) }
+    : undefined;
+  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop} />;
   // Expand, stash, hand off and fork: beside the text, or in the surface's foot
   // row next to send when it brings one.
   const rowActions = (
@@ -2388,6 +2382,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     allowanceOut={allowanceOut}
                     escapeHint={!escapeCloses && isFocused && message.length === 0}
                     awaitsOk={hostedAwaitsOk}
+                    stopInDisc={!!hostedStop && !bareComposer}
                   />
                 ) : ((isSessionStarting && !agentStatus) || isAgentStarting) && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5">
@@ -2527,13 +2522,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ) : hasPendingSend ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
-                    {hostedConversation ? "Sending..." : "Resuming session..."}
+                    {hostedConversation ? "Sending…" : "Resuming session..."}
                   </span>
                 ) : isInactive ? "Session idle — message to resume" : "\u00A0"}
       // A hosted conversation has no Claude Code permission mode to cycle: its
       // status line owns the whole meta row.
       metaEnd={permissionMode && !hostedConversation && (
-                  <div className="relative">
+                  <div className="relative" data-composer-mode={permissionMode}>
                     <button
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => { onCycleMode?.(); flashModeLabel(); }}
@@ -2814,7 +2809,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (hostedAwaitsOk ? MODE_WORDS.hosted.composerApproval : hostedLast === "asked" ? "Reply…" : hostedLast === "declined" ? MODE_WORDS.hosted.composerDeclined : hostedLast === "stopped" ? MODE_WORDS.hosted.composerAfterStop : hostedLast ? MODE_WORDS.hosted.composerFollowUp : MODE_WORDS.hosted.composerPlaceholder) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? MODE_WORDS.developer.composerApproval : hasAskUserQuestion ? "Answer the question to continue..." : MODE_WORDS.developer.composerPlaceholder) : MODE_WORDS.developer.composerPlaceholder)}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? MODE_WORDS.developer.composerApproval : hasAskUserQuestion ? "Answer the question to continue..." : MODE_WORDS.developer.composerPlaceholder) : MODE_WORDS.developer.composerPlaceholder)}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (

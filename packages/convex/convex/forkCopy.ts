@@ -105,7 +105,7 @@ async function emitForkDaemonCommand(ctx: ForkCopyCtx, fork: ForkConvRow): Promi
     await ctx.db.insertDaemonCommand({
       user_id: fork.user_id,
       command: "kill_session",
-      args: JSON.stringify({ conversation_id: fork._id, session_id: parsed.session_id }),
+      args: JSON.stringify({ conversation_id: fork._id, session_id: parsed.session_id, cause: "switch_agent" }),
       created_at: now,
       target_device_id: targetDeviceId,
     });
