@@ -48,6 +48,7 @@ import { clipFade } from "./CollapsibleBody";
 import { PlanBoardView } from "./PlanBoardView";
 import { PlanGraphView } from "./PlanGraphView";
 import { PlanOriginSession } from "./PlanOriginSession";
+import { TaskBlockedMark } from "./tasks/TaskBlockedMark";
 import { LivePulseDot } from "./SessionActivityLine";
 
 const api = _api as any;
@@ -752,6 +753,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     {taskSessions.length} sess
                   </span>
                 )}
+                <TaskBlockedMark task={task} />
                 {PriorityIcon && pc && (
                   <button
                     onClick={() => cyclePriority(task.short_id, task.priority || "medium")}

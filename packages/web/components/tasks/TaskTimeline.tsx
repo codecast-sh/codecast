@@ -11,7 +11,8 @@
  * which is what "who did what, when" needs.
  */
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowRight, History, Link2, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
+import { ArrowRight, Check, History, Hourglass, Link2, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
+import { FailedWaitIcon } from "./TaskBlockedMark";
 import { ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { SessionTag } from "../identity/SessionTag";
@@ -22,6 +23,8 @@ import { groupByDay } from "../../lib/timelineRail";
 import { RailBare, RailDay, RailRow, StatusWord } from "../timeline/Rail";
 import { TaskCommentItem, UserBadge, type TaskCommentRow } from "./TaskCommentStream";
 import type { TaskLinkedSession } from "./TaskSessionList";
+import { EntityIdPill } from "../EntityIdPill";
+import { graphChange, type GraphTone } from "@codecast/shared/tasks";
 
 type Person = { name: string; image?: string; github_username?: string };
 
@@ -71,8 +74,17 @@ function changeStyle(row: HistoryRow) {
   if (SYNC_ACTIONS.has(row.action)) return { icon: Link2, color: "text-sol-cyan" };
   if (row.field === "status") return { icon: ArrowRight, color: "text-sol-yellow" };
   if (row.field === "assignee") return { icon: UserRound, color: "text-sol-cyan" };
+  const graph = graphChange(row);
+  if (graph) return GRAPH_STYLE[graph.tone];
   return { icon: Pencil, color: "text-sol-text-dim" };
 }
+
+const GRAPH_STYLE: Record<GraphTone, { icon: typeof Pencil; color: string }> = {
+  blocked: { icon: Hourglass, color: "text-sol-orange" },
+  met: { icon: Check, color: "text-sol-green" },
+  failed: { icon: FailedWaitIcon, color: "text-sol-red" },
+  link: { icon: Link2, color: "text-sol-cyan" },
+};
 
 /** A linked session named inline, opening it on click. */
 export function TaskSessionLink({ session, onOpen }: { session: TaskLinkedSession; onOpen: (s: TaskLinkedSession) => void }) {
@@ -122,6 +134,21 @@ function ChangeBody({ row, provider, origin, openLinkedSession }: { row: History
         {row.new_value && (row.new_value_resolved
           ? <Who person={row.new_value_resolved} />
           : <span className="text-sol-text-muted italic">someone who has since left</span>)}
+      </>
+    );
+  }
+  const graph = graphChange(row);
+  if (graph) {
+    return (
+      <>
+        <Who person={row.actor} />
+        {graph.clauses.map((c, i) => (
+          <span key={i} className="inline-flex items-center flex-wrap gap-x-1.5 gap-y-0.5 min-w-0">
+            <span className={dim}>{c.verb}</span>
+            {c.refs?.map((ref) => <EntityIdPill key={ref} type="task" shortId={ref} />)}
+            {c.text && <span className="text-sol-text min-w-0">{c.text}</span>}
+          </span>
+        ))}
       </>
     );
   }
