@@ -93,7 +93,7 @@ describe("lineWriteGate", () => {
     expect(lineWriteGate(lp, [{ device_id: "mac", online: false, label: "Studio" }])).toMatchObject({ writable: true, device: "Studio", away: true });
     expect(lineWriteGate(lp, [{ device_id: "other", online: true }])).toMatchObject({ writable: false, reason: expect.stringMatching(/teammate's machine/) });
     expect(lineWriteGate({ finders: [], changed_at: 1, root: "/r" }, [])).toMatchObject({ writable: false, reason: expect.stringMatching(/older cast/) });
-    expect(lineWriteGate(null, [])).toMatchObject({ writable: false, reason: expect.stringMatching(/No machine has published/) });
+    expect(lineWriteGate(null, [])).toMatchObject({ writable: false, reason: expect.stringMatching(/no machine has uploaded them yet/) });
     // Nothing published but a known checkout: the defaults edit, and the first edit publishes.
     expect(lineWriteGate(null, [], "/Users/a/src/union")).toMatchObject({ writable: true, first: true });
     expect(lineWriteGate({ finders: [], changed_at: 1, root: "/r" }, [], "/r")).toMatchObject({ writable: false, reason: expect.stringMatching(/older cast/) });
