@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { surfaceMode } from "../surfaceRules";
-import { PALETTE_TAIL_MORE, PALETTE_TAIL_SEARCH, paletteActions, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, paletteValue, queryAsksToCreate, type PaletteTargetType } from "../paletteActions";
+import { PALETTE_ORG, PALETTE_TAIL_MORE, PALETTE_TAIL_SEARCH, paletteActions, palettePageValue, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, paletteValue, queryAsksToCreate, type PaletteTargetType } from "../paletteActions";
 import { resolvePaletteTarget } from "../paletteTarget";
+import { palettePages } from "../navPages";
 import { paletteSearchValue } from "../paletteRowValues";
 
 const session = { _id: "session-1", user_id: "me", agent_type: "claude_code", message_count: 3, title: "Example" };
@@ -176,7 +177,14 @@ describe("command tree targeting", () => {
   });
   test("links use canonical routes", () => {
     expect(paletteObjectPath("session", { _id: "s" })).toBe("/conversation/s");
-    expect(paletteObjectPath("project", { _id: "p" })).toBe("/projects/p");
+    // A company object opens its sheet on the Org screen; a project's board is a verb of its own.
+    expect(paletteObjectPath("project", { _id: "p", short_id: "pj-abc" })).toBe("/org/pj-abc");
+    expect(paletteObjectPath("initiative", { _id: "g", short_id: "in-2" })).toBe("/org/in-2");
+    expect(paletteObjectPath("role", { _id: "r", short_id: "or-7" })).toBe("/org/or-7");
+    expect(paletteObjectPath("person", { _id: "u1", member: { _id: "u1", username: "sam", github_username: "samvit" } })).toBe("/org/@samvit");
+    // Without a GitHub handle the address is the user id, as every pill writes it (personRefOf).
+    expect(paletteObjectPath("person", { _id: "u1", member: { _id: "u1", username: "sam" } })).toBe("/org/@u1");
+    expect(paletteActions("project", [{ _id: "p" }]).map((a) => a.key)).toContain("project_board");
   });
   test("digit accelerators leave typing and IME input alone", () => {
     const e = { key: "2", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
@@ -276,12 +284,12 @@ describe("palette item ranking", () => {
     expect(actions.find(a => a.key === "session_kill")?.label).toBe("Kill 3 sessions");
     expect(actions.find(a => a.key === "bucket")?.label).toBe("Label 3 sessions…");
   });
-  test("a teammate: follow where they are, reach them, then their profile", () => {
-    const person = { _id: "u-sam", name: "Samvit", username: "samvit", member: {}, online: true, following: false, session: { _id: "c1", title: "Deals lead" } };
+  test("a teammate: follow where they are, reach them, then their place in the org", () => {
+    const person = { _id: "u-sam", name: "Samvit", member: { _id: "u-sam", github_username: "samvit" }, online: true, following: false, session: { _id: "c1", title: "Deals lead" } };
     const actions = paletteActions("person", [person], "me", true);
     expect(actions.map(a => a.key)).toEqual(["person_follow", "person_message", "person_huddle", "open", "newtab", "copylink"]);
     expect(actions[0].label).toBe("Follow · Deals lead");
-    expect(paletteObjectPath("person", person)).toBe("/team/samvit");
+    expect(paletteObjectPath("person", person)).toBe("/org/@samvit");
     // Offline: nothing to follow; chat off: no message.
     expect(paletteActions("person", [{ ...person, online: false, session: null }], "me", false).map(a => a.key)).toEqual(["person_huddle", "open", "newtab", "copylink"]);
     expect(paletteActions("person", [{ ...person, following: true }], "me", true)[0].label).toBe("Stop following");
@@ -292,5 +300,43 @@ describe("queryAsksToCreate", () => {
   test("new or create, partly typed or with what to make, asks to create; other words do not", () => {
     for (const q of ["ne", "new", "New ", "new task", "cr", "create", "create doc"]) expect(queryAsksToCreate(q)).toBe(true);
     for (const q of ["", "n", "newsletter", "routine", "renew", "news"]) expect(queryAsksToCreate(q)).toBe(false);
+  });
+});
+
+describe("the Org row answers to the pages it replaced", () => {
+  // The Pages rows ranked the way cmdk ranks them: by score, ties in list order.
+  const rankPages = (q: string) =>
+    palettePages(surfaceMode(false, false), () => true, true)
+      .map((row, i) => ({ label: row.label, score: paletteItemScore(palettePageValue(row), q), i }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score || a.i - b.i);
+
+  for (const q of ["team", "goals", "roadmap", "company", "proj"]) {
+    test(`"${q}" puts Org first`, () => {
+      expect(rankPages(q)[0]?.label).toBe("Org");
+      // Above a session or task found by its title, too.
+      const org = rankPages(q)[0]!.score;
+      expect(org).toBeGreaterThan(paletteItemScore(`__recent__ ${q} sync|||r1`, q));
+      expect(org).toBeGreaterThan(paletteItemScore(`__entity__ ${q} review|||t1`, q));
+    });
+  }
+
+  test("a page's own name still leads its prefix", () => {
+    expect(rankPages("team ch")[0]?.label).toBe("Team Charts");
+    expect(rankPages("inbox")[0]?.label).toBe("Inbox");
+  });
+});
+
+describe("company objects in the palette", () => {
+  test("a goal, role or project whose title matches outranks a session or task matching as well", () => {
+    const q = "private";
+    const goal = paletteItemScore(`${PALETTE_ORG} Win the private network in-1|||g1`, q);
+    const role = paletteItemScore(`${PALETTE_ORG} Private Network lead @private-network or-3|||r1`, q);
+    const session = paletteItemScore("__recent__ Private Network lead|||s1", q);
+    const task = paletteItemScore("__entity__ Ship the private network broker|||t1", q);
+    expect(role).toBeGreaterThan(session);
+    expect(goal).toBeGreaterThan(task);
+    // Still under a command the query names.
+    expect(role).toBeLessThan(paletteItemScore(paletteValue("Private mode", "incognito"), q));
   });
 });
