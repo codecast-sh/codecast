@@ -35,6 +35,8 @@ import { docSourceForPlanSource } from "@codecast/shared/docs";
 import { renderFencedPlanRecord, renderFencedPlanTasks } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
+import { graphOutside } from "./lib/taskGraph";
+import { patchDepMirror } from "./tasks";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 export { canAccessPlan };
@@ -300,6 +302,8 @@ export const createFromTemplate = mutation({
         updated_at: now,
       } as any);
       taskIds.push(taskId);
+      const self = { short_id: taskShortId, workspace: workspaceForResource({ user_id: auth.userId, team_id: template.team_id }) };
+      for (const dep of blockedBy) await patchDepMirror(ctx, auth.userId, self, dep, "blocks", "add");
     }
 
     await ctx.db.patch(planId, { task_ids: taskIds });
@@ -353,6 +357,7 @@ export const fork = mutation({
 
     const oldToNew = new Map<string, string>();
     const taskIds: Id<"tasks">[] = [];
+    const edges: [string, string[]][] = [];
 
     for (const st of sourceTasks) {
       const newShortId = await nextShortId(ctx.db, "ct");
@@ -380,6 +385,12 @@ export const fork = mutation({
         updated_at: now,
       } as any);
       taskIds.push(tid);
+      edges.push([newShortId, blockedBy]);
+    }
+    // Every fork task is in place first: a blocker may come later in the list.
+    const workspace = workspaceForResource({ user_id: auth.userId, team_id: source.team_id });
+    for (const [shortId, blockedBy] of edges) {
+      for (const dep of blockedBy) await patchDepMirror(ctx, auth.userId, { short_id: shortId, workspace }, dep, "blocks", "add");
     }
 
     await ctx.db.patch(planId, { task_ids: taskIds });
@@ -946,7 +957,15 @@ export const get = query({
     // Merge legacy arrays + new entries into unified comments timeline
     const comments = mergePlanEntries(plan);
 
-    return { ...plan, tasks, doc_content, comments };
+    // The blockers and parents the plan's tasks name outside it, so the CLI's
+    // planReadiness resolves them instead of holding them unknown (TG1).
+    const outside = await graphOutside(ctx, tasks);
+    const graph_outside = {
+      tasks: outside.tasks.map((t) => ({ _id: t._id, short_id: t.short_id, status: t.status })),
+      searched: outside.searched,
+    };
+
+    return { ...plan, tasks, doc_content, comments, graph_outside };
   },
 });
 

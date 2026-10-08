@@ -20,7 +20,7 @@
 // several teams; each one runs through `requireTeam`, so naming a team you are
 // not in returns nothing rather than someone else's chat.
 
-import { internalAction, internalMutation, mutation, query } from "./functions";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -204,6 +204,33 @@ export async function readChannel(
   if (!(await canAccessChannel(ctx, userId, channel))) return null;
   return channel;
 }
+
+// The CLI prints a message as a short prefix of its id (`cast chat read`), so
+// every verb that takes a message id also takes that prefix. A full id passes
+// through untouched; a prefix resolves by a range read on the system `by_id`
+// index to the one message the caller can read. Unreadable matches are dropped
+// before counting, so a prefix never reveals another team's message.
+export const resolveMessageRef = internalQuery({
+  args: { api_token: v.optional(v.string()), ref: v.string() },
+  handler: async (ctx, args): Promise<{ id: Id<"chat_messages"> | null; error?: string }> => {
+    const ref = args.ref.trim();
+    const exact = ctx.db.normalizeId("chat_messages", ref);
+    if (exact) return { id: exact };
+    if (!/^[a-z0-9]{5,}$/.test(ref)) return { id: null, error: `Not a chat message id: ${ref}` };
+    const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
+    const rows = await ctx.db
+      .query("chat_messages")
+      .withIndex("by_id", (q: any) => q.gte("_id", ref).lt("_id", `${ref}~`))
+      .take(20);
+    const readable: Id<"chat_messages">[] = [];
+    for (const row of rows) {
+      if (await readChannel(ctx, userId, row.channel_id)) readable.push(row._id);
+    }
+    if (readable.length === 1) return { id: readable[0] };
+    if (!readable.length) return { id: null, error: `No chat message matches ${ref}` };
+    return { id: null, error: `${ref} matches ${readable.length} messages; use more of the id` };
+  },
+});
 
 export async function loadChannel(
   ctx: ReadCtx,
