@@ -1,210 +1,141 @@
-// RoleScopeView at its two sizes (docs/architecture/org-roles-run-work.md R3),
-// mounted in jsdom against the REAL store, so what is proven is what a person
-// sees: the hover card's scope section and the role page's Scope tab are one
-// rendering, both paint from the store's slices (the org tree, projects, plans,
-// tasks, sessions) and follow an optimistic edit in the same tick, the card is
-// one link with nothing clickable inside it, and the card still says something
-// honest when the tree, or the enrichment, or both are missing.
-// Run: bun components/identity/RoleScopeView.mount.test.tsx
-import { test } from "bun:test";
-import assert from "node:assert/strict";
-import type { OrgRole, OrgTree } from "../org/orgTypes";
-
+// The role's hover card (cohesive build spec §5.4, D14), mounted in jsdom
+// against the REAL store: with the org tree it is the role's summary and
+// says exactly what the role sheet's head says (whom it reports to, its
+// state, what it carries, the goals it serves); it follows an optimistic
+// edit in the same tick; a click opens the role's sheet inside the Org
+// screen and its address anywhere else, while a goal it serves opens that
+// goal instead; and without the tree it says what the enrichment knows, and
+// without either a face and a name, never an error.
+// Run: bun test components/identity/RoleScopeView.mount.test.tsx
+import { test, expect, afterAll, mock } from "bun:test";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
-async function verifyRoleScopeView() {
-  const { JSDOM } = await import("jsdom");
-  const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
-  for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
-    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
-  }
-  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-  const { mock } = await import("bun:test");
-  const React = await import("react");
-  const { act } = React;
+import type { OrgTree } from "../org/orgTypes";
 
-  // The enrichment is the one thing not in the store: the test switches it.
-  const env = { card: undefined as any };
-  mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: env.card }) }));
-  mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
+const { JSDOM } = await import("jsdom");
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
+for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLInputElement", "SVGElement", "Element", "Node", "NodeFilter", "MutationObserver", "CustomEvent", "Event", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "localStorage"]) {
+  const v = (dom.window as any)[key];
+  if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true, writable: true });
+}
+(globalThis as any).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+afterAll(() => closeDomWindow(dom));
 
-  const { ORG_FIXTURE } = await import("../org/orgFixture");
-  const { useInboxStore } = await import("../../store/inboxStore");
-  const { createRoot } = await import("react-dom/client");
-  const { RoleHoverContent } = await import("./RoleHoverCard");
-  const { RoleScopeView } = await import("./RoleScopeView");
-  const { useRoleScope } = await import("../../hooks/useRoleScope");
+const React = await import("react");
+const h = React.createElement;
+const { act } = React;
 
-  const TEAM = "fixture-team";
-  const WS = `team:${TEAM}`;
-  const today = new Date().toISOString().slice(0, 10);
-  const growth = ORG_FIXTURE.roles[0];
-  const seo: OrgRole = {
-    ...growth, _id: "fixture-role-seo", short_id: "or-2", name: "SEO lead", handle: "seo",
-    scope: { project_ids: [], plan_ids: ["fixture-plan-seo"] }, reports_to: { kind: "role", role_id: growth._id },
-    scope_names: { projects: [], plans: [{ id: "fixture-plan-seo", title: "SEO and AI citations", short_id: "pl-88" }] },
-  };
-  const tree: OrgTree = {
-    ...ORG_FIXTURE,
-    roles: [{ ...growth, scope: { ...growth.scope, plan_ids: [...growth.scope.plan_ids, "fixture-plan-loose"] }, scope_names: { ...growth.scope_names, plans: [...growth.scope_names.plans, { id: "fixture-plan-loose", title: "Pricing page rewrite", short_id: "pl-91" }] }, charter: "Owns organic search and paid search. Writes the weekly growth review.\n\nNever touches billing.", caps: { hands_per_day: 6, wakes_per_day: 40, tokens_per_day: 400_000 }, counters: { day: today, hands: 1, wakes: 3, tokens: 0 } }, seo],
-  };
-  // Tasks a person filed: the rows a project's board shows (shared/tasks isOnProjectBoard).
-  const row = (r: any) => ({ workspace: WS, team_id: TEAM, updated_at: 1, source: "human", ...r });
-  const seed = async (patch: Record<string, unknown>) => act(async () => { useInboxStore.setState(patch as never); });
+// The enrichment is the one thing not in the store: the test switches it.
+const env = { card: undefined as any };
+const realQuery = { ...(await import("../../hooks/useQueryNoThrow")) };
+mock.module("../../hooks/useQueryNoThrow", () => ({ ...realQuery, useQueryNoThrow: (_q: unknown, args: unknown) => ({ data: args === "skip" ? undefined : env.card }) }));
+mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
+const pushed: string[] = [];
+const realNav = { ...(await import("next/navigation")) };
+mock.module("next/navigation", () => ({ ...realNav, useRouter: () => ({ push: (u: string) => pushed.push(u), replace: () => {} }), usePathname: () => "/inbox", useSearchParams: () => new URLSearchParams() }));
+
+const { createRoot } = await import("react-dom/client");
+const { useInboxStore } = await import("../../store/inboxStore");
+const { ORG_FIXTURE } = await import("../org/orgFixture");
+const { RoleHoverContent } = await import("./RoleHoverCard");
+const { useRoleHead } = await import("../org/lines/useHeads");
+const { SheetFrame } = await import("../org/company/SheetFrame");
+const { OrgOpenContext } = await import("../org/company/orgOpenContext");
+
+const TEAM = "fixture-team";
+const WS = `team:${TEAM}`;
+const growth = ORG_FIXTURE.roles[0];
+const snapshot = { short_id: "or-1", name: "Head of Growth", handle: "growth", avatar: "fox" } as const;
+const row = (r: any) => ({ workspace: WS, team_id: TEAM, updated_at: 1, ...r });
+const project = row({ _id: "fixture-project-growth", title: "Growth", short_id: "pj-4g", status: "active", owner_role_id: growth._id, task_counts: { total: 0, done: 0, in_progress: 0 }, plan_count: 0, doc_count: 0, active_plan_count: 0, created_at: 1 });
+const goal = row({ _id: "g1", short_id: "in-7", title: "Organic search is the first channel", status: "active", owner: { kind: "role", role_id: growth._id }, project_ids: ["fixture-project-growth"], health: "on_track", health_at: 1, user_id: "fixture-user-me", created_at: 1 });
+
+const q = (sel: string, root: ParentNode = document) => root.querySelector(sel) as HTMLElement | null;
+const qa = (sel: string, root: ParentNode = document) => [...root.querySelectorAll<HTMLElement>(sel)];
+const texts = (root: ParentNode) => ({
+  reportsTo: q("[data-role-reports-to]", root)?.textContent?.replace(/\s+/g, " ").trim(),
+  state: q("[data-role-state]", root)?.textContent,
+  carries: q("[data-role-carries]", root)?.textContent,
+  serves: qa("[data-summary-serves-item], [data-sheet-link]", root).filter((a) => a.closest("[data-summary-serves], [data-sheet-serves]")).map((a) => a.textContent),
+});
+
+async function mountNode(node: React.ReactNode) {
+  const el = document.createElement("div");
+  document.body.appendChild(el);
+  const root = createRoot(el);
+  await act(async () => { root.render(node); });
+  return { el, unmount: async () => { await act(async () => root.unmount()); el.remove(); } };
+}
+const seed = (patch: Record<string, unknown>) => act(async () => { useInboxStore.setState(patch as never); });
+
+/** The role sheet's head, built the way RoleSheet builds it. */
+function SheetHead() {
+  const head = useRoleHead(useInboxStore.getState().orgTree!.roles[0]);
+  return h(SheetFrame, { kind: "role", idRef: "or-1", glyph: null, title: "Head of Growth", crumbs: [], facts: head.facts, serves: head.serves });
+}
+
+test("with the tree, the card is the role's summary and says what its sheet's head says", async () => {
   await seed({
     currentUser: { _id: "fixture-user-me" },
     clientState: { ...(useInboxStore.getState().clientState as object), ui: { active_team_id: TEAM } },
-    orgTree: tree,
-    projects: { "fixture-project-growth": row({ _id: "fixture-project-growth", title: "Growth", short_id: "pr-4", status: "active", task_counts: { total: 0, done: 0, in_progress: 0 }, plan_count: 0, doc_count: 0 }) },
-    plans: {
-      "fixture-plan-seo": row({ _id: "fixture-plan-seo", title: "SEO and AI citations", short_id: "pl-88", status: "active", project_id: "fixture-project-growth" }),
-      // In scope through nothing but the role naming it, and in no project.
-      "fixture-plan-loose": row({ _id: "fixture-plan-loose", title: "Pricing page rewrite", short_id: "pl-91", status: "active" }),
-    },
-    tasks: {
-      t1: row({ _id: "t1", short_id: "ct-1", title: "A", status: "open", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo", assignee: growth._id }),
-      t2: row({ _id: "t2", short_id: "ct-2", title: "B", status: "in_progress", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo" }),
-      t3: row({ _id: "t3", short_id: "ct-3", title: "C", status: "done", project_id: "fixture-project-growth", plan_id: "fixture-plan-seo" }),
-      // Another workspace's task on the same project id must never be counted.
-      leak: { _id: "leak", short_id: "ct-9", title: "X", status: "open", project_id: "fixture-project-growth", workspace: "team:someone-else", team_id: "someone-else", updated_at: 1 },
-    },
+    orgTree: ORG_FIXTURE as OrgTree,
+    projects: { [project._id]: project },
+    initiatives: { g1: goal },
   });
+  const card = await mountNode(h(RoleHoverContent, { role: snapshot }));
+  expect(q("[data-role-scope]", card.el)!.getAttribute("data-role-scope")).toBe("tree");
+  expect(q("[data-summary-title]", card.el)!.textContent).toBe("Head of Growth");
+  const said = texts(card.el);
+  expect(said).toEqual({ reportsTo: "↳ Ashot Petrosian", state: said.state, carries: "leads Growth", serves: ["Organic search is the first channel"] });
+  expect(said.state).toBeTruthy();
+  expect(q("[data-summary-carried]", card.el)!.textContent).toContain("1 project");
 
-  let root = createRoot(document.getElementById("root")!);
-  const mount = async (node: React.ReactNode) => {
-    await act(async () => root.unmount());
-    root = createRoot(document.getElementById("root")!);
-    await act(async () => root.render(node as never));
-  };
-  const q = (sel: string) => document.querySelector<HTMLElement>(sel);
-  const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
-  const click = async (el: Element | null) => { assert.ok(el, "missing element"); await act(async () => { (el as HTMLElement).click(); }); };
-  const snapshot = { short_id: "or-1", name: "Head of Growth", handle: "growth" };
+  const sheet = await mountNode(h(SheetHead));
+  expect(texts(sheet.el)).toEqual(said);
 
-  // ── the card: painted from the store, no enrichment at all ──
-  await mount(<RoleHoverContent role={snapshot} />);
-  assert.ok(q('[data-role-scope="card"]'), "the hover card carries the scope view at card size");
-  assert.deepEqual(qa("[data-scope-label]").map((el) => el.textContent), ["Projects", "Sessions", "Its job", "Reports to", "Under it", "Owns", "Daily limit"], "the sections, projects first");
-  assert.equal(q('[data-scope-project="pr-4"] [data-scope-project-line]')!.textContent, "Growth · 2 open tasks · 1 done · lead", "a project by name, with its state, and that this role leads it");
-  assert.equal(q('[data-scope-project="pr-4"] [data-scope-plan="pl-88"]')!.textContent, "SEO and AI citations · 1 of 3 done", "a plan sits inside its project, with live progress");
-  assert.equal(qa('[data-scope-plan="pl-88"]').length, 1, "and nowhere beside it");
-  assert.match(q("[data-scope-loose]")!.textContent!, /^Not in a projectPricing page rewrite/, "a plan in no project goes last, under its own heading");
-  assert.match(q("[data-scope-sessions-line]")!.textContent!, /waiting on a person/, "sessions by who acts next, in plain words");
-  assert.equal(q("[data-scope-charter]")!.textContent, "Owns organic search and paid search.", "the charter's first sentence only");
-  assert.match(q('[data-scope-section="reports-to"]')!.textContent!, /Ashot Petrosian/);
-  assert.match(q('[data-scope-section="reports"]')!.textContent!, /SEO lead/, "the roles under it");
-  assert.equal(q("[data-scope-owned]")!.textContent, "1 open task: 1 open");
-  assert.equal(q("[data-scope-limit]")!.textContent, "woke 3 of 40 times today · started 1 of 6 sessions", "today's use against the daily limit, never caps or hands");
-  assert.ok(!/\bcaps?\b|\bhands?\b/i.test(q("[data-role-card]")!.textContent!), "the card never says caps or hands");
-  // A click anywhere on the card opens the role: the card IS the link, so
-  // nothing inside it may be a link, a button, or another card's trigger.
-  const cardLink = q("[data-role-card]")!;
-  assert.equal(cardLink.tagName, "A");
-  assert.equal(cardLink.getAttribute("href"), "/org/or-1");
-  assert.equal(cardLink.querySelectorAll("a, button").length, 0, "nothing clickable nests inside the card");
+  // Local first: renaming the project it leads moves the card in the same tick.
+  await seed({ projects: { [project._id]: { ...project, title: "Growth engine", updated_at: 2 } } });
+  expect(q("[data-role-carries]", card.el)!.textContent).toBe("leads Growth engine");
+  await seed({ projects: { [project._id]: project } });
+  await sheet.unmount();
+  await card.unmount();
+});
 
-  // ── local first: an optimistic task edit moves the card in the same tick ──
-  await seed({ tasks: { ...useInboxStore.getState().tasks, t2: { ...(useInboxStore.getState().tasks as any).t2, status: "done", updated_at: 2 } } });
-  assert.equal(q('[data-scope-project="pr-4"] [data-scope-project-line]')!.textContent, "Growth · 1 open task · 2 done · lead");
-  assert.equal(q('[data-scope-plan="pl-88"]')!.textContent, "SEO and AI citations · 2 of 3 done");
+test("a click opens the role: its sheet inside the Org screen, its address elsewhere; a goal it serves opens that goal", async () => {
+  pushed.length = 0;
+  const outside = await mountNode(h(RoleHoverContent, { role: snapshot }));
+  await act(async () => { q("[data-role-card]", outside.el)!.click(); });
+  expect(pushed).toEqual(["/org/or-1"]);
+  await outside.unmount();
 
-  // ── a session bound to a task in the project shows in that project's card ──
-  const bound = growth.sessions.find((x) => x.state === "working") ?? growth.sessions[0];
-  await seed({ tasks: { ...useInboxStore.getState().tasks, t1: { ...(useInboxStore.getState().tasks as any).t1, conversation_ids: [bound._id], updated_at: 3 } } });
-  assert.match(q('[data-scope-project="pr-4"] [data-scope-project-sessions]')!.textContent!, /^1 /, "the sessions at work in the project, by who acts next");
-
-  // ── the page: the same view at full size ──
   const opened: string[] = [];
-  function Page() {
-    const { model } = useRoleScope("or-1");
-    return model ? (
-      <RoleScopeView
-        model={model}
-        density="page"
-        renderLead={(id) => <span data-test-lead={id} />}
-        renderInitiative={(id) => <span data-test-initiative={id} />}
-        onFilePlan={(planRef, projectId) => { opened.push(`file:${planRef}:${projectId}`); useInboxStore.getState().updatePlan(planRef, { project_id: projectId }); }}
-        sessions={<div data-test-sessions />}
-        onTab={(t) => opened.push(`tab:${t}`)}
-      />
-    ) : null;
-  }
-  await mount(<Page />);
-  assert.ok(q('[data-role-scope="page"]'));
-  assert.deepEqual(qa("[data-scope-label]").map((el) => el.textContent), ["Projects", "Sessions", "Its job", "Reports to", "Under it", "Owns", "Daily limit"], "the page asks the same questions as the card");
-  const projectCard = q('article[data-scope-project="pr-4"]')!;
-  assert.equal(projectCard.querySelector("header a")!.getAttribute("href"), "/projects/pr-4", "a project card opens the project");
-  assert.ok(projectCard.querySelector('[data-test-lead="fixture-project-growth"]'), "and carries the project's lead chip");
-  assert.ok(projectCard.querySelector('[data-scope-project-initiative] [data-test-initiative="fixture-project-growth"]'), "and the initiative it belongs to");
-  assert.equal(projectCard.querySelector("[data-scope-project-line]")!.textContent, "1 open task · 2 done", "open and done tasks");
-  assert.ok(projectCard.querySelector("[data-scope-project-sessions]"), "the sessions active in it");
-  assert.equal(projectCard.querySelector('[data-scope-plan="pl-88"] a')!.getAttribute("href"), "/plans/pl-88", "its plans are inside the card");
-  // The last card: plans in no project, and the one gesture that files them.
-  const loose = q("article[data-scope-loose]")!;
-  assert.match(loose.textContent!, /Not in a project/);
-  assert.ok(loose.querySelector('[data-scope-plan="pl-91"]'));
-  assert.ok(loose.querySelector('[data-scope-file-plan="pl-91"]'), "each offers File under a project");
-  assert.ok(loose.compareDocumentPosition(projectCard) & 2, "and it comes after the projects");
-  assert.equal(q("[data-scope-charter]")!.textContent, "Owns organic search and paid search. Writes the weekly growth review.", "the page reads the whole first paragraph");
-  // The grouped sessions the page hands in.
-  assert.ok(q('[data-scope-section="sessions"] [data-test-sessions]'));
-  await click(qa("button").find((b) => /^All \d+ sessions/.test(b.textContent ?? "")) ?? null);
-  assert.equal(opened.pop(), "tab:sessions");
-  await click(qa("button").find((b) => /Read the whole charter/.test(b.textContent ?? "")) ?? null);
-  assert.equal(opened.pop(), "tab:charter");
-  await click(q('[data-scope-owned-status="open"]'));
-  assert.equal(opened.pop(), "tab:tasks");
-  // A role named inside another role's scope opens its own page (and card).
-  assert.equal(q('[data-scope-section="reports"] a')!.getAttribute("href"), "/org/or-2");
+  const inside = await mountNode(h(OrgOpenContext.Provider, { value: { open: (k: string, r: string) => opened.push(`${k}:${r}`) } }, h(RoleHoverContent, { role: snapshot })));
+  await act(async () => { q("[data-role-card]", inside.el)!.click(); });
+  expect(opened).toEqual(["role:or-1"]);
+  await act(async () => { q("[data-summary-serves-item]", inside.el)!.click(); });
+  expect(opened).toEqual(["role:or-1", "initiative:in-7"]);
+  expect(pushed).toEqual(["/org/or-1"]);
+  await inside.unmount();
+});
 
-  // ── one language with the goal and project pages: a project's status is the
-  // glyph, word and colour its own page draws (lib/projectStatus), and a
-  // goal's health is the chip every goal surface draws, with its date ──
-  const { PROJECT_STATUS } = await import("../../lib/projectStatus");
-  const statusGlyph = () => q('article[data-scope-project="pr-4"] header svg')!;
-  assert.equal(statusGlyph().getAttribute("aria-label"), "Active");
-  assert.ok(statusGlyph().classList.contains(PROJECT_STATUS.active.color), "active wears the project's own colour, never health's green");
-  assert.equal(q("[data-scope-project-status]"), null, "an active project says no status word");
-  const projectsBefore = useInboxStore.getState().projects as Record<string, any>;
-  await seed({
-    projects: { "fixture-project-growth": { ...projectsBefore["fixture-project-growth"], status: "paused", updated_at: 4 } },
-    initiatives: { g1: row({ _id: "g1", short_id: "in-7", title: "Organic search is the first channel", status: "active", owner: { kind: "role", role_id: growth._id }, project_ids: [], health: "at_risk", health_at: Date.UTC(2026, 8, 16, 12), user_id: "fixture-user-me", created_at: 1 }) },
-  });
-  assert.equal(statusGlyph().getAttribute("aria-label"), "Paused");
-  assert.ok(statusGlyph().classList.contains(PROJECT_STATUS.paused.color));
-  assert.equal(q('[data-scope-project-status="paused"]')!.textContent, "Paused", "the word as the project page writes it");
-  assert.ok(q('[data-scope-project-status="paused"]')!.classList.contains(PROJECT_STATUS.paused.color));
-  assert.equal(qa("[data-scope-label]")[0].textContent, "Goals");
-  const goalRow = q('a[data-scope-initiative="in-7"]')!;
-  assert.equal(goalRow.querySelector("[data-initiative-health]")!.getAttribute("data-initiative-health"), "at_risk");
-  assert.match(goalRow.querySelector("[data-initiative-health]")!.textContent!, /^At risk.*Sep 16/, "the label as every goal surface writes it, and when it was said");
-  assert.match(goalRow.textContent!, /drives it/);
-  await mount(<RoleHoverContent role={snapshot} />);
-  assert.match(q('[data-role-scope="card"] [data-scope-initiative="in-7"] [data-initiative-health="at_risk"]')!.textContent!, /^At risk/, "the hover card draws the same chip");
-  await seed({ projects: projectsBefore, initiatives: {} });
-
-  // ── no tree: the enrichment stands in, and the rows still count ──
+test("without the tree the enrichment says what it knows; without either, a face and a name", async () => {
   await seed({ orgTree: null });
   env.card = {
-    _id: growth._id, short_id: "or-1", name: "Head of Growth", handle: "growth", avatar: "fox", status: "active", trust: "decide", tenure: { kind: "standing" },
-    charter: "Owns organic search.", reports_to: { kind: "user", name: "Ashot Petrosian" },
-    scope: { projects: [{ id: "fixture-project-growth", title: "Growth", short_id: "pr-4" }], plans: [] },
-    caps: null, counters: null,
+    _id: growth._id, short_id: "or-1", name: "Head of Growth", handle: "growth", avatar: "fox", status: "active", trust: "decide",
+    charter: "Owns organic search.\n\nNever touches billing.", reports_to: { kind: "user", name: "Ashot Petrosian" },
+    scope: { projects: [{ id: "fixture-project-growth", title: "Growth", short_id: "pj-4g" }], plans: [] }, caps: null, counters: null,
   };
-  await mount(<RoleHoverContent role={snapshot} />);
-  assert.match(q('[data-scope-project="pr-4"]')!.textContent!, /^Growth · 1 open task/, "the card names the project; the store still counts its tasks");
-  assert.equal(q('[data-scope-section="sessions"]'), null, "sessions are the tree's to say: without it the card says nothing rather than zero");
-  assert.match(q("[data-role-card]")!.textContent!, /starts work on its own/);
+  const card = await mountNode(h(RoleHoverContent, { role: snapshot }));
+  expect(q("[data-role-scope]", card.el)!.getAttribute("data-role-scope")).toBe("card");
+  expect(q("[data-role-reports-to]", card.el)!.textContent).toBe("↳ Ashot Petrosian");
+  expect(q("[data-role-carries]", card.el)!.textContent).toBe("Owns organic search.");
+  expect(q("[data-summary-carried]", card.el)!.textContent).toContain("1 project");
+  await card.unmount();
 
-  // ── neither: a face and a name, never an error ──
   env.card = undefined;
-  await mount(<RoleHoverContent role={snapshot} />);
-  assert.equal(q("[data-role-scope]"), null);
-  assert.match(q("[data-role-card]")!.textContent!, /Head of Growth@growth/);
-  assert.ok(q("[data-role-card] img"), "the face is there");
-
-  await act(async () => root.unmount());
-  closeDomWindow(dom);
-  console.log("role scope view, both densities: ok");
-}
-
-test("the role scope view mounts", verifyRoleScopeView, 600_000);
+  const bare = await mountNode(h(RoleHoverContent, { role: snapshot }));
+  expect(q("[data-role-scope]", bare.el)!.getAttribute("data-role-scope")).toBe("face");
+  expect(q("[data-summary-title]", bare.el)!.textContent).toBe("Head of Growth");
+  expect(q("[data-role-card] img", bare.el)).not.toBeNull();
+  await bare.unmount();
+});

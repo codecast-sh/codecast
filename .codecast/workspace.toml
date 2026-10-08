@@ -34,3 +34,23 @@ range = 20
 # axe, so sessions that drive the mobile app in a simulator can move there.
 [host]
 simulators = ["iOS"]
+
+# How `cast ship checkout` lands everything uncommitted in this shared
+# checkout: commits by session, replayed onto origin/main in memory, checked
+# here, pushed straight to main. Convex deploys before the push when the
+# shipped commits touch it (CLAUDE.md "Deploy convex BEFORE you push"); its own
+# typecheck is off because `cast check` just ran over the same tree, convex
+# included. Web ships itself: Railway builds every push to main. Tests run in
+# CI, not here: a day's ship touches a hundred test files across packages with
+# their own runners, and the fix-forward trigger answers a red run.
+[ship]
+mode = "direct"
+check = "cast check"
+tests = false
+level = true
+
+[[ship.deploy]]
+name = "convex"
+when = ["packages/convex/**", "packages/shared/**", "platform/**"]
+run = "packages/convex/deploy.sh --typecheck=disable"
+stage = "before_push"

@@ -13,6 +13,7 @@ import { TaskDecisionChip } from "../decisions/TaskDecisions";
 import { TaskStatusBadge } from "../TaskStatusBadge";
 import { LabelChips } from "../LabelChips";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
+import { formatRowTime, sentenceCase } from "../../lib/sessionCard";
 import type { ItemRowState } from "../ListRowShell";
 import { taskLivenessState } from "../../lib/liveness";
 import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
@@ -80,7 +81,8 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
   // Resolve through the task's own team so a row shows that team's vocabulary
   // ("Working on") even if it ever renders outside its workspace view.
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
-  const status = statusVisual(taskStatusOf(task as any, teamStatuses), teamStatuses);
+  const resolvedStatus = taskStatusOf(task as any, teamStatuses);
+  const status = statusVisual(resolvedStatus, teamStatuses);
   const priority = taskPriority(task.priority);
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
@@ -97,12 +99,18 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
     else state.onEditDone();
   }, [editValue, task.title, state.onTitleCommit, state.onEditDone]);
 
+  // Hosted mode leaves the time off an open to-do: a clock time beside it
+  // reads as when to do it, and the schema has no due time to show. A closed
+  // one says when it closed, in the rail's words ("Done Mon").
+  const closed = resolvedStatus.category === "done" || resolvedStatus.category === "dropped";
   const age = Date.now() - task.updated_at;
-  const ageStr = age < 3600000
-    ? `${Math.round(age / 60000)}m`
-    : age < 86400000
-      ? `${Math.round(age / 3600000)}h`
-      : `${Math.round(age / 86400000)}d`;
+  const ageStr = !internals
+    ? closed ? `${resolvedStatus.category === "done" ? "Done" : "Dropped"} ${formatRowTime(task.updated_at, true)}` : ""
+    : age < 3600000
+      ? `${Math.round(age / 60000)}m`
+      : age < 86400000
+        ? `${Math.round(age / 3600000)}h`
+        : `${Math.round(age / 86400000)}d`;
 
   return (
     <>
@@ -119,6 +127,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         onClick={(e) => { e.stopPropagation(); state.onOpenPalette("status"); }}
         className="flex-shrink-0 hover:scale-125 transition-transform"
         title="Change status (s)"
+        // Hosted mode names the circle by what it does to this to-do; the
+        // shortcut stays in the tooltip.
+        aria-label={internals ? undefined : `Mark ${sentenceCase(task.title)} ${closed ? "not done" : "done"}`}
       >
         {activeSession && taskLivenessState(task.status, activeSession) === "active" ? (
           <LivePulseHalo><StatusIcon className={`w-4 h-4 ${status.color}`} /></LivePulseHalo>
@@ -145,7 +156,25 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           className="flex-1 text-sm text-sol-text bg-transparent border-b border-sol-cyan outline-none py-0"
         />
       ) : (
-        <span className="flex-1 text-sm text-sol-text truncate">{task.title}</span>
+        <>
+          {/* Hosted mode says only the priorities worth a mark, high and
+              urgent, as a small accent bar before the title: what the
+              assistant set is visible, and p changes it. */}
+          {/* Every hosted row keeps the mark's slot, so titles share one edge. */}
+          {!internals && task.priority !== "high" && task.priority !== "urgent" && <span aria-hidden className="w-[3px] flex-shrink-0" />}
+          {!internals && (task.priority === "high" || task.priority === "urgent") && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
+              data-cc-todo-priority={task.priority}
+              className="flex-shrink-0 self-center h-3.5 w-[3px] rounded-full bg-[var(--pd-accent,var(--sol-orange))]"
+              style={task.priority === "high" ? { opacity: 0.55 } : undefined}
+              title={`${task.priority === "urgent" ? "Urgent" : "High priority"} (p to change)`}
+              aria-label={`${task.priority === "urgent" ? "Urgent" : "High priority"}, change priority`}
+            />
+          )}
+          <span className="flex-1 text-sm text-sol-text truncate">{internals ? task.title : sentenceCase(task.title)}</span>
+        </>
       )}
       {/* Floated subtask: the parent was filtered out of this view, so the row
           carries a small chip pointing back at it — never context-free. */}
@@ -287,7 +316,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
-      ) : (internals || task.priority === "urgent") && (
+      ) : internals && (
         <button
           onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
           className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"
@@ -296,7 +325,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} />
         </button>
       )}
-      <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-compact">{ageStr}</span>
+      {ageStr && <span className={`text-xs text-sol-text-dim ${internals ? "w-8" : "whitespace-nowrap"} text-right tabular-nums cq-hide-compact`}>{ageStr}</span>}
     </>
   );
 }
