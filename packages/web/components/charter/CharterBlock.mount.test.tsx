@@ -88,7 +88,8 @@ describe("CharterBlock", () => {
     for (const m of full.success_metrics) assert.ok(body.includes(m), m);
     for (const g of full.non_goals) assert.ok(body.includes(g), g);
     for (const r of full.risks) assert.ok(body.includes(r), r);
-    assert.match(body, /Success metrics2/);
+    assert.match(body, /Signs it works2/);
+    assert.doesNotMatch(body, /Success|Goal\b/, "the charter field is never called a goal, and its metrics are signs it works");
     assert.match(body, /Non goals1/);
     assert.match(body, /Risks1/);
     // The priority pill carries the level and its palette colour.
@@ -117,8 +118,23 @@ describe("CharterBlock", () => {
     const body = t.text();
     assert.doesNotMatch(body, /Risks/);
     assert.doesNotMatch(body, /Daily limit/);
-    assert.match(body, /Success metrics/);
+    assert.match(body, /Signs it works/);
     assert.match(body, /Non goals/);
+    t.unmount();
+  }, SLOW);
+
+  it("inside a project sheet's Charter fold: no card, no label of its own, and What it is for is the sheet's", async () => {
+    const t = await setup();
+    await t.render({ charter: full, plain: true, hideGoal: true, hideOwner: true });
+    const body = t.text();
+    assert.doesNotMatch(body, /^ ?Charter/, "the fold already says Charter");
+    assert.doesNotMatch(body, /Make the inbox the place/, "the sheet edits what it is for above the fold");
+    assert.match(body, /Signs it works2/);
+    assert.match(body, /Daily limit/);
+    // An empty charter in the fold is its fields, never the "No charter yet" line.
+    await t.render({ charter: {}, plain: true, hideGoal: true, hideOwner: true });
+    assert.doesNotMatch(t.text(), /No charter yet/);
+    assert.ok(t.button("Add a sign it works"));
     t.unmount();
   }, SLOW);
 
@@ -133,7 +149,7 @@ describe("CharterBlock", () => {
     await t.click(document.querySelector(`[data-owner="${role.short_id}"]`)!);
     await t.click(t.button("No owner"));
     assert.deepEqual(t.patches.at(-1), { owner_role_id: null });
-    // Goal: click, type, Enter with meta commits a multiline edit.
+    // What it is for: click, type, Enter with meta commits a multiline edit.
     await t.click(t.button(/Make the inbox/));
     const ta = document.querySelector<HTMLTextAreaElement>("textarea")!;
     await t.act(async () => {
@@ -143,7 +159,7 @@ describe("CharterBlock", () => {
     await t.act(async () => ta.dispatchEvent(new (globalThis as any).KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })));
     assert.deepEqual(t.patches.at(-1), { goal: "A sharper goal" });
     // Metrics: the add row appends; the remove button drops.
-    await t.click(t.button("Add a metric"));
+    await t.click(t.button("Add a sign it works"));
     await t.typeInto(document.querySelector<HTMLInputElement>("input")!, "NPS above 50");
     assert.deepEqual(t.patches.at(-1), { success_metrics: [...full.success_metrics, "NPS above 50"] });
     await t.click(document.querySelector('[aria-label="Remove Risk 1"]')!);
@@ -173,7 +189,7 @@ describe("CharterBlock", () => {
     assert.equal(t.buttons().filter((b) => /Head of People/.test(b.textContent ?? "")).length, 0, "the ask is never a button that opens blank fields");
     await t.click(t.button("or write it"));
     assert.equal(document.querySelector("[data-charter]")?.getAttribute("data-charter"), "project");
-    assert.ok(t.button("Add a metric"));
+    assert.ok(t.button("Add a sign it works"));
     assert.ok(document.querySelector('[data-priority]'), "the empty pill is editable");
     assert.ok(document.querySelector('[data-owner="none"]'), "the no owner chip");
     t.unmount();
@@ -296,12 +312,12 @@ describe("CharterBlock", () => {
     const t = await setup();
     await t.render({ charter: full });
     const names = t.buttons().map((b) => b.getAttribute("aria-label")).filter(Boolean) as string[];
-    for (const n of ["Edit Goal", "Edit Success metric 1", "Edit Success metric 2", "Edit New success metric", "Edit Non goal 1", "Edit Risk 1", "Edit Daily limit tokens per day", "Edit Daily limit hands per day", "Remove Risk 1"]) {
+    for (const n of ["Edit What it is for", "Edit Sign it works 1", "Edit Sign it works 2", "Edit New sign it works", "Edit Non goal 1", "Edit Risk 1", "Edit Daily limit tokens per day", "Edit Daily limit hands per day", "Remove Risk 1"]) {
       assert.ok(names.includes(n), `${n} in ${names.join(" | ")}`);
     }
     await t.click(t.button(/Make the inbox/));
     const ta = document.querySelector<HTMLTextAreaElement>("textarea")!;
-    assert.equal(ta.getAttribute("aria-label"), "Goal");
+    assert.equal(ta.getAttribute("aria-label"), "What it is for");
     assert.ok(document.querySelector("kbd"), "the multiline commit shortcut renders as keycaps");
     t.unmount();
   }, SLOW);

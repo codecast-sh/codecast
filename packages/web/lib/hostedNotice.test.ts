@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { foldHostedRetries, hostedStopsSig, lastAskOf, splitHostedStops, type RetryFoldRow } from "./hostedNotice";
+import { foldHostedRetries, hostedStopsSig, lastAskOf, NOTICE_DOT, noticeMove, noticeWords, splitHostedStops, type RetryFoldRow } from "./hostedNotice";
 
 const ask = (id: string, text = "keep basil alive on a windowsill?"): RetryFoldRow => ({ _id: id, role: "user", content: text, person: true });
 const fail = (id: string): RetryFoldRow => ({ _id: id, role: "assistant", subtype: "notice:error", content: "I can't reach my thinking service.", message_uuid: `notice:${id}` });
@@ -70,5 +70,35 @@ describe("hosted stops in the inbox", () => {
   test("Try again sends the person's last own words, past approval answers and system rows", () => {
     expect(lastAskOf([own, notice, { role: "user", content: "Approve" }, { role: "user", content: "<system>wake</system>" }])).toBe("keep basil alive?");
     expect(lastAskOf([])).toBeUndefined();
+  });
+});
+
+describe("noticeMove", () => {
+  // One rule for the web's notice and bulk retry and the phone's notice.
+  test("a failed turn sends the last ask again; without one there is nothing to offer", () => {
+    expect(noticeMove("error", "find a plumber", false)).toEqual({ label: "Try again", busy: "Trying again…", send: "find a plumber" });
+    expect(noticeMove("unavailable", "find a plumber", false)?.label).toBe("Try now");
+    expect(noticeMove("error", undefined, true)).toBeNull();
+  });
+
+  test("a paused turn keeps going, a spent month opens Plan only while plans can be bought", () => {
+    expect(noticeMove("time", undefined, false)).toEqual({ label: "Keep going", busy: "Going on…", send: "Keep going" });
+    expect(noticeMove("budget", "x", true)).toEqual({ label: "Open Plan", opensPlan: true });
+    expect(noticeMove("budget", "x", false)).toBeNull();
+    expect(noticeMove("safety", "x", true)).toBeNull();
+  });
+
+  test("a Free gate stop: verify's move is its code field, a limit opens Plan only while plans can be bought", () => {
+    expect(noticeMove("verify", "x", true)).toBeNull();
+    expect(noticeMove("limit", "x", true)).toEqual({ label: "Open Plan", opensPlan: true });
+    expect(noticeMove("limit", "x", false)).toBeNull();
+  });
+
+  test("the web's dot classes follow the shared tone", () => {
+    expect(NOTICE_DOT).toEqual({ error: "bg-sol-red/70", unavailable: "bg-sol-yellow", budget: "bg-sol-orange", time: "bg-sol-blue/70", safety: "bg-sol-red/70", verify: "bg-sol-blue/70", limit: "bg-sol-orange" });
+  });
+
+  test("a stop moved past drops the invitation to try again", () => {
+    expect(noticeWords("I stopped here. You can ask me to try again.", 0, true)).toBe("I stopped here.");
   });
 });
