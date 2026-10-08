@@ -18,6 +18,7 @@ import {
   Blocks, Library, Sun, Moon, SquareTerminal, Gauge,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { objectHref, personRefOf } from "../lib/entityLinks";
 
 function MenuItem({
   icon: Icon,
@@ -163,7 +164,7 @@ export function UserMenu() {
     mode.showsPage(path) ? <MenuItem key={path} icon={icon} label={label} onClick={() => go(path)} /> : null;
   // In hosted mode the rail already holds every page this group would repeat.
   const pages = hosted ? [] : [
-    <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)} />,
+    <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(user ? objectHref("person", personRefOf(user)) : "/org?lens=people")} />,
     page(Rss, "Feed", "/feed"),
     page(Radio, "Crosstalk", "/crosstalk"),
     page(ListChecks, "Tasks", "/tasks"),
@@ -199,7 +200,7 @@ export function UserMenu() {
       {open && (
         <div className="cc-topbar-menu absolute right-0 mt-2 w-60 max-h-[calc(100vh-4rem)] overflow-y-auto overscroll-contain bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
           <button
-            onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)}
+            onClick={() => go(user ? objectHref("person", personRefOf(user)) : "/org?lens=people")}
             className="w-full px-3 py-2.5 border-b border-sol-border text-left hover:bg-sol-bg-alt transition-colors"
           >
             <div className="flex items-center gap-2">
