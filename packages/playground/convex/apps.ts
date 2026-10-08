@@ -1,7 +1,7 @@
 // Apps: create (with its starter and, from the home page, the first
 // request), read by slug, and the home gallery, busiest first.
 import { v } from "convex/values";
-import { internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { GALLERY_MAX } from "./lib/limits";
 import { seedFiles } from "./lib/seed";
@@ -10,20 +10,18 @@ import { cleanMessageBody } from "./lib/room";
 import type { UnfurlApp } from "./lib/unfurl";
 import { fail } from "./lib/errors";
 import { appBySlug, postSystemNote, requireApp, touchApp } from "./model";
-import { hereRows } from "./presence";
-import { presenceCutoff } from "./lib/presence";
+import { crowdRow } from "./presence";
 import { versionSaid } from "./lib/versions";
 import { stillUrl } from "./stills";
 import { takeRate } from "./limits";
 import { startDataCopy } from "./runtime";
 import { appendCopiedVersion, appendVersion, shownVersion, versionByNumber } from "./versions";
-import { buildRefusal, enqueueBuild } from "./builder/queue";
+import { enqueueBuild, shownRefusal } from "./builder/queue";
 import { publicVisitors, requireVisitor, type PublicVisitor } from "./visitors";
 import { visitorArgs } from "./validators";
 
 const SEED_SUMMARY = "Fresh clay";
 const SLUG_ATTEMPTS = 5;
-const GALLERY_FACES = 3;
 
 async function freshSlug(ctx: QueryCtx, name: string): Promise<string> {
   for (let i = 0; i < SLUG_ATTEMPTS; i++) {
@@ -33,7 +31,7 @@ async function freshSlug(ctx: QueryCtx, name: string): Promise<string> {
   throw new Error("could not find a free slug");
 }
 
-type NewApp = { name: string; created_by: Id<"visitors">; forked_from?: { app_id: Id<"apps">; version: number }; ideas?: string[] };
+type NewApp = Pick<Doc<"apps">, "name" | "created_by" | "forked_from" | "ideas" | "unlisted">;
 
 /** Insert an app row with no versions yet, at a fresh slug. */
 async function insertApp(ctx: MutationCtx, fields: NewApp): Promise<Doc<"apps">> {
@@ -56,13 +54,13 @@ async function insertApp(ctx: MutationCtx, fields: NewApp): Promise<Doc<"apps">>
  *  scaffolding nobody sees, so the maker's first build is v1. Without one the
  *  starter is the app's v1. */
 export const create = mutation({
-  args: { ...visitorArgs, prompt: v.optional(v.string()), name: v.optional(v.string()) },
+  args: { ...visitorArgs, prompt: v.optional(v.string()), name: v.optional(v.string()), unlisted: v.optional(v.literal(true)) },
   handler: async (ctx, args) => {
     const visitor = await requireVisitor(ctx, args);
     await takeRate(ctx, "createApp", visitor._id);
     const prompt = args.prompt === undefined ? null : cleanMessageBody(args.prompt);
     const name = cleanAppName(args.name) ?? (prompt ? nameFromPrompt(prompt) : "Untitled");
-    const app = await insertApp(ctx, { name, created_by: visitor._id });
+    const app = await insertApp(ctx, { name, created_by: visitor._id, unlisted: args.unlisted });
     await appendVersion(ctx, app, { kind: "seed", summary: SEED_SUMMARY, author_id: visitor._id, scaffold: prompt !== null }, seedFiles(name));
     const request_message_id = prompt
       ? await ctx.db.insert("messages", { app_id: app._id, kind: "request", visitor_id: visitor._id, body: prompt })
@@ -84,7 +82,7 @@ export const fork = mutation({
     const name = cleanAppName(args.name) ?? fail("invalid", "Give it a name first.");
     await takeRate(ctx, "createApp", visitor._id);
     const forked_from = { app_id: source._id, version: from.number };
-    const app = await insertApp(ctx, { name, created_by: visitor._id, forked_from, ...(source.ideas ? { ideas: source.ideas } : {}) });
+    const app = await insertApp(ctx, { name, created_by: visitor._id, forked_from, ideas: source.ideas, unlisted: source.unlisted });
     await appendCopiedVersion(ctx, app, { kind: "fork", summary: from.summary, author_id: visitor._id, source: forked_from }, from);
     await startDataCopy(ctx, source._id, app._id, visitor._id);
     await postSystemNote(
@@ -112,47 +110,49 @@ export type AppView = {
   name: string;
   live_version: number;
   version_count: number;
-  contributor_count: number;
   created_by: PublicVisitor | null;
   created_at: number;
-  last_activity_at: number;
   forked_from: Lineage;
   /** The live version's line for the clean link's toast and link unfurls,
    *  and whether the gallery has its picture yet. */
   live: { number: number; summary: string; created_at: number; author_id: Id<"visitors">; has_still: boolean } | null;
   /** Changes Clay suggests next, for the empty room. */
   ideas: string[];
-  /** Why your changes cannot build right now, in one line for people, or null. */
-  builds_paused: string | null;
 };
 
-/** An app by its link, or null when no app has that slug. */
+/** An app by its link, or null when no app has that slug. Public, so the
+ *  app's page can draw before its visitor is known, and only facts that
+ *  change with the app itself: a message or a charge anywhere wakes nobody's
+ *  page (activity times, budgets and the room each have their own read). */
 export const get = query({
-  args: { ...visitorArgs, slug: v.string() },
+  args: { slug: v.string() },
   handler: async (ctx, args): Promise<AppView | null> => {
-    const visitor = await requireVisitor(ctx, args);
     const app = isSlug(args.slug) ? await appBySlug(ctx, args.slug) : null;
     if (!app) return null;
-    const [creator, live, refusal] = await Promise.all([
-      publicVisitors(ctx, [app.created_by]),
-      shownVersion(ctx, app._id, app.live_version),
-      buildRefusal(ctx, app, visitor._id),
-    ]);
+    const [creator, live] = await Promise.all([publicVisitors(ctx, [app.created_by]), shownVersion(ctx, app._id, app.live_version)]);
     return {
       id: app._id,
       slug: app.slug,
       name: app.name,
       live_version: app.live_version,
       version_count: app.version_count,
-      contributor_count: app.contributor_count,
       created_by: creator.get(app.created_by) ?? null,
       created_at: app.created_at,
-      last_activity_at: app.last_activity_at,
       forked_from: await lineage(ctx, app),
       live: live && { number: live.number, summary: live.summary, created_at: live.created_at, author_id: live.author_id, has_still: !!live.still },
       ideas: app.ideas ?? [],
-      builds_paused: refusal?.error ?? null,
     };
+  },
+});
+
+/** Why your changes in this app cannot build right now, in one line for
+ *  people, or null. Changes only when building is switched off or on, or a
+ *  budget is used up or freed (builder/queue shownRefusal). */
+export const buildsPaused = query({
+  args: { ...visitorArgs, app_id: v.id("apps") },
+  handler: async (ctx, args): Promise<string | null> => {
+    const visitor = await requireVisitor(ctx, args);
+    return (await shownRefusal(ctx, args.app_id, visitor._id))?.error ?? null;
   },
 });
 
@@ -171,39 +171,62 @@ export type GalleryCard = {
   here: PublicVisitor[];
 };
 
-/** How many people a gallery reads presence from to find busy apps. */
-const BUSY_SCAN = 500;
+/** How many busy apps a gallery reads. */
+const BUSY_SCAN = 200;
+/** Recent apps read per tile, so near-copies folding together still fill it. */
+const RECENT_PER_TILE = 3;
 
-/** The home gallery: apps with people in them first, the busiest first, then
+/** One tile per name and maker: a burst of near-copies (one person making
+ *  the same app again and again) is one app on the home page, its best. */
+function oneOfEach(apps: Doc<"apps">[]): Doc<"apps">[] {
+  const seen = new Set<string>();
+  return apps.filter((a) => {
+    const key = `${a.created_by}:${a.name.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** The home gallery (public, like everything it shows, so the home page
+ *  draws before its visitor is known): apps with people in them first, the busiest first, then
  *  the most recently active, with who is in each now and the headline
  *  counts ("41 people building in 12 apps"). An app still waiting for its
  *  first build has nothing to show yet, so it waits too; a fork nobody has
- *  changed is its source over again, so it shows only while someone is in it. */
+ *  changed is its source over again, so it shows only while someone is in it.
+ *  Unlisted apps never show, and near-copies show once (oneOfEach).
+ *  Who is where comes from each app's crowd, which changes only when someone
+ *  arrives or leaves, so heartbeats never re-run this. */
 export const gallery = query({
-  args: { ...visitorArgs, limit: v.optional(v.number()) },
+  args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireVisitor(ctx, args);
     const limit = Math.max(1, Math.min(args.limit ?? GALLERY_MAX, GALLERY_MAX));
-    const now = Date.now();
-    const recent = await ctx.db.query("apps").withIndex("by_last_activity").order("desc").take(limit);
-    const present = await ctx.db.query("presence").withIndex("by_seen", (q) => q.gt("last_seen", presenceCutoff(now))).take(BUSY_SCAN);
+    const recent = await ctx.db
+      .query("apps")
+      .withIndex("by_listed_activity", (q) => q.eq("unlisted", undefined))
+      .order("desc")
+      .take(limit * RECENT_PER_TILE);
+    const busy = await ctx.db.query("crowds").withIndex("by_count", (q) => q.gt("count", 0)).order("desc").take(BUSY_SCAN);
     const known = new Set(recent.map((a) => a._id));
-    const busy = await Promise.all([...new Set(present.map((p) => p.app_id))].filter((id) => !known.has(id)).map((id) => ctx.db.get(id)));
-    const apps = [...recent, ...busy.flatMap((a) => (a ? [a] : []))];
-    const here = new Map(await Promise.all(apps.map(async (a) => [a._id, await hereRows(ctx, a._id, now)] as const)));
-    const ranked = apps
-      .filter((a) => a.live_version > 0 && (here.get(a._id)!.length > 0 || !(a.forked_from && a.version_count === 1)))
-      .sort((a, b) => here.get(b._id)!.length - here.get(a._id)!.length || b.last_activity_at - a.last_activity_at)
-      .slice(0, limit);
+    const more = await Promise.all(busy.filter((c) => !known.has(c.app_id)).map((c) => ctx.db.get(c.app_id)));
+    const apps = [...recent, ...more.flatMap((a) => (a ? [a] : []))];
+    const crowdOf = new Map(busy.map((c) => [c.app_id, c]));
+    const missing = await Promise.all(apps.filter((a) => !crowdOf.has(a._id)).map((a) => crowdRow(ctx, a._id)));
+    for (const c of missing) if (c) crowdOf.set(c.app_id, c);
+    const count = (a: Doc<"apps">) => crowdOf.get(a._id)?.count ?? 0;
+    const ranked = oneOfEach(
+      apps
+        .filter((a) => !a.unlisted && a.live_version > 0 && (count(a) > 0 || !(a.forked_from && a.version_count === 1)))
+        .sort((a, b) => count(b) - count(a) || b.last_activity_at - a.last_activity_at),
+    ).slice(0, limit);
     const live = await Promise.all(ranked.map((a) => shownVersion(ctx, a._id, a.live_version)));
     const people = await publicVisitors(ctx, [
-      ...ranked.flatMap((a) => here.get(a._id)!.slice(0, GALLERY_FACES).map((r) => r.visitor_id)),
+      ...ranked.flatMap((a) => crowdOf.get(a._id)?.faces ?? []),
       ...live.flatMap((l) => (l ? [l.author_id] : [])),
     ]);
     const cards: GalleryCard[] = await Promise.all(
       ranked.map(async (app, i) => {
         const l = live[i];
-        const rows = here.get(app._id)!;
         const source = l?.kind === "fork" ? await lineage(ctx, app) : null;
         return {
           id: app._id,
@@ -213,17 +236,29 @@ export const gallery = query({
           last_activity_at: app.last_activity_at,
           still_url: await stillUrl(ctx, l),
           latest: l && { by: people.get(l.author_id) ?? null, at: l.created_at, said: versionSaid(l, source?.name ?? null) },
-          here_count: rows.length,
-          here: rows.slice(0, GALLERY_FACES).flatMap((r) => people.get(r.visitor_id) ?? []),
+          here_count: count(app),
+          here: (crowdOf.get(app._id)?.faces ?? []).flatMap((id) => people.get(id) ?? []),
         };
       }),
     );
-    const counts = [...here.values()];
+    const crowds = [...crowdOf.values()];
     return {
       apps: cards,
-      here_total: new Set(counts.flat().map((r) => r.visitor_id)).size,
-      active_apps: counts.filter((rows) => rows.length > 0).length,
+      here_total: crowds.reduce((n, c) => n + c.count, 0),
+      active_apps: crowds.filter((c) => c.count > 0).length,
     };
+  },
+});
+
+/** Take apps off the home page (a harness's leftovers, or one taken down);
+ *  their links keep working. */
+export const unlist = internalMutation({
+  args: { slugs: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    for (const slug of args.slugs) {
+      const app = await appBySlug(ctx, slug);
+      if (app) await ctx.db.patch(app._id, { unlisted: true });
+    }
   },
 });
 

@@ -1,20 +1,26 @@
 "use client";
-// /org: the org screen (docs/architecture/org-staffing.md S41). The Head of
-// People's standing conversation on the left, under a strip of the open
-// proposals, and the map on the right, read only. Every answer is given on a
-// card in the conversation and leaves with the next message; the URL is the
-// only durable state (`?proposal=`, `&focus=`, `show`, `beside`, `lens`,
-// `proposed`). Under 980px the columns stack behind a switch; opened beside
-// the Head of People's own thread (`?beside=`) only the map draws.
+// /org and /org/<ref>: the org screen (docs/architecture/org-staffing.md
+// S41, cohesive build spec §4). The conversation with whoever answers for
+// what is being read on the left, under the strip of what waits on the
+// person; the company on the right (CompanyPane), read as a document or
+// drawn as a map, with the sheets of the objects opened over it. Every
+// answer to a proposal is given on its card in the conversation and leaves
+// with the next message. The address holds the top sheet (`/org/in-2`) and
+// the screen's parameters (`?proposal=`, `&focus=`, `show`, `beside`,
+// `lens`, `proposed`, `week`); the steps under the top sheet are this visit's.
+// Arriving by address puts the object's responsible party on the left (D5);
+// opening a sheet inside the screen never swaps it. Under 980px the columns
+// stack behind a switch; opened beside the Head of People's own thread
+// (`?beside=`) only the company draws.
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { create as mutate } from "mutative";
 import { toast } from "sonner";
-import { useMutation } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { defaultNewSessionPath, useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { defaultNewSessionPath, useInboxStore, useTrackedStore, type ProjectItem } from "../../store/inboxStore";
 import { createOrgSlice } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useSyncOrgProposal, useSyncOrgProposals } from "../../hooks/useSyncOrgProposals";
@@ -23,6 +29,8 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { useInitiatives } from "../../hooks/useInitiatives";
+import { locateDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
+import type { QueueItem } from "../../lib/decisionQueue";
 import { nextFrame } from "../conversationScroll";
 import { useMeasuredWidth } from "../../hooks/useMeasuredWidth";
 import { cssZoomOf } from "../../lib/cssZoom";
@@ -34,19 +42,36 @@ import { proposalAnswersOf } from "../../lib/reviewActions";
 import { cn } from "../../lib/utils";
 import { useTabContext } from "../../lib/tabParams";
 import { OrgHeader } from "./OrgHeader";
+import { OrgSegmented } from "./OrgSegmented";
 import { OpenProposalsStrip, type LinkLineState, type StripRow } from "./OpenProposalsStrip";
 import { OrgConversation, PREVIEW_BATCH } from "./OrgConversation";
 import { OrgMapColumn } from "./OrgMapColumn";
 import { OrgPreviewBanner, OrgStaleBanner } from "./OrgReadStateBlock";
 import { OrgHistorySheet } from "./OrgHistorySheet";
+import { useOrgFeatureOn } from "../../hooks/useOrgFeatureOn";
+import { activeOrgWorkspace, storeHoldsObject, useOrgAsks } from "./useNeedsYou";
+import { peopleOnlyTree, type RosterRow } from "./orgPeopleTree";
+import type { OrgObjectKind } from "@codecast/shared/entities";
+import { ConversationWithPanel } from "./scope/ConversationWithPanel";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { orgObjectTarget, orgRefNeedsTypeLookup } from "../../lib/orgObjectTarget";
+import { CompanyPane, type CompanyLens } from "./company/CompanyPane";
+import { canonicalRef, findRole, namesOrgObject, seatFor } from "./company/objects";
+import { renameSheet, sheetId, sheetKey, sheetPath, stackForAddress, type SheetRef } from "./company/sheetStack";
+import type { SheetHost } from "./company/sheetHost";
+import { CompanyRowsOverride, useCompanyRows, type CompanyRows } from "./company/useCompanyRows";
+import { OrgMapCorner } from "./OrgMapColumn";
+import { useMapFollowing } from "./useMapFollowing";
+import type { OrgGraphObject } from "./OrgGraph";
 import { OrgProposalFeeders } from "./OrgProposalFeeders";
 import { OrgHoverContext } from "./proposalContexts";
 import { OrgIntro } from "./OrgIntro";
 import { HeadSeatDialog, type HeadSeatChoice } from "./HeadSeatDialog";
 import { orgTreeReadState } from "./orgReadState";
-import { findHeadOfPeople, isDecidable, openProposals, orgPreviewEnabled, pickProposal, resolveProposalLink, reviewRunState, type OrgReviewRun } from "./staffingModel";
-import { findProposalCardMessage, missionOf, openProposalsToFeed, orgScreenParams, stripRows, ORG_STACK_BELOW, type JumpRequest, type OrgScreenShow } from "./orgScreenModel";
-import { GOALS_FIXTURE_DATA, ORG_GOALS_FIXTURE_PROPOSAL } from "./goalsFixture";
+import { findHeadOfPeople, inWorkspace, isDecidable, orgPreviewEnabled, pickProposal, resolveProposalLink, reviewRunState, workspaceOpenProposals, needsYouLine, type NeedsYouItem, type NeedsYouTarget, type OrgReviewRun } from "./staffingModel";
+import { findProposalCardMessage, missionOf, openProposalsToFeed, proposedMissionOf, orgScreenParams, stripRows, ORG_STACK_BELOW, type JumpRequest, type OrgScreenShow } from "./orgScreenModel";
+import { OrgOpenContext, type OrgOpen } from "./company/orgOpenContext";
+import { GOALS_FIXTURE_DATA, GOALS_FIXTURE_PROJECTS, ORG_GOALS_FIXTURE_PROPOSAL } from "./goalsFixture";
 import { ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
 import { readOrgPreviewSpec, readOrgPreviewTree } from "./orgPreviewSpec";
 import { ORG_FIXTURE_WITH_HEAD } from "./orgFixture";
@@ -56,6 +81,11 @@ import type { OrgFocusTarget } from "./orgLayout";
 import type { OrgResetPreview } from "./orgMeta";
 import type { MapFilter } from "./OrgMap";
 import type { ChartPointer } from "./orgChartPointer";
+
+/** An address segment as written, or as is when it is not valid percent encoding. */
+function decodeRef(segment: string): string {
+  try { return decodeURIComponent(segment); } catch { return segment; }
+}
 
 /** The DEV preview flag is read from the live URL on every render (see
  *  orgPreviewEnabled): a module constant survived in-app navigation and kept
@@ -126,6 +156,7 @@ export function OrgScreen() {
     // The strip's answer counts: the head's batch, and the preview's.
     (st) => { const conv = findHeadOfPeople(st.orgTree)?.standing?.conversation_id; return conv ? st.reviewComments[conv] : undefined; },
     (st) => st.reviewComments[PREVIEW_BATCH],
+    (st) => st.clientState.ui?.org_view,
   ]);
   // The journal put an edit back on its own (no echo within its TTL): say
   // so, because a paused badge that quietly reappears reads as a bug. A
@@ -138,6 +169,45 @@ export function OrgScreen() {
   const searchParams = useSearchParams();
   const search = searchParams.toString();
   const params = useMemo(() => orgScreenParams(search), [search]);
+
+  // -------- the object the address names (/org/<ref>): the top sheet
+  // A short ref names its kind; an older form (a goal's stub key, a bare
+  // Convex id) is named by the store, else by the server.
+  const routeParams = useParams() as { id?: string } | null;
+  const routeId = routeParams?.id ? decodeRef(String(routeParams.id)) : null;
+  const needsLookup = useInboxStore((st) => (routeId ? orgRefNeedsTypeLookup(routeId, st) : false));
+  const { data: resolvedType, error: resolveError } = useQueryNoThrow(_api.entities.resolveIdType as any, needsLookup && routeId ? { id: routeId } : "skip");
+  // One string, so the subscription wakes only when the answer changes.
+  const routeKey = useInboxStore((st) => {
+    if (!routeId) return "";
+    const t = orgObjectTarget(routeId, st, resolveError ? null : (resolvedType as any));
+    return t.kind === "pending" ? "pending" : t.kind === "scope" ? "" : `${t.kind}:${t.ref}`;
+  });
+  const routeSheet = useMemo<SheetRef | null>(() => {
+    if (!routeKey || routeKey === "pending") return null;
+    const at = routeKey.indexOf(":");
+    return { kind: routeKey.slice(0, at) as OrgObjectKind, ref: routeKey.slice(at + 1) };
+  }, [routeKey]);
+  // The sheets follow the address. An open made inside the screen marks the
+  // address it moves to, so the stack keeps the steps under it and the
+  // conversation stays put (D5b); an address without the mark is an
+  // arrival: the stack starts over on it, and the object's responsible party
+  // takes the left (D5a). The mark lives here rather than in the history
+  // entry's state, which a stage pane's navigation does not carry.
+  const inScreenMark = useRef<string | null>(null);
+  const [nav, setNav] = useState<{ key: string; stack: SheetRef[]; arrival: boolean }>(() => ({ key: routeKey, stack: routeSheet ? [routeSheet] : [], arrival: true }));
+  // An address that names a proposal is answered in the Head of People's
+  // thread, where its card lives (D5e over D5a): it keeps the left pane.
+  const arrivalSeat = (to: SheetRef | null) => (params.proposal ? null : to);
+  const [seatTarget, setSeatTarget] = useState<SheetRef | null>(() => arrivalSeat(routeSheet));
+  if (routeKey !== "pending" && nav.key !== routeKey) {
+    const inScreen = inScreenMark.current === (routeSheet ? sheetKey(routeSheet) : "");
+    setNav({ key: routeKey, stack: stackForAddress(nav.stack, routeSheet, inScreen), arrival: !inScreen });
+    if (!inScreen) setSeatTarget(arrivalSeat(routeSheet));
+  }
+  useWatchEffect(() => { inScreenMark.current = null; }, [nav.key]);
+  const stack = nav.stack;
+  const top = stack[stack.length - 1] ?? null;
   const switchWorkspace = useSwitchWorkspace();
   const openLinked = useOpenLinkedSession();
   const phone = useIsPhone();
@@ -167,15 +237,28 @@ export function OrgScreen() {
   // trip instead of a foreign org. Personal = the viewer's own user id.
   const wantedWorkspace = activeTeamId && isConvexId(activeTeamId) ? activeTeamId : meId;
   const treeMatches = !storeTree || !wantedWorkspace || storeTree.workspace.id === wantedWorkspace;
-  const tree: OrgTree | null = preview ? previewTree : treeMatches ? storeTree : null;
+  // The org feature (D11) gates the conversation pane only. With it off the
+  // server sends no tree, and the company still shows: its people come from
+  // the roster the store holds, with no roles.
+  const orgOn = useOrgFeatureOn();
+  const leftOff = !orgOn && !preview;
+  const roster = useInboxStore((st) => (leftOff ? st.teamMembers : null)) as RosterRow[] | null;
+  const meRow = useInboxStore((st) => (leftOff ? st.currentUser : null)) as RosterRow | null;
+  const peopleTree = useMemo(() => {
+    if (!leftOff || !wantedWorkspace) return null;
+    const team = activeTeamId && isConvexId(activeTeamId) ? (s.teams as { _id: string; name?: string }[] | undefined)?.find((t) => String(t._id) === activeTeamId) : null;
+    return peopleOnlyTree({ workspace: team ? { kind: "team", id: activeTeamId!, name: team.name ?? "Team" } : { kind: "user", id: wantedWorkspace, name: "Personal" }, roster: roster ?? [], me: meRow, now: Date.now() });
+  }, [leftOff, wantedWorkspace, activeTeamId, s.teams, roster, meRow]);
+  const tree: OrgTree | null = preview ? previewTree : leftOff ? peopleTree : treeMatches ? storeTree : null;
 
   // -------- derived
   const proposals = useMemo<OrgProposalRow[]>(() => preview ? previewProposals : joinProposals(s.orgProposals, s.orgProposalChanges), [preview, previewProposals, s.orgProposals, s.orgProposalChanges]);
-  const workspaceProposals = useMemo(() => {
-    const wanted = tree?.workspace;
-    return wanted ? proposals.filter((p) => wanted.kind === "team" ? p.team_id === wanted.id : !p.team_id) : proposals;
-  }, [proposals, tree]);
-  const open = useMemo(() => openProposals(workspaceProposals), [workspaceProposals]);
+  // One workspace for every proposal read here, taken the way the sidebar's
+  // count takes it (activeOrgWorkspace), so the strip and the badge agree even
+  // while the tree is loading, refused or still another workspace's.
+  const proposalWorkspace = useMemo(() => preview ? previewTree.workspace : activeOrgWorkspace(activeTeamId, meId), [preview, previewTree, activeTeamId, meId]);
+  const workspaceProposals = useMemo(() => proposals.filter((p) => inWorkspace(p, proposalWorkspace)), [proposals, proposalWorkspace]);
+  const open = useMemo(() => workspaceOpenProposals(proposals, proposalWorkspace), [proposals, proposalWorkspace]);
   const linkedRef = params.proposal;
   const linked = useMemo(() => pickProposal(workspaceProposals, linkedRef), [workspaceProposals, linkedRef]);
   // The linked proposal, whatever workspace it lives in: the get feeder fills
@@ -192,14 +275,16 @@ export function OrgScreen() {
   const mapProposal = useMemo(() => mapRow ? { changes: mapRow.changes } : null, [mapRow?._id, mapRow?.changes]); // eslint-disable-line react-hooks/exhaustive-deps
   // What the screen says about the read itself (orgReadState.ts): a failure
   // or a refusal is said, never painted as an empty chart.
-  const readState = useMemo(() => orgTreeReadState({ hasTree: !!tree, hasNodes: (tree?.roles.length ?? 0) + (tree?.people.length ?? 0) > 0, ready, missing, refused: !preview && refused, error: preview ? null : treeError }), [tree, ready, missing, refused, treeError, preview]);
+  const readState = useMemo(() => orgTreeReadState({ hasTree: !!tree, hasNodes: (tree?.roles.length ?? 0) + (tree?.people.length ?? 0) > 0, ready: ready || leftOff, missing: missing && !leftOff, refused: !preview && !leftOff && refused, error: preview || leftOff ? null : treeError }), [tree, ready, missing, refused, treeError, preview, leftOff]);
   const storeInitiatives = useInitiatives();
   const mission = useMemo(() => missionOf(preview ? GOALS_FIXTURE_DATA.initiatives : storeInitiatives), [preview, storeInitiatives]);
+  // With no mission among the goals, the one an open proposal would set stands in, in violet.
+  const proposedMission = useMemo(() => (mission ? null : proposedMissionOf(workspaceProposals)), [mission, workspaceProposals]);
 
   // -------- layout: wide, stacked behind a switch, or the map alone beside the head's own thread
   const stacked = phone || (width ?? (typeof window !== "undefined" ? window.innerWidth : ORG_STACK_BELOW)) < ORG_STACK_BELOW;
   const mapOnly = !!params.beside && params.beside === headConv;
-  const mode = mapOnly ? "map-only" : stacked ? "stacked" : "wide";
+  const mode = mapOnly ? "map-only" : leftOff ? "company-only" : stacked ? "stacked" : "wide";
   const show: OrgScreenShow = params.show ?? "conversation";
   // The screen takes its tab's width while it is mounted (store.stageWide):
   // the session rail and any sibling pane fold to a thin rail and come back
@@ -221,15 +306,44 @@ export function OrgScreen() {
   }, [wideTabId, wideLeafId]);
 
   // -------- the URL (the only durable state)
+  // The path is the top sheet's; a parameter change never moves it.
+  const pathBase = routeSheet ? sheetPath(routeSheet) : routeId ? `/org/${encodeURIComponent(routeId)}` : "/org";
   const replaceParams = useCallback((edit: (params: URLSearchParams) => void) => {
     const next = new URLSearchParams(searchParams.toString());
     edit(next);
     const qs = next.toString();
-    router.replace(qs ? `/org?${qs}` : "/org");
+    router.replace(qs ? `${pathBase}?${qs}` : pathBase);
+  }, [searchParams, router, pathBase]);
+  /** Move the top sheet from inside the screen (D5b): an open, Back, a close.
+   *  `edit` changes the screen's parameters in the same replace. */
+  const goTo = useCallback((to: SheetRef | null, edit?: (params: URLSearchParams) => void) => {
+    const next = new URLSearchParams(searchParams.toString());
+    edit?.(next);
+    inScreenMark.current = to ? sheetKey(to) : "";
+    router.replace(sheetPath(to, next.toString()));
   }, [searchParams, router]);
   const setProposalParam = useCallback((shortId: string | null) => replaceParams((p) => { if (shortId) p.set("proposal", shortId); else p.delete("proposal"); p.delete("focus"); }), [replaceParams]);
   const setShow = useCallback((v: OrgScreenShow) => replaceParams((p) => p.set("show", v)), [replaceParams]);
-  const setFilter = useCallback((f: MapFilter) => replaceParams((p) => { if (f === "everything") p.delete("lens"); else p.set("lens", f); }), [replaceParams]);
+  // -------- the company pane's lens (D18): the person's, synced; a dev
+  // preview and the pane beside the head's own thread keep theirs locally
+  const localLens = preview || mapOnly;
+  const [ownLens, setOwnLens] = useState<CompanyLens>(mapOnly ? "map" : "read");
+  const keepLens = useCallback((v: CompanyLens) => {
+    if (localLens) setOwnLens(v); else useInboxStore.getState().updateClientUI({ org_view: v });
+  }, [localLens]);
+  // The week is drawn on the map, so an address that asks for it shows the map
+  // whatever lens the person keeps. Only an explicit Read pick leaves the map:
+  // turning the week off or picking another filter keeps the map in view.
+  const weekOn = params.week && params.lens === "people";
+  // This week belongs to the People filter (D12): leaving People drops it from the address.
+  const setFilter = useCallback((f: MapFilter) => {
+    if (weekOn && f !== "people") keepLens("map");
+    replaceParams((p) => { if (f === "everything") p.delete("lens"); else p.set("lens", f); if (f !== "people") p.delete("week"); });
+  }, [replaceParams, weekOn, keepLens]);
+  const setWeek = useCallback((on: boolean) => {
+    if (!on && weekOn) keepLens("map");
+    replaceParams((p) => { if (on) p.set("week", "1"); else p.delete("week"); });
+  }, [replaceParams, weekOn, keepLens]);
   const setAsProposed = useCallback((on: boolean) => replaceParams((p) => { if (on) p.delete("proposed"); else p.set("proposed", "0"); }), [replaceParams]);
   /** A pointer the followed thread wrote (OrgMapColumn): the proposal, the focus and the lens, each set or cleared. */
   const applyPointer = useCallback((ptr: ChartPointer) => replaceParams((p) => {
@@ -342,6 +456,124 @@ export function OrgScreen() {
   const comments = batchId ? s.reviewComments[batchId] : undefined;
   const rows = useMemo(() => stripRows(open, headConv, comments, now, preview), [open, headConv, comments, now, preview]);
   const answersStaged = rows.some((r) => r.answered > 0);
+  // The rest of what waits on you (D7): decisions and stuck roles, counted
+  // with the proposals by the same rule as the sidebar's Org count.
+  const asks = useOrgAsks(tree);
+  const waitingCount = needsYouLine(rows.length, asks).total;
+  /** The screen's one opener (D5b): every reference inside the screen (a
+   *  strip row, a pill, a line, a node) opens its object here, marked as an
+   *  in-screen open so the conversation on the left never swaps. An arrival
+   *  by URL carries no mark. */
+  // A sheet just made by New opens with its name ready to type, until the
+  // name is committed or let go. Held by the sheet's identity, which a rename
+  // of its ref keeps.
+  const [focusKey, setFocusKey] = useState<string | null>(null);
+  const openSheet = useCallback((kind: OrgObjectKind, ref: string, focus = false) => {
+    const to = { kind, ref };
+    setFocusKey(focus ? sheetId(to) : null);
+    // Stacked on the conversation, the company comes forward to show the sheet.
+    goTo(to, stacked && show === "conversation" ? (p) => p.set("show", "map") : undefined);
+  }, [goTo, stacked, show]);
+  /** Scroll the Head of People's thread to a proposal's card, the change lit
+   *  (D8): the column goes back to the Head of People first (D5e). */
+  const openProposalCard = useCallback((shortId: string, seq?: number) => {
+    setSeatTarget(null);
+    const row = workspaceProposals.find((p) => p.short_id === shortId);
+    arrived.current = shortId;
+    replaceParams((p) => { p.set("proposal", shortId); if (seq !== undefined) p.set("focus", String(seq)); else p.delete("focus"); if (stacked) p.set("show", "conversation"); });
+    if (!row) return;
+    if (row.thread?.conversation_id === headConv) { setExpandedForeign(null); scrollToProposal(row, seq !== undefined); } else setExpandedForeign(row.short_id);
+  }, [workspaceProposals, replaceParams, stacked, headConv, scrollToProposal]);
+  const orgOpen = useMemo<OrgOpen>(() => ({ open: (kind, ref) => openSheet(kind, ref), openProposal: openProposalCard }), [openSheet, openProposalCard]);
+
+  // -------- who sits on the left (D5): the Head of People, or the
+  // responsible party of the object arrived at, or the one the person chose to talk to
+  // The preview's sheets read its fixture, the same rows its map draws.
+  const liveCompany = useCompanyRows();
+  const previewCompany = useMemo<CompanyRows | null>(() => (preview ? { goals: GOALS_FIXTURE_DATA.initiatives, projects: GOALS_FIXTURE_PROJECTS as unknown as ProjectItem[], tree, members: [] } : null), [preview, tree]);
+  const company = previewCompany ?? liveCompany;
+  /** The rows an address resolves against: the company's, over the tree this screen draws. */
+  const addressRows = useMemo(() => ({ ...company, tree }), [company, tree]);
+  const seat = useMemo(() => (preview || leftOff ? null : seatFor(seatTarget, { goals: company.goals, projects: company.projects, tree })), [preview, leftOff, seatTarget, company.goals, company.projects, tree]);
+  const backToHead = useCallback(() => setSeatTarget(null), []);
+  // Arrived at an object before its collection reached the store: hold the
+  // column for it instead of showing the Head of People for a moment.
+  const seatPending = !!seatTarget && !seat && !preview && !leftOff && !!tree && (
+    seatTarget.kind === "initiative" ? company.goals.length === 0
+      : seatTarget.kind === "project" ? company.projects.length === 0
+      : false);
+  // The Head of People's own role is this screen (D16): arriving at its
+  // address lands on the company with its thread on the left.
+  const arrivedAtHead = nav.arrival && top?.kind === "role" && !!head && findRole(tree, top.ref)?._id === head._id;
+  useWatchEffect(() => { if (arrivedAtHead) goTo(null); }, [arrivedAtHead]);
+  // An address in an older form (a goal's stub key, a Convex id, a person's
+  // user id) moves to the object's short ref once the store names it, in
+  // place: the stack keeps its steps and the left pane stays.
+  const canonical = top ? canonicalRef(top, addressRows) : null;
+  useWatchEffect(() => {
+    if (!top || !canonical || canonical.toLowerCase() === top.ref.replace(/^@/, "").toLowerCase()) return;
+    const to = { kind: top.kind, ref: canonical };
+    setNav((n) => ({ ...n, stack: renameSheet(n.stack, top, to) }));
+    goTo(to);
+  }, [top?.kind, top?.ref, canonical]);
+
+  /** The ref an object on the map opens by: its short form when the store
+   *  holds it, else its id when that is an address. Null for an id that is
+   *  neither (a fixture's `proj-org`): /org/<it> is a scope page, and the
+   *  object would leave the screen instead of opening beside the map. */
+  const refOfGraph = useCallback((o: OrgGraphObject): string | null => canonicalRef({ kind: o.kind, ref: o.id }, addressRows) ?? (namesOrgObject(o.id) ? o.id : null), [addressRows]);
+  const talkTo = useCallback((to: SheetRef) => {
+    setSeatTarget(to);
+    if (stacked) setShow("conversation");
+  }, [stacked, setShow]);
+  const sheetHost = useMemo<Omit<SheetHost, "under" | "underTitle" | "covers">>(() => ({
+    back: () => goTo(stack.length > 1 ? stack[stack.length - 2] : null),
+    close: () => goTo(null),
+    open: (kind, ref) => openSheet(kind, ref),
+    talk: leftOff ? () => {} : talkTo,
+    talkable: !leftOff && !mapOnly,
+    leftConversationId: mapOnly || leftOff ? null : seat?.conversationId ?? headConv,
+    openProposal: openProposalCard,
+    focusTitle: !!top && sheetId(top) === focusKey,
+    titleSettled: () => setFocusKey(null),
+  }), [goTo, stack, openSheet, talkTo, leftOff, mapOnly, seat?.conversationId, headConv, openProposalCard, top, focusKey]);
+  /** A ghost on the map is a proposal's change: its card in the thread answers it (D8). */
+  const openChange = useCallback((changeId: string) => {
+    for (const p of workspaceProposals) {
+      const c = p.changes.find((x) => x._id === changeId);
+      if (c) { openProposalCard(p.short_id, c.seq); return; }
+    }
+  }, [workspaceProposals, openProposalCard]);
+
+  // -------- the lens the pane shows; choosing Read leaves the week behind
+  const lens: CompanyLens = weekOn ? "map" : localLens ? ownLens : s.clientState.ui?.org_view === "map" ? "map" : "read";
+  const setLens = useCallback((v: CompanyLens) => {
+    if (v === "read" && weekOn) replaceParams((p) => p.delete("week"));
+    keepLens(v);
+  }, [weekOn, replaceParams, keepLens]);
+  /** Scroll the thread to where a decision on it was asked: the `cast decide`
+   *  call's message, else the time it was asked. A later request (a pick, or
+   *  another decision) made while the lookup runs wins. */
+  const convex = useConvex();
+  const scrollToDecision = useCallback((item: QueueItem) => {
+    if (!headConv) return;
+    if (waiting.current) { window.clearTimeout(waiting.current.timer); waiting.current = null; }
+    const nonce = ++jumpSeq.current;
+    void locateDecisionAsk(convex, headConv, item.decisionId, item.question).then((at) => {
+      if (jumpSeq.current === nonce) setJump(at ? { messageId: at.id, nonce } : { timestamp: item.createdAt, nonce });
+    });
+  }, [headConv, convex]);
+  /** A decision or stuck role row opens what it is about (D7). One asked in
+   *  the Head of People's own thread is on the left already: the thread
+   *  scrolls to the ask, and a stacked screen shows the thread. */
+  const openTarget = useCallback((t: NeedsYouTarget, item?: NeedsYouItem) => {
+    if (t.kind === "role" && t.ref === head?.short_id) {
+      if (stacked) setShow("conversation");
+      if (item?.kind === "decision" && item.item.conversationId === headConv) scrollToDecision(item.item);
+      return;
+    }
+    orgOpen.open(t.kind, t.ref);
+  }, [head?.short_id, headConv, stacked, setShow, orgOpen, scrollToDecision]);
   const linkLine = useMemo<LinkLineState | null>(() => {
     if (linkState.kind === "open") return null;
     if (linkState.kind !== "foreign") return linkState;
@@ -350,6 +582,8 @@ export function OrgScreen() {
   }, [linkState, s.teams, meId]);
   const onPick = useCallback((row: StripRow) => {
     const id = row.proposal.short_id;
+    // A proposal is answered in the Head of People's thread: the column goes back to it first (D5e).
+    setSeatTarget(null);
     // The click is the arrival: the URL effect must not scroll a second time.
     arrived.current = id;
     // One replace: the proposal and, stacked, the column. Two replaces from
@@ -457,7 +691,7 @@ export function OrgScreen() {
   const introOffered = useRef(false);
   const initialized = s.clientStateInitialized;
   useWatchEffect(() => {
-    if (introOffered.current || !tree || preview || !initialized || introSeen) return;
+    if (introOffered.current || !tree || preview || leftOff || !initialized || introSeen) return;
     introOffered.current = true;
     setIntro("auto");
   }, [tree, preview, initialized, introSeen]);
@@ -544,10 +778,10 @@ export function OrgScreen() {
   const previewColumn = useMemo(() => preview ? { proposals: previewProposals, onSend: previewSend, current: params.proposal } : null, [preview, previewProposals, previewSend, params.proposal]);
 
   const strip = mapOnly ? null : (
-    <OpenProposalsStrip rows={rows} current={params.proposal} expanded={expandedForeign} batchConversationId={batchId} linkLine={linkLine} onPick={onPick} onCollapse={() => setExpandedForeign(null)} onClearCurrent={clearProposal} onSwitchWorkspace={(teamId) => void switchWorkspace(teamId)} />
+    <OpenProposalsStrip rows={rows} asks={asks} holds={storeHoldsObject} onOpen={openTarget} current={params.proposal} expanded={expandedForeign} batchConversationId={batchId} linkLine={linkLine} onPick={onPick} onCollapse={() => setExpandedForeign(null)} onClearCurrent={clearProposal} onSwitchWorkspace={(teamId) => void switchWorkspace(teamId)} />
   );
   const conversation = (
-    <div className="h-full min-h-0" onKeyDown={(e) => { if (e.key === "Escape" && s.orgFocusChangeId) clearFocus(); }}>
+    <div className="h-full min-h-0" onKeyDown={(e) => { if (e.key === "Escape" && s.orgFocusChangeId) { e.preventDefault(); clearFocus(); } }}>
       <OrgConversation
         tree={tree}
         head={head}
@@ -564,29 +798,65 @@ export function OrgScreen() {
         onResume={resumeHeadOfPeople}
         strip={strip}
         preview={previewColumn}
+        seat={seat}
+        holding={seatPending}
+        onBackToHead={backToHead}
       />
     </div>
   );
-  const map = (
-    <OrgMapColumn
-      tree={tree}
-      readState={readState}
-      onRetry={retryTree}
-      goals={preview ? GOALS_FIXTURE_DATA : undefined}
-      proposal={mapProposal}
+  const follow = useMapFollowing(params.beside, applyPointer);
+  const companyPane = (
+    <CompanyPane
+      lens={lens}
+      onLens={setLens}
       filter={params.lens}
       onFilter={setFilter}
-      asProposed={params.proposed}
-      onAsProposed={setAsProposed}
-      highlightChangeId={highlightChangeId}
-      focusTarget={focusTarget}
-      onOpenSession={openSession}
-      beside={params.beside}
-      onPointer={applyPointer}
+      stack={stack}
+      host={sheetHost}
+      corner={<OrgMapCorner asProposed={params.proposed} onAsProposed={setAsProposed} hasProposal={!!mapProposal} week={params.lens === "people" ? { on: weekOn, onToggle: setWeek } : null} follow={follow} />}
+      renderMap={({ ring, panelWidth }) => (
+        <OrgMapColumn
+          tree={tree}
+          readState={readState}
+          onRetry={retryTree}
+          goals={preview ? GOALS_FIXTURE_DATA : undefined}
+          proposal={mapProposal}
+          filter={params.lens}
+          asProposed={params.proposed}
+          onAsProposed={setAsProposed}
+          week={weekOn}
+          highlightChangeId={highlightChangeId}
+          focusTarget={focusTarget}
+          onOpenSession={openSession}
+          ring={ring}
+          panelWidth={panelWidth}
+          onOpenObject={(o) => {
+            if (!o) { goTo(null); return; }
+            const ref = refOfGraph(o);
+            if (!ref) return false;
+            openSheet(o.kind, ref);
+          }}
+          onOpenChange={openChange}
+          onTalk={leftOff || mapOnly ? undefined : (o) => { const ref = refOfGraph(o); if (ref) talkTo({ kind: o.kind, ref }); }}
+        />
+      )}
     />
   );
 
+  // Stacked, the two sides take turns, switched from the header's own row.
+  const switcher = mode === "stacked" ? (
+    <OrgSegmented
+      value={show}
+      onChange={setShow}
+      items={[{ key: "conversation", label: "Conversation", count: waitingCount }, { key: "map", label: "Company" }]}
+      label="Conversation or company"
+      data="org-switch"
+    />
+  ) : null;
+
   return (
+    <CompanyRowsOverride.Provider value={previewCompany}>
+    <OrgOpenContext.Provider value={orgOpen}>
     <OrgHoverContext.Provider value={setHoverChangeId}>
       <div ref={measureRef} className="h-full flex flex-col overflow-hidden relative" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }} data-org-screen={mode}>
         <OrgProposalFeeders refs={feedRefs} />
@@ -594,41 +864,27 @@ export function OrgScreen() {
             included, so it fits a laptop without a scroll; its own title says
             where the person is. Later or the start action brings the page back. */}
         {intro && tree && <OrgIntro key={intro} hasRoles={liveRoles > 0} compact={phone} onStart={() => closeIntro("start")} onLater={() => closeIntro("later")} />}
-        {!mapOnly && <OrgHeader tree={tree} mission={mission} isAdmin={!!isAdmin} healthOn={false} phone={phone} meId={me?.user_id ?? meId ?? ""} onCreateRole={(input) => run("createOrgRole", input)} onHistory={() => setHistoryOpen(true)} proposal={mapRow} />}
+        {!mapOnly && <OrgHeader tree={tree} mission={mission} proposedMission={proposedMission} onProposal={preview ? undefined : openProposalCard} isAdmin={!!isAdmin} phone={phone} meId={me?.user_id ?? meId ?? ""} canHire={!leftOff} onCreateRole={(input) => run("createOrgRole", input)} onHistory={() => setHistoryOpen(true)} onOpen={preview ? undefined : openSheet} proposal={mapRow} switcher={switcher} />}
         {preview && !mapOnly && <OrgPreviewBanner />}
         {readState.kind === "stale" && <OrgStaleBanner message={readState.message} onRetry={retryTree} />}
-        {mode === "stacked" && (
-          <div role="tablist" aria-label="Conversation or map" className="shrink-0 h-9 px-3 flex items-center border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-org-switch={show}>
-            <div className="inline-flex h-7 items-center rounded-lg border p-[2px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-card)" }}>
-              {(["conversation", "map"] as const).map((v) => (
-                <button key={v} type="button" role="tab" aria-selected={show === v} onClick={() => setShow(v)} className={cn("inline-flex h-full items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors", show === v ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/50")} style={{ color: show === v ? "var(--sol-text)" : "var(--sol-text-muted)" }} data-org-switch-pick={v}>
-                  {v === "conversation" ? "Conversation" : "Map"}
-                  {v === "conversation" && rows.length > 0 && <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{rows.length}</span>}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {/* The conversation keeps its place in the tree whatever the mode, so
-            a flip between wide and stacked (a pane folding beside the screen,
-            a window resize) never remounts the thread mid-jump: stacked on the
-            map, it is hidden, not gone. Wide: the conversation keeps room for
-            the cards' wide layout (561px and up); the map takes 40%, never
-            under 360px or over 620px. */}
-        <div className="flex-1 min-h-0 relative flex">
-          {!mapOnly && (
-            <div
-              className={cn("min-h-0", mode === "wide" ? "flex-1 min-w-[560px] border-r" : "flex-1", mode === "stacked" && show !== "conversation" && "hidden")}
-              style={mode === "wide" ? { borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" } : undefined}
-              data-org-column="conversation"
-            >{conversation}</div>
+        {/* One seam between the conversation and the company (ConversationWithPanel,
+            split kept in layouts.org). The conversation keeps its place in the
+            tree whatever the mode, so a flip between wide and stacked (a pane
+            folding beside the screen, a window resize) never remounts the
+            thread mid-jump: stacked on the company, its side folds to nothing
+            and it is hidden, not gone. The company mounts only where it shows:
+            a map laid out behind the thread would still measure and pan for nothing. */}
+        <ConversationWithPanel
+          open
+          layout="side"
+          hide={mode === "stacked" ? (show === "conversation" ? "panel" : "conversation") : null}
+          conversation={mapOnly || leftOff ? null : (
+            <div className={cn("flex-1 min-w-0 min-h-0", mode === "stacked" && show !== "conversation" && "hidden")} data-org-column="conversation">{conversation}</div>
           )}
-          {/* The map mounts only where it shows: a map laid out behind the
-              thread would still measure and pan for nothing. */}
-          {(mode !== "stacked" || show === "map") && (
-            <div className={cn("min-h-0", mode === "wide" ? "w-[40%] min-w-[360px] max-w-[620px]" : "flex-1")} data-org-column="map">{map}</div>
+          panel={(mode !== "stacked" || show === "map") && (
+            <div className="h-full min-h-0" data-org-column="map">{companyPane}</div>
           )}
-        </div>
+        />
 
         {/* seat the Head of People (S16) */}
         {seatDialog && (
@@ -644,5 +900,7 @@ export function OrgScreen() {
         <OrgHistorySheet open={historyOpen} onClose={() => setHistoryOpen(false)} preview={preview} reset={reset} />
       </div>
     </OrgHoverContext.Provider>
+    </OrgOpenContext.Provider>
+    </CompanyRowsOverride.Provider>
   );
 }
