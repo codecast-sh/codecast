@@ -695,6 +695,95 @@ export const listForCli = query({
   },
 });
 
+/**
+ * `cast signal move`: one fingerprint's signals leave a cause for another, or
+ * for a new cause of their own. A cause is one mechanism; a key attached to
+ * the wrong one moves, with both causes' counts and keys kept true, and the
+ * door attaches its later signals where it now lives.
+ */
+export const moveForCli = mutation({
+  args: {
+    api_token: v.string(),
+    fingerprint: v.string(),
+    from: v.string(),
+    to: v.optional(v.string()),
+    title: v.optional(v.string()),
+    ...scopeArgs,
+  },
+  handler: async (ctx, args) => {
+    const userId = await authed(ctx, args.api_token);
+    const byShort = async (short: string) => {
+      const task = await ctx.db.query("tasks").withIndex("by_short_id", (q) => q.eq("short_id", short.trim())).first();
+      if (!task || !(await canAccessTask(ctx, userId, task))) notFound(`Task ${short} not found`);
+      return task!;
+    };
+    const source = await byShort(args.from);
+    const fingerprint = args.fingerprint.trim();
+    const rows = (await ctx.db.query("signals").withIndex("by_task", (q) => q.eq("task_id", source._id)).collect())
+      .filter((r) => r.fingerprint === fingerprint)
+      .sort((a, b) => b.created_at - a.created_at);
+    if (rows.length === 0) throw new Error(`${source.short_id} holds no signal with fingerprint ${fingerprint}`);
+    const now = Date.now();
+    const first = Math.min(...rows.map((r) => r.observed_at ?? r.created_at));
+    const last = Math.max(...rows.map((r) => r.observed_at ?? r.created_at));
+
+    let target: Doc<"tasks">;
+    let created = false;
+    if (args.to) {
+      target = await byShort(args.to);
+      if (target._id === source._id) throw new Error(`${source.short_id} already holds ${fingerprint}`);
+      const cause = target.cause;
+      const keys = cause?.fingerprints ?? [];
+      await ctx.db.patch(target._id, {
+        cause: {
+          signal_count: (cause?.signal_count ?? 0) + rows.length,
+          first_seen: Math.min(cause?.first_seen ?? first, first),
+          last_seen: Math.max(cause?.last_seen ?? last, last),
+          fingerprints: keys.includes(fingerprint) || keys.length >= FINGERPRINTS_MAX ? keys : [...keys, fingerprint],
+        },
+        updated_at: now,
+      });
+    } else {
+      const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
+      const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, args.project))?._id ?? rows[0].project_id ?? null;
+      const newest = rows[0];
+      const taskId = await db.insert("tasks", {
+        short_id: await nextShortId(ctx.db, "ct"),
+        title: args.title?.trim() || newest.title,
+        description: causeDescription(newest as unknown as SignalInput),
+        task_type: newest.kind === "request" ? "feature" : newest.kind === "bug" || newest.kind === "regression" ? "bug" : "task",
+        status: "open",
+        priority: "medium",
+        blocks: [],
+        source: "signal",
+        triage_status: "suggested",
+        ...(projectId ? { project_id: projectId } : {}),
+        attempt_count: 0,
+        retry_count: 0,
+        max_retries: 3,
+        cause: { signal_count: rows.length, first_seen: first, last_seen: last, fingerprints: [fingerprint] },
+      });
+      target = (await ctx.db.get(taskId as Id<"tasks">)) as Doc<"tasks">;
+      created = true;
+    }
+
+    for (const row of rows) {
+      await ctx.db.patch(row._id, { task_id: target._id, project_id: target.project_id ?? row.project_id, attach: "person" as SignalAttach });
+    }
+    const left = source.cause;
+    await ctx.db.patch(source._id, {
+      cause: left
+        ? { ...left, signal_count: Math.max(0, (left.signal_count ?? 0) - rows.length), fingerprints: (left.fingerprints ?? []).filter((k) => k !== fingerprint) }
+        : left,
+      updated_at: now,
+    });
+    const author = "line";
+    await insertTaskComment(ctx, source._id, { author, comment_type: "note", text: `Moved ${rows.length} signal${rows.length === 1 ? "" : "s"} (${fingerprint}) to ${target.short_id}: a different mechanism from this cause.` });
+    await insertTaskComment(ctx, target._id, { author, comment_type: "note", text: `Took ${rows.length} signal${rows.length === 1 ? "" : "s"} (${fingerprint}) from ${source.short_id}.` });
+    return { from: source.short_id, to: target.short_id, moved: rows.length, created };
+  },
+});
+
 /** `cast signal show sg-N`: one signal with the cause it reached. */
 export const showForCli = query({
   args: { api_token: v.string(), signal: v.string() },
