@@ -184,10 +184,11 @@ export const VISIT_OBJECT_LABEL: Record<VisitObjectType, string> = {
   page: "Page",
 };
 
-/** The kind's name in the viewer's words: a session is a conversation in
- *  hosted mode (MODE_WORDS). */
-export function visitObjectLabel(type: VisitObjectType, words?: { conversation: string }): string {
-  return type === "session" && words ? words.conversation : VISIT_OBJECT_LABEL[type];
+/** The kind's name in the viewer's words: a session is a conversation, a
+ *  task a to-do and a doc a note in hosted mode (MODE_WORDS). */
+export function visitObjectLabel(type: VisitObjectType, words?: { conversation: string; task: string; doc: string }): string {
+  if (!words) return VISIT_OBJECT_LABEL[type];
+  return type === "session" ? words.conversation : type === "task" ? words.task : type === "doc" ? words.doc : VISIT_OBJECT_LABEL[type];
 }
 
 export function visitTimeAgo(ts: number): string {

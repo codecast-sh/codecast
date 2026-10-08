@@ -8,7 +8,8 @@ import { cloudHostReportValidator, hostReadinessValidator, localMirrorValidator 
 import { openTaskValidator } from "./lib/openTasksValidator";
 import { changeGuideValidator } from "./lib/changeGuideValidator";
 import { followViewValidator } from "./lib/followView";
-import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
+import { TASK_EFFORTS, TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
+import { taskWaitValidator } from "./lib/taskWaitValidator";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
@@ -76,6 +77,7 @@ const teamFeaturesValidator = v.object({
   changes: v.optional(v.boolean()),
   agent_faces: v.optional(v.boolean()),
   agent_realtime: v.optional(v.boolean()),
+  ship: v.optional(v.boolean()),
 });
 
 // A ship of one surface (cli, desktop, backend...) as Changes records it on a
@@ -4355,6 +4357,12 @@ export default defineSchema({
       v.literal("card_waiting"),
       v.literal("change_shipped"),
       v.literal("cause_reopened"),
+      // The last blocker of a task assigned to the recipient cleared and no
+      // session owns it (taskWaits.onUnblocked, task-graph.md TG2).
+      v.literal("task_unblocked"),
+      // Someone outside a decision's people answered or dismissed it for
+      // them (sessionDecisions.noticeAnsweredForPeople).
+      v.literal("decision_answered_for_you"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
       // join (to its admins), and an admin let them in (to them).
       v.literal("team_join_request"),
@@ -4657,6 +4665,11 @@ export default defineSchema({
     // category or team status id) the task is held at.
     task_id: v.optional(v.id("tasks")),
     station: v.optional(v.string()),
+    // Tasks with a wait on this decision (task-graph.md TG2), so answering,
+    // dismissing or reopening it finds them; a met wait has left the tasks'
+    // by_waiting_since index. Added by taskWaits.writeWaits, never pruned:
+    // each task is re-read and only its waits on this decision move.
+    waiting_task_ids: v.optional(v.array(v.id("tasks"))),
     stack_id: v.optional(v.id("decision_stacks")),
     // When it joined its stack; the auto default deadline counts from here.
     stack_joined_at: v.optional(v.number()),
@@ -4685,6 +4698,9 @@ export default defineSchema({
       v.object({
         kind: v.union(v.literal("user"), v.literal("role"), v.literal("policy")),
         id: v.string(),
+        // A person's answer given by their agent at their word (`cast decide
+        // answer --for-human`): the session that carried it.
+        via: v.optional(v.id("conversations")),
       })
     ),
     // Set when a role answered under a grant.
@@ -5248,6 +5264,9 @@ export default defineSchema({
     project_path: v.optional(v.string()),
     target_date: v.optional(v.number()),
     labels: v.optional(v.array(v.string())),
+    // The key a web create painted its stub under; the synced row carrying it
+    // supersedes that stub (the projects collection's altKey).
+    client_key: v.optional(v.string()),
     // ── Charter (docs/architecture/org-staffing.md S7) ──
     // The direction a role reads before the task list: the goal, how success
     // is measured, how urgent, which role owns the line, what it will not do,
@@ -5825,6 +5844,21 @@ export default defineSchema({
     // Dependencies
     blocked_by: v.optional(v.array(v.string())),
     blocks: v.optional(v.array(v.string())),
+    // The task graph (docs/architecture/task-graph.md). Waits are blockers on
+    // something that is not a task (TG2); every write goes through
+    // taskWaits.writeWaits, which keeps waiting_since set exactly while one
+    // is waiting, so events find their tasks through by_waiting_since.
+    waits: v.optional(v.array(taskWaitValidator)),
+    waiting_since: v.optional(v.number()),
+    // Links that do not block (TG5), all task short ids. related is mirrored
+    // on both rows like blocks.
+    found_during: v.optional(v.string()),
+    superseded_by: v.optional(v.string()),
+    related: v.optional(v.array(v.string())),
+    // Execution hint read before spawning (TG8).
+    effort: v.optional(v.union(...TASK_EFFORTS.map((e) => v.literal(e)))),
+    // Bookkeeping kept out of default views, feed and notifications (TG9).
+    ephemeral: v.optional(v.boolean()),
 
     // Session linkage
     conversation_ids: v.optional(v.array(v.id("conversations"))),
@@ -5983,6 +6017,10 @@ export default defineSchema({
     .index("by_parent_id", ["parent_id"])
     .index("by_share_token", ["share_token"])
     .index("by_short_id", ["short_id"])
+    // Sparse: only tasks with a wait still waiting (TG2).
+    .index("by_waiting_since", ["waiting_since"])
+    // Sparse: what was found while working on a task (TG5).
+    .index("by_found_during", ["found_during"])
     .index("by_short_title", ["short_title"])
     // Sparse in practice: only causes in watch (LE12) carry watch_until;
     // signals.sweepWatches reads the ended ones.
@@ -6055,6 +6093,9 @@ export default defineSchema({
     .index("by_project_created", ["project_id", "created_at"])
     .index("by_task", ["task_id", "created_at"])
     .index("by_workspace_created", ["workspace", "created_at"])
+    // A line's breaks (the-line-model.md LM5): a judge files the expectation
+    // id it breaks as the subject, and the expectations page counts them.
+    .index("by_workspace_subject", ["workspace", "subject", "created_at"])
     .index("by_short_id", ["short_id"]),
 
   orchestration_events: defineTable({

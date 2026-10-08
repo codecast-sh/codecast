@@ -8,8 +8,10 @@ import { View as RNView,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, TAB_BAR_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
-import { Mono, useMonoFace } from '@/constants/fonts';
+import { Mono, Serif, pageTitleFace, useMonoFace } from '@/constants/fonts';
 import { useChatUnread } from '@codecast/web/hooks/useChatSync';
+import { useHostedMode, useModeWords } from '@codecast/web/lib/surfaces';
+import { useActiveTeamId } from '@/hooks/useWorkspaceArgs';
 import {
   MOBILE_HEADER_STYLE,
   MOBILE_HEADER_TITLE_STYLE,
@@ -28,9 +30,12 @@ function TabBarIcon(props: {
   /** Something is happening there right now (a live huddle): a quiet green
    *  dot, never a number — a count is reserved for things addressed to you. */
   live?: boolean;
+  /** Unread without a count: hosted mode's quiet accent dot, as the web's
+   *  bell shows in hosted mode. */
+  dot?: boolean;
 }) {
   const Theme = useTheme();
-  const { badge, live, ...iconProps } = props;
+  const { badge, live, dot, ...iconProps } = props;
   return (
     <RNView style={{ position: 'relative' }}>
       <FontAwesome size={MOBILE_TAB_ICON_SIZE} style={{ marginBottom: -2 }} {...iconProps} />
@@ -42,19 +47,33 @@ function TabBarIcon(props: {
         </RNView>
       ) : live ? (
         <RNView style={badgeStyles.liveDot} />
+      ) : dot ? (
+        <RNView style={badgeStyles.unreadDot} />
       ) : null}
     </RNView>
   );
 }
 
-const badgeStyles = themedStyles((Theme) => StyleSheet.create({
+const badgeStyles = themedStyles((Theme, look) => StyleSheet.create({
+  // The family look has one accent, so a count wears it rather than red.
   badge: {
     ...MOBILE_TAB_BADGE_STYLE,
-    backgroundColor: Theme.red,
+    backgroundColor: look === 'family' ? Theme.orange : Theme.red,
   },
   badgeText: {
     ...MOBILE_TAB_BADGE_TEXT_STYLE,
     fontVariant: ['tabular-nums'],
+  },
+  unreadDot: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Theme.orange,
+    borderWidth: 1.5,
+    borderColor: Theme.bgAlt,
   },
   liveDot: {
     position: 'absolute',
@@ -72,6 +91,9 @@ const badgeStyles = themedStyles((Theme) => StyleSheet.create({
 export default function TabLayout() {
   const Theme = useTheme();
   const labelFace = useMonoFace(Mono.medium);
+  const titleFace = useMonoFace(Mono.semiBold);
+  const hosted = useHostedMode();
+  const words = useModeWords();
   // The badge counts unread rows in the persisted store list, so it paints at
   // boot and clears in the same tick as a mark-read (web NotificationBell).
   const unreadCount = useInboxStore((s) => {
@@ -86,6 +108,11 @@ export default function TabLayout() {
   // count (empty when chat is off for the team) and the live rooms.
   const { mentions: chatMentions } = useChatUnread();
   const anyLive = useInboxStore((s) => (s.liveRooms?.length ?? 0) > 0);
+  // Chat and huddles are a team's rooms. In hosted mode the personal
+  // workspace has none, so the tab steps out rather than opening on an empty
+  // "No team yet"; picking a team brings it back.
+  const activeTeamId = useActiveTeamId();
+  const chatHidden = hosted && !activeTeamId;
 
   return (
     <>
@@ -110,10 +137,18 @@ export default function TabLayout() {
           shadowOpacity: 0,
           elevation: 0,
         },
-        headerTitleStyle: {
+        // Hosted mode titles a page as the Inbox and To-dos tabs do: on the
+        // left, in the reading face (pageTitleFace), so every tab opens on
+        // the same frame.
+        headerTitleAlign: hosted ? 'left' : undefined,
+        headerTitleStyle: hosted ? {
+          fontFamily: Serif.regular,
+          fontSize: pageTitleFace('family').fontSize,
+          color: Theme.text,
+        } : {
           ...MOBILE_HEADER_TITLE_STYLE,
           color: Theme.text,
-          fontFamily: Mono.semiBold,
+          fontFamily: titleFace,
         },
         headerTintColor: Theme.text,
       }}>
@@ -128,6 +163,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="chat"
         options={{
+          href: chatHidden ? null : undefined,
           title: MOBILE_TAB.chat.title,
           headerShown: false,
           tabBarIcon: ({ color }) => (
@@ -143,7 +179,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="tasks"
         options={{
-          title: MOBILE_TAB.tasks.title,
+          // The tab opens on the To-dos list, named by mode as its page is.
+          title: hosted ? words.tasksPage : MOBILE_TAB.tasks.title,
           headerShown: false,
           tabBarIcon: ({ color }) => <TabBarIcon name={MOBILE_TAB.tasks.icon} color={color} />,
         }}
@@ -158,9 +195,11 @@ export default function TabLayout() {
         name="notifications"
         options={{
           title: MOBILE_TAB.notifications.title,
-          tabBarLabel: MOBILE_TAB.notifications.label,
+          // Five developer tabs need the short "Alerts"; hosted mode's four
+          // have room for the page's own name, the one Settings uses too.
+          tabBarLabel: hosted ? MOBILE_TAB.notifications.title : MOBILE_TAB.notifications.label,
           tabBarIcon: ({ color }) => (
-            <TabBarIcon name={MOBILE_TAB.notifications.icon} color={color} badge={unreadCount ?? 0} />
+            <TabBarIcon name={MOBILE_TAB.notifications.icon} color={color} badge={hosted ? 0 : unreadCount ?? 0} dot={hosted && unreadCount > 0} />
           ),
         }}
       />

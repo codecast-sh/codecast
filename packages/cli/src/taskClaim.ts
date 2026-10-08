@@ -1,5 +1,6 @@
 import { ASSIGNEE_MEANS, isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
+import { TASK_EFFORTS } from "@codecast/shared/tasks";
 
 // `cast task start` claims a task. Who the claim belongs to depends on who ran
 // it. A person at a terminal is the assignee. An agent inside a session runs
@@ -17,11 +18,39 @@ import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 // is the same witness that stamps source:"agent" on create.
 
 export function buildTaskStartBody(shortId: string, sessionId: string | null, opts: { take?: boolean } = {}): Record<string, any> {
-  const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
-  if (sessionId) body.conversation_id = sessionId;
-  else body.assignee = "me";
+  const body: Record<string, any> = { short_id: shortId, status: "in_progress", ...taskClaimant(sessionId) };
   if (opts.take) body.take = true;
   return body;
+}
+
+/** Who a start or a `cast task ready --claim` is for: the session, else the person. */
+export function taskClaimant(sessionId: string | null): { conversation_id: string } | { assignee: "me" } {
+  return sessionId ? { conversation_id: sessionId } : { assignee: "me" };
+}
+
+// `--model`, `--effort` and `--ephemeral` on create and update (task-graph.md
+// TG8, TG9). An effort is checked here so a typo is refused by name rather
+// than by the server's validator; "" clears a model or an effort.
+export function taskHintBody(options: { model?: string; effort?: string; ephemeral?: boolean }): Record<string, any> {
+  const body: Record<string, any> = {};
+  if (options.model !== undefined) body.model = options.model;
+  if (options.effort !== undefined) {
+    if (options.effort && !(TASK_EFFORTS as readonly string[]).includes(options.effort)) {
+      throw new Error(`Unknown --effort "${options.effort}". Use: ${TASK_EFFORTS.join(", ")}, or '' to clear`);
+    }
+    body.effort = options.effort;
+  }
+  if (options.ephemeral) body.ephemeral = true;
+  return body;
+}
+
+// `cast task ready`: the frontier comes in the order work should be taken, with
+// tasks nobody touched in 30 days last and flagged `stale` (TG7). They fold into
+// a count unless asked for.
+export function foldStaleTasks<T extends { stale?: boolean }>(tasks: T[], showStale: boolean): { shown: T[]; folded: number } {
+  if (showStale) return { shown: tasks, folded: 0 };
+  const shown = tasks.filter((t) => !t.stale);
+  return { shown, folded: tasks.length - shown.length };
 }
 
 // A task has one owning session (convex lib/taskOwner.ts). The start that
