@@ -2,7 +2,7 @@ import { createContext, useContext, useMemo } from "react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, parseProposalChangeRef, proposalChangeRefId, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from "./entityLinks";
+import { entityRoute, personRefOf, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, parseProposalChangeRef, proposalChangeRefId, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from "./entityLinks";
 import { replayTitle } from "../components/ops/opsModel";
 import { repoObjectRefOf, repoObjectTitle } from "./repoObjects";
 import { findEntityInStore, entityTypeInStore, resolveAssigneeInfo } from "./liveEntities";
@@ -57,6 +57,8 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   call: "Call",
   source: "Source",
   replay: "Replay",
+  role: "Role",
+  person: "Person",
 };
 
 
@@ -263,7 +265,16 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // Ops replays in the store, kept live by the query.
   const replayRef = type === "replay" ? parseReplayRef(rawId) : null;
   const { data: replay } = useQueryNoThrow(api.replays.webGetReplay, live && type === "replay" ? { ref: replayRef?.replay ?? rawId } : "skip");
-  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : type === "replay" ? replay : undefined;
+  // A role (`or-N`) seeds from the org tree in the store, which every
+  // workspace screen feeds. The role card answers only for a role the tree
+  // does not hold (another workspace's, or a page that never fed the tree):
+  // a pill on every line must not open a query apiece.
+  const roleInTree = useMemo(
+    () => (live && type === "role" ? findEntityInStore(useInboxStore.getState(), "role", rawId) : undefined),
+    [live, type, rawId],
+  );
+  const { data: roleCard } = useQueryNoThrow(api.org.roleCard, live && type === "role" && !roleInTree ? { role_id: rawId } : "skip");
+  const served = fixtures ? fixture?.entity ?? null : type === "role" ? roleCard : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : type === "replay" ? replay : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -323,7 +334,9 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // `op-N`, a decision's by its `sd-N` and a source's by its `src-N`: the
   // form a person reads. One change
   // of a proposal keeps its number, so the page opens with it in focus.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : replayRef ? rawId.toLowerCase() : ((type === "initiative" || type === "proposal" || type === "decision" || type === "source" || type === "replay") && entity?.short_id) || (entity?._id ?? rawId);
+  // A project and a role open by their `pj-…` and `or-N` too, and a person
+  // by handle (personRefOf), so one object never opens as two tabs.
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : replayRef ? rawId.toLowerCase() : type === "person" ? (entity?._id ? personRefOf(entity) : rawId) : ((type === "initiative" || type === "project" || type === "role" || type === "proposal" || type === "decision" || type === "source" || type === "replay") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
   return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href, changeSeq: changeRef?.seq };
