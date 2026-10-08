@@ -17,6 +17,8 @@ import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type CastBodyPart, type ChatSendArgs, type DecideArgs } from "../../castCommand";
 import { useInboxStore, useTrackedStore, type SessionDecisionItem } from "../../../store/inboxStore";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { DocDates } from "../../DocDates";
 import { DecisionAnswerControls } from "../../decisions/DecisionAnswerControls";
 import { FileText, CornerUpRight, BookOpen, Check, Split, Pin } from "lucide-react";
@@ -373,6 +375,53 @@ const DECIDE_STATUS_META: Record<string, { label: string; chip: string; accent: 
   withdrawn: { label: "withdrawn", chip: "border-sol-border text-sol-text-dim", accent: "border-sol-border" },
   posted: { label: "posted", chip: "border-sol-border text-sol-text-dim", accent: "border-sol-yellow/30" },
 };
+
+// `cast decide show|answer|recommend sd-N`: one decision named by reference.
+// The row is the decision's live pill; an answer or a recommendation adds the
+// option it chose, read off the decision's own options.
+const DECIDE_REF_VERB: Record<string, string> = { show: "read decision", answer: "answered decision", recommend: "recommended on decision" };
+
+function choiceLabel(choice: string | undefined, options: Array<{ label: string }> | undefined): string | null {
+  if (!choice) return null;
+  if (choice === "form") return "form answer";
+  const parts = choice.split(/[,>]/).map((n) => options?.[parseInt(n, 10) - 1]?.label ?? (n.trim() ? `option ${n.trim()}` : ""));
+  return parts.filter(Boolean).join(choice.includes(">") ? " > " : ", ") || null;
+}
+
+function CastDecideRefBlock({ decide, rawCmd, output, isError }: { decide: DecideArgs; rawCmd: string; output: string; isError: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const ref = decide.ref!;
+  const stored = useInboxStore((st) => {
+    for (const d of Object.values(st.sessionDecisions)) if (d._id === ref || d.short_id === ref) return d;
+    return undefined;
+  });
+  const { data: fetched } = useQueryNoThrow(api.sessionDecisions.get, !stored && decide.verb !== "show" ? { decision_id: ref } : "skip");
+  const options = (stored ?? fetched)?.options;
+  const chosen = decide.verb === "show" ? null : choiceLabel(decide.choice, options);
+  return (
+    <div data-cc-decide className="my-0.5">
+      <div className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap" onClick={() => setExpanded(!expanded)}>
+        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
+          <Split className="w-3 h-3" strokeWidth={2.2} />
+          <span className="group-hover:underline">{DECIDE_REF_VERB[decide.verb]}</span>
+        </span>
+        <span onClick={(e) => e.stopPropagation()} className="min-w-0"><EntityIdPill shortId={ref} type="decision" /></span>
+        {chosen && !isError && (
+          <span className="inline-flex items-center gap-1 text-sol-green min-w-0 truncate">
+            <CornerUpRight className="w-3 h-3 shrink-0" />{chosen}
+          </span>
+        )}
+        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+      </div>
+      {expanded && (
+        <pre className="mt-1 ml-1 border-l-2 border-sol-border pl-2.5 text-[11px] text-sol-text-dim whitespace-pre-wrap break-words max-h-80 overflow-auto">
+          $ {rawCmd}
+          {output && <>{"\n\n"}{renderAnsi(output)}</>}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { decide: DecideArgs; rawCmd: string; output: string; isError: boolean; conversationId?: Id<"conversations"> }) {
   const [expanded, setExpanded] = useState(false);
@@ -787,6 +836,9 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   // `cast decide` — the decision card, live from the store row when it exists.
   // `ls` is a plain read and keeps the generic row.
   const decide = cat === "decide" ? extractDecideArgs(subcommand, args) : null;
+  if (decide && (decide.verb === "show" || decide.verb === "answer" || decide.verb === "recommend") && decide.ref) {
+    return <CastDecideRefBlock decide={decide} rawCmd={cast.raw} output={output} isError={!!isError} />;
+  }
   if (decide && decide.verb !== "ls") {
     return <CastDecideBlock decide={decide} rawCmd={cast.raw} output={output} isError={!!isError} conversationId={conversationId} />;
   }

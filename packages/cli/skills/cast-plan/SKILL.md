@@ -44,17 +44,35 @@ PLAN
 cast plan bind <plan_id>
 ```
 
-Decompose into tasks that one session can finish alone, each with acceptance
-criteria in the description and the files it owns, ordered by dependency:
+Decompose into tasks that one session can finish alone, and write their order
+as waves: one step per line, a blank line between waves. Steps in a wave run
+in parallel; each wave needs every step of the one before. After ` :: `, a
+line carries the step's description: its acceptance criteria and the files
+it owns.
 
 ```bash
-cast task create "<title>" --plan <plan_id> -p high -d "<criteria and owned files>"
-cast task dep <later_id> --blocked-by <earlier_id>
+cast plan steps <plan_id> - <<'STEPS'
+Design the schema :: <acceptance criteria and owned files>
+
+Build the API :: <...>
+Build the UI :: <...>
+
+Review in the real app :: <...>
+STEPS
 ```
+
+Order by what a step needs, never by what comes first: Review needs Build,
+so it sits in a later wave. An edge waves cannot draw is `cast task dep
+<id> --blocked-by <other_id>`. A step that waits on something outside the
+plan records it the same way, so it stays off the ready list until it
+clears: a PR to merge (`#42`, `#42:checks` for green CI), a decision
+(`sd-4`) or a time (`2h`, `2026-10-14T09:00`).
 
 Two tasks that write the same file are one task or a dependency, never
 siblings. Record design decisions on the plan as you make them: `cast plan
-comment <plan_id> "<decision>" -d -r "<reason>"`.
+comment <plan_id> "<decision>" -d -r "<reason>"`. A plan worth repeating is
+kept with `cast plan template save <plan_id>` and written again with `cast
+plan create "<title>" --template "<name>"`.
 
 ## Stop
 

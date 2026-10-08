@@ -286,6 +286,7 @@ export function InboxNavRow({ active, isNarrow, badge, onClick }: {
       onClick={onClick}
       className={railRowClass(active, isNarrow)}
       title="Inbox"
+      data-nav-page="/inbox"
     >
       <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 10h16M4 14h16M4 18h16" />

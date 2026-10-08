@@ -167,9 +167,9 @@ export function wrappedLines(text: string, chars: number): number {
   return Math.min(3, lines);
 }
 
-/** A role's line under its name, as the close card prints it whole: its title, whether its seat is started, its sessions. */
+/** A role's line under its title, as the close card prints it whole: its persona name, whether its seat is started, its sessions. */
 export const roleMetaLine = (r: OrgRole, ghost?: boolean): string =>
-  [roleWords(r).subtitle, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" \u00b7 ");
+  [roleWords(r).name, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" \u00b7 ");
 /** How many lines a card's changes take as quiet lines: one each up to the cap, then one more for the rest. */
 export const quietChipLines = (n: number) => (n <= ORG_SIZES.quietChipMax ? n : ORG_SIZES.quietChipMax + 1);
 /** At close a card's changes are lines instead of a row of chips: what that adds to the chips row. */

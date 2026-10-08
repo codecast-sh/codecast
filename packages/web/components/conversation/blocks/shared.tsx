@@ -154,6 +154,7 @@ export function FooterIconButton({ onClick, title, label, children }: { onClick:
       onClick={onClick}
       className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
       title={title}
+      aria-label={title}
     >
       {children}
       {label && <span className="hidden sm:inline text-xs text-sol-text-dim">{label}</span>}
