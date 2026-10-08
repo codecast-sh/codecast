@@ -93,9 +93,12 @@ function builderTools(draft: Draft, narration: Narration, settle: (outcome: Outc
     defineTool({
       name: "finish",
       description:
-        "Checks the draft and, when it passes, puts it live for everyone. Call it alone, after your edits, with a one-line summary of what changed.",
+        "Checks the draft and, when it passes, puts it live for everyone. Call it alone, after your edits, with a short summary of what changed.",
       parameters: Type.Object({
-        summary: Type.String({ description: "Present tense, for people: \"Adds a reset button under the score\". On a first build, what the app is: \"A shared grocery list for the flat\"." }),
+        summary: Type.String({
+          description:
+            "One sentence under 70 characters, starting with a present-tense verb, naming the most visible change: \"Adds a reset button under the score\". On a first build, what the app is: \"A shared grocery list for the flat\".",
+        }),
         name: Type.Optional(
           Type.String({ description: "A new app's first build only: the app's name, as its own title shows it (\"Flat groceries\")." }),
         ),
