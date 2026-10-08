@@ -1409,7 +1409,8 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   // .markBriefRead); a day, for a role that never has.
   const since = role.checked_at ?? now - 24 * 3600_000;
   const changed: BriefChange[] = [
-    ...resolved.tasks.map((t): BriefChange => ({ kind: "task", short_id: t.short_id, title: t.title, status: t.status, updated_at: t.updated_at })),
+    // Ephemeral bookkeeping is no change worth reading (task-graph.md TG9).
+    ...resolved.tasks.filter((t) => !t.ephemeral).map((t): BriefChange => ({ kind: "task", short_id: t.short_id, title: t.title, status: t.status, updated_at: t.updated_at })),
     ...resolved.plans.map((p): BriefChange => ({ kind: "plan", short_id: p.short_id, title: p.title, status: p.status, updated_at: p.updated_at })),
   ].filter((c) => c.updated_at > since).sort((a, b) => b.updated_at - a.updated_at).slice(0, BRIEF_CHANGES_MAX);
 
