@@ -29,6 +29,10 @@ describe("parseStepHeading", () => {
     expect(parseStepHeading("Store it — src/schema.ts:L12")).toEqual({ title: "Store it", file: "src/schema.ts", start: 12, end: 12 });
     expect(parseStepHeading("Wire it (src/a.ts:L3-L9)")).toEqual({ title: "Wire it", file: "src/a.ts", start: 3, end: 9 });
   });
+  test("route files keep their brackets", () => {
+    expect(parseStepHeading("Rows `packages/mobile/app/task/[id].tsx:81-88`")).toEqual({ title: "Rows", file: "packages/mobile/app/task/[id].tsx", start: 81, end: 88 });
+    expect(parseStepHeading("Page — app/tasks/[id]/page.tsx:12")).toEqual({ title: "Page", file: "app/tasks/[id]/page.tsx", start: 12, end: 12 });
+  });
   test("whole file when no range", () => {
     expect(parseStepHeading("New hook `hooks/useGuide.ts`")).toEqual({ title: "New hook", file: "hooks/useGuide.ts" });
   });

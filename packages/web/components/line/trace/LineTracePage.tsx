@@ -5,7 +5,7 @@
 // with everything else dimmed, loops drawn twice; beside it, the story step
 // by step. Hovering a step lights the node it happened at. Paints from the
 // store (useLineTrace); the words are lib/line/lineTrace's.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUpRight, ChevronRight, CircleStop, Play, RotateCcw } from "lucide-react";
@@ -27,7 +27,9 @@ import { DOT, TraceStory } from "./TraceStory";
 import { useLineTrace } from "./useLineTrace";
 import { useLineCauseActions } from "../map/useLineCause";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import "./trace.css";
+import { graphKeyOf, type GraphRun } from "../../../lib/line/lineGraphs";
 
 /** A card's headline in a few words, lower case, for the answer button ("intro emails say what each person wants"). */
 const fewWords = (s: string) => {
@@ -40,7 +42,7 @@ const VIA: Record<LineTrace["via"], string> = { cause: "", signal: "Traced from 
 
 export function LineTracePage({ refParam }: { refParam: string }) {
   const ref = traceRefOf(refParam ?? "");
-  const { trace, rows, ready, graph, project, now } = useLineTrace(ref);
+  const { trace, rows, ready, graph, graphKey, project, now } = useLineTrace(ref);
   const [focusNode, setFocusNode] = useState<string | null>(null);
   // The whole map is one click away; the path strip is what reads at a glance.
   const [full, setFull] = useState(false);
@@ -84,7 +86,7 @@ export function LineTracePage({ refParam }: { refParam: string }) {
             {full && (
               <div className="ltrace-map-col">
                 <div className="ltrace-map rounded-xl border border-sol-border/30 overflow-hidden flex flex-col" data-trace-map>
-                  <TraceMap trace={trace} rows={rows} graph={graph} project={project} now={now} focusNode={focusNode} traceRef={ref} />
+                  <TraceMap trace={trace} rows={rows} graph={graph} graphKey={graphKey} project={project} now={now} focusNode={focusNode} traceRef={ref} />
                 </div>
               </div>
             )}
@@ -206,7 +208,7 @@ function PathStrip({ trace, focusNode, onFocusNode, full, onFull }: { trace: Lin
   // One value says where it is (lineTrace hereNodeId), the same the header reads.
   const current = trace.hereNodeId && chips.some((c) => c.nodeId === trace.hereNodeId) ? trace.hereNodeId : null;
   // After commit, when the chips have their widths; block "nearest" keeps the page where it is.
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = row.current;
     const chip = current ? el?.querySelector<HTMLElement>(`[data-trace-chip="${CSS.escape(current)}"]`) : null;
     if (!el || !chip) return;
@@ -278,19 +280,21 @@ function windowFor(trace: LineTrace, now: number): LineMapWindow {
 /** The cause's project's line with the trace's path lit and the rest dimmed
  *  (LX4). Hovering a step in the story focuses the node it happened at; a
  *  click opens that node on the project's map, still tracing. */
-function TraceMap({ trace, rows, graph, project, now, focusNode, traceRef }: { trace: LineTrace; rows: TraceRows; graph: LineGraph | null; project: LineProject | null; now: number; focusNode: string | null; traceRef: string }) {
+function TraceMap({ trace, rows, graph, graphKey, project, now, focusNode, traceRef }: { trace: LineTrace; rows: TraceRows; graph: LineGraph | null; graphKey: string; project: LineProject | null; now: number; focusNode: string | null; traceRef: string }) {
   const router = useRouter();
   const projectId = (trace.cause as { project_id?: string }).project_id ?? null;
   const lp = project?.line_profile ?? null;
   const win = windowFor(trace, now);
   const map = useMemo(() => {
     const scoped = projectId ? scopeLine(rows, projectId) : rows;
-    return buildLineMap({ graph, finders: lp?.finders, findersSince: lp?.changed_at, signals: scoped.signals, tasks: scoped.tasks, runs: scoped.runs, decisions: rows.decisions, now, windowMs: LINE_MAP_WINDOWS[win] });
-  }, [rows, projectId, graph, lp, now, win]);
+    // Only the runs of the graph on show, so its counts are its own.
+    const runs = scoped.runs.filter((r) => graphKeyOf(r as GraphRun) === graphKey);
+    return buildLineMap({ graph, finders: lp?.finders, findersSince: lp?.changed_at, signals: scoped.signals, tasks: scoped.tasks, runs, decisions: rows.decisions, now, windowMs: LINE_MAP_WINDOWS[win] });
+  }, [rows, projectId, graph, graphKey, lp, now, win]);
   const layout = useMemo(() => layoutLineMap(map), [map]);
   const open = (node: string) => {
     if (!projectId) return;
-    const q = new URLSearchParams({ tab: "line", node, trace: traceRef, ...(win !== "7d" ? { window: win } : {}) });
+    const q = new URLSearchParams({ tab: "line", node, trace: traceRef, graph: graphKey, ...(win !== "7d" ? { window: win } : {}) });
     router.push(`/projects/${project?.short_id || projectId}?${q}`);
   };
   return (

@@ -186,7 +186,7 @@ moments and grades the replies. Reads never change anything, and every read
 takes `--json`. The design is `docs/architecture/evals.md`.
 
 A surface is one prod prompt (title, settle, insight, call-summary, ask,
-handoff, suggest, org-review, role-wake, anchor-brief). A conversation is a
+handoff, suggest, ground, card-write, org-review, role-wake, anchor-brief). A conversation is a
 codecast session: `convo inbox` lists your sessions and `convo show
 <session>` reads one. A ref names its surface, `<surface>@<ref>`:
 `title@jx7c6zk:142` (a session and line), `call-summary@<callId>`,
