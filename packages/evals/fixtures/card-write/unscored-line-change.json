@@ -1,0 +1,24 @@
+{
+  "asOf": "2026-10-07T12:00:00.000Z",
+  "notes": "a change to one of the line's own station prompts, in a project with no eval command: no proof and an Eval check that says unscored. The words must not claim it was shown to work",
+  "snapshot": {
+    "task": { "short_id": "ct-9188", "title": "A failed Prove ends the run with no next step" },
+    "card": {
+      "cause": { "task": "ct-9188", "title": "A failed Prove ends the run with no next step", "signals": 1, "first_seen": 1791370000000, "sources": ["line"] },
+      "goal": { "ref": "none", "name": "", "why": "" },
+      "wrong": "",
+      "change": "",
+      "proof": { "before": [], "after": [] },
+      "examples": [],
+      "checks": [
+        { "name": "Verify", "ok": true, "detail": "The builder handed it over as done" },
+        { "name": "Eval", "ok": true, "detail": "Unscored: this project's line has no eval command, so no eval replayed the changed prompt" },
+        { "name": "Review", "ok": true, "detail": "An independent reviewer approved it" }
+      ],
+      "diff": { "files": 2, "added": 14, "removed": 3 },
+      "risk": { "class": "review", "reason": "Ground rated it review." },
+      "recommend": { "verdict": "", "why": "" },
+      "cost": { "tokens": 0, "usd": 0.74, "minutes": 21 }
+    }
+  }
+}

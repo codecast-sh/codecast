@@ -10,7 +10,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, ChevronRight, CircleStop, RotateCcw } from "lucide-react";
-import { lineTabHref } from "../../../lib/lineSettings";
+import { expectationsHref } from "../../../lib/expectations/view";
 import { runHref } from "../../../lib/decisionLinks";
 import { cn } from "../../../lib/utils";
 import { lineTraceHref as traceHref } from "../../../lib/line/lineMapUrl";
@@ -317,7 +317,7 @@ function BreaksLink({ id, projectId }: { id: string; projectId: string | null })
   const label = text ? text.split(/[:;]\s/)[0].trim() : null;
   const words = label ? `Breaks: ${label}` : "Breaks an expectation";
   if (!projectId) return <span className="text-[11.5px] text-sol-text-dim" title={id} data-trace-breaks={id}>{words}</span>;
-  return <span data-trace-breaks={id} className="min-w-0 max-w-full inline-flex"><TextLink href={`${lineTabHref(projectId)}#${id}`} title={`${text ?? "This expectation"} (${id}). Open it in the project's expectations`}>{words}</TextLink></span>;
+  return <span data-trace-breaks={id} className="min-w-0 max-w-full inline-flex"><TextLink href={expectationsHref(projectId, id)} title={`${text ?? "This expectation"} (${id}). Open it in the project's expectations`}>{words}</TextLink></span>;
 }
 
 /** A finder's markdown without its heading marks: the words, not the labels. */
@@ -328,7 +328,7 @@ function ArtifactChip({ a, projectId }: { a: TraceArtifact; projectId: string | 
   if ((a.kind === "session" || a.kind === "decision") && a.href) return <TextLink href={a.href} out title={a.label}>{a.kind === "session" ? "Session" : "Card"}</TextLink>;
   if (a.kind === "expectation" && a.ref) {
     return projectId
-      ? <ReportChip href={`${lineTabHref(projectId)}#${a.ref}`} title="Open this line in the project's expectations">{a.label}</ReportChip>
+      ? <ReportChip href={expectationsHref(projectId, a.ref)} title="Open this line in the project's expectations">{a.label}</ReportChip>
       : <span className="text-[11.5px] text-sol-text-dim">{a.label}</span>;
   }
   if (a.kind === "signal" && a.ref) return <ReportChip href={traceHref(a.ref)} title="Trace this signal">{a.label}</ReportChip>;
