@@ -34,6 +34,8 @@ import { LineMapPanel, AskProjectPick, useProjectTitle } from "./LineMapPanel";
 import type { useLineAdmission } from "./useLineAdmission";
 import { cn } from "../../../lib/utils";
 import { projectLineVersions } from "../../../lib/line/runReport";
+import { lineMetrics } from "../../../lib/line/lineMetrics";
+import { lineMetricsPhrases, windowWords } from "../../../lib/line/lineMetricsWords";
 import "./lineMap.css";
 
 export type LineMapRows = { signals: LineSignal[]; tasks: LineCauseTask[]; runs: LineFlowRun[]; decisions: LineDecision[] };
@@ -226,6 +228,27 @@ function LineAsk({ projectId: own, node }: { projectId: string | null; node: Map
 }
 
 const WINDOWS = Object.keys(LINE_MAP_WINDOWS) as LineMapWindow[];
+
+/** How the line's quality is going over the map's window (lineMetrics, LM8):
+ *  expectation breaks a day, the share of signals that joined a known cause,
+ *  and the fixes that held, as one sentence under the bar. */
+function LineMapQuality({ rows, now, windowMs, window: w }: { rows: LineMapRows; now: number; windowMs: number; window: LineMapWindow }) {
+  const phrases = useMemo(() => lineMetricsPhrases(lineMetrics({
+    signals: rows.signals, tasks: rows.tasks, runs: rows.runs, window: { from: now - windowMs, to: now }, now,
+  })), [rows.signals, rows.tasks, rows.runs, now, windowMs]);
+  const lead = windowWords(w);
+  return (
+    <p className="lmap-note lmap-quality" data-map-quality data-window={w}>
+      <span className="lmap-quality-lead">In {lead}:</span>{" "}
+      {phrases.map((p, i) => (
+        <span key={p.key} data-map-quality-metric={p.key} data-empty={p.num === null ? "true" : undefined} title={p.tip}>
+          {i > 0 && <span className="lmap-quality-sep" aria-hidden> · </span>}
+          {p.num !== null && <b>{p.num}</b>}{p.text}
+        </span>
+      ))}
+    </p>
+  );
+}
 const KEY_DIR: Record<string, MapDirection> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", h: "left", l: "right", k: "up", j: "down" };
 
 // Every gate answer a run took, for the rounds of a loop the run row overwrote (lineMap runVisits).
@@ -379,6 +402,7 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
           )}
           {barEnd && <span>{barEnd}</span>}
         </div>
+        {!empty && <LineMapQuality rows={rows} now={now} windowMs={windowMs} window={state.window} />}
         {empty && (note ?? <p className="lmap-note" data-map-empty>Nothing passed through this line in the last {state.window}. The map shows its stations; counts fill in as work arrives.</p>)}
         {state.trace && (
           <div className="lmap-trace-bar" data-map-trace={state.trace}>
