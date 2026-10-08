@@ -1,6 +1,6 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { HOSTED_PAGE_FRAME } from "../lib/hostedPage";
+import { HOSTED_LIST_TOP, HOSTED_PAGE_FRAME } from "../lib/hostedPage";
 import { PageHeading } from "./PageHeading";
 import { useHostedMode, useSurface } from "../lib/surfaces";
 import { copyToClipboard } from "../lib/utils";
@@ -601,6 +601,9 @@ export interface GenericListViewProps<T> {
     onReorder?: (item: T, before: T | null, after: T | null, groupKey: string | null) => void;
   };
   extraKeyHandler?: (e: KeyboardEvent, stop: () => void) => boolean;
+  /** The row's own toggle for x (a to-do's done or open), where the list has
+   *  no selection to toggle. */
+  onToggleItem?: (item: T) => void;
   disableKeyboard?: boolean;
   activeItemId?: string;
   children?: ReactNode;
@@ -654,6 +657,7 @@ export function GenericListView<T>({
   contextMenuContent,
   dnd,
   extraKeyHandler,
+  onToggleItem,
   disableKeyboard,
   activeItemId,
   children,
@@ -947,7 +951,10 @@ export function GenericListView<T>({
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) { stop(); openPalette("root"); return; }
       if (e.key === "x" && !e.metaKey && !e.ctrlKey) {
         stop();
-        if (focusedItem) toggleSelect(getItemId(focusedItem));
+        if (focusedItem) {
+          if (onToggleItem) onToggleItem(focusedItem);
+          else toggleSelect(getItemId(focusedItem));
+        }
         return;
       }
       if (e.key === "Escape") {
@@ -963,7 +970,7 @@ export function GenericListView<T>({
         }
       }
 
-      if (e.key === "d" && !e.metaKey && !e.ctrlKey) { stop(); openPalette("root"); return; }
+      if (e.key === "d" && !e.metaKey && !e.ctrlKey) { stop(); openPalette("actions"); return; }
       if (e.key === "e" && !e.metaKey && !e.ctrlKey && onItemEdit) {
         stop();
         if (focusedItem) setEditingId(getItemId(focusedItem));
@@ -1019,7 +1026,7 @@ export function GenericListView<T>({
     return () => window.removeEventListener("keydown", handler);
   }, [paneActive, shortcutsPanelOpen, disableKeyboard, paletteIsOpen, editingId, focusedItem, visibleItems, focusIndex, tabs,
     previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId, currentPath,
-    onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);
+    onCreate, openPalette, toggleSelect, router, extraKeyHandler, onToggleItem, onItemEdit, renderPreview, getSearchText]);
 
   const previewItem = previewId ? visibleItems.find((item) => getItemId(item) === previewId) || null : null;
 
@@ -1198,7 +1205,8 @@ export function GenericListView<T>({
       {/* Header. The outer wrapper is the container-query context; the inner
           .cq-header row is what adapts (wraps the toolbar below the tabs) as the
           panel narrows — a container can't query its own width, only a child's. */}
-      <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
+      {/* The header's own rule (.cc-panel__head) is the one line under it. */}
+      <div className={`cq-container ${hosted ? HOSTED_LIST_TOP : ""}`}>
         <div ref={titlebarRef} className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
         <div className="flex items-center gap-2 min-w-0">
           {/* Hosted mode names the page the way Whisk does, with its count;
@@ -1272,6 +1280,7 @@ export function GenericListView<T>({
                   : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
               }`}
               title="Search"
+              aria-label="Search"
             >
               <Search className="w-3.5 h-3.5" />
             </button>
