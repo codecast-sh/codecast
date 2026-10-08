@@ -4,12 +4,18 @@ import { useWatchEffect } from "./useWatchEffect";
 
 export type PanelLayout = "side" | "overlay" | "sheet";
 
-/** The width of the panel's own column and of the overlay. */
+/** The width of the overlay a narrow page opens the panel in. */
 export const PANEL_W = 360;
 
-/** The conversation needs this much beside the panel's column before the
- *  panel gets one; a narrower page gets the panel as an overlay. */
-const WIDE_MIN_W = PANEL_W + 620;
+/** The narrowest the two sides of the seam go (ConversationWithPanel): the
+ *  conversation keeps room for a readable thread and a composer, the panel for
+ *  a map or a sheet. */
+export const CONVERSATION_MIN_W = 420;
+export const PANEL_MIN_W = 360;
+
+/** A page this wide holds both sides at their minimums, so the panel gets its
+ *  own side of the seam; a narrower page gets the panel as an overlay. */
+const WIDE_MIN_W = CONVERSATION_MIN_W + PANEL_MIN_W;
 
 /** Where the panel sits, by the width of the PAGE, not the window: a page in
  *  a split pane is as narrow as its pane. `measureRef` goes on the page root;

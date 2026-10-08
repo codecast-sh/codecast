@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import { sessionIdentity } from "./sessionIdentity";
 import { cleanTitle } from "./conversationProcessor";
-import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight } from "lucide-react";
+import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { canMoveSessionToMachine, sessionMoveVerbs } from "./sessionControl";
@@ -9,19 +9,21 @@ import { DEVELOPER_MODE, type SurfaceMode } from "./surfaceRules";
 import { isForeignSession } from "./liveEntities";
 import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
 import { isTriggerEditable } from "./triggerEditable";
+import { isOrgObjectKind, objectHref, personRefOf } from "./entityLinks";
 
 /** The entities a route or a collection names (paletteTarget). */
 export type PaletteEntityType = "session" | "task" | "doc" | "plan" | "project" | "trigger";
-/** Plus "person", a teammate: its row is a PalettePerson, built where the
- *  palette drills into them (CommandPalette), never read from a collection. */
-export type PaletteTargetType = PaletteEntityType | "person";
+/** Plus the company's objects the palette opens on the Org screen: a goal, a
+ *  role, and a "person", a teammate, whose row is a PalettePerson built where
+ *  the palette drills into them (CommandPalette), never read from a collection. */
+export type PaletteTargetType = PaletteEntityType | "initiative" | "role" | "person";
 
 /** A teammate as a palette target: the roster member plus the facts its
  *  verbs branch on, read live while the palette is drilled into them. */
 export type PalettePerson = {
   _id: string;
   name: string;
-  username?: string;
+  /** The roster row: its github_username names their address (personRefOf). */
   member: any;
   online: boolean;
   following: boolean;
@@ -37,9 +39,13 @@ export type PaletteAction = {
   shortcutAction?: ShortcutAction;
 };
 
+/** Where a palette object opens. A goal, project, role or person opens its
+ *  sheet on the Org screen (objectHref); a project's board is its own verb
+ *  ("Open the board"). */
 export function paletteObjectPath(type: PaletteTargetType, target: any): string {
-  if (type === "person") return `/team/${target.username || target._id}`;
-  const route = { session: "conversation", task: "tasks", doc: "docs", plan: "plans", project: "projects", trigger: "triggers" }[type];
+  if (type === "person") return objectHref("person", personRefOf({ _id: target._id, github_username: target.member?.github_username ?? target.github_username }));
+  if (isOrgObjectKind(type)) return objectHref(type, target.short_id || target._id);
+  const route = { session: "conversation", task: "tasks", doc: "docs", plan: "plans", trigger: "triggers" }[type];
   return `/${route}/${target._id}`;
 }
 
@@ -58,7 +64,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
   const single = targets.length === 1;
   const row = (key: string, label: string, icon: PaletteAction["icon"], hotkey?: string, shortcutAction?: ShortcutAction): PaletteAction => ({ key, label, icon, hotkey: shortcutAction ? undefined : hotkey, shortcutAction });
   // A teammate: where they are first (follow), then the ways to reach them,
-  // then their profile. The huddle row's word is live call state, so the
+  // then their place in the org. The huddle row's word is live call state, so the
   // palette renders it from its own hook (PersonHuddleItem) and it has no
   // hotkey here.
   if (type === "person") {
@@ -68,15 +74,15 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
         : p.online ? [row("person_follow", p.session ? `Follow · ${p.session.title ? cleanTitle(p.session.title) : "a session"}` : "Follow", ArrowRight, "f")] : []),
       ...(chatOn ? [row("person_message", "Message", MessageSquare, "m")] : []),
       row("person_huddle", "Huddle", Headphones),
-      row("open", "Open profile", User, "o"),
-      row("newtab", "Open profile in new tab", ExternalLink, "n"),
-      row("copylink", "Copy profile link", Link, "c"),
+      row("open", "Open", User, "o"),
+      row("newtab", "Open in new tab", ExternalLink, "n"),
+      row("copylink", "Copy link", Link, "c"),
     ];
   }
   const common = single ? [
     row("open", "Open", ExternalLink, "o"),
     row("newtab", "Open in new tab", ExternalLink, "n"),
-    row("copy", `Copy ${type} ID`, Copy, "i"),
+    row("copy", `Copy ${type === "initiative" ? "goal" : type} ID`, Copy, "i"),
     row("copylink", "Copy link", Link, "c", type === "session" ? "conv.copyLink" : undefined),
     ...(chatOn ? [row("forward", "Send to chat…", Forward, "h")] : []),
   ] : [];
@@ -159,7 +165,10 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     row("create_task", "Add task to plan…", Plus, "t"),
     ...common,
   ];
+  // A goal and a role open their sheet; their verbs live there.
+  if (type === "initiative" || type === "role") return common;
   if (type === "project") return [
+    row("project_board", "Open the board", FolderKanban, "b"),
     row("project_status", "Change status…", CircleDot, "s"),
     row("rename", "Rename project…", Pencil, "r"),
     row("deadline", "Set target date…", CalendarDays, "d"),
@@ -209,6 +218,8 @@ const PALETTE_MATCH = 1;
 // typing a command's name ranks it above session and entity hits, which all
 // score a flat PALETTE_MATCH, so Enter runs the command the person named.
 const PALETTE_LABEL_HIT = 1.5;
+// A row whose label (or an alias) is exactly the query: above one it only starts.
+const PALETTE_LABEL_EXACT = 1.6;
 // Every query word found in the row's label, in any order ("task new" names
 // "New task"): below a label that starts with the query, above a keyword hit.
 const PALETTE_LABEL_WORDS = 1.25;
@@ -224,16 +235,34 @@ const PALETTE_TITLE_START = 0.15;
 const PALETTE_MORE = 0.2;
 const PALETTE_FULL_SEARCH = 0.15;
 export const PALETTE_TAIL_MORE = "__more__";
+/** A row listed because the query is its kind's word ("routines" lists the
+ *  routines, lib/universalSearch kindOfQuery): ranked as a title hit, above a
+ *  conversation found only in a message snippet. */
+export const PALETTE_KIND = "__kind__";
 export const PALETTE_TAIL_SEARCH = "__search__page";
+/** A goal, role or project row. The company's objects are few and curated,
+ *  so one ranks a little above a session or task whose title matches the
+ *  query as well (PALETTE_ORG_LIFT), still under a command the query names. */
+export const PALETTE_ORG = "__org__";
+const PALETTE_ORG_LIFT = 0.08;
 
 /** Between a row's label and its keywords in a cmdk value (paletteValue). */
 const LABEL_END = "\u2063";
+/** Between a row's label and each name it also answers to (paletteValue). */
+const ALIAS_SEP = "\u2062";
 
 /** A row's cmdk value: the label it renders (in the mode's words, so a hosted
- *  label is always searchable) and then its keywords. paletteItemScore ranks
- *  a hit in the label above a hit in the keywords. */
-export function paletteValue(label: string, keywords = ""): string {
-  return `${label}${LABEL_END} ${keywords}`;
+ *  label is always searchable), any other names it answers to, and then its
+ *  keywords. paletteItemScore ranks a hit in a name above a hit in the
+ *  keywords. */
+export function paletteValue(label: string | readonly string[], keywords = ""): string {
+  return `${typeof label === "string" ? label : label.join(ALIAS_SEP)}${LABEL_END} ${keywords}`;
+}
+
+/** A Pages row's cmdk value: its label in this mode and its aliases (the
+ *  Org row answers to Goals, Team, Roadmap, the pages it replaced). */
+export function palettePageValue({ page, label }: { page: { keywords: string; aliases?: readonly string[] }; label: string }): string {
+  return paletteValue([label, ...(page.aliases ?? [])], page.keywords);
 }
 
 /** How much a found row's title matches the query: its title is the text
@@ -280,6 +309,8 @@ export function paletteItemScore(value: string, search: string): number {
   if (value.startsWith("__filter__o")) return PALETTE_FILTER_NAME;
   if (value.startsWith(PALETTE_TAIL_MORE)) return PALETTE_MORE;
   if (value.startsWith(PALETTE_TAIL_SEARCH)) return PALETTE_FULL_SEARCH;
+  if (value.startsWith(PALETTE_KIND)) return PALETTE_MATCH + Math.max(PALETTE_TITLE_WORDS, titleHit(value, search));
+  if (value.startsWith(PALETTE_ORG)) return PALETTE_MATCH + PALETTE_ORG_LIFT + titleHit(value, search);
   if (
     value.startsWith("__search__") ||
     value.startsWith("__recent__") ||
@@ -295,10 +326,15 @@ export function paletteItemScore(value: string, search: string): number {
   const hay = searchable.toLowerCase();
   const needle = search.trim().toLowerCase();
   if (!needle) return PALETTE_MATCH;
-  if (hay.startsWith(needle)) return PALETTE_LABEL_HIT;
+  // The label and each alias are names: one the query spells out in full
+  // ranks above one it only starts ("team" is the Org row's Team before it is
+  // the start of Team Charts).
+  const labelEnd = hay.indexOf(LABEL_END);
+  const names = labelEnd >= 0 ? hay.slice(0, labelEnd).split(ALIAS_SEP) : [hay];
+  if (names.some((name) => name === needle)) return PALETTE_LABEL_EXACT;
+  if (names.some((name) => name.startsWith(needle))) return PALETTE_LABEL_HIT;
   // Each word on its own, so "new task" finds "Create task new todo".
   const words = needle.split(/\s+/);
-  const labelEnd = hay.indexOf(LABEL_END);
   if (labelEnd >= 0 && hasEveryWord(hay.slice(0, labelEnd), words)) return PALETTE_LABEL_WORDS;
   return hay.includes(needle) || hasEveryWord(hay, words) ? PALETTE_MATCH : 0;
 }
