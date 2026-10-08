@@ -21,6 +21,8 @@ import type * as builds from "../builds.js";
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as lib_appData from "../lib/appData.js";
+import type * as lib_bootCatcher from "../lib/bootCatcher.js";
+import type * as lib_entryPage from "../lib/entryPage.js";
 import type * as lib_errors from "../lib/errors.js";
 import type * as lib_files from "../lib/files.js";
 import type * as lib_identity from "../lib/identity.js";
@@ -70,6 +72,8 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   http: typeof http;
   "lib/appData": typeof lib_appData;
+  "lib/bootCatcher": typeof lib_bootCatcher;
+  "lib/entryPage": typeof lib_entryPage;
   "lib/errors": typeof lib_errors;
   "lib/files": typeof lib_files;
   "lib/identity": typeof lib_identity;
