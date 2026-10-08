@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
-import { checkProject, classifyWatchLine, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { checkProject, classifyWatchLine, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {
@@ -364,5 +364,38 @@ describe("idle exit", () => {
     expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, finishedAt: t - 1000 }, t)).toBe(false);
     // A first pass still building on a loaded machine is not idle, however old.
     expect(shouldIdleExit({ ...base, inProgress: true, askedAt: t - 3 * IDLE_EXIT_MS }, t)).toBe(false);
+  });
+});
+
+
+describe("projectsTouching", () => {
+  let iso: IsolatedCodecastDir;
+  beforeEach(() => { iso = isolateCodecastDir(); });
+  afterEach(() => iso.restore());
+
+  test("picks the projects whose program holds a changed file, and a project above a file no program has seen", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "touching-")));
+    try {
+      const projects = [
+        { name: "web", tsconfig: "packages/web/tsconfig.json" },
+        { name: "cli", tsconfig: "packages/cli/tsconfig.json" },
+        { name: "convex", tsconfig: "packages/convex/tsconfig.json" },
+      ];
+      const info = (name: string, files: string[]) => {
+        const dir = watchDir(root, name);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: files.map((f) => path.relative(dir, path.join(root, f))) }));
+      };
+      info("web", ["packages/web/app.tsx", "packages/shared/x.ts"]);
+      info("cli", ["packages/cli/src/a.ts"]);
+      info("convex", ["packages/convex/f.ts", "packages/shared/x.ts"]);
+      const names = (changed: string[]) => projectsTouching(root, projects, changed).map((p) => p.name);
+      expect(names(["packages/shared/x.ts"])).toEqual(["web", "convex"]);
+      expect(names(["packages/cli/src/new.ts"])).toEqual(["cli"]);
+      expect(names(["README.md", "docs/a.md"])).toEqual([]);
+      expect(names(["packages/web/tsconfig.json"])).toEqual(["web"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
