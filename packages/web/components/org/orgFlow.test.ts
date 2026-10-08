@@ -1,4 +1,4 @@
-// The health page's numbers (orgFlow.ts): each role's week as a series keyed
+// This week's numbers (orgFlow.ts): each role's week as a series keyed
 // the way org.health keys it, the company's week as their sum, the map's edge
 // weights and handoffs, and the two what-ifs, including what they refuse to
 // claim.
