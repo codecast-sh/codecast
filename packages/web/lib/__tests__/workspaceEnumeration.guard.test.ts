@@ -43,6 +43,8 @@ const ALLOWED = new Map<string, string>([
   ["components/tasks/SubtasksSection.tsx", "subtree of one already-authorized task (its subtasks share its workspace)"],
   ["store/undo/writers.ts", "id/short_id LOOKUP to name a task in an undo write the server re-authorizes"],
   ["store/opsSlice.ts", "the slice that owns opsGroups, dropping a removed source's rows"],
+  ["store/taskGraphDraft.ts", "short_id LOOKUP: a graph write patches every copy of the one task it names; renders nothing"],
+  ["store/initiativeSlice.ts", "the slice that owns goals, moving a stub project id to its real id in every goal that lists it; renders nothing"],
   ["app/projects/[id]/page.tsx", "short id LOOKUP of the one project the address names (pj-…)"],
 ]);
 

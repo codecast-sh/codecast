@@ -18,6 +18,11 @@ export * from "./statuses";
 export * from "./relatedDocs";
 export * from "./foreignText";
 export * from "./planForeignText";
+export * from "./graph";
+export * from "./graphHistory";
+export * from "./frontier";
+export * from "./planSteps";
+export * from "./resume";
 
 // ---------------------------------------------------------------------------
 // Origin
@@ -76,6 +81,8 @@ export function isHumanOrigin(task: { source?: string | null }): boolean {
  * "Someone" includes a role (org-roles-run-work.md R5): a task a role holds is
  * the company's work, not one session's bookkeeping, so it shows under the
  * role on the board's Assignee and Chain groupings with no change of Source.
+ * Ephemeral bookkeeping (task-graph.md TG9) is never on it, whoever filed or
+ * holds it; it lists with the agent work until `cast task keep`.
  * Web and mobile both filter with this, so the two boards cannot disagree.
  */
 /**
@@ -102,8 +109,9 @@ export function isOnHumanBoard(task: {
   source?: string | null;
   promoted?: boolean | null;
   assignee?: string | null;
+  ephemeral?: boolean | null;
 }): boolean {
-  return isHumanOrigin(task) || !!task.promoted || !!task.assignee;
+  return !task.ephemeral && (isHumanOrigin(task) || !!task.promoted || !!task.assignee);
 }
 
 /**
