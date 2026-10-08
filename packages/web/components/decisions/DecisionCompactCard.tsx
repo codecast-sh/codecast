@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowUpRight, Layers, LayoutTemplate, ShieldCheck, Workflow } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
+import { DecisionDiscussion } from "./DecisionDiscussion";
 import { askingSessionName, decisionHref, gateRunLabel, ladderRecommendation, runHref } from "../../lib/decisionLinks";
 import { optionPageSlugs } from "../../lib/decisionQueue";
 import { useSyncWorkflowRun } from "../../hooks/useSyncWorkflows";
@@ -339,6 +340,10 @@ export function DecisionCompactCardView({
             </Link>
           )}
         </div>
+      )}
+      {/* Ask the session that owns it, without leaving the queue (ct-58330). */}
+      {!folded && !hostedApproval && (
+        <div className="px-4 pb-3"><DecisionDiscussion decisionId={decision._id} compact /></div>
       )}
     </div>
   );

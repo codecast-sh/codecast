@@ -8,6 +8,7 @@ import type { TouchLedger } from "./ledger.js";
 import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
 import { GH_WRAPPER_REL } from "../ghWrapper.js";
 import { MAX_MIRROR_BODY_BYTES } from "./bundle.js";
+import { isCredentialFilePath } from "../../secretPatterns.js";
 import { credentialContentReason, homeRelative, isActiveConfig, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
 export { isActiveConfig } from "./transform.js";
 
@@ -169,7 +170,7 @@ export function matchesContextPattern(pattern: string, rel: string, isDir = fals
 }
 
 export function isDeniedPath(rel: string, isDir = false): boolean {
-  if (!isDir && (/(?:^|\/)\.env(?:\.[^/]*)?$/.test(rel) || /\.(?:pem|key|p8|p12|pfx|der|jks|keystore|kdbx|1password|keychain(?:-db)?)$/i.test(rel) || ["auth.json", ".credentials.json", "oauth_creds.json", "google_accounts.json", "hosts.yml", ".netrc", ".npmrc", ".pgpass", "pass.txt", "passwords.txt", "passwords.csv"].includes(path.posix.basename(rel).toLowerCase()))) return true;
+  if (!isDir && isCredentialFilePath(rel)) return true;
   if (rel.startsWith(".claude/projects/")) {
     const parts = rel.split("/");
     if (parts.length > 3 && parts[3] !== "memory") return true;

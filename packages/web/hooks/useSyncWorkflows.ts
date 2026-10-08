@@ -47,6 +47,29 @@ export function useWorkflowBySlug(slug: string | null | undefined): any | null |
 }
 const workflowGraphSig = (w: any) => `${workflowSig(w)}|${w.nodes ? stableRefId(w.nodes) : 0}|${w.edges ? stableRefId(w.edges) : 0}`;
 
+/** Feeder: the graph one run ran (its workflows row), for any viewer who may
+ *  read the run, the owner of the row or not (the line page's graphs). */
+export function useSyncRunGraph(runId: string | null | undefined) {
+  return useSyncCollection(
+    "workflows",
+    api.workflow_runs.graphOfRun,
+    runId ? { run_id: runId } : "skip",
+    { select: (row: any) => (row ? [row] : []) },
+  );
+}
+
+/** Reader: the workflows row a run ran, by the run's workflow_id (undefined
+ *  while cold, null once the server said the viewer cannot read it). Its
+ *  graph is in the signature, so an edited station re-renders. */
+export function useRunGraph(runId: string | null | undefined, workflowId: string | null | undefined): any | null | undefined {
+  const { ready } = useSyncRunGraph(workflowId ? runId : null);
+  const where = useMemo(() => (w: any) => !!workflowId && w._id === workflowId, [workflowId]);
+  const rows = useCollectionRows<any>("workflows", { where, sig: workflowGraphSig });
+  if (!workflowId) return null;
+  if (rows[0]) return rows[0];
+  return ready ? null : undefined;
+}
+
 /** Feeder: the viewer's dynamic (multi-agent) runs window. */
 export function useSyncDynamicRuns(enabled = true) {
   return useSyncCollection("workflowRuns", api.workflow_runs.listDynamicRuns, enabled ? {} : "skip");
