@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { SHIPPED_LINE } from "../shippedLine.generated";
-import { LINE_PHASES, cardName, causeRunEntries, causeWhere, gateAnswer, isMainStation, lineVersions, projectLineVersions, runOutcome, runPath, shortDay, stationHistory, stationWords, versionChange, type ReportRun } from "../runReport";
+import { union57382Run, union57467Run } from "./unionLineRuns.fixture";
+import { ct57659Run2, ct57659Run3, ct57659Run5 } from "./ct57659Runs.fixture";
+import { LINE_PHASES, cardName, causeRunEntries, causeWhere, gateAnswer, isMainStation, lineVersions, projectLineVersions, runOutcome, runPath, scriptLine, shortDay, stationHistory, stationWords, versionChange, type ReportRun } from "../runReport";
 
 const T0 = 1_790_000_000_000;
 const DAY = 86_400_000;
@@ -22,7 +24,8 @@ const shippedRun: ReportRun = {
 describe("phases", () => {
   test("every station of the shipped line sits in exactly one phase", () => {
     const stations = SHIPPED_LINE.nodes.map((x) => x.id).filter((id) => id !== "start" && id !== "exit");
-    const placed = LINE_PHASES.flatMap((p) => p.stations);
+    // merge stays placed for runs from before the line dropped it.
+    const placed = LINE_PHASES.flatMap((p) => p.stations).filter((id) => id !== "merge");
     expect(new Set(placed).size).toBe(placed.length);
     expect([...stations].sort()).toEqual([...placed].sort());
   });
@@ -36,7 +39,7 @@ describe("runPath", () => {
     expect(path.map((p) => p.key)).toEqual(["understand", "prove", "build", "check", "decide", "ship"]);
     expect(phase("understand").steps.map((s) => s.id)).toEqual(["ground", "analyze"]);
     expect(phase("understand").folded.map((s) => s.id).sort()).toEqual(["park", "plan", "plan_gate"]);
-    expect(phase("prove").folded.map((s) => s.id)).toEqual(["dissolve"]);
+    expect(phase("prove").folded.map((s) => s.id)).toEqual(["prove_line", "dissolve"]);
   });
 
   test("a gate reads as its answer, never a raw key, and is not a failure", () => {
@@ -249,8 +252,74 @@ describe("words a reader meets", () => {
   test("every station says what it does, and the main path leaves the branches out", () => {
     const all = LINE_PHASES.flatMap((p) => p.stations);
     for (const id of all) expect(stationWords(id)).toBeTruthy();
-    expect(all.filter((id) => !isMainStation(id)).sort()).toEqual(["card", "card_draft", "card_write", "dissolve", "drop", "park", "plan", "plan_gate", "reopen", "unscored"]);
+    expect(all.filter((id) => !isMainStation(id)).sort()).toEqual(["ask", "card", "card_draft", "card_write", "dissolve", "drop", "implement_line", "park", "plan", "plan_gate", "prove_line", "reopen", "unscored"]);
     // No insider word for the problem.
     for (const id of all) expect(stationWords(id)).not.toMatch(/\bmiss\b/);
+  });
+});
+
+describe("a station's words are what it reported (Union's AgentWatch line, 2026-10-07)", () => {
+  const step = (run: ReportRun, id: string) => runPath(run).flatMap((p) => p.steps).find((s) => s.id === id)!;
+
+  test("a dissolve that passed the cluster on says so, never that it closed it", () => {
+    for (const run of [union57382Run, union57467Run]) {
+      expect(step(run, "dissolve").result).toBe("Passed it on: the problem needs its own fix");
+    }
+  });
+
+  test("a prove that proved its cause reads as proved, though the run stopped after it", () => {
+    const prove = step(union57382Run, "prove");
+    expect(prove.state).not.toBe("failed");
+    expect(prove.result).toStartWith("C116 is proven");
+  });
+
+  test("a station that pinned a question reads as its question", () => {
+    expect(step(union57467Run, "refine").result).toStartWith("Refine stopped: the missed-call cause (C115)");
+  });
+});
+
+describe("scriptLine", () => {
+  test("a check's routing JSON reads as its why, or as nothing so the station's words stand", () => {
+    expect(scriptLine('{"red": true, "dir": "/x/.git/cast-line/line-ct-1", "why": "repro.sh fails"}')).toBe("repro.sh fails");
+    expect(scriptLine('{"dissolved": "no_repro"} ok Completed ct-1')).toBeUndefined();
+    expect(scriptLine("applied to the working tree: 2 files changed")).toBe("applied to the working tree: 2 files changed");
+    expect(scriptLine(undefined)).toBeUndefined();
+  });
+});
+
+describe("a station's words are what happened to it (ct-57659's runs, 2026-10-07)", () => {
+  const step = (run: ReportRun, id: string) => runPath(run).flatMap((p) => p.steps).find((s) => s.id === id)!;
+
+  test("a station whose session was killed before it began never started", () => {
+    expect(step(ct57659Run2, "prove_line").result).toBe("Never started: queued, then killed before it began");
+    expect(runOutcome(ct57659Run2).text).toBe("Stopped at Prove line: Prove line never started (it was queued, then killed).");
+  });
+
+  test("a builder that handed off needs_context stopped to ask, it did not fail outright", () => {
+    expect(step(ct57659Run3, "implement_line").result).toBe("Handed off needs_context: stopped to ask for context");
+    expect(runOutcome(ct57659Run3).text).toBe("Stopped at Build line: Build line stopped to ask for context (a needs_context handoff), and the line had no route for that.");
+  });
+
+  test("script stations read as one sentence, never their raw output", () => {
+    for (const run of [ct57659Run3, ct57659Run5]) {
+      expect(step(run, "verify").result).toBe("No checks ran: the project names no check command");
+      expect(step(run, "green").result).toBe("The test passes with the change");
+      expect(step(run, "eval").result).toBe("No evals ran: the change touches no eval surface");
+      expect(step(run, "red").result).toBe("repro.sh fails");
+    }
+  });
+
+  test("a script station's JSON reads as its why; a station that pinned blocked waits on a person", () => {
+    const run = (preview: string): ReportRun => ({ ...ct57659Run5, node_statuses: ct57659Run5.node_statuses!.map((n) => (n.node_id === "green" ? { ...n, result_preview: preview } : n)) });
+    expect(step(run('{"green": false, "why": "the reproduction still fails"}'), "green").result).toBe("The reproduction still fails");
+    expect(step(run('{"card": {"cause": {"task": "ct-57659", "title": "When Prove fa'), "green").result).toBe("The test passes with the change");
+    expect(runOutcome({ ...ct57659Run3, fail_reason: "implement_line is waiting on a person" }).text).toBe("Stopped at Build line: it asked a question and waits on a person's answer.");
+  });
+});
+
+describe("a retired station keeps its own words", () => {
+  test("a station that finished and was then retired (killed) is not read as killed", () => {
+    const run: ReportRun = { ...ct57659Run5, node_statuses: ct57659Run5.node_statuses!.map((n) => (n.node_id === "analyze" ? { ...n, session: { _id: "jx77tqg", killed: true, message_count: 11 } } : n)) };
+    expect(runPath(run).flatMap((p) => p.steps).find((s) => s.id === "analyze")!.result).toBe("Read the cause and its signals");
   });
 });

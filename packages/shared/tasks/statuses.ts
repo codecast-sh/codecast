@@ -27,6 +27,12 @@ export const TASK_PRIORITIES = ["urgent", "high", "medium", "low", "none"] as co
 
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
+/** Every value tasks.effort may hold (task-graph.md TG8): the reasoning effort
+ *  a session spawned for the task launches with. */
+export const TASK_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+export type TaskEffort = (typeof TASK_EFFORTS)[number];
+
 /** Categories that close a task (stamp closed_at, leave progress denominators). */
 export const TERMINAL_TASK_CATEGORIES: readonly TaskStatusCategory[] = ["done", "dropped"];
 
