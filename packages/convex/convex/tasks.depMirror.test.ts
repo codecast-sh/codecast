@@ -98,13 +98,15 @@ describe("update dependency mirror", () => {
     expect(byShortId(tables, "ct-c").blocks).toEqual(["ct-a"]);
   });
 
-  test("a reference the caller cannot access is skipped silently", async () => {
+  // Readiness never reads across workspaces, so the edge could never clear.
+  test("a reference into another workspace is refused and nothing is written", async () => {
     const { ctx, tables } = await makeCtx([
       bare("ct-a"),
       bare("ct-x", { user_id: "u_other", blocks: [] }),
     ]);
-    await (update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-a", blocked_by: ["ct-x"] });
-    expect(byShortId(tables, "ct-a").blocked_by).toEqual(["ct-x"]);
+    await expect((update as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-a", blocked_by: ["ct-x"] }))
+      .rejects.toThrow("dependency task belongs to another workspace");
+    expect(byShortId(tables, "ct-a").blocked_by).toBeUndefined();
     expect(byShortId(tables, "ct-x").blocks).toEqual([]);
   });
 });
