@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Window } from "happy-dom";
 import { sha256Hex, type CodecastErrorItem, type CodecastReplayManifest, type CodecastSink, type ReplayChunkSign, type ReplaySignResult } from "./codecast";
-import { cleanUrl, labelOf, startReplay, visibleOutline, REPLAY_LIMITS, type DomEvent, type ReplayEvent, type ReplayRecorder, type StartDomRecording } from "./replay";
+import { cleanUrl, labelOf, startReplay, visibleOutline, DOM_CHECKOUT_MS, REPLAY_LIMITS, type DomEvent, type ReplayEvent, type ReplayRecorder, type StartDomRecording } from "./replay";
 
 // A real DOM for the recorder, installed as the globals it reads.
 let win: Window;
@@ -452,6 +452,50 @@ describe("DOM mode", () => {
     expect(r.kept).toBe(false);
     expect(dom.state.checkouts).toBe(1);
     expect(r.domEvents).toBe(2);
+  });
+
+  it("checks out every half ring until the DOM ships, and rarely once it does", async () => {
+    const dom = fakeDom();
+    const { recorder: r, sink, signs } = start({ replayDom: "onError", loadDomRecorder: dom.load });
+    await until(() => dom.started());
+    const checkoutTimer = () => timers.filter((t) => t.ms === DOM_CHECKOUT_MS.ring || t.ms === DOM_CHECKOUT_MS.shipping).at(-1)!;
+    expect(checkoutTimer().ms).toBe(DOM_CHECKOUT_MS.ring);
+    checkoutTimer().fn();
+    expect(dom.state.checkouts).toBe(1);
+    expect(checkoutTimer().ms).toBe(DOM_CHECKOUT_MS.ring);
+
+    sink.captureError(new Error("boom"));
+    await until(() => domPuts(signs).length === 1);
+    checkoutTimer().fn();
+    expect(dom.state.checkouts).toBe(2);
+    expect(checkoutTimer().ms).toBe(DOM_CHECKOUT_MS.shipping);
+    r.stop();
+  });
+
+  it("the first upload of a big ring yields to the page while it serializes", async () => {
+    const dom = fakeDom();
+    const sink = fakeSink();
+    // Each URL rewrite costs a millisecond, so serializing the ring is ~60 ms of work.
+    let turns = 0;
+    const seen = new Set<number>();
+    const scrub = sink.sink.scrubUrl;
+    sink.sink.scrubUrl = (text: string) => {
+      seen.add(turns);
+      const end = performance.now() + 1;
+      while (performance.now() < end);
+      return scrub(text);
+    };
+    const { recorder: r, signs } = start({ replayDom: "onError", loadDomRecorder: dom.load }, sink);
+    await until(() => dom.started());
+    for (let i = 0; i < 60; i++) dom.inc(`/path/${i}`);
+    const tick = setInterval(() => turns++, 0);
+    (sink.sink as unknown as { captureError(e: unknown): void }).captureError(new Error("boom"));
+    await until(() => domPuts(signs).length >= 1, 10_000);
+    clearInterval(tick);
+    expect(domPuts(signs).length).toBe(1);
+    // The page got turns between slices of the work, not only after all of it.
+    expect(seen.size).toBeGreaterThan(3);
+    r.stop();
   });
 
   it("stop stops rrweb and drops what it held", async () => {

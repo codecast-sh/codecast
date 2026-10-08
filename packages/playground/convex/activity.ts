@@ -1,16 +1,16 @@
 // The home page's "Right now" feed (DESIGN 6.1): the latest versions made
 // anywhere in Clayground, each said as who did what to which app. One person
 // changing one app is one row, their latest change, however many they made.
+// Unlisted apps (a test harness's) stay out.
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { versionSaid } from "./lib/versions";
-import { publicVisitors, requireVisitor, type PublicVisitor } from "./visitors";
-import { visitorArgs } from "./validators";
+import { publicVisitors, type PublicVisitor } from "./visitors";
 
 const FEED_MAX = 5;
 /** Versions read to fill the feed after folding runs together. */
-const FEED_SCAN = 40;
+const FEED_SCAN = 100;
 
 export type ActivityEvent = {
   id: Id<"versions">;
@@ -24,26 +24,29 @@ export type ActivityEvent = {
   live: boolean;
 };
 
+/** Public, like the gallery beside it. */
 export const recent = query({
-  args: { ...visitorArgs },
-  handler: async (ctx, args): Promise<ActivityEvent[]> => {
-    await requireVisitor(ctx, args);
+  args: {},
+  handler: async (ctx): Promise<ActivityEvent[]> => {
     const scanned = await ctx.db.query("versions").order("desc").take(FEED_SCAN);
+    const apps = new Map(
+      await Promise.all([...new Set(scanned.map((r) => r.app_id))].map(async (id) => [id, await ctx.db.get(id)] as const)),
+    );
     // v0 is a starter nobody sees; the first build says "made it".
     const seen = new Set<string>();
     const shown = scanned
       .filter((r) => {
         const key = `${r.app_id}:${r.author_id}`;
-        if (r.number === 0 || seen.has(key)) return false;
+        const app = apps.get(r.app_id);
+        if (r.number === 0 || !app || app.unlisted || seen.has(key)) return false;
         seen.add(key);
         return true;
       })
       .slice(0, FEED_MAX);
     const people = await publicVisitors(ctx, shown.map((r) => r.author_id));
     const events = await Promise.all(
-      shown.map(async (row): Promise<ActivityEvent | null> => {
-        const app = await ctx.db.get(row.app_id);
-        if (!app) return null;
+      shown.map(async (row): Promise<ActivityEvent> => {
+        const app = apps.get(row.app_id)!;
         const source = row.kind === "fork" && row.source ? await ctx.db.get(row.source.app_id) : null;
         return {
           id: row._id,
@@ -56,6 +59,6 @@ export const recent = query({
         };
       }),
     );
-    return events.filter((e) => e !== null);
+    return events;
   },
 });
