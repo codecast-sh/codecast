@@ -1,13 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowUpRight, Blocks, Search } from "lucide-react";
+import { ArrowUpRight, Blocks, Check, Search } from "lucide-react";
 import {
   FEATURE_EXPLAINERS,
   SNIPPET_CATALOG,
   SNIPPET_CATEGORIES,
   STABLE_MODES,
+  isAgentSetupTool,
   snippetAvailableForTeams,
+  type AgentSetupTool,
   type SnippetDescriptor,
   type StableMode,
 } from "@codecast/shared/contracts";
@@ -24,6 +26,8 @@ import { isRecentlyShipped, snippetEnabledOn } from "../../lib/newSnippets";
 import { FeatureVignette } from "./FeatureVignette";
 import { FeatureDialog, NewPill, STABLE_NAME } from "./FeatureDetail";
 import { featureIcon, featureTone, TONE } from "./featureLook";
+import { AgentToolSetupPanel } from "../conversation/blocks/AgentToolSetupCard";
+import { useAgentToolSetup } from "../../lib/useAgentToolSetup";
 
 /**
  * /agent-features: what codecast can teach your agents. The web twin of
@@ -252,6 +256,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
                     <FeatureCard
                       key={s.slug}
                       s={s}
+                      d={d}
                       on={isOn(s)}
                       disabled={!d.online || pending.has(s.slug)}
                       onToggle={(next) => toggle(s, next)}
@@ -276,6 +281,11 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
       <FeatureDialog
         slug={openFeature ? openFeature.slug : open === STABLE_KEY ? STABLE_KEY : null}
         feature={openFeature}
+        setup={
+          openFeature && isAgentSetupTool(openFeature.slug) && isOn(openFeature) && d.online ? (
+            <AgentToolSetupPanel tool={openFeature.slug} target={{ deviceId: d.device_id }} machineName={deviceDisplayName(d)} />
+          ) : null
+        }
         onClose={() => setOpen(null)}
         control={
           openFeature ? (
@@ -375,12 +385,14 @@ function CardFooter({ left, mono = true }: { left: React.ReactNode; mono?: boole
 
 function FeatureCard({
   s,
+  d,
   on,
   disabled,
   onToggle,
   onOpen,
 }: {
   s: SnippetDescriptor;
+  d: Device;
   on: boolean;
   disabled: boolean;
   onToggle: (next: boolean) => void;
@@ -399,9 +411,33 @@ function FeatureCard({
         </>
       }
       control={<Switch checked={on} disabled={disabled} onCheckedChange={onToggle} aria-label={s.name} />}
-      footer={<CardFooter left={`cast install ${s.slug}`} />}
+      footer={
+        isAgentSetupTool(s.slug) && on && d.online
+          ? <CardFooter left={<SetupStatus tool={s.slug} deviceId={d.device_id} />} mono={false} />
+          : <CardFooter left={`cast install ${s.slug}`} />
+      }
     />
   );
+}
+
+/**
+ * A feature that also needs a one-time step on the machine (the Chrome
+ * extension, the macOS grants): where that stands, in a line. The steps
+ * themselves are in the feature's dialog.
+ */
+function SetupStatus({ tool, deviceId }: { tool: AgentSetupTool; deviceId: string }) {
+  const { status, error, checking } = useAgentToolSetup({ deviceId }, tool, true);
+  if (status?.ready) {
+    return (
+      <span className="inline-flex items-center gap-1 text-sol-green">
+        <Check className="h-3 w-3" strokeWidth={2.5} /> {tool === "browser" ? "Chrome connected" : "Permissions granted"}
+      </span>
+    );
+  }
+  if (checking) return <span>Checking setup…</span>;
+  if (status?.tool === "computer" && !status.supported) return <span>Not available on this machine</span>;
+  if (error && !status) return <span className="text-sol-red/90">Could not check setup</span>;
+  return <span className="text-sol-yellow">{tool === "browser" ? "Needs the Chrome extension" : "Needs two macOS permissions"}</span>;
 }
 
 /** Stable context: a tri-state (Solo / Team / Off) and a scope switch. */

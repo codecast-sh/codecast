@@ -46,6 +46,7 @@ import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../l
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { applyTaskDrop, closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undoActions";
+import { gestureToast } from "../../store/undoStack";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import {
@@ -406,6 +407,17 @@ const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title", "ma
 const TASK_SORT_DEFAULT_DIR: Record<string, "asc" | "desc"> = {
   priority: "asc", title: "asc", created: "desc", updated: "desc", manual: "asc",
 };
+/** x on a hosted to-do: check it off, or open it again, as one gesture with
+ *  its Undo toast. Closing goes through the one close gateway, so a to-do
+ *  with open subtasks still asks first. */
+function toggleTodoDone(task: TaskItem): void {
+  const done = task.status === "done";
+  gestureToast(done ? `Reopened “${task.title}”` : `Done: “${task.title}”`, () => {
+    if (done) useInboxStore.getState().updateTask(task.short_id, { status: "open" });
+    else closeTaskWithGuard(task.short_id, "done");
+  });
+}
+
 function taskDefaultDir(sort: string): "asc" | "desc" {
   return TASK_SORT_DEFAULT_DIR[sort] ?? "asc";
 }
@@ -436,12 +448,18 @@ export function hostedPersonalView(view: { group: string; sort: string; dir: "as
   return { group: "none", sort: "created", dir: "desc" };
 }
 
-function useTaskUrlState(hosted = false) {
+function useTaskUrlState(hosted = false, scoped = false) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
-  const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const savedTaskView = useInboxStore((s) => s.clientState.ui?.task_view);
+  const updateSavedUI = useInboxStore((s) => s.updateClientUI);
+  // A list scoped to a role's area starts from that scope alone: the filters
+  // the person set on the Tasks page (another workspace's labels, a project)
+  // would hide the work, so a scoped list keeps its own, for as long as it is open.
+  const [scopedView, setScopedView] = useState<TaskViewPrefs | undefined>(undefined);
+  const taskView = scoped ? scopedView : savedTaskView;
+  const updateClientUI = useCallback((patch: { task_view: TaskViewPrefs }) => (scoped ? setScopedView(patch.task_view) : updateSavedUI(patch)), [scoped, updateSavedUI]);
 
   const isDetailPage = pathname !== "/tasks";
   const hasUrlParams = !isDetailPage && searchParams.toString().length > 0;
@@ -596,7 +614,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const workspaceArgs = useWorkspaceArgs();
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode);
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode, !!scope);
   const completionClock = useCoarseNow(60_000);
   const pendingCompletions = useInboxStore((s) => completedFilter ? pendingTaskCompletionsSig(s.pending) : "");
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
@@ -1362,6 +1380,9 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           quickAdd={hostedMode ? { placeholder: "New to-do", onAdd: (title) => void createTaskAndAdopt({ title, task_type: "task", status: "open", ...(workspaceArgs === "skip" ? {} : workspaceArgs), ...(projectId ? { project_id: projectId } : {}) }) } : undefined}
           hasMore={hasMore}
           onLoadMore={loadMore}
+          // Hosted to-dos check off with x, the list's one verb there (hosted
+          // rows have no selection), with the gesture's Undo toast.
+          onToggleItem={hostedMode ? toggleTodoDone : undefined}
           paletteShortcuts={[
             { key: "s", mode: "status", label: "status" },
             { key: "p", mode: "priority", label: "priority" },

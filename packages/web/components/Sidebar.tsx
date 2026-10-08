@@ -1,4 +1,5 @@
 import { SlackLogo } from "./SlackLogo";
+import { HostedConnectionFoot } from "./conversation/HostedConnection";
 import { HostedWordmark } from "./HostedWordmark";
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature } from "../lib/teamFeatures";
@@ -41,7 +42,13 @@ import { projectDotClass } from "../lib/projectColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { toast } from "sonner";
 import { ContextMenu, CtxItem, useContextMenu } from "./ui/context-menu";
-import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall, Monitor, Smartphone } from "lucide-react";
+import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall, Monitor, Smartphone, PanelRight } from "lucide-react";
+import { useBarlessShell } from "../hooks/useBarlessShell";
+import { GlobalSearch } from "./GlobalSearch";
+import { TeamSwitcher } from "./TeamSwitcher";
+import { NotificationBell } from "./NotificationBell";
+import { UserMenu } from "./UserMenu";
+import { TopbarButton } from "./TopbarButton";
 import { NATIVE_APP_COPY, NATIVE_APP_LINKS, nativeAppOffer, trackNativeAppClick } from "../lib/nativeApps";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
@@ -49,6 +56,7 @@ import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
 import { ShellUsageMeter } from "./plan/UsageMeter";
+import { OrgNeedsYouBadge } from "./org/OrgNeedsYouBadge";
 import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "./sidebar/SidebarNav";
 import { Surface, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
 import { paneDragProps, railRowTone } from "../lib/railRow";
@@ -629,20 +637,22 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const rootAgent = useRootAgent();
   // Hosted mode's rows and words (lib/surfaces.ts).
   const surfaceMode = useSurfaceMode();
+  const words = useModeWords();
+  const barless = useBarlessShell();
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
   const isCalls = pathname === "/calls" || pathname?.startsWith("/calls/");
   // Per-team opt-in: no chat row (and no create-channel modal) unless the
   // active team turned chat on.
-  // The org feature is per team, default off: with it off the Org row and
-  // the workspace agent row do not exist, like chat.
+  // The org feature is per team, default off: with it off the workspace
+  // agent row does not exist, like chat. The Org row stays: the company's
+  // goals and projects need no agents.
   const orgOn = useWorkspaceFeature("org");
   const changesOn = useTeamFeature("changes");
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
-  const isInitiatives = pathname === "/goals" || pathname?.startsWith("/goals/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
@@ -863,12 +873,15 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // active workspace.
   const wsProjects = useWorkspaceCollection<any>("projects");
   const projectItems = useMemo(() => {
-    const order: Record<string, number> = { active: 0, planning: 1, paused: 2, done: 3 };
-    return [...wsProjects]
+    // The projects still in play nest under Org; a finished one is on the Org screen.
+    const order: Record<string, number> = { active: 0, planning: 1, paused: 2 };
+    return wsProjects
+      .filter((p: any) => p.status !== "done")
       .sort((a: any, b: any) =>
         (order[a.status] ?? 9) - (order[b.status] ?? 9) || (a.title || "").localeCompare(b.title || ""))
       .map((p: any) => ({
-        active: pathname === `/projects/${p._id}` || !!pathname?.startsWith(`/projects/${p._id}/`),
+        // The board's address is the project's pj- ref; an older link may still carry its id.
+        active: [p.short_id, p._id].some((ref) => !!ref && (pathname === `/projects/${ref}` || !!pathname?.startsWith(`/projects/${ref}/`))),
         id: p._id,
         name: p.title,
         icon: <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass(p)}`} />,
@@ -880,7 +893,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onClick: () => togglePin("project", p._id, p.title || "Project"),
           },
         ],
-        onSelect: () => { router.push(`/projects/${p._id}`); onMobileClose?.(); },
+        onSelect: () => { router.push(`/projects/${p.short_id ?? p._id}`); onMobileClose?.(); },
       }));
     // pathname is a dep: without it the highlight is computed once and never
     // moves as you navigate between projects.
@@ -1008,6 +1021,15 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             <HostedWordmark />
           </div>
         )}
+        {/* With no top bar (useBarlessShell), search sits under the
+            wordmark, as Whisk's does, and the workspace switcher under it
+            for someone on a team (it draws nothing otherwise). */}
+        {barless && !isNarrow && (
+          <div data-cc-rail-search className="flex flex-col gap-2 px-3 pb-3">
+            <GlobalSearch />
+            <TeamSwitcher />
+          </div>
+        )}
         {/* Pins lead the developer rail; hosted mode's leads with the inbox and
             keeps its pins after Work. */}
         {!isNarrow && !surfaceMode.hosted && pinnedRail}
@@ -1067,16 +1089,15 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           </>)}
           workAction={<AppPopOutButton app="work" />}
           active={{
-            initiatives: !!isInitiatives,
-            projects: isProjects,
             tasks: isTasks,
             docs: isDocs || isPlans,
             code: pathname === "/repo" || /^\/(repo|commit|pr)\//.test(pathname || ""),
             files: isVault,
             pages: isPages,
             sessions: !!isSessions,
-            workflows: isWorkflows,
-            line: pathname === "/line",
+            // A line is the workflow a project runs: every workflow page
+            // (definitions, runs, dynamic) lives under Line.
+            line: pathname === "/line" || pathname?.startsWith("/line/") || isWorkflows,
             triggers: isTriggers,
             ops: isOpsPath(pathname),
             org: !!isOrg,
@@ -1090,6 +1111,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? (isTasks && !surfaceMode.hosted), onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? (isTasks && !surfaceMode.hosted)) })) }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
+          orgBadge={<OrgNeedsYouBadge />}
           changesOn={changesOn}
           agent={{
             label: rootAgent ? agentName(rootAgent) : "Workspace agent",
@@ -1274,8 +1296,20 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       <div data-sidebar-scroll className="flex-1 overflow-y-auto scrollbar-auto pt-3 sm:pt-4">
         {sidebarContent}
       </div>
-      {/* Hosted mode's quiet usage meter: the month so far, opening Plan. */}
-      {!isNarrow && <ShellUsageMeter />}
+      {/* Hosted mode's quiet usage meter: the month so far, opening Plan.
+          With no top bar the bell, the account menu and the conversations
+          panel's toggle sit beside it (their menus open upward from here,
+          globals.css [data-cc-rail-foot]). */}
+      {barless ? (
+        <div data-cc-rail-foot className={`mt-2 flex items-center gap-0.5 ${isNarrow ? "flex-col" : "pr-2"}`}>
+          <div className="min-w-0 flex-1 [&>[data-cc-usage-meter]]:mt-0">{!isNarrow && <><HostedConnectionFoot /><ShellUsageMeter /></>}</div>
+          <NotificationBell />
+          <UserMenu />
+          <TopbarButton onClick={() => useInboxStore.getState().toggleSidePanel()} aria-label={words.conversationsPanel} title={words.conversationsPanel}>
+            <PanelRight />
+          </TopbarButton>
+        </div>
+      ) : !isNarrow && <ShellUsageMeter />}
       {/* Hosted mode offers the apps from the account menu, not under the meter. */}
       {offerNativeApp && nativeApp && !isNarrow && !surfaceMode.hosted && (
         <a
