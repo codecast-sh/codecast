@@ -1,5 +1,5 @@
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../../lib/conversationProcessor";
-import { isBootstrapPrompt, isPollResponsePayload } from "@codecast/shared/contracts";
+import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
@@ -547,7 +547,7 @@ export function getFileExtension(filePath: string): string | undefined {
   return ext ? langMap[ext] : undefined;
 }
 
-export function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
+export function isAlwaysVisibleToolCall(tc: ToolCall, result?: { content?: string }): boolean {
   // Monitor, background Bash, Workflow, and ScheduleWakeup stay visible in
   // condensed feeds: all are standing state the reader needs to know is armed
   // (a watch, a detached command, a running multi-agent fleet, a loop's next
@@ -555,6 +555,9 @@ export function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
   // reason: it is addressed to the reader. Folding a delivery into a receipt
   // chip is how the file went unseen in the first place. `cast decide` is the
   // authored twin of AskUserQuestion — the card is the ask, not a command.
+  // A command whose output carries the setup marker holds a card the person
+  // must act on (AgentToolSetupCard), so it stays out of the receipt too.
+  if (hasAgentSetupMarker(result?.content)) return true;
   return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc));
 }
 
