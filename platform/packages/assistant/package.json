@@ -17,6 +17,7 @@
     "./mail": "./src/mail.ts",
     "./calendar": "./src/calendar.ts",
     "./web": "./src/web.ts",
+    "./sources": "./src/sources.ts",
     "./testkit": "./src/whisk.testkit.ts",
     "./messages": "./src/messages.ts",
     "./whisk-engine": "./src/whiskEngine.ts",

@@ -7,7 +7,7 @@ import { parseThreadStateStatus, type WorkState } from "@codecast/shared/contrac
 import { describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
-import type { OrgParentRef, OrgStandingState, OrgTree, StateCounts } from "./orgTypes";
+import type { OrgParentRef, OrgRole, OrgStandingState, OrgTree, StateCounts } from "./orgTypes";
 import type { OrgHealth } from "./orgStaffingTypes";
 
 export const ORG_STATE_META: Record<WorkState, { label: string; color: string; chip: string }> = {
@@ -16,6 +16,13 @@ export const ORG_STATE_META: Record<WorkState, { label: string; color: string; c
   dormant: { label: "dormant", color: "var(--sol-blue)", chip: THREAD_STATE_STATUS_META.dormant.chip },
   done: { label: "done", color: "var(--sol-cyan)", chip: THREAD_STATE_STATUS_META.done.chip },
   idle: { label: "idle", color: "var(--sol-text-dim)", chip: "bg-sol-bg-highlight text-sol-text-dim border-sol-border/30" },
+};
+
+/** A person's presence as a colour: the map's dot and a company line's state. */
+export const PRESENCE_COLOR: Record<"online" | "away" | "offline", string> = {
+  online: "var(--sol-green)",
+  away: "var(--sol-yellow)",
+  offline: "color-mix(in srgb, var(--sol-border) 50%, transparent)",
 };
 
 /** A card's sessions in words, the states a person acts on first ("4 need
@@ -245,4 +252,16 @@ export function ghostFrameStyle(stub: OrgGhostStub): CSSProperties {
   return stub.solid
     ? { borderTopWidth: 3, borderTopColor: "var(--sol-cyan)", background: "var(--sol-card)" }
     : { ...changeFrameStyle(stub.status), borderTopWidth: 1 };
+}
+
+/** What the Head of People is for, under its name, said to the founder: the
+ *  job every Head of People has. A charter a person wrote about it shows
+ *  instead when its first line is one whole sentence about the role; the
+ *  standing prompt speaks to the agent ("Your job is…"), so it never does. */
+const HEAD_CAPTION = "Reads the company and proposes who does what";
+export function headCaption(head: Pick<OrgRole, "charter">): string {
+  const line = head.charter?.split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").trim()).find(Boolean);
+  const sentence = line?.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? line;
+  if (!sentence || /^(you|your|you're)\b/i.test(sentence) || sentence.length > 90) return HEAD_CAPTION;
+  return sentence.replace(/[.!]$/, "");
 }
