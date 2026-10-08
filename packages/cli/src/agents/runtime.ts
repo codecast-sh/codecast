@@ -2,6 +2,8 @@ import { spawn, spawnSync, type ChildProcess } from "../proc.js";
 import { existsSync, writeFileSync, unlinkSync, openSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, renameSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { tmuxRun } from "../tmux.js";
+import { withTmuxSession } from "../tmuxRoute.js";
+import { appendModelEffortFlags } from "../launchCommand.js";
 
 export interface AgentHandle {
   id: string;
@@ -23,9 +25,18 @@ export interface SpawnOpts {
   sessionName: string;
   prompt: string;
   model: string;
+  /** Reasoning effort (task-graph.md TG8); a level the client lacks is dropped. */
+  effort?: string;
   workingDir: string;
   resourceIndex?: number;
   taskShortId?: string;
+}
+
+/** The client's effort flag for `effort`, as every other launch path writes it. */
+function effortArgs(agentType: "claude" | "codex", effort: string | undefined): string[] {
+  const args: string[] = [];
+  appendModelEffortFlags(args, { agentType, requestedEffort: effort });
+  return args;
 }
 
 export interface AgentRuntime {
@@ -286,6 +297,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     const child = spawn("claude", [
       "-p", opts.prompt,
       "--model", opts.model,
+      ...effortArgs("claude", opts.effort),
       "--permission-mode", "bypassPermissions",
     ], {
       cwd: opts.workingDir,
@@ -347,6 +359,7 @@ export class CodexRuntime implements AgentRuntime {
     const child = spawn("codex", [
       "exec", opts.prompt,
       "-m", opts.model,
+      ...effortArgs("codex", opts.effort),
     ], {
       cwd: opts.workingDir,
       stdio: ["ignore", logFd, logFd],
@@ -405,13 +418,16 @@ export class TmuxRuntime implements AgentRuntime {
     writeFileSync(promptFile, opts.prompt);
 
     tmuxRun(["new-session", "-d", "-s", opts.sessionName, "-c", opts.workingDir,
-      `claude --model ${opts.model} --dangerously-skip-permissions`]);
+      ["claude", "--model", opts.model, ...effortArgs("claude", opts.effort), "--dangerously-skip-permissions"].join(" ")]);
 
     this.waitForReady(opts.sessionName);
 
     const bufName = `agent-spawn-${opts.sessionName}`;
-    tmuxRun(["load-buffer", "-b", bufName, promptFile]);
-    tmuxRun(["paste-buffer", "-t", opts.sessionName, "-b", bufName, "-d"]);
+    // load-buffer names no target; the scope puts the buffer on the server the paste reads.
+    withTmuxSession(opts.sessionName, () => {
+      tmuxRun(["load-buffer", "-b", bufName, promptFile]);
+      tmuxRun(["paste-buffer", "-t", opts.sessionName, "-b", bufName, "-d"]);
+    });
 
     spawnSync("sleep", ["1"]);
     tmuxRun(["send-keys", "-t", opts.sessionName, "Enter"]);

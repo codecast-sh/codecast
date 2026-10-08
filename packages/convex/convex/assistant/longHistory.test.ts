@@ -27,7 +27,7 @@ const savedTurn = { ...turnDeps };
 const savedHistory = { ...historyDeps };
 
 beforeAll(() => {
-  faux = pi.registerFauxProvider({ models: [{ id: "claude-haiku-4-5-20251001" }, { id: "claude-sonnet-5-5" }], tokenSize: { min: 3, max: 6 } });
+  faux = pi.registerFauxProvider({ models: [{ id: "claude-haiku-5-5" }, { id: "claude-sonnet-5-5" }], tokenSize: { min: 3, max: 6 } });
 });
 afterAll(() => faux.unregister());
 
@@ -81,7 +81,7 @@ async function settle(t: any, forMs = 30_000) {
 
 /** A person with a hosted conversation already `count` messages long, a minute apart, the first carrying FIRST. */
 async function longConversation(t: any, count: number, opts: { line?: (i: number) => string } = {}) {
-  const user = (await t.run((ctx: any) => ctx.db.insert("users", { name: "Dana" }))) as Id<"users">;
+  const user = (await t.run((ctx: any) => ctx.db.insert("users", { name: "Dana", emailVerificationTime: 1 }))) as Id<"users">;
   const conversationId = (await t.withIdentity({ subject: user }).mutation(api.assistant.entry.startConversation, {})).conversation_id as Id<"conversations">;
   const start = Date.now() - (count + 10) * 60_000;
   await t.run(async (ctx: any) => {

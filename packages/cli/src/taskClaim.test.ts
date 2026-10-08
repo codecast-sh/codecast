@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildTaskStartBody, startedLines } from "./taskClaim.js";
+import { buildTaskStartBody, foldStaleTasks, startedLines, taskClaimant, taskHintBody } from "./taskClaim.js";
+import { resolveTaskModelFull } from "./agents/prompts.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 
 describe("buildTaskStartBody", () => {
@@ -164,5 +165,32 @@ describe("the task verbs never guess the session", () => {
       expect(action.includes("detectCurrentSessionId("), `${verb} must not guess the session`).toBe(false);
       expect(action.includes("ownSessionId(getRealCwd())"), `${verb} reads the caller's own session`).toBe(true);
     }
+  });
+});
+
+describe("cast task ready --claim and the execution hints (task-graph.md TG7-TG9)", () => {
+  test("a claim is for the session, else the person, the same rule as a start", () => {
+    expect(taskClaimant("sess-1")).toEqual({ conversation_id: "sess-1" });
+    expect(taskClaimant(null)).toEqual({ assignee: "me" });
+  });
+
+  test("--effort is checked by name and '' clears; --ephemeral only ever sets", () => {
+    expect(taskHintBody({ model: "sonnet", effort: "xhigh", ephemeral: true })).toEqual({ model: "sonnet", effort: "xhigh", ephemeral: true });
+    expect(taskHintBody({ effort: "", model: "" })).toEqual({ effort: "", model: "" });
+    expect(taskHintBody({})).toEqual({});
+    expect(() => taskHintBody({ effort: "huge" })).toThrow(/Unknown --effort "huge"/);
+  });
+
+  test("stale rows fold into a count unless --stale", () => {
+    const rows = [{ id: 1 }, { id: 2, stale: true }, { id: 3, stale: false }];
+    expect(foldStaleTasks(rows, false)).toEqual({ shown: [{ id: 1 }, { id: 3, stale: false }], folded: 1 });
+    expect(foldStaleTasks(rows, true)).toEqual({ shown: rows, folded: 0 });
+  });
+
+  test("a task's own effort wins over the plan stylesheet's; a model alone keeps none", () => {
+    const plan = { model_stylesheet: "* { model: sonnet; reasoning_effort: low; }" };
+    expect(resolveTaskModelFull(plan, { effort: "max" })).toMatchObject({ model: "sonnet", reasoning_effort: "max" });
+    expect(resolveTaskModelFull(plan, {})).toMatchObject({ model: "sonnet", reasoning_effort: "low" });
+    expect(resolveTaskModelFull({}, { model: "opus", effort: "high" })).toMatchObject({ model: "opus", reasoning_effort: "high" });
   });
 });
