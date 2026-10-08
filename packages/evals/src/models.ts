@@ -3,6 +3,8 @@
 export { CHEAP_MODEL as CALL_MODEL } from '../../convex/convex/lib/anthropic';
 /** The Changes page's prose calls, from their one home (changesProse.ts reads it from the same leaf). */
 export { PROSE_MODEL } from '../../convex/convex/lib/changesProseModel';
+/** The line's server ground step (convex/lineGround.ts), from its one home. */
+export { STRONG_MODEL, sendsThinkingOff } from '../../convex/convex/lib/anthropic';
 
 /** Grades a reply against a freeze's criteria. Never changes with --model. */
 export const JUDGE_MODEL = 'claude-sonnet-5-5';
