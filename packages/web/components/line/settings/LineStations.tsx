@@ -17,7 +17,7 @@
 // the profile's edit path to that machine (useLineStationEdits), and the
 // first one writes the shipped line out into the repo. The workflow copy
 // above is only for a project no machine has published.
-import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -170,7 +170,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
   const panel = useRef<HTMLDivElement>(null);
   const arrived = !!focusStation && selected?.id === focusStation;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (arrived) panel.current?.scrollIntoView({ block: "center" });
   }, [arrived, focusStation]);
 

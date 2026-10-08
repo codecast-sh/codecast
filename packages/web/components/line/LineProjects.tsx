@@ -3,7 +3,7 @@
 // in the line page's header, the URL that holds the choice, and the "all
 // projects" roll-up, which only counts. Every number comes from lib/lineFlow
 // (lineRollup builds each project's flow the way its own page does).
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { ALL_PROJECTS, NO_PROJECT, defaultLineKey, type LineProject, type RollupRow } from "../../lib/lineFlow";
@@ -11,6 +11,7 @@ import { cn } from "../../lib/utils";
 import { lineProjectParam } from "../../lib/line/lineStations";
 import { centerInRow, edgeAttrs, useScrollEdges, type ScrollEdges } from "./useScrollEdges";
 import { EdgeArrows } from "./EdgeArrows";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 /** The URL names a line by its project's short id (or id), "none" or "all". */
 const paramOf = (key: string, projects: LineProject[]) => {
@@ -60,7 +61,7 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
   const edges = useScrollEdges(row, rollup.length > 0);
   // The selected pill sits at the row's center on mount and on every pick,
   // whole and clear of both faded edges.
-  useEffect(() => {
+  useWatchEffect(() => {
     const nav = row.current;
     const pill = nav?.querySelector<HTMLElement>("[data-active=true]");
     if (nav && pill) centerInRow(nav, pill);
@@ -95,7 +96,7 @@ export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: Ro
  *  row (under the fade counts as clipped), so the arrow can carry them. */
 function useClippedWaiting(row: RefObject<HTMLElement | null>, edges: ScrollEdges, rows: unknown) {
   const [waiting, setWaiting] = useState({ left: 0, right: 0 });
-  useEffect(() => {
+  useWatchEffect(() => {
     const nav = row.current;
     if (!nav) return;
     const measure = () => {
