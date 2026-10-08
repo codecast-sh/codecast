@@ -7,3 +7,10 @@ import { createContext } from "react";
  * where the views sit on a moving 3D plane a portal cannot follow.
  */
 export const HoverCardsOff = createContext(false);
+
+/**
+ * Closes the hover card a body sits in. Each host (HoverCard, the reference
+ * pill's popover) provides its own; a card that opens its object calls it, by
+ * click or by Enter, so the card never floats over what it opened.
+ */
+export const HoverCardClose = createContext<(() => void) | null>(null);

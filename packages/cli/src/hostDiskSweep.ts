@@ -17,10 +17,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileAsync } from "./proc.js";
-import { LANDED_REF } from "./remote/session-move.js";
+import { LANDED_REF, MOVE_CLONE_RE } from "./remote/session-move.js";
 import { releaseSessionWorktree, type GcVerdict } from "./worktreeGc.js";
-
-export const MOVE_CLONE_RE = /-mv-[a-z0-9]+$/;
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });

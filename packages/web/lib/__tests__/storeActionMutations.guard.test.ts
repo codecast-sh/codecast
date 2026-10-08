@@ -21,7 +21,7 @@ const WEB = join(import.meta.dir, "..", "..");
  *  fall. Pinned at 54 when the rule widened to bespoke-fed keys (`writtenBy`)
  *  and to Convex client calls, with the team, org, PR and palette gestures it
  *  first caught moved onto store actions. */
-const PIN_DIRECT_SYNCED_WRITES = 51;
+const PIN_DIRECT_SYNCED_WRITES = 50;
 const CONVEX = join(WEB, "..", "convex", "convex");
 const DISPATCH = readFileSync(join(CONVEX, "dispatch.ts"), "utf8");
 

@@ -1,11 +1,12 @@
 // The composer (DESIGN 6.3): one field, three modes (Auto lets Clay decide,
 // Change it forces a build, Just chat forces talk), point and talk, and the
 // sent message shows at once while the server catches up.
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { insertAtTop, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import type { MessageView } from "../../convex/messages";
+import { MESSAGE_BODY_MAX } from "../../convex/lib/limits";
 import { errorData } from "../lib/errors";
 import { useIdentity } from "../lib/identity";
 import { ElementChip } from "../ui/Chips";
@@ -16,7 +17,8 @@ import { Popover } from "../ui/Popover";
 import { Segmented } from "../ui/Segmented";
 import { useToast } from "../ui/Toast";
 import { load, save } from "../lib/storage";
-import { freshFocus, useAppState, useComposer, useStream, type Mode } from "./appState";
+import { useBuildsPaused } from "../data/budget";
+import { freshFocus, useAppState, useComposer, useDraft, useStream, type Mode } from "./appState";
 import { IdeaChips } from "./IdeaChips";
 import s from "./Composer.module.css";
 
@@ -28,6 +30,8 @@ const MODES: { mode: Mode; label: string; placeholder: string; short: string; hi
 ];
 
 const TYPING_EVERY_MS = 3_000;
+/** The counter shows once a message gets near the cap. */
+const COUNT_FROM = MESSAGE_BODY_MAX - 200;
 const MAX_LINES = 6;
 
 /** `compact`: the phone sheet's peek. Below desktop the mode folds into a
@@ -36,6 +40,8 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
   const { app, picking, setPicking } = useAppState();
   const folded = !useDesktop();
   const composer = useComposer();
+  const text = useDraft(composer.draft);
+  const paused = useBuildsPaused(app.id);
   const { creds, me } = useIdentity();
   const toast = useToast();
   const stream = useStream();
@@ -44,7 +50,7 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
   const sentKey = `clayground.sent.${app.id}.${me.id}`;
   const [sent, setSent] = useState(() => load(sentKey, false));
   const newcomer = !sent && !stream.messages.some((m) => m.author?.id === me.id);
-  const ideas = !compact && newcomer && !composer.text && stream.messages.length > 0;
+  const ideas = !compact && newcomer && !text && stream.messages.length > 0;
   const field = useRef<HTMLTextAreaElement>(null);
   const [retryAt, setRetryAt] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -77,14 +83,28 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
     return () => clearTimeout(t);
   }, [composer.focusAt]);
 
-  // Grow with the text up to six lines, then scroll.
-  useEffect(() => {
+  // Grow with the text up to six lines, then scroll. Measured on the text
+  // alone (a placeholder that wraps on a phone must not make an empty field
+  // two lines tall), after layout, and again whenever the field's width moves.
+  const [single, setSingle] = useState(true);
+  useLayoutEffect(() => {
     const el = field.current;
     if (!el) return;
-    el.style.height = "auto";
-    const line = parseFloat(getComputedStyle(el).lineHeight) || 21;
-    el.style.height = `${Math.min(el.scrollHeight, line * MAX_LINES + 4)}px`;
-  }, [composer.text, compact]);
+    const grow = () => {
+      const line = parseFloat(getComputedStyle(el).lineHeight) || 21;
+      const placeholder = el.placeholder;
+      el.placeholder = "";
+      el.style.height = "auto";
+      const height = text ? el.scrollHeight : line;
+      el.placeholder = placeholder;
+      el.style.height = `${Math.min(height, line * MAX_LINES + 4)}px`;
+      setSingle(height <= line * 1.5);
+    };
+    grow();
+    const ro = new ResizeObserver(grow);
+    ro.observe(el.parentElement!);
+    return () => ro.disconnect();
+  }, [text, compact]);
 
   // The rate limit's countdown.
   const waiting = retryAt > now;
@@ -106,15 +126,18 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
   };
 
   // Change it can't build while budgets are spent or building is paused.
-  const paused = composer.mode === "change" ? app.builds_paused : null;
-  const pick = (m: Mode) => !(m === "change" && app.builds_paused) && composer.setMode(m);
-  const blocked = waiting || !!paused;
+  const refused = composer.mode === "change" ? paused : null;
+  const pick = (m: Mode) => !(m === "change" && paused) && composer.setMode(m);
+  // Long is fine; past the cap it can't send, and says so before it's tried.
+  const length = text.trim().length;
+  const tooLong = length > MESSAGE_BODY_MAX;
+  const blocked = waiting || !!refused || tooLong;
 
   const submit = async () => {
-    const body = composer.text.trim();
+    const body = text.trim();
     if (!body || blocked) return;
     const element = composer.element;
-    composer.setText("");
+    composer.draft.set("");
     composer.setElement(null);
     lastTyping.current = 0;
     if (!sent) {
@@ -125,7 +148,7 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
       await send({ ...creds, app_id: app.id, body, mode: composer.mode, ...(element ? { element } : {}) });
     } catch (err) {
       const e = errorData(err);
-      composer.setText(body);
+      composer.draft.set(body);
       composer.setElement(element);
       if (e.code === "rate_limited" && e.retry_after_ms) {
         setNow(Date.now());
@@ -160,8 +183,8 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
             options={MODES.map((m, i) => ({
               value: m.mode,
               label: m.label,
-              disabled: m.mode === "change" && !!app.builds_paused,
-              tip: m.mode === "change" && app.builds_paused ? app.builds_paused : <Keys keys={[MOD, String(i + 1)]} />,
+              disabled: m.mode === "change" && !!paused,
+              tip: m.mode === "change" && paused ? paused : <Keys keys={[MOD, String(i + 1)]} />,
               keyshortcuts: `${MOD_ARIA}+${i + 1}`,
             }))}
           />
@@ -175,10 +198,10 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
       )}
       {waiting ? (
         <p className={s.limit} role="status">Slow down a little. Try again in {seconds}s</p>
-      ) : paused ? (
-        <p className={s.limit} role="status">{paused}</p>
+      ) : refused ? (
+        <p className={s.limit} role="status">{refused}</p>
       ) : null}
-      <div className={s.field}>
+      <div className={`${s.field} ${single && !composer.element ? s.single : ""}`}>
         <button
           className={`${s.pick} ${picking ? s.picking : ""}`}
           onClick={() => setPicking(!picking)}
@@ -188,31 +211,36 @@ export function Composer({ compact = false, onFocus }: { compact?: boolean; onFo
         >
           <PickIcon />
         </button>
-        {folded && <ModeChip mode={composer.mode} paused={app.builds_paused} onPick={pick} />}
+        {folded && <ModeChip mode={composer.mode} paused={paused} onPick={pick} />}
         <div className={s.text}>
           {composer.element && <ElementChip element={composer.element} onRemove={() => composer.setElement(null)} />}
           <textarea
             ref={field}
             rows={1}
-            value={composer.text}
+            value={text}
             placeholder={folded ? current.short : current.placeholder}
             aria-label={current.placeholder}
             onChange={(e) => {
-              composer.setText(e.target.value);
+              composer.draft.set(e.target.value);
               typing(e.target.value.trim().length > 0);
             }}
             onKeyDown={onKey}
             onFocus={onFocus}
             onBlur={() => typing(false)}
           />
+          {length >= COUNT_FROM && (
+            <span className={`${s.count} ${tooLong ? s.over : ""}`} aria-live="polite">
+              {length}/{MESSAGE_BODY_MAX}
+            </span>
+          )}
         </div>
-        <button className={`${s.send} ${s[`send_${composer.mode}`]}`} onClick={submit} disabled={!composer.text.trim() || blocked} aria-label="Send">
+        <button className={`${s.send} ${s[`send_${composer.mode}`]}`} onClick={submit} disabled={!text.trim() || blocked} aria-label="Send">
           <ArrowUpIcon />
         </button>
       </div>
       {!folded && (
         <p className={s.hint}>
-          <span>{current.hint}</span>
+          <span>{composer.mode === "auto" && paused ? "Changes are off for now, so this goes as chat" : current.hint}</span>
           <span className={s.nextMode}>
             <Keys keys={[MOD, String(MODES.indexOf(next) + 1)]}>{next.label}</Keys>
           </span>
