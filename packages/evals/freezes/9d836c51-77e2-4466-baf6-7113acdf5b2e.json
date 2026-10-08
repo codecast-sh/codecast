@@ -1,0 +1,26 @@
+{
+  "name": "card-write all-green",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:all-green"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "card-write:all-green",
+    "title": "card-write all-green"
+  },
+  "asOf": "2026-09-22T12:00:00.000Z",
+  "trigger": {
+    "type": "card-write"
+  },
+  "meta": {
+    "surface": "card-write",
+    "visibility": "public",
+    "snapshot": "fixtures/card-write/all-green.json"
+  },
+  "judge": "a person who never saw the work can judge Ship, Revise or Drop from the six fields alone, and every claim in them matches what the card records (its checks, proof, examples and diff), with no result stated stronger than the card shows",
+  "notes": null,
+  "tags": [],
+  "id": "9d836c51-77e2-4466-baf6-7113acdf5b2e",
+  "createdAt": "2026-10-07T17:30:45.676Z"
+}

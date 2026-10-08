@@ -3,7 +3,7 @@ import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
+import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
@@ -274,7 +274,10 @@ function receiptOrLegacyCommandId(
 
 type DurableCreateContinuation =
   | { version: 1; kind: "navigate" }
-  | { version: 1; kind: "assignBucket"; conversationIds: string[] };
+  | { version: 1; kind: "assignBucket"; conversationIds: string[] }
+  // A project created from a goal's sheet lands under that goal in the same
+  // transaction as the create, so the goal never lists a project that failed.
+  | { version: 1; kind: "attachToInitiative"; initiativeId: string };
 
 function validatedCreateContinuation(
   action: string,
@@ -314,6 +317,15 @@ function validatedCreateContinuation(
       kind: "assignBucket",
       conversationIds: [...new Set(continuation.conversationIds as string[])],
     };
+  }
+  if (
+    continuation.version === 1 &&
+    continuation.kind === "attachToInitiative" &&
+    action === "createProject" &&
+    typeof continuation.initiativeId === "string" &&
+    continuation.initiativeId.length > 0
+  ) {
+    return { version: 1, kind: "attachToInitiative", initiativeId: continuation.initiativeId };
   }
   throw new Error(`Invalid ${action} continuation`);
 }
@@ -416,9 +428,9 @@ export async function applyPatches(
           (doc as any)[config.ownerField] === userId ||
           (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString()) ||
           // A decision is answerable by every person it was asked of
-          // (docs/architecture/decisions-as-documents.md D6), not only the
-          // asking session's owner.
-          (table === "session_decisions" && personMayResolve(doc as any, userId))
+          // (docs/architecture/decisions-as-documents.md D6), and by anyone
+          // else who may read it (the people then hear who answered).
+          (table === "session_decisions" && (personMayResolve(doc as any, userId) || await userMayRead(ctx as any, userId, doc as any)))
         );
         // owner_user_id caches only the PRIMARY (first-added) owner; a SECONDARY
         // owner's triage patch must resolve through the canonical owner set or
@@ -2392,13 +2404,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!hasReceiptCommandId(result)) {
       return await ctx.runMutation!(api.projects.webCreate, opts);
     }
-    validatedCreateContinuation("createProject", result);
+    const continuation = validatedCreateContinuation("createProject", result);
     return await runReceiptBackedCreate(ctx, userId, {
       action: "createProject",
       commandName: "projects.create/v2",
       arguments: opts,
       result,
-      create: () => ctx.runMutation!(api.projects.webCreate, opts),
+      create: async () => {
+        const created = await ctx.runMutation!(api.projects.webCreate, opts);
+        if (continuation?.kind === "attachToInitiative") {
+          await ctx.runMutation!(api.initiatives.addProject, { id: continuation.initiativeId, project_id: String(created.id) });
+        }
+        return created;
+      },
     });
   },
   promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {

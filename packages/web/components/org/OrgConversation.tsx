@@ -1,17 +1,23 @@
 "use client";
 // The org screen's left column (docs/architecture/org-staffing.md S41): the
 // Head of People's standing conversation, embedded whole and live, under the
-// strip of open proposals. The strip and the head row paint from the org
-// tree at once; only the thread body waits on its loader. With no Head of
-// People the column is the one home of the hire card and "Propose an org
-// now"; a refused or failed tree read is said here too.
+// strip of what waits on the person. The strip and the head row paint from
+// the org tree at once; only the thread body waits on its loader. With no
+// Head of People the column is the one home of the hire card and "Propose an
+// org now"; a refused or failed tree read is said here too.
+//
+// The column can sit with someone else (cohesive build spec D5): the owner
+// of a goal arrived at by its address, the role a person chose to talk to.
+// Its head then says who that is, and a chip takes the column back to the
+// Head of People.
 import { useMemo, useRef, useState } from "react";
-import { ExternalLink, Sparkles } from "lucide-react";
+import { ArrowLeft, ExternalLink, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { agoOf } from "../../lib/threadState";
+import { cn } from "../../lib/utils";
 import { proposalAnswersOf } from "../../lib/reviewActions";
 import { AnchorConversation, CenteredNote, HireHeadOfPeopleCard } from "../anchor/AnchorConversation";
 import { ComposerFade } from "../ComposerFade";
@@ -26,6 +32,8 @@ import type { JumpRequest } from "./orgScreenModel";
 import type { OrgTreeReadState } from "./orgReadState";
 import type { OrgProposalRow } from "./orgStaffingTypes";
 import type { OrgRole, OrgTree } from "./orgTypes";
+import type { Seat } from "./company/objects";
+import { ORG_BAND, ORG_GUTTER, ORG_RULE } from "./orgFrame";
 
 /** The batch an answer given on a preview card joins: nothing sends it. */
 export const PREVIEW_BATCH = "preview:org";
@@ -49,6 +57,13 @@ export type OrgConversationProps = {
   onResume: (roleId: string) => void;
   strip: React.ReactNode;
   preview: null | { proposals: OrgProposalRow[]; onSend: (proposalId: string) => void; current: string | null };
+  /** Someone other than the Head of People sits in the column (D5). */
+  seat?: Seat | null;
+  /** The chip that hands the column back to the Head of People. */
+  onBackToHead?: () => void;
+  /** An address named a seat whose object has not arrived yet: the column
+   *  waits for it rather than show the Head of People for a moment. */
+  holding?: boolean;
 };
 
 export function orgConversationState(p: Pick<OrgConversationProps, "tree" | "head" | "conversationId" | "readState" | "preview">): OrgConversationState {
@@ -61,7 +76,7 @@ export function orgConversationState(p: Pick<OrgConversationProps, "tree" | "hea
 }
 
 export function OrgConversation(props: OrgConversationProps) {
-  const { tree, head, conversationId, readState, onRetry, jump, answersStaged, onOpenSession, onResume, strip, preview } = props;
+  const { tree, head, conversationId, readState, onRetry, jump, answersStaged, onOpenSession, onResume, strip, preview, seat, onBackToHead, holding } = props;
   const state = orgConversationState(props);
   // A cold open: the standing session is bucket-hidden, so the inbox never
   // seeds its row and the embed would say "Loading conversation…" until the
@@ -71,9 +86,17 @@ export function OrgConversation(props: OrgConversationProps) {
     const st = useInboxStore.getState();
     if (conversationId && !st.conversations[conversationId] && !st.sessions[conversationId]) st.syncRecord("conversations", conversationId, { _id: conversationId });
   }, [conversationId]);
-  return (
-    <div className="flex h-full min-h-0 flex-col" data-org-conversation={conversationId ?? ""} data-org-conversation-state={state}>
-      {strip}
+  // The Head of People's thread stays mounted under a seat, hidden: swapping
+  // back (the chip, a proposal picked in the strip) finds it where the
+  // person left it, scroll and all (D5).
+  const held = !!seat || !!holding;
+  const headColumn = (
+    <div
+      key="head"
+      className={cn("h-full min-h-0 flex-col", held ? "hidden" : "flex")}
+      {...(held ? { "data-org-conversation-held": conversationId ?? "" } : { "data-org-conversation": conversationId ?? "", "data-org-conversation-state": state })}
+    >
+      {!held && strip}
       {state === "refused" || state === "error" ? (
         <div className="relative flex-1 min-h-0"><OrgReadStateBlock kind={state} message={readState.kind === "error" ? readState.message : undefined} onRetry={state === "error" ? onRetry : undefined} /></div>
       ) : state === "loading" ? (
@@ -82,14 +105,14 @@ export function OrgConversation(props: OrgConversationProps) {
         <NoHeadColumn {...props} />
       ) : (
         <>
-          <ConversationHead head={head!} conversationId={conversationId} onOpenSession={onOpenSession} />
+          <SeatHead face={head!} name={head!.name} caption={headCaption(head!)} onOpenThread={conversationId ? () => onOpenSession(conversationId) : undefined} />
           {state === "not-started" ? (
             <CenteredNote>{head!.name} has not started yet. Its conversation appears here when it does.</CenteredNote>
           ) : state === "preview" ? (
             <PreviewColumn head={head!} {...preview!} />
           ) : (
             <>
-              {head!.status === "paused" && <RolePausedNote name={head!.name} onResume={() => onResume(head!._id)} className="mx-3 mt-2" />}
+              {head!.status === "paused" && <RolePausedNote name={head!.name} onResume={() => onResume(head!._id)} className="mx-4 mt-2" />}
               <div className="flex-1 min-h-0">
                 <AnchorConversation
                   conversationId={conversationId!}
@@ -112,20 +135,95 @@ export function OrgConversation(props: OrgConversationProps) {
       )}
     </div>
   );
+  return (
+    <>
+      {seat && <SeatColumn key="seat" seat={seat} head={head} strip={strip} onOpenSession={onOpenSession} onResume={onResume} onBackToHead={onBackToHead} />}
+      {!seat && holding && <div key="hold" className="flex h-full min-h-0 flex-col" data-org-conversation-state="holding">{strip}<CenteredNote>Loading…</CenteredNote></div>}
+      {headColumn}
+    </>
+  );
 }
 
-/** The head's face and name, and the way to the full thread. Its state line
- *  has one home, the thread's own pinned state panel at the foot. */
-function ConversationHead({ head, conversationId, onOpenSession }: { head: OrgRole; conversationId: string | null; onOpenSession: (id: string) => void }) {
+/** What the Head of People is for, under its name, said to the founder: the
+ *  job every Head of People has. A charter a person wrote about it shows
+ *  instead when its first line is one whole sentence about the role; the
+ *  standing prompt speaks to the agent ("Your job is…"), so it never does. */
+const HEAD_CAPTION = "Reads the company and proposes who does what";
+export function headCaption(head: Pick<OrgRole, "charter">): string {
+  const line = head.charter?.split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").trim()).find(Boolean);
+  const sentence = line?.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? line;
+  if (!sentence || /^(you|your|you're)\b/i.test(sentence) || sentence.length > 90) return HEAD_CAPTION;
+  return sentence.replace(/[.!]$/, "");
+}
+
+/** The one head of the left column, whoever sits in it: the face, the name
+ *  over what they are here for, any chips, and the way to the full thread.
+ *  The Head of People's and a seat's are the same row, so swapping between
+ *  them moves nothing. Its state line has one home, the thread's own pinned
+ *  state panel at the foot. */
+function SeatHead({ face, name, caption, chips, onOpenThread, seat }: { face: OrgRole | null; name: string; caption: string | null; chips?: React.ReactNode; onOpenThread?: () => void; seat?: boolean }) {
   return (
-    <div className="shrink-0 h-11 px-3 flex items-center gap-2.5 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-org-conversation-head>
-      <RoleFace role={head} size={24} />
-      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold" style={{ color: "var(--sol-text)" }}>{head.name}</span>
-      {conversationId && (
-        <button type="button" onClick={() => onOpenSession(conversationId)} className="shrink-0 h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} title="Open the full thread" aria-label="Open the full thread" data-org-open-thread>
+    <div className={cn("shrink-0 flex items-center gap-2.5 border-b", ORG_BAND, ORG_GUTTER)} style={{ borderColor: ORG_RULE }} data-org-conversation-head={seat ? "seat" : "head"}>
+      {face ? <RoleFace role={face} size={28} /> : <span className="w-7 h-7 rounded-full shrink-0" style={{ background: "var(--sol-bg-highlight)" }} aria-hidden />}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-semibold leading-[17px]" style={{ color: "var(--sol-text)" }} data-org-conversation-name>{name}</div>
+        {caption && <div className="truncate text-[11.5px] leading-[15px]" style={{ color: "var(--sol-text-dim)" }} data-org-conversation-caption>{caption}</div>}
+      </div>
+      {chips}
+      {onOpenThread && (
+        <button type="button" onClick={onOpenThread} className="shrink-0 h-7 w-7 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }} title="Open the full thread" aria-label="Open the full thread" data-org-open-thread>
           <ExternalLink className="w-3.5 h-3.5" />
         </button>
       )}
+    </div>
+  );
+}
+
+/** The column sitting with someone other than the Head of People: their face
+ *  and why they are here ("owner of Increase top of funnel"), the chip that
+ *  says who the person is talking to, and the way back. The thread is the
+ *  same embed the Head of People's is. */
+function SeatColumn({ seat, head, strip, onOpenSession, onResume, onBackToHead }: { seat: Seat; head: OrgRole | null; strip: React.ReactNode; onOpenSession: (id: string) => void; onResume: (roleId: string) => void; onBackToHead?: () => void }) {
+  // The seat's row may not be in the inbox (a standing session is bucket
+  // hidden): seed the minimal row, as the Head of People's column does.
+  useWatchEffect(() => {
+    const st = useInboxStore.getState();
+    if (!st.conversations[seat.conversationId] && !st.sessions[seat.conversationId]) st.syncRecord("conversations", seat.conversationId, { _id: seat.conversationId });
+  }, [seat.conversationId]);
+  const role = seat.role;
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-org-conversation={seat.conversationId} data-org-conversation-state="seat" data-org-seat={role?.short_id ?? "person"}>
+      {strip}
+      <SeatHead
+        seat
+        face={role}
+        name={seat.name}
+        caption={seat.caption}
+        onOpenThread={() => onOpenSession(seat.conversationId)}
+        chips={<>
+          <span className="hidden md:inline-flex shrink-0 items-center rounded-[10px] px-2 py-[2px] text-[11px] whitespace-nowrap" style={{ background: "var(--sol-bg-highlight)", color: "var(--sol-text-muted)" }} data-org-talking-to>Talking to {seat.name}</span>
+          {onBackToHead && (
+            <button type="button" onClick={onBackToHead} className="shrink-0 inline-flex items-center gap-1 rounded-[10px] px-2 py-[2px] text-[11px] whitespace-nowrap hover:brightness-110" style={{ background: "var(--sol-bg-highlight)", color: "var(--sol-text-secondary)" }} title={head ? `Back to ${head.name}` : "Back to the Head of People"} data-org-back-to-head>
+              <ArrowLeft className="w-3 h-3" /> {head?.name ?? "Head of People"}
+            </button>
+          )}
+        </>}
+      />
+      {role?.status === "paused" && <RolePausedNote name={role.name} onResume={() => onResume(role._id)} className="mx-4 mt-2" />}
+      <div className="flex-1 min-h-0">
+        <AnchorConversation
+          key={seat.conversationId}
+          conversationId={seat.conversationId}
+          hideHeader
+          hideDiff
+          seedOwnership={false}
+          foldBootstrap
+          foldWorkingTurns
+          initialDensity="condensed"
+          stickyPrompt={false}
+          composerPlaceholder={`Ask ${seat.name}`}
+        />
+      </div>
     </div>
   );
 }
