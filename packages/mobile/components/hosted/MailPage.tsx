@@ -14,7 +14,7 @@ import { openWebPage } from '@/lib/links';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import type { WhiskReturnPath } from '@codecast/convex/convex/whisk';
 import { LANE_COPY, connectionControls, plainConnectError } from '@codecast/web/components/simple/lane';
-import { useLaneMail } from '@codecast/web/components/simple/useLaneMail';
+import { WHISK_HOME, useLaneMail } from '@codecast/web/components/simple/useLaneMail';
 import { calendarAbility, disconnectNote, emailAbility, mailboxLine } from '@codecast/web/components/simple/connectionWords';
 import { Callout, HostedButton, Pill } from './HostedUI';
 import { HOSTED_RADIUS, useHostedTheme } from './hostedTheme';
@@ -59,18 +59,17 @@ export function MailPage() {
 
   return (
     <SettingsScroll>
+      {/* While connecting is closed the note says it in the future tense and
+          the way to mail today is the Use Whisk button below (web WhiskCard). */}
       <Text style={[s.lede, { marginTop: 18, marginHorizontal: 4 }]}>
-        {WORDS.whiskNote}
-        {connected ? null : (
-          <Text style={{ color: c.accent }} onPress={() => void openWebPage(whiskUrl)} accessibilityRole="link">{` ${WORDS.openWhisk}`}</Text>
-        )}
+        {known && controls.coming && !connected ? WORDS.whiskNoteComing : WORDS.whiskNote}
       </Text>
 
       <SettingsGroup footnote={known && (controls.connect || connected) ? disconnectNote(connected) : undefined}>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10, paddingHorizontal: 15, paddingVertical: 14 }}>
           <Text style={{ fontSize: 15.5, fontWeight: '600', color: c.ink }}>{WORDS.through}</Text>
           <Text numberOfLines={1} style={{ flex: 1, textAlign: 'right', fontSize: 13, color: connected ? c.ok : c.faint }}>
-            {!known ? WORDS.checking : connected ? mailboxLine(email, mailboxes) ?? WORDS.connected : controls.coming ? WORDS.coming : WORDS.notConnected}
+            {!known ? WORDS.checking : controls.reconnect ? WORDS.needsReconnect : connected ? mailboxLine(email, mailboxes) ?? WORDS.connected : controls.coming ? WORDS.coming : WORDS.notConnected}
           </Text>
         </View>
         <Service icon="mail" title={WORDS.email} on={connected ? !!can?.read_mail : null}>{emailAbility(can)}</Service>
@@ -82,8 +81,10 @@ export function MailPage() {
         ) : null}
         {known ? (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: 12 }}>
-            {controls.coming ? <Text style={[s.muted, { fontSize: 13, lineHeight: 19 }]}>{WORDS.comingNote}</Text> : null}
+            {/* "Coming soon" is the status line's to say, once. */}
+            {controls.coming && !connected ? <HostedButton tone="plain" icon="external-link" label={WORDS.useWhiskNow} onPress={() => void openWebPage(WHISK_HOME)} /> : null}
             {controls.connect ? <HostedButton tone="yes" label={WORDS.connect} onPress={openConnect} /> : null}
+            {controls.reconnect ? <HostedButton tone="yes" label={WORDS.reconnect} onPress={openConnect} /> : null}
             {controls.allow ? <HostedButton tone="yes" label={WORDS.allow} onPress={openConnect} /> : null}
             {controls.confirm ? (
               <>

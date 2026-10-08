@@ -92,8 +92,10 @@ export function mergeManifests(
     o.length > 0 ? o : b;
 
   const host = override.host ?? base.host;
+  const ship = override.ship ?? base.ship;
   return {
     ...(host ? { host } : {}),
+    ...(ship ? { ship } : {}),
     setup: {
       copy: replaceArrayIfNonEmpty(override.setup.copy, base.setup.copy),
       share: replaceArrayIfNonEmpty(override.setup.share, base.setup.share),
