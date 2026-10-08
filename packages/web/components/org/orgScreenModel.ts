@@ -4,6 +4,8 @@
 // rules test without a DOM.
 
 import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
+import { editedOrgChange } from "@codecast/shared/contracts/orgProposal";
+import { proposalProgressWords, proposalSubjects } from "./proposalSubjects";
 import { agoOf } from "../../lib/threadState";
 import { proposalAnswersOf } from "../../lib/reviewActions";
 import type { PendingComment } from "../../lib/quoteFormat";
@@ -36,10 +38,12 @@ export type OrgScreenParams = {
   show: OrgScreenShow | null;
   /** The conversation this pane sits beside, set by the split opener. */
   beside: string | null;
-  /** The map's filter; absent reads as everything. */
+  /** The company pane's filter, the document's and the map's alike; absent reads as everything. */
   lens: MapFilter;
   /** "As proposed" on the map; `proposed=0` turns it off. */
   proposed: boolean;
+  /** `week=1`: the People map carries each role's week (D12); it draws only on the map's People filter. */
+  week: boolean;
   /** Text to seed the head's draft with. */
   compose: string | null;
   /** `panel=history`: open the history sheet. */
@@ -62,25 +66,39 @@ export function orgScreenParams(search: string | URLSearchParams | null | undefi
     focus: focus && /^\d+$/.test(focus) ? Number(focus) : null,
     show: show === "conversation" || show === "map" ? show : null,
     beside: q.get("beside") || null,
-    lens: lens === "goals" || lens === "people" ? lens : "everything",
+    lens: lens === "goals" || lens === "projects" || lens === "people" ? lens : "everything",
     proposed: q.get("proposed") !== "0",
+    week: q.get("week") === "1",
     compose: composeParam(s),
     history: q.get("panel") === "history",
   };
 }
 
-/** `/org?` with `proposal`, `focus`, `lens`, `show`, `beside`, in that order
- *  and only those set; `everything` is the absent lens. The split opener and
- *  the chip build their links here. */
-export function orgScreenPath(p: { proposal?: string | null; focus?: string | number | null; lens?: string | null; show?: OrgScreenShow | null; beside?: string | null }): string {
+/** `/org?` with `proposal`, `focus`, `lens`, `week`, `show`, `beside`, in
+ *  that order and only those set; `everything` is the absent lens. The split
+ *  opener, the chip and the header's This week build their links here. */
+export function orgScreenPath(p: { proposal?: string | null; focus?: string | number | null; lens?: string | null; week?: boolean; show?: OrgScreenShow | null; beside?: string | null }): string {
   const q = new URLSearchParams();
   if (p.proposal) q.set("proposal", p.proposal);
   if (p.focus !== undefined && p.focus !== null && p.focus !== "") q.set("focus", String(p.focus));
   if (p.lens && p.lens !== "everything") q.set("lens", p.lens);
+  if (p.week) q.set("week", "1");
   if (p.show) q.set("show", p.show);
   if (p.beside) q.set("beside", p.beside);
   const s = q.toString();
   return s ? `/org?${s}` : "/org";
+}
+
+/** Where the retired health page's address lands (D12): `/org?view=health`
+ *  becomes the People map with This week on, every other parameter kept.
+ *  Null for any other address, so the route renders the screen as it is. */
+export function healthRedirect(search: string | URLSearchParams | null | undefined): string | null {
+  const q = paramsOf(search);
+  if (q.get("view") !== "health") return null;
+  q.delete("view");
+  q.set("lens", "people");
+  q.set("week", "1");
+  return `/org?${q.toString()}`;
 }
 
 /** The message that draws a proposal's card: the first one from the START
@@ -108,16 +126,21 @@ export function openProposalsToFeed(rows: OrgProposalRow[], linkedRef: string | 
 
 /** The strip row's count: the one helper's ("64 records", "11 changes to
  *  goals"), or the list row's while the change rows load. */
+/** The strip row's count: the words the proposal's card leads with ("10 to
+ *  decide", "3 of 10 to decide · 7 approved"), so the strip and the card it
+ *  opens never name two numbers for one proposal. */
 export function stripCount(p: Pick<OrgProposalRow, "changes" | "counts">): string {
   if (p.changes.length === 0) return p.counts?.total ? `${p.counts.total} changes` : "";
-  return proposalTotals(p.changes).count;
+  return proposalProgressWords(proposalSubjects(p.changes, NO_LIVE)) || proposalTotals(p.changes).count;
 }
+/** Grouping a proposal's changes into the cards it draws needs no live rows. */
+const NO_LIVE = { tree: null, goals: [], projects: [], plans: [], tasks: [] } as unknown as Parameters<typeof proposalSubjects>[1];
 
 /** The strip row's totals sentence (its hover): the one helper's line without
  *  the stop, else the count. */
 export function stripTotals(p: Pick<OrgProposalRow, "changes" | "counts">): string {
-  const line = p.changes.length ? proposalTotals(p.changes).line : null;
-  return (line ?? stripCount(p)).replace(/\.$/, "");
+  const totals = p.changes.length ? proposalTotals(p.changes) : null;
+  return (totals ? totals.line ?? totals.count : stripCount(p)).replace(/\.$/, "");
 }
 
 export type StripRow = {
@@ -158,21 +181,6 @@ export function stripRows(open: OrgProposalRow[], headConv: string | null, comme
   });
 }
 
-/** The strip's one line: how many wait, the changes they hold in all (when
- *  every row's count is known), and the staged answers across them. */
-export function stripLine(rows: readonly Pick<StripRow, "proposal" | "answered">[]): { wait: string; changes: string | null; answered: string | null } {
-  // The list row's count, or the fed change rows when the list row has none
-  // (the dev preview's fixtures); a row with neither leaves the changes off.
-  const totals = rows.map((r) => r.proposal.counts?.total ?? (r.proposal.changes.length || undefined));
-  const changes = totals.every((t): t is number => typeof t === "number") ? totals.reduce((n, t) => n + t, 0) : null;
-  const answered = rows.reduce((n, r) => n + r.answered, 0);
-  return {
-    wait: rows.length === 1 ? "1 proposal waits on you" : `${rows.length} proposals wait on you`,
-    changes: changes === null ? null : changes === 1 ? "1 change" : `${changes} changes`,
-    answered: answered > 0 ? `${answered} answered, waiting for your send` : null,
-  };
-}
-
 /** The mission, by goalsLayout's rule: roots are rows with no parent; a root
  *  with a child among the rows is a mission; exactly one mission and exactly
  *  one root is that goal, else none. */
@@ -181,4 +189,17 @@ export function missionOf(rows: readonly { _id: string; short_id: string; title:
   if (roots.length !== 1) return null;
   const root = roots[0];
   return rows.some((r) => r.parent_initiative_id === root._id) ? { title: root.title, shortId: root.short_id } : null;
+}
+
+/** The mission an open proposal would set while the goals have none: a new
+ *  goal at the top that other changes put goals under. The header says it in
+ *  violet, and it opens the proposal's card. */
+export function proposedMissionOf(proposals: readonly Pick<OrgProposalRow, "short_id" | "changes">[]): { title: string; proposal: string; seq: number } | null {
+  for (const p of proposals) {
+    const live = p.changes.filter((c) => c.status === "proposed" || c.status === "accepted" || c.status === "failed").map((c) => ({ c, ch: editedOrgChange(c.change, c.edits) }));
+    const parents = new Set(live.flatMap(({ ch }) => ("parent" in ch && typeof ch.parent === "string" ? [ch.parent.trim().toLowerCase()] : [])));
+    const top = live.find(({ ch }) => ch.kind === "initiative" && !ch.parent && parents.has(ch.title.trim().toLowerCase()));
+    if (top && top.ch.kind === "initiative") return { title: top.ch.title.trim(), proposal: p.short_id, seq: top.c.seq };
+  }
+  return null;
 }

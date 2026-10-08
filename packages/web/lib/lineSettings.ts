@@ -216,11 +216,11 @@ export function lineWriteGate(lp: Facts, roster: RosterDevice[] | null, checkout
   // editable, and the first edit writes the file on the viewer's machine that
   // last ran a session there, whose republish makes it the line (LX5).
   if (!lp && checkout) return { writable: true, device: "your machine with this checkout", file, first: true };
-  if (!lp) return { writable: false, device: null, file, reason: "No machine has published this line yet. Run cast line profile --publish in the project's checkout." };
+  if (!lp) return { writable: false, device: null, file, reason: "This line's settings live in a file in the project's repository, and no machine has uploaded them yet. Run one session in the project's folder on your machine: the settings then show here, and your first change writes the file and uploads it." };
   if (!lp.root || !lp.device_id || !hasProfileFacts(lp)) {
-    return { writable: false, device: null, file, reason: "An older cast published this line, without the machine that holds the file. Run cast line profile --publish there with a current cast." };
+    return { writable: false, device: null, file, reason: "An older codecast uploaded these settings without saying which machine holds the file, so edits have nowhere to go. They become editable here once that machine runs the current codecast and uploads them again." };
   }
-  if (lp.default === false) return { writable: false, device: null, file, reason: "Only this project's finders are declared, in another project's profile. Edit them in that project's file." };
+  if (lp.default === false) return { writable: false, device: null, file, reason: "Only this project's sources are set, from another project's settings file. Change them on that project's line." };
   if (!roster) return { writable: true, device: "the publishing machine", file };
   const device = roster.find((d) => d.device_id === lp.device_id);
   if (!device) return { writable: false, device: null, file, reason: "The file is on a teammate's machine. Its owner can edit it, here or in the file." };

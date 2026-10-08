@@ -45,6 +45,8 @@ describe("goalChip", () => {
   it("a project without a priority is unranked, none is parked, empty is ungrounded", () => {
     expect(goalChip("pj-a", initiatives, projects)).toMatchObject({ kind: "project", priority: "unranked" });
     expect(goalChip("none", initiatives, projects)).toMatchObject({ kind: "parked", priority: null });
+    // A change to the line itself serves the line's own goal: grounded, never parked.
+    expect(goalChip("line", initiatives, projects)).toMatchObject({ kind: "line", label: "the line itself", priority: "unranked" });
     expect(goalChip(undefined, initiatives, projects)).toMatchObject({ kind: "ungrounded", priority: null });
   });
   it("never prints a ref it cannot name", () => {
@@ -193,23 +195,23 @@ describe("buildLineFlow", () => {
     // Ground marked it ready a minute ago: the sweep has not had its turn yet.
     const ready = (id: string) => cause(id, { readiness: "ready", goal_ref: "in-9:k", updated_at: NOW - 60_000 });
     const why = (a: LineAdmission) => flow({ tasks: [ready("a")], admission: a }).causes.state;
-    expect(why(adm({ role: null }))).toMatchObject({ kind: "paused", why: "no role looks after this project, so nothing starts on its own" });
-    expect(why(adm({ role: { ...role, paused: true } }))).toMatchObject({ kind: "paused", why: "@aq-line is paused, so admission is held" });
-    expect(why(adm({ on: false }))).toMatchObject({ kind: "paused", why: "admission is off for @aq-line, so nothing starts on its own" });
-    expect(why(adm({ hands: 6 }))).toMatchObject({ kind: "paused", why: "@aq-line started its 6 sessions for today" });
-    expect(why(adm({ busy: 2 }))).toMatchObject({ kind: "paused", why: "all 2 slots are busy until a card is answered" });
+    expect(why(adm({ role: null }))).toMatchObject({ kind: "paused", why: "no one is in charge of this project's line, so nothing starts on its own" });
+    expect(why(adm({ role: { ...role, paused: true } }))).toMatchObject({ kind: "paused", why: "@aq-line, who runs this line, is paused, so nothing new starts" });
+    expect(why(adm({ on: false }))).toMatchObject({ kind: "paused", why: "@aq-line has automatic starting off, so nothing starts on its own" });
+    expect(why(adm({ hands: 6 }))).toMatchObject({ kind: "paused", why: "@aq-line used all 6 of today's sessions" });
+    expect(why(adm({ busy: 2 }))).toMatchObject({ kind: "paused", why: "the line works on 2 fixes at a time, and both wait for your decision" });
     expect(why(adm({}))).toMatchObject({ kind: "running", why: "1 queued; the next starts within two minutes" });
     // An unknown count holds nothing: only what the sweep would see does.
     expect(why(adm({ busy: null, hands: null }))).toMatchObject({ kind: "running" });
-    expect(admissionHold(adm({ busy: 2 }))?.short).toBe("2 of 2 slots busy");
+    expect(admissionHold(adm({ busy: 2 }))?.short).toBe("2 of 2 places taken");
     // The role's switch on, codecast's sweep off (LINE_SWEEP_ON): the map says the
     // sweep, not "on", and offers the top ready cause to start by hand.
     const off = flow({ tasks: [ready("a")], admission: adm({ sweepOff: true }) }).causes;
-    expect(off.state).toMatchObject({ kind: "paused", why: "codecast's line sweep is off, so no line starts a cause on its own" });
-    expect(off.hold).toMatchObject({ short: "Sweep off", top: { task: { _id: "a" } } });
-    expect(off.hold?.long).toContain("lib/lineSweep.ts");
+    expect(off.state).toMatchObject({ kind: "paused", why: "automatic starting is switched off for every line, so work starts only by hand" });
+    expect(off.hold).toMatchObject({ short: "Starting off everywhere", top: { task: { _id: "a" } } });
+    expect(off.hold?.long).not.toContain("lineSweep");
     // The headline says it, and links the queue.
-    expect(lineHeadline(flow({ tasks: [cause("a"), cause("b")], admission: adm({ on: false }) }), NOW)[0]).toMatchObject({ text: "2 causes wait: admission is off for @aq-line, so nothing starts on its own", tone: "warn", station: "causes" });
+    expect(lineHeadline(flow({ tasks: [cause("a"), cause("b")], admission: adm({ on: false }) }), NOW)[0]).toMatchObject({ text: "2 problems wait to start: @aq-line has automatic starting off, so nothing starts on its own", tone: "warn", station: "causes" });
   });
 
   // Round 10: "on at 5 slots, 0 busy" beside causes waiting 20h said nothing
@@ -219,14 +221,14 @@ describe("buildLineFlow", () => {
     const a: LineAdmission = { role, on: true, slots: 5, busy: 0, hands: 0, handsCap: 6 };
     // None ready: ground left them needing context or never reached them.
     const unready = flow({ tasks: [cause("a", { readiness: "needs_context", goal_ref: "in-9:k" }), cause("b"), cause("c")], admission: a });
-    expect(unready.causes.state).toMatchObject({ kind: "paused", why: "none is ready for the line: 1 needs context from a person, 2 are not grounded yet" });
+    expect(unready.causes.state).toMatchObject({ kind: "paused", why: "none is ready to start: 1 needs context from a person, 2 are not grounded yet" });
     expect(unready.causes.hold).toMatchObject({ short: "None ready", top: null });
     // Ready for 20h, nothing started since: the sweep is not running, and the top one can start by hand.
     const stuck = (over: Partial<LineCauseTask> = {}) => cause("a", { readiness: "ready", goal_ref: "in-9:k", updated_at: NOW - 20 * HOUR, ...over });
     const stalled = flow({ tasks: [stuck(), cause("b")], admission: a });
-    expect(stalled.causes.hold).toMatchObject({ short: "No start in 20h", long: "Admission is on with 5 free slots and 1 cause ready, but nothing has started in 20h. The sweep that starts the top one every two minutes is not running; start it by hand" });
+    expect(stalled.causes.hold).toMatchObject({ short: "No start in 20h", long: "Starting is on, with room for 5 more and 1 problem ready, but nothing has started in 20h. The check that starts the top one every two minutes is not running; start it by hand" });
     expect(stalled.causes.hold?.top?.task._id).toBe("a");
-    expect(lineHeadline(stalled, NOW)[0]).toMatchObject({ text: "2 causes wait: nothing has started in 20h, though 5 slots are free", station: "causes" });
+    expect(lineHeadline(stalled, NOW)[0]).toMatchObject({ text: "2 problems wait to start: nothing has started in 20h, though there is room for 5 more", station: "causes" });
     // A run started ten minutes ago: the sweep is moving, so no stall.
     expect(flow({ tasks: [stuck(), cause("z")], runs: [run("r1", { task_id: "z", created_at: NOW - 10 * 60_000 })], admission: a }).causes.hold).toBeNull();
     // Assigned to someone else: the sweep never takes it.
@@ -314,19 +316,19 @@ describe("lineHeadline", () => {
       runs: [run("r1", { task_id: "a" }), run("r2", { task_id: "b", updated_at: NOW - 3 * DAY })],
       decisions: [card("d1", { created_at: NOW - 2 * HOUR })],
     });
-    expect(text(f)).toBe("1 card waits on you, oldest 2h, 1 building, 1 stalled 3d");
+    expect(text(f)).toBe("1 finished fix waits for your decision, oldest 2h, 1 problem being worked on, 1 run silent for 3d");
   });
   it("ends calm when nothing waits", () => {
-    expect(text(flow({ tasks: [cause("a")], runs: [run("r1", { task_id: "a" })] }))).toBe("1 building, nothing waiting on you");
-    expect(text(flow({ tasks: [cause("a", { status: "done", closed_at: NOW - 9 * DAY })] }))).toBe("The line is quiet: nothing building, nothing waiting on you");
+    expect(text(flow({ tasks: [cause("a")], runs: [run("r1", { task_id: "a" })] }))).toBe("1 problem being worked on, nothing needs you");
+    expect(text(flow({ tasks: [cause("a", { status: "done", closed_at: NOW - 9 * DAY })] }))).toBe("The line is quiet: nothing being worked on, nothing needs you");
     expect(text(flow({ runs: [run("r1")] }))).toBe("Nothing has reached the line yet");
     expect(text(flow({}))).toBe("Nothing has reached the line yet");
   });
   it("points the actionable parts at their stations and says all clear in its own tone", () => {
     const parts = lineHeadline(flow({ tasks: [cause("a"), cause("b")] }), NOW);
     expect(parts.map((p) => [p.text, p.tone, p.station ?? null])).toEqual([
-      ["2 causes queued", "live", "causes"],
-      ["nothing waiting on you", "clear", null],
+      ["2 problems wait to start", "live", "causes"],
+      ["nothing needs you", "clear", null],
     ]);
   });
 });

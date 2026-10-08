@@ -267,6 +267,11 @@
 .lmap-now-item { font-size: 11.5px; line-height: 1.4; color: var(--sol-text-muted); padding-left: 13px; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .lmap-note { margin: 2px 16px 6px; font-size: 11.5px; color: var(--sol-text-muted); }
 .lmap-note code { color: var(--sol-text); }
+/* The line's three quality numbers over the window, one sentence under the bar. */
+.lmap-quality { margin-top: 0; }
+.lmap-quality b { font-weight: 600; color: var(--sol-text); }
+.lmap-quality [data-empty] { color: var(--sol-text-dim); }
+.lmap-quality-lead, .lmap-quality-sep { color: var(--sol-text-dim); }
 .lmap-trace-bar {
   display: flex; align-items: center; gap: 10px; margin: 2px 16px 6px; padding: 6px 10px;
   border-radius: 8px; font-size: 12px; min-width: 0;
@@ -439,3 +444,34 @@
 .lmap-start-top-button:hover { background: color-mix(in srgb, var(--sol-blue) 18%, transparent); }
 .lmap-start-top-button:disabled { opacity: 0.6; cursor: default; }
 .lmap-start-top-error { flex-basis: 100%; margin: 0; color: var(--sol-red); font-size: 11.5px; }
+
+/* The graphs a project's work runs (lineGraphs): one tab each, named by the
+   work that goes through it, above the map they switch. */
+.lmap-graphs { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 8px 16px 2px; min-width: 0; }
+.lmap-graphs-lead { font-size: 11.5px; color: var(--sol-text-dim); white-space: nowrap; }
+.lmap-graphs-tabs { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.lmap-graph-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 10px; border-radius: 8px; text-align: left;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); color: var(--sol-text-muted);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.lmap-graph-tab b { font-size: 12px; font-weight: 600; color: var(--sol-text); }
+.lmap-graph-tab span { font-size: 11px; color: var(--sol-text-dim); }
+.lmap-graph-tab:hover { border-color: var(--sol-border); }
+.lmap-graph-tab[aria-selected="true"] { border-color: color-mix(in srgb, var(--sol-blue) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-blue) 9%, transparent); }
+.lmap-graphs-note { font-size: 11px; color: var(--sol-text-dim); }
+
+/* A station's instructions, rendered as the agent reads them. */
+.lmap-instructions { font-size: 12.5px; line-height: 1.55; color: var(--sol-text); padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--sol-text) 4%, transparent); border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); overflow-wrap: anywhere; }
+.lmap-script { font-family: var(--font-mono), monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 8px 10px; border-radius: 8px; color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.lmap-chip[data-tone="ask"] { color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
+/* The steps where a person decides: the places you act stand out on the map. */
+.lmap-node[data-who="person"]:not([data-selected]) { border-color: color-mix(in srgb, var(--sol-yellow) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-yellow) 7%, var(--sol-card, transparent)); }
+.lmap-you { margin-left: auto; font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; padding: 0 4px; border-radius: 3px; color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); }
+.lmap-instructions :is(p, li, td, th, blockquote) { font-size: 12.5px; line-height: 1.55; }
+.lmap-instructions :is(h1, h2, h3, h4) { font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+.lmap-instructions code { font-size: 11.5px; }
+.lmap-answers { display: flex; flex-direction: column; gap: 4px; }
+.lmap-answers li { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--sol-yellow) 30%, var(--sol-border)); }
+.lmap-answers b { font-size: 12.5px; font-weight: 600; color: var(--sol-text); }
+.lmap-answers span { font-size: 11.5px; color: var(--sol-text-muted); }
