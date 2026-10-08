@@ -205,10 +205,12 @@ export function shouldReapEmpty(
 // Enqueue a broadcast kill_session for the conversation's agent, deduped against
 // a still-pending kill so repeated sweeps/dismissals don't pile up commands.
 // Returns true if a command was inserted (false = one is already queued).
+// `cause` names who asked (KillCause); the daemon logs it with the teardown.
 export async function enqueueKillSessionCommand(
   ctx: { db: any },
   conv: { _id: any; user_id: any; session_id?: string },
   now: number = Date.now(),
+  cause?: string,
 ): Promise<boolean> {
   const pending = await ctx.db
     .query("daemon_commands")
@@ -226,7 +228,7 @@ export async function enqueueKillSessionCommand(
     command: "kill_session" as const,
     // session_id rides along (mirrors conversations.killSession) so the daemon
     // can still tear the backend down when its conversation mapping is gone.
-    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id }),
+    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, ...(cause ? { cause } : {}) }),
     created_at: now,
   });
   return true;
@@ -245,7 +247,7 @@ export async function reapEmptyConversation(
   const hasLiveAgent = sessions.some((m: any) => (m.last_heartbeat ?? 0) > now - LIVE_HEARTBEAT_MS);
 
   if (hasLiveAgent) {
-    await enqueueKillSessionCommand(ctx, conv, now);
+    await enqueueKillSessionCommand(ctx, conv, now, "gc_empty");
     return "kill_enqueued";
   }
 
@@ -301,7 +303,7 @@ export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  opts?: { cascade?: boolean; forceKill?: boolean },
+  opts?: { cascade?: boolean; forceKill?: boolean; cause?: string },
 ): Promise<{
   action: "reap" | "kill" | "none";
   canceledSchedules: number;
@@ -332,7 +334,7 @@ export async function applyHideTransition(
     // be in the client's outbox (an image uploading, send-and-stash, a kill
     // from another window), and deleting the row under it loses that message
     // and strands the client's copy of the session (2026-10-01).
-    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), `${opts?.cause ?? "hide"}:reap`);
     await subagentEnded(ctx, doc, "killed");
   } else if (action === "kill") {
     // false = an unexecuted kill_session for this conversation is ALREADY on the
@@ -340,7 +342,7 @@ export async function applyHideTransition(
     // holds either way, so callers report which it was instead of piling on a
     // duplicate command. A kill the daemon already executed leaves no pending
     // row, so the re-kill that matters — the resurrection case — always inserts.
-    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), opts?.cause ?? "hide");
     // A persistent anchor never auto-completes on a dismiss/kill — it goes
     // dormant, not retired (only decommissionAnchor clears `persistent`).
     // inbox_killed_at records when the session was FIRST killed: a forced
@@ -387,7 +389,7 @@ export async function applyHideTransition(
   // per-child transition call opts out to stay single-level.
   let cascaded = 0;
   if (opts?.cascade !== false && (patch.inbox_dismissed_at || patch.inbox_stashed_at)) {
-    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill });
+    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill, cause: opts?.cause });
   }
   return { action, canceledSchedules, canceledMessages, cascaded, teardownEnqueued };
 }
@@ -419,7 +421,7 @@ export async function cascadeHideToNestedChildren(
   ctx: { db: any },
   lead: any,
   patch: { inbox_dismissed_at?: number; inbox_stashed_at?: number },
-  opts?: { forceKill?: boolean },
+  opts?: { forceKill?: boolean; cause?: string },
 ): Promise<number> {
   const field = patch.inbox_dismissed_at ? ("inbox_dismissed_at" as const) : ("inbox_stashed_at" as const);
   const stamp = patch[field];
@@ -446,7 +448,7 @@ export async function cascadeHideToNestedChildren(
     if (alreadyHidden && !opts?.forceKill) continue; // quiet re-assert — never re-kill
     const childPatch = { [field]: alreadyHidden ? child[field] : stamp };
     if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
-    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill });
+    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, cause: `cascade<-${opts?.cause ?? "hide"}` });
     cascaded++;
   }
   return cascaded;

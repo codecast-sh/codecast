@@ -1,4 +1,5 @@
 import { refuseSeatKill } from "./lib/seatKill";
+import { isClaudeSubagentSessionId } from "./lib/claudeSubagentSession";
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
@@ -1400,7 +1401,8 @@ export const createConversation = mutation({
       parent_conversation_id: parentConversationId,
       ...(args.fork && forkOrigin ? daemonForkFields(forkOrigin, args.fork, now) : {}),
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
-        (!!parentConversationId && !args.parent_message_uuid) || undefined,
+        (!!parentConversationId && !args.parent_message_uuid) ||
+        (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)) || undefined,
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
@@ -11706,7 +11708,7 @@ export const cliSetSessionVisibility = mutation({
     // already-dismissed session (whose worker a daemon bug may have revived) —
     // a re-asserted quiet dismiss still doesn't.
     const { action: outcome, canceledSchedules, canceledMessages, cascaded, teardownEnqueued } =
-      await applyHideTransition(ctx, conv, patch, { forceKill: args.action === "kill" });
+      await applyHideTransition(ctx, conv, patch, { forceKill: args.action === "kill", cause: `cli:${args.action}` });
     return {
       ok: true as const,
       short_id: shortId,
@@ -13592,7 +13594,7 @@ export async function enqueueKillAndResume(
   // requestId: the client's id for this restart (store restartSession).
   // It lands on the resume row, the one whose outcome IS the restart's, so the
   // row the click painted settles from it. A replayed request queues nothing.
-  opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string; requestId?: string } = {},
+  opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string; requestId?: string; cause?: string } = {},
 ) {
   const now = Date.now();
   // Throws for a hosted conversation: no daemon kills or resumes it.
@@ -13671,6 +13673,7 @@ export async function enqueueKillAndResume(
       // as a user kill, marks the conversation completed, and Codex keeps
       // answering under the old thread (ct-51691).
       ...(opts.switchAgent ? { switch_agent: true } : {}),
+      cause: opts.cause ?? (opts.switchAgent ? "switch_agent" : "kill_and_resume"),
     }),
     created_at: now,
   });
@@ -13689,7 +13692,7 @@ export async function enqueueKillAndResume(
 
 /** The kill itself, for every caller that has already authenticated: the
  *  daemon teardown, the completed stamp, and the sweeps that keep it dead. */
-export async function killConversation(ctx: any, userId: Id<"users">, args: { conversation_id: Id<"conversations">; mark_completed?: boolean; session_id?: string }, opts?: { retiring?: boolean }) {
+export async function killConversation(ctx: any, userId: Id<"users">, args: { conversation_id: Id<"conversations">; mark_completed?: boolean; session_id?: string }, opts?: { retiring?: boolean; cause?: string }) {
   const conv = await ctx.db.get(args.conversation_id);
   // The runner, or the session's second-party owner — same rule as
   // restartSession/dispatch.sendMessage. An owned session kills from the
@@ -13708,6 +13711,7 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
     args: JSON.stringify({
       conversation_id: args.conversation_id,
       session_id: args.session_id ?? conv?.session_id,
+      cause: opts?.cause ?? "killSession",
     }),
     created_at: Date.now(),
   });
@@ -13755,7 +13759,7 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
     // unconditional enqueue above: this mutation IS an explicit kill gesture,
     // so an already-hidden child whose worker came back gets torn down again
     // rather than skipped — the group comes down as one unit.
-    await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true });
+    await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true, cause: opts?.cause ?? "killSession" });
     if (!conv.persistent) await subagentEnded(ctx, conv, "killed");
   }
   return { existed: !!conv, canceled_schedules: canceledSchedules, canceled_messages: canceledMessages };
@@ -13806,7 +13810,7 @@ export const restartSession = mutation({
     // Daemon commands are polled by the RUNNER's daemon — for a second-party
     // owner restarting a session run by another account, address the commands
     // to the runner, not the caller (same routing as dispatch.resumeSession).
-    await enqueueKillAndResume(ctx, conv.user_id, conv, { requestId: args.request_id });
+    await enqueueKillAndResume(ctx, conv.user_id, conv, { requestId: args.request_id, cause: "restart" });
     return { conversation_id: conv._id, restored };
   },
 });
@@ -13827,7 +13831,7 @@ export const repairSession = mutation({
     if (!conv.session_id) throw new Error("No session to repair");
 
     // Runner-routed for the same reason as restartSession above.
-    await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true, requestId: args.request_id });
+    await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true, requestId: args.request_id, cause: "repair" });
     return { conversation_id: conv._id, restored };
   },
 });
@@ -13869,7 +13873,7 @@ export const switchSessionProject = mutation({
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
       command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      args: JSON.stringify({ conversation_id: args.conversation_id, cause: "switch_project" }),
       created_at: now,
     });
 
