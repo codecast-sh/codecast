@@ -31,4 +31,11 @@ describe("ingestTaskDetail with subtasks", () => {
     expect(a.status).toBe("in_progress");
     expect(a.assignee_info).toEqual({ name: "Ada" });
   });
+
+  it("files the tasks its graph names, so a finished blocker the list never held reads as done", () => {
+    ingestTaskDetail({ ...task("p", { blocked_by: ["ct-b"] }), graph_tasks: [task("b", { status: "done" })] });
+    const tasks = useInboxStore.getState().tasks as any;
+    expect(tasks[id("p")].graph_tasks).toBeUndefined();
+    expect(tasks[id("b")].status).toBe("done");
+  });
 });

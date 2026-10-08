@@ -332,12 +332,25 @@ export const CLIENT_SYNC_REGISTRY = {
   // forProject view (the current document, its history, the open proposals
   // with their changes, whether the viewer is the project's person), one row
   // per project viewed, keyed by the project's Convex id. Delta: each panel
-  // feeds its own row and must not evict the others.
+  // feeds its own row and must not evict the others. Everything that changes
+  // on the row is nested (the document, its history, the proposals, the
+  // usage), so those compare by content: by scalars alone an echo that keeps
+  // current_version (a paint already reached it) was dropped whole.
   projectExpectations: {
     persistence: { kind: "collection", key: "projectExpectations" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true },
+    sync: { isDelta: true, deepFields: ["doc", "versions", "proposals", "usage", "sources", "routine", "project"] },
     feeds: ["expectations.forProject"],
+  },
+  // Every project's expectations in a workspace, one summary row each
+  // (expectations.overview): the /expectations page. Snapshot: the query is
+  // the workspace's complete set. Rows carry the workspace key.
+  expectationsOverview: {
+    persistence: { kind: "collection", key: "expectationsOverview" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    sync: { deepFields: ["project", "most_broken"] },
+    feeds: ["expectations.overview"],
   },
   // Saved views: the sidebar rail and its pinned rows. A pin lives in client
   // UI state and renders offline, but its click resolves the view row from
@@ -390,8 +403,10 @@ export const CLIENT_SYNC_REGISTRY = {
     // from tasks/plans/docs and move without any scalar on the row changing,
     // so they must be content-compared or a refetch lands as a no-op. The line
     // profile (signals.publishProfile) is replaced whole without touching any
-    // scalar, so it is content-compared for the same reason.
-    sync: { isDelta: true, deepFields: ["task_counts", "line_profile"] },
+    // scalar, so it is content-compared for the same reason. A create paints
+    // a stub keyed by its `client_key`; the server row carrying the same key
+    // supersedes it.
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["task_counts", "line_profile"] },
   },
   // Initiatives (initiatives-projects-role-page.md I1). SNAPSHOT, not delta:
   // initiatives.webList returns the complete visible set of the workspace, so
@@ -703,7 +718,9 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     localFirst: true,
     indexes: "_id, workflow_id",
-    sync: { isDelta: true },
+    // A node's session is a join that moves no scalar on the row (a feed with
+    // budget attaches it where another had none), so the nodes compare by content.
+    sync: { isDelta: true, deepFields: ["node_statuses"] },
     feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns"],
   },
   // Signals (the-line-end-to-end.md LE3, LE13): the active workspace's last
@@ -1645,6 +1662,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   decisionDetails: "shared",
   taskEvidence: "shared",
   projectExpectations: "shared",
+  expectationsOverview: "shared",
   shipTargets: "shared",
   savedViews: "shared",
   mods: "shared",
