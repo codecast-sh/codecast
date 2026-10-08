@@ -31,6 +31,7 @@ import { TakeoverEdit } from "./TakeoverEdit";
 import { CHIP_STATUS, GHOST } from "./orgMeta";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import { useOrgHover } from "./proposalContexts";
+import { lightChanges, useChangeLit } from "./lines/changeLight";
 import { changeReply, fieldText, subjectStatusWords, type SubjectCard, type SubjectStatus } from "./proposalSubjects";
 import type { ProposalTreeFace } from "./proposalTree";
 import { StagedBand, stagedWash } from "./StagedBand";
@@ -577,6 +578,9 @@ export function useFocusScroll(ref: React.RefObject<HTMLElement | null>, focused
 
 export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAnswer, takeover, revisedNew, focused, className }: ProposalSubjectCardProps) {
   const hover = useOrgHover();
+  // A ghost line on the company document points at one of this card's
+  // changes, or this card points at its line (lightChanges on hover).
+  const lit = useChangeLit(card.change_ids);
   const rootRef = useRef<HTMLDivElement>(null);
   useFocusScroll(rootRef, focused);
   // "Leave the sessions where they are": the tick is read from the pending
@@ -635,12 +639,12 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
   return (
     <div
       ref={rootRef}
-      className={cn("not-prose min-w-0 text-left", LEDGER_INKS, !layout && "[container-type:inline-size]", ordinal != null && "border-t", className)}
-      style={{ borderColor: LEDGER_HAIR }}
-      onMouseEnter={hover ? () => hover(leadId) : undefined}
-      onMouseLeave={hover ? () => hover(null) : undefined}
-      onFocus={hover ? () => hover(leadId) : undefined}
-      onBlur={hover ? () => hover(null) : undefined}
+      className={cn("not-prose min-w-0 text-left transition-[background-color,box-shadow] duration-150", LEDGER_INKS, !layout && "[container-type:inline-size]", ordinal != null && "border-t", className)}
+      style={{ borderColor: LEDGER_HAIR, ...(lit ? { background: "color-mix(in srgb, var(--sol-violet) 11%, transparent)", boxShadow: "inset 2px 0 0 var(--sol-violet)" } : {}) }}
+      onMouseEnter={() => { hover?.(leadId); lightChanges(card.change_ids); }}
+      onMouseLeave={() => { hover?.(null); lightChanges(null); }}
+      onFocus={() => { hover?.(leadId); lightChanges(card.change_ids); }}
+      onBlur={() => { hover?.(null); lightChanges(null); }}
       data-layout={mode}
       data-settled={settled || undefined}
       data-subject={card.key}
@@ -650,6 +654,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
       data-subject-answer={answer?.verdict}
       data-revised-new={revisedNew || undefined}
       data-focused={focused || undefined}
+      data-lit={lit || undefined}
     >
       <div
         className={cn("grid items-baseline", AT.grid[mode], ordinal != null && AT.pad[mode])}

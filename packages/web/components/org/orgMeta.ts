@@ -18,6 +18,13 @@ export const ORG_STATE_META: Record<WorkState, { label: string; color: string; c
   idle: { label: "idle", color: "var(--sol-text-dim)", chip: "bg-sol-bg-highlight text-sol-text-dim border-sol-border/30" },
 };
 
+/** A person's presence as a colour: the map's dot and a company line's state. */
+export const PRESENCE_COLOR: Record<"online" | "away" | "offline", string> = {
+  online: "var(--sol-green)",
+  away: "var(--sol-yellow)",
+  offline: "color-mix(in srgb, var(--sol-border) 50%, transparent)",
+};
+
 /** A card's sessions in words, the states a person acts on first ("4 need
  *  input · 2 working"), at most `max` parts; the rest is for a title. Empty
  *  when there is nothing to say. */

@@ -37,6 +37,11 @@ export interface ModelOption {
 // (opus-4-8), so the Claude 5 family and Opus 4.8 all hold a million. Haiku 4.5
 // is the documented 200k. A figure that is wrong shows up as a share over 100%,
 // which is why measuring beats guessing here.
+/** The small Claude model codecast's own calls run on: titles, summaries,
+ *  briefs, ask, triage, and the Free plan's assistant. It refuses any
+ *  temperature, and it thinks by default inside max_tokens. */
+export const CHEAP_MODEL = "claude-haiku-5-5";
+
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your saved default model" },
   { key: "fable", label: "Fable", hint: "Most capable, ~2× limit burn", cliAlias: "fable", contextWindow: 1_000_000 },

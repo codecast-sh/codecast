@@ -3,7 +3,8 @@
 // shell that answers the SDK's `ready` with a real `init`, and a small React
 // app reading the hooks. Checks what the builder is promised in SDK_DOCS:
 // the ready flags, app.link, useMine across a reload and between people,
-// where reads and removeWhere, and a refused write told to the shell once.
+// where reads and removeWhere, a refused write told to the shell once, and
+// a looking-only page whose writes stay quiet for the app.
 //
 //   bun scripts/verify-sdk.ts   exit 1 on any failure
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
@@ -13,13 +14,16 @@ import { MAX_DATA_DOC_BYTES } from "../convex/lib/limits";
 import { initFor, type AppLink, type InitMessage } from "../runtime/protocol";
 import { CLOUD, check, failed, visitor, type Visitor } from "./lib/harness";
 
-type Page = { init: Omit<InitMessage, "protocol">; act: "first" | "reload" | "other" };
+type Page = { init: Omit<InitMessage, "protocol">; act: "first" | "reload" | "other" | "watch" };
 type Seen = {
   firstRender: { notesReady: boolean; mineReady: boolean; notes: number };
   ready: { notes: number; word: unknown; scoped: number };
   link: AppLink;
   removed?: number;
   afterRemove?: number;
+  /** Looking only: how a write settled for the app, and what the shell heard. */
+  watchWrite?: string;
+  refusals?: number;
   shellErrors: string[];
 };
 
@@ -32,8 +36,10 @@ if (process.argv[2] === "--page") {
   process.env.PLAYGROUND_CONVEX_URL = CLOUD;
 
   const shellErrors: string[] = [];
+  let refusals = 0;
   const shell = {
     postMessage(message: { type: string; message?: string }) {
+      if (message.type === "refused") refusals++;
       if (message.type === "ready") setTimeout(() => window.dispatchEvent(new MessageEvent("message", { data: { protocol: "clayground/1", ...page.init }, source: shell as never })));
       if (message.type === "error") shellErrors.push(message.message!);
     },
@@ -77,6 +83,11 @@ if (process.argv[2] === "--page") {
     await notes!.insert({ s: "x".repeat(MAX_DATA_DOC_BYTES) }).catch(() => {});
     await new Promise((r) => setTimeout(r, 300));
   }
+  if (page.act === "watch") {
+    const settled = notes!.insert({ round: 3 }).then(() => "resolved", (e: Error) => `rejected: ${e.message}`);
+    seen.watchWrite = await Promise.race([settled, new Promise<string>((r) => setTimeout(() => r("quiet"), 1_000))]);
+    seen.refusals = refusals;
+  }
   console.log(`SEEN ${JSON.stringify(seen)}`);
   process.exit(0);
 }
@@ -86,13 +97,13 @@ if (process.argv[2] === "--page") {
 const avatars = Object.fromEntries(AVATAR_KEYS.map((k) => [k, `https://avatars.test/${k}.webp`])) as Record<(typeof AVATAR_KEYS)[number], string>;
 const A = await visitor();
 const B = await visitor();
-const made = await A.client.mutation(api.apps.create, { ...A.creds, name: "SDK check" });
+const made = await A.client.mutation(api.apps.create, { ...A.creds, name: "SDK check", unlisted: true });
 const appId = made.app_id as Id<"apps">;
 const link: AppLink = { name: "SDK check", link: `https://clayground.test/${made.slug}`, room: `https://clayground.test/${made.slug}?room` };
 
 async function open(who: Visitor, act: Page["act"]): Promise<Seen> {
   const me = (await who.client.query(api.visitors.me, who.creds))!.visitor;
-  const init = await initFor({ creds: who.creds, appId, version: 1, visitor: me, avatars, app: link });
+  const init = await initFor({ creds: who.creds, appId, version: 1, visitor: me, avatars, app: link, scope: act === "watch" ? "watch" : "use" });
   const proc = Bun.spawn(["bun", import.meta.path, "--page", JSON.stringify({ init, act })], { stdout: "pipe", stderr: "pipe" });
   const out = await new Response(proc.stdout).text();
   const line = out.split("\n").find((l) => l.startsWith("SEEN "));
@@ -116,6 +127,11 @@ check(
 
 const other = await open(B, "other");
 check("another person never sees someone's private value", other.ready.word === null, other.ready);
+
+const watch = await open(B, "watch");
+check("looking only, a write neither fails nor succeeds for the app", watch.watchWrite === "quiet", watch.watchWrite);
+check("looking only, the shell hears the refusal and no app error", watch.refusals === 1 && watch.shellErrors.length === 0, watch);
+check("looking only, the app still reads the shared data", watch.ready.notes === 1, watch.ready);
 
 await Promise.all([A.client.close(), B.client.close()]);
 console.log(failed() ? `\n${failed()} failed` : "\nall SDK checks passed");

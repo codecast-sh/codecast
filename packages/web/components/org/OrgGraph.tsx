@@ -32,7 +32,7 @@ import { useTheme } from "../ThemeProvider";
 import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutEdge, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget, ORG_SIZES, roleNodeId } from "./orgLayout";
 import { ClusterCard, HealthRoleCard, PersonCard, RoleCard, SessionCard, type HealthRoleNodeData } from "./OrgNodeCards";
 import { bandOrigin, computeOrgViewport, FIT_PAD, hiddenRoots, panIntoView } from "./orgViewport";
-import { useZoomLevel, type ZoomLevel } from "./orgZoom";
+import { useZoomLevel, zoomLevelOf, type ZoomLevel } from "./orgZoom";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
 import { GHOST, healthFlagsByNode } from "./orgMeta";
 import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
@@ -41,6 +41,7 @@ import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./Org
 import type { FlowMap, RoleFlow } from "./orgFlow";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
+import type { OrgObjectKind } from "@codecast/shared/entities";
 import { useInitiatives } from "../../hooks/useInitiatives";
 import { goalFocusedChange, goalsAnchor, layoutGoals, type GoalProject, type GoalsLayout } from "./goalsLayout";
 import { GOALS_EDGE_TYPES, GOALS_NODE_TYPES, type GoalsEdgeData } from "./GoalsNodeCards";
@@ -58,6 +59,19 @@ const ORG_EDGE_TYPES = { ...ORG_FLOW_EDGE_TYPES, ...GOALS_EDGE_TYPES };
  *  who reports to whom. */
 export type OrgLens = "everything" | "people" | "goals";
 const NO_LAYOUT: ReturnType<typeof layoutOrgTree> = { nodes: [], edges: [], width: 0, height: 0 };
+
+/** A company object as the canvas names it: its kind and its row id (a
+ *  goal's, a project's or a role's `_id`, a person's user id). */
+export type OrgGraphObject = { kind: OrgObjectKind; id: string };
+
+/** The card that draws an object: its own node, or for a project the first
+ *  card of it (a project under two goals is drawn under each). */
+function nodeIdOfObject(nodes: readonly { id: string }[], o: OrgGraphObject | null | undefined): string | null {
+  if (!o) return null;
+  const want = o.kind === "initiative" ? `goal:${o.id}` : o.kind === "role" ? `role:${o.id}` : o.kind === "person" ? `person:${o.id}` : null;
+  if (want) return nodes.some((n) => n.id === want) ? want : null;
+  return nodes.find((n) => n.id.startsWith("project:") && n.id.endsWith(`:${o.id}`))?.id ?? null;
+}
 
 export type OrgReparentRequest = {
   subject: { kind: "session"; id: string; title: string } | { kind: "role"; id: string; title: string };
@@ -82,7 +96,7 @@ export type OrgGraphProps = {
   onOpenSession?: (conversationId: string) => void;
   /** Bumped by the page after a cancelled move, to snap the card back. */
   resetKey?: number;
-  /** The health map (HealthBoard): reporting edges carry the week's work and
+  /** This week on the People map (OrgMap): reporting edges carry the week's work and
    *  handoffs between roles are drawn across the tree; a focused role keeps
    *  its edges lit and dims the rest. */
   flow?: { map: FlowMap; focusNodeId: string | null; roles: Record<string, RoleFlow>; days: string[] };
@@ -120,6 +134,20 @@ export type OrgGraphProps = {
   /** False draws the chart as a still picture (the marketing hero): no zoom
    *  controls or edge cues, and no pan, zoom, drag or wheel capture. Default true. */
   chrome?: boolean;
+  /** The object whose sheet is open over the canvas (cohesive build spec D3):
+   *  its card is ringed and panned into the part of the canvas the sheet
+   *  leaves visible (left of `panelWidth`). */
+  ring?: OrgGraphObject | null;
+  /** The Projects filter: the goals outline with its goal cards dimmed, so the projects lead. */
+  dimGoals?: boolean;
+  /** A single click on a goal, project, role, person or owner card opens its
+   *  sheet (D15); the company card closes them (null). Absent, or answering
+   *  false (the page has no address for it), a click selects the card. */
+  onOpenObject?: (o: OrgGraphObject | null) => boolean | void;
+  /** A click on a proposal's ghost card: the page sends the reader to its card (D8). */
+  onOpenChange?: (changeId: string) => void;
+  /** A double click on a role or an owner card: talk to it (D5c). */
+  onTalk?: (o: OrgGraphObject) => void;
 };
 
 const DRAGGABLE = new Set(["session", "role"]);
@@ -184,7 +212,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
+  const { tree, view, selectedId: pickedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople, ring = null, dimGoals = false, onOpenObject, onOpenChange, onTalk } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -244,6 +272,9 @@ function OrgGraphInner(props: OrgGraphProps) {
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
   /** What the fit and the focus pan read: the drawn lens' cards. */
   const boxes = goals?.nodes ?? layout.nodes;
+  // The open sheet's card keeps its ring while the sheet is on top (D15).
+  const ringNodeId = useMemo(() => nodeIdOfObject(boxes, ring), [boxes, ring?.kind, ring?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selectedId = ringNodeId ?? pickedId;
   // Flags reach the cards by identity, so they are rebuilt only when a flag
   // changes (the signature), not on every health push (spend counters move).
   const flagsSig = useMemo(() => flagsSigOf(healthFlagsByNode(health)), [health]);
@@ -260,7 +291,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   const handlers = useMemo(() => ({ onToggleCollapse, onExpandCluster, onCollapseCluster }), [onToggleCollapse, onExpandCluster, onCollapseCluster]);
   const ghostHandlers = useMemo<GhostHandlers>(() => ({ focusChangeId, onFocusChange: (id) => onFocusChange?.(id) }), [focusChangeId, onFocusChange]);
   const flowNodes = useMemo(() => {
-    if (goals) return goalsFlowNodes(goals, selectedId, ghostHandlers);
+    if (goals) return goalsFlowNodes(goals, selectedId, ghostHandlers, dimGoals);
     const nodes = toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode);
     if (!flow) return nodes;
     // The health map: a role draws its week instead of its sessions.
@@ -270,7 +301,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       const data: HealthRoleNodeData = { role: f.role, selected: n.id === selectedId, flow: f, days: flow.days };
       return { ...n, type: "healthRole", draggable: false, data };
     });
-  }, [goals, layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode, flow]);
+  }, [goals, layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode, flow, dimGoals]);
   const flowEdges = useMemo<Edge[]>(
     () => goals ? goalsFlowEdges(goals, hoverId ?? selectedId ?? (focusChangeId ? goals.changeNode[focusChangeId] ?? null : null)) : flow ? flowModeEdges(layout.edges, flow.map, flow.focusNodeId) : layout.edges.map((e) => ({
       id: e.id,
@@ -372,10 +403,10 @@ function OrgGraphInner(props: OrgGraphProps) {
     const key = `${rootSig}|${panelWidth}|${panelHeightFraction}`;
     if (fitted.current === key) return;
     const first = fitted.current === null;
-    if (!first && focusNodeId) { fitted.current = key; return; }
+    if (!first && (focusNodeId || ringNodeId)) { fitted.current = key; return; }
     if (!first) userMoved.current = false;
     if (fit(!first)) fitted.current = key;
-  }, [viewportReady, rootSig, panelWidth, panelHeightFraction, boxes.length, fit, focusNodeId]);
+  }, [viewportReady, rootSig, panelWidth, panelHeightFraction, boxes.length, fit, focusNodeId, ringNodeId]);
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -391,15 +422,32 @@ function OrgGraphInner(props: OrgGraphProps) {
   // list of cards never drags the map about, and a jump never strands half
   // the tree off the pane. Re-runs when the panel opens or closes around it.
   // A programmatic move, so the cue recomputes from the target viewport.
-  useWatchEffect(() => {
+  // The open sheet's card goes to the middle of the strip the sheet leaves,
+  // at a readable zoom (D3): its far edge sits under the sheet's shadow.
+  const panNodeId = focusNodeId ?? ringNodeId;
+  /** A ring pan that zoomed across a stop: the new level's layout lands a
+   *  render later, with the card somewhere else, so it is centred once more. */
+  const settleRing = useRef<string | null>(null);
+  const panToNode = useCallback((id: string, mode: "least" | "center") => {
     const el = wrapRef.current;
-    if (!focusNodeId || !el || !viewportReady) return;
-    const next = panIntoView(boxes, focusNodeId, rf.getViewport(), { w: el.clientWidth - panelWidth, h: el.clientHeight * (1 - panelHeightFraction) });
+    if (!el) return;
+    const now = rf.getViewport();
+    const next = panIntoView(boxes, id, now, { w: el.clientWidth - panelWidth, h: el.clientHeight * (1 - panelHeightFraction) }, mode);
     if (!next) return;
     userMoved.current = true;
+    if (mode === "center" && zoomLevelOf(next.zoom) !== zoomLevelOf(now.zoom)) settleRing.current = id;
     rf.setViewport(next, { duration: document.hidden ? 0 : 280 });
     recomputeCue(next);
-  }, [focusNodeId, focusSeq, viewportReady, panelWidth, panelHeightFraction]);
+  }, [boxes, rf, panelWidth, panelHeightFraction, recomputeCue]);
+  useWatchEffect(() => {
+    if (!panNodeId || !viewportReady) return;
+    panToNode(panNodeId, focusNodeId ? "least" : "center");
+  }, [panNodeId, focusSeq, viewportReady, panelWidth, panelHeightFraction]);
+  useWatchEffect(() => {
+    const id = settleRing.current;
+    settleRing.current = null;
+    if (id && id === ringNodeId && !focusNodeId) panToNode(id, "center");
+  }, [level]);
 
   // Escape clears the selection unless the user is typing somewhere. Only
   // listening while there is something to clear keeps a resting chart off the window.
@@ -470,32 +518,57 @@ function OrgGraphInner(props: OrgGraphProps) {
     });
   }, [findDropTarget, byId, onReparentRequest, setNodes, flowNodes]);
 
+  /** A ghost card is a change: the page that answers it in the conversation
+   *  sends the reader there (D8); otherwise a click focuses it on the map. */
+  const ghostClick = useCallback((changeId: string) => {
+    if (onOpenChange) onOpenChange(changeId);
+    else onFocusChange?.(changeId === focusChangeId ? null : changeId);
+  }, [onOpenChange, onFocusChange, focusChangeId]);
   const onNodeClick: NodeMouseHandler = useCallback((_e, node) => {
     if (node.type === "cluster") return;
     if (goals) {
       // A ghost goal or project is a change: a click focuses it, as a role ghost's does.
       const g = goals.nodes.find((x) => x.id === node.id);
-      const ghost = g?.kind === "goal" ? g.goal.ghost : g?.kind === "project" ? g.project.ghost : undefined;
-      if (ghost) { onFocusChange?.(ghost.change_id === focusChangeId ? null : ghost.change_id); return; }
-      onSelect(node.id === selectedId ? null : node.id);
+      const ghost = g?.kind === "goal" ? g.goal.ghost : g?.kind === "project" ? g.project.ghost : g?.kind === "owner" ? g.ghost : undefined;
+      // A goal, project or role that exists today opens even while a proposal
+      // moves it (its sheet's Now says so); only what a proposal would create is a change.
+      const exists = g?.kind === "goal" ? !!g.goal.row : g?.kind === "project" ? projects.some((p) => p._id === g.project.id) : g?.kind === "owner" ? !g.ghost : true;
+      if (ghost && (!onOpenObject || !exists)) { ghostClick(ghost.change_id); return; }
+      if (onOpenObject && g) {
+        const o: OrgGraphObject | null | undefined = g.kind === "goal" ? { kind: "initiative", id: g.goal.row?._id ?? g.goal.id }
+          : g.kind === "project" ? { kind: "project", id: g.project.id }
+          : g.kind === "owner" && (g.owner.kind === "role" || g.owner.kind === "person") ? { kind: g.owner.kind, id: g.owner.id }
+          : g.kind === "company" ? null : undefined;
+        if (o !== undefined && onOpenObject(o) !== false) return;
+      }
+      onSelect(node.id === pickedId ? null : node.id);
       return;
     }
     // A ghost stub is a change, not a node the page holds: a click focuses the
     // change (the pane opens on its rationale) instead of selecting.
     const n = byId.get(node.id);
     const stub = n && (n.kind === "person" || n.kind === "role" || n.kind === "session") ? n.ghost : undefined;
-    if (stub) { onFocusChange?.(stub.change_id === focusChangeId ? null : stub.change_id); return; }
-    onSelect(node.id === selectedId ? null : node.id);
-  }, [onSelect, selectedId, byId, onFocusChange, focusChangeId, goals]);
+    if (stub) { ghostClick(stub.change_id); return; }
+    const o: OrgGraphObject | null = n?.kind === "role" ? { kind: "role", id: n.role._id } : n?.kind === "person" ? { kind: "person", id: n.person.user_id } : null;
+    if (onOpenObject && o && onOpenObject(o) !== false) return;
+    onSelect(node.id === pickedId ? null : node.id);
+  }, [onSelect, pickedId, byId, ghostClick, goals, onOpenObject, projects]);
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_e, node) => {
-    if (node.type === "owner") { onOpenInPeople?.(node.id); return; }
+    if (node.type === "owner") {
+      const g = goals?.nodes.find((x) => x.id === node.id);
+      if (onTalk && g?.kind === "owner" && g.owner.kind === "role" && !g.ghost) { onTalk({ kind: "role", id: g.owner.id }); return; }
+      onOpenInPeople?.(node.id);
+      return;
+    }
     const n = byId.get(node.id);
     if (n?.kind === "session") onOpenSession?.(n.session._id);
+    // Talk to a seat: the page puts its conversation beside the map (D5c).
+    else if (n?.kind === "role" && !n.ghost && onTalk) onTalk({ kind: "role", id: n.role._id });
     // A seat opens the way a session does, and lands on the role page (I3);
     // collapse keeps its own toggle on the card and its row in the menu.
     else if (n?.kind === "role" && !n.ghost && n.role.standing?.conversation_id) onOpenSession?.(n.role.standing.conversation_id);
     else if (n && (n.kind === "person" || n.kind === "role")) onToggleCollapse(n.id);
-  }, [byId, onOpenSession, onToggleCollapse, onOpenInPeople]);
+  }, [byId, goals, onOpenSession, onToggleCollapse, onOpenInPeople, onTalk]);
   const onContext: NodeMouseHandler = useCallback((e, node) => {
     const n = byId.get(node.id);
     if (n) onNodeContextMenu(e, n);
@@ -514,7 +587,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       onNodeContextMenu={onContext}
       onNodeMouseEnter={goals ? (_e, n) => setHoverId(n.id) : undefined}
       onNodeMouseLeave={goals ? () => setHoverId(null) : undefined}
-      onPaneClick={() => onSelect(null)}
+      onPaneClick={() => { if (pickedId) onSelect(null); }}
       onMoveStart={(event) => { if (event) userMoved.current = true; }}
       onNodeDragStart={onNodeDragStart}
       onNodeDrag={onNodeDrag}
@@ -548,8 +621,15 @@ function OrgGraphInner(props: OrgGraphProps) {
   );
 }
 
+/** React Flow's panel margin and the zoom controls' column at the bottom left:
+ *  the left pill sits just past them, on the same baseline. */
+const PANEL_MARGIN = 15;
+const CONTROLS_W = 28;
+
 /** A soft fade at one edge of the canvas plus a pill that pans the next hidden
- *  root card into view. Nothing when every root is on screen. */
+ *  root card into view. Nothing when every root is on screen. The pill sits at
+ *  the bottom, clear of the root row at the top. Against an open sheet the
+ *  sheet's border and shadow already mark the edge, so there is no fade. */
 function EdgeCue({ side, hidden, onPan, offset }: { side: "left" | "right"; hidden: OrgLayoutNode[]; onPan: (n: OrgLayoutNode, side: "left" | "right") => void; offset: number }) {
   if (hidden.length === 0) return null;
   const people = hidden.filter((n) => n.kind === "person").length;
@@ -559,20 +639,24 @@ function EdgeCue({ side, hidden, onPan, offset }: { side: "left" | "right"; hidd
   const Icon = side === "right" ? ChevronRight : ChevronLeft;
   return (
     <>
-      <div
-        aria-hidden
-        className="pointer-events-none absolute top-0 bottom-0 w-20 z-10"
-        style={{
-          [side]: offset,
-          background: `linear-gradient(to ${side === "right" ? "right" : "left"}, transparent, color-mix(in srgb, var(--sol-bg) 85%, transparent))`,
-        }}
-      />
+      {offset === 0 && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-0 bottom-0 w-20 z-10"
+          style={{
+            [side]: 0,
+            background: `linear-gradient(to ${side === "right" ? "right" : "left"}, transparent, color-mix(in srgb, var(--sol-bg) 85%, transparent))`,
+          }}
+        />
+      )}
       <button
         type="button"
+        data-edge-cue={side}
         onClick={() => onPan(hidden[0], side)}
-        className="absolute top-3 z-10 inline-flex items-center gap-1 h-7 pl-2.5 pr-2 rounded-full border text-[11.5px] font-medium transition-colors hover:bg-sol-bg-highlight backdrop-blur"
+        className="absolute z-10 inline-flex items-center gap-1 h-7 pl-2.5 pr-2 rounded-full border text-[11.5px] font-medium transition-colors hover:bg-sol-bg-highlight backdrop-blur"
         style={{
-          [side]: offset + 12,
+          [side]: side === "left" ? offset + PANEL_MARGIN + CONTROLS_W + 8 : offset + PANEL_MARGIN,
+          bottom: PANEL_MARGIN,
           background: "color-mix(in srgb, var(--sol-card) 92%, transparent)",
           borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)",
           color: "var(--sol-text-muted)",
@@ -587,8 +671,9 @@ function EdgeCue({ side, hidden, onPan, offset }: { side: "left" | "right"; hidd
   );
 }
 
-/** The goals outline as React Flow nodes: nothing drags, a card carries its own ghost. */
-function goalsFlowNodes(goals: GoalsLayout, selectedId: string | null, ghosts: GhostHandlers): Node[] {
+/** The goals outline as React Flow nodes: nothing drags, a card carries its
+ *  own ghost. Under the Projects filter the goal cards step back. */
+function goalsFlowNodes(goals: GoalsLayout, selectedId: string | null, ghosts: GhostHandlers, dimGoals = false): Node[] {
   return goals.nodes.map((n) => {
     // The card carrying the change in focus is lit the way a selected one is, and rises over the tight row beneath it.
     // A new goal's own project rows share its change: the goal is lit, not every row; a row an initiative_projects change added is lit on its own.
@@ -597,7 +682,8 @@ function goalsFlowNodes(goals: GoalsLayout, selectedId: string | null, ghosts: G
       : n.kind === "project" ? n.project.ghost?.kind === "initiative_projects" && !!goalFocusedChange(f, n.project.ghost)
       : n.kind === "owner" ? n.ghost?.change_id === f || n.retire?.change_id === f || n.move?.change_id === f || !!n.chips?.some((c) => c.change_id === f)
       : false);
-    const base = { id: n.id, type: n.kind, position: { x: n.x, y: n.y }, width: n.w, height: n.h, draggable: false, selectable: true, connectable: false, zIndex: focused ? 10 : 2 };
+    const dim = dimGoals && (n.kind === "goal" || n.kind === "company") && n.id !== selectedId;
+    const base = { id: n.id, type: n.kind, position: { x: n.x, y: n.y }, width: n.w, height: n.h, draggable: false, selectable: true, connectable: false, zIndex: focused ? 10 : 2, ...(dim ? { style: { opacity: 0.45 } } : {}) };
     const selected = n.id === selectedId || focused;
     switch (n.kind) {
       case "company": return { ...base, data: { selected, name: n.name, goals: n.goals, projects: n.projects, mission: n.mission } };
