@@ -31,11 +31,17 @@ export function isCredentialHelperFastPath(argv: string[]): boolean {
   return argv[2] === "git-credential" && argv.length === 4 && ["get", "store", "erase"].includes(argv[3]!);
 }
 
+/** A SessionStart hook verb, bare or with `--client <client>`. */
+function isSessionStartVerb(argv: string[], verb: string): boolean {
+  return argv[2] === verb && (argv.length === 3 || (argv.length === 5 && argv[3] === "--client"));
+}
+
 export function isStableContextFastPath(argv: string[]): boolean {
-  return (
-    argv[2] === "stable-context" &&
-    (argv.length === 3 || (argv.length === 5 && argv[3] === "--client"))
-  );
+  return isSessionStartVerb(argv, "stable-context");
+}
+
+export function isTaskContextFastPath(argv: string[]): boolean {
+  return isSessionStartVerb(argv, "_task-context");
 }
 
 /** Runs the verb when argv names a hot-path verb. Returns true when claimed
@@ -133,6 +139,16 @@ export function runFastPath(argv: string[]): boolean {
           cfg.readAuthConfig(cfg.defaultConfigDir()),
           hook.parseStableHookClient(argv[4]),
         ),
+      )
+      .catch(() => {});
+    return true;
+  }
+  if (isTaskContextFastPath(argv)) {
+    // SessionStart hook after compaction or a resume (taskContextHook.ts).
+    // Same contract as stable-context: stdout is the block or nothing.
+    Promise.all([import("./taskContextHook.js"), import("./stableContext.js"), import("./config/readAuthConfig.js")])
+      .then(([hook, stable, cfg]) =>
+        hook.runTaskContextHook(cfg.readAuthConfig(cfg.defaultConfigDir()), stable.parseStableHookClient(argv[4])),
       )
       .catch(() => {});
     return true;
