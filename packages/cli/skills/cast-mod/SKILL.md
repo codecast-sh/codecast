@@ -1,6 +1,6 @@
 ---
 name: cast-mod
-description: Make a codecast mod, a small sandboxed module that adds panes, commands and new kinds of blocks agents can draw to the codecast app, and that reads the person's sessions, tasks, plans, PRs and more. Use when asked to customize, extend or add something to codecast's interface, to build a dashboard or view over the fleet inside codecast, or when a fenced block type should render richly everywhere.
+description: Make a codecast mod, a small sandboxed module that adds panes, commands and new kinds of blocks agents can draw to the codecast app, and that reads the person's sessions, tasks, plans, PRs and more. Use when asked to customize, extend, retheme or add something to codecast's interface, to build a dashboard or view over the fleet inside codecast, or when a fenced block type should render richly everywhere.
 argument-hint: "<what the mod should do>"
 ---
 
@@ -63,6 +63,12 @@ it is right.
 - A fence is how agents use what the mod adds: declare it, draw it in
   `on("ui.render", { fence })`, and any agent's ```<lang> block renders that way
   for everyone who has the mod.
+- To restyle the app, declare `themes`: an id, a title, and a `light` and/or
+  `dark` palette of hex values per token (`bg`, `bg-alt`, `card`, `border`,
+  `text`, `text-muted`, `text-dim`, `link`, the nine accents) plus `font-ui`
+  and `font-mono` stacks. The person picks it in Settings > Appearance, and it
+  recolors every surface, Tailwind's color scales included. A theme is data
+  only: there is no CSS hook, so it survives every change to the app.
 
 ## The local half
 
