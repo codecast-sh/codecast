@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD } from "../../lib/hostedPage";
+import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD, HOSTED_PAGE_TOP } from "../../lib/hostedPage";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -1250,8 +1250,10 @@ function TriggersContent() {
 
   return (
     <div className="h-full overflow-y-auto bg-sol-bg" data-main-scroll>
-      <div className={`${HOSTED_PAGE_FRAME} ${fleet ? "px-5 sm:px-6" : HOSTED_PAGE_PAD} py-8`}>
-        <div ref={titlebarRef} className={`flex items-center gap-2 ${fleet ? "mb-5" : "flex-wrap gap-y-2 mb-1.5"}`}>
+      <div className={`${HOSTED_PAGE_FRAME} ${fleet ? "px-5 sm:px-6 py-8" : `${HOSTED_PAGE_PAD} ${HOSTED_PAGE_TOP} pb-8`}`}>
+        {/* Hosted: the row's items start at its top, so the New button never
+            pushes the title below where To-dos and Approvals put theirs. */}
+        <div ref={titlebarRef} className={`flex gap-2 ${fleet ? "items-center mb-5" : "items-start flex-wrap gap-y-2 mb-1.5"}`}>
           {fleet ? (
             <>
               <Zap className="w-4 h-4 text-sol-amber" />
@@ -1368,7 +1370,9 @@ function TriggersContent() {
                   <RowList tasks={paused} {...listProps} />
                 </Section>
                 <Section
-                  title="History"
+                  // Hosted mode names what the section holds: routines that
+                  // ran their course or were stopped (plainEndedWords).
+                  title={fleet ? "History" : "Finished and stopped"}
                   count={history.length}
                   // Success rates are fleet health; hosted mode says only what
                   // went wrong, in the person's words.

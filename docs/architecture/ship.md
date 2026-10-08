@@ -57,6 +57,10 @@ check), or done.
 
 ## Where it renders
 
+Ship is a team feature (`teams.features.ship`, off by default, toggled in
+team settings). In an off workspace none of the controls below render; the
+personal workspace follows the viewer's teams.
+
 - Task page: `TaskShipStation`, at the review station (status in review, or
   any task with a ship run).
 - Session header: `SessionShipButton`, when the session has a branch with
