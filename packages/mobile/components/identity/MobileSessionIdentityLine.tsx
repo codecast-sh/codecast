@@ -8,10 +8,13 @@ import { identityLine, type IdentityRow } from '@codecast/web/lib/sessionIdentit
 import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
 import { useTheme } from '@/constants/Theme';
 
-export function MobileSessionIdentityLine({ row, title, style, maxFontSizeMultiplier }: {
+export function MobileSessionIdentityLine({ row, title, suffix, style, maxFontSizeMultiplier }: {
   row: IdentityRow | null | undefined;
   /** The display title, already cleaned by the caller. */
   title: string;
+  /** A muted word after the title that tells two same-name rows apart
+   *  (lib/sameNameSuffix); it never truncates. */
+  suffix?: string;
   /** The surface's own title style; the name inherits it. */
   style?: StyleProp<TextStyle>;
   maxFontSizeMultiplier?: number;
@@ -20,7 +23,13 @@ export function MobileSessionIdentityLine({ row, title, style, maxFontSizeMultip
   const personifyAll = usePersonifyAll();
   const line = row ? identityLine(row, title, personifyAll) : { name: null, title, handle: null };
   if (!line.name) {
-    return <RNText style={style} numberOfLines={1} maxFontSizeMultiplier={maxFontSizeMultiplier}>{title}</RNText>;
+    if (!suffix) return <RNText style={style} numberOfLines={1} maxFontSizeMultiplier={maxFontSizeMultiplier}>{title}</RNText>;
+    return (
+      <>
+        <RNText style={[style, { flex: 0, flexShrink: 1 }]} numberOfLines={1} maxFontSizeMultiplier={maxFontSizeMultiplier}>{title}</RNText>
+        <RNText style={{ marginLeft: 6, fontSize: 12, color: Theme.textMuted0, flexGrow: 1 }} numberOfLines={1} maxFontSizeMultiplier={maxFontSizeMultiplier}>{suffix}</RNText>
+      </>
+    );
   }
   return (
     <RNText style={style} numberOfLines={1} maxFontSizeMultiplier={maxFontSizeMultiplier}>
