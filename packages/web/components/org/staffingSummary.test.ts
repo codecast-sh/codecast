@@ -58,7 +58,7 @@ describe("the glossary", () => {
   test("one sentence each, no short id in an example, with examples from this workspace where it has one", () => {
     const entries = glossaryEntries(ORG_FIXTURE, ORG_STAFFING_FIXTURE_HEALTH, P);
     expect(entries.map((e) => e.word)).toEqual(GLOSSARY_ORDER);
-    expect(entries).toHaveLength(8);
+    expect(entries).toHaveLength(13);
     for (const e of entries) {
       expect(e.definition.split(/[.!?](\s|$)/).filter((s) => s.trim()).length).toBe(1);
       expect(e.example.length).toBeGreaterThan(8);
@@ -70,6 +70,28 @@ describe("the glossary", () => {
     expect(by.proposal.example).toBe("The one open now: 8 changes, 2 decided.");
     for (const e of entries) expect(e.example).not.toMatch(/\b(op|ct|pl|or|tr)-\d+\b/);
     expect(by.session.example).toMatch(/sessions? working right now\.$/);
+  });
+
+  test("Serves, Carried by and Now are words; goal, project and their relations take examples from the company's own goals and projects", () => {
+    const company = {
+      goals: [
+        { _id: "g1", title: "Make revenue" },
+        { _id: "g2", title: "Increase top of funnel", parent_initiative_id: "g1", project_ids: ["p1", "p2", "p9"] },
+      ],
+      projects: [{ _id: "p1", title: "Lead lists" }, { _id: "p2", title: "Matching Engine" }],
+    };
+    const by = Object.fromEntries(glossaryEntries(null, null, null, company).map((e) => [e.word, e]));
+    expect(["Serves", "Carried by", "Now", "Focus"].every((t) => Object.values(by).some((e) => e.term === t))).toBe(true);
+    expect(by.serves.example).toBe('"Lead lists" serves "Increase top of funnel".');
+    expect(by.carried_by.example).toBe('"Increase top of funnel" is carried by "Lead lists" and "Matching Engine".');
+    expect(by.goal.example).toBe('"Increase top of funnel", carried by Lead lists and Matching Engine.');
+    expect(by.project.own).toBe(true);
+    // No projects anywhere: a sub-goal still says what it serves.
+    const bare = Object.fromEntries(glossaryEntries(null, null, null, { goals: company.goals.map(({ project_ids, ...g }) => g), projects: [] }).map((e) => [e.word, e]));
+    expect(bare.serves.example).toBe('"Increase top of funnel" serves "Make revenue".');
+    expect(bare.carried_by.own).toBe(false);
+    // A person's brief priorities are their focus, never their goals.
+    expect(by.focus.definition).toMatch(/^A person's own priorities/);
   });
 
   test("with an empty workspace every example is a general one, and the short page has four parts", () => {

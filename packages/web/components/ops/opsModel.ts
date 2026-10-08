@@ -7,7 +7,8 @@ import { bucketSeries, kindTriggerEvents, sourceFilterAdmits } from "@codecast/s
 import { parseStackFrame } from "@codecast/shared/contracts/signalFingerprint";
 import { capForeignText, escapeForeignControlChars, fenceForeignText, FOREIGN_TEXT_CAPS, inlineForeignText } from "@codecast/shared/contracts";
 import type { ReplayEvent } from "@codecast/shared/contracts/replay";
-import type { OpsEvent, OpsGroup } from "./opsTypes";
+import type { OpsEvent, OpsGroup, OpsReplay } from "./opsTypes";
+import { formatCallTime } from "@codecast/shared/entities";
 import { formatCodecastConfig, mergeCodecastConfig } from "@codecast/shared/contracts/codecastConfig";
 
 export { bucketSeries };
@@ -232,6 +233,22 @@ export function replayPlace(url: string | null | undefined): string | null {
 export function replayTitle(r: { url?: string | null; external_id?: string } | null | undefined): string | undefined {
   if (!r) return undefined;
   return replayPlace(r.url) ?? r.external_id ?? undefined;
+}
+
+/** What a replay holds, as one line of facts: where it came from, who, how
+ *  long, what broke, and whether the page itself can be played. Pills, cards
+ *  and the moment embed share it, so a replay reads alike everywhere. */
+export function replayFacts(r: Partial<Pick<OpsReplay, "source_name" | "provider" | "user" | "duration_ms" | "counts" | "dom_chunks">>): string[] {
+  const errors = r.counts?.errors ?? 0;
+  const failed = r.counts?.failed_requests ?? 0;
+  return [
+    r.source_name ?? r.provider ?? null,
+    r.user ? r.user.email ?? r.user.name ?? r.user.id ?? null : null,
+    r.duration_ms ? formatCallTime(r.duration_ms) : null,
+    errors ? `${errors} ${errors === 1 ? "error" : "errors"}` : null,
+    failed ? `${failed} failed ${failed === 1 ? "request" : "requests"}` : null,
+    r.dom_chunks === 0 ? "events only" : r.dom_chunks ? "page capture" : null,
+  ].filter((f): f is string => !!f);
 }
 
 /** The repro's base url: the origin the recording started on. */
