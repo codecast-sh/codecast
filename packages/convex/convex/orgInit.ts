@@ -68,6 +68,8 @@ import { roleRoutineFor } from "./lib/orgRoutine";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
 import { handTask, recalcPlanProgress, resolveStatusWrite } from "./tasks";
+import { releaseDependents } from "./taskWaits";
+import { mintProjectShortId } from "./lib/projectShortId";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an
@@ -1288,6 +1290,7 @@ export async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Bou
           user_id: userId,
           team_id: boundary.team_id,
           workspace: key,
+          short_id: await mintProjectShortId(ctx, now),
           title: c.title.trim(),
           description: [c.description?.trim(), note].filter(Boolean).join("\n\n") || undefined,
           status: "active",
@@ -1578,7 +1581,16 @@ const OPEN_TASK = (t: any) => t.status !== "done" && t.status !== "dropped";
  *  every role), the bound sessions released and the plan's progress
  *  reconciled. Shared by the task change and by a plan close's cascade, so
  *  there is one path a proposal can move a task through. */
-export async function setTaskStatus(ctx: Ctx, boundary: Boundary, task: any, status: string, now: number): Promise<void> {
+export async function setTaskStatus(
+  ctx: Ctx,
+  boundary: Boundary,
+  task: any,
+  status: string,
+  now: number,
+  // Who decided the close, and every task the same apply closes (a plan's
+  // cascade): the release of the tasks it blocked reads both (TG2).
+  release: { actorUserId?: Id<"users">; closing?: ReadonlySet<string> } = {},
+): Promise<void> {
   const write = await resolveStatusWrite(ctx, boundary.team_id ?? null, task.status, { status });
   const next = write.status ?? status;
   const closing = next === "done" || next === "dropped";
@@ -1589,7 +1601,9 @@ export async function setTaskStatus(ctx: Ctx, boundary: Boundary, task: any, sta
   // closed task it is history that would read as a live stall.
   if (closing && (task.execution_status === "blocked" || task.execution_status === "needs_context")) patch.execution_status = undefined;
   if (next === "done" && task.started_at) patch.actual_minutes = Math.round((now - task.started_at) / 60000);
+  const before = { ...task };
   await ctx.db.patch(task._id, patch);
+  await releaseDependents(ctx as any, before, next, release);
   if (closing) {
     for (const convId of task.conversation_ids ?? []) {
       const conv = await ctx.db.get(convId);
@@ -1624,7 +1638,8 @@ export async function applyPlanStatus(ctx: Ctx, _userId: Id<"users">, boundary: 
   if (closing) {
     const open: any[] = (await ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).collect()).filter((t: any) => OPEN_TASK(t) && isActiveTask(t));
     open.sort((a, b) => String(a.short_id).localeCompare(String(b.short_id), undefined, { numeric: true }));
-    for (const t of open) { await setTaskStatus(ctx, boundary, t, "dropped", now); tasks_closed.push({ task_id: String(t._id), short_id: t.short_id, before_status: t.status }); }
+    const closingIds = new Set(open.map((t) => String(t._id)));
+    for (const t of open) { await setTaskStatus(ctx, boundary, t, "dropped", now, { actorUserId: _userId, closing: closingIds }); tasks_closed.push({ task_id: String(t._id), short_id: t.short_id, before_status: t.status }); }
     if (open.length) cascade = `; dropped its ${open.length} open task${open.length === 1 ? "" : "s"}: ${open.map((t) => t.short_id).join(", ")}`;
   }
   await noteOrgChange(ctx, _userId, whereOfRecord(plan), { kind: "plan_status", subject: recordSubject("plan", plan), ...movedFields({ status: plan.status }, { status: p.status }), effects: { tasks_closed } });
@@ -1655,7 +1670,7 @@ export async function applyTaskStatus(ctx: Ctx, userId: Id<"users">, boundary: B
   const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", p.task.trim())).first();
   if (!task || workspaceKey(workspaceForResource(task)) !== key) throw new Error(`No task "${p.task}" in this workspace`);
   if (task.status === p.status) return { status: "applied", note: `${task.short_id} is already ${p.status}` };
-  await setTaskStatus(ctx, boundary, task, p.status, Date.now());
+  await setTaskStatus(ctx, boundary, task, p.status, Date.now(), { actorUserId: userId });
   await noteOrgChange(ctx, userId, whereOfRecord(task), { kind: "task_status", subject: recordSubject("task", task), before: { status: task.status }, after: { status: p.status } });
   return { status: "applied", note: `${task.short_id} "${task.title}": ${task.status} → ${p.status}` };
 }
