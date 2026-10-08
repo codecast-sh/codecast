@@ -40,6 +40,7 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { TaskCommentComposer, UserBadge } from "../../../components/tasks/TaskCommentStream";
 import { TaskSessionLink, TaskTimeline } from "../../../components/tasks/TaskTimeline";
+import { SupersededBanner, TaskRelations } from "../../../components/tasks/TaskRelations";
 import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -480,6 +481,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
       } else if (e.key === "l" && !e.metaKey && !e.ctrlKey) {
         stop();
         openCmd("labels");
+      } else if (e.key === "b" && !e.metaKey && !e.ctrlKey) {
+        stop();
+        openCmd("blocker");
       } else if (e.key === "e" && !e.metaKey && !e.ctrlKey) {
         stop();
         startEditTitle();
@@ -596,6 +600,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           </div>
 
           <RepositoryLinks taskId={data._id} conversationIds={linkedIds} sessions={linkedConversations} repository={taskRepository(data) ?? undefined} />
+
+          <SupersededBanner task={data} />
 
           {/* Parent breadcrumb — a subtask never renders context-free */}
           {(data as any).parent_id && (
@@ -759,29 +765,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               </div>
             )}
 
-            {/* Blocked by */}
-            {data.blocked_by && data.blocked_by.length > 0 && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-                <span className="text-xs text-sol-text-dim">Blocked by</span>
-                <div className="flex gap-1.5 flex-wrap">
-                  {data.blocked_by.map((b: string) => (
-                    <Link key={b} href={`/tasks/${b}`} className="text-xs font-mono text-sol-red hover:underline">{b}</Link>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Blocks */}
-            {data.blocks && data.blocks.length > 0 && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-                <span className="text-xs text-sol-text-dim">Blocks</span>
-                <div className="flex gap-1.5 flex-wrap">
-                  {data.blocks.map((b: string) => (
-                    <Link key={b} href={`/tasks/${b}`} className="text-xs font-mono text-sol-text-muted hover:underline">{b}</Link>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* The task graph (task-graph.md TG12): blockers and waits, then links */}
+            <TaskRelations task={data} tasks={allTasks} onAddBlocker={() => openCmd("blocker")} />
 
             {/* Parent — set, change, or detach */}
             <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">

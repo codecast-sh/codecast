@@ -34,6 +34,7 @@ const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-tal
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
+const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-of-every-turn/page"));
 const BlogCloud = lazy(() => import("@/app/(marketing)/blog/codecast-in-the-cloud/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
 const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
@@ -58,10 +59,7 @@ const ModObjects = lazy(() => import("@/app/objects/page"));
 const ModObject = lazy(() => import("@/app/o/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
-const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
-const Initiatives = lazy(() => import("@/app/initiatives/page"));
-const InitiativeDetail = lazy(() => import("@/app/initiatives/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
@@ -69,6 +67,7 @@ const Explore = lazy(() => import("@/app/explore/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
 const Line = lazy(() => import("@/app/line/page"));
+const Expectations = lazy(() => import("@/app/expectations/page"));
 const LineSettings = lazy(() => import("@/app/line/settings/page"));
 const LineTrace = lazy(() => import("@/app/line/trace/[ref]/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
@@ -122,7 +121,6 @@ const CallDetailEntry = lazy(() => import("@/app/calls/[id]/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
-const Projects = lazy(() => import("@/app/projects/page"));
 const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 // Routines = our DOT-graph orchestration (was "Workflows"); the graph page lives at /routines.
 // Workflows = Anthropic dynamic-workflow runs dashboard at /workflows.
@@ -136,13 +134,11 @@ const Anchor = lazy(() => import("@/app/anchor/page"));
 const SlackConnect = lazy(() => import("@/app/slack/connect/page"));
 const WhiskReturn = lazy(() => import("@/app/connect/whisk/page"));
 
-const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
 const TeamCharts = lazy(() => import("@/app/team/charts/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
 
 const Orchestration = lazy(() => import("@/app/orchestration/page"));
-const Roadmap = lazy(() => import("@/app/roadmap/page"));
 const Cli = lazy(() => import("@/app/cli/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
@@ -226,6 +222,7 @@ export function App() {
               <Route path="blog/the-pull-request-that-knows-its-sessions" element={<E name="BlogPullRequests"><BlogPullRequests /></E>} />
               <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
               <Route path="blog/one-repository-twenty-checkouts" element={<E name="BlogWorktrees"><BlogWorktrees /></E>} />
+              <Route path="blog/the-tree-at-the-end-of-every-turn" element={<E name="BlogTurns"><BlogTurns /></E>} />
               <Route path="blog/codecast-in-the-cloud" element={<E name="BlogCloud"><BlogCloud /></E>} />
               <Route path="blog/fewer-bigger-jumps" element={<E name="BlogJumps"><BlogJumps /></E>} />
               <Route path="blog/field-manual" element={<E name="BlogFieldManual"><BlogFieldManual /></E>} />
@@ -262,10 +259,8 @@ export function App() {
               <Route path="o/:id" element={<E name="ModObject"><ModObject /></E>} />
               <Route path="crosstalk" element={<E name="Crosstalk"><Crosstalk /></E>} />
               <Route path="browser" element={<E name="Browser"><Browser /></E>} />
-              <Route path="org" element={<E name="Org"><Org /></E>} />
+              <Route path="org" element={<E name="OrgScope"><OrgScope /></E>} />
               <Route path="org/:id" element={<E name="OrgScope"><OrgScope /></E>} />
-              <Route path="goals" element={<E name="Initiatives"><Initiatives /></E>} />
-              <Route path="goals/:id" element={<E name="InitiativeDetail"><InitiativeDetail /></E>} />
               {/* Team chat. The bare route picks the busiest channel; the
                   parameterized one is the permalink the server mints
                   (convex/chatText.ts chatPermalink → /chat/<id>?m=<msg>). */}
@@ -279,6 +274,7 @@ export function App() {
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
               <Route path="questions" element={<E name="Questions"><Questions /></E>} />
               <Route path="line" element={<E name="Line"><Line /></E>} />
+              <Route path="expectations" element={<E name="Expectations"><Expectations /></E>} />
               <Route path="line/settings" element={<E name="Line settings"><LineSettings /></E>} />
               <Route path="line/trace/:ref" element={<E name="Line trace"><LineTrace /></E>} />
               <Route path="decisions/stacks" element={<E name="DecisionStacks"><DecisionStacks /></E>} />
@@ -305,7 +301,6 @@ export function App() {
               <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />
               <Route path="tasks" element={<E name="Tasks"><Tasks /></E>} />
               <Route path="tasks/:id" element={<E name="TaskDetail"><TaskDetail /></E>} />
-              <Route path="projects" element={<E name="Projects"><Projects /></E>} />
               <Route path="projects/:id" element={<E name="ProjectDetail"><ProjectDetail /></E>} />
               {/* A task opened inside a project — same component as the project
                   itself, so the project never unmounts around it. */}
@@ -320,7 +315,6 @@ export function App() {
               <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
               <Route path="resources" element={<E name="Resources"><Resources /></E>} />
               <Route path="anchor" element={<E name="Anchor"><Anchor /></E>} />
-              <Route path="team" element={<E name="Team"><Team /></E>} />
               <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
               <Route path="team/charts" element={<E name="TeamCharts"><TeamCharts /></E>} />
               <Route path="team/:username" element={<E name="TeamMember"><TeamMember /></E>} />
@@ -341,7 +335,6 @@ export function App() {
             <Route path="explore" element={<E name="Explore"><Explore /></E>} />
             <Route path="windows" element={<E name="Windows"><Windows /></E>} />
             <Route path="orchestration" element={<E name="Orchestration"><Orchestration /></E>} />
-            <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
             <Route path="cli" element={<E name="Cli"><Cli /></E>} />
 
             {/* Sharing. (Published artifacts at /a/<slug> are NOT here: they're
@@ -449,9 +442,19 @@ export function App() {
             <Route path="plan" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="mail" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="integrations" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
-            {/* Renamed pages' old addresses (lib/renamedPages.ts): /initiatives is /goals. */}
+            {/* The non-developer funnel's address: the landing with For everyone first. */}
+            <Route path="everyone" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
+            {/* Renamed pages' old addresses (lib/renamedPages.ts): the company's
+                list pages are filters of the Org screen now, and a goal is its
+                sheet there (/goals/in-2 is /org/in-2). */}
+            <Route path="goals" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
+            <Route path="goals/:id" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="initiatives" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="initiatives/:id" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
+            <Route path="projects" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
+            <Route path="team" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
+            <Route path="company" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
+            <Route path="roadmap" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
 
             {/* Settings - shared sidebar layout */}
             <Route path="settings" element={<SettingsLayout />}>
