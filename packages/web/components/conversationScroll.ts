@@ -137,7 +137,9 @@ export interface LoadNewerInput {
  * bottom, which re-enters the trigger band with no user input and rips through
  * every remaining page. The caller therefore also gates on a wheel-down "arm"
  * (consumed per load) exactly as load-older does — that intent state lives
- * outside this pure function, same as loadOlderArmedRef.
+ * outside this pure function, same as loadOlderArmedRef — except while the
+ * window cannot scroll: then nothing can snap and loading stops once it
+ * overflows, so it fills without intent.
  */
 export function shouldLoadNewer(i: LoadNewerInput): boolean {
   if (!i.hasMoreBelow || i.isLoadingOlder || i.isLoadingNewer || i.cooldownActive) return false;

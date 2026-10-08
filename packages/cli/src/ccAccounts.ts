@@ -1820,6 +1820,8 @@ export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: num
 }
 
 const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
+// Haiku 4.5, not 5.5: on a subscription token claude-haiku-5-5 answers a bare
+// call 429 with no window headers (three accounts, 2026-10-07).
 const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-20251001";
 
 /** One-token model call whose only purpose is the rate-limit headers. Costs a

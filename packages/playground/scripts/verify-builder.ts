@@ -28,7 +28,7 @@ const client = A.client;
 
 const prompt = "A tea tally for the office: everyone taps a big button each time they drink a cup today, with a running total and the faces of who drank the most.";
 const sent1 = performance.now();
-const app = await client.mutation(api.apps.create, { ...credsA, prompt });
+const app = await client.mutation(api.apps.create, { ...credsA, prompt, unlisted: true });
 console.log(`app ${app.slug} at ${SITE}${livePath(app.slug)}`);
 const appId = app.app_id as Id<"apps">;
 const room = A.watchRoom(appId);

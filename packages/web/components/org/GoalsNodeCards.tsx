@@ -22,6 +22,7 @@ import { cn } from "../../lib/utils";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInitiativeUpdates } from "../../hooks/useInitiatives";
 import { Avatar } from "../tasks/TaskCommentStream";
+import { PersonHoverCard } from "../identity/PersonHoverCard";
 import { HealthChip, MetricReadingLine, MetricTile, NextMilestoneChip, UpdateLine } from "../initiatives/InitiativeAtoms";
 import { useZoomLevel } from "./orgZoom";
 import { Frame, GhostChips, Ports, StateBar, StateWords } from "./OrgNodeCards";
@@ -74,7 +75,7 @@ export const LooseCard = memo(function LooseCard({ data }: NodeProps<Node<LooseN
 
 function OwnerFace({ owner, size = 28 }: { owner: GoalOwner; size?: number }) {
   if (owner.kind === "role") return <RoleFace role={{ handle: owner.handle, name: owner.name, avatar: owner.avatar }} size={size} />;
-  if (owner.kind === "person") return <Avatar name={owner.name} image={owner.image} size={size > 22 ? "md" : "sm"} />;
+  if (owner.kind === "person") return <PersonHoverCard person={{ userId: owner.id, name: owner.name, image: owner.image }} side="right" triggerClassName="inline-flex"><Avatar name={owner.name} image={owner.image} size={size > 22 ? "md" : "sm"} /></PersonHoverCard>;
   return <span className="inline-flex items-center justify-center rounded-full" style={{ width: size, height: size, border: `1px solid ${CHIP_STATUS.failed.color}`, color: CHIP_STATUS.failed.color }}><AlertTriangle className="h-3.5 w-3.5" /></span>;
 }
 
