@@ -11,7 +11,7 @@ mock.module("next/link", () => ({ default: ({ children, href, ...rest }: any) =>
 mock.module("../../../lib/convexUrl", () => ({ CONVEX_URL: "https://convex.test", getConvexUrl: () => "https://convex.test" }));
 mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined, error: null }) }));
 mock.module("../../../hooks/useSyncPendingPermissions", () => ({ usePendingPermissions: () => undefined }));
-mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true }));
+mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk: () => async () => true, locateDecisionAsk: async () => null }));
 mock.module("../../PublishedPageEmbed", () => ({ PublishedPageEmbed: () => null }));
 mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div data-md>{content}</div> }));
 
@@ -156,4 +156,29 @@ test("a decision from a role's standing thread names the role that asks", async 
   expect(fold.pane.textContent).toContain("@growth asks");
   expect(fold.pane.textContent).not.toContain("Asked for your steer");
   fold.unmount();
+});
+
+// One decision, one place to read it: a plan gate attaches the plan as a
+// document, and the sheet draws it with the facts and the ladder the decision
+// page draws (DecisionSections), never a link out to read what is answered.
+test("the sheet reads an attached document, the task and the ladder in place, with no link to the page", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const decision: any = {
+    _id: "d2", short_id: "sd-9", conversation_id: "c1", status: "pending", blocking: true, created_at: Date.now() - 60_000,
+    question: "Approve the plan?", options: [{ label: "Approve" }, { label: "Revise" }], task_id: "t1", station: "plan_gate",
+  };
+  useInboxStore.getState().syncTable("decisionDetails", [{
+    _id: "d2", decision,
+    doc: { _id: "doc1", content: "## The plan\n\nStale callbacks get a promise flag." },
+    task: { _id: "t1", short_id: "ct-42", title: "Call cards ring the wrong numbers" },
+    stack: null, ladder: [], asked_users: [{ _id: "u1", name: "Ashot" }], holder_role: null, grant_offer: null, grant: null,
+  } as any]);
+  const plan = { ...item(true), key: "decide:d2", decisionId: "d2", docId: "doc1", contextMd: undefined, question: decision.question, options: decision.options };
+  const { pane, unmount } = await mount(<SessionDecisionCard item={plan} stepper={null} />);
+  expect(pane.querySelector("[data-decision-doc]")!.textContent).toContain("Stale callbacks get a promise flag");
+  expect(pane.textContent).toContain("ct-42");
+  expect(pane.textContent).toContain("went straight to Ashot");
+  expect(pane.textContent).not.toContain("read the full decision");
+  expect(pane.querySelector("a[href^='/decisions/']")).toBeNull();
+  unmount();
 });

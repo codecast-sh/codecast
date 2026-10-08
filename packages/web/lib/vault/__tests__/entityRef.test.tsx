@@ -268,7 +268,7 @@ describe("what an object completion inserts", () => {
     expect(markdownForMentionItem(ITEMS.doc)).toBe(
       `[Library decisions](https://codecast.sh/docs/${CONVEX_ID})`,
     );
-    expect(markdownForMentionItem(ITEMS.person)).toBe("[@ashot](https://codecast.sh/team/ashot)");
+    expect(markdownForMentionItem(ITEMS.person)).toBe("[@ashot](https://codecast.sh/org/@ashot)");
   });
 
   test("everything it inserts reads back as the reference it meant", () => {

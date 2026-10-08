@@ -29,6 +29,7 @@ import { DEFAULT_CAPS, type RoleCaps, type RoleCounters, type ScopeOverlap } fro
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 import { isHeadOfPeopleRole } from "../orgStaffingTypes";
 import { SlackConnect } from "../../anchor/SlackConnect";
+import { OrgObjectLink } from "../company/OrgObjectLink";
 import { HandingOverSection, MergeStepSwitch, SplitRoleSection, SuccessionSection } from "./RoleHandoffSections";
 
 const NO_INTENTS: OrgIntent[] = [];
@@ -53,7 +54,7 @@ export function OverlapWarning({ overlaps, projectName, planName }: { overlaps: 
       <div className="text-[12px] min-w-0" style={{ color: "var(--sol-text-secondary)" }}>
         {overlaps.map((o) => (
           <p key={o.role_id} className="truncate">
-            <Link href={`/org/${o.short_id}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{o.name}</Link>
+            <OrgObjectLink kind="role" objRef={o.short_id} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{o.name}</OrgObjectLink>
             <span style={{ color: "var(--sol-text-dim)" }}> @{o.handle}</span> also looks after {[...o.project_ids.map(projectName), ...o.plan_ids.map(planName)].join(", ")}.
           </p>
         ))}
@@ -98,21 +99,21 @@ function ReportingPeople({ tree, role, canEdit, onUpdate }: { tree: OrgTree; rol
   const addable = canEdit ? tree.people.filter((p) => !ids.includes(p.user_id)) : [];
   const set = (next: string[]) => onUpdate({ reports_user_ids: next });
   return (
-    <Section title="People whose goals it keeps" hint="The role keeps each person's goals in its notes, reads their sessions against those goals every time it runs, and tells them when an important goal stalls. It has no say over their work.">
-      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It keeps nobody's goals yet.</p>}
+    <Section title="People whose focus it keeps" hint="The role keeps each person's priorities in its notes, reads their sessions against them every time it runs, and tells them when an important one stalls. It has no say over their work.">
+      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It keeps nobody's focus yet.</p>}
       <ul className="flex flex-wrap gap-1.5" data-reporting-people={people.length}>
         {people.map((p) => (
           <li key={p.user_id} className="inline-flex items-center gap-1.5 h-7 pl-1 pr-1.5 rounded-full border text-[12px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text)" }}>
             <Avatar name={p.name} image={p.image} size="sm" />{p.name}
             {(canEdit || p.is_me) && (
-              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`Stop keeping ${p.name}'s goals`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
+              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`Stop keeping ${p.name}'s focus`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
             )}
           </li>
         ))}
       </ul>
       <div className="mt-2.5 flex items-center gap-2 flex-wrap">
         {me && !ids.includes(me.user_id) && (
-          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Add my goals</button>
+          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Add my focus</button>
         )}
         {addable.filter((p) => !p.is_me).length > 0 && (
           <SelectBox value="" onChange={(e) => { if (e.target.value) set([...ids, e.target.value]); }} className="text-[12px]" aria-label="Add a person">

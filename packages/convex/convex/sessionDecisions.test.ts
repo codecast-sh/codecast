@@ -245,6 +245,53 @@ describe("ask: people, inbox, ladder, holder", () => {
     expect(row.hops).toEqual([]);
   });
 
+  // An agent account (the Mac mini signed in as a bot) runs sessions nobody
+  // owns. Its questions belong to the people who answer for the work, never
+  // to the bot: nobody reads a bot's queue.
+  const BOT = "users_bot" as any;
+  const botSeed = (rows: any[] = []) => seed({
+    projects: [{ _id: "projects_p1", team_id: TEAM, name: "P1" }],
+    session_decisions: rows,
+  });
+  function addBotSession(tables: any) {
+    tables.users.push({ _id: BOT, name: "Aivery", is_bot: true });
+    tables.team_memberships.push({ _id: "m_bot", user_id: BOT, team_id: TEAM, role: "member" });
+    tables.conversations.push({ _id: "conversations_bot", session_id: "sess-bot", user_id: BOT, team_id: TEAM, message_count: 1 });
+  }
+
+  test("an agent account's session climbs the task's project lead line to a person", async () => {
+    const { ctx, tables } = botSeed();
+    addBotSession(tables);
+    const r = await askCore(ctx, { userId: BOT }, { session_id: "sess-bot", question: "Build this fix?", options: twoOptions, category: "approach", task: "ct-7" });
+    expect(r.error).toBeUndefined();
+    const row = tables.session_decisions[0];
+    expect(row.asked_user_ids).toEqual([BOSS]);
+    expect(row.hops.map((h: any) => h.role_id)).toEqual(["org_roles_lead", "org_roles_head"]);
+    expect(row.holder).toEqual({ kind: "user", id: BOSS });
+  });
+
+  test("an agent account's session with no line to follow asks the workspace admins", async () => {
+    const { ctx, tables } = botSeed();
+    addBotSession(tables);
+    const r = await askCore(ctx, { userId: BOT }, { session_id: "sess-bot", question: "Which way?", options: twoOptions, category: "approach" });
+    expect(r.error).toBeUndefined();
+    expect(tables.session_decisions[0].asked_user_ids).toEqual([HOST, BOSS]);
+  });
+
+  test("a question already held by an agent account reroutes to the line", async () => {
+    const { ctx, tables } = botSeed([
+      { _id: "session_decisions_old", short_id: "sd-1", conversation_id: "conversations_bot", session_id: "sess-bot", user_id: BOT, question: "Build this fix?", options: twoOptions, kind: "single", category: "approach", status: "pending", task_id: "tasks_t1", asked_user_ids: [BOT], hops: [], holder: { kind: "user", id: BOT }, created_at: NOW },
+    ]);
+    addBotSession(tables);
+    tables.decision_inbox.push({ _id: "di_old", decision_id: "session_decisions_old", user_id: BOT, status: "pending", created_at: NOW });
+    await reroutePendingDecisionsForConversation(ctx, "conversations_bot" as any, NOW);
+    const row = tables.session_decisions[0];
+    expect(row.asked_user_ids).toEqual([BOSS]);
+    expect(row.hops.map((h: any) => h.role_id)).toEqual(["org_roles_lead", "org_roles_head"]);
+    expect(row.holder).toEqual({ kind: "user", id: BOSS });
+    expect(tables.decision_inbox.map((i: any) => i.user_id)).toEqual([BOSS]);
+  });
+
   test("a standing session asks its owners, not the runner or the role parent", async () => {
     const { ctx, tables } = seed();
     const r = await askApproach(ctx, "sess-standing");
@@ -401,6 +448,32 @@ describe("the race", () => {
     expect(msg?.content).toContain(`<cast-decision id="${decisionId}"`);
   });
 
+  test("--for-human: a session answers as its human, recorded with the session as the route", async () => {
+    const { ctx, tables } = seed();
+    await askApproach(ctx);
+    // The asking session cannot answer its own question, even at its human's word.
+    const self = await answerCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-ask", for_human: true, answer_index: 0 });
+    expect(self.error).toContain("its own question");
+    // Another of the human's sessions, told to answer: their answer, via that session.
+    const r = await answerCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-plain", for_human: true, answer_index: 1 });
+    expect(r.error).toBeUndefined();
+    expect(r.answered_by).toEqual({ kind: "user", id: HOST, via: "conversations_plain" });
+    const row = tables.session_decisions[0];
+    expect(row.status).toBe("answered");
+    expect(row.answered_by).toEqual({ kind: "user", id: HOST, via: "conversations_plain" });
+    expect(row.resolved_by).toBe(HOST);
+  });
+
+  test("--for-human from an agent account's session is refused: a bot speaks for nobody", async () => {
+    const { ctx, tables } = seed();
+    await askApproach(ctx);
+    tables.users.push({ _id: "users_bot", name: "Aivery", is_bot: true });
+    tables.conversations.push({ _id: "conversations_botrun", session_id: "sess-botrun", user_id: "users_bot", team_id: TEAM, message_count: 1 });
+    const r = await answerCore(ctx, { userId: "users_bot" as any }, { decision_id: "sd-1", session_id: "sess-botrun", for_human: true, answer_index: 0 });
+    expect(r.error).toContain("agent account");
+    expect(tables.session_decisions[0].status).toBe("pending");
+  });
+
   test("a session never answers as a person: the asking session, a role session without a grant, a roleless session", async () => {
     const { ctx, tables } = seed();
     await askApproach(ctx);
@@ -421,7 +494,32 @@ describe("the race", () => {
     const { ctx: ctx2 } = seed();
     await askApproach(ctx2);
     const s = await answerCore(ctx2, { userId: "users_stranger" as any }, { decision_id: "sd-1", answer_index: 0 });
-    expect(s.error).toContain("Not a holder");
+    expect(s.error).toContain("not your decision");
+  });
+
+  test("a teammate who may read a decision asked of others answers it, and its people are told who answered for them", async () => {
+    const MATE = "users_mate" as any;
+    const { ctx, tables } = seed();
+    tables.users.push({ _id: MATE, name: "Mate" });
+    tables.team_memberships.push({ _id: "m3", user_id: MATE, team_id: TEAM, role: "member" });
+    // The asking session is shared with the team, so the teammate reads it.
+    Object.assign(tables.conversations.find((c: any) => c._id === "conversations_ask"), { is_private: false, team_visibility: "full" });
+    await askApproach(ctx);
+    const row = tables.session_decisions[0];
+    expect(row.asked_user_ids.map(String)).not.toContain(MATE);
+    expect(await userMayRead(ctx, MATE, row)).toBe(true);
+    const r = await answerCore(ctx, { userId: MATE }, { decision_id: "sd-1", answer_index: 1 });
+    expect(r.answered_by).toEqual({ kind: "user", id: MATE });
+    const notes = (tables.notifications ?? []).filter((n: any) => n.type === "decision_answered_for_you");
+    expect(notes.map((n: any) => String(n.recipient_user_id)).sort()).toEqual(row.asked_user_ids.map(String).sort());
+    expect(notes[0].actor_user_id).toBe(MATE);
+    expect(notes[0].message).toContain("Switch to upstream");
+    expect(notes[0].link).toBe(`/decisions/${row.short_id}`);
+    // One of its people answering is no news to anyone.
+    const { ctx: ctx2, tables: t2 } = seed();
+    await askApproach(ctx2);
+    await answerCore(ctx2, { userId: HOST }, { decision_id: "sd-1", answer_index: 0 });
+    expect((t2.notifications ?? []).filter((n: any) => n.type === "decision_answered_for_you")).toHaveLength(0);
   });
 
   test("a role session whose switch is off cannot answer even under a grant", async () => {

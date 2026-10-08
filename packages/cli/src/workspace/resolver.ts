@@ -24,11 +24,10 @@
 import * as path from "node:path";
 import { AGENT_CONTEXT_ROOTS, collectProjectContext } from "../cloud/mirror/discovery.js";
 import { detectProject } from "./detect.js";
-import { DEFAULT_BROWSER, parseManifest } from "./manifest.js";
+import { DEFAULT_BROWSER, MANIFEST_REL_PATH, parseManifest } from "./manifest.js";
 import type { BrowserSpec, WorkspaceManifest } from "./types.js";
 
-/** Conventional location of the workspace manifest within a repo. */
-export const MANIFEST_REL_PATH = ".codecast/workspace.toml";
+export { MANIFEST_REL_PATH };
 
 /**
  * Resolve the merged workspace manifest for a repo.
@@ -92,8 +91,10 @@ export function mergeManifests(
     o.length > 0 ? o : b;
 
   const host = override.host ?? base.host;
+  const ship = override.ship ?? base.ship;
   return {
     ...(host ? { host } : {}),
+    ...(ship ? { ship } : {}),
     setup: {
       copy: replaceArrayIfNonEmpty(override.setup.copy, base.setup.copy),
       share: replaceArrayIfNonEmpty(override.setup.share, base.setup.share),
