@@ -1,5 +1,6 @@
 "use client";
 
+import { EntityIdPill } from "../EntityIdPill";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { advisoryAnswerOpen } from "@codecast/shared/contracts";
 import { useCallback, useState } from "react";
@@ -7,8 +8,8 @@ import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Layers, ShieldCheck, Undo2, User } from "lucide-react";
-import { mayAnswerFromDocument, useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
+import { AlertTriangle, ArrowLeft, Check, Layers, ShieldCheck, Undo2, User } from "lucide-react";
+import { answersForOthers, mayAnswerFromDocument, useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -45,10 +46,10 @@ export function DecisionDocument({ id }: { id: string }) {
     if (missing && ready) return <Empty text="This decision does not exist, or it is not yours to read." />;
     return <AppLoader />;
   }
-  // The store row is the queue's; the detail's copy is the server's read. A
-  // person the decision was asked of answers either way: a role on the
-  // ladder that heard it first keeps it out of their queue, not out of
-  // their hands (onAnswer adopts the detail's copy first).
+  // The store row is the queue's; the detail's copy is the server's read.
+  // Any signed-in reader answers either way: a role on the ladder that heard
+  // it first, or a decision asked of somebody else, keeps it out of their
+  // queue, not out of their hands (onAnswer adopts the detail's copy first).
   const decision: SessionDecisionItem = liveRow ?? detail.decision;
   return <DocumentBody decision={decision} detail={detail} answerable={!!liveRow || mayAnswerFromDocument(detail, meId)} />;
 }
@@ -107,6 +108,16 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
     : detail.asked_users.length
       ? `held by ${detail.asked_users.map((u) => u.name).join(", ")}`
       : "held by its people";
+  // Answering for somebody else is allowed; the page says so where the
+  // answer is given, and the server tells the people who answered for them.
+  const heldNote = pending && answerable && answersForOthers(detail, meId) ? (
+    <div className="mb-3 flex items-start gap-2 rounded-lg border border-sol-yellow/40 bg-sol-yellow/5 px-3 py-2 text-[12px] text-sol-text-muted">
+      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-sol-yellow" />
+      <span>
+        {holderLine[0].toUpperCase() + holderLine.slice(1)}. You can still answer it; {detail.asked_users.map((u) => u.name).join(", ") || "its people"} will be told you answered for them.
+      </span>
+    </div>
+  ) : null;
 
   const answeredBy = decision.answered_by;
   const answeredPerson = answeredBy?.kind === "user" ? detail.asked_users.find((u) => u._id === answeredBy.id) : undefined;
@@ -116,7 +127,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
       ? <>answered by policy: stack {detail.stack?.short_id ?? answeredBy.id.replace(/^stack:/, "")} default</>
       : answeredBy.kind === "role"
         ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
-        : <span className="inline-flex items-center gap-1.5">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} /></span>;
+        : <span className="inline-flex items-center gap-1.5 flex-wrap">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} />{answeredBy.via && <>through their agent in <EntityIdPill id={answeredBy.via} type="session" compact /></>}</span>;
 
   // A settled change card says what happened once: the verdict, who gave it
   // and when, as the card's last line.
@@ -226,6 +237,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         </header>
 
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
+        {verdictBar && decision.card && heldNote && <div className="mt-4">{heldNote}</div>}
         {verdictBar && decision.card && (
           <ChangeCardVerdictBar card={decision.card}>
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={pending ? onDismiss : undefined} keys recommendation={rec} record={outcome?.pill} />
@@ -266,7 +278,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               footer; a settled or held decision reads its rows plainly. */}
           <div className="mt-3">
             {answerInOptions ? (
-              <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
+              <>
+                {heldNote}
+                <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
+              </>
             ) : (
               <DecisionOptionList
                 options={decision.options}
@@ -341,10 +356,11 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             answerable ? (
               <>
                 <h2 className="decision-kicker mb-3">Your answer</h2>
+                {heldNote}
                 <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
               </>
             ) : (
-              <div className="text-sm text-sol-text-dim">{holderLine[0].toUpperCase() + holderLine.slice(1)}. You can read it, not answer it.</div>
+              <div className="text-sm text-sol-text-dim">{holderLine[0].toUpperCase() + holderLine.slice(1)}. Sign in to answer it.</div>
             )
           ) : (
             <>

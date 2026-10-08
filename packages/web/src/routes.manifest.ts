@@ -110,6 +110,7 @@ const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-tal
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
+const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-of-every-turn/page"));
 const BlogCloud = lazy(() => import("@/app/(marketing)/blog/codecast-in-the-cloud/page"));
 const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
 const BlogFieldManual = lazy(() => import("@/app/(marketing)/blog/field-manual/page"));
@@ -142,8 +143,6 @@ const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
-const Initiatives = lazy(() => import("@/app/initiatives/page"));
-const InitiativeDetail = lazy(() => import("@/app/initiatives/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
@@ -170,7 +169,6 @@ const CallDetailEntry = lazy(() => import("@/app/calls/[id]/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
-const Projects = lazy(() => import("@/app/projects/page"));
 const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 // Routines = our DOT-graph orchestration page at /routines (App import: @/app/workflows/page).
 // Workflows = Anthropic dynamic-workflow runs dashboard at /workflows (import: @/app/workflows/dashboard).
@@ -190,7 +188,6 @@ const SlackConnect = lazy(() => import("@/app/slack/connect/page"));
 const WhiskReturn = lazy(() => import("@/app/connect/whisk/page"));
 // One component serves the index and every section
 // so section switches reconcile in place instead of remounting.
-const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
 const TeamCharts = lazy(() => import("@/app/team/charts/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
@@ -204,7 +201,6 @@ const Ops = lazy(() => import("@/app/ops/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 const Orchestration = lazy(() => import("@/app/orchestration/page"));
-const Roadmap = lazy(() => import("@/app/roadmap/page"));
 const Cli = lazy(() => import("@/app/cli/page"));
 const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 
@@ -303,6 +299,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/the-pull-request-that-knows-its-sessions", component: cast(BlogPullRequests), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/one-repository-twenty-checkouts", component: cast(BlogWorktrees), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/the-tree-at-the-end-of-every-turn", component: cast(BlogTurns), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/codecast-in-the-cloud", component: cast(BlogCloud), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/fewer-bigger-jumps", component: cast(BlogJumps), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/field-manual", component: cast(BlogFieldManual), layout: "marketing", guestOk: true, guestKind: "public" },
@@ -340,8 +337,6 @@ export const ROUTES: RouteEntry[] = [
   // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
   { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org", fullWidth: true },
   { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },
-  { path: "goals", component: cast(Initiatives), layout: "dashboardShell", tab: "/goals" },
-  { path: "goals/:id", component: cast(InitiativeDetail), layout: "dashboardShell", tab: "/goals/:id" },
   // Chat is full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions and
   // /anchor), not via a DashboardLayout isOnXPage flag — so it carries no
   // fullWidth here. See the reverse-drift check in routes.manifest.test.ts.
@@ -380,7 +375,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "plans/:id", component: cast(PlanDetail), layout: "dashboardShell", tab: "/plans/:id", fullWidth: true },
   { path: "tasks", component: cast(Tasks), layout: "dashboardShell", tab: "/tasks", fullWidth: true },
   { path: "tasks/:id", component: cast(TaskDetail), layout: "dashboardShell", tab: "/tasks/:id", fullWidth: true },
-  { path: "projects", component: cast(Projects), layout: "dashboardShell", tab: "/projects", fullWidth: true },
   { path: "projects/:id", component: cast(ProjectDetail), layout: "dashboardShell", tab: "/projects/:id", fullWidth: true },
   { path: "projects/:id/:taskId", component: cast(ProjectDetail), layout: "dashboardShell", tab: "/projects/:id/:taskId", fullWidth: true },
   { path: "workflows", component: cast(Workflows), layout: "dashboardShell", tab: "/workflows", fullWidth: true },
@@ -394,7 +388,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "resources", component: cast(Resources), layout: "dashboardShell", tab: "/resources" },
   // Full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions), not an isOnXPage flag.
   { path: "anchor", component: cast(Anchor), layout: "dashboardShell", tab: "/anchor" },
-  { path: "team", component: cast(Team), layout: "dashboardShell", tab: "/team" },
   { path: "team/activity", component: cast(TeamActivity), layout: "dashboardShell", tab: "/team/activity" },
   { path: "team/charts", component: cast(TeamCharts), layout: "dashboardShell", tab: "/team/charts" },
   { path: "team/:username", component: cast(TeamMember), layout: "dashboardShell", tab: "/team/:username" },
@@ -416,7 +409,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "explore", component: cast(Explore), layout: "standalone" },
   { path: "windows", component: cast(Windows), layout: "standalone", tab: "/windows", fullWidth: true },
   { path: "orchestration", component: cast(Orchestration), layout: "standalone" },
-  { path: "roadmap", component: cast(Roadmap), layout: "standalone" },
   { path: "cli", component: cast(Cli), layout: "standalone" },
 
   // -- Sharing (no AuthGuard → public) --
@@ -527,9 +519,19 @@ export const ROUTES: RouteEntry[] = [
   { path: "plan", component: cast(LaneRedirect), layout: "redirect" },
   { path: "mail", component: cast(LaneRedirect), layout: "redirect" },
   { path: "integrations", component: cast(LaneRedirect), layout: "redirect" },
-  // Renamed pages' old addresses (lib/renamedPages.ts): /initiatives is /goals.
+  // The non-developer funnel's address, open to a signed-out visitor.
+  { path: "everyone", component: cast(LaneRedirect), layout: "redirect", guestOk: true, guestKind: "public" },
+  // Renamed pages' old addresses (lib/renamedPages.ts): the company's list
+  // pages are filters of the Org screen, and a goal is its sheet there.
+  { path: "goals", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "goals/:id", component: cast(LaneRedirect), layout: "redirect" },
   { path: "initiatives", component: cast(LaneRedirect), layout: "redirect" },
   { path: "initiatives/:id", component: cast(LaneRedirect), layout: "redirect" },
+  // Full width like every page under /projects (DashboardLayout isOnProjectsPage).
+  { path: "projects", component: cast(LaneRedirect), layout: "redirect", fullWidth: true },
+  { path: "team", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "company", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "roadmap", component: cast(LaneRedirect), layout: "redirect" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },
