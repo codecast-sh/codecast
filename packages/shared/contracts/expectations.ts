@@ -190,16 +190,68 @@ export function autoApplies(ops: ExpectationOp[], personSaid: (c: ExpectationCit
 
 /**
  * What a signed-in person changes by hand where the expectations are read
- * (line-map.md LX3, LX5): a line in their own words, or a retirement with the
- * reason. Either becomes a proposal like any other.
+ * (line-map.md LX3, LX5): a line in their own words (with the source it came
+ * from, when they have one), a change to a line's words, area or open
+ * question, or a retirement with the reason. Each becomes a proposal like any
+ * other. `why` on an edit is what they say about the change (how an open
+ * question was settled); it is their words on the record.
  */
-export type PersonEdit = { op: "add"; text: string; part: string } | { op: "retire"; id: string; reason: string };
+export type PersonEdit =
+  | { op: "add"; text: string; part: string; note?: string; source?: ExpectationCitation }
+  | { op: "edit"; id: string; text?: string; part?: string; note?: string; why?: string }
+  | { op: "retire"; id: string; reason: string };
 
-/** The op a person's edit becomes: their own words are its source, cited as them on the day they typed them. */
+/** The words a person's edit puts on the record as theirs. */
+function personWords(edit: PersonEdit): string {
+  if (edit.op === "add") return edit.text;
+  if (edit.op === "retire") return edit.reason;
+  return edit.why?.trim() || edit.text?.trim() || edit.note?.trim() || "Changed by hand";
+}
+
+/** The op a person's edit becomes: their own words are its source, cited as them on the day they typed them, beside the source they named. */
 export function personOp(edit: PersonEdit, userId: string, now: number): ExpectationOp {
   const when = new Date(now).toISOString().slice(0, 10);
-  const words = edit.op === "add" ? edit.text : edit.reason;
-  return normalizeOp({ ...edit, citations: [{ kind: "person", ref: userId, quote: words, when }] });
+  const own = { kind: "person", ref: userId, quote: personWords(edit), when };
+  if (edit.op === "add") {
+    const { source, ...rest } = edit;
+    return normalizeOp({ ...rest, citations: source?.ref ? [own, source] : [own] });
+  }
+  if (edit.op === "edit") {
+    const { why: _why, ...rest } = edit;
+    return normalizeOp({ ...rest, citations: [own] });
+  }
+  return normalizeOp({ ...edit, citations: [own] });
+}
+
+/** A proposal summary for a person's edit, in the words a history reads. */
+export function personEditSummary(edit: PersonEdit, who: string): string {
+  if (edit.op === "add") return `${who} added: ${edit.text}`;
+  if (edit.op === "retire") return `${who} retired ${edit.id}: ${edit.reason}`;
+  if (edit.note === "") return `${who} settled the open question on ${edit.id}${edit.why ? `: ${edit.why}` : ""}`;
+  if (edit.note && edit.text === undefined && edit.part === undefined) return `${who} raised a question on ${edit.id}: ${edit.note}`;
+  return `${who} changed ${edit.id}${edit.text ? `: ${edit.text}` : ""}`;
+}
+
+/**
+ * Where a source a person names lives, from what they paste: a codecast short
+ * id (ct-, cl-, sd-, a session's seven characters, doc:), a codecast link to
+ * one, a chat message link, a commit (repo@sha), or anything else as "other".
+ */
+export function citationFromInput(input: string): { kind: CitationKind; ref: string } | null {
+  const raw = input.trim();
+  if (!raw) return null;
+  const chat = /\/chat\/([^/?#\s]+)(?:\/|\?(?:[^#]*&)?(?:m|message|msg)=)([a-z0-9]{20,})/i.exec(raw);
+  if (chat) return { kind: "chat", ref: `#${chat[1]}/${chat[2]}` };
+  const path = /^https?:\/\//i.test(raw) ? (() => { try { return new URL(raw).pathname.split("/").filter(Boolean).pop() ?? raw; } catch { return raw; } })() : raw;
+  const id = path.replace(/^@/, "");
+  if (/^ct-\d+$/i.test(id)) return { kind: "task", ref: id.toLowerCase() };
+  if (/^cl-\d+(:\d+)?$/i.test(id)) return { kind: "call", ref: id.toLowerCase() };
+  if (/^sd-\d+$/i.test(id)) return { kind: "decision", ref: id.toLowerCase() };
+  if (/^doc:\S+$/i.test(id)) return { kind: "doc", ref: id };
+  if (/^sg-\d+$/i.test(id)) return { kind: "signal", ref: id.toLowerCase() };
+  if (/^[^@\s]+@[0-9a-f]{7,40}$/i.test(id)) return { kind: "commit", ref: id };
+  if (/^jx[a-z0-9]{5}$/.test(id)) return { kind: "session", ref: id };
+  return { kind: "other", ref: raw.slice(0, LIMITS.ref) };
 }
 
 /**

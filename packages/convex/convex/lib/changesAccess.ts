@@ -167,26 +167,23 @@ export type ChangesMedia = {
   artifacts?: SessionArtifact[];
 };
 
-const MEDIA_IMAGES_PER_SESSION = 4;
+const MEDIA_IMAGES_PER_SESSION = 6;
 const MEDIA_EDITS_PER_SESSION = 3;
 const MEDIA_EDIT_CHARS = 900;
 const MEDIA_ARTIFACTS_PER_SESSION = 3;
 const MEDIA_CONTEXT_CHARS = 220;
 /**
- * How far from a story's commits a session's media still belongs to it. A
- * screenshot shows the work it was taken during: everything the session did
- * since its own previous commit went into this one, so its screenshots from
- * then on belong to the story, however long it worked before committing, and
- * a session that commits often keeps a tight window. A session with no
- * earlier commit reaches back SHOT_LOOKBACK_MS. Screenshots checking the
- * result come up to SHOT_REACH_MS after. A page, a canvas or an edit to
- * instructions comes first (a design, a proposal, the prompt change) and
- * rarely long after.
+ * How far from a story's commits a session's media still belongs to it.
+ * Everything a session did since its own previous commit went into this one:
+ * the design or report it published first, the screenshots it took while
+ * building, however long it worked before committing. A session that commits
+ * often keeps a tight window, and one with no earlier commit reaches back
+ * MEDIA_LOOKBACK_MS (the window that makes a session an author of the commit).
+ * Screenshots checking the result and a page reporting it come up to
+ * MEDIA_REACH_MS after.
  */
-const SHOT_LOOKBACK_MS = 12 * 60 * 60 * 1000;
-const SHOT_REACH_MS = 3 * 60 * 60 * 1000;
-const MADE_BEFORE_MS = 6 * 60 * 60 * 1000;
-const MADE_AFTER_MS = 60 * 60 * 1000;
+const MEDIA_LOOKBACK_MS = 48 * 60 * 60 * 1000;
+const MEDIA_REACH_MS = 3 * 60 * 60 * 1000;
 
 /** A message's words around an image: its text with image markup and links dropped, clipped. */
 function imageContext(content: string | undefined): string {
@@ -236,9 +233,9 @@ async function toolCallInput(ctx: DbCtx, conversationId: Id<"conversations">, to
   return "";
 }
 
-/** Where a session's work toward a commit at `firstAt` began: its own previous commit, at most SHOT_LOOKBACK_MS back. */
+/** Where a session's work toward a commit at `firstAt` began: its own previous commit, at most MEDIA_LOOKBACK_MS back. */
 async function sinceOwnCommit(ctx: DbCtx, conversationId: Id<"conversations">, firstAt: number): Promise<number> {
-  const floor = firstAt - SHOT_LOOKBACK_MS;
+  const floor = firstAt - MEDIA_LOOKBACK_MS;
   const commits: Doc<"commits">[] = await ctx.db.query("commits").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId)).take(200);
   const before = commits.map((c) => c.timestamp).filter((t) => t < firstAt && t > floor);
   return before.length ? Math.max(...before) : floor;
@@ -254,12 +251,11 @@ export async function teamVisibleMedia(
   inputs: ReadonlyArray<Pick<TeamVisibleInput, "conversation_id" | "mode">>,
   work: { first_at: number; last_at: number },
 ): Promise<Map<string, ChangesMedia>> {
-  const made = { since: work.first_at - MADE_BEFORE_MS, until: work.last_at + MADE_AFTER_MS };
   const out = new Map<string, ChangesMedia>();
   for (const input of inputs) {
     if (input.mode !== "full") continue;
-    const shots = { since: await sinceOwnCommit(ctx, input.conversation_id, work.first_at), until: work.last_at + SHOT_REACH_MS };
-    const found = await sessionImages(ctx, input.conversation_id, { ...shots, max: MEDIA_IMAGES_PER_SESSION });
+    const window = { since: await sinceOwnCommit(ctx, input.conversation_id, work.first_at), until: work.last_at + MEDIA_REACH_MS };
+    const found = await sessionImages(ctx, input.conversation_id, { ...window, max: MEDIA_IMAGES_PER_SESSION });
     const images = [];
     for (const img of found) {
       const message: Doc<"messages"> | null = await ctx.db.get(img.message_id);
@@ -274,8 +270,8 @@ export async function teamVisibleMedia(
         origin: (captured ? "captured during the work" : "pasted by a person") as ImageOrigin,
       });
     }
-    const edits = await sessionInstructionEdits(ctx, input.conversation_id, { ...made, max: MEDIA_EDITS_PER_SESSION, chars: MEDIA_EDIT_CHARS });
-    const artifacts = await sessionArtifacts(ctx, input.conversation_id, { ...made, max: MEDIA_ARTIFACTS_PER_SESSION });
+    const edits = await sessionInstructionEdits(ctx, input.conversation_id, { ...window, max: MEDIA_EDITS_PER_SESSION, chars: MEDIA_EDIT_CHARS });
+    const artifacts = await sessionArtifacts(ctx, input.conversation_id, { ...window, max: MEDIA_ARTIFACTS_PER_SESSION });
     if (images.length || edits.length || artifacts.length) {
       out.set(String(input.conversation_id), { images: images.reverse(), edits, ...(artifacts.length ? { artifacts } : {}) });
     }

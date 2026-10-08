@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from "../proc.js";
 import { existsSync, writeFileSync, unlinkSync, openSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, renameSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { tmuxRun } from "../tmux.js";
+import { withTmuxSession } from "../tmuxRoute.js";
 
 export interface AgentHandle {
   id: string;
@@ -410,8 +411,11 @@ export class TmuxRuntime implements AgentRuntime {
     this.waitForReady(opts.sessionName);
 
     const bufName = `agent-spawn-${opts.sessionName}`;
-    tmuxRun(["load-buffer", "-b", bufName, promptFile]);
-    tmuxRun(["paste-buffer", "-t", opts.sessionName, "-b", bufName, "-d"]);
+    // load-buffer names no target; the scope puts the buffer on the server the paste reads.
+    withTmuxSession(opts.sessionName, () => {
+      tmuxRun(["load-buffer", "-b", bufName, promptFile]);
+      tmuxRun(["paste-buffer", "-t", opts.sessionName, "-b", bufName, "-d"]);
+    });
 
     spawnSync("sleep", ["1"]);
     tmuxRun(["send-keys", "-t", opts.sessionName, "Enter"]);
