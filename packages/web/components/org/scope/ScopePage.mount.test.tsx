@@ -27,11 +27,13 @@ function world() {
   worldOnce ??= (async () => {
     const { JSDOM } = await import("jsdom");
     const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
-    for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "NodeFilter", "DocumentFragment"]) {
+    for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "NodeFilter", "DocumentFragment", "DOMRect"]) {
       Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
     }
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     (dom.window as any).HTMLElement.prototype.scrollIntoView = () => {};
+    // The seam's Group (ConversationWithPanel) observes its own size.
+    (dom.window as any).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
     const { mock } = await import("bun:test");
     const React = await import("react");
     const { act } = React;
@@ -174,22 +176,26 @@ async function verifyScopePage() {
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold"), "1", "the seat's provisioning prompt folds away");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold-working"), "1", "working turns and machine prompts fold away (F4.1)");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "working turns fold to receipts");
-  assert.match(q("[data-scope-lead]")!.textContent!, /I look after Growth, SEO and AI citations\./, "the agent opens by saying what this area is");
+  assert.equal(q("[data-scope-lead]"), null, "the role's head says what it carries, so its thread opens on the thread itself");
   assert.match(q("[data-scope-stripe]")!.textContent!, /Rewriting the weekly growth review/, "the header says what it is watching");
   assert.equal(q("[data-scope-lead-ask]"), null, "the lead never counts sessions waiting on a person: those wait on the role, which raises what it cannot answer in its own thread");
   for (const word of ["trust", "model", "today", "wakes", "tokens", "host"]) assert.ok(!qa("header *").some((el) => el.children.length === 0 && el.textContent?.trim().toLowerCase() === word), `the header no longer says ${word}`);
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-autofocus"), "1", "the composer comes to hand on a desktop");
   assert.ok(q("[data-composer]"), "the composer is Talk");
   assert.equal(qa("button").filter((b) => /^(Talk|Wake)$/.test(b.textContent?.trim() ?? "")).length, 0, "Talk and Wake left the header");
-  assert.ok(q("[data-scope-reports-to]"), "the header keeps the reports to line");
-  assert.equal(q("[data-scope-state]")!.getAttribute("data-scope-state"), "awake");
+  // Under the name, the head its sheet and its hover card say: whom it
+  // reports to (their sheet one click away), its state, what it carries, since when.
+  const headFacts = q("[data-scope-head-facts]")!;
+  assert.ok(headFacts, "the role's head sits under its name");
+  const reportsTo = headFacts.querySelector("[data-scope-reports-to] a")!;
+  assert.match(reportsTo.getAttribute("href")!, /^\/org\//, "whom it reports to opens their sheet on the Org screen");
+  assert.ok(headFacts.querySelector("[data-role-state]"), "its state, in the word its line uses");
+  assert.match(headFacts.textContent!, /Owns organic search/, "with nothing led or owned, what it carries is what it is for");
+  assert.equal(q("[data-scope-state]"), null, "one state on the head, not a chip beside it");
   assert.equal(q("[data-scope-aside]"), null, "the page opens on the conversation, the panel collapsed");
-  assert.ok(q("[data-scope-glance]"), "the collapsed panel is a glance under the header");
-  assert.match(q("[data-scope-glance-charter]")!.textContent!, /Owns organic search/, "with no goal written down, its top line is what the role is for");
-  assert.ok(q("[data-scope-glance] [data-scope-doing]"), "and it says what the role is doing");
-  await click(q("[data-scope-glance]"));
-  assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "side", "a click on the glance opens the panel");
-  assert.equal(q("[data-scope-glance]"), null, "the glance gives way to the panel");
+  await click(headFacts);
+  assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "side", "a click on the head opens the panel");
+  assert.ok(q("[data-scope-head-facts]"), "the head stays while the panel is open");
   // A role's page opens on Overview (org-roles-run-work.md R3): what it is
   // for, the briefing, its notes behind a fold, then what happened lately.
   assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "scope", "a role's page opens on Overview");
@@ -423,7 +429,7 @@ async function verifyFirstScreen() {
   const q = (sel: string) => document.querySelector<HTMLElement>(sel);
   const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
   function Screen({ brief }: { brief: string | null }) {
-    return React.createElement(ScopeOverviewTab, { role: calling as any, now: T0, narrative: brief, briefLoaded: true });
+    return React.createElement(ScopeOverviewTab, { role: calling as any, now: T0, narrative: brief });
   }
   const render = (brief: string | null) => act(async () => root.render(React.createElement(Screen, { brief })));
 
@@ -442,7 +448,7 @@ async function verifyFirstScreen() {
   assert.match(market.textContent!, /Market growth.*two markets are filled and the third waits on a lawyer/, "matched by the short id the role wrote");
   assert.equal(market.querySelector("[data-scope-stands-age]")!.getAttribute("data-scope-stands-age"), "12", "a line older than a week says how old it is");
   const doing = q("[data-scope-briefing] [data-scope-doing]")!;
-  assert.match(doing.textContent!, /^4 sessions at work/, "one activity line");
+  assert.match(doing.textContent!, /^Filling the third market/, "one activity line, in the role's own words as its sheet says them");
   assert.ok(doing.querySelector('[data-pill="jx7c033"]'), "and the session it is on now, as a pill");
   // No digit outside those lines: no count of hands waiting, no task count,
   // no plan fraction, no progress bar.

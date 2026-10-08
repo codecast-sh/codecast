@@ -97,7 +97,7 @@ function Story({ task, runs }: { task: StoryTask; runs: ReportRun[] }) {
       <div className="px-4 pb-3 pt-1 space-y-3">
         {(goal || kind || readiness || cited.length > 0) && (
           <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-1 text-[12px]" data-cause-ground>
-            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
+            {goal && <><dt className="text-sol-text-dim">Goal</dt><dd className={cn("min-w-0 truncate", goal.kind === "project" || goal.kind === "initiative" || goal.kind === "line" ? "text-sol-text" : "text-sol-text-dim")}>{goal.label}</dd></>}
             {cited.map((id) => <ExpectationRow key={id} id={id} line={(lines as ExpectationLine[] | undefined)?.find((l) => l.id === id)} />)}
             {kind && <><dt className="text-sol-text-dim">Kind</dt><dd className="text-sol-text-muted">{kind}</dd></>}
             {readiness && <><dt className="text-sol-text-dim">Readiness</dt><dd className={readiness === "ready" ? "text-sol-text-muted" : "text-sol-yellow"} title={task.readiness_note ?? undefined} data-cause-readiness>{readinessWords(readiness, task.readiness_note)}</dd></>}

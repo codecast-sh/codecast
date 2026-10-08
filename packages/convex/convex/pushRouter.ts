@@ -123,11 +123,12 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   chat_added: ["channel invite", "channel invites"],
   chat_post: ["channel message", "channel messages"],
   daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
-  goal_stall: ["stalled goal", "stalled goals"],
+  goal_stall: ["stalled focus item", "stalled focus items"],
   device_shared: ["shared machine", "shared machines"],
   card_waiting: ["change card waiting", "change cards waiting"],
   change_shipped: ["change shipped", "changes shipped"],
   cause_reopened: ["cause reopened", "causes reopened"],
+  decision_answered_for_you: ["decision answered for you", "decisions answered for you"],
   team_join_request: ["request to join", "requests to join"],
   team_join_approved: ["team you joined", "teams you joined"],
 };
