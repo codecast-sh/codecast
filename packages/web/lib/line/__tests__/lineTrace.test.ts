@@ -66,9 +66,9 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
 
   test("the group: siblings and how this one attached", () => {
     const g = t.steps[1];
-    expect(g.title).toBe("3 signals share this cause");
-    expect(g.detail).toBe("It opened this cause. From agentwatch and chat");
-    expect(g.artifacts.map((a) => a.ref)).toEqual(["sg-a2", "sg-a3"]);
+    expect(g.title).toBe("3 reports of this problem");
+    expect(g.detail).toBe("It was the first report of this problem. From agentwatch and chat");
+    expect(g.artifacts.map((a) => a.ref)).toEqual(["sg-a3", "sg-a2"]);
   });
 
   test("the cause and its ground", () => {
@@ -99,7 +99,8 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
 
   test("ship, watch and the outcome", () => {
     const by = (stage: string) => t.steps.find((s) => s.stage === stage)!;
-    expect(by("ship")).toMatchObject({ title: "Shipped", detail: "Merged", nodeId: "merge" });
+    // The run merged at a station today's line no longer has: the step points at Ship on the map.
+    expect(by("ship")).toMatchObject({ title: "Shipped", detail: "Merged", nodeId: "ship" });
     expect(by("watch")).toMatchObject({ title: "The watch ended quiet", status: "done" });
     expect(by("outcome")).toMatchObject({ title: "Held: the fix stayed fixed through its watch", nodeId: "end:held" });
     expect(t.where.text).toMatch(/The watch ended quiet\.$/);
@@ -110,7 +111,8 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
     expect(p.slice(0, 5)).toEqual(["expectations", "source:agentwatch", "signals", "causes", "ground"]);
     expect(p.filter((x) => x === "implement")).toHaveLength(2);
     expect(p.filter((x) => x === "decide")).toHaveLength(2);
-    expect(p.slice(-4)).toEqual(["ship", "merge", "watch", "end:held"]);
+    // The run's merge station is gone from today's line, so the path skips it.
+    expect(p.slice(-4)).toEqual(["decide", "ship", "watch", "end:held"]);
   });
 
   test("every path node is a node on the map", () => {
@@ -233,7 +235,7 @@ describe("AgentWatch findings as a person traces them (LX4)", () => {
     const dup = { ...a1, _id: "sig_dup", task_id: "task_b" };
     const others = F.rows.signals.filter((s) => s.task_id !== "task_a");
     const g = trace("ct-101", { signals: [a1, ...others, dup] }).steps[1];
-    expect(g.title).toBe("Seen before: filed to 1 other cause too");
+    expect(g.title).toBe("Seen before: also filed to 1 other problem");
     // It never reads as opening this cause right before naming the others it opened.
     expect(g.detail).toBe("The same AgentWatch finding also opened:");
     expect(g.links[0]).toMatchObject({ ref: "ct-102" });
@@ -242,7 +244,7 @@ describe("AgentWatch findings as a person traces them (LX4)", () => {
   test("a lone signal nothing else saw is the only one so far", () => {
     const a1 = F.rows.signals.find((s) => s._id === "sig_a1")!;
     const g = trace("ct-101", { signals: [a1, ...F.rows.signals.filter((s) => s.task_id !== "task_a")] }).steps[1];
-    expect(g.title).toBe("Only this signal so far");
+    expect(g.title).toBe("The only report so far");
   });
 });
 

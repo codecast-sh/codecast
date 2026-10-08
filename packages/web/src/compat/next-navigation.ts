@@ -48,7 +48,9 @@ export function useRouter() {
       // The second arg mirrors Next.js's `NavigateOptions` (e.g. `{ scroll }`).
       // We don't act on it, but accepting it keeps `router.push/replace(path,
       // { scroll: false })` call sites type-checking against this shim.
-      push: (path: string, _options?: { scroll?: boolean }) => {
+      // `state` is the history entry's own state (location.state), for a
+      // screen that tells an in-screen open from an arrival by URL.
+      push: (path: string, options?: { scroll?: boolean; state?: unknown }) => {
         // A Cmd-click's push opens the path in a background tab / detached
         // window instead (lib/openIntent) — the current view stays put.
         if (divertNavigation(path)) return;
@@ -59,12 +61,12 @@ export function useRouter() {
           return;
         }
         if (shouldUseTabRouting(path)) {
-          tabNavigate(path, "push", tabId);
+          tabNavigate(path, "push", tabId, options?.state);
         } else {
-          navigate(path);
+          navigate(path, { state: options?.state });
         }
       },
-      replace: (path: string, _options?: { scroll?: boolean }) => {
+      replace: (path: string, options?: { scroll?: boolean; state?: unknown }) => {
         // A replace canonicalizes the current URL; it never claims a Cmd-click
         // on its own, but stands down when a sibling push in the same click did.
         if (divertNavigation(path, { openable: false })) return;
@@ -75,9 +77,9 @@ export function useRouter() {
           return;
         }
         if (shouldUseTabRouting(path)) {
-          tabNavigate(path, "replace", tabId);
+          tabNavigate(path, "replace", tabId, options?.state);
         } else {
-          navigate(path, { replace: true });
+          navigate(path, { replace: true, state: options?.state });
         }
       },
       back: () => navigate(-1),
