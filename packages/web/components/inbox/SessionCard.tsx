@@ -22,13 +22,13 @@ import { memberListSig, rosterIdentity } from "../../hooks/useTeamRoster";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../../hooks/useSyncAnchors";
 import { viewersOf, viewersSig } from "../presence/memberPresence";
 import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
+import { localDeviceIdOf } from "../../hooks/useLocalDeviceId";
 import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration } from "../../lib/sessionCard";
-import { hostedTitle } from "../../lib/conversationTitle";
-import { firstUserPromptOf } from "../../hooks/useForkTree";
+import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
-import { useSurface } from "../../lib/surfaces";
+import { surfaceShown } from "../../lib/surfaces";
 import { showsAgentIcon } from "../simple/lanePaths";
 
 // The inbox session card's container: the store, the clock, the mutations and
@@ -42,7 +42,7 @@ function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
   // In the Assistant scope every row is the assistant's, so its mark says
   // nothing there; Everything keeps it to tell the assistant from people.
-  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) && !assistantScopeOnly(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) && !assistantScopeOnly(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -97,15 +97,7 @@ export type SessionCardProps = Pick<
   onPin?: (id: string) => void;
 };
 
-type TitleState = Pick<ReturnType<typeof useInboxStore.getState>, "conversations" | "sessions" | "messages" | "pendingMessages">;
-
-/** What a hosted rail row is called: hostedTitle over the conversation row,
- *  the session row, and the first ask in the transcript (or the send still on
- *  its way). The rail and its same-name suffix both read it. */
-export function hostedRowTitle(s: TitleState, id: string): string {
-  return hostedTitle(s.conversations[id] as any, s.sessions[id] as any, () =>
-    firstUserPromptOf([...(s.messages[id] ?? []), ...(s.pendingMessages[id] ?? [])]));
-}
+export { hostedRowTitle };
 
 export const SessionCard = memo(function SessionCard({
   session: row,
@@ -125,9 +117,6 @@ export const SessionCard = memo(function SessionCard({
   const hasDraft = !!session._hasDraft;
   const cardId = session._id;
   const hosted = isHostedAgentType(session.agent_type);
-  // The hosted name rule (hostedRowTitle), so the rail and the header name a
-  // conversation the same way from its first seconds on.
-  const liveTitle = useInboxStore((s) => (hosted ? hostedRowTitle(s, cardId) : ""));
   // ONE subscription for the whole card (ct-49746). Every value below used to be
   // its own useInboxStore/hook subscription — 13 of them, so a sidebar showing 75
   // rows held ~1000 subscriptions and zustand ran ~1000 selectors on every
@@ -149,6 +138,7 @@ export const SessionCard = memo(function SessionCard({
     (s) => convAuthorSig(s.conversations[cardId]),
     // The roster's own object, Object.is-stable between roster pushes.
     (s) => rosterDeviceOf(s.machineRoster as any, deviceId),
+    (s) => localDeviceIdOf(s),
     (s) => memberListSig(s.teamMembers),
     (s) => anchorIdentitySig((s as any).anchors, anchorId),
     // Teammates who have this session open (their faces in the meta row and
@@ -159,7 +149,13 @@ export const SessionCard = memo(function SessionCard({
     // so a streamed message wakes the card only when the answer changes.
     (s) => (hosted ? hostedStopOf(s.sessions[cardId] ?? session, s.messages[cardId]) : null),
     (s) => (hosted ? awaitingOkIds(s.sessionDecisions).has(cardId) : false),
+    // The hosted name rule (hostedRowTitle), so the rail and the header name a
+    // conversation the same way from its first seconds on. A string, so only a
+    // changed name wakes the card.
+    (s) => (hosted ? hostedRowTitle(s, cardId) : ""),
+    (s) => surfaceShown(s, "gitChips"),
   ]);
+  const liveTitle = hosted ? hostedRowTitle(st, cardId) : "";
   const meId = st.currentUser?._id?.toString?.() ?? null;
   const viewers = viewersOf(st.teamMembers, cardId, meId);
   const stoppedKind = hosted ? hostedStopOf(st.sessions[cardId] ?? session, st.messages[cardId]) : null;
@@ -189,13 +185,18 @@ export const SessionCard = memo(function SessionCard({
   // host earns an icon: a worktree on your own laptop needs no explaining.
   const ownerDevice = rosterDeviceOf(st.machineRoster as any, deviceId);
   const runHost = ownerDevice && deviceWakesOnUse(ownerDevice) ? ownerDevice : null;
+  // Where the session runs, when that is worth a glance: any cloud machine,
+  // or another of your machines when this window knows which one it is on.
+  const localDeviceId = localDeviceIdOf(st);
+  const placeDevice = ownerDevice && (ownerDevice.is_remote || (localDeviceId && ownerDevice.device_id !== localDeviceId)) ? ownerDevice : null;
   const chromeSig = cardChromeSig(st.clientState);
-  const showGitChips = useSurface("gitChips");
+  const showGitChips = surfaceShown(st, "gitChips");
   const chrome = useMemo<SessionCardChrome>(() => ({
     showModelBadge: chromeSig[0] === "1",
     showAgentIcon: chromeSig[1] === "1",
     personifyAll: chromeSig[3] === "1",
     showBranchPill: chromeSig[4] === "1",
+    showDeviceIcon: chromeSig[5] === "1",
     showGitChips,
   }), [chromeSig, showGitChips]);
   // Cache-first bytes: a thumbnail seen once paints locally (and offline)
@@ -247,7 +248,6 @@ export const SessionCard = memo(function SessionCard({
   // snapshot lives on the parent's standing row, so it is read from there.
   const roleAbove = rest.subRow === "role" ? roleLookingAfter(session) ?? leadRoleOf(session) : null;
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
-  const sendMessage = useInboxStore((s) => s.sendMessage);
   const ackAssignment = useAckAssignment();
 
   const handleDropFiles = useCallback(async (dropped: File[], title: string) => {
@@ -265,12 +265,12 @@ export const SessionCard = memo(function SessionCard({
         const { storageId } = await result.json();
         storageIds.push(storageId);
       }
-      sendMessage(cardId, "[image]", storageIds);
+      useInboxStore.getState().sendMessage(cardId, "[image]", storageIds);
       toast.success(`Attached ${files.length} image${files.length > 1 ? "s" : ""} to "${title}"`);
     } catch {
       toast.error("Failed to attach files");
     }
-  }, [cardId, generateUploadUrl, sendMessage]);
+  }, [cardId, generateUploadUrl]);
 
   const isPinned = !!session.is_pinned;
   const handlePin = useMemo(() => onPin && ((id: string, e: React.MouseEvent) => {
@@ -325,6 +325,7 @@ export const SessionCard = memo(function SessionCard({
       spawnedByTitle={spawnedByTitleOf(st, spawnedById)}
       anchorIdentity={anchorIdentity}
       runHost={runHost}
+      placeDevice={placeDevice}
       thumbSrc={thumbSrc}
       selecting={selecting}
       onToggleSelect={toggleSelect}

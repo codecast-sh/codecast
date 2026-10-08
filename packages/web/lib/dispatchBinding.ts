@@ -144,6 +144,10 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
     // row to re-drive, so its intent stays open and the echo settles it;
     // reverting it would put a ghost back while the accept still lands.
     for (const text of dropRejectedOrgIntent(useInboxStore.getState(), action, args, error)) toast.error(text);
+    // A refused wait has no echo coming and no lock to roll back.
+    if (action === "addWait" && Array.isArray(args) && typeof args[0] === "string" && typeof args[1]?.id === "string") {
+      useInboxStore.getState().rollbackWait(args[0], args[1].id);
+    }
     // A refused daemon command has no echo coming: its painted row ends failed.
     if (SESSION_COMMAND_ACTIONS.has(action) && Array.isArray(args) && typeof args[0] === "string") {
       recordSessionCommandDispatchError(args[0], error);

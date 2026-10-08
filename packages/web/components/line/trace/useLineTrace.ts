@@ -14,7 +14,8 @@ import { useSyncSignals, useWorkspaceSignals } from "../../../hooks/useSyncSigna
 import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
 import type { LineProject } from "../../../lib/lineFlow";
-import { useProjectStations } from "../settings/LineStations";
+import { useLineGraph } from "../map/useLineGraph";
+import { graphKeyOf, type GraphRun } from "../../../lib/line/lineGraphs";
 import { buildLineTrace, resolveTraceRef, type LineTrace, type TraceRows, type TraceTask } from "../../../lib/line/lineTrace";
 import type { LineGraph, MapDecision, MapRun, MapSignal } from "../../../lib/line/lineMap";
 import { useGoalChip } from "../../../hooks/useGoalChip";
@@ -34,6 +35,8 @@ export type LineTraceState = {
   trace: LineTrace | null;
   rows: TraceRows;
   graph: LineGraph | null;
+  /** Which of the project's graphs the map draws (lineGraphs graphKeyOf). */
+  graphKey: string;
   /** The cause's project: whose line the map draws. */
   project: LineProject | null;
   /** The floor has arrived: a missing trace is missing, not loading. */
@@ -95,7 +98,9 @@ export function useLineTrace(ref: string): LineTraceState {
   const rows = useMemo<TraceRows>(() => ({
     signals: byId(floor.signals, causeSignals as MapSignal[]),
     tasks: floor.tasks,
-    runs: byId(floor.runs, causeRuns as unknown as MapRun[], lonelyRun ? [lonelyRun] : []).filter((r) => r.task_id !== causeId || isLineRun(r.node_statuses as never)),
+    // The cause's runs of any line-shaped graph: codecast's line, or a repo's
+    // own that ends in a watch (Union's AgentWatch); other routines on the task stay out.
+    runs: byId(floor.runs, causeRuns as unknown as MapRun[], lonelyRun ? [lonelyRun] : []).filter((r) => r.task_id !== causeId || isLineRun(r.node_statuses as never) || !!r.graph_nodes?.some((n) => n.id === "watch")),
     // sessionDecisions is a card's home and stays live; a detail row is a
     // per-view cache that can hold a card's older status, so it only fills in
     // cards the home does not hold.
@@ -106,8 +111,10 @@ export function useLineTrace(ref: string): LineTraceState {
   // customized one, else the shipped line), so the path lands on its nodes.
   const projectId = cause?.project_id ?? null;
   const project = useMemo(() => (projectId ? projects.find((p) => p._id === projectId) ?? null : null), [projectId, projects]);
-  const stations = useProjectStations(projectId ?? "");
-  const graph = useMemo<LineGraph | null>(() => (projectId ? { nodes: stations.nodes, edges: stations.edges } : null), [projectId, stations.nodes, stations.edges]);
+  // The graph this cause's runs ran, else the project's busiest (useLineGraph).
+  const projectRuns = useMemo(() => (projectId ? rows.runs.filter((r) => r.task_id && rows.tasks.some((t) => t._id === r.task_id && t.project_id === projectId)) : []), [projectId, rows.runs, rows.tasks]);
+  const ownRun = useMemo(() => [...rows.runs].filter((r) => r.task_id === causeId).sort((a, b) => b.updated_at - a.updated_at)[0] ?? null, [rows.runs, causeId]);
+  const { graph, graphKey } = useLineGraph(projectId, projectRuns as GraphRun[], rows.signals, ownRun ? graphKeyOf(ownRun as GraphRun) : null);
 
   // The goal the cause serves, by name (a project or a goal), never its id.
   const goal = useGoalChip(cause?.goal_ref);
@@ -132,5 +139,5 @@ export function useLineTrace(ref: string): LineTraceState {
     });
   }, [ref, rows, cause, lonelyRun, detail, now, graph, people, meId, goal, projects]);
 
-  return { trace, rows, graph, project, ready, now };
+  return { trace, rows, graph, graphKey, project, ready, now };
 }
