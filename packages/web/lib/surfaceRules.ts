@@ -36,8 +36,11 @@ export const DEV_SURFACES = {
   // Published pages: cast publish is a developer's tool and the hosted
   // assistant has no publish step, so the page could only list an agent's work.
   "nav.pages": "developer",
-  // The rail's Agents group (workflows, the line, ops, the org and the
-  // workspace's agent). In hosted mode Routines moves into Work and the
+  // The Org screen: the company's goals, projects, people and roles in one
+  // place (the rail's Org row, /org and every address that moved into it).
+  "nav.org": "developer",
+  // The rail's Agents group (workflows, the line, ops and the workspace's
+  // agent). In hosted mode Routines moves into Work and the
   // group goes, so the usage meter never sits under an empty heading.
   "nav.agentsGroup": "developer",
   // Shell banners and first-run prompts about machines.
@@ -58,10 +61,24 @@ export const DEV_SURFACES = {
   // A conversation's working parts in its menu: the resume commands, its
   // short id, restart, the model and agent panel, and the token counts.
   "conversation.internals": "developer",
+  // The first ask pinned over the top of a transcript as it scrolls. A
+  // hosted chat is short, its header already says what it is about, and the
+  // pin floated a stale ask over the reply.
+  "conversation.stickyPrompt": "developer",
+  // The composer's ghost reply suggestion that Tab takes. Grey text in an
+  // empty box reads as already typed, and the key cap means nothing to a
+  // person who is not working from the keyboard.
+  "composer.suggestion": "developer",
   // A transcript's navigation chrome: the message minimap, jump to top and
   // the scroll progress rail. Hosted mode keeps only the arrow back to the
   // latest message, shown while scrolled up.
   transcriptNav: "developer",
+  // The desktop top bar (workspace switcher, search, plus, bell, account,
+  // panel toggles). Hosted mode's desktop shell has none, as Whisk has none:
+  // search sits under the wordmark and the bell and account in the rail's
+  // foot (hooks/useBarlessShell). Phones and the desktop app keep the bar,
+  // which carries the menu button and the window's titlebar.
+  "chrome.topBar": "developer",
   // The top bar's "Create Team" button for an account with no team. Settings'
   // Team page keeps the way in.
   "topbar.createTeam": "developer",
@@ -101,9 +118,9 @@ export const DEV_SURFACES = {
   "triggers.devForm": "developer",
   // Pages for tuning and inspecting agents (evals, agent memory).
   "pages.devTools": "developer",
-  // A company's pages (plans, team charts, the public community rooms, the
-  // company document): the palette's Pages rows that are about running a
-  // team of agents rather than one person's errands.
+  // A company's pages (plans, team charts, the public community rooms): the
+  // palette's Pages rows that are about running a team of agents rather than
+  // one person's errands.
   "pages.company": "developer",
   // An inbox row's working detail on the phone: the status word, the
   // generated summary bullets, the person's last words behind a shell caret,
@@ -272,6 +289,9 @@ export const MODE_WORDS = {
     // The rail's names for the lists the assistant fills, matching what its
     // receipts say ("Wrote a note", "Added a to-do").
     tasksPage: "Tasks",
+    // One of each, where a row or the palette names a single object's kind.
+    task: "Task",
+    doc: "Doc",
     docsPage: "Docs",
     newTask: "New task",
     newDoc: "New document",
@@ -374,8 +394,10 @@ export const MODE_WORDS = {
     questionsPage: "Approvals",
     questionsTip: "Things waiting for your OK",
     queueEmptyTitle: "Nothing needs your OK right now",
-    queueEmptyLede: "Before I send, change or delete anything, I'll ask here first.",
+    queueEmptyLede: "Before I send, change or delete anything, or open a site you didn't name, I'll ask here first.",
     tasksPage: "To-dos",
+    task: "To-do",
+    doc: "Note",
     docsPage: "Notes",
     newTask: "New to-do",
     newDoc: "New note",
@@ -474,9 +496,12 @@ const PAGE_SURFACES: Record<string, DevSurface> = {
   "/repo": "nav.code",
   "/files": "nav.files",
   "/line": "nav.line",
+  "/expectations": "nav.projects",
   "/ops": "nav.ops",
   "/windows": "nav.windows",
   "/routines": "nav.workflows",
+  // The dynamic-workflow runs dashboard, the graph editor's sibling.
+  "/workflows": "nav.workflows",
   "/evals": "pages.devTools",
   "/memory": "pages.devTools",
   // The rail's rows that hosted mode hides, so the palette hides them too.
@@ -484,18 +509,20 @@ const PAGE_SURFACES: Record<string, DevSurface> = {
   "/feed": "nav.feed",
   // The team activity dashboard, the feed's page by another door.
   "/team/activity": "nav.feed",
-  "/goals": "nav.initiatives",
   "/pages": "nav.pages",
   "/artifacts": "nav.pages",
-  // The goals page's old address (lib/renamedPages.ts), which stored visits still carry.
-  "/initiatives": "nav.initiatives",
-  "/org": "nav.agentsGroup",
+  // The Org screen, and the old addresses that moved into it
+  // (lib/renamedPages.ts), which stored visits still carry.
+  "/org": "nav.org",
+  "/goals": "nav.org",
+  "/initiatives": "nav.org",
+  "/company": "nav.org",
+  "/roadmap": "nav.org",
   "/anchor": "nav.agentsGroup",
-  // A company's pages: its plans, charts, public rooms and charter.
+  // A company's pages: its plans, charts and public rooms.
   "/plans": "pages.company",
   "/community": "pages.company",
   "/team/charts": "pages.company",
-  "/company": "pages.company",
   // Agents talking among themselves.
   "/crosstalk": "nav.feed",
   // The pages behind settings' Machines group, and the machine views.
@@ -532,6 +559,8 @@ const ACTION_SURFACES: Record<string, DevSurface> = {
   // pages (HOSTED_SECTION_KEYS).
   "view.switch": "actions.fleet",
   "inbox.toggleTriageBar": "triageBar",
+  // Labels live in the label strip, which hosted mode hides.
+  "session.moveToBucket": "inbox.labelStrip",
   "session.stashHide": "actions.fleet",
   "session.dormantAdvance": "actions.fleet",
   "session.composeDock": "actions.fleet",
@@ -561,6 +590,16 @@ const ACTION_SURFACES: Record<string, DevSurface> = {
   "task.assign": "actions.fleet",
   "ui.openTours": "actions.fleet",
   "nav.inbox": "actions.fleet",
+  // Every label sits behind working detail hosted mode hides, and hosted
+  // rows have no select gutter; message density and zen mode tune a fleet's
+  // screen. A to-do's priority stays: the assistant sets it, so the person
+  // sees it (a mark on high and urgent rows) and changes it with p.
+  "task.labels": "inbox.labelStrip",
+  "doc.labels": "inbox.labelStrip",
+  "list.select": "actions.fleet",
+  "list.selectAll": "actions.fleet",
+  "conv.cycleDensity": "actions.fleet",
+  "ui.zenToggle": "actions.fleet",
 };
 
 /** The surface an action belongs to, or null for one every mode offers. */
@@ -581,6 +620,8 @@ const HELP_CONTEXT_SURFACES: Record<string, DevSurface> = {
   line: "nav.line",
   changes: "nav.changes",
   threads: "nav.threads",
+  // The desktop app's window keys.
+  desktop: "actions.fleet",
 };
 
 /** The surface a shortcuts sheet section belongs to, or null. */
@@ -610,6 +651,7 @@ export const HOSTED_ACTION_WORDS: Record<string, string> = {
   "session.pin": "Pin or unpin conversation",
   "session.markUnread": "Mark conversation unread",
   "session.moveToBucket": "Label conversation",
+  "session.mruSwitch": "Switch to the last conversation",
   "session.stash": "Set aside",
   "session.kill": "Close conversation",
   "session.snooze": "Snooze conversation…",
@@ -623,10 +665,23 @@ export const HOSTED_ACTION_WORDS: Record<string, string> = {
   "inbox.toggleFlatView": "Inbox: assistant conversations or everything",
 };
 
+/** Pages gated at their own address only, never their children's. The team
+ *  roster moved into the Org screen (its People filter); a teammate's
+ *  profile under it (/team/<name>) is where a hosted person's mention of them
+ *  opens. */
+const EXACT_PAGE_SURFACES: Record<string, DevSurface> = {
+  "/team": "nav.org",
+};
+
 /** The surface the page at `path` belongs to, or null for a page every mode
  *  shows. */
 export function pageSurface(path: string): DevSurface | null {
   let p = path.split("?")[0].split("#")[0];
+  // A person's address under the Org screen (`/org/@handle`) opens their
+  // profile, so it shows wherever /team/<handle> does.
+  const person = /^\/org\/@([^/]+)\/?$/.exec(p);
+  if (person) p = `/team/${person[1]}`;
+  if (EXACT_PAGE_SURFACES[p]) return EXACT_PAGE_SURFACES[p];
   while (p.length > 1) {
     const surface = PAGE_SURFACES[p];
     if (surface) return surface;
@@ -634,6 +689,35 @@ export function pageSurface(path: string): DevSurface | null {
   }
   return null;
 }
+
+/** Where a hidden page sends the person instead: the hosted page that does
+ *  the same job, else the inbox. Longest prefix wins, as in pageSurface. */
+const HIDDEN_PAGE_HOMES: Record<string, string> = {
+  // A routine is a trigger in hosted mode; the graph editor and its runs
+  // share the word.
+  "/routines": "/triggers",
+  "/workflows": "/triggers",
+  "/plans": "/tasks",
+  "/goals": "/tasks",
+  "/initiatives": "/tasks",
+  "/settings": "/settings",
+};
+
+/** The page to show instead of `path` when `mode` hides it (showsPage), or
+ *  null when the page shows. The shell's one route guard reads it, so the
+ *  rail, the palette and the address bar keep one rule. */
+export function hiddenPageRedirect(path: string, mode: SurfaceMode): string | null {
+  if (mode.showsPage(path)) return null;
+  let p = path.split("?")[0].split("#")[0];
+  while (p.length > 1) {
+    if (HIDDEN_PAGE_HOMES[p]) return HIDDEN_PAGE_HOMES[p];
+    p = p.slice(0, p.lastIndexOf("/"));
+  }
+  return "/inbox";
+}
+
+/** Every path the registry maps to a surface, for tests that walk them. */
+export const SURFACE_PAGE_PATHS: readonly string[] = [...Object.keys(PAGE_SURFACES), ...Object.keys(EXACT_PAGE_SURFACES)];
 
 /** Pages whose name is a mode word. This map is the one place a page is
  *  named by mode: the rail rows (SurfaceMode.page), the palette's Pages rows,

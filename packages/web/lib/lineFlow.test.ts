@@ -45,6 +45,8 @@ describe("goalChip", () => {
   it("a project without a priority is unranked, none is parked, empty is ungrounded", () => {
     expect(goalChip("pj-a", initiatives, projects)).toMatchObject({ kind: "project", priority: "unranked" });
     expect(goalChip("none", initiatives, projects)).toMatchObject({ kind: "parked", priority: null });
+    // A change to the line itself serves the line's own goal: grounded, never parked.
+    expect(goalChip("line", initiatives, projects)).toMatchObject({ kind: "line", label: "the line itself", priority: "unranked" });
     expect(goalChip(undefined, initiatives, projects)).toMatchObject({ kind: "ungrounded", priority: null });
   });
   it("never prints a ref it cannot name", () => {
