@@ -60,6 +60,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:_pendingSendSig": "window",
   "store/inboxStore.ts:_placementDeadlineMemo": "window",
   "store/inboxStore.ts:_placedMemo": "window",
+  // The retired field locks' acknowledgement times: each window acknowledges its own writes.
+  "store/inboxStore.ts:retiredAckTs": "window",
   // The dev parity check's throttle: one per window, as each browser window keeps its own.
   "store/inboxStore.ts:_lastParityCheckAt": "window",
   "store/inboxStore.ts:_depChanges": { shared: "dev render census, read only from the console" },
@@ -133,7 +135,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // Each browser window keeps its own undo history: ⌘Z in one window never
   // reaches a gesture another window recorded.
   ...Object.fromEntries(
-    ["undoStack", "redoStack", "history", "version", "snapshot", "suppressDepth", "refreshTarget", "groupDepth", "groupChildren", "groupToast", "groupExternals", "recordingHolds"].map(
+    ["undoStack", "redoStack", "history", "version", "snapshot", "suppressDepth", "refreshTarget", "groupDepth", "groupChildren", "groupToast", "groupExternals", "recordingHolds", "vanishedRuns", "pendingGestures", "detachedChildren"].map(
       (name) => [`${ENGINE}undoStack.ts:${name}`, "window" as SlotClass],
     ),
   ),
@@ -144,6 +146,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
     ]),
   ),
   [`${ENGINE}undoStack.ts:idCounter`]: { shared: "process-wide counter: entry ids stay unique across windows and no window reads another's value" },
+  [`${ENGINE}undoStack.ts:undoSeqCounter`]: { shared: "process-wide counter: sequence numbers only order one window's own entries, and a shared one still rises" },
   [`${ENGINE}undoStack.ts:listeners`]: NO_REACT,
   [`${ENGINE}undoStack.ts:rekeyHooks`]: { shared: "rekey hooks registered once at module load" },
   [`${ENGINE}undoStack.ts:resetListeners`]: { shared: "reset listeners registered once at module load" },
@@ -153,7 +156,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   [`${ENGINE}react.ts:_clocks`]: NO_REACT,
   [`${ENGINE}case.ts:VERBATIM`]: CONSTANT,
   ...Object.fromEntries(
-    ["snapshot", "lastSteadyFocus", "returnTo", "trackedDoc", "flash", "listeners", "flashListeners"].map((name) => [
+    ["snapshot", "lastSteadyFocus", "returnTo", "cardTookFocus", "trackedDoc", "flash", "listeners", "flashListeners"].map((name) => [
       `lib/undoTimelineOpen.ts:${name}`,
       { shared: "the history timeline's open state and DOM focus bookkeeping; the sim never opens the timeline" },
     ]),
@@ -195,6 +198,21 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/browserPane.ts:titles": { shared: "page titles a browser pane reports; the sim opens no pane" },
   "lib/browserPane.ts:listeners": NO_REACT,
   "lib/browserPane.ts:APP_HOSTS": CONSTANT,
+  "lib/calls/recordingPress.ts:presses": { shared: "a Record press's own dispatch state, written only by a press; the sim presses no Record, so it stays empty" },
+  "lib/calls/recordingPress.ts:pressedRuns": { shared: "the recording runs a press started, written only by a press; the sim presses no Record, so it stays empty" },
+  "lib/calls/recordingPress.ts:pressListeners": NO_REACT,
+  "lib/follow.ts:surfaces": NO_REACT,
+  "lib/follow.ts:surfaceListeners": NO_REACT,
+  ...Object.fromEntries(
+    ["previousQuery", "normalizedQuery", "queryTokens"].map((name) => [
+      `lib/mentionRanking.ts:${name}`,
+      { shared: "the last query's tokens, a pure function of the query string; no window state goes into it" },
+    ]),
+  ),
+  "lib/tabSafePath.ts:TAB_PATH_ACTIONS": CONSTANT,
+  "lib/workflowRun.ts:HIDDEN_TYPES": CONSTANT,
+  "store/inboxStore.ts:HOSTED_UNFOLDABLE_SECTIONS": CONSTANT,
+  "store/orgSlice.ts:writeOptimisticMessage": { shared: "the store's optimistic message writer, bound once as the store module loads" },
   "lib/calls/recordingPress.ts:abandoned": { shared: "Record presses a person was told did not happen, written only by useRoomRecording; the sim presses no Record, so it stays empty" },
   "lib/chatViews.ts:knownAgents": { shared: "display-name fallback only; nothing an invariant compares reads it" },
   "lib/cuePlay.ts:shared": AUDIO,
@@ -257,7 +275,7 @@ type InboxSlots = ReturnType<InboxBindings["get"]>;
 // The inboxStore window bindings declared as const collections: set() refills
 // them in place, and the store's own setter reassigns the rest. A binding
 // missing here is never restored, which realm.selftest's round trip catches.
-const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo"] as const;
+const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo", "retiredAckTs"] as const;
 
 // inboxStore exports its live window bindings; the copying lives here. A
 // snapshot copies the const collections and both levels of _heldOverlayFacts
