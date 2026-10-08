@@ -89,9 +89,9 @@ describe("TraceStory", () => {
 
     // The siblings each open their own trace.
     const siblings = qa(step(host, "group"), "[data-trace-sibling]");
-    expect(siblings.map((s) => s.dataset.traceSibling)).toEqual(["sg-a2", "sg-a3"]);
-    expect(siblings[0].querySelector("a")?.getAttribute("href")).toBe("/line/trace/sg-a2");
-    expect(text(step(host, "group"))).toContain("It opened this cause");
+    expect(siblings.map((s) => s.dataset.traceSibling)).toEqual(["sg-a3", "sg-a2"]);
+    expect(siblings[0].querySelector("a")?.getAttribute("href")).toBe("/line/trace/sg-a3");
+    expect(text(step(host, "group"))).toContain("It was the first report of this problem");
 
     // Two rounds through build: the earlier one folds into one row, and implement says it is its second visit.
     const run = q(host, "[data-trace-run]")!;

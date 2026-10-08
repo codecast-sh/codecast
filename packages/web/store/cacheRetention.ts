@@ -52,6 +52,20 @@ export function persistedMessageTail<T>(
 export const SESSION_CACHE_TTL_MS = WORKING_SET_RECENCY_MS; // the shared recency horizon (server scan, selection, reconcile window)
 export const MAX_CACHED_SESSIONS = 1200;
 
+const sessionStampedAt = (row: any): number =>
+  Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0);
+
+/**
+ * Whether a session row the replica does not hold yet belongs in the cache on
+ * its own stamps: pinned, or touched inside the TTL. The same line hydration
+ * draws, so a feeder that asks this never adds a row the next boot would drop.
+ * A row that carries no stamp at all cannot be judged old, and is let in.
+ */
+export function sessionWithinRetention(row: any, now: number): boolean {
+  const stamp = sessionStampedAt(row);
+  return !!row.is_pinned || stamp === 0 || now - stamp <= SESSION_CACHE_TTL_MS;
+}
+
 export function partitionSessionRetention(
   rows: any[],
   liveInboxIdList: string[] | undefined,
@@ -64,8 +78,7 @@ export function partitionSessionRetention(
     maxRows: MAX_CACHED_SESSIONS,
     alwaysKeep: (row) =>
       liveIds.has(row._id) || row._id === lastFocusedId || !isConvexId(row._id) || !!row.is_pinned,
-    stampedAt: (row) =>
-      Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0),
+    stampedAt: sessionStampedAt,
     sortStamp: (row) => row.updated_at ?? 0,
   });
 }

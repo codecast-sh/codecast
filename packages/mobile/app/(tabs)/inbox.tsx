@@ -4,8 +4,9 @@ import { useActiveTeamFeature, useWorkspaceFeatureState } from '@/lib/teamFeatur
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { router as appRouter, useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { Ionicons } from '@expo/vector-icons';
 import { Theme, Spacing, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
 import {
   SessionData, SwipeableSessionItem, sessionTitle, agentLabel, agentColor,
@@ -16,18 +17,26 @@ import {
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
   sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
+  hostedOnlyInbox, hostedStatusSections, pendingSendIdsOf, HOSTED_UNFOLDABLE_SECTIONS,
 } from '@codecast/web/store/inboxStore';
+import { awaitingOkIds } from '@codecast/web/lib/decisionQueue';
+import { hostedRowTitle } from '@codecast/web/lib/hostedRowTitle';
+import { hostedStopsSig, splitHostedStops } from '@codecast/web/lib/hostedNotice';
+import { sameNameSuffixes } from '@codecast/web/lib/sameNameSuffix';
 import {
   AGENT_MODEL_CONFIG, AGENT_PICKER_OPTIONS, compareMachineChips, featuredModelOptions, fromConvexAgentType, isHostedAgentType, launchRailOptions, toConvexAgentType,
   type AgentClientId, type DeviceModelInventory,
 } from '@codecast/shared/contracts';
 import { defaultMachineId } from '@codecast/web/lib/machinePicker';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
+import { OptionSheet, type SheetOption } from '@/components/OptionSheet';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
 import { useHostedMode, useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { AssistantIntro, AssistantStart } from '@/components/hosted/AssistantStart';
+import { LANE_COPY } from '@codecast/web/components/simple/lane';
+import { Serif, pageCountLook, pageTitleFace } from '@/constants/fonts';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
@@ -46,6 +55,10 @@ import { useQuery } from 'convex/react';
 import { mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
 import { showActionSheet } from '@/lib/actionSheet';
+
+/** How a hosted inbox section draws: its same-name suffixes, whether it
+ *  waits on the person (the accent dot), and whether it never folds. */
+type HostedSectionOpts = { suffixes?: ReadonlyMap<string, string>; attention?: boolean; fixed?: boolean };
 
 // Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
@@ -189,37 +202,25 @@ function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stu
   });
 }
 
-// A sheet section that folds to "LABEL   value ›" until tapped. The header is
-// the same micro-label as the always-open sections, so closed and open rows
-// read as one list; only the trailing summary + chevron mark it as foldable.
-function CollapsibleSection({ label, summary, open, onToggle, disabled, children }: {
+// One launch choice in the sheet's settings card: label left, the current
+// value right, tapping opens its picker.
+function SettingRow({ label, value, dot, muted, onPress }: {
   label: string;
-  summary: string;
-  open: boolean;
-  onToggle: () => void;
-  disabled?: boolean;
-  children: ReactNode;
+  value: string;
+  dot?: string;
+  muted?: boolean;
+  onPress: () => void;
 }) {
   const Theme = useTheme();
   return (
-    <>
-      <TouchableOpacity
-        style={modalStyles.collapseHeader}
-        onPress={onToggle}
-        disabled={disabled}
-        activeOpacity={0.6}
-        hitSlop={{ top: 12, bottom: 12 }}
-      >
-        <RNText style={modalStyles.collapseLabel}>{label}</RNText>
-        {/* Summary fills the row when closed; an empty spacer keeps the
-            chevron pinned to the right edge when open so the row doesn't jump. */}
-        {open
-          ? <RNView style={{ flex: 1 }} />
-          : <RNText style={modalStyles.collapseSummary} numberOfLines={1}>{summary}</RNText>}
-        <FontAwesome name={open ? "angle-down" : "angle-right"} size={15} color={Theme.textMuted0} />
-      </TouchableOpacity>
-      {open && children}
-    </>
+    <TouchableOpacity style={modalStyles.settingRow} onPress={onPress} activeOpacity={0.6}>
+      <RNText style={modalStyles.settingLabel}>{label}</RNText>
+      <RNView style={modalStyles.settingValueWrap}>
+        {dot ? <RNView style={[modalStyles.machineDot, { backgroundColor: dot }]} /> : null}
+        <RNText style={[modalStyles.settingValue, muted && { color: Theme.textMuted0 }]} numberOfLines={1}>{value}</RNText>
+      </RNView>
+      <FontAwesome name="angle-right" size={16} color={Theme.textMuted0} />
+    </TouchableOpacity>
   );
 }
 
@@ -234,6 +235,10 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
   const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
   const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
   const hosted = isHostedAgentType(agentId);
+  // Hosted mode's sheet is one question, the web's compose heading, and
+  // files no label (surface inbox.labelStrip).
+  const hostedSheet = useHostedMode() && hosted;
+  const labelStrip = useSurface('inbox.labelStrip');
   // The pinned agents, and always the hosted assistant: the phone has no
   // palette to reach it from, and it is the one agent that needs no machine.
   const pinnedOptions = usePinnedPickerOptions(agentId);
@@ -259,12 +264,10 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const effectiveBucketId = bucketPick === undefined ? (activeBucketFilter ?? null) : bucketPick;
   const [modelSheetVisible, setModelSheetVisible] = useState(false);
-  const [showAllRecents, setShowAllRecents] = useState(false);
-  // Pre-filled controls fold away by default (the common launch is agent +
-  // go): projectOpen gates only the free-text path input (the recent pills
-  // stay visible), contextOpen gates the stable-mode segments.
-  const [projectOpen, setProjectOpen] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
+  // Every pre-filled choice is one row that opens its own picker sheet, so the
+  // common launch (agent + go) fits on one screen.
+  const [openSheet, setOpenSheet] = useState<"machine" | "project" | "context" | null>(null);
+  const [projectQuery, setProjectQuery] = useState("");
   // Machine picker. `deviceId` holds an EXPLICIT pick only: left null, routing
   // picks the machine (deviceRouting) and the folder list stays the union across
   // online devices — the behaviour before this row existed.
@@ -273,9 +276,6 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
   const rawDevices = useInboxStore((s) => s.machineRoster) as MachineDevice[];
   // listDevices is last_seen-sorted; chips hold still instead.
   const devices = useMemo(() => [...rawDevices].sort(compareMachineChips), [rawDevices]);
-  // The row scrolls sideways, so the selected chip can open past the edge:
-  // its first layout scrolls the row to it.
-  const machineRowRef = useRef<ScrollView>(null);
   // What auto-routing would choose, so the highlighted chip matches where the
   // session actually lands. One ladder with the web picker (machinePicker), fed
   // the folder being typed so a machine holding that checkout wins — the same
@@ -343,9 +343,7 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
     setStableMode("auto");
     setIsolated(false);
     setBucketPick(undefined);
-    setShowAllRecents(false);
-    setProjectOpen(false);
-    setContextOpen(false);
+    setOpenSheet(null);
     onClose();
     onSessionCreated(conversationId);
   };
@@ -457,47 +455,58 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
     }
   };
 
-  // The expanded folder list narrows to what the user is TYPING. A path that
-  // came from the list (or the seeding effect) is a selection, not a query, so
-  // it must not collapse the browser to a single row.
-  const allRecents = recentProjects;
-  const typed = projectPath.trim().toLowerCase();
-  // The rows render ~-collapsed (displayPath), so a query typed from what the
-  // list shows — or from the input's own "~/src/my-project" placeholder — must
-  // match too, not just the raw absolute spelling.
-  const matchesTyped = (p: string) =>
-    p.toLowerCase().includes(typed) || displayPath(p).toLowerCase().includes(typed);
-  const browseRecents = typed && !allRecents.some((p) => p.path.toLowerCase() === typed)
-    ? allRecents.filter((p) => matchesTyped(p.path))
-    : allRecents;
+  // The project picker's autocomplete. Rows render ~-collapsed (displayPath),
+  // so a query typed from what the list shows matches as well as the raw
+  // absolute spelling; a folder whose name starts with the query ranks first.
+  // A query that names no listed folder is offered as a path of its own.
+  const projectName = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
+  const query = projectQuery.trim().toLowerCase();
+  const projectOptions = useMemo(() => {
+    const matches = query
+      ? recentProjects
+          .filter((p) => p.path.toLowerCase().includes(query) || displayPath(p.path).toLowerCase().includes(query))
+          .sort((x, y) => Number(!projectName(x.path).toLowerCase().startsWith(query)) - Number(!projectName(y.path).toLowerCase().startsWith(query)))
+      : recentProjects;
+    const rows: SheetOption[] = matches.map((p) => ({ key: p.path, label: projectName(p.path), hint: displayPath(p.path), dim: p.suggested }));
+    const typedPath = projectQuery.trim();
+    if (/^[~/]/.test(typedPath) && !recentProjects.some((p) => p.path === typedPath || displayPath(p.path) === typedPath)) {
+      rows.unshift({ key: typedPath, label: `Use ${typedPath}`, hint: "Folder on the machine" });
+    }
+    return rows;
+  }, [recentProjects, query, projectQuery]);
+
+  const stableModeItem = STABLE_MODES.find((m) => m.key === stableMode) ?? STABLE_MODES[0];
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <RNView style={modalStyles.header}>
-          <RNText style={modalStyles.title}>{words.newConversation}</RNText>
+          <RNText style={[modalStyles.title, hostedSheet && modalStyles.hostedSheetTitle]}>{hostedSheet ? LANE_COPY.intro.sheetTitle : words.newConversation}</RNText>
           <TouchableOpacity
             onPress={onClose}
             hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+            accessibilityLabel="Close"
           >
-            <FontAwesome name="times" size={20} color={Theme.textMuted} />
+            {/* The hosted sheet's close is a thin stroke, as its starters' arrows are. */}
+            {hostedSheet
+              ? <Ionicons name="close" size={24} color={Theme.textMuted} />
+              : <FontAwesome name="times" size={20} color={Theme.textMuted} />}
           </TouchableOpacity>
         </RNView>
 
         <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
           {onlyHosted ? null : (<>
-          <RNText style={modalStyles.label}>Agent</RNText>
           {/* The viewer's pinned agents (users.pinned_agents, registry order), the
-              hosted assistant among them. A 3-up grid of tiles: the mark above the
-              name, tinted with the client's accent when active. */}
-          <RNView style={modalStyles.agentGrid}>
+              hosted assistant among them. Compact chips that wrap, so every
+              agent shows without scrolling; the active one wears its accent. */}
+          <RNView style={modalStyles.agentRow}>
             {agentOptions.map((a) => {
               const active = agentId === a.id;
               const accent = agentAccents[a.id];
               return (
                 <TouchableOpacity
                   key={a.id}
-                  style={[modalStyles.agentTile, active && { borderColor: accent + "80", backgroundColor: accent + "16" }]}
+                  style={[modalStyles.agentChip, active && { borderColor: accent + "90", backgroundColor: accent + "1c" }]}
                   onPress={() => {
                     setSubmitError(null);
                     // Re-tapping the active agent must not wipe a model/effort
@@ -510,10 +519,10 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
                   }}
                   activeOpacity={0.7}
                 >
-                  <RNView style={{ opacity: active ? 1 : 0.4 }}>
-                    <AgentLogoSvg agentType={a.id} size={30} />
+                  <RNView style={{ opacity: active ? 1 : 0.55 }}>
+                    <AgentLogoSvg agentType={a.id} size={18} />
                   </RNView>
-                  <RNText style={[modalStyles.agentTileText, active && { color: accent, fontWeight: "700" }]} numberOfLines={2}>
+                  <RNText style={[modalStyles.agentChipText, active && { color: accent, fontWeight: "700" }]} numberOfLines={1}>
                     {a.label}
                   </RNText>
                 </TouchableOpacity>
@@ -526,194 +535,54 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
               its sheet is the first ask. */}
           {hosted ? (
             <RNView style={{ marginTop: onlyHosted ? Spacing.sm : Spacing.lg }}>
-              <AssistantStart key={seed ?? ''} seed={seed} onStart={startHosted} />
+              <AssistantStart
+                key={seed ?? ''}
+                seed={seed}
+                onStart={startHosted}
+                // The sheet is a native modal: close it first, so the Plan
+                // page opens in front rather than under it.
+                onOpenPlan={() => { onClose(); appRouter.push('/settings/plan' as never); }}
+              />
             </RNView>
           ) : (<>
-          {/* Machine row. One machine is no choice at all, so it only appears
-              once there are two — a single-device account sees the old sheet. */}
-          {devices.length > 1 && (
-            <>
-              <RNText style={modalStyles.label}>Machine</RNText>
-              <ScrollView
-                ref={machineRowRef}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={modalStyles.machineRow}
-                keyboardShouldPersistTaps="handled"
-              >
-                {devices.map((d) => {
-                  const active = selectedDeviceId === d.device_id;
-                  return (
-                    <TouchableOpacity
-                      key={d.device_id}
-                      onLayout={(e) => {
-                        if (active) machineRowRef.current?.scrollTo({ x: Math.max(0, e.nativeEvent.layout.x - Spacing.lg), animated: false });
-                      }}
-                      style={[
-                        modalStyles.machineChip,
-                        !d.online && !active && modalStyles.machineChipOffline,
-                        active && modalStyles.machineChipActive,
-                      ]}
-                      onPress={() => {
-                        // Scoping the folder list to another machine can drop the
-                        // current path (it may have no such checkout), so clear it
-                        // and let the field fall back to the new list's top folder.
-                        setDeviceId(d.device_id === defaultDeviceId ? null : d.device_id);
-                        setProjectPath(null);
-                        setSubmitError(null);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <RNView style={[modalStyles.machineDot, { backgroundColor: d.online ? Theme.green : Theme.textMuted0 }]} />
-                      <RNText style={[modalStyles.machineChipText, active && modalStyles.machineChipTextActive]} numberOfLines={1}>
-                        {deviceDisplayName(d)}
-                      </RNText>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </>
-          )}
-
-          {/* Only the free-text path editor folds away; the recent-project
-              pills below stay visible so the common pick is one tap. The
-              summary names the path only when no visible pill shows it (a
-              custom path, or a recent past the first six). */}
-          <CollapsibleSection
-            label="Project directory"
-            summary={
-              projectPath.trim() && !allRecents.slice(0, 6).some((p) => p.path === projectPath)
-                ? displayPath(projectPath.trim()).split("/").pop() || displayPath(projectPath.trim())
-                : ""
-            }
-            open={projectOpen}
-            onToggle={() => setProjectOpen((v) => !v)}
-          >
-          <TextInput
-            style={modalStyles.input}
-            value={projectPath}
-            onChangeText={(value) => {
-              setProjectPath(value);
-              setSubmitError(null);
-            }}
-            placeholder="~/src/my-project"
-            placeholderTextColor={Theme.textMuted0}
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
-          </CollapsibleSection>
-          {allRecents.length > 0 && (
-            <RNView style={modalStyles.recentRow}>
-              {allRecents.slice(0, 6).map((p) => (
-                <TouchableOpacity
-                  key={p.path}
-                  // `suggested` entries are padding — roots the picked machine
-                  // has but this account has no recent session in. Still pickable,
-                  // just visibly weaker than real recents.
-                  style={[
-                    modalStyles.recentChip,
-                    p.suggested && modalStyles.recentChipSuggested,
-                    projectPath === p.path && { borderColor: Theme.cyan, backgroundColor: Theme.cyan + "18" },
-                  ]}
-                  onPress={() => {
-                    setProjectPath(p.path);
-                    setSubmitError(null);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <RNText style={[modalStyles.recentChipText, projectPath === p.path && { color: Theme.cyan }]} numberOfLines={1}>
-                    {p.path.split("/").pop()}
-                  </RNText>
-                </TouchableOpacity>
-              ))}
-              {allRecents.length > 6 && (
-                <TouchableOpacity
-                  style={modalStyles.recentChip}
-                  onPress={() => setShowAllRecents((v) => !v)}
-                  activeOpacity={0.7}
-                >
-                  <RNText style={[modalStyles.recentChipText, showAllRecents && { color: Theme.cyan }]}>
-                    {showAllRecents ? "Less" : `More… (${allRecents.length - 6})`}
-                  </RNText>
-                </TouchableOpacity>
-              )}
-            </RNView>
-          )}
-          {showAllRecents && (
-            <RNView style={modalStyles.recentList}>
-              {browseRecents.length === 0 ? (
-                <RNText style={modalStyles.hintText}>No folders match "{projectPath.trim()}"</RNText>
-              ) : browseRecents.map((p) => (
-                <TouchableOpacity
-                  key={p.path}
-                  style={[modalStyles.recentListRow, p.suggested && modalStyles.recentChipSuggested]}
-                  onPress={() => {
-                    setProjectPath(p.path);
-                    setSubmitError(null);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <RNText style={[modalStyles.recentListText, projectPath === p.path && { color: Theme.cyan }]} numberOfLines={1}>
-                    {displayPath(p.path)}
-                  </RNText>
-                </TouchableOpacity>
-              ))}
-            </RNView>
-          )}
-
-          {rail && (
-            <>
-              <RNText style={modalStyles.label}>Model</RNText>
-              <TouchableOpacity
-                style={modalStyles.selectChip}
-                onPress={() => setModelSheetVisible(true)}
-                activeOpacity={0.7}
-              >
-                <RNText style={modalStyles.selectChipText} numberOfLines={1}>
-                  {effort === "default" ? modelLabel : `${modelLabel} · ${effort}`}
-                </RNText>
-                <FontAwesome name="angle-down" size={13} color={Theme.textMuted0} />
-              </TouchableOpacity>
-            </>
-          )}
-
-          <CollapsibleSection
-            label="Context"
-            summary={STABLE_MODES.find((m) => m.key === stableMode)?.label ?? "Auto"}
-            open={contextOpen}
-            onToggle={() => setContextOpen((v) => !v)}
-          >
-          <RNView style={modalStyles.segmentRow}>
-            {STABLE_MODES.map((m) => {
-              const active = stableMode === m.key;
-              return (
-                <TouchableOpacity
-                  key={m.key}
-                  style={[modalStyles.segment, active && { borderColor: Theme.cyan, backgroundColor: Theme.cyan + "18" }]}
-                  onPress={() => setStableMode(m.key)}
-                  activeOpacity={0.7}
-                >
-                  <RNText style={[modalStyles.segmentText, active && { color: Theme.cyan, fontWeight: "600" }]}>{m.label}</RNText>
-                </TouchableOpacity>
-              );
-            })}
-          </RNView>
-          <RNText style={modalStyles.hintText}>
-            {STABLE_MODES.find((m) => m.key === stableMode)?.title}
-          </RNText>
-          </CollapsibleSection>
-
-          <RNView style={modalStyles.switchRow}>
-            <RNText style={modalStyles.switchLabel}>Isolated worktree</RNText>
-            <Switch
-              value={isolated}
-              onValueChange={setIsolated}
-              trackColor={{ true: Theme.cyan, false: Theme.borderLight }}
+          {/* One row per launch choice, each opening its own picker. The
+              machine row appears only with two or more machines: one machine
+              is no choice at all. */}
+          <RNView style={modalStyles.card}>
+            {devices.length > 1 && (
+              <SettingRow
+                label="Machine"
+                value={selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
+                dot={selectedDevice ? (selectedDevice.online ? Theme.green : Theme.textMuted0) : undefined}
+                onPress={() => setOpenSheet("machine")}
+              />
+            )}
+            <SettingRow
+              label="Project"
+              value={projectPath.trim() ? projectName(projectPath.trim()) : "Choose…"}
+              muted={!projectPath.trim()}
+              onPress={() => { setProjectQuery(""); setOpenSheet("project"); }}
             />
+            {rail && (
+              <SettingRow
+                label="Model"
+                value={effort === "default" ? modelLabel : `${modelLabel} · ${effort}`}
+                onPress={() => setModelSheetVisible(true)}
+              />
+            )}
+            <SettingRow label="Context" value={stableModeItem.label} onPress={() => setOpenSheet("context")} />
+            <RNView style={[modalStyles.settingRow, modalStyles.settingRowLast]}>
+              <RNText style={modalStyles.settingLabel}>Isolated worktree</RNText>
+              <Switch
+                value={isolated}
+                onValueChange={setIsolated}
+                trackColor={{ true: Theme.cyan, false: Theme.borderLight }}
+              />
+            </RNView>
           </RNView>
           </>)}
 
-          {labels.length > 0 && (
+          {labels.length > 0 && labelStrip && (
             <RNView style={modalStyles.labelPillRow}>
               <TouchableOpacity
                 style={[modalStyles.labelPill, !chosenLabel && modalStyles.labelPillEmpty]}
@@ -742,20 +611,11 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
         {hosted ? null : (
         <RNView style={modalStyles.footer}>
           <TouchableOpacity
-            style={modalStyles.cancelBtn}
-            onPress={onClose}
-            activeOpacity={0.7}
-          >
-            <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
-          </TouchableOpacity>
-          <TouchableOpacity
             style={modalStyles.submitBtn}
             onPress={handleSubmit}
             activeOpacity={0.7}
           >
-            <RNView style={modalStyles.submitContent}>
-              <RNText style={modalStyles.submitBtnText}>Start Session</RNText>
-            </RNView>
+            <RNText style={modalStyles.submitBtnText}>Start session</RNText>
           </TouchableOpacity>
         </RNView>
         )}
@@ -774,6 +634,47 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
             }}
           />
         )}
+        <OptionSheet
+          visible={openSheet === "machine"}
+          onClose={() => setOpenSheet(null)}
+          title="Machine"
+          options={devices.map((d) => ({
+            key: d.device_id,
+            label: deviceDisplayName(d),
+            hint: d.online ? undefined : "Offline",
+            dim: !d.online,
+            leading: <RNView style={[modalStyles.machineDot, { backgroundColor: d.online ? Theme.green : Theme.textMuted0 }]} />,
+          }))}
+          selectedKey={selectedDeviceId ?? null}
+          onSelect={(id) => {
+            // Scoping the folder list to another machine can drop the current
+            // path (it may have no such checkout), so clear it and let the
+            // field fall back to the new list's top folder.
+            setDeviceId(id === defaultDeviceId ? null : id);
+            setProjectPath(null);
+            setSubmitError(null);
+          }}
+        />
+        <OptionSheet
+          visible={openSheet === "project"}
+          onClose={() => setOpenSheet(null)}
+          title="Project"
+          options={projectOptions}
+          selectedKey={projectPath}
+          onSelect={(path) => { setProjectPath(path); setSubmitError(null); }}
+          query={projectQuery}
+          onQueryChange={setProjectQuery}
+          placeholder="Search or type a path"
+          emptyText={projectQuery.trim() ? `No folders match "${projectQuery.trim()}"` : "No recent folders. Type a path to use one."}
+        />
+        <OptionSheet
+          visible={openSheet === "context"}
+          onClose={() => setOpenSheet(null)}
+          title="Context"
+          options={STABLE_MODES.map((m) => ({ key: m.key, label: m.label, hint: m.title }))}
+          selectedKey={stableMode}
+          onSelect={(k) => setStableMode(k as StableModePick)}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -792,131 +693,46 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     borderBottomColor: Theme.borderLight,
   },
   title: { fontSize: 18, fontWeight: "600", color: Theme.text },
+  // The hosted sheet's question, in the reading face.
+  hostedSheetTitle: { fontFamily: Serif.regular, fontSize: 22, fontWeight: "500" },
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   bodyContent: { paddingBottom: Spacing.lg },
-  // Web's muted micro-headers: small caps, letterspaced, quiet.
-  label: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: Theme.textMuted0,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 8,
-    marginTop: Spacing.lg,
-  },
-  agentGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  agentTile: {
-    // 3 per row: (100% - 2 gaps of 10) / 3. flexGrow keeps a short last row
-    // from stretching a lone tile to full width.
-    flexBasis: "30%",
-    flexGrow: 1,
-    maxWidth: "32%",
+  agentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: Spacing.sm },
+  agentChip: {
+    flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    borderRadius: 12,
+    gap: 7,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: Theme.borderLight,
     backgroundColor: Theme.bgAlt + "55",
   },
-  agentTileText: { fontSize: 13, fontWeight: "500", color: Theme.textMuted, textAlign: "center" },
-  collapseHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+  agentChipText: { fontSize: 13, fontWeight: "500", color: Theme.textMuted },
+  // The launch choices as one grouped card, iOS-settings style.
+  card: {
     marginTop: Spacing.lg,
-    marginBottom: 8,
-  },
-  collapseLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: Theme.textMuted0,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  collapseSummary: { flex: 1, fontSize: 13, color: Theme.text, fontWeight: "500", textAlign: "right" },
-  input: {
+    borderRadius: 12,
     backgroundColor: Theme.bgAlt,
-    borderRadius: 10,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: Theme.text,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
+    overflow: "hidden",
   },
-  machineRow: { flexDirection: "row", gap: 8, paddingRight: Spacing.lg },
-  machineChip: {
+  settingRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: 1,
-    borderColor: Theme.borderLight,
-    maxWidth: 180,
-  },
-  machineChipOffline: { opacity: 0.5 },
-  machineChipActive: { borderColor: Theme.cyan, backgroundColor: Theme.cyan + "18" },
-  machineChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500", flexShrink: 1 },
-  machineChipTextActive: { color: Theme.cyan, fontWeight: "700" },
-  machineDot: { width: 6, height: 6, borderRadius: 3 },
-  recentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
-  recentChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    maxWidth: 140,
-  },
-  recentChipSuggested: { opacity: 0.55 },
-  recentChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500" },
-  recentList: { marginTop: 8, borderRadius: 10, backgroundColor: Theme.bgAlt, overflow: "hidden" },
-  recentListRow: {
+    gap: 10,
+    minHeight: 48,
     paddingHorizontal: Spacing.md,
-    paddingVertical: 9,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
   },
-  recentListText: { fontSize: 13, color: Theme.textMuted },
-  selectChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    maxWidth: "100%",
-  },
-  selectChipText: { fontSize: 13, color: Theme.text, fontWeight: "500", flexShrink: 1 },
-  segmentRow: { flexDirection: "row", gap: 8 },
-  segment: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: 1,
-    borderColor: Theme.borderLight,
-  },
-  segmentText: { fontSize: 13, color: Theme.textMuted, fontWeight: "500" },
-  hintText: { fontSize: 11, color: Theme.textMuted0, marginTop: 6, lineHeight: 15 },
-  switchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: Spacing.lg,
-  },
-  switchLabel: { fontSize: 14, color: Theme.text, fontWeight: "500" },
+  settingRowLast: { borderBottomWidth: 0, justifyContent: "space-between" },
+  settingLabel: { fontSize: 14, color: Theme.textMuted, fontWeight: "500" },
+  settingValueWrap: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 0 },
+  settingValue: { fontSize: 14, color: Theme.text, fontWeight: "600", flexShrink: 1 },
+  machineDot: { width: 7, height: 7, borderRadius: 4 },
   labelPillRow: { flexDirection: "row", marginTop: Spacing.md },
   labelPill: {
     flexDirection: "row",
@@ -938,23 +754,17 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     marginTop: Spacing.md,
   },
   footer: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 10,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Theme.borderLight,
   },
-  cancelBtn: { paddingHorizontal: 16, paddingVertical: 10 },
-  cancelBtnText: { fontSize: 15, color: Theme.textMuted },
   submitBtn: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
+    alignItems: "center",
+    paddingVertical: 13,
+    borderRadius: 12,
     backgroundColor: Theme.blue,
   },
-  submitContent: { flexDirection: "row", alignItems: "center", gap: 8 },
   submitBtnText: { fontSize: 15, fontWeight: "600", color: "#fff" },
 }));
 
@@ -1122,6 +932,12 @@ export default function InboxScreen() {
   // Unread has its own signature: sessionsWakeSig deliberately omits
   // updated_at, which is exactly the number the read model compares against.
   const unreadSig = useInboxStore((s) => sessionUnreadWakeSig(s));
+  // The Assistant scope (lib/assistantScope): in hosted mode the inbox holds
+  // the assistant's conversations and folds them into the web rail's words
+  // (hostedStatusSections), stops in their own "Couldn't finish".
+  const hostedOnly = useInboxStore((s) => hostedOnlyInbox(s.clientState?.ui ?? {}));
+  const awaitingSig = useInboxStore((s) => (hostedOnly ? [...awaitingOkIds(s.sessionDecisions)].sort().join(',') : ''));
+  const stopsSig = useInboxStore((s) => (hostedOnly ? hostedStopsSig(s.sessions, s.messages) : ''));
   const sessions = useInboxStore.getState().sessions;
   // placeInboxRows' trust-TTL adaptation (stale "working" → needs-input) and
   // the rows' relative times are time-driven, not field-driven — a signature
@@ -1231,12 +1047,13 @@ export default function InboxScreen() {
       projectFilters: activeProjectFilter ? [{ id: activeProjectFilter, path: null, exclude: false }] : undefined,
       bucketFilters: activeBucketFilter ? [{ id: activeBucketFilter, exclude: false }] : undefined,
       bucketByConv,
+      hostedOnly,
     }),
-    [activeProjectFilter, activeBucketFilter, bucketByConv]);
+    [activeProjectFilter, activeBucketFilter, bucketByConv, hostedOnly]);
   const chipFilter = useCallback((items: InboxSession[]) => {
-    if (!activeProjectFilter && !activeBucketFilter) return items;
+    if (!activeProjectFilter && !activeBucketFilter && !hostedOnly) return items;
     return items.filter(chipMatches);
-  }, [activeProjectFilter, activeBucketFilter, chipMatches]);
+  }, [activeProjectFilter, activeBucketFilter, hostedOnly, chipMatches]);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchQuery(text);
@@ -1401,9 +1218,10 @@ export default function InboxScreen() {
     [unreadSig],
   );
 
-  const renderSessionItem = useCallback((s: InboxSession) => (
+  const renderSessionItem = useCallback((s: InboxSession, titleSuffix?: string) => (
     <SwipeableSessionItem
       key={s._id}
+      titleSuffix={titleSuffix}
       session={s as SessionData}
       isUnread={!!unreadByConv[s._id]}
       onPress={() => router.push(`/session/${s._id}`)}
@@ -1424,17 +1242,43 @@ export default function InboxScreen() {
   // `count` is the chokepoint's section count (flat cards plus members nested
   // under a same-bucket lead) — the header number web, the tally and the CLI
   // agree on; items.length is only the flat cards.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number) => {
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number, hosted?: HostedSectionOpts) => {
     if (items.length === 0) return null;
     const key = collapseKey ?? label;
-    const collapsed = !!collapsedSections?.[key];
+    // A hosted section that never folds (New) ignores a stored fold.
+    const collapsed = !hosted?.fixed && !!collapsedSections?.[key];
+    const rows = collapsed ? null : items.map((row) => renderSessionItem(row, hosted?.suffixes?.get(String(row._id))));
+    if (hosted) {
+      // The web rail's hosted headings: sentence case in the interface face,
+      // muted ink, the count beside it, and one accent dot on what waits on
+      // the person.
+      return (
+        <RNView key={key}>
+          <TouchableOpacity
+            style={[styles.sectionHeader, styles.hostedSectionHeader]}
+            onPress={hosted.fixed ? undefined : () => toggleCollapsedSection(key)}
+            disabled={hosted.fixed}
+            activeOpacity={0.7}
+            accessibilityRole="header"
+          >
+            {hosted.attention ? <RNView style={styles.hostedSectionDot} /> : null}
+            <RNText style={styles.hostedSectionTitle}>{label}</RNText>
+            <RNText style={styles.hostedSectionCount}>{count ?? items.length}</RNText>
+            {hosted.fixed ? null : (
+              <FontAwesome name={collapsed ? "chevron-right" : "chevron-down"} size={8} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
+            )}
+          </TouchableOpacity>
+          {rows}
+        </RNView>
+      );
+    }
     return (
       <RNView key={key}>
         <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleCollapsedSection(key)} activeOpacity={0.7}>
           <FontAwesome name={collapsed ? "chevron-right" : "chevron-down"} size={9} color={Theme.textMuted0} />
           <RNText style={[styles.sectionTitle, color ? { color } : undefined]}>{label} ({count ?? items.length})</RNText>
         </TouchableOpacity>
-        {!collapsed && items.map(renderSessionItem)}
+        {rows}
       </RNView>
     );
   }, [renderSessionItem, collapsedSections, toggleCollapsedSection]);
@@ -1561,6 +1405,35 @@ export default function InboxScreen() {
       }
       return sections.filter(Boolean);
     }
+    if (hostedOnly) {
+      // The Assistant scope's sections, the web rail's (hostedStatusSections):
+      // Your move, then Couldn't finish, Working on it, New, Earlier (or
+      // Done), and Drafts. The collapse keys are the web's, so a fold
+      // round-trips with the desktop.
+      const st = useInboxStore.getState();
+      const awaiting = awaitingOkIds(st.sessionDecisions);
+      const sending = pendingSendIdsOf(st);
+      const { asks, stopped } = splitHostedStops(statusNeedsInput, (id) => st.messages[id]);
+      const hostedSections = hostedStatusSections(
+        { pinned: filteredPinned, questions: filteredQuestions, needsInput: asks, newSessions: filteredNew, working: statusWorking, done: statusDone, dormant: statusDormant },
+        (id) => awaiting.has(id), (id) => sending.has(id), (id) => !!unreadByConv[id],
+      );
+      // Same-name rows get a muted day or time after the title.
+      const suffixes = sameNameSuffixes([...hostedSections.flatMap(([rows]) => rows), ...stopped], (row) => hostedRowTitle(st, row._id), coarseNow);
+      const anyNew = hostedSections.some(([rows, k]) => k === 'new_results' && rows.length > 0);
+      const opts = (key: string, attention = false): HostedSectionOpts => ({ suffixes, attention, fixed: HOSTED_UNFOLDABLE_SECTIONS.has(key) });
+      for (const [rows, key] of hostedSections) {
+        if (key === 'needs_input') {
+          sections.push(renderSection(words.sectionNeedsInput, rows, undefined, 'Needs Input', undefined, opts(key, true)));
+          sections.push(renderSection("Couldn't finish", stopped, undefined, 'hosted_stopped', undefined, opts('hosted_stopped')));
+        } else if (key === 'pinned') sections.push(renderSection('Pinned', rows, undefined, 'Pinned', undefined, opts(key)));
+        else if (key === 'working') sections.push(renderSection(words.sectionWorking, rows, undefined, 'working', undefined, opts(key)));
+        else if (key === 'new_results') sections.push(renderSection('New', rows, undefined, 'new_results', undefined, opts(key)));
+        else if (key === 'done') sections.push(renderSection(anyNew ? 'Earlier' : 'Done', rows, undefined, 'done', undefined, opts(key)));
+        else sections.push(renderSection('Drafts', rows, undefined, 'drafts', undefined, opts(key)));
+      }
+      return sections.filter(Boolean);
+    }
     // Questions lead: a session that asked you something is your move before
     // anything else, pinned or not — same order as the web panel.
     sections.push(renderSection(words.sectionQuestions, filteredQuestions, Theme.violet, "questions"));
@@ -1579,7 +1452,7 @@ export default function InboxScreen() {
     sections.push(renderSection(words.sectionDormant, statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words, hostedOnly, awaitingSig, stopsSig, pendingSendSig, unreadByConv, coarseNow]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -1709,7 +1582,9 @@ export default function InboxScreen() {
         {/* Title-side badges (counts that link elsewhere) sit here. */}
         {!isSearching && <DecisionsBadge />}
         <RNView style={{ flex: 1 }} />
-        {!searchOpen && (
+        {/* Hosted mode has one way into search, the field over the list (as
+            the web rail has one under the wordmark). */}
+        {!searchOpen && !hostedMode && (
           <TouchableOpacity
             style={styles.headerIconBtn}
             onPress={() => setSearchOpen(true)}
@@ -1874,21 +1749,23 @@ export default function InboxScreen() {
       />
 
       <RNView style={styles.fabContainer} pointerEvents="box-none">
+        {/* Hosted mode's new conversation is the family's ink disc, as send
+            is; developer mode keeps the action blue. */}
         <TouchableOpacity
-          style={styles.fab}
+          style={[styles.fab, hostedMode && styles.fabHosted]}
           onPress={() => openNewSession()}
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel={words.newConversation}
         >
-          <FontAwesome name="plus" size={18} color="#fff" />
+          <FontAwesome name="plus" size={18} color={hostedMode ? Theme.bg : '#fff'} />
         </TouchableOpacity>
       </RNView>
     </SafeAreaView>
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -1903,12 +1780,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     gap: 8,
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    ...pageTitleFace(look),
     color: Theme.text,
   },
   countBadge: {
-    backgroundColor: Theme.accent,
+    ...pageCountLook(look, Theme.accent, Theme.textMuted, Theme.bg).badge,
     borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -1917,8 +1793,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   countBadgeText: {
     fontSize: 12,
-    fontWeight: '700',
-    color: Theme.bg,
+    ...pageCountLook(look, Theme.accent, Theme.textMuted, Theme.bg).text,
   },
   headerIconBtn: {
     width: 34,
@@ -1939,7 +1814,21 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 14,
     color: Theme.blue,
   },
-  searchReveal: {
+  // The family look draws it as the web rail's search field: a bordered
+  // field, left-aligned, in the same 44pt the pull-down reveal hides.
+  searchReveal: look === 'family' ? {
+    height: 34,
+    marginVertical: 5,
+    marginHorizontal: Spacing.md,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+    backgroundColor: Theme.bgAlt,
+  } : {
     height: 44,
     marginHorizontal: Spacing.md,
     flexDirection: 'row',
@@ -1961,8 +1850,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     height: 6,
     borderRadius: 3,
   },
+  // Room under the last row for the floating + (48pt, 24pt up), so the
+  // last row's time can scroll clear of it.
   listContent: {
-    paddingBottom: Spacing.xl,
+    paddingBottom: 88,
   },
   emptyList: {
     flexGrow: 1,
@@ -1995,6 +1886,30 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.textMuted0,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  hostedSectionHeader: {
+    gap: 7,
+    paddingTop: 14,
+    paddingBottom: 6,
+    backgroundColor: Theme.bg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
+  },
+  hostedSectionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.accent,
+  },
+  hostedSectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Theme.textMuted,
+  },
+  hostedSectionCount: {
+    fontSize: 12,
+    color: Theme.textMuted0,
+    fontVariant: ['tabular-nums'],
   },
   hiddenToggleRow: {
     flexDirection: 'row',
@@ -2205,5 +2120,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 6,
     elevation: 6,
+  },
+  fabHosted: {
+    backgroundColor: Theme.text,
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
   },
 }));

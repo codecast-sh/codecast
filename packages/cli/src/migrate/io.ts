@@ -29,10 +29,12 @@ import {
   gitSshUrl,
   hostCheckoutDirty,
   isWorktree,
+  moveClonePath,
   pullSession,
   pushSession,
   refreshRemoteCredential,
   remoteHome,
+  remoteRepoPath,
   shq,
   ssh,
   type MoveResult,
@@ -207,7 +209,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         skipTree: o.skipTree,
         pushedHead: o.pushedHead,
         landing: async (main) => {
-          const own = `${main}-mv-${o.batchId.replace(/^mg-/, "").slice(0, 8)}`;
+          const own = moveClonePath(main, o.batchId);
           const holder = await client.query(api.sessionMigrations.checkoutHolder, { api_token: token, migration_id: o.migrationId, project_path: main });
           if (holder) {
             log(`  ${main} on the host is in use by ${holder.short_id ?? holder.conversation_id} (${holder.title ?? "untitled"}); landing in ${own}`);
@@ -237,7 +239,8 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       return {
         pushedHead: move.pushedHead,
         destinationPath: move.remoteCwd,
-        gitRoot: isWorktree(move.localCwd) ? move.remoteCwd : undefined,
+        // A move clone is the host checkout's stand-in, so the root stays the checkout's.
+        gitRoot: isWorktree(move.localCwd) ? remoteRepoPath(host, move.localCwd) : undefined,
         sourcePath: `${move.localCwd}`,
         verification: describeVerification(move.verification),
         localCwd: move.localCwd,
