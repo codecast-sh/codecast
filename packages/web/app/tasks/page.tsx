@@ -46,8 +46,10 @@ import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../l
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { applyTaskDrop, closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undoActions";
+import { gestureToast } from "../../store/undoStack";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
+import { tasksForSource } from "../../lib/taskSource";
 import {
   Plus,
   Circle,
@@ -406,6 +408,17 @@ const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title", "ma
 const TASK_SORT_DEFAULT_DIR: Record<string, "asc" | "desc"> = {
   priority: "asc", title: "asc", created: "desc", updated: "desc", manual: "asc",
 };
+/** x on a hosted to-do: check it off, or open it again, as one gesture with
+ *  its Undo toast. Closing goes through the one close gateway, so a to-do
+ *  with open subtasks still asks first. */
+function toggleTodoDone(task: TaskItem): void {
+  const done = task.status === "done";
+  gestureToast(done ? `Reopened “${task.title}”` : `Done: “${task.title}”`, () => {
+    if (done) useInboxStore.getState().updateTask(task.short_id, { status: "open" });
+    else closeTaskWithGuard(task.short_id, "done");
+  });
+}
+
 function taskDefaultDir(sort: string): "asc" | "desc" {
   return TASK_SORT_DEFAULT_DIR[sort] ?? "asc";
 }
@@ -436,12 +449,20 @@ export function hostedPersonalView(view: { group: string; sort: string; dir: "as
   return { group: "none", sort: "created", dir: "desc" };
 }
 
-function useTaskUrlState(hosted = false) {
+function useTaskUrlState(hosted = false, scoped = false) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
-  const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const savedTaskView = useInboxStore((s) => s.clientState.ui?.task_view);
+  const updateSavedUI = useInboxStore((s) => s.updateClientUI);
+  // A list scoped to a role's area or to one project's board starts from that
+  // scope alone: the filters the person set on the Tasks page (another
+  // workspace's labels, "All", a project) would hide the work or count rows
+  // the board does not hold, so a scoped list keeps its own view, for as long
+  // as it is open, and never rewrites the Tasks page's saved one.
+  const [scopedView, setScopedView] = useState<TaskViewPrefs | undefined>(undefined);
+  const taskView = scoped ? scopedView : savedTaskView;
+  const updateClientUI = useCallback((patch: { task_view: TaskViewPrefs }) => (scoped ? setScopedView(patch.task_view) : updateSavedUI(patch)), [scoped, updateSavedUI]);
 
   const isDetailPage = pathname !== "/tasks";
   const hasUrlParams = !isDetailPage && searchParams.toString().length > 0;
@@ -596,7 +617,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const workspaceArgs = useWorkspaceArgs();
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode);
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode, !!scope || !!projectId);
   const completionClock = useCoarseNow(60_000);
   const pendingCompletions = useInboxStore((s) => completedFilter ? pendingTaskCompletionsSig(s.pending) : "");
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
@@ -829,37 +850,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     return [...set].sort();
   }, [scopedTasksList]);
 
-  // Source filtering applied before other filters.
-  // Active tasks = not suggested-insight and not dismissed. A promoted mined
-  // task counts as active — promote is what lifts it out of triage.
-  // The default view is the human's board: web-created tasks plus anything
-  // promoted onto it (cast task create --human, or a triage accept). Every
-  // machine-made unpromoted task (agent, plan_mode, todo_sync, import) sits
-  // behind the Agent segment; "all" shows both. Insight suggestions stay
-  // behind the separate triage link.
-  // The one activity predicate, shared with mobile/CLI counts so every surface
-  // agrees on which rows exist (see @codecast/shared/tasks).
-  const isActive = isActiveTask;
-  const isTriage = (t: TaskItem) => t.source === "insight" ? t.triage_status !== "dismissed" : t.triage_status === "suggested";
-  // Which rows belong on the human's board is the shared isOnHumanBoard rule
-  // (@codecast/shared/tasks): human/meeting origin, promoted, or assigned to a
-  // person or a role. Web and mobile both use it so the two boards can't drift.
-  const onHumanBoard = isOnHumanBoard;
-  const sourceFilteredTasks = useMemo(() => {
-    if (sourceFilter === "agent") {
-      return scopedTasksList.filter((t) => !onHumanBoard(t) && isActive(t));
-    } else if (sourceFilter === "all") {
-      return scopedTasksList.filter(isActive);
-    } else if (sourceFilter === "triage") {
-      return scopedTasksList.filter(isTriage);
-    } else if (sourceFilter === "dismissed") {
-      return scopedTasksList.filter((t) => t.triage_status === "dismissed");
-    } else {
-      // "" (default) and legacy "human" links both mean the human's board.
-      return scopedTasksList.filter((t) => onHumanBoard(t) && isActive(t));
-    }
-  }, [scopedTasksList, sourceFilter]);
-
+  // Source filtering applied before other filters (tasksForSource).
+  const sourceFilteredTasks = useMemo(() => tasksForSource(scopedTasksList, sourceFilter), [scopedTasksList, sourceFilter]);
 
   const completionTick = completedFilter ? completionClock : 0;
   const completionFilteredTasks = useMemo(
@@ -1362,6 +1354,9 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           quickAdd={hostedMode ? { placeholder: "New to-do", onAdd: (title) => void createTaskAndAdopt({ title, task_type: "task", status: "open", ...(workspaceArgs === "skip" ? {} : workspaceArgs), ...(projectId ? { project_id: projectId } : {}) }) } : undefined}
           hasMore={hasMore}
           onLoadMore={loadMore}
+          // Hosted to-dos check off with x, the list's one verb there (hosted
+          // rows have no selection), with the gesture's Undo toast.
+          onToggleItem={hostedMode ? toggleTodoDone : undefined}
           paletteShortcuts={[
             { key: "s", mode: "status", label: "status" },
             { key: "p", mode: "priority", label: "priority" },

@@ -6,6 +6,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { OrgObjectLink } from "../company/OrgObjectLink";
 import { X, FileText, Pencil, Check } from "lucide-react";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import type { DocItem, PlanItem, ProjectItem } from "../../../store/inboxStore";
@@ -125,7 +126,7 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
         )}
         {role.scope.project_ids.map((id) => (
           <span key={`p:${id}`} className="inline-flex items-center gap-1" data-scope-project={id}>
-            <Chip tone="blue" href={`/projects/${id}`} onRemove={canEdit ? () => remove("project", id) : undefined}>{nameOfProject(id)}</Chip>
+            <Chip tone="blue" href={`/projects/${id}`} object={{ kind: "project", ref: (projectById.get(id) as { short_id?: string } | undefined)?.short_id || id }} onRemove={canEdit ? () => remove("project", id) : undefined}>{nameOfProject(id)}</Chip>
             {/* The project's charter at a glance (org-staffing.md S7): its priority and who leads it (org-roles-run-work.md R4). */}
             <PriorityPill priority={projectById.get(id)?.priority} size="xs" />
             <ProjectLeadChip projectId={id} size="xs" />
@@ -160,11 +161,13 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
   );
 }
 
-export function Chip({ children, tone, mono, href, onRemove }: { children: React.ReactNode; tone: "blue" | "magenta"; mono?: boolean; href: string; onRemove?: () => void }) {
+export function Chip({ children, tone, mono, href, object, onRemove }: { children: React.ReactNode; tone: "blue" | "magenta"; mono?: boolean; href: string; /** An Org object: inside the screen the chip opens its sheet (D10). */ object?: { kind: "project"; ref: string }; onRemove?: () => void }) {
   const color = tone === "blue" ? "var(--sol-blue)" : "var(--sol-magenta)";
   return (
     <span className="inline-flex items-center h-[22px] rounded-md overflow-hidden text-[11px] font-medium" style={{ background: `color-mix(in srgb, ${color} 12%, transparent)`, color, fontFamily: mono ? "var(--font-mono)" : undefined }}>
-      <Link href={href} className="px-2 hover:underline truncate max-w-[160px]">{children}</Link>
+      {object
+        ? <OrgObjectLink kind={object.kind} objRef={object.ref} className="px-2 hover:underline truncate max-w-[160px]">{children}</OrgObjectLink>
+        : <Link href={href} className="px-2 hover:underline truncate max-w-[160px]">{children}</Link>}
       {onRemove && (
         <button type="button" onClick={onRemove} className="h-full px-1.5 hover:bg-black/10 dark:hover:bg-white/10" aria-label="Remove from scope">
           <X className="w-3 h-3" />

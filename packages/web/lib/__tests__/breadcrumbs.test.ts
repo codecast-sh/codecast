@@ -31,16 +31,16 @@ describe("buildBreadcrumbs", () => {
   });
 
   it("puts a task opened inside a project under THAT project, not under Tasks", () => {
-    expect(labels("/projects/p1/t1")).toEqual([
-      "Projects",
-      "Codecast: Product",
-      "Fix the auth race",
-    ]);
+    expect(labels("/projects/p1/t1")).toEqual(["Codecast: Product", "Fix the auth race"]);
+  });
+
+  it("gives a project's board one crumb, so the bar stays hidden under its own header", () => {
+    expect(labels("/projects/p1")).toEqual(["Codecast: Product"]);
   });
 
   it("links every crumb but the last, which is where you already are", () => {
     const crumbs = buildBreadcrumbs("/projects/p1/t1", lookups);
-    expect(crumbs.map((c) => c.href)).toEqual(["/projects", "/projects/p1", undefined]);
+    expect(crumbs.map((c) => c.href)).toEqual(["/projects/p1", undefined]);
   });
 
   it("leaves a lone section crumb unlinked too", () => {
@@ -49,14 +49,14 @@ describe("buildBreadcrumbs", () => {
 
   it("carries kind and id so the bar can mark a crumb", () => {
     const crumbs = buildBreadcrumbs("/projects/p1/t1", lookups);
-    expect(crumbs.map((c) => c.kind)).toEqual(["section", "project", "task"]);
-    expect(crumbs[1].id).toBe("p1");
+    expect(crumbs.map((c) => c.kind)).toEqual(["project", "task"]);
+    expect(crumbs[0].id).toBe("p1");
   });
 
   it("falls back to the raw id when the entity isn't loaded yet", () => {
     // A crumb must never render blank while the store catches up.
     expect(labels("/tasks/unknown-id", {})).toEqual(["Tasks", "unknown-id"]);
-    expect(labels("/projects/p9/t9", {})).toEqual(["Projects", "p9", "t9"]);
+    expect(labels("/projects/p9/t9", {})).toEqual(["p9", "t9"]);
   });
 
   it("never renders a raw Convex id — the crumb names the kind until the row loads", () => {

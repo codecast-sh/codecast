@@ -242,12 +242,22 @@ describe("deepLinkSessionId — what a desktop deep link selects in place", () =
   });
 });
 
-describe("pathLabel — goals, under the new address and the old one", () => {
-  it("names a goal by its in-N and the list as Goals", () => {
+describe("pathLabel — the company's objects, under the new address and the old ones", () => {
+  it("names a goal by its in-N, and the old lists as the Org screen they moved to", () => {
+    expect(pathLabel("/org/in-7")).toBe("Goal in-7");
     expect(pathLabel("/goals/in-7")).toBe("Goal in-7");
-    expect(pathLabel("/initiatives/in-7")).toBe("Goal in-7");
     expect(pathLabel("/initiatives/IN-7?tab=tasks")).toBe("Goal in-7");
-    expect(pathLabel("/goals")).toBe("Goals");
-    expect(pathLabel("/initiatives")).toBe("Goals");
+    expect(pathLabel("/goals")).toBe("Org");
+    expect(pathLabel("/initiatives")).toBe("Org");
+    expect(pathLabel("/projects")).toBe("Org");
+    expect(pathLabel("/company")).toBe("Org");
+  });
+
+  it("names a role, a person and a project on the Org screen, and a board by any id", () => {
+    expect(pathLabel("/org/or-7")).toBe("Role or-7");
+    expect(pathLabel("/org/@samvit")).toBe("@samvit");
+    expect(pathLabel("/org/pj-mf3k2a")).toBe("Project");
+    expect(pathLabel("/projects/pj-mf3k2a")).toBe("Project");
+    expect(pathLabel("/projects/pj-mf3k2a/ct-12")).toBe("Project");
   });
 });
