@@ -6,6 +6,7 @@
 //   cast expectations propose <file|-> [--project <ref>] [--hold] [--json]
 //   cast expectations apply <xp-N>
 //   cast expectations drop <xp-N>
+//   cast expectations routine [--project <ref>]
 //
 // Routes: /cli/expectations/{show,brief,propose,resolve} (convex/expectations.ts).
 // The shapes, the proposal parser and the renderings are
@@ -20,6 +21,14 @@ import { formatAge } from "./decideCommand.js";
 import { stdinText } from "./sendBody.js";
 import { lineProjectFor, scopeFor } from "./signalCommand.js";
 import { parseProposal, renderExpectations, type ExpectationsVersion } from "@codecast/shared/contracts/expectations";
+// The line template's proposer routine, the one prompt every pass follows,
+// whether its trigger runs it daily or a person asks for one pass.
+import routinePrompt from "../org-templates/line/org/prompts/expectations-daily.md" with { type: "text" };
+
+/** The proposer routine's prompt for one project: its name and the ref the commands in it take. */
+export function renderRoutine(project: { title: string; ref: string }): string {
+  return routinePrompt.replaceAll("{{project.name}}", project.title).replaceAll("{{project.ref}}", project.ref);
+}
 
 type ShowResult = {
   project: { id: string; title: string };
@@ -132,6 +141,14 @@ since/until record the window of team context read; the newest until is the next
       const r = await apiPost(deps, "/cli/expectations/propose", { ...scope, ...proposal, ...(options.hold ? { hold: true } : {}) });
       if (options.json) console.log(JSON.stringify(r, null, 2));
       else console.log(formatProposeResult(r));
+    });
+
+  scoped(cmd.command("routine").description("The pass that reads the team's recent context and proposes changes, written out for the project; a session follows it to run one pass now"))
+    .action(async (options: { project?: string; team?: string }) => {
+      const scope = await scopeFor(deps, options.team, false, lineProjectFor(options.team, options.project));
+      const r = await apiPost(deps, "/cli/expectations/brief", scope, { read: true });
+      const ref = options.project?.trim() || r.project.title;
+      process.stdout.write(renderRoutine({ title: r.project.title, ref: /\s/.test(ref) ? `"${ref}"` : ref }));
     });
 
   for (const action of ["apply", "drop"] as const) {

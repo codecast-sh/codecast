@@ -57,7 +57,7 @@ export function isLaneConversation(row: Pick<InboxSession, "agent_type"> & { inb
 
 export { conversationTitle } from "../../lib/conversationTitle";
 import { ownTitle, type TitleRow } from "../../lib/conversationTitle";
-import { allowancePoint, dollars, planPoints, planPrice, plural } from "./planWords";
+import { allowancePoint, dollars, planPoints, planPrice, plural, requestsLeftWords } from "./planWords";
 import { describeHostedCadence, hostedNextWords } from "../triggers/hostedSchedule";
 import { describeTaskCadence } from "../triggerCadence";
 export { dollars, planPoints, planPrice } from "./planWords";
@@ -157,15 +157,33 @@ export function answerTone(label: string, index: number): "yes" | "plain" | "no"
   return index === 0 ? "yes" : "plain";
 }
 
+/** Whether an answer says something the step's receipt cannot: a plain yes
+ *  or no is already in the receipt ("you said no"), while "don't ask again"
+ *  and an answer in the person's own words are not. The web transcript
+ *  (ConversationView) and the phone's (answerNote) both read it. */
+export function approvalAnswerAddsToReceipt(answer: string): boolean {
+  return answer !== APPROVAL_ANSWERS.approve && answer !== APPROVAL_ANSWERS.decline;
+}
+
 /** The quiet note where an approval card was, once the person answered it,
- *  or null when the transcript already says the answer. A decline reads in
- *  the step it declined ("Didn't set up a routine (you said no)"), so its
- *  note would say the same thing twice. The rule reads the answer alone and
- *  never the step's result, which lands a moment after the answer does. */
+ *  or null when the transcript already says the answer: the step it answered
+ *  reads "Set up the routine" or "Didn't set up a routine (you said not
+ *  now)", so a plain yes or no would say the same thing twice. The rule reads
+ *  the answer alone and never the step's result, which lands a moment after
+ *  the answer does. */
 export function answerNote(answer: string | null | undefined): string | null {
   const said = answer?.trim();
-  if (!said || said === APPROVAL_ANSWERS.decline) return null;
-  return LANE_COPY.transcript.answered(said);
+  if (!said || !approvalAnswerAddsToReceipt(said)) return null;
+  return approvalAnswerWords(said);
+}
+
+/** What the person answered an approval, as a receipt says it, on the web
+ *  (HostedNotice ApprovalAnswerLine) and the phone alike. */
+export function approvalAnswerWords(answer: string): string {
+  if (answer === APPROVAL_ANSWERS.approve) return "You said yes";
+  if (answer === APPROVAL_ANSWERS.always) return "You said yes, and not to ask again";
+  if (answer === APPROVAL_ANSWERS.decline) return "You said not now";
+  return `You said: “${answer}”`;
 }
 
 // ── Tool steps ─────────────────────────────────────────────────────────────
@@ -312,6 +330,14 @@ export function meterShort(w: MeterFigures): string {
   if (used >= 1) return "Allowance used, on extra credit";
   if (w.used_usd <= 0) return "Nothing used this month";
   return `${capitalized(monthPercent(used))} used this month`;
+}
+
+/** The meter's one line wherever it stands alone (the shell's meter, the
+ *  phone's Plan row): while the allowance has room, what is left counted in
+ *  requests (requestsLeftWords); otherwise meterShort, whose share is then
+ *  the tooltip. */
+export function meterWords(w: MeterFigures & { remaining_usd: number }): string {
+  return !meterOut(w) && meterFill(w).used < 1 && w.used_usd > 0 ? requestsLeftWords(w.remaining_usd) : meterShort(w);
 }
 
 /** The lines under the meter (the headline already says how much is used),
@@ -574,21 +600,16 @@ export const LANE_COPY = {
       { label: "Help me write", text: "Help me write something. Start by asking what it is and who it's for." },
     ],
     loading: "Getting your conversations",
-    waiting: "Waiting on you",
+    /** The rail's name for the same rows (surfaceRules sectionNeedsInput). */
+    waiting: "Your move",
+    comingUp: "Coming up",
     happening: "Happening now",
     done: "Done lately",
     seeAll: "See all",
     showMore: (n: number) => `Show ${n} more`,
   },
   conversation: {
-    working: "On it",
-    reply: "Reply",
     send: "Send",
-    change: "Or tell me what to change",
-  },
-  transcript: {
-    /** The note where an approval card was, once the person answered it. */
-    answered: (answer: string) => `You said: ${answer}`,
   },
   approval: {
     showAll: "Show all of it",
@@ -644,6 +665,12 @@ export const LANE_COPY = {
     failed: "Your mail didn't connect. Try again.",
     /** Whisk is the family's mail app: one mail, two doors. */
     whiskNote: "Your mail and calendar come in through Whisk, our mail app. Whisk works on its own too, with the same mail.",
+    /** The note while connecting is not open yet, in the future tense its
+     *  "Coming soon" pill promises. */
+    whiskNoteComing: "Your mail and calendar will come in through Whisk, our mail app. Whisk works on its own today.",
+    /** The quiet way to mail while connecting is closed (MailConnectChip,
+     *  WhiskCard): Whisk itself. */
+    useWhiskNow: "Use Whisk for mail now",
   },
   plan: {
     title: "Your plan",
