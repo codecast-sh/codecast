@@ -1,0 +1,31 @@
+{
+  "asOf": "2026-10-07T12:00:00.000Z",
+  "notes": "a cause about the line itself (its subject starts with line:), grounded against a project brief whose charter is about the product, not the line: ground should call it category line and tie it to the line's own goal, not park it as serving none",
+  "label": { "category": "line", "goal_ref": "line" },
+  "snapshot": {
+    "now": 1791374400000,
+    "cause": {
+      "short_id": "ct-9188",
+      "title": "A failed Prove ends the run with no next step",
+      "description": "When Prove fails outright (it could not write a test, so there is no prove.json), the run stops with 'the line had no next step'. Give a failed Prove a route, such as parking the cause with what Prove tried.",
+      "priority": "medium",
+      "created_at": 1791370800000,
+      "signal_count": 1,
+      "first_seen": 1791370000000,
+      "last_seen": 1791370000000,
+      "signals": [
+        { "source": "line", "kind": "line", "title": "Run stopped: the line had no next step after prove", "subject": "line:station:prove", "detail_md": "When Prove fails outright (it could not write a test, so there is no prove.json), the run stops with 'the line had no next step'. Give a failed Prove a route, such as parking the cause with what Prove tried.", "observed_at": 1791370000000 }
+      ],
+      "comments": []
+    },
+    "brief": {
+      "workspace": "team:fixture",
+      "workspace_name": "Fernway",
+      "project_title": "Fernway app",
+      "initiatives": [],
+      "projects": [
+        { "short_id": "pj-30", "title": "Fernway app", "status": "active", "priority": "p1", "owner_role": "@product", "goal": "Make Fernway the place a small team plans, tracks and ships its weekly work: one board, one inbox, one place to decide.", "success_metrics": ["Weekly active teams up 20% this quarter", "Median time from a request to its owner under 10 minutes"], "non_goals": ["A general purpose chat client"], "risks": ["Sync load on large boards"] }
+      ]
+    }
+  }
+}

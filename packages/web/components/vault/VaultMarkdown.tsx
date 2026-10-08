@@ -35,6 +35,7 @@ import { VAULT_HTML_SCHEMA, isAuthorityRelativeUrl } from "../../lib/vault/htmlP
 // Render-time-only cycle with VaultHoverPreview (it renders VaultMarkdown
 // inside the card); safe because neither module touches the other at eval.
 import { useHoverPreview } from "./VaultHoverPreview";
+import { objectHref } from "../../lib/entityLinks";
 
 export interface VaultLinkResolution {
   path: string | null;
@@ -137,7 +138,7 @@ function PersonPill({ username }: { username: string }) {
   );
   return (
     <Link
-      href={`/team/${encodeURIComponent(username)}`}
+      href={objectHref("person", username)}
       className="not-prose inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline no-underline"
     >
       @{member?.github_username || username}
