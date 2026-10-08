@@ -7,6 +7,7 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
 import { VENDOR_CONVERTER_VERSION, needsVendorImport } from "@codecast/shared/contracts/replay";
+import { REPLAY_FRAME_LIMITS } from "@codecast/shared/contracts/replayPlayer";
 import { decodeChunk, fetchReplayFrames, followReplayImport, formatReplayImport, parseEvery, readReplayEvents, reproBaseUrl, snapTimes, type ReplayDetail } from "./replayCommand.js";
 
 const EVENTS = [
@@ -137,10 +138,21 @@ describe("cast replay import", () => {
 
 describe("snap", () => {
   test("draws the named moment, a stretch every step, or the whole replay; held to the recording", () => {
-    expect(snapTimes({ at_ms: 83_000 }, null, 60_000)).toEqual([60_000]);
-    expect(snapTimes({ range: { from_ms: 10_000, to_ms: 30_000 } }, 10_000, 60_000)).toEqual([10_000, 20_000, 30_000]);
-    expect(snapTimes({ range: { from_ms: 50_000, to_ms: 90_000 } }, null, 60_000)).toEqual([50_000, 60_000]);
-    expect(snapTimes({}, 20_000, 45_000)).toEqual([0, 20_000, 40_000, 45_000]);
+    const times = (p: ReturnType<typeof snapTimes>) => p.times;
+    expect(times(snapTimes({ at_ms: 83_000 }, null, 60_000))).toEqual([60_000]);
+    expect(times(snapTimes({ range: { from_ms: 10_000, to_ms: 30_000 } }, 10_000, 60_000))).toEqual([10_000, 20_000, 30_000]);
+    expect(times(snapTimes({ range: { from_ms: 50_000, to_ms: 90_000 } }, null, 60_000))).toEqual([50_000, 60_000]);
+    expect(snapTimes({}, 20_000, 45_000)).toEqual({ times: [0, 20_000, 40_000, 45_000], truncated: null });
+  });
+
+  test("a lone moment with --every is refused: --every samples a stretch", () => {
+    expect(() => snapTimes({ replay: "rp-4", at_ms: 83_000 }, 10_000, 600_000)).toThrow("rp-4@1:00-2:30 --every 10s");
+  });
+
+  test("a stretch longer than the frame cap says where it stopped", () => {
+    const plan = snapTimes({}, 10_000, 20 * 60_000);
+    expect(plan.times.length).toBe(REPLAY_FRAME_LIMITS.max_frames);
+    expect(plan.truncated).toEqual({ last_ms: (REPLAY_FRAME_LIMITS.max_frames - 1) * 10_000, wanted: 121 });
   });
 
   test("--every reads like a player clock", () => {
@@ -169,6 +181,36 @@ describe("snap", () => {
     expect(frames.map((f) => f.t_ms)).toEqual(times);
     expect(asked.map((b) => b.length)).toEqual([12, 3]);
     expect(slept).toEqual([7_000]);
+  });
+
+  test("a capability that lapses partway is minted again, once per batch", async () => {
+    const caps: string[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      caps.push(body.cap);
+      if (body.cap === "old" && body.times_ms[0] > 0) return Response.json({ error: "This replay link has expired" }, { status: 404 });
+      return Response.json({ frames: body.times_ms.map((t: number) => ({ t_ms: t, url: null, outline: "", width: 1, height: 1, png_base64: "AA==" })) });
+    }) as any;
+    const times = Array.from({ length: 20 }, (_, i) => i * 1000);
+    let minted = 0;
+    const frames = await fetchReplayFrames({ cap: "old", frame_url: "https://replay.test/frame" }, times, { fetchImpl, remint: async () => (minted++, { cap: "new", frame_url: "https://replay.test/frame" }) });
+    expect(frames.map((f) => f.t_ms)).toEqual(times);
+    expect(frames.every((f) => f.png_base64)).toBe(true);
+    expect(minted).toBe(1);
+    expect(caps).toEqual(["old", "old", "new"]);
+  });
+
+  test("a later batch that fails keeps the frames already drawn", async () => {
+    let n = 0;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if (n++ > 0) return Response.json({ error: "The frame could not be rendered: boom" }, { status: 502 });
+      return Response.json({ frames: body.times_ms.map((t: number) => ({ t_ms: t, url: null, outline: "", width: 1, height: 1, png_base64: "AA==" })) });
+    }) as any;
+    const times = Array.from({ length: 15 }, (_, i) => i * 1000);
+    const frames = await fetchReplayFrames({ cap: "c", frame_url: "https://replay.test/frame" }, times, { fetchImpl });
+    expect(frames.filter((f) => f.png_base64).length).toBe(12);
+    expect(frames.slice(12).map((f) => [f.t_ms, f.error])).toEqual([12_000, 13_000, 14_000].map((t) => [t, "The frame could not be rendered: boom"]));
   });
 
   test("a refusal fails with the renderer's words", async () => {
