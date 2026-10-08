@@ -14,7 +14,7 @@ import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/org
 import { taskWork } from "./lib/orgOwnership";
 import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
-import { NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
+import { LINE_GOAL, NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { priority as linePriority, type Severity } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -100,12 +100,14 @@ function severityOf(task: any): Severity {
   return SEVERITIES.has(task.priority) ? task.priority : "none";
 }
 
-// goal_ref is a metric ref `in-N:key`, a project's short id, or "none"
+// goal_ref is a metric ref `in-N:key`, a project's short id, "line" or "none"
 // (goalsBrief.ts). The goal's priority is read from its row in the task's own
-// workspace; a ref that names nothing readable there counts as unranked.
+// workspace; the line's own goal has no row and no priority, and a ref that
+// names nothing readable there counts as unranked.
 async function goalPriorityOf(ctx: Ctx, task: any, cache: Map<string, GoalPriority | "unranked" | null>): Promise<GoalPriority | "unranked" | null> {
   const ref = task.goal_ref?.trim();
   if (!ref || ref === NO_GOAL) return null;
+  if (ref === LINE_GOAL) return "unranked";
   const key = `${task.workspace}|${ref}`;
   if (cache.has(key)) return cache.get(key)!;
   const shortId = ref.split(":")[0];
