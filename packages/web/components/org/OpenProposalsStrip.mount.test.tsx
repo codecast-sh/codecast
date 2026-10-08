@@ -25,11 +25,16 @@ const { act } = React;
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
 // The card is the cards worker's; here it echoes the batch the composer bridge hands it.
 const { useReviewComposer } = await import("../reviewContext");
-mock.module("../EntityObjectCard", () => ({ EntityObjectCard: ({ refId }: { refId: string }) => h("div", { "data-card-stub": refId, "data-card-batch": useReviewComposer()?.conversationId ?? "" }) }));
+// Spread the real module: bun shares mock.module across files in one run, so
+// a mock missing an export breaks a later file that imports it.
+const realCard = { ...(await import("../EntityObjectCard")) };
+mock.module("../EntityObjectCard", () => ({ ...realCard, EntityObjectCard: ({ refId }: { refId: string }) => h("div", { "data-card-stub": refId, "data-card-batch": useReviewComposer()?.conversationId ?? "" }) }));
 
 const { createRoot } = await import("react-dom/client");
 const { OpenProposalsStrip } = await import("./OpenProposalsStrip");
 const { stripRows } = await import("./orgScreenModel");
+const { OrgOpenContext } = await import("./company/orgOpenContext");
+import type { NeedsYouItem } from "./staffingModel";
 import type { OrgProposalRow } from "./orgStaffingTypes";
 import type { PendingComment } from "../../lib/quoteFormat";
 
@@ -74,7 +79,7 @@ async function mount(props: Partial<React.ComponentProps<typeof OpenProposalsStr
 test("one line by default: how many wait, the changes in all, the answers staged; the rows open on the chevron, oldest first, and close after a pick", async () => {
   const { el, picked, unmount } = await mount();
   expect(q("[data-org-strip]", el)!.getAttribute("data-org-strip")).toBe("5");
-  expect(q("[data-org-strip-head]", el)!.textContent).toBe("5 proposals wait on you·45 changes·2 answered, waiting for your send");
+  expect(q("[data-org-strip-head]", el)!.textContent).toBe("5 wait on you: 5 proposals·2 answered, waiting for your send");
   expect(q("[data-org-strip-toggle]", el)!.getAttribute("aria-expanded")).toBe("false");
   expect(q("[data-org-strip-rows]", el)).toBeNull();
   expect(q("[data-org-strip]", el)!.hasAttribute("data-org-strip-open")).toBe(false);
@@ -88,13 +93,13 @@ test("one line by default: how many wait, the changes in all, the answers staged
   // Waiting: the title and the count, nothing else on the row; the age in the hover.
   const waiting = q("[data-org-strip-row='op-1']", el)!;
   expect(waiting.getAttribute("data-org-strip-state")).toBe("waiting");
-  expect(waiting.textContent).toBe("Proposal 11 change");
+  expect(waiting.textContent).toBe("Proposal 11 to decide");
   expect(waiting.getAttribute("title")).toMatch(/^1 change · \S+ ago$/);
   // Answered: the staged count, in the proposal's colour.
   const answered = q("[data-org-strip-row='op-2']", el)!;
   expect(answered.getAttribute("data-org-strip-state")).toBe("answered");
   expect(answered.getAttribute("data-org-strip-answered")).toBe("2");
-  expect(answered.textContent).toBe("Proposal 22 changes2 answered");
+  expect(answered.textContent).toBe("Proposal 21 to decide2 answered");
   // Decided, from the list row's counts while its rows load: the hover says so, the row stays the count.
   const decided = q("[data-org-strip-row='op-3']", el)!;
   expect(decided.getAttribute("data-org-strip-state")).toBe("decided");
@@ -121,6 +126,8 @@ test("the breadcrumb names the current proposal and its x clears it; the current
   const crumb = q("[data-org-strip-current]", el)!;
   expect(crumb.getAttribute("data-org-strip-current")).toBe("op-5");
   expect(crumb.textContent).toBe("·Proposal 5");
+  // The chevron stays beside the crumb: the line still opens into rows.
+  expect(q("[data-org-strip-chevron]", el)).not.toBeNull();
   expect(q("[data-org-strip-clear]", el)!.getAttribute("aria-label")).toBe("Leave Proposal 5");
   await act(async () => { q("[data-org-strip-clear]", el)!.click(); });
   expect(events).toEqual(["clear"]);
@@ -181,11 +188,76 @@ test("the link line in its three kinds; Switch calls back with the team", async 
   await unmount();
 });
 
-test("a lone proposal reads in the singular; no answers staged, no answered words; a count unknown for one row leaves the changes off the line", async () => {
+test("a lone proposal reads in the singular; no answers staged, no answered words", async () => {
   const { el, render, unmount } = await mount({ rows: stripRows([open[0]], HEAD, undefined, NOW) });
-  expect(q("[data-org-strip-head]", el)!.textContent).toBe("1 proposal waits on you·9 changes");
+  expect(q("[data-org-strip-head]", el)!.textContent).toBe("1 waits on you: 1 proposal");
   expect(q("[data-org-strip-answered-line]", el)).toBeNull();
   await render({ rows: stripRows([open[0], proposal(6, { counts: undefined })], HEAD, undefined, NOW) });
-  expect(q("[data-org-strip-head]", el)!.textContent).toBe("2 proposals wait on you");
+  expect(q("[data-org-strip-head]", el)!.textContent).toBe("2 wait on you: 2 proposals");
   await unmount();
+});
+
+// What else waits on you (D7): a decision from the Growth lead's thread, one
+// from the Head of People's, and the Calling lead stuck.
+const role = (handle: string, name: string, short_id: string) => ({ _id: `role-${handle}`, short_id, handle, name, avatar: "owl" }) as any;
+const GROWTH = role("growth", "Growth lead", "or-3");
+const CALLING = role("calling", "Calling lead", "or-7");
+const decision = (key: string, r: any, question: string, createdAt: number): NeedsYouItem => ({ kind: "decision", key, role: r, canAnswerInPlace: false, item: { key, source: "decide", conversationId: `${r.handle}-conv`, question, options: [], blocking: true, createdAt } as any });
+const ASKS: NeedsYouItem[] = [
+  decision("decide:1", GROWTH, "Move pj-k3x under in-2?", 1),
+  decision("decide:2", role("head-of-people", "Head of People", "or-9"), "Which market goes first?", 2),
+  { kind: "blocked", key: "blocked:calling", role: CALLING, conversationId: "calling-conv", line: "Needs the call list approved" },
+];
+
+test("the line counts every kind (4 wait on you: 2 proposals · 2 decisions · Calling lead is stuck); the rows list proposals, then decisions, then stuck roles; each ask opens what it is about", async () => {
+  const opened: string[] = [];
+  const { el, render, unmount } = await mount({ rows: stripRows(open.slice(0, 2), HEAD, undefined, NOW), asks: ASKS, holds: (ref) => ref === "pj-k3x", onOpen: (t) => opened.push(`${t.kind}:${t.ref}`) });
+  expect(q("[data-org-strip]", el)!.getAttribute("data-org-strip")).toBe("5");
+  expect(q("[data-org-strip-lead]", el)!.textContent).toBe("5 wait on you:");
+  expect(qa("[data-org-strip-part]", el).map((p) => p.textContent)).toEqual(["2 proposals", "·2 decisions", "·Calling lead is stuck"]);
+  // The dot takes the most pressing item's colour, and that item is drawn in it: a stuck role red, decisions yellow, proposals violet.
+  const dot = q("[data-org-strip-dot]", el)!;
+  expect(dot.getAttribute("data-org-strip-dot")).toBe("stuck");
+  const tone = (kind: string) => (q(`[data-org-strip-part='${kind}'] .tabular-nums`, el)!).style.color;
+  expect(dot.style.background).toBe(tone("stuck"));
+  expect([tone("proposals"), tone("decisions"), tone("stuck")]).toEqual(["var(--sol-violet)", "var(--sol-yellow)", "var(--sol-red)"]);
+  // The chevron sits in the toggle right after the words, not pushed to the far edge.
+  const toggle = q("[data-org-strip-toggle]", el)!;
+  expect(toggle.lastElementChild!.hasAttribute("data-org-strip-chevron")).toBe(true);
+  expect(toggle.className).not.toContain("flex-1");
+  await act(async () => { q("[data-org-strip-toggle]", el)!.click(); });
+  const rows = q("[data-org-strip-rows]", el)!;
+  expect(qa("[data-org-strip-row], [data-org-strip-ask]", rows).map((r) => r.getAttribute("data-org-strip-row") ?? r.getAttribute("data-org-strip-kind"))).toEqual(["op-1", "op-2", "decision", "decision", "blocked"]);
+  const growth = q("[data-org-strip-ask='decide:1']", el)!;
+  expect(growth.textContent).toBe("Move pj-k3x under in-2?asked by Growth leaddecision");
+  const stuck = q("[data-org-strip-ask='blocked:calling']", el)!;
+  expect(stuck.textContent).toBe("Calling lead is stuckNeeds the call list approvedstuck");
+  // A decision citing a project the workspace holds opens the project; the rows close after the pick.
+  await act(async () => { growth.click(); });
+  expect(opened).toEqual(["project:pj-k3x"]);
+  expect(q("[data-org-strip-rows]", el)).toBeNull();
+  // One that cites nothing opens the role that asked; a stuck role opens its own sheet.
+  await act(async () => { q("[data-org-strip-toggle]", el)!.click(); });
+  await act(async () => { q("[data-org-strip-ask='decide:2']", el)!.click(); });
+  await act(async () => { q("[data-org-strip-toggle]", el)!.click(); });
+  await act(async () => { q("[data-org-strip-ask='blocked:calling']", el)!.click(); });
+  expect(opened).toEqual(["project:pj-k3x", "role:or-9", "role:or-7"]);
+  // Asks alone still draw the line, in the singular when one.
+  await render({ rows: [], asks: [ASKS[2]] });
+  expect(q("[data-org-strip-head]", el)!.textContent).toBe("1 waits on you: Calling lead is stuck");
+  await unmount();
+});
+
+test("with no onOpen, an ask opens through the screen's OrgOpenContext", async () => {
+  const opened: string[] = [];
+  const el = document.createElement("div");
+  document.body.appendChild(el);
+  const root = createRoot(el);
+  const props: React.ComponentProps<typeof OpenProposalsStrip> = { rows: [], asks: [ASKS[2]], current: null, expanded: null, batchConversationId: HEAD, linkLine: null, onPick: () => {}, onCollapse: () => {}, onClearCurrent: () => {}, onSwitchWorkspace: () => {} };
+  await act(async () => { root.render(h(OrgOpenContext.Provider, { value: { open: (kind: string, ref: string) => opened.push(`${kind}:${ref}`) } }, h(OpenProposalsStrip, props))); });
+  await act(async () => { q("[data-org-strip-toggle]", el)!.click(); });
+  await act(async () => { q("[data-org-strip-ask='blocked:calling']", el)!.click(); });
+  expect(opened).toEqual(["role:or-7"]);
+  await act(async () => { root.unmount(); });
+  el.remove();
 });

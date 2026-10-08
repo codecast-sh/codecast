@@ -38,7 +38,12 @@ export function fitTarget(
   // they do not have it, the outline is what the fit shows first.
   const spine = !roots && nodes.some((n) => n.kind === "owner") && all.w * readableZoom > freeW ? boundsOf(nodes.filter((n) => n.kind !== "owner")) : null;
   const rect = roots ?? spine ?? all;
-  return { rect, zoom: Math.max(readableZoom, Math.min(1, freeW / rect.w)), whole: false };
+  const byWidth = Math.min(1, freeW / rect.w);
+  if (byWidth >= readableZoom) return { rect, zoom: byWidth, whole: false };
+  // Even that column is wider than the pane at the floor, so shrinking buys
+  // nothing: read as large as the height allows (a shallow, wide org at full
+  // size), start at the left, and let the edge pills reach the rest.
+  return { rect, zoom: Math.max(readableZoom, Math.min(1, freeH / all.h)), whole: false };
 }
 
 /**
@@ -92,6 +97,18 @@ function axisPan(pos: number, size: number, treePos: number, treeSize: number, e
   if (pos >= 0 && pos + size <= extent) return 0;
   let d = pos + size > extent ? extent - FIT_PAD - (pos + size) : 0;
   if (pos + d < FIT_PAD) d = FIT_PAD - pos;
+  return holdToTree(d, treePos, treeSize, extent);
+}
+
+/** The pan that puts a span's centre in the middle of `extent`, held to the
+ *  tree the same way (a card near the tree's end stops short of the middle). */
+function axisCenter(pos: number, size: number, treePos: number, treeSize: number, extent: number): number {
+  return holdToTree(extent / 2 - (pos + size / 2), treePos, treeSize, extent);
+}
+
+/** A pan `d` corrected so the tree never leaves a blank strip at its start or
+ *  end when it is longer than `extent`, and never leaves the area when not. */
+function holdToTree(d: number, treePos: number, treeSize: number, extent: number): number {
   const t0 = treePos + d, t1 = treePos + treeSize + d;
   if (treeSize > extent - FIT_PAD * 2) {
     if (t0 > FIT_PAD) d += FIT_PAD - t0;
@@ -110,21 +127,37 @@ function axisPan(pos: number, size: number, treePos: number, treeSize: number, e
  * inside it, on that axis alone. The pan is clamped to the tree (axisPan),
  * so a tree wider than the pane never strands its left edge right of
  * FIT_PAD with half the picture off screen. Null when nothing need move.
+ *
+ * `center` is for the card whose sheet is open (D3): the sheet leaves a
+ * narrow strip, and the far edge of it sits under the sheet's shadow, so the
+ * card goes to the middle of the strip across, held to the tree, and the
+ * zoom rises to MIN_READABLE_ZOOM (about the card) when it is below it.
+ * Down the page it still moves by the least, so the root row stays put.
  */
 export function panIntoView(
   nodes: readonly OrgViewportNode[],
   targetId: string,
   vp: Viewport,
   free: { w: number; h: number },
+  mode: "least" | "center" = "least",
 ): Viewport | null {
   const n = nodes.find((b) => b.id === targetId);
   const all = boundsOf(nodes);
   if (!n || !all) return null;
-  const z = vp.zoom;
-  const dx = axisPan(n.x * z + vp.x, n.w * z, all.x * z + vp.x, all.w * z, free.w);
-  const dy = axisPan(n.y * z + vp.y, n.h * z, all.y * z + vp.y, all.h * z, free.h);
-  if (dx === 0 && dy === 0) return null;
-  return { x: vp.x + dx, y: vp.y + dy, zoom: z };
+  let at = vp;
+  if (mode === "center" && vp.zoom < MIN_READABLE_ZOOM) {
+    // Zoom about the card's centre, so the pans below start from where it is.
+    const cx = n.x + n.w / 2, cy = n.y + n.h / 2, z = MIN_READABLE_ZOOM;
+    at = { x: cx * vp.zoom + vp.x - cx * z, y: cy * vp.zoom + vp.y - cy * z, zoom: z };
+  }
+  const z = at.zoom;
+  const across = mode === "center" ? axisCenter : axisPan;
+  let dx = across(n.x * z + at.x, n.w * z, all.x * z + at.x, all.w * z, free.w);
+  const dy = axisPan(n.y * z + at.y, n.h * z, all.y * z + at.y, all.h * z, free.h);
+  // Already centred to the pixel: a re-run on a panel change does not nudge.
+  if (Math.abs(dx) < 0.5) dx = 0;
+  if (dx === 0 && dy === 0 && at === vp) return null;
+  return { x: at.x + dx, y: at.y + dy, zoom: z };
 }
 
 /**

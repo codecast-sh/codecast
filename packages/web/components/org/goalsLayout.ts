@@ -29,7 +29,7 @@ import { ghostScopeNames, ORG_SIZES, personNodeId, quietChipLines, roleNodeId, w
 import { proposalChangeRows, type ProposalTreeFace, type ProposalTreeRow } from "./proposalTree";
 
 /** What the lens reads off a project row. */
-export type GoalProject = { _id: string; title: string; short_id?: string; status?: string; owner_role_id?: string };
+export type GoalProject = { _id: string; title: string; short_id?: string; client_key?: string; status?: string; owner_role_id?: string };
 
 /** A change as a goal or project card wears it: the tag it leads with, and
  *  whether it is accepted (drawn solid until the store carries it). */

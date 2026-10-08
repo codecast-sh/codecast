@@ -3,7 +3,7 @@
   display: flex; flex-direction: column; align-items: center; text-align: center; padding: 28px;
   background: var(--paper); border-right: var(--hair);
 }
-.title { font: 700 24px/1.1 var(--voice); font-variation-settings: var(--voice-axes); }
+.title { font: 700 24px/1.1 var(--ui); }
 .bigFace {
   width: 140px; height: 140px; margin: 22px 0 20px; overflow: hidden; border-radius: 30%;
   background: var(--sunk); box-shadow: var(--shadow-md), 0 0 0 1px rgba(43, 37, 32, .06);
@@ -18,9 +18,9 @@
 .nameField:focus-within { box-shadow: inset 0 0 0 1px var(--ink-3), 0 0 0 3px rgba(196, 73, 31, .1); }
 .nameField input {
   flex: 1; min-width: 0; border: 0; background: none; color: var(--ink);
-  font: 700 18px/1 var(--voice); font-variation-settings: var(--voice-axes);
+  font: 700 18px/1 var(--ui);
 }
-.count { flex: none; font: var(--t-mono); font-variation-settings: var(--mono-axes); color: var(--ink-3); font-feature-settings: "tnum" 1; }
+.count { flex: none; font: var(--t-mono); color: var(--ink-3); font-feature-settings: "tnum" 1; }
 .dice { background: var(--surface); box-shadow: var(--ring-line-2); border-radius: var(--r-md); }
 .dice svg { width: 18px; height: 18px; }
 .suggest { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 14px; }

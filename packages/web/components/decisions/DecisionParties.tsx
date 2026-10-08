@@ -12,6 +12,7 @@ import { categoryMeaning } from "../../lib/decisionCategory";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { askingSessionName } from "../../lib/decisionLinks";
 import { useSurface } from "../../lib/surfaces";
+import { objectHref } from "../../lib/entityLinks";
 
 // Who is in a decision: the session that asked, the person who holds it, and
 // what its category means. One rendering for the queue card and the document
@@ -120,7 +121,7 @@ export function PersonChip({
       <span className="truncate text-sol-text">{name}</span>
     </span>
   );
-  return handle ? <Link href={`/team/${handle}`} title={`${name}'s profile`}>{body}</Link> : body;
+  return handle ? <Link href={objectHref("person", handle)} title={`${name}'s profile`}>{body}</Link> : body;
 }
 
 /** Everyone holding the decision right now: the people it was asked of, or
