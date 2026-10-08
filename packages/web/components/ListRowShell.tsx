@@ -73,7 +73,10 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
           }`}
         />
       )}
-      <button
+      {/* Bulk select is a developer's gesture: hosted mode draws the box only
+          on a selected row, so titles line up under the page's heading
+          instead of after an empty gutter. */}
+      {(!hosted || isSelected) && <button
         onClick={(e) => { e.stopPropagation(); state.onSelect(); }}
         className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors cq-hide-compact ${
           isSelected
@@ -84,7 +87,7 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
         }`}
       >
         {isSelected && <Check className="w-3 h-3 text-sol-bg" />}
-      </button>
+      </button>}
       {children}
     </div>
   );

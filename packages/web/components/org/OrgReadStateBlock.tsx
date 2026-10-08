@@ -1,5 +1,5 @@
 "use client";
-// What the org screen says about the tree read when there is no tree to
+// What the org screen says about the company read when there is nothing to
 // draw (orgReadState.ts): the function not deployed, a failed read, a
 // refusal, nothing yet, nobody in it. One block, mounted in whichever column
 // has nothing else to show, and the one-line banner for a stale copy.
@@ -16,7 +16,7 @@ export function OrgReadStateBlock({ kind, message, onRetry }: { kind: OrgReadBlo
         <div className="text-center max-w-xs px-6">
           <Network className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--sol-text-dim)" }} />
           <div className="text-sm font-medium">Nothing to show yet</div>
-          <p className="mt-1 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>The chart appears here on its own when it is ready.</p>
+          <p className="mt-1 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>The company appears here on its own when it is ready.</p>
         </div>
       ) : kind === "error" ? (
         // A read that failed is said as one, with the server's own
@@ -24,7 +24,7 @@ export function OrgReadStateBlock({ kind, message, onRetry }: { kind: OrgReadBlo
         // as "nobody works here".
         <div className="text-center max-w-sm px-6">
           <Network className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--sol-red)" }} />
-          <div className="text-sm font-medium">The org chart could not be read</div>
+          <div className="text-sm font-medium">The company could not be read</div>
           <p className="mt-1 text-[12.5px] break-words" style={{ color: "var(--sol-text-muted)" }}>{message}</p>
           {onRetry && <div className="mt-3 flex justify-center"><OrgButton size="sm" onClick={onRetry}>Try again</OrgButton></div>}
         </div>
@@ -37,7 +37,7 @@ export function OrgReadStateBlock({ kind, message, onRetry }: { kind: OrgReadBlo
       ) : kind === "loading" ? (
         <div className="flex flex-col items-center gap-3" style={{ color: "var(--sol-text-dim)" }}>
           <Network className="w-8 h-8 animate-pulse" style={{ color: "var(--sol-violet)" }} />
-          <span className="text-sm">Drawing the tree…</span>
+          <span className="text-sm">Reading the company…</span>
         </div>
       ) : (
         <div className="text-center max-w-xs px-6">

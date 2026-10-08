@@ -55,14 +55,16 @@ const AUTHOR_CHUNK = 40;
 const AUTHOR_LOOKBACK_MS = 48 * 60 * 60 * 1000;
 /** How long after a commit a session's insight may be written: a session's insight is rewritten as it goes on. */
 const AUTHOR_LOOKAHEAD_MS = 3 * 24 * 60 * 60 * 1000;
+/** Edits read per file and checkout, newest first: a past day's file may have been edited many times since. */
+const AUTHOR_EDITS_PER_PATH = 200;
 /** Checkouts searched per commit, those with the most sessions at work around it first. */
 const AUTHOR_ROOTS = 6;
 /** Sessions an author lookup weighs: a past day's, through its lookahead. */
 const AUTHOR_CANDIDATES = 400;
 /** Authors kept per commit, most files first. */
-const AUTHORS_PER_COMMIT = 2;
+const AUTHORS_PER_COMMIT = 4;
 /** Sessions a story names: its own and its commits' authors together. */
-const STORY_SESSIONS = 4;
+const STORY_SESSIONS = 6;
 /** external_events rows per page. */
 const EVENT_PAGE = 500;
 /** A release the morning after still says what carried the day's stories. */
@@ -169,7 +171,15 @@ export const readAuthors = internalQuery({
     const candidates = (await teamVisibleRecentInsights(ctx, args.team_id, args.since, AUTHOR_CANDIDATES, args.until)).filter(
       (c) => !!c.checkout_root && (!c.repository || normalizeRepository(c.repository) === repository),
     );
-    const known = new Set(candidates.map((c) => String(c.conversation_id)));
+    // A session that edited the files counts whether or not it has an insight
+    // of its own (a subagent, a workflow worker): the caller gates every author.
+    // Its parent is credited beside it, since the parent holds the person's asks
+    // and what the work was checked with.
+    const parentOf = new Map<string, Id<"conversations"> | null>();
+    const parent = async (id: Id<"conversations">) => {
+      if (!parentOf.has(String(id))) parentOf.set(String(id), ((await ctx.db.get(id)) as Doc<"conversations"> | null)?.parent_conversation_id ?? null);
+      return parentOf.get(String(id))!;
+    };
     const out: Record<string, CommitAuthor[]> = {};
     for (const c of args.commits) {
       // The checkouts of sessions at work around the commit, busiest first.
@@ -188,15 +198,18 @@ export const readAuthors = internalQuery({
             .query("file_changes")
             .withIndex("by_file_path", (q) => q.eq("file_path", `${root}/${path}`))
             .order("desc")
-            .take(30);
+            .take(AUTHOR_EDITS_PER_PATH);
           for (const row of rows) {
-            const id = String(row.conversation_id);
             if (row.timestamp > c.timestamp || row.timestamp < c.timestamp - AUTHOR_LOOKBACK_MS) continue;
-            if (row.change_type === "commit" || row.change_type === "delete" || !known.has(id) || hit.has(id)) continue;
-            hit.add(id);
-            const s = score.get(id) ?? { id: row.conversation_id, paths: [] };
-            s.paths.push(path);
-            score.set(id, s);
+            if (row.change_type === "commit" || row.change_type === "delete") continue;
+            const up = await parent(row.conversation_id);
+            for (const id of up ? [row.conversation_id, up] : [row.conversation_id]) {
+              if (hit.has(String(id))) continue;
+              hit.add(String(id));
+              const s = score.get(String(id)) ?? { id, paths: [] };
+              s.paths.push(path);
+              score.set(String(id), s);
+            }
           }
         }
       }

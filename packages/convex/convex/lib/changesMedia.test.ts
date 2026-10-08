@@ -93,13 +93,13 @@ describe("media windows", () => {
     expect(media[String(conv)].images.map((i: any) => i.url)).toEqual(["https://convex.example/morning.png"]);
   });
 
-  test("a session with no earlier commit reaches back twelve hours", async () => {
+  test("a session with no earlier commit reaches back two days", async () => {
     const t = convexTest(schema, modules);
     const conv = await t.run(async (ctx) => {
       const user = await ctx.db.insert("users", { name: "Ana" } as any);
       const conv = await ctx.db.insert("conversations", { user_id: user, agent_type: "claude_code", session_id: "s", started_at: T, updated_at: T, message_count: 1, status: "active" } as any);
       const message = await ctx.db.insert("messages", { conversation_id: conv, message_uuid: "m", role: "assistant", content: "The ranked needs list", timestamp: T } as any);
-      for (const [key, hours] of [["day-before", 13], ["morning", 11]] as const) {
+      for (const [key, hours] of [["day-before", 49], ["morning", 40]] as const) {
         await ctx.db.insert("conversation_images", { conversation_id: conv, image_key: key, src: `https://convex.example/${key}.png`, message_id: message, seq: 0, timestamp: T - hours * 3_600_000 });
       }
       return conv;
@@ -115,7 +115,7 @@ describe("media windows", () => {
       const team = await ctx.db.insert("teams", { name: "Acme", created_at: 0, invite_code: "acme" } as any);
       const conv = await ctx.db.insert("conversations", { user_id: user, team_id: team, agent_type: "claude_code", session_id: "s", started_at: T, updated_at: T, message_count: 2, status: "active" } as any);
       await ctx.db.insert("messages", { conversation_id: conv, message_uuid: "design", role: "assistant", content: "The design: https://codecast.sh/a/header-design", timestamp: T - 5 * 3_600_000 } as any);
-      await ctx.db.insert("messages", { conversation_id: conv, message_uuid: "film", role: "assistant", content: "The film: https://codecast.sh/a/teaser-film", timestamp: T + 1000 + 2 * 3_600_000 } as any);
+      await ctx.db.insert("messages", { conversation_id: conv, message_uuid: "film", role: "assistant", content: "The film: https://codecast.sh/a/teaser-film", timestamp: T + 1000 + 4 * 3_600_000 } as any);
       return conv;
     });
     const media: Record<string, any> = await t.run(async (ctx) => Object.fromEntries(await teamVisibleMedia(ctx as any, [{ conversation_id: conv, mode: "full" }], { first_at: T, last_at: T + 1000 })));
