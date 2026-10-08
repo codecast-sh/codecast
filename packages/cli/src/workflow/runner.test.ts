@@ -857,6 +857,62 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/sessions/kill").map(c => c.body.session)).toEqual(["conv_hand"]);
   }, 30000);
 
+  test("a station that pinned blocked stops the run there, even when its json names an edge", async () => {
+    const g = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      investigate [label="Investigate", backend=session, agent=claude, prompt="look", max_visits=2]
+      refine [label="Refine", backend=session, agent=claude, prompt="refine"]
+      exit [shape=Msquare]
+      start -> investigate -> refine
+      refine -> investigate [condition="refine.json.outcome = wrong_cause"]
+      refine -> exit [condition="refine.json.outcome = refined"]
+    }`);
+    pinned = { state: "Investigated", status: "done" };
+    let spawns = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/spawn") && ++spawns === 2) {
+        pinned = { state: "Waiting on sd-486", status: "blocked", result: JSON.stringify({ outcome: "wrong_cause" }) };
+      }
+      return inner(url, init);
+    }) as typeof fetch;
+    const outcome = await runWorkflow(g, { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+    expect(outcome).toBe("failed");
+    expect(spawns).toBe(2);
+    const park = calls.find(c => c.route === "/cli/work/update")!;
+    expect(park.body).toMatchObject({ short_id: "ct-9", status: "in_review", execution_status: "blocked" });
+  }, 30000);
+
+  test("a builder that pinned blocked routes to the line's ask gate with its own words, and the answer goes back to it", async () => {
+    const g = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      implement [label="Implement", backend=session, agent=claude, prompt="build it", max_visits=2]
+      ask [label="Builder asks", shape=hexagon, prompt="The builder stopped ($handoff).", doc="$handoff_note"]
+      reopen [shape=parallelogram, script="true"]
+      exit [shape=Msquare]
+      start -> implement
+      implement -> exit [condition="outcome = success"]
+      implement -> ask [condition="handoff = blocked"]
+      ask -> reopen [label="[A] Answer :: back to the builder"]
+      reopen -> implement
+    }`);
+    let spawns = 0;
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      if (route === "/cli/spawn") pinned = ++spawns === 1 ? { state: "Which schema version should the migration target?", status: "blocked" } : { state: "Built", status: "done" };
+      if (route === "/cli/workflow-runs/poll-gate") return new Response(JSON.stringify({ status: "running", gate_response: "A: version 3" }), { status: 200 });
+      return inner(url, init);
+    }) as typeof fetch;
+    const outcome = await runWorkflow(g, { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+    expect(outcome).toBe("completed");
+    expect(spawns).toBe(2);
+    const gate = calls.find(c => c.route === "/cli/workflow-runs/gate")!.body;
+    expect(gate).toMatchObject({ node_id: "ask", prompt: "The builder stopped (blocked).", doc_md: "Which schema version should the migration target?" });
+    const second = calls.filter(c => c.route === "/cli/spawn")[1].body;
+    expect(second.prompt).toContain("# Human Instructions\nversion 3");
+  }, 30000);
+
   test("a station that ended on a question is left standing for the person", async () => {
     pinned = { state: "Which base should prove run on?", status: "working" };
     await run();

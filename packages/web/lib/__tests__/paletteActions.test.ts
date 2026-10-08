@@ -176,7 +176,14 @@ describe("command tree targeting", () => {
   });
   test("links use canonical routes", () => {
     expect(paletteObjectPath("session", { _id: "s" })).toBe("/conversation/s");
-    expect(paletteObjectPath("project", { _id: "p" })).toBe("/projects/p");
+    // A company object opens its sheet on the Org screen; a project's board is a verb of its own.
+    expect(paletteObjectPath("project", { _id: "p", short_id: "pj-abc" })).toBe("/org/pj-abc");
+    expect(paletteObjectPath("initiative", { _id: "g", short_id: "in-2" })).toBe("/org/in-2");
+    expect(paletteObjectPath("role", { _id: "r", short_id: "or-7" })).toBe("/org/or-7");
+    expect(paletteObjectPath("person", { _id: "u1", member: { _id: "u1", username: "sam", github_username: "samvit" } })).toBe("/org/@samvit");
+    // Without a GitHub handle the address is the user id, as every pill writes it (personRefOf).
+    expect(paletteObjectPath("person", { _id: "u1", member: { _id: "u1", username: "sam" } })).toBe("/org/@u1");
+    expect(paletteActions("project", [{ _id: "p" }]).map((a) => a.key)).toContain("project_board");
   });
   test("digit accelerators leave typing and IME input alone", () => {
     const e = { key: "2", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
@@ -276,12 +283,12 @@ describe("palette item ranking", () => {
     expect(actions.find(a => a.key === "session_kill")?.label).toBe("Kill 3 sessions");
     expect(actions.find(a => a.key === "bucket")?.label).toBe("Label 3 sessions…");
   });
-  test("a teammate: follow where they are, reach them, then their profile", () => {
-    const person = { _id: "u-sam", name: "Samvit", username: "samvit", member: {}, online: true, following: false, session: { _id: "c1", title: "Deals lead" } };
+  test("a teammate: follow where they are, reach them, then their place in the org", () => {
+    const person = { _id: "u-sam", name: "Samvit", member: { _id: "u-sam", github_username: "samvit" }, online: true, following: false, session: { _id: "c1", title: "Deals lead" } };
     const actions = paletteActions("person", [person], "me", true);
     expect(actions.map(a => a.key)).toEqual(["person_follow", "person_message", "person_huddle", "open", "newtab", "copylink"]);
     expect(actions[0].label).toBe("Follow · Deals lead");
-    expect(paletteObjectPath("person", person)).toBe("/team/samvit");
+    expect(paletteObjectPath("person", person)).toBe("/org/@samvit");
     // Offline: nothing to follow; chat off: no message.
     expect(paletteActions("person", [{ ...person, online: false, session: null }], "me", false).map(a => a.key)).toEqual(["person_huddle", "open", "newtab", "copylink"]);
     expect(paletteActions("person", [{ ...person, following: true }], "me", true)[0].label).toBe("Stop following");
