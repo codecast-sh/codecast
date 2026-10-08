@@ -13,9 +13,14 @@ import { ORG_STAFFING_FIXTURE_HEALTH } from "./orgStaffingFixture";
 const change = (id: string, seq: number, c: OrgProposalChange["change"], status: OrgProposalChange["status"] = "proposed", proposal_id = "fixture-goals-proposal", rationale = "The work already points at this; the record does not hold it yet."): OrgProposalChange =>
   ({ _id: id, proposal_id, seq, change: c, rationale, evidence: [], status });
 
+/** The fixture's projects with the short refs their addresses take
+ *  (`/org/pj-org`), so the dev preview opens each one's sheet beside the map. */
+const PROJECT_REFS: Record<string, string> = { "proj-org": "pj-org", "proj-inbox": "pj-inbox", "proj-billing": "pj-billing" };
+export const GOALS_FIXTURE_PROJECTS = FIXTURE_PROJECTS.map((p) => ({ ...p, short_id: PROJECT_REFS[p._id] }));
+
 export const GOALS_FIXTURE_DATA: { initiatives: typeof FIXTURE_INITIATIVES; projects: GoalProject[] } = {
   initiatives: FIXTURE_INITIATIVES,
-  projects: FIXTURE_PROJECTS.map((p) => ({ _id: p._id, title: p.title, status: p.status, owner_role_id: (p as { owner_role_id?: string }).owner_role_id })),
+  projects: GOALS_FIXTURE_PROJECTS.map((p) => ({ _id: p._id, short_id: p.short_id, title: p.title, status: p.status, owner_role_id: (p as { owner_role_id?: string }).owner_role_id })),
 };
 
 export const GOALS_FIXTURE_CHANGES: OrgProposalChange[] = [

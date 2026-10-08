@@ -14,6 +14,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useShipTarget, type ShipTargetRef, type ShipTargetRow } from "../hooks/useShipTarget";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 
 const PHASE_TONE: Record<ShipPhase, string> = {
   starting: "var(--sol-text-dim)",
@@ -48,7 +49,13 @@ function useRunProgress(row: ShipTargetRow | undefined): ShipProgress | null {
   }, [row?.run, row?.line, session, pr]);
 }
 
-export function ShipControl({ target, size = "full" }: { target: ShipTargetRef; size?: "full" | "compact" }) {
+/** Ship is a team feature (teams.features.ship, default off): an off workspace
+ *  renders no control and runs no ship query. */
+export function ShipControl(props: { target: ShipTargetRef; size?: "full" | "compact" }) {
+  return useWorkspaceFeature("ship") ? <ShipControlOn {...props} /> : null;
+}
+
+function ShipControlOn({ target, size = "full" }: { target: ShipTargetRef; size?: "full" | "compact" }) {
   const row = useShipTarget(target);
   const progress = useRunProgress(row);
   const startShip = useInboxStore((s) => s.startShip);
@@ -188,8 +195,9 @@ function renderCode(text: string) {
  * run's progress for as long as there is one (it outlives the review).
  */
 export function TaskShipStation({ task }: { task: { _id: string; status?: string } }) {
+  const on = useWorkspaceFeature("ship");
   const hasRun = useInboxStore((s) => !!(s as any).shipTargets?.[`task:${task._id}`]?.run);
-  if (task.status !== "in_review" && !hasRun) return null;
+  if (!on || (task.status !== "in_review" && !hasRun)) return null;
   return (
     <section className="mb-6 flex flex-col gap-2" data-task-ship>
       <h3 className="text-xs font-medium uppercase tracking-wide text-sol-text-dim">Ship</h3>
