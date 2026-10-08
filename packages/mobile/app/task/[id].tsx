@@ -17,7 +17,7 @@ import { Text as RNText, TextInput } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
-import { Mono } from "@/constants/fonts";
+import { Mono, uiFace } from "@/constants/fonts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { directChildren, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
@@ -215,7 +215,7 @@ export default function TaskDetailScreen() {
           title: task.short_id,
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
+          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
         }}
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>

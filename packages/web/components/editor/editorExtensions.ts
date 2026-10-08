@@ -1,5 +1,6 @@
 import { ReactRenderer, ReactNodeViewRenderer } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { Node } from "@tiptap/core";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -25,6 +26,7 @@ import { TabIndentExtension } from "./TabIndentExtension";
 import { ImageUploadPlaceholder } from "./ImageUploadPlugin";
 import { DocTitleExtension, TitleFirstDocument } from "./DocTitleExtension";
 import { DRAFTING_MARKS } from "./DraftingExtension";
+import { splitOnImagePlaceholders } from "../../lib/imagePlaceholder";
 import { identityLine } from "../../lib/sessionIdentity";
 import { personifyAllNow } from "../../hooks/usePersonifyAll";
 
@@ -152,6 +154,28 @@ const MarkdownLink = Link.extend({
   },
 });
 
+/**
+ * Text, writing `[Image N]` attachment tokens back verbatim. The default
+ * serializer escapes the brackets, and the agent then gets `\[Image 1\]`
+ * instead of a reference to the image it was sent.
+ */
+const MarkdownText = Node.create({
+  name: "text",
+  group: "inline",
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: any, node: any) {
+          splitOnImagePlaceholders(node.text).forEach((part, i) => {
+            if (part) state.text(i % 2 ? part : part.replace(/</g, "&lt;").replace(/>/g, "&gt;"), i % 2 === 0);
+          });
+        },
+        parse: {},
+      },
+    };
+  },
+});
+
 export function createBaseExtensions(opts: {
   placeholder?: string;
   withTables?: boolean;
@@ -168,6 +192,7 @@ export function createBaseExtensions(opts: {
       codeBlock: false,
       heading: { levels: [1, 2, 3] },
       link: false,
+      text: false,
       ...(opts.titleFirst ? { document: false } : {}),
     }),
     ...(opts.titleFirst
@@ -183,6 +208,7 @@ export function createBaseExtensions(opts: {
           }),
         ]
       : [Placeholder.configure({ placeholder: bodyPlaceholder })]),
+    MarkdownText,
     MarkdownLink.configure({
       openOnClick: true,
       HTMLAttributes: { class: "editor-link" },

@@ -216,6 +216,10 @@ describe("the map over the Union fixture", () => {
     const carried = new Set(UNION_GOALS_DATA.initiatives.flatMap((g) => g.project_ids));
     const expected = UNION_GOALS_DATA.projects.filter((p) => !carried.has(p._id));
     expect(loose.projects).toBe(expected.length);
+    // The company's tally counts them too, as the document's state line does: the loose card says the split.
+    const top = nodes[0];
+    const tally = top.kind === "company" ? top.projects : top.kind === "goal" ? top.root?.projects : undefined;
+    expect(tally).toBe(new Set([...carried, ...expected.map((p) => p._id)].filter((id) => UNION_GOALS_DATA.projects.some((p) => p._id === id && p.status !== "done"))).size);
     const rows = nodes.filter((n) => n.kind === "project" && n.id.startsWith(`project:${LOOSE_NODE_ID}:`));
     expect(rows.length).toBe(expected.length);
     for (const r of rows) expect(edges.some((e) => e.kind === "spine" && e.source === LOOSE_NODE_ID && e.target === r.id)).toBe(true);
