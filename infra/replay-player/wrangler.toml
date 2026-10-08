@@ -30,3 +30,7 @@ binding = "BROWSER"
 [vars]
 CONVEX_ORIGIN = "https://convex.codecast.sh"
 PLAYER_ORIGIN = "https://replay.codecast.sh"
+# The private replays bucket, path style, as Convex signs DOM chunk URLs
+# (R2_ENDPOINT + "/" + REPLAYS_R2_BUCKET). The page and the frame renderer
+# read R2 under this prefix only. Change it with either Convex variable.
+REPLAYS_BUCKET_URL = "https://518bafbd08199d43fe9080a12a7ac1b7.r2.cloudflarestorage.com/codecast-replays/"

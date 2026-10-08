@@ -7,12 +7,16 @@ import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keysOwnedElsewhere } from "../shortcuts/keyOwnership";
-import { queueTier, routeQueueKey, messagesSinceAsk, needsDocumentPage, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
+import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
+import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./decisions/DecisionSections";
+import { GateRunChip } from "./decisions/DecisionCompactCard";
+import { useSyncDecisionDetail, useDecisionDetail } from "../hooks/useSyncDecisionDetail";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { formatTimeAgo } from "../lib/messageNavigator";
@@ -21,7 +25,7 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
-import { ChevronUp, ChevronDown, ArrowUpRight, Link2 } from "lucide-react";
+import { ChevronUp, ChevronDown, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import "./decisions/decisions.css";
@@ -153,8 +157,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // The kinds beyond a single choice (the-line.md L10: multi, rank, form)
   // answer through DecisionAnswerControls on the live store row, which
   // carries the form and takes the digit and Enter keys itself; the card's
-  // own digits stand down for them. Anything with a document or option pages
-  // links to the decision page, where there is room to read.
+  // own digits stand down for them.
   const decisionRow = useInboxStore((s) => (item.source === "decide" && item.decisionId ? s.sessionDecisions[item.decisionId] : undefined));
   const kind = item.source === "decide" ? (item.kind ?? "single") : "single";
   // A change card (LE11) answers Ship, Revise or Drop through its own
@@ -166,7 +169,14 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const cardBar = !!card && richControls;
   const pageSlugs = item.source === "decide" ? optionPageSlugs(item.options) : [];
   const shareHref = item.source === "decide" && item.decisionId ? decisionHref({ _id: item.decisionId, short_id: item.shortId }) : null;
-  const documentHref = needsDocumentPage(item) ? shareHref : null;
+  // The open sheet reads the decision the way its page does: the attached
+  // document, the facts and the ladder come from the same detail
+  // (DecisionSections), so the sheet never sends the reader elsewhere to
+  // see what they are answering. Folded, nothing is drawn, so nothing loads.
+  const decideId = item.source === "decide" ? item.decisionId : undefined;
+  useSyncDecisionDetail(full ? decideId : undefined);
+  const detail = useDecisionDetail(decideId);
+  const detailDecision = detail ? (decisionRow ?? detail.decision) : null;
 
   const onDone = stepper?.onDone;
   const answer = useCallback((index: number) => { answerItem(index); onDone?.(); }, [answerItem, onDone]);
@@ -326,11 +336,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     </button>
   );
 
-  const documentLink = documentHref && (
-    <a href={documentHref} data-decision-document className="inline-flex items-center gap-1 text-[11px] text-sol-blue hover:underline" title="The decision page: the document, the pages, the ladder">
-      read the full decision<ArrowUpRight className="w-3 h-3" />
-    </a>
-  );
+  // A gate on a workflow run (the-line.md L4): the run this question pauses.
+  const runChip = detailDecision?.workflow_run_id ? <GateRunChip runId={detailDecision.workflow_run_id} nodeId={detailDecision.gate_node_id} className="text-[11px]" /> : null;
+  const facts = detail && detailDecision ? <DecisionFacts decision={detailDecision} detail={detail} className={card ? "" : "mt-4 mb-5"} /> : null;
 
   const whoIsAsking = askingRole ? (
     <div className="flex items-center gap-2 min-w-0 flex-1" data-decision-asker={askingRole.handle}>
@@ -387,7 +395,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
   // The reasoning, in the page's body type: the authored context of a
   // `cast decide`, or the detail an AskUserQuestion carries.
-  const reasoning = item.contextMd
+  const body = detail && detailDecision && hasDecisionBody(detailDecision, detail) ? <DecisionBody decision={detailDecision} detail={detail} /> : null;
+  const reasoning = detail
+    ? null
+    : item.contextMd
     ? <MarkdownRenderer content={item.contextMd} />
     : poll?.question.detail
       ? <span className="whitespace-pre-line">{poll.question.detail}</span>
@@ -398,10 +409,13 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const showRecent = !item.contextMd && !!recentText && !hosted;
   const showThreadState = !item.contextMd && !recentText && !!session?.thread_state;
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
-  const contextBlock = (card || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
+  const contextBlock = (card || detail || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
     <div className="decision-sheet-context min-w-0 space-y-4" data-reveal-span>
       {/* The headline above already says the change and its cause. */}
       {card && <ChangeCardView card={card} density="inline" change={false} recommend={!richControls} summarized={cardBar} />}
+      {/* A run's gate is owned by the session that started the run or the
+          project's lead, not this log: discuss it with them (ct-58330). */}
+      {decideId && decisionRow?.workflow_run_id && <DecisionDiscussion decisionId={decideId} compact />}
       {reasoning && (
         <div className="decision-body text-sm text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context>
           {reasoning}
@@ -418,7 +432,15 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       {showThreadState && (
         <div className="text-sm text-sol-text-muted border-l-2 border-sol-border pl-3 whitespace-pre-wrap">{session!.thread_state}</div>
       )}
-      {item.reportSlug && !card && <PublishedPageEmbed slug={item.reportSlug} />}
+      {body}
+      {card && facts}
+      {item.reportSlug && !card && !detail && <PublishedPageEmbed slug={item.reportSlug} />}
+      {detail && detailDecision && (
+        <div>
+          <div className="decision-kicker">The ladder</div>
+          <DecisionLadder decision={detailDecision} detail={detail} now={now} />
+        </div>
+      )}
       {showUnreadable && (
         <div className="text-sm text-sol-text-dim">
           This session is waiting on you, but its question is only visible in its terminal so far.
@@ -546,12 +568,13 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </div>
         <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto">
           <div className="decision-sheet-col mx-auto w-full px-6 pt-4 pb-6">
-            {(askedLine || documentLink) && <div className="mb-2 flex items-center gap-3 flex-wrap">{askedLine}{documentLink}</div>}
+            {(askedLine || runChip) && <div className="mb-2 flex items-center gap-3 flex-wrap">{askedLine}{runChip}</div>}
             <DecisionProposalOrigin contextMd={item.contextMd} className="mb-2 text-[12px]" size="md" />
             {/* A card leads with its change, the way its page does. */}
             {card
               ? <ChangeCardHeadline card={card} question={question} className="mb-2" />
-              : question && <h1 className="decision-question text-sol-text mb-5">{question}</h1>}
+              : question && <h1 className={`decision-question text-sol-text ${facts ? "" : "mb-5"}`}>{question}</h1>}
+            {!card && facts}
             {cardBar ? (
               <>
                 <ChangeCardVerdictBar card={card!}>{answerBlock}</ChangeCardVerdictBar>

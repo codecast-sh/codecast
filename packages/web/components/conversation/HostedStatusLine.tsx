@@ -17,7 +17,7 @@ import { useUpgradesOpen } from "../simple/billing";
 import { THINKING_DOWN, useThinkingAvailable } from "../simple/assistantPromise";
 import { AskHeldLine } from "../simple/useHostedAskGate";
 import { lastNoticeKind } from "../../lib/hostedNotice";
-import { connectionChipCopy, useAppOffline } from "../../hooks/useAppOffline";
+import { hostedConnectionWords, useHostedConnection } from "./HostedConnection";
 
 /** The title of the person's other hosted conversation that is running now,
  *  the one a waiting request waits behind. */
@@ -76,7 +76,7 @@ function ThinkingLine({ phrase, conversationId }: { phrase?: string; conversatio
   }, []);
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <Dot className="bg-sol-cyan/50 animate-pulse" />
+      <Dot className="bg-sol-text-dim/60 animate-pulse" />
       <span className="truncate">{phrase ?? (long ? "Still working on it…" : "Thinking…")}</span>
       {conversationId && (
         <button
@@ -118,7 +118,7 @@ function EscapeHint() {
   );
 }
 
-export function HostedStatusLine({ conversationId, agentStatus, phrase, sending, allowanceOut, escapeHint = false, awaitsOk = false }: {
+export function HostedStatusLine({ conversationId, agentStatus, phrase, sending, allowanceOut, escapeHint = false, awaitsOk = false, stopInDisc = false }: {
   conversationId: string;
   agentStatus?: string;
   /** The step in flight, in the assistant's words (deriveHostedRunningPhrase). */
@@ -132,6 +132,8 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
   escapeHint?: boolean;
   /** A decision row of this conversation is still pending (awaitingOkIds). */
   awaitsOk?: boolean;
+  /** The send disc is the Stop square now, so the line says no second Stop. */
+  stopInDisc?: boolean;
 }) {
   const thinking = useThinkingAvailable();
   // A transcript that ends on a stop notice is settled, whatever the work
@@ -144,12 +146,12 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
   // The same link state the developer header's sync chip shows. Hosted mode
   // hides that chip, so a dropped link is said here instead of reading as a
   // slow assistant.
-  const connection = connectionChipCopy(useAppOffline());
+  const connection = useHostedConnection();
   if (connection) {
     return (
-      <span className="flex min-w-0 items-center gap-1.5 text-sol-text-muted">
+      <span className="flex min-w-0 items-center gap-1.5 text-sol-text-muted" title={connection.detail}>
         <Dot className="bg-sol-text-dim/50 animate-pulse" />
-        <span className="truncate">{sending ? "Reconnecting… your message will go as soon as we're back" : connection.label === "Offline" ? "You're offline" : "Reconnecting…"}</span>
+        <span className="truncate">{hostedConnectionWords(connection, sending)}</span>
       </span>
     );
   }
@@ -158,7 +160,7 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
     // The conversation the outage stopped is where its reason belongs.
     return thinking === false ? <span className="truncate text-sol-text-muted">{THINKING_DOWN}</span> : " ";
   }
-  if (agentStatus === "working" || agentStatus === "thinking") return <ThinkingLine phrase={phrase} conversationId={conversationId} />;
+  if (agentStatus === "working" || agentStatus === "thinking") return <ThinkingLine phrase={phrase} conversationId={stopInDisc ? undefined : conversationId} />;
   if (agentStatus === "waiting") return <WaitingLine conversationId={conversationId} />;
   // The approval card sits at the end of the transcript and the composer's
   // placeholder points at it; a third line saying so would be noise. Once the
@@ -168,7 +170,7 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
   if (sending) {
     return answeredBefore ? <ThinkingLine /> : (
       <span className="flex items-center gap-1.5">
-        <Dot className="bg-sol-cyan/50 animate-pulse" />
+        <Dot className="bg-sol-text-dim/60 animate-pulse" />
         Getting started…
       </span>
     );
