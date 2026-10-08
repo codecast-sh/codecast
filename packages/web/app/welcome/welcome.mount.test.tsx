@@ -337,4 +337,26 @@ describe("/welcome", () => {
     expect(text()).not.toContain("Bring in your mail and calendar");
     connectAvailable = true;
   });
+
+  test("a first ask lands in its conversation even when the server row arrives first; a returning person goes to the inbox", async () => {
+    const before = useInboxStore.getState().sessions;
+    const synced = { _id: "s_first", agent_type: "codecast", message_count: 1, updated_at: Date.now() };
+    setMail(false);
+    await open();
+    await settle(() => text().includes(ASKS.sayNo));
+    await act(async () => {
+      [...container().querySelectorAll("button")].find((b) => b.textContent?.includes(ASKS.sayNo))!.click();
+      // The server row of the conversation just started syncs inside the
+      // send-off: the person now has a hosted conversation.
+      useInboxStore.getState().syncRecord("sessions", synced._id, synced as any);
+    });
+    await settle(() => !!container().querySelector("[data-landed]"));
+    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/conversation/");
+    // Coming back to /welcome with that conversation is a return.
+    await open();
+    await settle(() => !!container().querySelector("[data-landed]"));
+    expect(container().querySelector("[data-landed]")?.textContent).toBe("/inbox");
+    useInboxStore.setState({ sessions: before } as any);
+    starts.length = 0;
+  });
 });

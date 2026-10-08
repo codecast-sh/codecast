@@ -182,7 +182,7 @@ describe("orgLine.sweep (L9)", () => {
     }
   });
 
-  test("candidates: only open tasks assigned to agent:<handle> with no run and no open blocker", async () => {
+  test("candidates: only open tasks assigned to agent:<handle> with no run and no open blocker or wait", async () => {
     const role = () => fixtures().tables.org_roles[0];
     const cases: Array<[Record<string, any>, number]> = [
       [{}, 1],
@@ -194,6 +194,8 @@ describe("orgLine.sweep (L9)", () => {
       [{ blocked_by: ["ct-9"] }, 0],
       [{ blocked_by: ["ct-8"] }, 1],
       [{ blocked_by: ["ct-404"] }, 1],
+      [{ waits: [{ kind: "time", at: NOW + 3_600_000, state: "waiting", created_at: NOW }] }, 0],
+      [{ waits: [{ kind: "time", at: NOW - 1, state: "met", created_at: NOW - 2 }] }, 1],
       [{ project_id: "projects_elsewhere" }, 0],
     ];
     for (const [over, expected] of cases) {

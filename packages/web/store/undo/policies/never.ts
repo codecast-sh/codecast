@@ -91,6 +91,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   mergeQueued: never("shared: a merged message is one turn others may already have seen; remove it from the queue instead"),
   clearDraftFinal: DRAFT,
   answerDecision: never("send: an answered decision has already been read by the agent that asked"),
+  discussDecision: SEND,
   startShip: never("send: Ship starts a session that commits, pushes and opens a pull request; stopping it is the way back"),
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
