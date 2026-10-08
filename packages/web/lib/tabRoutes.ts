@@ -11,7 +11,7 @@ import { IN_SHELL_ROOT_SEGMENTS, isPublicProfilePath } from "./desktopHandoff";
 // boot script is inlined from, so the tab shell and the router agree on them.
 import { LANE_ROOTS, isUnderRoot } from "../components/simple/laneBoot";
 import { WHISK_RETURN_PATH } from "@codecast/convex/convex/lib/whisk";
-import { RENAMED_PAGE_ROOTS, currentPagePath } from "./renamedPages";
+import { RENAMED_PAGES, RENAMED_PAGE_ROOTS, currentPagePath } from "./renamedPages";
 
 export { IN_SHELL_ROOT_SEGMENTS };
 
@@ -24,6 +24,10 @@ export { IN_SHELL_ROOT_SEGMENTS };
 // marketing page stays mounted until a manual reload).
 export const NON_TAB_EXACT = new Set([
   "/",
+  // Renamed pages that moved alone (lib/renamedPages.ts: /projects is the
+  // Org screen's Projects filter): the router runs their redirect, while the
+  // pages under them (/projects/<pj-…>) stay tab pages.
+  ...Object.keys(RENAMED_PAGES),
   // The published-page identity relay (redirects out to /a/<slug>; /pages
   // itself stays a tab page, so this is exact, not a prefix).
   "/pages/auth",
@@ -73,7 +77,7 @@ export const NON_TAB_EXACT = new Set([
 // LANE_ROOTS are the hosted assistant's front door (/welcome) and the retired
 // simple lane's addresses (/simple), which redirect into the main app through
 // the real router (components/LaneRedirect): a tab would intercept the click
-// and never run the redirect. A renamed page's old root (/initiatives) redirects
+// and never run the redirect. A renamed page's old root (/goals) redirects
 // the same way.
 export const NON_TAB_PREFIXES: readonly string[] = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/features", "/compare", "/a", "/r", "/slack/connect", WHISK_RETURN_PATH, ...LANE_ROOTS, ...Object.keys(RENAMED_PAGE_ROOTS)];
 
