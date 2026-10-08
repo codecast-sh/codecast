@@ -123,10 +123,11 @@ project's when it has one, else its workspace's, never the repo profile's
 default project; the same brief `cast task update` checks the goal_ref
 against), and the cause with its signals, and writes four fields:
 
-- `goal_ref`: the initiative metric or project goal the cause threatens, or
-  `none`. A cause with `none` parks as `suggested` and never reaches a person
-  unless its signal count crosses the workspace threshold.
-- `category`: `code` | `prompt` | `ux` | `infra` | `data`.
+- `goal_ref`: the initiative metric or project goal the cause threatens,
+  `line` for a change to the line itself, or `none`. A cause with `none` parks
+  as `suggested` and never reaches a person unless its signal count crosses
+  the workspace threshold.
+- `category`: `code` | `prompt` | `ux` | `infra` | `data` | `line`.
 - `risk`: `low` | `review` | `plan`. `plan` means architecture, cross cutting
   design, schema, billing or anything in the protected decision categories:
   the run stops at a plan gate before build.
@@ -134,6 +135,13 @@ against), and the cause with its signals, and writes four fields:
 
 Priority is computed, not judged: goal priority × severity × signal count,
 in `lib/linePriority.ts`.
+
+The line is a goal of its own. Every brief offers `line`, the line's own
+health: its three numbers (the-line-model.md LM8) moving the right way and
+every station doing its job. Only a change to the line itself (category
+`line`, line-map.md LX6) serves it; a product goal never stretches to cover
+line plumbing, and line plumbing never parks as serving nothing. It carries no
+priority of its own, so it ranks as an unranked goal.
 
 A fresh cause is grounded before admission, so admission can rank it and
 spends a hand only on causes worth one. `lineGround.sweep` takes the oldest
