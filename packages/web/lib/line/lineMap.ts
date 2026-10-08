@@ -187,9 +187,11 @@ export type RunVisit = {
 };
 
 type Adjacency = Map<string, string[]>;
-const adjacency = (graph: LineGraph): Adjacency => {
+/** The graph's edges by station; with `own`, only the stations a run's own graph had. */
+const adjacency = (graph: LineGraph, own?: Set<string> | null): Adjacency => {
   const adj: Adjacency = new Map();
-  for (const e of graph.edges) adj.set(e.from, [...(adj.get(e.from) ?? []), e.to]);
+  const has = (id: string) => !own || id === "start" || id === "exit" || own.has(id);
+  for (const e of graph.edges) if (has(e.from) && has(e.to)) adj.set(e.from, [...(adj.get(e.from) ?? []), e.to]);
   return adj;
 };
 
@@ -225,7 +227,10 @@ function between(adj: Adjacency, from: string, to: string, reached: Set<string>)
  * gets its earlier rounds back: each answer's branch, round to the gate again.
  */
 export function runVisits(run: MapRun, graph: LineGraph = SHIPPED_LINE, decisions: ReadonlyArray<MapDecision> = []): RunVisit[] {
-  const adj = adjacency(graph);
+  // A run is drawn through the stations its own graph had: a station the line
+  // gained after it ran (rebase, the ask gate) is never inferred into its path.
+  const own = run.graph_nodes?.length ? new Set(run.graph_nodes.map((n) => n.id)) : null;
+  const adj = adjacency(graph, own);
   const states = stepStates(run, graph);
   const statuses = (run.node_statuses ?? []).filter((n) => n.node_id !== "start" && n.node_id !== "exit" && (n.started_at != null || n.status !== "pending"));
   const timed = [...statuses].sort((a, b) => (a.started_at ?? Infinity) - (b.started_at ?? Infinity) || (a.completed_at ?? Infinity) - (b.completed_at ?? Infinity));
@@ -619,12 +624,31 @@ function leftOf(v: RunVisit, next: RunVisit | undefined, live: boolean): { left:
   return { left: "stopped", to: endNodeId("stopped") };
 }
 
-/** The edges that go back: found by a walk from Causes, an edge to a station
- *  still on the walk's path closes a loop. */
+/** The edges that go back. An edge to a station nearer Causes (fewer steps
+ *  from it) that can reach the edge's start again closes a loop: so two
+ *  stations that stand in for each other (prove and prove_line, both a step
+ *  after analyze) each get their own loop back from red, whichever a walk
+ *  would meet first. Any cycle that rule leaves, a walk from Causes breaks:
+ *  an edge to a station still on the walk's path closes it. */
 function backEdges(edges: Array<{ from: string; to: string }>): Set<string> {
   const adj = new Map<string, string[]>();
   for (const e of edges) adj.set(e.from, [...(adj.get(e.from) ?? []), e.to]);
+  const stepsFrom = (seed: string) => {
+    const d = new Map<string, number>([[seed, 0]]);
+    const queue = [seed];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      for (const m of adj.get(cur) ?? []) if (!d.has(m)) { d.set(m, d.get(cur)! + 1); queue.push(m); }
+    }
+    return d;
+  };
+  const dist = stepsFrom(CAUSES_NODE);
   const out = new Set<string>();
+  for (const e of edges) {
+    const [a, b] = [dist.get(e.from), dist.get(e.to)];
+    if (a != null && b != null && b < a && stepsFrom(e.to).has(e.from)) out.add(`${e.from}->${e.to}`);
+  }
+  for (const [from, tos] of adj) adj.set(from, tos.filter((to) => !out.has(`${from}->${to}`)));
   const state = new Map<string, 1 | 2>();
   const walk = (n: string) => {
     state.set(n, 1);

@@ -134,7 +134,20 @@ describe("renderFencedPlanTasks", () => {
     expect(block.match(/<untrusted-/g)!.length).toBe(1);
     expect(block).toContain("Tasks (1/4 done)");
     expect(block).toContain("In progress:\n- ct-1: Fence the plan surfaces");
-    expect(block).toContain("- ct-3: Ship it (by ct-1)");
+    expect(block).toContain("Not ready:\n- ct-3: Ship it (waiting: ct-1)");
+  });
+
+  test("groups by the shared readiness: a finished blocker clears, a wait or a worked parent holds", () => {
+    const block = renderFencedPlanTasks([
+      { short_id: "ct-4", title: "Land K1", status: "done" },
+      { short_id: "ct-5", title: "After K1", status: "open", blocked_by: ["ct-4"] },
+      { short_id: "ct-6", title: "After a PR", status: "open", waits: [{ id: "w1", kind: "pr_merged", repository: "acme/api", pr_number: 42, state: "waiting", created_at: 1 }] },
+      { short_id: "ct-7", title: "After outside", status: "open", blocked_by: ["ct-90"] },
+    ], { ...plan, graph_outside: { tasks: [{ short_id: "ct-90", status: "open" }], searched: ["ct-90"] } })!;
+    expect(block).toContain("Ready:\n- ct-5: After K1\n");
+    expect(block).toContain("- ct-6: After a PR (waiting: PR acme/api#42 merges)");
+    expect(block).toContain("- ct-7: After outside (waiting: ct-90)");
+    expect(block).not.toContain("ct-4)");
   });
 
   test("descriptions are opt-in, one folded line, and only for unfinished work", () => {
