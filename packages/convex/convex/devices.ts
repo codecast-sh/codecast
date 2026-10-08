@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
-import { MACHINE_SETTINGS, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, isMachineSetting, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
+import { MACHINE_SETTINGS, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, isMachineSetting, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -1854,8 +1854,50 @@ export const enqueueCloudAgentActionCommand = mutation({
   },
 });
 
-/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in, a cloud agent action. */
-const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action"]);
+/**
+ * The setup steps for `cast browser`'s Chrome extension and `cast computer`'s
+ * macOS grants: ask a machine where setup stands ("check"), or open the next
+ * step on its screen ("start"). Two callers name the machine two ways: the card
+ * under a failed command names the session (its runner's device), the Agent
+ * features page names one of the viewer's devices. The daemon answers an
+ * AgentToolSetupStatus (watchedCommandOutcome's `setup`).
+ */
+export const enqueueAgentToolSetupCommand = mutation({
+  args: {
+    conversation_id: v.optional(v.id("conversations")),
+    device_id: v.optional(v.string()),
+    tool: v.union(v.literal("browser"), v.literal("computer")),
+    op: v.union(v.literal("check"), v.literal("start")),
+  },
+  handler: async (ctx, args) => {
+    if (!args.conversation_id === !args.device_id) throw new Error("Name a conversation or a device, not both");
+    let queueOwner: Id<"users">;
+    let target: string;
+    if (args.conversation_id) {
+      const userId = await getAuthUserId(ctx);
+      if (!userId) throw new Error("Authentication required");
+      const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
+      if (!conv.owner_device_id) throw new Error("No machine hosts this session yet");
+      queueOwner = conv.user_id;
+      target = conv.owner_device_id;
+    } else {
+      const { userId } = await requireOwnDevice(ctx, undefined, args.device_id!);
+      queueOwner = userId;
+      target = args.device_id!;
+    }
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: queueOwner,
+      command: "agent_tool_setup" as const,
+      args: JSON.stringify({ ...(args.conversation_id ? { conversation_id: args.conversation_id } : {}), tool: args.tool, op: args.op }),
+      created_at: Date.now(),
+      target_device_id: target,
+    });
+    return { command_id: commandId };
+  },
+});
+
+/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in or action, an agent tool's setup. */
+const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action", "agent_tool_setup"]);
 
 /**
  * How a watched command went, for the page that sent it: still waiting, or
@@ -1878,8 +1920,9 @@ export const watchedCommandOutcome = query({
     try { result = JSON.parse(row.result ?? "{}") ?? {}; } catch {}
     const text = (k: string) => (typeof result[k] === "string" && result[k] ? { [k]: result[k] as string } : {});
     const login = row.command === "cloud_agent_login" && isCloudAgentLoginState(result.state) ? { login: result.state } : {};
-    return { state: "done" as const, ...text("account"), ...text("plan"), ...text("detail"), ...text("url"), ...login } as {
-      state: "done"; account?: string; plan?: string; detail?: string; url?: string; login?: CloudAgentLoginStateName;
+    const setup = row.command === "agent_tool_setup" && isAgentSetupTool(result.tool) ? { setup: result as unknown as AgentToolSetupStatus } : {};
+    return { state: "done" as const, ...text("account"), ...text("plan"), ...text("detail"), ...text("url"), ...login, ...setup } as {
+      state: "done"; account?: string; plan?: string; detail?: string; url?: string; login?: CloudAgentLoginStateName; setup?: AgentToolSetupStatus;
     };
   },
 });

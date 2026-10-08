@@ -46,8 +46,11 @@ import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../l
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { applyTaskDrop, closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undoActions";
+import { gestureToast } from "../../store/undoStack";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
+import { tasksForSource } from "../../lib/taskSource";
+import { isReadyInStore, readySig, UNBLOCKED_VIEW } from "../../lib/taskBlockers";
 import {
   Plus,
   Circle,
@@ -77,6 +80,7 @@ import {
   Activity,
   CornerDownRight,
   Copy,
+  CirclePlay,
 } from "lucide-react";
 
 // One task-status vocabulary, shared with TaskStatusBadge and the groupers.
@@ -406,6 +410,17 @@ const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title", "ma
 const TASK_SORT_DEFAULT_DIR: Record<string, "asc" | "desc"> = {
   priority: "asc", title: "asc", created: "desc", updated: "desc", manual: "asc",
 };
+/** x on a hosted to-do: check it off, or open it again, as one gesture with
+ *  its Undo toast. Closing goes through the one close gateway, so a to-do
+ *  with open subtasks still asks first. */
+function toggleTodoDone(task: TaskItem): void {
+  const done = task.status === "done";
+  gestureToast(done ? `Reopened “${task.title}”` : `Done: “${task.title}”`, () => {
+    if (done) useInboxStore.getState().updateTask(task.short_id, { status: "open" });
+    else closeTaskWithGuard(task.short_id, "done");
+  });
+}
+
 function taskDefaultDir(sort: string): "asc" | "desc" {
   return TASK_SORT_DEFAULT_DIR[sort] ?? "asc";
 }
@@ -436,12 +451,20 @@ export function hostedPersonalView(view: { group: string; sort: string; dir: "as
   return { group: "none", sort: "created", dir: "desc" };
 }
 
-function useTaskUrlState(hosted = false) {
+function useTaskUrlState(hosted = false, scoped = false) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const taskView = useInboxStore((s) => s.clientState.ui?.task_view);
-  const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const savedTaskView = useInboxStore((s) => s.clientState.ui?.task_view);
+  const updateSavedUI = useInboxStore((s) => s.updateClientUI);
+  // A list scoped to a role's area or to one project's board starts from that
+  // scope alone: the filters the person set on the Tasks page (another
+  // workspace's labels, "All", a project) would hide the work or count rows
+  // the board does not hold, so a scoped list keeps its own view, for as long
+  // as it is open, and never rewrites the Tasks page's saved one.
+  const [scopedView, setScopedView] = useState<TaskViewPrefs | undefined>(undefined);
+  const taskView = scoped ? scopedView : savedTaskView;
+  const updateClientUI = useCallback((patch: { task_view: TaskViewPrefs }) => (scoped ? setScopedView(patch.task_view) : updateSavedUI(patch)), [scoped, updateSavedUI]);
 
   const isDetailPage = pathname !== "/tasks";
   const hasUrlParams = !isDetailPage && searchParams.toString().length > 0;
@@ -596,7 +619,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const workspaceArgs = useWorkspaceArgs();
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode);
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode, !!scope || !!projectId);
   const completionClock = useCoarseNow(60_000);
   const pendingCompletions = useInboxStore((s) => completedFilter ? pendingTaskCompletionsSig(s.pending) : "");
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
@@ -609,6 +632,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     () => Object.fromEntries(wsTasks.map((t) => [String(t._id), t])) as Record<string, TaskItem>,
     [wsTasks],
   );
+  // Blockers and parents resolve against every task the store holds (a
+  // blocker may live in another project) and each row's snapshot. The page
+  // wakes on the signature of those answers, not on every task write.
+  const blockerSig = useInboxStore(useCallback((s) => readySig(wsTasks, s.tasks), [wsTasks]));
   const projects = useInboxStore((s) => s.projects);
   const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
   const taskOriginBadges = useInboxStore((s) => s.taskOriginBadges);
@@ -687,6 +714,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // (the-line.md L10); this is the one feeder behind it, mounted per list.
   useSyncRuns(RUNS_FEED_ARGS);
   const currentUser = useViewerIdentity();
+  const viewerId = currentUser?._id ? String(currentUser._id) : null;
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   // One workspace pointer for the whole page: rows are scoped by activeTeamId
   // (filterToWorkspace below), so the roster must use the same source — a
@@ -829,37 +857,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     return [...set].sort();
   }, [scopedTasksList]);
 
-  // Source filtering applied before other filters.
-  // Active tasks = not suggested-insight and not dismissed. A promoted mined
-  // task counts as active — promote is what lifts it out of triage.
-  // The default view is the human's board: web-created tasks plus anything
-  // promoted onto it (cast task create --human, or a triage accept). Every
-  // machine-made unpromoted task (agent, plan_mode, todo_sync, import) sits
-  // behind the Agent segment; "all" shows both. Insight suggestions stay
-  // behind the separate triage link.
-  // The one activity predicate, shared with mobile/CLI counts so every surface
-  // agrees on which rows exist (see @codecast/shared/tasks).
-  const isActive = isActiveTask;
-  const isTriage = (t: TaskItem) => t.source === "insight" ? t.triage_status !== "dismissed" : t.triage_status === "suggested";
-  // Which rows belong on the human's board is the shared isOnHumanBoard rule
-  // (@codecast/shared/tasks): human/meeting origin, promoted, or assigned to a
-  // person or a role. Web and mobile both use it so the two boards can't drift.
-  const onHumanBoard = isOnHumanBoard;
-  const sourceFilteredTasks = useMemo(() => {
-    if (sourceFilter === "agent") {
-      return scopedTasksList.filter((t) => !onHumanBoard(t) && isActive(t));
-    } else if (sourceFilter === "all") {
-      return scopedTasksList.filter(isActive);
-    } else if (sourceFilter === "triage") {
-      return scopedTasksList.filter(isTriage);
-    } else if (sourceFilter === "dismissed") {
-      return scopedTasksList.filter((t) => t.triage_status === "dismissed");
-    } else {
-      // "" (default) and legacy "human" links both mean the human's board.
-      return scopedTasksList.filter((t) => onHumanBoard(t) && isActive(t));
-    }
-  }, [scopedTasksList, sourceFilter]);
-
+  // Source filtering applied before other filters (tasksForSource).
+  const sourceFilteredTasks = useMemo(() => tasksForSource(scopedTasksList, sourceFilter), [scopedTasksList, sourceFilter]);
 
   const completionTick = completedFilter ? completionClock : 0;
   const completionFilteredTasks = useMemo(
@@ -867,13 +866,19 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     [sourceFilteredTasks, completedFilter, completionTick, pendingCompletions],
   );
 
+  // Only the Unblocked view filters on what blockers say.
+  const unblockedViewSig = statusFilter === UNBLOCKED_VIEW ? blockerSig : null;
   const baseFilteredTasks = useMemo(() => {
     let list = completionFilteredTasks;
 
     // Status filtering. An explicit selection (one status or several) is a
     // plain membership test; "all" imposes nothing; the default hides the
-    // terminal states.
-    if (statusFilter && statusFilter !== "all") {
+    // terminal states. Unblocked is the CLI's ready (task-graph.md TG1): open
+    // work nothing holds back.
+    if (statusFilter === UNBLOCKED_VIEW) {
+      const storeTasks = useInboxStore.getState().tasks;
+      list = list.filter((t) => isReadyInStore(t, storeTasks, viewerId));
+    } else if (statusFilter && statusFilter !== "all") {
       const set = new Set(statusFilter.split(","));
       // A selection names STATUSES, which on a team with custom ones are finer
       // than categories ("Today" and "In Progress" both sit in in_progress), so
@@ -905,7 +910,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     else if (assigneeFilter === "_chain") list = list.filter((t) => !!t.assignee && !!myChain?.has(t.assignee));
     else if (assigneeFilter) list = list.filter((t) => t.assignee === assigneeFilter);
     return list;
-  }, [completionFilteredTasks, priorityFilter, labelFilter, assigneeFilter, myChain, statusFilter, sourceFilter, viewMode, taskStatuses, kanbanKeyFor]);
+  }, [completionFilteredTasks, priorityFilter, labelFilter, assigneeFilter, myChain, statusFilter, sourceFilter, viewMode, taskStatuses, kanbanKeyFor, unblockedViewSig, viewerId]);
 
   // Session-linkage filter, layered last. "Has session" must match exactly what
   // the row shows a session pill for, so it mirrors the badge's union: a live
@@ -1007,16 +1012,18 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // Counts for both vocabularies at once: by category (what the presets mean)
   // and by resolved status (what the Status filter offers, custom ones included).
   const taskCounts = useMemo(() => {
-    const counts: Record<string, number> = { active: 0, all: 0 };
+    const counts: Record<string, number> = { active: 0, all: 0, [UNBLOCKED_VIEW]: 0 };
+    const storeTasks = useInboxStore.getState().tasks;
     for (const t of completionFilteredTasks) {
       counts[t.status] = (counts[t.status] || 0) + 1;
       const key = kanbanKeyFor(t);
       if (key !== t.status) counts[key] = (counts[key] || 0) + 1;
       counts.all++;
       if ((ACTIVE as string[]).includes(t.status)) counts.active++;
+      if (isReadyInStore(t, storeTasks, viewerId)) counts[UNBLOCKED_VIEW]++;
     }
     return counts;
-  }, [completionFilteredTasks, kanbanKeyFor]);
+  }, [completionFilteredTasks, kanbanKeyFor, blockerSig, viewerId]);
   // One status vocabulary, two controls over it. The pills carry the three
   // answers people want without thinking — the live work, everything, the
   // finished work — and every finer selection (one status, a handful, a team's
@@ -1054,6 +1061,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const statusFilterValue = useMemo(() => {
     if (statusFilter === "all") return "";
     if (!statusFilter) return activeValue;
+    // Unblocked is a pill of its own, not a set of statuses: nothing is ticked.
+    if (statusFilter === UNBLOCKED_VIEW) return UNBLOCKED_VIEW;
     return canonicalStatuses(statusFilter.split(","));
   }, [statusFilter, activeValue, canonicalStatuses]);
   // Ticking statuses in the popover folds back into the shortest value that
@@ -1235,12 +1244,15 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           getComposeRef={(t) => t.short_id}
           title={projectId ? "Project tasks" : scope ? "Tasks in scope" : modeWords.tasksPage}
           tabs={[
-            // The three answers worth a click: everything, the open work, the
-            // finished work. Anything finer is the Status filter in the bar
+            // The answers worth a click: the live work, what can start now,
+            // everything, the finished work. Anything finer is the Status filter in the bar
             // below — the pills would otherwise grow a segment per custom
             // status until the header could not hold them.
             { key: "", label: "Active", count: taskCounts.active, icon: Activity,
               title: "Live work: " + statusOptionList.filter((st) => ACTIVE.includes(st.category as TaskStatus)).map((st) => st.name).join(", ") },
+            // A hosted to-do list has no dependency graph to read.
+            ...(hostedMode ? [] : [{ key: UNBLOCKED_VIEW, label: "Unblocked", count: taskCounts[UNBLOCKED_VIEW], icon: CirclePlay,
+              title: "Open work nothing holds back: every blocking task closed, every wait met" }]),
             { key: "all", label: "All", count: taskCounts.all, icon: Layers, title: "Every status, Backlog and Done and Dropped included" },
             { key: doneValue || "done", label: "Done", count: taskCounts.done || 0, icon: STATUS_CONFIG.done.icon,
               title: "Finished work" },
@@ -1275,10 +1287,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
             defs: [
               {
                 key: "status", label: "Status", icon: <Circle className="w-3 h-3" />, value: statusFilterValue, multi: true,
-                // The pills already say Active / All / Done, so those three
-                // values draw no chip — the chip appears exactly when the
+                // The pills already say Active / Unblocked / All / Done, so
+                // those values draw no chip — the chip appears exactly when the
                 // selection is something the pill row cannot show.
-                presetValues: ["", activeValue, doneValue],
+                presetValues: ["", activeValue, doneValue, UNBLOCKED_VIEW],
                 options: [
                   { key: "", label: "Any status" },
                   ...statusOptionList.map((st) => {
@@ -1356,12 +1368,20 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           getItemRoute={(t) => (projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`)}
           getSearchText={(t) => `${t.short_id} ${t.title}`}
           emptyIcon={<Circle className="w-8 h-8 opacity-30" />}
-          emptyMessage={hostedMode ? "No to-dos yet" : "No tasks found"}
+          emptyMessage={
+            hostedMode ? "No to-dos yet"
+            // An empty Unblocked view is an answer, not a broken filter.
+            : statusFilter === UNBLOCKED_VIEW ? (taskCounts.open ? "Nothing can start right now: every open task is waiting on something" : "No open tasks")
+            : "No tasks found"
+          }
           onCreate={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
           // Hosted mode adds a to-do the way one writes a list: type, Enter.
           quickAdd={hostedMode ? { placeholder: "New to-do", onAdd: (title) => void createTaskAndAdopt({ title, task_type: "task", status: "open", ...(workspaceArgs === "skip" ? {} : workspaceArgs), ...(projectId ? { project_id: projectId } : {}) }) } : undefined}
           hasMore={hasMore}
           onLoadMore={loadMore}
+          // Hosted to-dos check off with x, the list's one verb there (hosted
+          // rows have no selection), with the gesture's Undo toast.
+          onToggleItem={hostedMode ? toggleTodoDone : undefined}
           paletteShortcuts={[
             { key: "s", mode: "status", label: "status" },
             { key: "p", mode: "priority", label: "priority" },
