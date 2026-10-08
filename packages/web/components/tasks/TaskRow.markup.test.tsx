@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import type { TaskItem } from "../../store/inboxStore";
+import { useInboxStore, type TaskItem } from "../../store/inboxStore";
 import type { ItemRowState } from "../ListRowShell";
 import { TaskRow, KanbanCard } from "./TaskRow";
 

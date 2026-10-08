@@ -17,7 +17,7 @@ import { Text as RNText, TextInput } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
-import { Mono } from "@/constants/fonts";
+import { Mono, uiFace } from "@/constants/fonts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { directChildren, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
@@ -26,6 +26,7 @@ import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { CollapsibleBody } from "@/components/CollapsibleBody";
 import { formatRelativeTime } from "@/components/SessionItem";
+import { taskGraphView, type BlockerRow } from "@/lib/taskGraphRows";
 import {
   STATUS_CONFIG,
   STATUS_ORDER,
@@ -76,6 +77,9 @@ export default function TaskDetailScreen() {
       .sort((a: any, b: any) => (a.created_at || 0) - (b.created_at || 0));
   }, [tasks, task?._id]);
   const subtaskProgress = useMemo(() => subtaskProgressOf(subtasks as any[]), [subtasks]);
+  // Blockers and links resolve against the one tasks collection; the detail
+  // files the rows they name into it (graph_tasks), finished blockers included.
+  const graph = useMemo(() => (task ? taskGraphView(task, Object.values(tasks) as TaskItem[]) : null), [tasks, task]);
   const addSubtask = useCallback(() => {
     const t = subtaskTitle.trim();
     if (!t || !task) return;
@@ -215,7 +219,7 @@ export default function TaskDetailScreen() {
           title: task.short_id,
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
+          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
         }}
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -253,6 +257,10 @@ export default function TaskDetailScreen() {
           ))}
         </RNView>
 
+        {graph?.supersededBy && (
+          <TaskLinkRow icon="exchange" label="Superseded by" link={graph.supersededBy} color={Theme.orange} />
+        )}
+
         {/* Render whenever the task HAS a parent, mirroring web — a subtask must
             never appear context-free even if the parent row isn't cached yet
             (deep link / cold start). The press is disabled until it resolves. */}
@@ -281,11 +289,25 @@ export default function TaskDetailScreen() {
           </TouchableOpacity>
         )}
 
+        {graph?.foundDuring && <TaskLinkRow icon="search" label="Found during" link={graph.foundDuring} />}
+
         {task.description && (
           <RNView style={styles.section}>
             <CollapsibleBody fadeColor={Theme.bg} height={180}>
               <MarkdownContent text={task.description} baseStyle={styles.description} />
             </CollapsibleBody>
+          </RNView>
+        )}
+
+        {graph && graph.blockedBy.length > 0 && (
+          <RNView style={styles.section}>
+            <RNView style={styles.subtaskHeader}>
+              <RNText style={styles.sectionLabel}>Blocked by</RNText>
+              {graph.unblocked && (
+                <RNText style={[styles.blockerState, { color: Theme.green }]}>unblocked</RNText>
+              )}
+            </RNView>
+            {graph.blockedBy.map((b) => <BlockerRowView key={b.key} row={b} />)}
           </RNView>
         )}
 
@@ -457,6 +479,60 @@ function executionColor(status: string): { backgroundColor: string; borderColor:
   }
 }
 
+type IconName = React.ComponentProps<typeof FontAwesome>["name"];
+
+const WAIT_ICON: Record<Exclude<BlockerRow["kind"], "task">, IconName> = {
+  pr_merged: "code-fork",
+  pr_checks_green: "check-circle-o",
+  decision: "question-circle-o",
+  time: "clock-o",
+};
+
+/** One Blocked by entry, read-only: a task blocker opens its task; a wait
+ *  shows its condition and state, with the note it settled with. */
+function BlockerRowView({ row }: { row: BlockerRow }) {
+  const Theme = useTheme();
+  const router = useRouter();
+  if (row.kind === "task") {
+    const cfg = STATUS_CONFIG[row.status as TaskStatus];
+    const state = cfg?.label ?? (row.status === "missing" ? "not found" : "status unknown");
+    return (
+      <TouchableOpacity
+        style={styles.subtaskRow}
+        onPress={() => router.push(`/task/${row.ref}` as any)}
+        disabled={row.status === "missing"}
+        activeOpacity={0.6}
+      >
+        <FontAwesome name={cfg?.icon ?? "question-circle-o"} size={12} color={cfg?.color ?? Theme.textMuted0} />
+        <RNText style={styles.subtaskId}>{row.ref}</RNText>
+        <RNText style={[styles.subtaskTitle, row.cleared && styles.subtaskTitleDone]} numberOfLines={1}>{row.title ?? ""}</RNText>
+        <RNText style={[styles.blockerState, { color: cfg?.color ?? Theme.textMuted0 }]}>{state}</RNText>
+      </TouchableOpacity>
+    );
+  }
+  const color = row.state === "met" ? Theme.green : row.state === "failed" ? Theme.red : Theme.yellow;
+  return (
+    <RNView style={styles.subtaskRow}>
+      <FontAwesome name={WAIT_ICON[row.kind]} size={12} color={color} />
+      <RNText style={[styles.subtaskTitle, row.cleared && styles.subtaskTitleDone]} numberOfLines={1}>{row.label}</RNText>
+      <RNText style={[styles.blockerState, { color }]} numberOfLines={1}>{row.note ?? row.state}</RNText>
+    </RNView>
+  );
+}
+
+/** A link that does not block (found during, superseded by), opening its task. */
+function TaskLinkRow({ icon, label, link, color }: { icon: IconName; label: string; link: { ref: string; title?: string }; color?: string }) {
+  const Theme = useTheme();
+  const router = useRouter();
+  return (
+    <TouchableOpacity style={styles.parentLink} onPress={() => router.push(`/task/${link.ref}` as any)} activeOpacity={0.6}>
+      <FontAwesome name={icon} size={11} color={color ?? Theme.textMuted0} />
+      <RNText style={[styles.parentLinkLabel, color ? { color } : null]}>{label} {link.ref}</RNText>
+      {link.title && <RNText style={styles.parentLinkTitle} numberOfLines={1}>{link.title}</RNText>}
+    </TouchableOpacity>
+  );
+}
+
 const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   content: { padding: Spacing.lg },
@@ -615,6 +691,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   subtaskTitleDone: {
     color: Theme.textMuted0,
     textDecorationLine: "line-through",
+  },
+  blockerState: {
+    fontSize: 11,
+    fontFamily: Mono.regular,
+    maxWidth: "45%",
   },
   subtaskInputRow: {
     flexDirection: "row",

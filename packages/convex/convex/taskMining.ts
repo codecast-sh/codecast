@@ -13,6 +13,7 @@ import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from 
 import { inboxVisibilityFields } from "./inboxProjection";
 import { liveConversationIdSet } from "./lib/liveSessions";
 import { docRelatesToTask } from "@codecast/shared/tasks";
+import { graphNeighbors } from "./lib/taskGraph";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -1405,6 +1406,9 @@ export const webGetTaskDetail = query({
       // list (a session's task chip) draws the same subtask checklist and
       // progress. The client files each into the one tasks collection.
       subtasks: await directSubtasks(ctx, userId, task._id),
+      // The tasks its graph names (blockers, blocks, links), filed the same
+      // way, so Blocked by shows a finished blocker's state, not "unknown".
+      graph_tasks: await graphNeighbors(ctx, task),
       related_docs: relatedDocs,
       source_insight: insight,
       creator,

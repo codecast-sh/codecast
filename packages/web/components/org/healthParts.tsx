@@ -1,30 +1,22 @@
 "use client";
-// The health surface's small parts (org-staffing.md S29): the note for a
-// health read that could not happen, a role's check line, the ask into a
-// role's thread, an opened area row, and the lines for a review session.
-// HealthBoard and the org screen's no-head column mount from here.
+// The week's small parts (cohesive build spec D12): the note for a health
+// read that could not happen, a role's fix loop and its two levers (its
+// daily limit, and handing part of its work to another role), and the lines
+// for a review session. The map's This week, the role sheet's This week
+// section and the org screen's no-head column mount from here; a role's
+// week itself is RoleWeekBody (orgFlowViz), which the map's cards share.
 
 import { useState } from "react";
-import Link from "next/link";
-import { ExternalLink, Pause, Play, RefreshCw, Send } from "lucide-react";
-import { agoOf } from "../../lib/threadState";
-import { MetricReadingLine } from "../initiatives/InitiativeAtoms";
+import { ArrowRightLeft, ExternalLink, Sparkles } from "lucide-react";
+import { cn } from "../../lib/utils";
 import { OrgButton } from "./OrgButton";
-import { SEVERITY_META } from "./orgMeta";
-import { reachedBreakdown, reachedTotal, type AreaCheck } from "@codecast/shared/contracts/orgAreas";
+import { RoleFace } from "./RoleFace";
+import { moveAsk, projectCap, projectMove, type RoleFlow } from "./orgFlow";
+import { DayBars, FLOW_TONE } from "./orgFlowViz";
+import type { OrgRoleHealth } from "./orgStaffingTypes";
 import type { OrgRole } from "./orgTypes";
-import { CHECK_CADENCES, cadenceLabel, type AreaRow } from "./staffingModel";
-export { StatusPill } from "./ghostChrome";
 
 const BORDER = "color-mix(in srgb, var(--sol-border) 30%, transparent)";
-
-function IconButton({ label, tone, onClick, children }: { label: string; tone?: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-label={label} title={label} className="w-6 h-6 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: tone ?? "var(--sol-text-dim)" }}>
-      {children}
-    </button>
-  );
-}
 
 /** What the health read could not do: a server without it, a failed read
  *  with nothing cached, or a stale copy. Never painted as a clean company. */
@@ -36,143 +28,133 @@ export function HealthNote({ missing, error, hasHealth, onRetry }: { missing?: b
   return null;
 }
 
-const ago = (now: number, at: number | null | undefined): string => (at ? agoOf(now - at) : "");
-
-/** The role's check (or the company review) as a person controls it: when
- *  it last looked, when it looks next, pause and run now, and the cadence. */
-export function CheckLine({ check, checkedAt, now, word, onTrigger, onSetEvery }: { check: AreaCheck | null; checkedAt: number | null; now: number; word: "check" | "review"; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void }) {
-  const paused = check?.status === "paused";
-  const live = !!check && (check.status === "scheduled" || check.status === "running" || paused);
-  const last = checkedAt ?? check?.last_run_at ?? null;
-  const cadences = check?.interval_ms && !CHECK_CADENCES.some((c) => c.ms === check.interval_ms) ? [{ ms: check.interval_ms, label: cadenceLabel(check.interval_ms) }, ...CHECK_CADENCES] : CHECK_CADENCES;
+/** The fix loop under a role's week: defects its runs introduced, the
+ *  promises it owns and how many are late, and hands that finished with a
+ *  concern. Silent while every count is zero. */
+export function FixLoopLine({ flow }: { flow: OrgRoleHealth["flow"] | undefined }) {
+  if (!flow) return null;
+  const bugs = flow.bugs_introduced_30d ?? 0, open = flow.promises_open ?? 0, late = flow.promises_overdue ?? 0, concerns = flow.done_with_concerns_7d ?? 0;
+  if (bugs + open + concerns === 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]" data-area-check={check?.status ?? "none"} style={{ color: "var(--sol-text-muted)" }}>
-      <span>{last ? `Last ${word} ${ago(now, last)}` : `No ${word} yet`}</span>
-      {live && !paused && check.run_at && <span style={{ color: "var(--sol-text-dim)" }}>· next {check.run_at > now ? `in ${agoOf(check.run_at - now).replace(/ ago$/, "")}` : "any moment"}</span>}
-      {paused && <span style={{ color: "var(--sol-yellow)" }}>· paused</span>}
-      {!live && check && <span style={{ color: "var(--sol-text-dim)" }}>· {check.status}</span>}
-      {live && onSetEvery && (
-        <select value={check.interval_ms ?? ""} onChange={(e) => onSetEvery(check.trigger_id, Number(e.target.value))} className="h-5 rounded border bg-transparent px-1 text-[11px] outline-none" style={{ borderColor: BORDER, color: "var(--sol-text-secondary)" }} aria-label={`How often it ${word === "check" ? "checks" : "reviews"}`} data-area-cadence>
-          {cadences.map((c) => <option key={c.ms} value={c.ms}>{c.label}</option>)}
-        </select>
+    <p className="mt-1 text-[12px] tabular-nums" style={{ color: "var(--sol-text-secondary)" }} data-fix-loop>
+      <span style={{ color: bugs > 0 ? "var(--sol-red)" : undefined }}>{bugs} {bugs === 1 ? "bug" : "bugs"} introduced</span> <span style={{ color: "var(--sol-text-dim)" }}>30d</span>
+      {" · "}<span style={{ color: late > 0 ? "var(--sol-yellow)" : undefined }}>{open} {open === 1 ? "promise" : "promises"}{late > 0 ? `, ${late} late` : ""}</span>
+      {" · "}{concerns} with concerns
+    </p>
+  );
+}
+
+export type RoleLeversProps = {
+  /** The role's week, and every role's, for the hand-over. */
+  f: RoleFlow;
+  flows: readonly RoleFlow[];
+  days: string[];
+  /** Set its daily limit in place; absent when the viewer may not edit the role. */
+  onSetLimit?: (perDay: number) => void;
+  /** The Head of People, whose proposal is how work moves between roles. */
+  head: OrgRole | null;
+  /** Send the hand-over ask into the Head of People's thread; absent when it has none. */
+  onAskHead?: (text: string) => void;
+};
+
+/**
+ * The two levers a person has over a role's week, replayed over this week:
+ * its daily limit (applied in place, when they may edit it), and handing
+ * part of its work to another role (sent to the Head of People, whose
+ * proposal is how the org changes). The projection says what it cannot know.
+ * Pause, resume and run now are the role's Triggers tab.
+ */
+export function RoleLevers({ f, flows, days, onSetLimit, head, onAskHead }: RoleLeversProps) {
+  const [lever, setLever] = useState<"limit" | "move">(f.daysAtCap > 0 ? "limit" : "move");
+  const [cap, setCap] = useState(f.cap);
+  const others = flows.filter((o) => o.role._id !== f.role._id && o.role.status !== "paused");
+  const [toId, setToId] = useState<string>(() => [...others].sort((a, b) => a.loadRatio - b.loadRatio)[0]?.role._id ?? "");
+  const [share, setShare] = useState(0.3);
+  const [sent, setSent] = useState(false);
+  const to = others.find((o) => o.role._id === toId) ?? null;
+  const capP = projectCap(f, cap);
+  const moveP = to ? projectMove(f, to, share) : null;
+  const top = Math.max(f.cap * 2, 80, ...f.wakes);
+  return (
+    <div className="rounded-lg border p-2.5" style={{ borderColor: BORDER, background: "var(--sol-card)" }} data-what-if={lever}>
+      <div className="flex flex-wrap items-center gap-1 mb-2">
+        <span className="text-[11.5px] font-semibold mr-1" style={{ color: "var(--sol-text)" }}>What if</span>
+        {(["limit", "move"] as const).map((l) => (
+          <button key={l} type="button" onClick={() => setLever(l)} aria-pressed={lever === l} className={cn("h-6 px-2 rounded-md text-[11.5px]", lever === l ? "font-medium" : "hover:bg-sol-bg-highlight")} style={lever === l ? { background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)", color: "var(--sol-violet)" } : { color: "var(--sol-text-muted)" }} data-what-if-pick={l}>
+            {l === "limit" ? "its daily limit changed" : "some of its work moved"}
+          </button>
+        ))}
+      </div>
+      {lever === "limit" ? (
+        <>
+          <div className="flex items-center gap-3">
+            <DayBars values={f.wakes} days={days} tone={FLOW_TONE.reached} width={150} height={44} limit={cap} max={Math.max(cap, ...f.wakes, 1)} />
+            <div className="min-w-0 flex-1">
+              <label className="flex items-center justify-between text-[11px]" style={{ color: "var(--sol-text-muted)" }}>
+                <span>Limit a day</span>
+                <span className="font-semibold tabular-nums" style={{ color: "var(--sol-text)" }}>{cap}</span>
+              </label>
+              <input type="range" min={5} max={Math.ceil(top / 5) * 5} step={5} value={cap} onChange={(e) => setCap(Number(e.target.value))} className="w-full accent-[var(--sol-violet)]" aria-label={`${f.role.name}'s daily limit`} data-what-if-limit />
+            </div>
+          </div>
+          <p className="mt-1.5 text-[11.5px] leading-snug" style={{ color: "var(--sol-text-secondary)" }} data-what-if-says>
+            {cap === f.cap
+              ? `Now ${f.cap} a day. It sat at that limit on ${f.daysAtCap} of 7 days.`
+              : capP.unknownDays > 0
+                ? `At ${cap} a day, the ${capP.unknownDays} ${capP.unknownDays === 1 ? "day" : "days"} it sat at ${f.cap} would have gone further; held work is not counted, so whether they would reach ${cap} is unknown.`
+                : `At ${cap} a day it would have sat at its limit on ${capP.daysAtCap} of 7 days${capP.heldAtLeast > 0 ? `, holding at least ${capP.heldAtLeast} pieces of work` : ""}.`}
+          </p>
+          {cap !== f.cap && (
+            <div className="mt-2 flex items-center gap-1.5">
+              {onSetLimit ? (
+                <OrgButton size="sm" primary onClick={() => onSetLimit(cap)} data-what-if-apply>Set its limit to {cap} a day</OrgButton>
+              ) : (
+                <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>Only an admin or the role's owner can change its limit.</span>
+              )}
+              <OrgButton size="sm" onClick={() => setCap(f.cap)}>Reset</OrgButton>
+            </div>
+          )}
+        </>
+      ) : !to || !moveP ? (
+        <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>There is no other role to hand work to.</p>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sol-text-muted)" }}>
+            <span className="tabular-nums font-semibold" style={{ color: "var(--sol-text)" }}>{Math.round(share * 100)}%</span>
+            <input type="range" min={0.1} max={0.9} step={0.05} value={share} onChange={(e) => { setShare(Number(e.target.value)); setSent(false); }} className="min-w-0 flex-1 accent-[var(--sol-violet)]" aria-label="Share of its work to move" data-what-if-share />
+            <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
+            <select value={toId} onChange={(e) => { setToId(e.target.value); setSent(false); }} className="h-6 rounded border bg-transparent px-1 text-[11.5px] outline-none max-w-[140px]" style={{ borderColor: BORDER, color: "var(--sol-text-secondary)" }} aria-label="Hand it to" data-what-if-to>
+              {others.map((o) => <option key={o.role._id} value={o.role._id}>{o.role.name}</option>)}
+            </select>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <MoveSide f={f} after={moveP.from} days={days} atCap={moveP.fromDaysAtCap} />
+            <MoveSide f={to} after={moveP.to} days={days} atCap={moveP.toDaysAtCap} />
+          </div>
+          <p className="mt-1.5 text-[11.5px] leading-snug" style={{ color: "var(--sol-text-secondary)" }} data-what-if-says>
+            About {moveP.moved} pieces of work move over the week. {f.role.name} would sit at its limit on {moveP.fromDaysAtCap} days instead of {f.daysAtCap}; {to.role.name} on {moveP.toDaysAtCap} instead of {to.daysAtCap}.
+          </p>
+          {head && onAskHead && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <OrgButton size="sm" primary disabled={sent} onClick={() => { onAskHead(moveAsk(f, to, moveP)); setSent(true); }} data-what-if-ask>
+                <Sparkles className="w-3 h-3" /> Ask {head.name} to propose it
+              </OrgButton>
+              {sent && <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-what-if-sent>Sent. The proposal waits for you above the conversation.</span>}
+            </div>
+          )}
+        </>
       )}
-      {live && onTrigger && (
-        <span className="ml-auto inline-flex items-center gap-0.5">
-          <IconButton label={paused ? "Resume" : "Pause"} onClick={() => onTrigger(check.trigger_id, paused ? "resume" : "pause")}>{paused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}</IconButton>
-          {!paused && <IconButton label={word === "check" ? "Check now" : "Review now"} tone="var(--sol-violet)" onClick={() => onTrigger(check.trigger_id, "runNow")}><RefreshCw className="w-3 h-3" /></IconButton>}
-        </span>
-      )}
-      {check?.short_id && <Link href={`/triggers/${check.short_id}`} className="text-[10.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-area-check-link>change</Link>}
     </div>
   );
 }
 
-/** "Ask @growth": one line into the role's own thread; the answer lands there. */
-export function AskRole({ role, conversationId, onSend, onOpenSession }: { role: OrgRole; conversationId: string | null; onSend?: (conversationId: string, text: string) => void; onOpenSession: (id: string) => void }) {
-  const [text, setText] = useState("");
-  const [sent, setSent] = useState(false);
-  if (!conversationId) return <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>It has no session yet, so there is nobody to ask.</p>;
-  const submit = () => {
-    const body = text.trim();
-    if (!body || !onSend) return;
-    onSend(conversationId, body);
-    setText("");
-    setSent(true);
-  };
+function MoveSide({ f, after, days, atCap }: { f: RoleFlow; after: number[]; days: string[]; atCap: number }) {
   return (
-    <form className="flex flex-col gap-1" data-ask-role={role.handle} onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <div className="flex items-center gap-1.5">
-        <input value={text} onChange={(e) => { setText(e.target.value); setSent(false); }} placeholder={`Ask @${role.handle}…`} className="min-w-0 flex-1 h-7 rounded-md px-2 border outline-none text-[12px] bg-sol-bg-alt" style={{ borderColor: BORDER, color: "var(--sol-text)" }} aria-label={`Ask @${role.handle}`} />
-        <OrgButton size="sm" primary type="submit" disabled={!text.trim() || !onSend} aria-label="Send"><Send className="w-3 h-3" /></OrgButton>
-      </div>
-      {sent && (
-        <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-ask-role-sent>
-          Sent. Its answer lands in <button type="button" onClick={() => onOpenSession(conversationId)} className="hover:underline" style={{ color: "var(--sol-violet)" }}>its thread</button>.
-        </span>
-      )}
-    </form>
-  );
-}
-
-const DETAIL_LABEL = "text-[10px] font-semibold uppercase tracking-[0.08em]";
-
-/** A row opened: the area's goals and progress, the sessions waiting under
- *  it, at most three signals, its check, and a line to the role. */
-export function AreaDetail({ row, now, onOpenSession, onSelectNode, onTrigger, onSetEvery, onSend }: { row: AreaRow; now: number; onOpenSession: (id: string) => void; onSelectNode: (nodeId: string) => void; onTrigger?: (id: string, verb: "pause" | "resume" | "runNow") => void; onSetEvery?: (id: string, ms: number) => void; onSend?: (conversationId: string, text: string) => void }) {
-  const a = row.area;
-  const conv = a?.standing_conversation_id ?? row.role.standing?.conversation_id ?? null;
-  const goals = a?.goals ?? [];
-  const scopeProjects = row.role.scope_names.projects;
-  return (
-    <div className="px-2.5 pb-2.5 pt-1 flex flex-col gap-2.5 org-pop-in" data-area-detail={row.role.handle}>
-      {a && row.status !== "on_track" && <p className="text-[12px] leading-snug" style={{ color: row.color }} data-area-status-line>{a.status_line}</p>}
-      {a?.reached && reachedTotal(a.reached) > 0 && (
-        <p className="text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-area-reached={reachedTotal(a.reached)}>
-          {reachedTotal(a.reached)} session{reachedTotal(a.reached) === 1 ? "" : "s"} under it: {reachedBreakdown(a.reached)}.
-        </p>
-      )}
-
-      <div data-area-goals>
-        <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Goals</div>
-        {goals.length === 0 && scopeProjects.length === 0 && <p className="text-[12px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>{row.role.handle === "head-of-people" ? "Everything no other role looks after." : "No area of its own: it runs its check and answers what it is asked."}</p>}
-        {goals.length === 0 && scopeProjects.length > 0 && <p className="text-[12px] mt-0.5" style={{ color: "var(--sol-text-secondary)" }}>{scopeProjects.map((p) => p.title).join(", ")}</p>}
-        {goals.map((g) => (
-          <div key={g.project.id} className="mt-0.5 text-[12px] leading-snug" data-area-goal={g.project.id}>
-            <Link href={`/projects/${g.project.short_id ?? g.project.id}`} className="font-medium no-underline hover:underline" style={{ color: "var(--sol-text)" }}>{g.project.title}</Link>
-            {g.goal && <span style={{ color: "var(--sol-text-secondary)" }}>: {g.goal}</span>}
-            <span className="block text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{g.done_7d} done this week · {g.in_progress} in progress · {g.open} open</span>
-          </div>
-        ))}
-      </div>
-
-      {a && (a.initiatives?.length ?? 0) > 0 && (
-        <div data-area-initiatives={a.initiatives!.length}>
-          <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Serves</div>
-          {a.initiatives!.map((i) => (
-            <div key={i.id} className="mt-0.5 text-[12px] leading-snug" data-area-initiative={i.short_id} data-area-initiative-owned={i.owned || undefined}>
-              <Link href={`/goals/${i.short_id}`} className="font-medium no-underline hover:underline" style={{ color: "var(--sol-text)" }}>{i.title}</Link>
-              {i.chain.length > 0 && <span style={{ color: "var(--sol-text-dim)" }}> under {i.chain.map((c) => c.title).join(", under ")}</span>}
-              {i.metrics.map((m) => <MetricReadingLine key={m.key} reading={m} now={now} className="block mt-0.5 text-[11px]" />)}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {a && a.waiting.length > 0 && (
-        <div data-area-waiting={a.waiting.length}>
-          <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Waiting under it</div>
-          {a.waiting.map((w) => (
-            <button key={w.id} type="button" onClick={() => onOpenSession(w.id)} className="mt-0.5 w-full text-left rounded-md px-1 -mx-1 py-0.5 hover:bg-sol-bg-highlight/70" data-area-waiting-session={w.short_id}>
-              <span className="block text-[12px] leading-snug truncate" style={{ color: "var(--sol-text)" }}>{w.title || w.short_id}</span>
-              <span className="block text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>{w.why === "blocked" ? "blocked" : "waiting"} for {agoOf(now - w.since).replace(/ ago$/, "")}{w.state ? ` · ${w.state}` : ""}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {a && a.signals.length > 0 && (
-        <div data-area-signals={a.signals.length}>
-          <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Signals</div>
-          {a.signals.map((sg, i) => {
-            const m = SEVERITY_META[sg.severity];
-            return (
-              <p key={i} className="mt-0.5 flex items-start gap-1.5 text-[12px] leading-snug" style={{ color: "var(--sol-text-secondary)" }} data-area-signal={sg.code}>
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-[6px]" aria-hidden style={m.dot === "none" ? { border: `1px solid ${m.color}` } : m.dot === "filled" ? { background: m.color } : { border: `1.5px solid ${m.color}` }} />
-                <span>{sg.text}</span>
-              </p>
-            );
-          })}
-        </div>
-      )}
-
-      <div>
-        <div className={DETAIL_LABEL} style={{ color: "var(--sol-text-dim)" }}>Check</div>
-        <div className="mt-0.5"><CheckLine check={a?.check ?? null} checkedAt={a?.checked_at ?? null} now={now} word="check" onTrigger={onTrigger} onSetEvery={onSetEvery} /></div>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1"><AskRole role={row.role} conversationId={conv} onSend={onSend} onOpenSession={onOpenSession} /></div>
-        <button type="button" onClick={() => onSelectNode(row.nodeId)} className="shrink-0 text-[11px] h-7 px-1.5 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} data-area-open-node>On the chart</button>
+    <div className="min-w-0 rounded-md px-2 py-1.5" style={{ background: "color-mix(in srgb, var(--sol-border) 14%, transparent)" }}>
+      <div className="flex items-center gap-1.5 text-[11px] truncate" style={{ color: "var(--sol-text-secondary)" }}><RoleFace role={f.role} size={14} />{f.role.name}</div>
+      <div className="mt-1 flex items-end justify-between gap-1">
+        <DayBars values={after} ghost={f.wakes} days={days} tone={FLOW_TONE.reached} width={96} height={32} limit={f.cap} />
+        <span className="text-[10.5px] tabular-nums text-right" style={{ color: atCap > 0 ? FLOW_TONE.limit : "var(--sol-text-dim)" }}>{atCap}/7 days<br />at limit</span>
       </div>
     </div>
   );

@@ -1,10 +1,11 @@
 "use client";
-// A person's goals as the role keeps them (docs/architecture/
-// org-roles-run-work.md R6): each goal in the person's words, what the role
-// matched to it, and what moved or stalled. The rows come from org.brief's
+// A person's focus as the role keeps it (docs/architecture/
+// org-roles-run-work.md R6; cohesive build spec §7): each priority in the
+// person's words, what the role matched to it, and what moved or stalled. The rows come from org.brief's
 // `facts.people`, which reads the brief's goal section against the live rows
-// with the viewer's grants, so this only draws them. The Scope tab shows the
-// viewer their own goals; the Brief tab shows every person who reports.
+// with the viewer's grants, so this only draws them. A person's sheet shows
+// it as Focus, once for each role that keeps it; the role's Overview shows
+// the viewer their own.
 import { goalStateLine } from "@codecast/shared/contracts/roleGoals";
 import { EntityIdPill } from "../../EntityIdPill";
 import type { BriefPerson } from "./scopeTypes";
@@ -15,7 +16,7 @@ export function PersonGoals({ person, roleHandle, now, own }: { person: BriefPer
   if (!person.has_section || person.goals.length === 0) {
     return (
       <p className="px-2.5 text-[12px] text-sol-text-muted" data-person-goals="0">
-        {own ? "You report" : `${person.name} reports`} to @{roleHandle}, and it holds no goals for {own ? "you" : "them"} yet. Tell it {own ? "your" : "their"} three to five goals in the conversation, or write them on the Brief tab under “## Goals: {person.name}”.
+        {own ? "You report" : `${person.name} reports`} to @{roleHandle}, and it doesn't know {own ? "your" : "their"} focus yet. Tell it {own ? "your" : "their"} three to five priorities in the conversation.
       </p>
     );
   }

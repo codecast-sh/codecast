@@ -1,9 +1,11 @@
 import { mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
+import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
+import { relateCore, supersedeCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
+import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
@@ -17,7 +19,7 @@ import { resolveTeamForPath, buildShareUpdate } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
-import { resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
+import { addDepCore, removeDepCore, resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { sentryStatusFor } from "./sources/sentry";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType,
@@ -274,7 +276,10 @@ function receiptOrLegacyCommandId(
 
 type DurableCreateContinuation =
   | { version: 1; kind: "navigate" }
-  | { version: 1; kind: "assignBucket"; conversationIds: string[] };
+  | { version: 1; kind: "assignBucket"; conversationIds: string[] }
+  // A project created from a goal's sheet lands under that goal in the same
+  // transaction as the create, so the goal never lists a project that failed.
+  | { version: 1; kind: "attachToInitiative"; initiativeId: string };
 
 function validatedCreateContinuation(
   action: string,
@@ -314,6 +319,15 @@ function validatedCreateContinuation(
       kind: "assignBucket",
       conversationIds: [...new Set(continuation.conversationIds as string[])],
     };
+  }
+  if (
+    continuation.version === 1 &&
+    continuation.kind === "attachToInitiative" &&
+    action === "createProject" &&
+    typeof continuation.initiativeId === "string" &&
+    continuation.initiativeId.length > 0
+  ) {
+    return { version: 1, kind: "attachToInitiative", initiativeId: continuation.initiativeId };
   }
   throw new Error(`Invalid ${action} continuation`);
 }
@@ -416,9 +430,9 @@ export async function applyPatches(
           (doc as any)[config.ownerField] === userId ||
           (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString()) ||
           // A decision is answerable by every person it was asked of
-          // (docs/architecture/decisions-as-documents.md D6), not only the
-          // asking session's owner.
-          (table === "session_decisions" && personMayResolve(doc as any, userId))
+          // (docs/architecture/decisions-as-documents.md D6), and by anyone
+          // else who may read it (the people then hear who answered).
+          (table === "session_decisions" && (personMayResolve(doc as any, userId) || await userMayRead(ctx as any, userId, doc as any)))
         );
         // owner_user_id caches only the PRIMARY (first-added) owner; a SECONDARY
         // owner's triage patch must resolve through the canonical owner set or
@@ -1456,12 +1470,32 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       sort_order: fields.sort_order,
       duplicate_of: fields.duplicate_of,
       from_call: fields.from_call,
+      model: fields.model,
+      effort: fields.effort,
+      ephemeral: fields.ephemeral,
       subtask_resolution:
         fields.subtask_resolution === "cascade" || fields.subtask_resolution === "only_parent"
           ? fields.subtask_resolution
           : undefined,
     });
   },
+
+  // Task blockers (task-graph.md TG4, TG12): the task page's add-blocker
+  // palette and the Blocked by row's remove, through the same core as
+  // `cast task dep`. The store patches both rows' mirrors on the draft.
+  addBlocker: async (ctx, userId, [shortId, blocker]: [string, string]) =>
+    addDepCore(ctx as any, userId, { short_id: String(shortId), blocked_by: String(blocker) }),
+  removeBlocker: async (ctx, userId, [shortId, blocker]: [string, string]) =>
+    removeDepCore(ctx as any, userId, { short_id: String(shortId), blocked_by: String(blocker) }),
+
+  // Task links that do not block (task-graph.md TG5). The store's relateTasks
+  // and unrelateTasks patch both rows' related on the draft.
+  relateTasks: async (ctx, userId, [shortId, other]: [string, string]) =>
+    relateCore(ctx, userId, { user_id: userId, actor_type: "user" }, shortId, other, "add"),
+  unrelateTasks: async (ctx, userId, [shortId, other]: [string, string]) =>
+    relateCore(ctx, userId, { user_id: userId, actor_type: "user" }, shortId, other, "remove"),
+  supersedeTask: async (ctx, userId, [shortId, replacement, note]: [string, string, string?]) =>
+    supersedeCore(ctx, userId, { user_id: userId, actor_type: "user" }, shortId, replacement, note),
 
   // Delegate to tasks.webCreate so every workspace rule lives in one place:
   // team_id membership enforcement (createDataContext.resolveWorkspace),
@@ -1489,8 +1523,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // Idempotency key: a retried/replayed create returns the same row.
       client_key: opts.client_key,
       from_call: opts.from_call,
+      model: opts.model,
+      effort: opts.effort,
+      ephemeral: opts.ephemeral,
     });
   },
+
+  // Waits (task-graph.md TG2). The client paints the wait under its own id and
+  // passes it here, so the synced row reconciles the optimistic one; input is
+  // client JSON, which addWaitCore rebuilds field by field.
+  addWait: async (ctx, userId, [shortId, input]: [string, AddWaitInput]) =>
+    addWaitCore(ctx as any, userId, shortId, {
+      ref: input?.ref, target: input?.target, repository: input?.repository, time_zone: input?.time_zone, id: input?.id,
+    }),
+  removeWait: async (ctx, userId, [shortId, waitId]: [string, string]) =>
+    removeWaitCore(ctx as any, userId, shortId, { wait_id: String(waitId) }),
 
   // Delegate to tasks.webAddComment so the local-first path keeps image
   // attachments, the canAccessTask check, and subscriber notifications — none of
@@ -2392,13 +2439,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!hasReceiptCommandId(result)) {
       return await ctx.runMutation!(api.projects.webCreate, opts);
     }
-    validatedCreateContinuation("createProject", result);
+    const continuation = validatedCreateContinuation("createProject", result);
     return await runReceiptBackedCreate(ctx, userId, {
       action: "createProject",
       commandName: "projects.create/v2",
       arguments: opts,
       result,
-      create: () => ctx.runMutation!(api.projects.webCreate, opts),
+      create: async () => {
+        const created = await ctx.runMutation!(api.projects.webCreate, opts);
+        if (continuation?.kind === "attachToInitiative") {
+          await ctx.runMutation!(api.initiatives.addProject, { id: continuation.initiativeId, project_id: String(created.id) });
+        }
+        return created;
+      },
     });
   },
   promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {

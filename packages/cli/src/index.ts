@@ -18,7 +18,7 @@ import { CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } f
 import { missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
-import { buildTaskStartBody, groupTasksByAssignee, startedLines } from "./taskClaim.js";
+import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine } from "./taskClaim.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
@@ -89,6 +89,9 @@ import {
   foreignProse,
   renderFencedPlanRecord,
   renderFencedPlanTasks,
+  blockersOf,
+  blockerLabel,
+  isBlocking,
 } from "@codecast/shared/tasks";
 import { buildEventFilter, narrowingWithoutOn } from "./triggerEventFilter.js";
 import { describeDates, describeDatesFull, formatDateSmart, parseDuration as parseSharedDuration, parseEndDate, parseRelativeDate, wasEdited } from "@codecast/shared/time";
@@ -115,7 +118,7 @@ import {
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
-import { agentDisplayName, normalizeSubagentCaps } from "@codecast/shared/contracts";
+import { agentDisplayName, CHEAP_MODEL, normalizeSubagentCaps } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
@@ -124,7 +127,8 @@ import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
-import { planReadiness, resolvedTaskIds, isUnblocked } from "./planReadiness.js";
+import { parkedNote, planReadiness } from "./planReadiness.js";
+import { listedBlockers, listedReady } from "./listedReadiness.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
@@ -156,7 +160,7 @@ import { parseSessionFile, extractSlug, extractCwd } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import type { DoctorDeps } from "./doctor.js";
-import { CHECK_CONFIG_REL_PATH, checkProject, listWatchers, repoRoot, resolveProjects, runWatcher } from "./check.js";
+import { CHECK_CONFIG_REL_PATH, checkProject, gitLines, listWatchers, projectsTouching, repoRoot, resolveProjects, runWatcher } from "./check.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
@@ -223,7 +227,7 @@ import { resolveOwnTarget } from "./ownTarget.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
-import { readTaskPulseFor } from "./taskPulse.js";
+import { readTaskPulseFor, recordTaskStart, writeTaskPulse } from "./taskPulse.js";
 
 const program = new Command();
 const isStableContextFastPath = isStableContextFastPathArgv(process.argv);
@@ -930,16 +934,6 @@ function installSlashCommand(): void {
   } catch {
     // Ignore errors - slash command is optional
   }
-}
-
-function writeTaskPulse(sessionId: string, taskId: string, planId?: string): void {
-  try {
-    const dir = path.join(defaultConfigDir(), "task-pulse");
-    fs.mkdirSync(dir, { recursive: true });
-    const data: Record<string, string> = { task: taskId };
-    if (planId) data.plan = planId;
-    fs.writeFileSync(path.join(dir, `${sessionId}.json`), JSON.stringify(data));
-  } catch {}
 }
 
 function clearTaskPulse(sessionId: string): void {
@@ -2710,145 +2704,24 @@ async function promptStableEnablement(): Promise<void> {
   }
 }
 
+// Bare `cast sync`: the daemon's unsynced sweep uploads whatever trails its
+// synced position, with the daemon's own ingest (subagents nest under their
+// parent, secrets are redacted, the conversation cache is shared). A stopped
+// daemon runs that sweep on start; a running one on SIGUSR2, unless its build
+// is stale and the bounce restarts it into the same startup sweep.
 async function runSync(): Promise<void> {
   const config = readConfig();
-
   if (!config?.auth_token || !config?.user_id) {
     console.error("Not authenticated. Run 'cast auth' first.");
     process.exit(1);
   }
-
-  const projectsPath = path.join(process.env.HOME || "", ".claude", "projects");
-
-  if (!fs.existsSync(projectsPath)) {
-    console.log("No Claude Code projects found at:", projectsPath);
-    return;
+  const pid = getDaemonPid();
+  if (pid === null) {
+    startDaemon();
+  } else if (!bounceDaemonIfBuildChanged(true)) {
+    process.kill(pid, "SIGUSR2");
   }
-
-  console.log(`\n${fmt.muted("Finding unsynced conversations...")}\n`);
-
-  const sessionFiles = await glob("**/*.jsonl", {
-    cwd: projectsPath,
-    absolute: true,
-  });
-
-  if (sessionFiles.length === 0) {
-    console.log("No session files found.");
-    return;
-  }
-
-  const unsyncedFiles: Array<{ path: string; size: number; position: number }> = [];
-
-  for (const filePath of sessionFiles) {
-    try {
-      // Manual sync is not an escape hatch around selected-project privacy.
-      // Keep its candidate set identical to the daemon and reconciliation.
-      if (!isTranscriptFileInSyncScope(filePath, config)) continue;
-      const stats = fs.statSync(filePath);
-      const position = getPosition(filePath);
-
-      if (position < stats.size) {
-        unsyncedFiles.push({
-          path: filePath,
-          size: stats.size,
-          position,
-        });
-      }
-    } catch (err) {
-      continue;
-    }
-  }
-
-  if (unsyncedFiles.length === 0) {
-    console.log(`${fmt.success(icons.check)} ${fmt.muted("All conversations are already synced.")}`);
-    return;
-  }
-
-  console.log(`${fmt.muted("Syncing")} ${fmt.number(unsyncedFiles.length)} ${fmt.muted("conversations...")}\n`);
-
-  const syncService = new SyncService({
-    convexUrl: config.convex_url || CONVEX_URL,
-    authToken: config.auth_token,
-    userId: config.user_id,
-  });
-
-  let syncedCount = 0;
-  let errorCount = 0;
-
-  for (const file of unsyncedFiles) {
-    try {
-      const content = fs.readFileSync(file.path, "utf-8");
-      const lines = content.split("\n");
-      const newLines = lines.slice(Math.floor(file.position / (file.size / lines.length)));
-
-      if (newLines.length === 0) {
-        continue;
-      }
-
-      const messages = parseSessionFile(newLines.join("\n"));
-
-      if (messages.length === 0) {
-        continue;
-      }
-
-      const sessionId = path.basename(file.path, ".jsonl");
-      const projectDir = path.basename(path.dirname(file.path));
-      const projectPath = readProjectPathFromSession(file.path) || ("/" + projectDir.slice(1).replace(/-/g, "/"));
-      const slug = extractSlug(content);
-
-      let conversationId: string | null = null;
-
-      try {
-        conversationId = await syncService.createConversation({
-          userId: config.user_id!,
-          teamId: config.team_id,
-          sessionId,
-          agentType: "claude_code",
-          projectPath,
-          slug,
-          startedAt: messages[0]?.timestamp || Date.now(),
-        });
-      } catch (err) {
-        const errorMsg = (err as Error).message;
-        if (errorMsg.includes("already exists")) {
-          continue;
-        }
-        throw err;
-      }
-
-      if (conversationId) {
-        for (const msg of messages) {
-          await syncService.addMessage({
-            conversationId,
-            messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: msg.content,
-            timestamp: msg.timestamp,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            files: msg.files,
-            subtype: msg.subtype,
-          });
-        }
-      }
-
-      setPosition(file.path, file.size);
-      syncedCount++;
-
-      process.stdout.write(`\rSynced ${syncedCount}/${unsyncedFiles.length} conversations...`);
-    } catch (err) {
-      errorCount++;
-    }
-  }
-
-  console.log(`\n\n${fmt.success(icons.check)} ${c.bold}Sync complete!${c.reset}`);
-  console.log(`  ${fmt.muted("Synced")}  ${fmt.number(syncedCount)} ${fmt.muted("conversations")}`);
-
-  if (errorCount > 0) {
-    console.log(`  ${fmt.error("Errors")}  ${fmt.number(errorCount)}`);
-  }
+  console.log(`${fmt.success(icons.check)} ${fmt.muted("The daemon is uploading unsynced conversations; progress is in")} ${fmt.cmd("~/.codecast/daemon.log")}`);
 }
 
 async function syncSingleSession(sessionId: string, projectRoot: string): Promise<boolean> {
@@ -5526,12 +5399,25 @@ program
     "without one, the tsconfig nearest your directory. A project is also any directory or tsconfig path."
   )
   .option("--fresh", "Restart the watcher before asking (the escape hatch for a watcher that lost track)")
+  .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
   .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
-  .action(async (projects: string[], o: { fresh?: boolean; json?: boolean }) => {
+  .action(async (projects: string[], o: { fresh?: boolean; json?: boolean; changedSince?: string }) => {
     const root = repoRoot();
     let wanted;
     try {
       wanted = resolveProjects(root, projects);
+      if (o.changedSince) {
+        const changed = [
+          ...gitLines(root, ["diff", "--name-only", o.changedSince, "--"]),
+          ...gitLines(root, ["ls-files", "--others", "--exclude-standard"]),
+        ].filter(Boolean);
+        wanted = projectsTouching(root, wanted, changed);
+        if (!wanted.length) {
+          if (o.json) console.log("[]");
+          else console.log(`${fmt.success("✓")} no project's program changed since ${o.changedSince}`);
+          return;
+        }
+      }
     } catch (err) {
       console.error(`${fmt.error("✗")} ${(err as Error).message}`);
       process.exit(2);
@@ -5721,6 +5607,8 @@ program
 const syncCommand = program
   .command("sync")
   .description("Sync a cloud session's folder with the laptop (status, pull, push, diff, start, stop, keep); bare, upload unsynced conversations")
+  // An unknown verb (`cast sync ls`) is an error, never the bare upload.
+  .allowExcessArguments(false)
   .action(async () => {
     await runSync();
   });
@@ -5737,7 +5625,7 @@ program
     "  cast config set subagents.per_session 6   # workers one session runs at once (default 10)\n" +
     "  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer, tmux_server_per_session, subagents.per_session, subagents.per_machine)")
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer, tmux_server_per_session, level_checkouts_enabled, subagents.per_session, subagents.per_machine)")
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
   .allowExcessArguments()
@@ -5916,10 +5804,10 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"] as const;
     const sensitiveKeys = ["auth_token"];
     // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
-    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session"]);
+    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -9885,7 +9773,7 @@ program
   .option("-s, --session <id>", "Source session (default: the session running this command, else the project's most recent)")
   .option("--to <agent>", `Agent for the new session: ${Object.keys(LOCAL_AGENT_CLIENTS).join(", ")}, or same (the source's own)`)
   .option("--model <model>", "Model for the new session (e.g. opus, sonnet); --model alone keeps the source's agent")
-  .option("--effort <level>", "Reasoning effort for the new session (claude: low|medium|high|max; varies by agent)")
+  .option("--effort <level>", "Reasoning effort for the new session (claude: low|medium|high|xhigh|max; varies by agent)")
   .option("--account <name>", "Claude account profile the new session runs on (cast accounts token <name>)")
   .option("--device <name>", "Machine to start the new session on (label or device id)")
   .option("-m, --message <text>", stdinText("Direction for the new session, appended to the composed prompt"))
@@ -12093,7 +11981,7 @@ program
   .option("--as <definition>", "Run as a named agent definition (cast agent ls): its client, model, effort, tools and prompt; explicit flags override it")
   .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
-  .option("--effort <level>", "Reasoning effort (claude: low|medium|high|max; varies by agent)")
+  .option("--effort <level>", "Reasoning effort (claude: low|medium|high|xhigh|max; varies by agent)")
   .option("--account <name>", "Claude account profile to run on, without switching the machine's login (needs: cast accounts token <name>)")
   .option("--isolated", "Give each session its own git worktree")
   .option("--worktree <name>", "Name the worktree (implies --isolated; one task only)")
@@ -12713,9 +12601,9 @@ program
     let llmSearchTerms: string[] = [];
     try {
       const expansion = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: CHEAP_MODEL,
         max_tokens: 128,
-        temperature: 0.2,
+        thinking: { type: "disabled" },
         messages: [
           {
             role: "user",
@@ -12911,8 +12799,9 @@ Question: ${query}`,
 
       // Call Haiku for RAG
       const response = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: CHEAP_MODEL,
         max_tokens: 1024,
+        thinking: { type: "disabled" },
         messages: [
           {
             role: "user",
@@ -16216,7 +16105,8 @@ function formatWorkItem(t: any, verbose = false, indent = 0): string {
   const pcolor = PRIORITY_COLORS[t.priority] || "";
   const pri = t.priority !== "medium" ? ` ${pcolor}${t.priority}${c.reset}` : "";
   const labels = t.labels?.length ? ` ${c.dim}[${t.labels.join(", ")}]${c.reset}` : "";
-  const blocked = t.blocked_by?.length ? ` ${c.red}blocked${c.reset}` : "";
+  const blockers = listedBlockers(t);
+  const blocked = blockers.length ? ` ${c.red}blocked: ${blockers.join(", ")}${c.reset}` : "";
   // A role's name already carries its "@"; a person's does not.
   const assignee = t.assignee_name ? ` ${c.dim}@${String(t.assignee_name).replace(/^@/, "")}${c.reset}` : "";
   // A meeting task was decided by people; an agent only wrote it down. Marking
@@ -16313,8 +16203,8 @@ program
     // Sort helpers
     const statusOrder: Record<string, number> = { in_progress: 0, in_review: 1, open: 2, backlog: 3, done: 4, dropped: 5 };
     const sortTasks = (arr: any[]) => arr.sort((a: any, b: any) => {
-      const aBlocked = a.blocked_by?.length > 0;
-      const bBlocked = b.blocked_by?.length > 0;
+      const aBlocked = listedBlockers(a).length > 0;
+      const bBlocked = listedBlockers(b).length > 0;
       if (aBlocked !== bBlocked) return aBlocked ? 1 : -1;
       return (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99);
     });
@@ -16322,7 +16212,7 @@ program
     const taskIcon = (t: any): string => {
       if (t.status === "done") return `${o.green}✓${o.reset}`;
       if (t.status === "dropped") return `${o.dim}✕${o.reset}`;
-      if (t.blocked_by?.length > 0) return `${o.dim}◌${o.reset}`;
+      if (listedBlockers(t).length > 0) return `${o.dim}◌${o.reset}`;
       if (t.status === "in_progress") return `${o.yellow}●${o.reset}`;
       if (t.status === "in_review") return `${o.magenta}◈${o.reset}`;
       return `○`;
@@ -16369,7 +16259,8 @@ program
 
         for (const t of planTasks) {
           const icon = taskIcon(t);
-          const blocked = t.blocked_by?.length > 0 ? (options.plain ? ` (blocked by ${t.blocked_by.join(", ")})` : ` ${o.dim}blocked by ${t.blocked_by.join(", ")}${o.reset}`) : "";
+          const blockers = listedBlockers(t).join(", ");
+          const blocked = blockers ? (options.plain ? ` (blocked: ${blockers})` : ` ${o.dim}blocked: ${blockers}${o.reset}`) : "";
           const concern = t.execution_status === "done_with_concerns" ? (options.plain ? " [concerns]" : ` ${o.yellow}!${o.reset}`) : "";
           const session = sessionTag(t);
           if (options.plain) {
@@ -16441,8 +16332,8 @@ program
     // Summary line
     const totalPlans = activePlans.length + draftPlans.length;
     const inProgress = allTasks.filter((t: any) => t.status === "in_progress").length;
-    const ready = allTasks.filter((t: any) => (t.status === "open" || t.status === "backlog") && (!t.blocked_by || t.blocked_by.length === 0)).length;
-    const blocked = allTasks.filter((t: any) => t.blocked_by?.length > 0 && t.status !== "done" && t.status !== "dropped").length;
+    const ready = allTasks.filter((t: any) => listedReady(t)).length;
+    const blocked = allTasks.filter((t: any) => listedBlockers(t).length > 0 && t.status !== "done" && t.status !== "dropped").length;
     const doneCount = allTasks.filter((t: any) => t.status === "done").length;
     const staleNote = stalePlanCount > 0 ? ` (${stalePlanCount} stale plans hidden, use --all)` : "";
 
@@ -16488,6 +16379,9 @@ work
   .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
   .option("--from-meeting", "This task came out of a meeting with people in it, not from your own work")
   .option("--from-call <call>", "The call this task was pulled from (cl-42, from `cast calls`); implies --from-meeting, and the task shows on the call's page")
+  .option("--model <model>", "Model a session spawned for this task launches with")
+  .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max")
+  .option("--ephemeral", "Bookkeeping with no value once done (a checklist, a probe): kept off the board, the feed and notifications; cast task keep undoes it")
   .option("--json", "Output the created task as JSON (one object for one title, an array for several)")
   .action(async (title: string, options: any) => {
     // Bulk decomposition: `cast task create --parent ct-x -` gives one subtask
@@ -16496,6 +16390,13 @@ work
     const titles = title.split("\n").map((s) => s.trim()).filter(Boolean);
     if (titles.length === 0) {
       console.error("No title given");
+      process.exit(1);
+    }
+    let hints: Record<string, any> = {};
+    try {
+      hints = taskHintBody(options);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     }
 
@@ -16522,6 +16423,7 @@ work
       if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
       if (options.plan) body.plan_id = options.plan;
       if (options.parent) body.parent_id = options.parent;
+      Object.assign(body, hints);
 
       // Origin by evidence (workOriginStamp): a session binds the task and
       // stamps agent; a terminal or --human stamps human; a missed session
@@ -16562,10 +16464,12 @@ work
   .option("--chain <person>", "Everything in a person's reporting chain: their tasks and the tasks of every role under them ('me', a name, or a handle)")
   .option("--label <label>", "Filter by label (case-insensitive)")
   .option("--plan <plan_id>", "Filter by plan")
+  .option("--ephemeral", "Include ephemeral bookkeeping tasks (hidden by default)")
   .option("-v, --verbose", "Show descriptions")
   .option("--json", "Output as JSON (an array of task rows; every field, no colours)")
   .action(async (options: any) => {
     const body: Record<string, any> = { limit: parseInt(options.limit) };
+    if (options.ephemeral) body.include_ephemeral = true;
     if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
     if (options.initiative) body.initiative = options.initiative;
     if (options.project) body.project_id = await resolveProjectId(options.project, options.team);
@@ -16747,6 +16651,17 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   console.log();
 }
 
+/** What a start leaves behind in this shell, for `cast task start` and
+ *  `cast task ready --claim`: the task pulse and the plan binding always, and
+ *  the server's notes unless `quiet` (--json prints the result instead). */
+async function afterTaskStarted(shortId: string, sessionId: string | null, result: any, opts: { quiet?: boolean } = {}): Promise<void> {
+  const boundPlan = await recordTaskStart(sessionId, shortId, result.plan_id, (planId, session) =>
+    cliPost("/cli/plans/bind", { short_id: planId, session_id: session }));
+  if (opts.quiet) return;
+  for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
+  if (boundPlan) console.log(`${c.dim}Session bound to plan ${boundPlan}${c.reset}`);
+}
+
 work
   .command("start")
   .description("Start working on a task (set in_progress)")
@@ -16762,16 +16677,7 @@ work
     const sessionId = ownSessionId(getRealCwd());
     const result = await cliPost("/cli/work/update", buildTaskStartBody(shortId, sessionId, { take: options.take }));
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
-    for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
-
-    if (sessionId) writeTaskPulse(sessionId, shortId, result.plan_id);
-
-    if (result.plan_id && sessionId) {
-      try {
-        await cliPost("/cli/plans/bind", { short_id: result.plan_id, session_id: sessionId });
-        console.log(`${c.dim}Session bound to plan ${result.plan_id}${c.reset}`);
-      } catch {}
-    }
+    await afterTaskStarted(shortId, sessionId, result);
     // The server owns the spawn (it shares spawnSessionForTask with the board's
     // assign-to-agent action), so --spawn needs no local session and no daemon
     // of its own — docs/architecture/issue-sync.md S7.
@@ -16966,6 +16872,8 @@ work
   .option("--readiness <state>", "Whether it can be worked as it stands: ready, needs_context or not_actionable")
   .option("--readiness-note <text>", "One line on why")
   .option("--watch-days <n>", "Watch the cause after ship: a signal within N days reopens it, a quiet watch closes it as resolved; 0 ends the watch")
+  .option("--model <model>", "Model a session spawned for this task launches with; '' clears")
+  .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max; '' clears")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId };
@@ -16978,7 +16886,7 @@ work
       body.watch_days = days;
     }
     try {
-      Object.assign(body, groundUpdateBody(options));
+      Object.assign(body, groundUpdateBody(options), taskHintBody({ model: options.model, effort: options.effort }));
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
@@ -17003,6 +16911,17 @@ work
     if (options.fromCall !== undefined) body.from_call = await taskCallArg(options.fromCall);
     await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${shortId}${c.reset}`);
+  });
+
+work
+  .command("keep")
+  .description("Keep an ephemeral task: it returns to the board, the feed and notifications")
+  .argument("<short_ids...>", "Task short IDs")
+  .action(async (shortIds: string[]) => {
+    for (const shortId of shortIds) {
+      await cliPost("/cli/work/update", { short_id: shortId, ephemeral: false });
+      console.log(`${c.green}ok${c.reset} Kept ${c.cyan}${shortId}${c.reset}`);
+    }
   });
 
 work
@@ -17153,15 +17072,36 @@ work
   .option("--plan <plan_id>", "Filter by plan")
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("--subtasks", "Include open subtasks of in-progress parents (rescue an abandoned tree)")
-  .option("--json", "Output as JSON (an array of task rows)")
+  .option("--claim", "Start the first ready task for this session in one step, so two agents never take the same one. Takes only unassigned tasks or your own (or your role's)")
+  .option("--stale", "Also list ready tasks nobody has touched in 30 days (folded into a count by default); with --claim, let the claim take one")
+  .option("--json", "Output as JSON (an array of task rows; with --claim, the claim)")
   .action(async (options: any) => {
-    const body: Record<string, any> = { ready: true };
-    if (options.project) body.project_id = await resolveProjectId(options.project);
-    if (options.plan) body.plan_id = options.plan;
-    if (options.query) body.query = options.query;
-    if (options.subtasks) body.include_subtasks = true;
-    body.project_path = getRealCwd();
-    const tasks = await cliPost("/cli/work/list", body);
+    const filters: Record<string, any> = {};
+    if (options.project) filters.project_id = await resolveProjectId(options.project);
+    if (options.plan) filters.plan_id = options.plan;
+    if (options.query) filters.query = options.query;
+    if (options.subtasks) filters.include_subtasks = true;
+    filters.project_path = getRealCwd();
+    const sessionId = ownSessionId(getRealCwd());
+    if (options.claim) {
+      const claim = await cliPost("/cli/work/claim", buildTaskClaimBody(filters, sessionId, { stale: options.stale }));
+      if (options.json) {
+        // The pulse and the plan binding are the claim's, not the output's.
+        if (claim?.task) await afterTaskStarted(claim.task.short_id, sessionId, claim, { quiet: true });
+        printJson(claim);
+        return;
+      }
+      for (const s of claim?.skipped ?? []) console.log(fmt.muted(`  passed over ${s.short_id}: ${s.reason}`));
+      if (!claim?.task) {
+        console.log(fmt.muted(unclaimedLine(claim)));
+        return;
+      }
+      console.log(`${c.green}ok${c.reset} Claimed ${c.cyan}${claim.task.short_id}${c.reset} ${inlineForeignText(claim.task.title)}`);
+      await afterTaskStarted(claim.task.short_id, sessionId, claim);
+      return;
+    }
+    // The session's own ephemeral tasks are on its frontier, no other session's (TG9).
+    const tasks = await cliPost("/cli/work/list", { ...buildTaskClaimBody(filters, sessionId), ready: true, limit: READY_LIST_LIMIT });
     if (options.json) {
       printJson(Array.isArray(tasks) ? tasks : []);
       return;
@@ -17170,13 +17110,15 @@ work
       console.log(fmt.muted("No ready tasks."));
       return;
     }
-    for (const t of tasks) {
+    const { shown, folded } = foldStaleTasks(tasks, !!options.stale);
+    for (const t of shown) {
       // A ready subtask can't nest (its parent isn't in the set), so mark it
       // so a claiming agent knows it is stepping into someone's decomposition.
       const suffix = t.parent_id ? fmt.muted(`  ↳ subtask of ${t.parent_short_id || "a parent task"}`) : "";
-      console.log(formatWorkItem(t) + suffix);
+      const stale = t.stale ? fmt.muted("  (untouched 30+ days)") : "";
+      console.log(formatWorkItem(t) + suffix + stale);
     }
-    console.log(fmt.muted(`\n  ${tasks.length} ready`));
+    console.log(fmt.muted(`\n  ${readyCountLine(shown.length, folded, tasks.length)}`));
   });
 
 work
@@ -18794,7 +18736,7 @@ plan
 
     const plan = result;
     const allTasks = plan.tasks || [];
-    const { open: openTasks, ready: readyTasks, blocked } = planReadiness<any>(allTasks);
+    const { open: openTasks, ready: readyTasks, blocked, parked } = planReadiness<any>(allTasks, plan.graph_outside);
 
     if (openTasks.length === 0) {
       console.log(fmt.muted("No open tasks to orchestrate."));
@@ -18812,6 +18754,8 @@ plan
     if (readyTasks.length > maxAgents) console.log(fmt.muted(`  ${readyTasks.length - maxAgents} queued for next wave`));
 
     if (blocked.length) console.log(fmt.muted(`  ${blocked.length} blocked on dependencies`));
+    const parkedLine = parkedNote(parked);
+    if (parkedLine) console.log(fmt.muted(`  ${parkedLine}`));
     console.log();
 
     for (let i = 0; i < toSpawn.length; i++) {
@@ -18827,11 +18771,13 @@ plan
 
       try {
         const runtime = getAgentRuntime();
-        const taskModel = resolveTaskModel(plan, task);
+        // A model and an effort are fixed at launch (TG8): the task's own win.
+        const { model: taskModel, reasoning_effort: taskEffort } = resolveTaskModelFull(plan, task);
         const handle = runtime.spawn({
           sessionName,
           prompt,
           model: taskModel,
+          effort: taskEffort,
           workingDir: getRealCwd(),
           resourceIndex: i,
           taskShortId: task.short_id,
@@ -19155,13 +19101,15 @@ plan
       const plan = await cliPost("/cli/plans/get", { short_id: planId });
       if (!plan) { console.error("Plan not found"); process.exit(1); }
       const allTasks = plan.tasks || [];
-      const { ready } = planReadiness<any>(allTasks);
+      const { ready, parked } = planReadiness<any>(allTasks, plan.graph_outside);
       console.log(`\n  ${c.bold}Autopilot dry-run${c.reset} for ${c.cyan}${planId}${c.reset}`);
       console.log(`  ${ready.length} ready tasks, would spawn ${Math.min(ready.length, maxAgents)} agents:\n`);
       for (const t of ready.slice(0, maxAgents)) {
         console.log(`  ${c.cyan}${t.short_id}${c.reset} ${inlineForeignText(t.title)}`);
       }
       if (ready.length > maxAgents) console.log(fmt.muted(`  ... and ${ready.length - maxAgents} queued`));
+      const parkedLine = parkedNote(parked);
+      if (parkedLine) console.log(fmt.muted(`  ${parkedLine}`));
       return;
     }
 
@@ -19384,17 +19332,13 @@ plan
       }
 
       // Find ready tasks (dropped dependencies count as resolved)
-      const resolvedIds = resolvedTaskIds(allTasks);
+      const { ready: planReady, waiting: planWaiting, parked } = planReadiness<any>(allTasks, plan.graph_outside);
       const taskOutcomes = new Map<string, string>();
       for (const t of allTasks) {
         if (t.status === "done") taskOutcomes.set(t.short_id, t.execution_status || "done");
         else if (t.status === "dropped") taskOutcomes.set(t.short_id, "dropped");
       }
-      const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
-      const readyTasks = openTasks.filter((t: any) => {
-        if (activeAgents.has(t.short_id)) return false;
-        return isUnblocked(t, resolvedIds) && evaluateCondition(t, taskOutcomes);
-      });
+      const readyTasks = planReady.filter((t: any) => !activeAgents.has(t.short_id) && evaluateCondition(t, taskOutcomes));
 
       const slots = maxAgents - activeAgents.size;
       const toSpawn = readyTasks.slice(0, Math.max(0, slots));
@@ -19410,6 +19354,17 @@ plan
         console.log(`  ${c.dim}Wave ${waveCount}${maxWaves ? `/${maxWaves}` : ""}${c.reset}`);
       }
 
+      // Nothing running, startable or waiting on something that moves by
+      // itself (a blocker, a wait, a parent being worked): only backlog,
+      // untriaged work or a condition that came out false is left, so stop
+      // rather than idle until max runtime.
+      const working = allTasks.some((t: any) => t.status === "in_progress" || t.status === "in_review");
+      if (activeAgents.size === 0 && !working && readyTasks.length === 0 && planWaiting.length === 0) {
+        console.log(`\n  ${c.yellow}Stalled:${c.reset} ${done}/${actionable} done, nothing ready or in flight.${parked.length ? ` ${parkedNote(parked)}.` : ""}`);
+        try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Autopilot stalled: ${done}/${actionable} done, nothing ready${parked.length ? `, ${parked.length} in backlog` : ""}` }); } catch {}
+        return false;
+      }
+
       const ts = new Date().toLocaleTimeString();
       console.log(`  ${c.dim}${ts}${c.reset} ${done}/${actionable} done, ${activeAgents.size} active, ${readyTasks.length} ready`);
       try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Cycle: ${done}/${actionable} done, ${activeAgents.size} active, ${readyTasks.length} ready` }); } catch {}
@@ -19421,11 +19376,12 @@ plan
         const resourceIdx = [...activeAgents.values()].length + i;
 
         try {
-          const taskModel = resolveTaskModel(plan, task);
+          const { model: taskModel, reasoning_effort: taskEffort } = resolveTaskModelFull(plan, task);
           const handle = runtime.spawn({
             sessionName,
             prompt,
             model: taskModel,
+            effort: taskEffort,
             workingDir: getRealCwd(),
             resourceIndex: resourceIdx % 4,
             taskShortId: task.short_id,
@@ -19494,7 +19450,7 @@ plan
     const open = tasks.filter((t: any) => t.status === "open" || t.status === "backlog");
     const dropped = tasks.filter((t: any) => t.status === "dropped");
 
-    const { ready, blocked } = planReadiness<any>(tasks);
+    const { ready, blocked, parked } = planReadiness<any>(tasks, plan.graph_outside);
 
     const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
     const needsContext = tasks.filter((t: any) => t.execution_status === "needs_context");
@@ -19510,7 +19466,9 @@ plan
 
     console.log(`\n  ${c.bold}${inlineForeignText(plan.title)}${c.reset} ${c.dim}(${plan.short_id})${c.reset}`);
     console.log(`  ${bar} ${pct}%\n`);
-    console.log(`  ${c.green}${done.length}${c.reset} done  ${c.yellow}${inProgress.length}${c.reset} in-progress  ${c.blue}${ready.length}${c.reset} ready  ${c.dim}${blocked.length}${c.reset} blocked  ${c.dim}${dropped.length}${c.reset} dropped`);
+    console.log(`  ${c.green}${done.length}${c.reset} done  ${c.yellow}${inProgress.length}${c.reset} in-progress  ${c.blue}${ready.length}${c.reset} ready  ${c.dim}${blocked.length}${c.reset} blocked  ${c.dim}${parked.length}${c.reset} backlog  ${c.dim}${dropped.length}${c.reset} dropped`);
+    const parkedLine = parkedNote(parked);
+    if (parkedLine) console.log(fmt.muted(`  ${parkedLine}`));
 
     if (withConcerns.length || needsContext.length || execBlocked.length) {
       console.log(`\n  ${c.yellow}${withConcerns.length}${c.reset} with concerns  ${c.red}${execBlocked.length}${c.reset} exec-blocked  ${c.magenta || c.dim}${needsContext.length}${c.reset} needs context`);
@@ -19625,7 +19583,7 @@ plan
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
     const tasks = plan.tasks || [];
-    const { open, ready, blocked } = planReadiness<any>(tasks);
+    const { open, ready, blocked, parked, statusOf } = planReadiness<any>(tasks, plan.graph_outside);
     const inProgress = tasks.filter((t: any) => t.status === "in_progress");
 
     console.log(`\n  ${c.bold}${plan.title}${c.reset} ${c.dim}(${planId})${c.reset}\n`);
@@ -19648,11 +19606,13 @@ plan
     if (blocked.length > 0) {
       console.log(`\n  ${c.dim}Blocked${c.reset} (${blocked.length}):`);
       for (const t of blocked.slice(0, 10)) {
-        const deps = (t.blocked_by || []).join(", ");
+        const deps = blockersOf(t, statusOf).filter(isBlocking).map((b) => blockerLabel(b)).join(", ");
         console.log(`  ${c.dim}x${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(waiting: ${deps})${c.reset}`);
       }
       if (blocked.length > 10) console.log(fmt.muted(`  ... and ${blocked.length - 10} more`));
     }
+    const parkedLine = parkedNote(parked);
+    if (parkedLine) console.log(fmt.muted(`\n  ${parkedLine}`));
     console.log();
   });
 
@@ -20014,8 +19974,9 @@ plan
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: CHEAP_MODEL,
           max_tokens: 1000,
+          thinking: { type: "disabled" },
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -20841,6 +20802,7 @@ workflow
         if (createResult?.run_id) {
           runOpts.runId = createResult.run_id;
           runOpts.runSession = createResult.primary_conversation_id;
+          runOpts.spawnerSession ??= createResult.spawner_conversation_id || undefined;
         }
       } catch (err: any) {
         if (runRegistrationIsFatal({ detach: options.detach, taskId: runOpts.taskId, planId: runOpts.planId })) {
