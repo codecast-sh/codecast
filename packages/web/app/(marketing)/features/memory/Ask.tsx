@@ -78,7 +78,7 @@ export function AskLayer() {
         <Bullet>msg 139: the load test shows a deploy keeps the queue down for longer than three attempts cover.</Bullet>
         <Bullet>msg 141: MAX_ATTEMPTS becomes 5. The cap of 3 is history.</Bullet>{"\n"}
         {t.y("read:")} {t.v("cast read jx7k2qa 88")}  {t.v("cast read jx7k2qa 139:141")}{"\n"}
-        {t.dim("claude-haiku-4-5 · read 214 lines, 35 matched, showed 214 · 41.2k in / 298 out, $0.043 · 8.9s")}
+        {t.dim("claude-haiku-5-5 · read 214 lines, 35 matched, showed 214 · 41.2k in / 298 out, $0.004 · 8.9s")}
       </Pane>
       <div className="grid sm:grid-cols-2 gap-3 mt-5">
         <Note label="huge sessions">

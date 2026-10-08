@@ -1,4 +1,5 @@
 import { refuseSeatKill } from "./lib/seatKill";
+import { isClaudeSubagentSessionId } from "./lib/claudeSubagentSession";
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
@@ -1400,7 +1401,8 @@ export const createConversation = mutation({
       parent_conversation_id: parentConversationId,
       ...(args.fork && forkOrigin ? daemonForkFields(forkOrigin, args.fork, now) : {}),
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
-        (!!parentConversationId && !args.parent_message_uuid) || undefined,
+        (!!parentConversationId && !args.parent_message_uuid) ||
+        (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)) || undefined,
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
