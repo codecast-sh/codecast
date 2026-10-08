@@ -37,6 +37,8 @@ export const socialTypes = new Set([
   "comment_reply",
   "conversation_comment",
   "team_invite",
+  // Someone answered a decision asked of you, for you.
+  "decision_answered_for_you",
   "team_join_request",
   "team_join_approved",
   "artifact_commented",
@@ -91,11 +93,12 @@ export const typeLabels: Record<string, string> = {
   chat_post: "posted in a channel you follow",
   daemon_overloaded: "daemon under load",
   sessions_need_input: "waiting for you",
-  goal_stall: "goal stalled",
+  goal_stall: "focus stalled",
   device_shared: "shared a machine",
   card_waiting: "card waiting on you",
   change_shipped: "change shipped",
   cause_reopened: "cause reopened",
+  decision_answered_for_you: "answered for you",
   team_join_request: "asked to join your team",
   team_join_approved: "let you into a team",
 };
@@ -132,6 +135,7 @@ export const typeColors: Record<string, string> = {
   card_waiting: "text-sol-orange",
   change_shipped: "text-sol-green",
   cause_reopened: "text-red-400",
+  decision_answered_for_you: "text-sol-yellow",
   team_join_request: "text-sol-violet",
   team_join_approved: "text-sol-violet",
 };
