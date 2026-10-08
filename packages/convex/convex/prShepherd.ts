@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, internalAction, mutation } from "./functions";
+import { internalMutation, internalQuery, internalAction, mutation, type MutationCtx } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
@@ -10,6 +10,7 @@ import { recordExternalEvent } from "./externalEvents";
 import { foldChecksState, foldShepherdState, prUrl, shortSha } from "./lib/gitRefs";
 import { checkLabel, inlineForeignText } from "@codecast/shared/contracts";
 import { syncPullRequestSessions } from "./lib/prSessions";
+import { settlePrWaits } from "./taskWaits";
 
 const SHEPHERD_MAX_RUNTIME_MS = 30 * 60 * 1000;
 const WAKE_RETRY_MS = 20 * 1000;
@@ -46,6 +47,8 @@ export async function firePrTrigger(
     pr_number: pr.number,
     team_id: pr.team_id,
   });
+  // Tasks waiting on this PR (task-graph.md TG2). Every caller is a mutation.
+  await settlePrWaits(ctx as MutationCtx, eventType, pr);
 }
 
 /**

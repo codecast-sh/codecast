@@ -41,9 +41,12 @@ export type EdgePath = { id: string; d: string; kind: MapEdge["kind"]; labelAt: 
 export type PhaseSpan = { key: string; label: string; x: number; w: number };
 export type MapLayout = { width: number; height: number; boxes: Map<string, NodeBox>; paths: Map<string, EdgePath>; phases: PhaseSpan[] };
 
+/** A line cause's own stations (line-map.md LX6) stand in for main ones, so they draw as wide. */
+const STANDS_IN = new Set(["prove_line", "implement_line"]);
+
 /** Narrow nodes: a branch, and the card's routine assembly steps. */
 export const isSmallNode = (n: Pick<MapNode, "id" | "kind" | "main">) =>
-  n.kind === "end" ? !n.main : n.kind === "station" && (!n.main || !isMainStation(n.id));
+  n.kind === "end" ? !n.main : n.kind === "station" && !STANDS_IN.has(n.id) && (!n.main || !isMainStation(n.id));
 
 const PHASE_LABEL: Record<string, string> = {
   sense: "Sense", admit: "Admit", understand: "Understand", prove: "Prove", build: "Build", check: "Check", decide: "Decide", ship: "Ship", end: "Ends",

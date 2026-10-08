@@ -19,10 +19,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
+import { Serif, pageCountLook, pageTitleFace } from "@/constants/fonts";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
 import { createTaskAndAdopt } from "@codecast/web/lib/taskActions";
-import { buildTaskTree, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
-import { isOnHumanShelf } from "@codecast/shared/docs";
+import { buildTaskTree, isAssistantTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
+import { isOnHumanShelf, isOnNotesShelf } from "@codecast/shared/docs";
+import { isAssistantDoc } from "@codecast/web/lib/assistantScope";
 import { filterToWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { useActiveTeam, useSwitchActiveTeam } from "@/hooks/useWorkspaceArgs";
@@ -33,8 +36,9 @@ import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskAc
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
 import { showActionSheet } from "@/lib/actionSheet";
-import { useModeWords, useSurfaceMode } from "@codecast/web/lib/surfaces";
+import { modePageLabel, useAssistantConversationIds, useAssistantScope, useHostedMode, useModeWords, useSurfaceMode } from "@codecast/web/lib/surfaces";
 import { RoutineList } from "@/components/hosted/Routines";
+import { sentenceCase } from "@codecast/web/lib/sessionCard";
 
 const ICON_EMOJI: Record<string, string> = {
   rocket: "🚀", flame: "🔥", zap: "⚡", star: "⭐", diamond: "💎", crown: "👑",
@@ -48,6 +52,8 @@ type Segment = "tasks" | "plans" | "docs" | "routines";
  *  hosted mode has no Plans, as the web has no /plans there. */
 const SEGMENT_PAGES: Record<Segment, string> = { tasks: "/tasks", plans: "/plans", docs: "/docs", routines: "/triggers" };
 const SEGMENTS = Object.keys(SEGMENT_PAGES) as Segment[];
+/** What an empty hosted To-dos list offers: both ways a to-do arrives. */
+const HOSTED_TODOS_HINT = "Ask the assistant to add one, or tap +.";
 type SourceFilter = "" | "human" | "bot";
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type GroupBy = "status" | "assignee" | "priority" | "plan";
@@ -88,6 +94,11 @@ function CreateTaskModal({
   onCreate: (title: string, priority: string, description?: string) => void;
 }) {
   const Theme = useTheme();
+  // Hosted mode's new to-do is the web's quick add made a sheet: what to do
+  // and any notes, under the compose sheet's own header (the reading face,
+  // a thin close). Priority stays a later change from the row.
+  const hosted = useHostedMode();
+  const words = useModeWords();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("medium");
@@ -112,38 +123,40 @@ function CreateTaskModal({
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <RNView style={modalStyles.header}>
-          <RNText style={modalStyles.title}>New Task</RNText>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <FontAwesome name="times" size={20} color={Theme.textMuted} />
+          <RNText style={[modalStyles.title, hosted && modalStyles.hostedTitle]}>{hosted ? words.newTask : "New Task"}</RNText>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityLabel="Close">
+            {hosted
+              ? <Ionicons name="close" size={24} color={Theme.textMuted} />
+              : <FontAwesome name="times" size={20} color={Theme.textMuted} />}
           </TouchableOpacity>
         </RNView>
 
         <ScrollView style={modalStyles.body} keyboardShouldPersistTaps="handled">
-          <RNText style={modalStyles.label}>Title</RNText>
+          {hosted ? null : <RNText style={modalStyles.label}>Title</RNText>}
           <TextInput
             style={modalStyles.input}
             value={title}
             onChangeText={setTitle}
-            placeholder="What needs to be done?"
+            placeholder={hosted ? "What needs doing?" : "What needs to be done?"}
             placeholderTextColor={Theme.textMuted0}
             autoFocus
             autoCorrect={false}
             returnKeyType="next"
           />
 
-          <RNText style={modalStyles.label}>Description</RNText>
+          <RNText style={[modalStyles.label, hosted && { marginTop: 14 }]}>{hosted ? "Notes" : "Description"}</RNText>
           <TextInput
             style={[modalStyles.input, { minHeight: 80, textAlignVertical: "top" }]}
             value={description}
             onChangeText={setDescription}
-            placeholder="Add details..."
+            placeholder={hosted ? "Anything to remember (optional)" : "Add details..."}
             placeholderTextColor={Theme.textMuted0}
             multiline
             autoCorrect={false}
           />
 
-          <RNText style={modalStyles.label}>Priority</RNText>
-          <RNView style={modalStyles.priorityRow}>
+          {hosted ? null : <RNText style={modalStyles.label}>Priority</RNText>}
+          {hosted ? null : <RNView style={modalStyles.priorityRow}>
             {priorities.map((p) => (
               <TouchableOpacity
                 key={p.key}
@@ -164,20 +177,23 @@ function CreateTaskModal({
                 </RNText>
               </TouchableOpacity>
             ))}
-          </RNView>
+          </RNView>}
         </ScrollView>
 
         <RNView style={modalStyles.footer}>
-          <TouchableOpacity style={modalStyles.cancelBtn} onPress={onClose} activeOpacity={0.7}>
-            <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
-          </TouchableOpacity>
+          {/* The header's close already cancels in hosted mode. */}
+          {hosted ? null : (
+            <TouchableOpacity style={modalStyles.cancelBtn} onPress={onClose} activeOpacity={0.7}>
+              <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={[modalStyles.submitBtn, !title.trim() && { opacity: 0.4 }]}
             onPress={handleSubmit}
             disabled={!title.trim()}
             activeOpacity={0.7}
           >
-            <RNText style={modalStyles.submitBtnText}>Create</RNText>
+            <RNText style={modalStyles.submitBtnText}>{hosted ? "Add" : "Create"}</RNText>
           </TouchableOpacity>
         </RNView>
       </KeyboardAvoidingView>
@@ -220,7 +236,11 @@ export default function TasksScreen() {
   const router = useRouter();
   // Routines are the triggers, named by mode (lib/surfaces MODE_WORDS).
   const words = useModeWords();
-  const segmentLabel = (s: Segment) => (s === "tasks" ? "Tasks" : s === "plans" ? "Plans" : s === "docs" ? "Docs" : words.triggers);
+  // Each segment is named as the web names its page in this mode
+  // (modePageLabel): To-dos and Notes in hosted mode.
+  const hosted = useHostedMode();
+  const segmentLabel = (s: Segment) =>
+    s === "routines" ? words.triggers : modePageLabel(SEGMENT_PAGES[s], hosted) ?? (s === "tasks" ? "Tasks" : s === "plans" ? "Plans" : "Docs");
 
   const { teamId, activeTeam, validTeams } = useActiveTeam();
   const switchTeam = useSwitchActiveTeam();
@@ -257,12 +277,21 @@ export default function TasksScreen() {
   // held task groups and filters as "Unassigned". The roles are fed app-wide
   // (useSyncWorkspaceData), so they are in the store before this tab opens.
   const { roles: orgRoles } = useOrgRoles();
-  const tasksList = useMemo(() => filterToWorkspace(Object.values(tasks), teamId).map((t) => {
-    const info = resolveAssigneeInfo(t.assignee, t.assignee_info, null, null, orgRoles);
-    return sameAssigneeInfo(info, t.assignee_info) ? t : ({ ...t, assignee_info: info } as TaskItem);
-  }), [tasks, teamId, orgRoles]);
+  // The Assistant scope (lib/assistantScope), as the web's To-dos and Notes
+  // read it: the person's own errands and notes, and what the assistant made
+  // for them, not what coding work filed. Hosted Notes are the notes shelf.
+  const { only: assistantOnly } = useAssistantScope();
+  const assistantConversations = useAssistantConversationIds();
+  const tasksList = useMemo(() => filterToWorkspace(Object.values(tasks), teamId)
+    .filter((t) => !assistantOnly || isAssistantTask(t as any))
+    .map((t) => {
+      const info = resolveAssigneeInfo(t.assignee, t.assignee_info, null, null, orgRoles);
+      return sameAssigneeInfo(info, t.assignee_info) ? t : ({ ...t, assignee_info: info } as TaskItem);
+    }), [tasks, teamId, orgRoles, assistantOnly]);
   const plansList = useMemo(() => filterToWorkspace(Object.values(plans), teamId), [plans, teamId]);
-  const docsList = useMemo(() => filterToWorkspace(Object.values(docs), teamId), [docs, teamId]);
+  const docsList = useMemo(() => filterToWorkspace(Object.values(docs), teamId)
+    .filter((d) => !assistantOnly || (isOnNotesShelf(d as any) && isAssistantDoc(d as any, assistantConversations))),
+  [docs, teamId, assistantOnly, assistantConversations]);
 
   // "human" = the human's board (isOnHumanBoard, shared with web): human or
   // meeting origin, promoted (cast task create --human, triage accept), or
@@ -524,12 +553,21 @@ export default function TasksScreen() {
       }
       return (
         <RNView key={groupKey}>
+          {hosted ? (
+            // Hosted headings are the inbox's: sentence case in quiet ink
+            // with the count beside them, no status icon or colour.
+            <RNView style={styles.hostedSectionHeader}>
+              <RNText style={styles.hostedSectionTitle}>{sentenceCase(label.toLowerCase())}</RNText>
+              <RNText style={styles.hostedSectionCount}>{items.length}</RNText>
+            </RNView>
+          ) : (
           <RNView style={styles.sectionHeader}>
             <FontAwesome name={icon} size={11} color={color} />
             <RNText style={[styles.sectionTitle, { color }]}>
               {label} ({items.length})
             </RNText>
           </RNView>
+          )}
           {items.map((t) => {
             const nest = viewNesting.get(t._id);
             const total = familyIndex.descendants.get(t._id) ?? 0;
@@ -554,7 +592,7 @@ export default function TasksScreen() {
         </RNView>
       );
     },
-    [groupedTasks, groupBy, router, updateTask, viewNesting, familyIndex, tasks],
+    [groupedTasks, groupBy, router, updateTask, viewNesting, familyIndex, tasks, hosted],
   );
 
   const taskGroupOrder = useMemo(() => {
@@ -600,12 +638,15 @@ export default function TasksScreen() {
       const cfg = DOC_TYPE_CONFIG[docType] ?? DOC_TYPE_CONFIG.note;
       return (
         <RNView key={docType}>
+          {/* Every hosted note is a note: no type heading over the list. */}
+          {!hosted && (
           <RNView style={styles.sectionHeader}>
             <FontAwesome name={cfg.icon} size={11} color={cfg.color} />
             <RNText style={[styles.sectionTitle, { color: cfg.color }]}>
               {cfg.label} ({items.length})
             </RNText>
           </RNView>
+          )}
           {items.map((d) => (
             <DocItemRow
               key={d._id}
@@ -616,7 +657,7 @@ export default function TasksScreen() {
         </RNView>
       );
     },
-    [groupedDocs, router],
+    [groupedDocs, router, hosted],
   );
 
   return (
@@ -642,12 +683,14 @@ export default function TasksScreen() {
               onPress={() => setSearchOpen(true)}
               activeOpacity={0.7}
               hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-              accessibilityLabel={segment === "tasks" ? "Search tasks" : "Search docs"}
+              accessibilityLabel={`Search ${segmentLabel(segment).toLowerCase()}`}
             >
               <FontAwesome name="search" size={15} color={Theme.textMuted} />
             </TouchableOpacity>
           )}
-          {segment !== "routines" && (
+          {/* Hosted lists show their filter from six items, or while one is
+              in use, as the web's hosted list header does. */}
+          {segment !== "routines" && (!hosted || activeFilters.length > 0 || (segment === "tasks" ? tasksList.length : segment === "docs" ? docsList.length : 6) >= 6) && (
           <TouchableOpacity
             style={[styles.filterBtn, activeFilters.length > 0 && styles.filterBtnActive]}
             onPress={openFilterMenu}
@@ -660,6 +703,9 @@ export default function TasksScreen() {
             )}
           </TouchableOpacity>
           )}
+          {/* A hosted person with no team has one workspace, so there is
+              nothing to switch (the web's switcher renders nothing too). */}
+          {!(hosted && validTeams.length === 0) && (
           <TouchableOpacity style={styles.workspaceBtn} onPress={showWorkspacePicker} activeOpacity={0.7}>
             {teamId && activeTeam ? (
               <>
@@ -676,6 +722,7 @@ export default function TasksScreen() {
             )}
             <FontAwesome name="chevron-down" size={8} color={Theme.textMuted0} />
           </TouchableOpacity>
+          )}
         </RNView>
       </RNView>
 
@@ -751,13 +798,21 @@ export default function TasksScreen() {
             ) : filteredTasks.length === 0 ? (
               <RNView style={styles.emptyState}>
                 <FontAwesome name="check-square-o" size={32} color={Theme.textMuted0} />
-                <RNText style={styles.emptyText}>No tasks</RNText>
+                <RNText style={styles.emptyText}>{hosted ? `No ${words.tasksPage.toLowerCase()}` : "No tasks"}</RNText>
                 <RNText style={styles.emptySubtext}>
-                  {searchQuery || sourceFilter ? "Try a different filter" : "Create a task to get started"}
+                  {searchQuery || sourceFilter ? "Try a different filter" : hosted ? HOSTED_TODOS_HINT : "Create a task to get started"}
                 </RNText>
               </RNView>
             ) : (
               <>
+                {/* Only finished to-dos: hosted mode says the list is clear
+                    above the fold that holds them, rather than a bare toggle. */}
+                {hosted && activeTaskCount === 0 && !searchQuery ? (
+                  <RNView style={styles.emptyState}>
+                    <RNText style={styles.emptyText}>{words.noActive}</RNText>
+                    <RNText style={styles.emptySubtext}>{HOSTED_TODOS_HINT}</RNText>
+                  </RNView>
+                ) : null}
                 {taskGroupOrder.map((key) => renderTaskGroup(key))}
 
                 {groupBy === "status" && TERMINAL_STATUSES.some((s) => groupedTasks[s]?.length) && (
@@ -813,9 +868,9 @@ export default function TasksScreen() {
             ) : filteredDocs.length === 0 ? (
               <RNView style={styles.emptyState}>
                 <FontAwesome name="file-text-o" size={32} color={Theme.textMuted0} />
-                <RNText style={styles.emptyText}>No docs</RNText>
+                <RNText style={styles.emptyText}>{hosted ? `No ${words.docsPage.toLowerCase()} yet` : "No docs"}</RNText>
                 <RNText style={styles.emptySubtext}>
-                  {searchQuery || sourceFilter ? "Try a different filter" : "Documents created by you or your agents"}
+                  {searchQuery || sourceFilter ? "Try a different filter" : hosted ? "Notes you or the assistant write land here." : "Documents created by you or your agents"}
                 </RNText>
               </RNView>
             ) : (
@@ -834,12 +889,16 @@ export default function TasksScreen() {
             onCreate={handleCreateTask}
           />
           <RNView style={styles.fabContainer} pointerEvents="box-none">
+            {/* Hosted mode's + is the inbox's ink disc, so adding reads the
+                same on every tab; developer mode keeps the quiet one. */}
             <TouchableOpacity
-              style={styles.fab}
+              style={[styles.fab, hosted && styles.fabHosted]}
               onPress={() => setShowCreate(true)}
               activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={hosted ? words.newTask : "New task"}
             >
-              <FontAwesome name="plus" size={16} color={Theme.textMuted} />
+              <FontAwesome name="plus" size={hosted ? 18 : 16} color={hosted ? Theme.bg : Theme.textMuted} />
             </TouchableOpacity>
           </RNView>
         </>
@@ -848,7 +907,7 @@ export default function TasksScreen() {
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   header: {
     flexDirection: "row",
@@ -866,12 +925,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     gap: 8,
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: "700",
+    ...pageTitleFace(look),
     color: Theme.text,
   },
   countBadge: {
-    backgroundColor: Theme.accent,
+    ...pageCountLook(look, Theme.accent, Theme.textMuted, Theme.bg).badge,
     borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -880,13 +938,15 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   countBadgeText: {
     fontSize: 12,
-    fontWeight: "700",
-    color: Theme.bg,
+    ...pageCountLook(look, Theme.accent, Theme.textMuted, Theme.bg).text,
   },
+  // The controls' height, held when a segment has none (Routines), so the
+  // title and segments sit at the same place on every segment.
   headerRight: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    minHeight: 30,
   },
   headerIconBtn: {
     width: 32,
@@ -1020,8 +1080,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.text,
     paddingVertical: 0,
   },
+  // Room under the last row for the floating + (48pt, 24pt up), so the
+  // last row's time can scroll clear of it.
   listContent: {
-    paddingBottom: Spacing.xl,
+    paddingBottom: 88,
   },
   routines: {
     paddingHorizontal: Spacing.lg,
@@ -1040,6 +1102,24 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 0.5,
+  },
+  hostedSectionHeader: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 6,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: 18,
+    paddingBottom: 6,
+  },
+  hostedSectionTitle: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: Theme.textMuted,
+  },
+  hostedSectionCount: {
+    fontSize: 12,
+    color: Theme.textMuted0,
+    fontVariant: ["tabular-nums"],
   },
   emptyState: {
     alignItems: "center",
@@ -1077,6 +1157,15 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     zIndex: 100,
     elevation: 100,
   },
+  fabHosted: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 0,
+    backgroundColor: Theme.text,
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+  },
   fab: {
     width: 40,
     height: 40,
@@ -1107,6 +1196,7 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     borderBottomColor: Theme.borderLight,
   },
   title: { fontSize: 18, fontWeight: "600", color: Theme.text },
+  hostedTitle: { fontFamily: Serif.regular, fontSize: 22, fontWeight: "500" },
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   label: {
     fontSize: 13,
