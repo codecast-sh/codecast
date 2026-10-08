@@ -1520,6 +1520,10 @@ const RESERVED_USERNAMES = new Set([
   // lib/laneRedirect.ts PAGE_ALIASES), renamed pages' old roots (web
   // lib/renamedPages.ts), and the pages they name.
   "approvals", "plan", "mail", "integrations", "initiatives", "questions", "triggers", "assistant",
+  // The Org screen and the company document's old address, which redirects to it.
+  "org", "company",
+  // The non-developer funnel's address (/everyone, the landing's For everyone).
+  "everyone",
   // Product nouns / safety
   "u", "api", "teams", "codecast", "help", "status", "me", "you", "new", "null", "undefined",
 ]);
