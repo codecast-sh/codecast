@@ -53,6 +53,23 @@ describe("editExpectations", () => {
   });
 });
 
+describe("editExpectations: changing a line", () => {
+  it("the project's person's change paints the next version at once; settling a question clears it", () => {
+    useInboxStore.setState({ projectExpectations: { [PID]: row({ you_answer: true, doc: { ...row().doc, items: [{ ...row().doc.items[0], note: "Every caller?" }] } }) } } as any);
+    s().editExpectations(PID, { op: "edit", id: "ex-callers-call-1", note: "", why: "Every caller, ruled on the call" });
+    expect(doc().version).toBe(2);
+    expect(doc().items[0].note).toBeUndefined();
+    expect(doc().items[0].citations.at(-1)).toMatchObject({ kind: "person", ref: ME, quote: "Every caller, ruled on the call" });
+    expect(calls[0]).toEqual(["editExpectations", [PID, { op: "edit", id: "ex-callers-call-1", note: "", why: "Every caller, ruled on the call" }]]);
+  });
+
+  it("a teammate's change paints as an open proposal summarized in their words", () => {
+    s().editExpectations(PID, { op: "edit", id: "ex-callers-call-1", text: "A card's facts are true for brokers." });
+    expect(doc().version).toBe(1);
+    expect(s().projectExpectations[PID].proposals[0]).toMatchObject({ status: "open", summary: "You changed ex-callers-call-1: A card's facts are true for brokers.", ops: [{ op: "edit", text: "A card's facts are true for brokers." }] });
+  });
+});
+
 describe("resolveExpectationProposal", () => {
   const open = { short_id: "xp-2", status: "open", summary: "Retire", changes: 1, base_version: 1, created_at: 1, card_id: CARD, ops: [{ op: "retire", id: "ex-callers-call-1", reason: "ruled out", citations: [QUOTE] }] };
 

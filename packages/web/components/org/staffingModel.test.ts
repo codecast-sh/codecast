@@ -9,6 +9,12 @@ import {
   areaRows,
   cadenceLabel,
   needsYou,
+  needsYouLine,
+  needsYouTreeSig,
+  decisionSubject,
+  orgAsks,
+  workspaceOpenProposals,
+  inWorkspace,
   rolesInTreeOrder,
   findHeadOfPeople,
   groupChanges,
@@ -179,6 +185,55 @@ describe("health summary", () => {
     const pin = needsYou(tree, H, [], [P], P);
     expect(pin).toEqual([expect.objectContaining({ kind: "blocked", conversationId: "fixture-head-conv", line: "Which market goes first?" })]);
     expect(needsYou(ORG_FIXTURE, H, [], [], null)).toEqual([]);
+  });
+
+  test("the strip's line (D7): the total, then proposals, decisions and the stuck roles by name", () => {
+    const role = (name: string) => ({ name }) as any;
+    const d = { kind: "decision" as const, role: role("Head of People") };
+    const b = (n: string) => ({ kind: "blocked" as const, role: role(n) });
+    expect(needsYouLine(2, [d, b("Calling lead")])).toEqual({ total: 4, lead: "4 wait on you", parts: ["2 proposals", "1 decision", "Calling lead is stuck"] });
+    expect(needsYouLine(1, [])).toEqual({ total: 1, lead: "1 waits on you", parts: ["1 proposal"] });
+    expect(needsYouLine(0, [d, d, b("A"), b("B")]).parts).toEqual(["2 decisions", "A and B are stuck"]);
+    expect(needsYouLine(0, [b("A"), b("B"), b("C")]).parts).toEqual(["3 roles are stuck"]);
+    expect(needsYouLine(0, []).total).toBe(0);
+  });
+
+  test("the asks are needsYou without proposals, and the tree signature moves only with what they read", () => {
+    const queue: any[] = [{ key: "decide:2", source: "decide", conversationId: "fixture-growth-conv", question: "Keep the ads?", options: [{ label: "Yes" }], blocking: true, createdAt: 5, decisionId: "sd2" }];
+    expect(orgAsks(tree, H, queue)).toEqual(needsYou(tree, H, queue, [], null));
+    const sig = needsYouTreeSig(tree);
+    expect(needsYouTreeSig({ ...tree, generated_at: tree.generated_at + 1, people: [] })).toBe(sig);
+    expect(needsYouTreeSig({ ...tree, roles: tree.roles.map((r) => r.handle === "growth" ? { ...r, standing: { ...r.standing, state_status: "blocked" } } : r) })).not.toBe(sig);
+  });
+
+  test("a decision opens the goal or project it cites when the workspace holds it, else the role that asked", () => {
+    const growth = { short_id: "or-3" };
+    const holds = (ref: string) => ref === "in-2" || ref === "pj-k3x";
+    expect(decisionSubject({ question: "Move pj-k3x under in-2?" }, growth, holds)).toEqual({ kind: "project", ref: "pj-k3x" });
+    expect(decisionSubject({ question: "Which list?", contextMd: "For In-2 only." }, growth, holds)).toEqual({ kind: "initiative", ref: "in-2" });
+    expect(decisionSubject({ question: "Close in-9 and in-app checkout?" }, growth, holds)).toEqual({ kind: "role", ref: "or-3" });
+    expect(decisionSubject({ question: "Anything" }, null, holds)).toBeNull();
+  });
+
+  test("open proposals of one workspace, newest first, by the rule the strip and the sidebar share", () => {
+    const rows = [
+      { _id: "a", status: "open" as const, created_at: 1, team_id: "t1" },
+      { _id: "b", status: "open" as const, created_at: 3, team_id: "t1" },
+      { _id: "c", status: "resolved" as const, created_at: 2, team_id: "t1" },
+      { _id: "d", status: "open" as const, created_at: 4 },
+      { _id: "e", status: "open" as const, created_at: 5, team_id: "t2" },
+    ];
+    expect(workspaceOpenProposals(rows, { kind: "team", id: "t1" }).map((p) => p._id)).toEqual(["b", "a"]);
+    expect(workspaceOpenProposals(rows, { kind: "user", id: "u1" }).map((p) => p._id)).toEqual(["d"]);
+    expect(workspaceOpenProposals(rows, null).map((p) => p._id)).toEqual(["e", "d", "b", "a"]);
+  });
+
+  test("one workspace rule: a team's rows, the personal rows, or every row before a workspace is known", () => {
+    expect(inWorkspace({ team_id: "t1" }, { kind: "team", id: "t1" })).toBe(true);
+    expect(inWorkspace({ team_id: "t2" }, { kind: "team", id: "t1" })).toBe(false);
+    expect(inWorkspace({}, { kind: "user", id: "u1" })).toBe(true);
+    expect(inWorkspace({ team_id: "t1" }, { kind: "user", id: "u1" })).toBe(false);
+    expect(inWorkspace({ team_id: "t1" }, null)).toBe(true);
   });
 
   test("a cadence reads as words", () => {

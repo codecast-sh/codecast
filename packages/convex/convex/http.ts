@@ -17,7 +17,7 @@ import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
-import { REPLAY_CHUNK_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
+import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./replays";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
 import { handleFaceRequest } from "./callFace";
@@ -1605,6 +1605,7 @@ cliRoute("/cli/decide/answer", (ctx, body) =>
     // A person at a plain shell has no session (decisions-as-documents.md
     // D2): the CLI sends null, and the validator takes undefined only.
     session_id: body.session_id ?? undefined,
+    for_human: body.for_human ?? undefined,
     answer_index: body.answer_index,
     answer_json: body.answer_json,
     answer_text: body.answer_text,
@@ -4345,6 +4346,9 @@ cliRoute("/cli/signal/ls", async (ctx, body) => {
 cliRoute("/cli/signal/show", async (ctx, body) => {
   return await ctx.runQuery(api.signals.showForCli, body);
 });
+cliRoute("/cli/signal/move", async (ctx, body) => {
+  return await ctx.runMutation(api.signals.moveForCli, body);
+});
 // A repo's resolved line profile onto its projects (line-profile.md LP3).
 // device_id is the publisher's machine, where an edit of the file is routed.
 cliRoute("/cli/line/profile/publish", async (ctx, body) => {
@@ -5150,6 +5154,8 @@ http.route({ path: REPLAY_CHUNK_PATH, method: "OPTIONS", handler: replayChunkPre
 // The player page (replay.codecast.sh) trades its capability for the DOM capture's signed URLs.
 http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "GET", handler: replayPlayerManifest });
 http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "OPTIONS", handler: replayPlayerManifestPreflight });
+// The player worker asks before each frame request starts a browser: the capability opens and its budget has room.
+http.route({ path: REPLAY_FRAME_ADMIT_PATH, method: "POST", handler: replayFrameAdmit });
 
 // One-click unsubscribe for the notification digest (emails/digest.ts). Lives
 // under /cli/ because Caddy forwards only that prefix to HTTP actions. GET

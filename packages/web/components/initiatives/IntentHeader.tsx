@@ -1,18 +1,19 @@
 "use client";
-// The header a goal's page and a project's page both wear
-// (docs/architecture/initiatives-projects-role-page.md I5 "Where it shows"):
-// a stripe in the page's colour, the way back, a glyph, the title in the serif
-// face, the id, share, then one line of chips that says status, who drives it,
-// how it is going, when it is due and how far along it is. The two pages are
-// one product, so the grammar lives here once: the title that renames in
-// place, the chip that opens a list, the chip that sets the target day, the
-// tab strip (the scope panel's own: data-scope-tab, an h-8 row, an underline
-// under the active one) and the tab that lives in the URL.
-import { useCallback, useRef, useState, type ReactNode } from "react";
+// A project board's header (cohesive build spec §5.3, D10) and the pickers a
+// goal and a project share. The board is where a project's work happens, so
+// its header is one row: the way back to the project's sheet, its glyph, its
+// name (renamed in place), its id, the chips that say status, lead and the
+// goals it serves, and its actions at the right end; then the tab strip. The
+// pickers live here once: the chip that opens a list (a goal's owner and
+// status on its line and sheet, a project's status), the chip that sets a
+// target day, the tab strip in the scope panel's grammar, and the tab that
+// lives in the URL.
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, CalendarDays, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { PROJECT_STATUS, PROJECT_STATUS_ORDER, projectStatusOf } from "../../lib/projectStatus";
 import { FilterOptionList, type FilterOption } from "../FilterDropdown";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { INITIATIVE_ACCENT } from "../../lib/initiativeColors";
@@ -22,10 +23,7 @@ export const INTENT_HAIRLINE = "color-mix(in srgb, var(--sol-border) 22%, transp
 
 type DataAttrs = Record<`data-${string}`, string | undefined>;
 
-export function IntentHeader({ stripeColor, stripeClassName, accent = INITIATIVE_ACCENT, back, glyph, title, onRename, renameLabel, titleData, idChip, share, chips, actions, extra, tabs, phone }: {
-  /** The stripe's colour as a CSS colour, or as a background class when the colour is one (a project's swatch). */
-  stripeColor?: string;
-  stripeClassName?: string;
+export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, onRename, renameLabel, titleData, idChip, chips, actions, tabs, phone }: {
   /** The page's own accent: the rename underline. */
   accent?: string;
   back: { href: string; label: string };
@@ -36,63 +34,38 @@ export function IntentHeader({ stripeColor, stripeClassName, accent = INITIATIVE
   renameLabel?: string;
   titleData?: DataAttrs;
   idChip?: ReactNode;
-  share?: ReactNode;
-  /** Line two: status, who drives it, health, target, progress, the numbers, the next milestone. */
+  /** Status, who leads it, what it serves: the facts the row carries. */
   chips: ReactNode;
-  /** Controls at the far right of the title row (the goal page's panel toggle). */
+  /** Controls at the row's right end (About, share). */
   actions?: ReactNode;
-  /** Rows under the chip line that belong to this page alone (a project's folder, repositories and charter). */
-  extra?: ReactNode;
-  /** A tab strip as the header's last row; its underline sits on the header's own border. */
+  /** A tab strip under the row; its underline sits on the header's own border. */
   tabs?: ReactNode;
   phone?: boolean;
 }) {
-  // The title wraps, so what stands beside it sits on its first line.
-  const firstLine = cn("shrink-0 inline-flex items-center", phone ? TITLE_LINE.phone.box : TITLE_LINE.wide.box);
   return (
-    <>
-      <div
-        className={cn("shrink-0 h-[3px] w-full", stripeClassName)}
-        style={{ background: stripeColor, maskImage: "linear-gradient(90deg, #000, rgba(0,0,0,.3) 70%, transparent)", WebkitMaskImage: "linear-gradient(90deg, #000, rgba(0,0,0,.3) 70%, transparent)" }}
-        aria-hidden
-        data-intent-stripe
-      />
-      <header className={cn("shrink-0 border-b", phone ? "px-3 pt-2" : "px-5 pt-3", !tabs && (phone ? "pb-2.5" : "pb-3"))} style={{ borderColor: INTENT_HAIRLINE }} data-intent-header>
-        <div className="flex items-start gap-3">
-          <Link href={back.href} className={cn("shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70", phone ? TITLE_LINE.phone.back : TITLE_LINE.wide.back)} style={{ color: "var(--sol-text-muted)" }} aria-label={back.label}>
-            <ArrowLeft className="w-4 h-4" />
-          </Link>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-start gap-2 min-w-0">
-              <span className={firstLine}>{glyph}</span>
-              <IntentTitle title={title} onRename={onRename} label={renameLabel} accent={accent} phone={phone} data={titleData} />
-              {idChip && <span className={firstLine}>{idChip}</span>}
-              {share && <span className={firstLine}>{share}</span>}
-            </div>
-            <div className={cn("mt-2 flex items-center gap-x-4 gap-y-1.5 flex-wrap", phone ? "text-[12px]" : "text-[12.5px]")} data-intent-chips>
-              {chips}
-            </div>
-            {extra}
-            {tabs && <div className="mt-2.5 -ml-2">{tabs}</div>}
-          </div>
-          {actions}
+    <header className="shrink-0 border-b" style={{ borderColor: INTENT_HAIRLINE }} data-intent-header>
+      <div className={cn("flex items-center gap-x-2.5 gap-y-1.5 min-w-0", phone ? "flex-wrap px-3 pt-2 pb-1.5" : "px-4 py-2 min-h-[46px]")} data-intent-row>
+        <Link href={back.href} className="shrink-0 inline-flex items-center justify-center w-7 h-7 -ml-1 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label={back.label} title={back.label} data-intent-back>
+          <ArrowLeft className="w-4 h-4" />
+        </Link>
+        <span className="shrink-0 inline-flex items-center">{glyph}</span>
+        <IntentTitle title={title} onRename={onRename} label={renameLabel} accent={accent} phone={phone} data={titleData} />
+        {idChip && <span className="shrink-0 inline-flex items-center">{idChip}</span>}
+        <div className={cn("flex items-center gap-x-3 gap-y-1 min-w-0 text-[12.5px]", phone ? "order-last basis-full flex-wrap pl-[38px]" : "flex-wrap")} data-intent-chips>
+          {chips}
         </div>
-      </header>
-    </>
+        <span className="flex-1" />
+        {actions && <span className="shrink-0 inline-flex items-center gap-1.5">{actions}</span>}
+      </div>
+      {tabs && <div className={phone ? "px-2" : "px-3"}>{tabs}</div>}
+    </header>
   );
 }
 
-/** The id beside a title, in the page's accent. */
-export function IntentIdChip({ id, accent = INITIATIVE_ACCENT }: { id: string; accent?: string }) {
-  return <span className="shrink-0 whitespace-nowrap inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: accent, color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{id}</span>;
+/** The id beside a title, as the sheet shows it: quiet, in the mono face. */
+export function IntentIdChip({ id }: { id: string }) {
+  return <span className="shrink-0 whitespace-nowrap font-mono text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-intent-id>{id}</span>;
 }
-
-/** The title's type, the height of one of its lines, and the margin that
- *  centres the 28px back button on that line, by header. */
-const TITLE_LINE = {
-  wide: { text: "text-[22px] leading-[26px]", box: "h-[26px]", back: "-my-px" },
-  phone: { text: "text-[18px] leading-[22px]", box: "h-[22px]", back: "-my-[3px]" },
-} as const;
 
 function IntentTitle({ title, onRename, label = "Title", accent, phone, data }: { title: string; onRename?: (next: string) => void; label?: string; accent: string; phone?: boolean; data?: DataAttrs }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -101,7 +74,7 @@ function IntentTitle({ title, onRename, label = "Title", accent, phone, data }: 
     if (next && next !== title) onRename?.(next);
     setDraft(null);
   };
-  const line = phone ? TITLE_LINE.phone : TITLE_LINE.wide;
+  const text = phone ? "text-[16px] leading-[22px]" : "text-[17px] leading-[24px]";
   if (draft !== null) {
     return (
       <input
@@ -110,26 +83,45 @@ function IntentTitle({ title, onRename, label = "Title", accent, phone, data }: 
         onChange={(e) => setDraft(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setDraft(null); }}
-        className={cn("min-w-0 flex-1 bg-transparent outline-none font-semibold tracking-tight border-b", line.text, line.box)}
+        className={cn("min-w-[12ch] flex-1 bg-transparent outline-none font-medium border-b", text)}
         style={{ fontFamily: "var(--font-serif)", borderColor: accent }}
         aria-label={label}
       />
     );
   }
   return (
-    // The page's own title reads in full: it wraps as far as it needs. Only
-    // the phone header holds it to two lines, and there the whole title is
-    // its tooltip, which the rename hint never takes the place of.
+    // One row: the name holds one line (two on a phone) and its whole text is
+    // the tooltip, which the rename hint never takes the place of.
     <h1
-      className={cn("min-w-0 font-semibold tracking-tight [overflow-wrap:anywhere]", line.text, phone && "line-clamp-2", onRename && "cursor-text")}
+      className={cn("min-w-0 shrink font-medium tracking-[-0.01em]", text, phone ? "line-clamp-2 [overflow-wrap:anywhere]" : "truncate", onRename && "cursor-text")}
       style={{ fontFamily: "var(--font-serif)" }}
       onClick={onRename ? () => setDraft(title) : undefined}
-      title={phone ? title : onRename ? "Click to rename" : undefined}
+      title={title}
       data-intent-title
       {...data}
     >
       {title}
     </h1>
+  );
+}
+
+/** A project's status, read and set in place: the one picker its board's
+ *  header and its sheet both use. `face` draws the chip when the surface has
+ *  its own word for the state (the sheet's live sessions). */
+export function ProjectStatusPick({ status, onPick, face, ...data }: { status: string | undefined; onPick: (status: string) => void; face?: ReactNode } & DataAttrs) {
+  const options = useMemo(() => PROJECT_STATUS_ORDER.map((key) => {
+    const Icon = PROJECT_STATUS[key].icon;
+    return { key, label: PROJECT_STATUS[key].label, face: <Icon className={cn("w-3.5 h-3.5", PROJECT_STATUS[key].color)} /> };
+  }), []);
+  const current = projectStatusOf(status);
+  const Icon = current.icon;
+  return (
+    <IntentPickChip options={options} value={status ?? "active"} width="w-44" onPick={(key) => { if (key && key !== status) onPick(key); }} {...data}>
+      {face ?? <>
+        <Icon className={cn("w-3.5 h-3.5", current.color)} />
+        <span style={{ color: "var(--sol-text-secondary)" }}>{current.label}</span>
+      </>}
+    </IntentPickChip>
   );
 }
 
