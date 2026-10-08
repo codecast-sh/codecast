@@ -12,7 +12,7 @@ import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { LINE_PROFILE_DEFAULTS } from "@codecast/shared/contracts/lineProfile";
 import { ageShort, quietWatchEnd, type LineCauseTask } from "../lineFlow";
 import {
-  CAUSES_NODE, END_LABEL, EXPECTATIONS_NODE, SIGNALS_NODE, endNodeId, rawAnswer, runVisits, sourceNodeId,
+  CAUSES_NODE, END_LABEL, EXPECTATIONS_NODE, SIGNALS_NODE, endNodeId, graphRunEnd, rawAnswer, runVisits, sourceNodeId,
   type LineGraph, type MapDecision, type MapEnd, type MapRun, type MapSignal,
 } from "./lineMap";
 import { cardName, causeWhere, choiceWords, closedGate, isLiveRun, isRoutineStation, loopedStation, runOutcome, runPath, shortDay, type ReportRun, type ReportStep, type ReportTask, type RunOutcome, type StepState } from "./runReport";
@@ -72,7 +72,7 @@ export type TraceLink = {
 };
 /** What a step produced: the session that did it, a decision, where a finding
  *  was seen, the expectation it breaks, a sibling signal. `ref` is a trace ref. */
-export type TraceArtifact = { kind: "session" | "decision" | "evidence" | "expectation" | "signal"; label: string; href?: string; ref?: string };
+export type TraceArtifact = { kind: "session" | "decision" | "evidence" | "expectation" | "signal"; label: string; href?: string; ref?: string; /** Reports this row stands for, when several said the same thing. */ count?: number };
 
 export type TraceStep = {
   id: string;
@@ -165,9 +165,9 @@ const sentence = (s: string) => (s && !/[.!?:]$/.test(s) ? `${s}.` : s);
 
 /** How a signal joined its cause (signals.attach), as a sentence. */
 const ATTACH_WORDS: Record<string, string> = {
-  fingerprint: "It joined by its fingerprint",
-  judge: "The judge read it as the same problem and joined it",
-  new: "It opened this cause",
+  fingerprint: "It matched a problem already open, so it joined it",
+  judge: "A reviewer read it as the same problem and joined it",
+  new: "It was the first report of this problem",
   person: "A person filed it here",
 };
 
@@ -205,7 +205,7 @@ export function decisionAnswer(d: MapDecision): string | null {
 export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceRows, opts: TraceOpts): LineTrace {
   const { cause, via, focusId } = "cause" in resolved && "via" in resolved ? resolved : { cause: resolved, via: "cause" as const, focusId: resolved._id };
   const { now } = opts;
-  const graph = opts.graph?.nodes?.length ? opts.graph : SHIPPED_LINE;
+  const graph: LineGraph = opts.graph?.nodes?.length ? opts.graph : SHIPPED_LINE;
   const labelOf = (id: string) => graph.nodes.find((n) => n.id === id)?.label ?? SHIPPED_LINE.nodes.find((n) => n.id === id)?.label ?? id;
   const steps: TraceStep[] = [];
   const path: string[] = [];
@@ -253,7 +253,6 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       : [];
     const elsewhereRefs = elsewhere.filter((t): t is NonNullable<typeof t> => !!t);
     const sources = [...new Set(signals.map((s) => s.source))];
-    const fingerprints = cause.cause?.fingerprints ?? [];
     // A finding that also opened other causes says so, and those causes read
     // by where they live, so near-identical titles are told apart (LX4).
     const how = elsewhere.length && focus.attach === "new" ? null : ATTACH_WORDS[focus.attach ?? ""];
@@ -262,13 +261,12 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       // The headline never contradicts the detail: a finding filed to other
       // causes is "seen before", not "only this signal" (LX4).
       title: siblings.length
-        ? `${plural(signals.length, "signal")} share this cause`
-        : elsewhere.length ? `Seen before: filed to ${plural(elsewhere.length, "other cause")} too` : "Only this signal so far",
+        ? `${plural(signals.length, "report")} of this problem`
+        : elsewhere.length ? `Seen before: also filed to ${plural(elsewhere.length, "other problem")}` : "The only report so far",
       at: siblings.length ? siblings[siblings.length - 1].created_at : focus.created_at, durationMs: null, status: "done",
       detail: [
         how,
         sources.length > 1 ? `From ${sources.slice(0, -1).join(", ")} and ${sources[sources.length - 1]}` : null,
-        fingerprints.length > 1 ? `${fingerprints.length} fingerprints point here` : null,
         elsewhere.length ? `The same ${finderName(focus.source)} finding also opened:` : null,
       ].filter(Boolean).join(". "),
       // The other causes by what they are and where they live, each opening its own trace.
@@ -282,7 +280,8 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
           ...(projectName ? { project: projectName } : {}), state: taskState, earlier: (t.created_at ?? 0) < (cause.created_at ?? 0),
         };
       }),
-      artifacts: siblings.map((s) => ({ kind: "signal" as const, label: s.title, ref: s.short_id || s._id, ...(s.evidence_url ? { href: s.evidence_url } : {}) })),
+      // Reports that say the same thing are one row with a count, newest first.
+      artifacts: groupReports(siblings),
       nodeId: SIGNALS_NODE,
     });
   }
@@ -328,7 +327,11 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     const looped = loopedStation(run as ReportRun);
     const loopRows = looped ? visits.filter((v) => v.node === looped.node).length : 0;
     for (const [j, v] of visits.entries()) {
-      path.push(v.node);
+      // The path is drawn on today's map: a station the line has since lost
+      // (an old run's merge) keeps its story step but no place on the path.
+      // A foreign graph's terminal step is its end on the map, which the run's tail draws.
+      const onMap = graph.nodes.some((n) => n.id === v.node) && !graph.ends?.[v.node];
+      if (onMap) path.push(v.node);
       if (v.node === "ground") continue;
       const s = report.get(v.node);
       // The newest visit of a station is the one the run row keeps.
@@ -340,11 +343,13 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
         status: newest ? STATUS_OF[newest.state] : STATUS_OF[v.state],
         detail: newest ? [newest.result, newest.note].filter(Boolean).join(": ") : "An earlier round: the line keeps the details of a station's newest visit only",
         links: [], artifacts: newest ? sessionArtifacts(s) : [],
-        nodeId: v.node, runId: run._id, round, ...(v.inferred ? { inferred: true } : {}),
+        nodeId: onMap ? v.node : null, runId: run._id, round, ...(v.inferred ? { inferred: true } : {}),
         ...(newest && looped?.node === v.node && looped.times > loopRows ? { visits: looped.times } : {}),
       });
     }
-    const end = lineRunOutcome(run.node_statuses);
+    // A foreign graph says how a run ended by its own terminal steps (lineMap graphRunEnd).
+    const own = graph.ends ? graphRunEnd(run, graph) : null;
+    const end = graph.ends ? (own && own.kind !== "stopped" ? { kind: own.kind, at: own.at } : null) : lineRunOutcome(run.node_statuses);
     if (end?.kind === "shipped") lastShip = { run, at: end.at };
     const replaced = !isLiveRun(run) && !end ? replacedBy(run, round, runs, decisions, signals) : null;
     const runEnd: TraceRunEnd = isLiveRun(run) ? (run.status === "paused" ? "waiting" : run === latest && approved ? "approved" : "working")
@@ -406,7 +411,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       id: "ship", stage: "ship", title: runOutcome(ship.run as ReportRun, cause, now, true).text.replace(/\.$/, ""),
       at: visit?.completed_at ?? ship.at, durationMs: visit?.started_at != null && visit.completed_at != null ? visit.completed_at - visit.started_at : null,
       status: "done", detail: landed ? [landed.result, landed.note].filter(Boolean).join(": ") : "",
-      links: landed?.href ? [{ label: landed.hrefTitle ?? "Open", href: landed.href }] : [], artifacts: [], nodeId: landed?.id ?? "ship",
+      links: landed?.href ? [{ label: landed.hrefTitle ?? "Open", href: landed.href }] : [], artifacts: [], nodeId: landed && graph.nodes.some((n) => n.id === landed.id) ? landed.id : "ship",
     });
   } else {
     // Titled by what it waits on: the kicker already says Ship.
@@ -797,4 +802,18 @@ export function traceBlocks(trace: Pick<LineTrace, "steps"> & Partial<Pick<LineT
     }
   }
   return out;
+}
+
+/** A report's title without the judge's "Not met:" lead and a trailing machine number, for grouping. */
+const reportKey = (t: string) => t.replace(/^not met:\s*/i, "").replace(/\s+\d{10,13}\s*$/, "").trim().toLowerCase();
+
+/** Sibling reports as rows: reports that say the same thing fold into one
+ *  with a count (the newest's ref), busiest first, then newest. */
+export function groupReports(signals: ReadonlyArray<MapSignal>): TraceArtifact[] {
+  const groups = new Map<string, MapSignal[]>();
+  for (const s of signals) groups.set(reportKey(s.title), [...(groups.get(reportKey(s.title)) ?? []), s]);
+  return [...groups.values()]
+    .map((g) => [...g].sort((a, b) => b.created_at - a.created_at))
+    .sort((a, b) => b.length - a.length || b[0].created_at - a[0].created_at)
+    .map((g) => ({ kind: "signal" as const, label: g[0].title.replace(/^not met:\s*/i, ""), ref: g[0].short_id || g[0]._id, ...(g.length > 1 ? { count: g.length } : {}), ...(g[0].evidence_url ? { href: g[0].evidence_url } : {}) }));
 }

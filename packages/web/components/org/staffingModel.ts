@@ -32,7 +32,7 @@ export function findHeadOfPeople(tree: OrgTree | null): OrgRole | null {
 }
 
 /** Open proposals, newest first. */
-export function openProposals(rows: OrgProposalRow[]): OrgProposalRow[] {
+export function openProposals<P extends Pick<OrgProposalRow, "status" | "created_at">>(rows: readonly P[]): P[] {
   return rows.filter((p) => p.status === "open").sort((a, b) => b.created_at - a.created_at);
 }
 
@@ -460,6 +460,90 @@ export function needsYou(tree: OrgTree | null, health: OrgHealth | null, queue: 
     out.push({ kind: "proposal", key: `proposal:${p._id}`, proposal: p, remaining: proposalProgress(p).remaining });
   }
   return out;
+}
+
+/** Whether a proposal belongs to a workspace: a team's rows, or the personal
+ *  rows (no team). With no workspace known yet, every row does. The one
+ *  workspace rule for proposals, on the Org screen and in the sidebar. */
+export function inWorkspace(p: Pick<OrgProposalRow, "team_id">, ws: OrgWorkspaceRef | null | undefined): boolean {
+  return !ws || (ws.kind === "team" ? p.team_id === ws.id : !p.team_id);
+}
+
+/** The open proposals of one workspace, newest first. The strip and the
+ *  sidebar count read proposals through this one rule. */
+export function workspaceOpenProposals<P extends Pick<OrgProposalRow, "status" | "created_at" | "team_id">>(rows: readonly P[], ws: OrgWorkspaceRef | null | undefined): P[] {
+  return openProposals(rows.filter((p) => inWorkspace(p, ws)));
+}
+
+/** What a needs-you row opens (D7): a goal, a project or a role, by short id. */
+export type NeedsYouTarget = { kind: "initiative" | "project" | "role"; ref: string };
+
+const CITED_OBJECT = /\b(in-\d+|pj-[a-z0-9]+)\b/gi;
+
+/** The object a decision is about: the first goal or project its words cite
+ *  that this workspace holds, else the role whose thread asked it. */
+export function decisionSubject(item: Pick<QueueItem, "question" | "contextMd">, role: Pick<OrgRole, "short_id"> | null, holds: (ref: string) => boolean): NeedsYouTarget | null {
+  for (const m of `${item.question}\n${item.contextMd ?? ""}`.matchAll(CITED_OBJECT)) {
+    const ref = m[1].toLowerCase();
+    if (holds(ref)) return { kind: ref.startsWith("in-") ? "initiative" : "project", ref };
+  }
+  return role ? { kind: "role", ref: role.short_id } : null;
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** The strip's line (D7): "4 wait on you", then what they are, in the order
+ *  the rows list them: proposals, decisions, then the stuck roles by name
+ *  (two at most; more are counted). */
+/** The kinds of what waits on you, most pressing last: the strip draws a
+ *  stuck role red, a decision yellow and proposals violet. */
+export type NeedsYouPartKind = "proposals" | "decisions" | "stuck";
+
+/** needsYouLine's parts with the kind each one counts. */
+export function needsYouParts(proposals: number, asks: readonly { kind: NeedsYouItem["kind"]; role?: { name: string } | null }[]): { kind: NeedsYouPartKind; text: string }[] {
+  const decisions = asks.filter((a) => a.kind === "decision").length;
+  const stuck = asks.filter((a) => a.kind === "blocked").map((a) => a.role?.name ?? "A role");
+  const parts: { kind: NeedsYouPartKind; text: string | null }[] = [
+    { kind: "proposals", text: proposals > 0 ? plural(proposals, "proposal", "proposals") : null },
+    { kind: "decisions", text: decisions > 0 ? plural(decisions, "decision", "decisions") : null },
+    { kind: "stuck", text: stuck.length === 1 ? `${stuck[0]} is stuck` : stuck.length === 2 ? `${stuck[0]} and ${stuck[1]} are stuck` : stuck.length > 2 ? `${stuck.length} roles are stuck` : null },
+  ];
+  return parts.filter((p): p is { kind: NeedsYouPartKind; text: string } => !!p.text);
+}
+
+export function needsYouLine(proposals: number, asks: readonly { kind: NeedsYouItem["kind"]; role?: { name: string } | null }[]): { total: number; lead: string; parts: string[] } {
+  const total = proposals + asks.filter((a) => a.kind === "decision" || a.kind === "blocked").length;
+  const parts = needsYouParts(proposals, asks);
+  // One kind says itself without repeating the count: "3 proposals wait on
+  // you", "Growth is stuck". Only mixed kinds lead with the total.
+  if (parts.length === 1) {
+    const [only] = parts;
+    const one = only.kind === "proposals" ? proposals === 1 : only.kind === "decisions" ? total === 1 : true;
+    return { total, lead: only.kind === "stuck" ? only.text : `${only.text} ${one ? "waits" : "wait"} on you`, parts: [] };
+  }
+  return { total, lead: total === 1 ? "1 waits on you" : `${total} wait on you`, parts: parts.map((p) => p.text) };
+}
+
+/** The asks beside the proposals: decisions the org routed to a person and
+ *  roles stuck on one. needsYou without its proposal half. */
+export function orgAsks(tree: OrgTree | null, health: OrgHealth | null, queue: QueueItem[]): NeedsYouItem[] {
+  return needsYou(tree, health, queue, [], null);
+}
+
+// Wake signatures (store/wakeSig.ts): only the fields needsYou branches on,
+// so an always mounted reader (the sidebar count) does not re-render on every
+// tree push or heartbeat.
+export function needsYouTreeSig(tree: OrgTree | null): string {
+  if (!tree) return "";
+  return `${tree.workspace.id}|${tree.roles.map((r) => `${r._id}:${r.status}:${r.standing?.conversation_id ?? ""}:${r.standing?.state_status ?? ""}:${r.sessions.map((s) => s._id).join(",")}`).join(";")}`;
+}
+
+export function needsYouHealthSig(health: OrgHealth | null): string {
+  return health ? health.roles.map((r) => `${r.role_id}:${r.area?.status ?? ""}`).join(";") : "";
+}
+
+export function needsYouProposalsSig(rows: Record<string, Pick<OrgProposalListRow, "_id" | "status" | "team_id">> | undefined): string {
+  return Object.values(rows ?? {}).filter((p) => p.status === "open").map((p) => `${p._id}:${p.team_id ?? ""}`).sort().join(";");
 }
 
 /** A short label for a flag code, for badges. */

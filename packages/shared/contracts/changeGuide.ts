@@ -46,7 +46,9 @@ const RANGE_CONTEXT = 3;
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 const FENCE = /^\s*(```|~~~)/;
 // A location: a path with a dot or a slash in it, then an optional :start or :start-end (L-prefixes allowed).
-const LOCATION_BODY = String.raw`((?:[\w@.~-]+\/)*[\w@.~-]+\.[\w-]+|(?:[\w@.~-]+\/)+[\w@.~-]+)(?::L?(\d+)(?:\s*[-–]\s*L?(\d+))?)?`;
+// A segment may hold a whole `[name]`, for route files (`app/task/[id].tsx`), never a stray bracket.
+const SEG = String.raw`(?:\[[\w.-]+\]|[\w@.~-])+`;
+const LOCATION_BODY = String.raw`((?:${SEG}\/)*${SEG}\.[\w-]+|(?:${SEG}\/)+${SEG})(?::L?(\d+)(?:\s*[-–]\s*L?(\d+))?)?`;
 const LOCATION_TICKED = new RegExp("`" + LOCATION_BODY + "`");
 const LOCATION_BARE = new RegExp(String.raw`(?:^|[\s(])` + LOCATION_BODY + String.raw`(?=$|[\s),])`);
 
