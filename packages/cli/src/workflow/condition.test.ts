@@ -57,6 +57,25 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = success and not line.commands.ship", { outcome: "success", "line.commands.ship": "bun ship.ts" }, false],
     ["outcome = success and line.commands.ship", { outcome: "success", "line.commands.ship": "bun ship.ts" }, true],
     ["outcome = success and line.commands.ship", { outcome: "success", "line.commands.ship": "" }, false],
+    // A change to the line itself (category line) is scored by eval like a prompt.
+    ["outcome = success and category != prompt and category != line", { outcome: "success", category: "code" }, true],
+    ["outcome = success and category != prompt and category != line", { outcome: "success", category: "line" }, false],
+    ["outcome = success and (category = prompt or category = line)", { outcome: "success", category: "line" }, true],
+    ["outcome = success and (category = prompt or category = line)", { outcome: "success", category: "code" }, false],
+    // The eval station: exit 1 is a failed verdict, anything else could not score.
+    ["outcome = failure and eval.exit_code = 1", { outcome: "failure", "eval.exit_code": "1" }, true],
+    ["outcome = failure and eval.exit_code = 1", { outcome: "failure", "eval.exit_code": "2" }, false],
+    ["outcome = failure and eval.exit_code != 1", { outcome: "failure", "eval.exit_code": "2" }, true],
+    ["outcome = failure and eval.exit_code != 1", { outcome: "failure", "eval.exit_code": "1" }, false],
+    // The rebase station (rebase.sh): landed when nothing of the change is left on the branch.
+    ["outcome = success and rebase.json.landed != true", { outcome: "success", "rebase.json": '{"landed":false}' }, true],
+    ["outcome = success and rebase.json.landed != true", { outcome: "success", "rebase.json": '{"landed":true}' }, false],
+    ["outcome = success and rebase.json.landed = true", { outcome: "success", "rebase.json": '{"landed":true}' }, true],
+    ["outcome = success and rebase.json.landed = true", { outcome: "success", "rebase.json": '{"landed":false}' }, false],
+    ["outcome = failure and rebase.exit_code = 1", { outcome: "failure", "rebase.exit_code": "1" }, true],
+    ["outcome = failure and rebase.exit_code = 1", { outcome: "failure", "rebase.exit_code": "2" }, false],
+    ["outcome = failure and rebase.exit_code != 1", { outcome: "failure", "rebase.exit_code": "2" }, true],
+    ["outcome = failure and rebase.exit_code != 1", { outcome: "failure", "rebase.exit_code": "1" }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

@@ -1796,7 +1796,7 @@ pre[class*="language-"] {
   padding-left: 0;
 }
 
-/* The gutter handles (.cc-block-quote / .cc-block-comment) hang 1.95rem into
+/* The gutter handles (.cc-block-quote / .cc-block-comment) hang about 2rem into
    the body indent this view just flattened, so the feed scroller clipped them
    at its padding edge. MessageReview measures the real visible gutter into
    --cc-gutter-l / --cc-gutter-r (set in measure(), fresh whenever the handle
@@ -1809,14 +1809,14 @@ pre[class*="language-"] {
   height: 1.15rem;
 }
 .simple-view .cc-block-quote {
-  left: calc(-1 * min(1.45rem, var(--cc-gutter-l, 1.45rem) - 0.2rem));
+  left: calc(-1 * min(1.85rem, var(--cc-gutter-l, 1.85rem) - 0.2rem));
 }
 .simple-view .cc-block-comment {
   right: calc(-1 * min(1.45rem, var(--cc-gutter-r, 1.45rem) - 0.2rem));
 }
 .simple-view .cc-block-quote.cc-block-quote-key {
   left: auto;
-  right: calc(100% + min(1.45rem, var(--cc-gutter-l, 1.45rem) - 0.2rem) - 1.2rem);
+  right: calc(100% + min(1.85rem, var(--cc-gutter-l, 1.85rem) - 0.2rem) - 1.2rem);
   padding: 3px 0.25rem 3px 3px;
 }
 
@@ -2378,10 +2378,12 @@ pre[class*="language-"] {
    top-right. Sits at the content's right edge; slides left of the rail when the
    rail is open. One container border, plain icon buttons inside. */
 /* Single Quote handle in the LEFT gutter at the hovered block's top — kept on
-   the opposite side from the top-right meta toolbar so the two never collide. */
+   the opposite side from the top-right meta toolbar so the two never collide.
+   Its right edge sits 0.65rem left of the text: clear of the active-block
+   highlight, which bleeds 0.5rem past the text (.cc-active-overlay). */
 .cc-block-quote {
   position: absolute;
-  left: -1.95rem;
+  left: -2.2rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2413,7 +2415,7 @@ pre[class*="language-"] {
    LEFT from the same right edge, so the quote mark stays put as the key joins. */
 .cc-block-quote.cc-block-quote-key {
   left: auto;
-  right: calc(100% + 0.4rem);
+  right: calc(100% + 0.65rem);
   width: auto;
   /* Sized by its content with an even inset, so the key cap never touches the
      pill's own border at either size. */
@@ -2429,11 +2431,11 @@ pre[class*="language-"] {
   --cc-rail-gap: 2.25rem;
 }
 .cc-rail-inline .cc-block-quote {
-  left: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 1.95rem);
+  left: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 2.2rem);
 }
 .cc-rail-inline .cc-block-quote.cc-block-quote-key {
   left: auto;
-  right: calc(100% - var(--cc-rail-w) - var(--cc-rail-gap) + 0.4rem);
+  right: calc(100% - var(--cc-rail-w) - var(--cc-rail-gap) + 0.65rem);
 }
 
 /* Per-LINE variant inside a diff (DiffView). Same handle, same gutter — but one
@@ -2538,44 +2540,37 @@ pre[class*="language-"] {
   border-color: var(--sol-cyan);
   background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-bg));
 }
-/* The block's actions, opened from the right gutter handle: a column under the
-   handle, inside the gutter, so it never covers the text it acts on. */
+/* The block's actions, opened from the right gutter handle: a strip in the
+   message toolbar's look (TOOLBAR_SHELL), ending just left of the handle and
+   centred on it. */
 .cc-block-menu {
   position: absolute;
-  right: -1.95rem;
-  width: 1.55rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 2px 0;
-  border: 1px solid var(--sol-border);
-  border-radius: 7px;
-  background: var(--sol-bg);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  z-index: 7;
-  animation: ccPop 120ms ease-out;
+  right: -0.15rem;
+  margin-top: calc(-0.15rem - 1px);
+  /* Slides out of the handle: revealed from its right edge, drifting left.
+     The open inset is negative so the toolbar shadow is not clipped. */
+  clip-path: inset(-8px -8px -8px 100%);
+  opacity: 0;
+  transform: translateX(0.5rem);
+  transition: clip-path 180ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 120ms ease-out, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.cc-block-menu button {
-  display: grid;
-  place-items: center;
-  height: 1.45rem;
-  color: var(--sol-text-muted);
-  border-radius: 5px;
-  margin: 0 2px;
-  cursor: pointer;
-  transition: color 120ms, background 120ms;
+.cc-block-menu[data-open="true"] {
+  clip-path: inset(-8px);
+  opacity: 1;
+  transform: none;
 }
-.cc-block-menu button:hover {
-  color: var(--sol-cyan);
-  background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-bg));
+.cc-block-comment-chevron {
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cc-block-comment[aria-expanded="true"] .cc-block-comment-chevron {
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-block-menu, .cc-block-comment-chevron { transition: none; }
 }
 .simple-view .cc-block-menu {
-  width: 1.2rem;
-  right: calc(-1 * min(1.45rem, var(--cc-gutter-r, 1.45rem) - 0.2rem));
-}
-.simple-view .cc-block-menu button {
-  height: 1.15rem;
-  margin: 0 1px;
+  right: calc(1.45rem - min(1.45rem, var(--cc-gutter-r, 1.45rem) - 0.2rem));
+  margin-top: -0.3rem;
 }
 /* A paragraph deep link (#msg-<id>.p<n>) lands with its block lit, then fades. */
 .cc-active-overlay.cc-flash {
@@ -3713,7 +3708,8 @@ pre[class*="language-"] {
   transition: background-color 150ms;
 }
 .cc-split:hover::before,
-.cc-split[data-resize-handle-active]::before { background: var(--sol-cyan); }
+.cc-split[data-separator="hover"]::before,
+.cc-split[data-separator="active"]::before { background: var(--sol-cyan); }
 .cc-split.is-hidden { visibility: hidden; }
 
 /* Width changes (peek ⇄ full) ride the same motion as everything else. */
@@ -4168,6 +4164,12 @@ pre[class*="language-"] {
 .minimal-style [data-sidebar-scroll] {
   padding-top: 0;
   padding-bottom: 12px;
+}
+
+/* Docked beside the split, the split is the rail's one edge; the nav's own
+   rule stays for the phone's drawer, which has no split. */
+.minimal-style [data-cc-sidebar-slot] [data-sv-nav] {
+  border-right: 0;
 }
 
 .minimal-style [data-sv-nav]:hover {
@@ -7111,6 +7113,30 @@ html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-me
 html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] {
   font-size: 14px;
 }
+/* What the assistant says before it acts ("I'll make a packing list...")
+   is narration, not the answer: when the step it leads into follows it in
+   the same message, it sits in the interface face at the receipt's size and
+   ink, so the final reply alone reads in the letter face. */
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose:has(~ [data-cc-made-note], ~ [data-cc-made-line], ~ .not-prose [data-cc-tool-receipt], ~ .not-prose [data-cc-made-line]) {
+  font-family: var(--pd-font-ui);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--pd-ink-muted);
+}
+/* A reply's headings are its own emphasis, not a document's: body size in
+   the reading face's semibold, so three "## Option" lines read as the start
+   of each part of an answer rather than as poster type in a chat column. */
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose :is(h1, h2, h3, h4) {
+  font-family: var(--pd-font-read);
+  font-size: 1em;
+  line-height: 1.45;
+  font-weight: 600;
+  letter-spacing: 0;
+  margin: 1.1em 0 0.35em;
+}
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose :is(h1, h2, h3, h4):first-child {
+  margin-top: 0;
+}
 /* A proposal card reads in that same face wherever it is mounted (the thread,
    the open proposals strip, a doc), so one proposal never changes voice
    between two places on one screen. */
@@ -7153,13 +7179,20 @@ html.hosted-mode.minimal-style [data-sv-convhead] [data-cc-conv-title] {
    there is something to send. The round form is the icon send only: with a
    label ("Send and apply 3") the button is the pill its own classes draw,
    wide enough for its words. */
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
+/* One composer surface for the home and a conversation: raised paper on a
+   hairline, 20px in from the left, and the same small shadow in both, so the
+   caret never sits on the border and nothing pools under the box in dark. */
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div,
+html.hosted-mode.minimal-style [data-simple-lane] .sl-composer {
   border-color: var(--pd-rule);
   background: var(--pd-bg-raised);
-  box-shadow: var(--pd-shadow);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--pd-ink) 8%, transparent);
+  padding-left: 20px;
 }
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div:focus-within {
+html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div:focus-within,
+html.hosted-mode.minimal-style [data-simple-lane] .sl-composer:focus-within {
   border-color: var(--pd-rule-strong);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--pd-ink) 8%, transparent);
 }
 html.hosted-mode.minimal-style [data-cc-send]:not([data-cc-send-label]) {
   width: 40px;
@@ -7343,18 +7376,21 @@ html.hosted-mode.minimal-style :is(.face-row, .walkie-strip, .people-bar, .phone
 html.hosted-mode.minimal-style [data-sv-nav] :is([data-nav-row], [data-nav-subrow], a.w-full, button.w-full):not(.justify-center) > :first-child:not(:last-child):not([data-sv-count]) {
   display: none;
 }
-html.hosted-mode.minimal-style [data-sv-nav] :is(a, button)[href="/inbox"]:not(.justify-center) > :first-child:not(:last-child),
-html.hosted-mode.minimal-style [data-sv-nav] :is(a, button)[href="/questions"]:not(.justify-center) > :first-child:not(:last-child) {
+html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [data-nav-page="/inbox"], [href="/questions"]):not(.justify-center) > :first-child:not(:last-child) {
   display: inline-block;
   opacity: 0.6;
 }
 html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count],
 html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count] > * {
-  font-family: var(--pd-font-mono);
-  font-size: 11px;
+  /* The interface face with tabular figures: a mono count was the last
+     terminal detail on the hosted chrome. */
+  font-family: var(--pd-font-ui);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  font-size: 11.5px;
   color: var(--pd-ink-faint) !important;
 }
-html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [href="/questions"]) [data-sv-count],
+html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [data-nav-page="/inbox"], [href="/questions"]) [data-sv-count],
 html.hosted-mode.minimal-style [data-sv-nav] [data-sv-new-results] {
   color: var(--pd-accent) !important;
 }
@@ -7366,8 +7402,11 @@ html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count="mention"] {
    chevron, so hovering a row and opening it only change its fill and never its
    geometry. The open row is a filled pill, as Whisk's nav draws it; the accent
    bar is kept for the selected row of a list (the inbox rail, To-dos, Notes). */
+/* An explicit width, not auto: a link stretches at auto but a button (the
+   Inbox row) shrinks to its words, so the open Inbox was a short pill. The
+   count sits at the row's right edge, as Whisk's "Inbox 9" does. */
 html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center) {
-  width: auto;
+  width: calc(100% - 16px);
   margin-inline: 8px;
   border-radius: 8px;
   border-left-color: transparent;
@@ -7381,15 +7420,23 @@ html.hosted-mode.minimal-style [data-sv-nav] div.border-l-2 > [data-nav-row]:not
 html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center):not(.bg-sol-bg-highlight) {
   color: var(--pd-ink-muted);
 }
+html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center) [data-sv-count] {
+  margin-left: auto;
+}
+/* Hover is half the selected fill, so a row under the pointer never reads as
+   a second open page (in dark the two used to all but match). */
 html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center):not(.bg-sol-bg-highlight):hover {
   color: var(--pd-ink);
-  background: var(--pd-bg-hover);
+  background: var(--hosted-hover);
 }
 /* The app's one selected look (the rail's open conversation and a list's
    open row use it too): a neutral warm fill, as Whisk selects. The accent is
    kept for what is new or waits on the person, never for what is open. */
-html.hosted-mode { --hosted-selected: #ebe4d8; }
-html.hosted-mode.dark { --hosted-selected: color-mix(in srgb, var(--pd-ink) 8%, var(--pd-bg-raised)); }
+html.hosted-mode { --hosted-selected: #ebe4d8; --hosted-hover: color-mix(in srgb, #ebe4d8 50%, transparent); }
+html.hosted-mode.dark {
+  --hosted-selected: color-mix(in srgb, var(--pd-ink) 9%, var(--pd-bg-raised));
+  --hosted-hover: color-mix(in srgb, var(--pd-ink) 4%, var(--pd-bg-raised));
+}
 html.hosted-mode.minimal-style [data-sv-nav] .border-l-2.bg-sol-bg-highlight {
   background: var(--hosted-selected);
   box-shadow: none;
@@ -7401,15 +7448,15 @@ html.hosted-mode.minimal-style [data-sv-nav] .border-l-2.bg-sol-bg-highlight {
   outline: none;
 }
 
-/* A group's label reads as a label, not a row: the family's small tracked
-   mono capitals (Whisk's LANES, TOPICS) in faint ink, air above and a little
-   below. */
+/* A group's label reads as a label, not a row: the interface face in
+   sentence case and faint ink, air above and a little below. Tracked mono
+   capitals made the nav look like a terminal. */
 html.hosted-mode.minimal-style [data-sv-nav] [data-rail-heading] {
-  font-family: var(--pd-font-mono);
-  font-size: 10.5px;
-  font-weight: 400;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-family: var(--pd-font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--pd-ink-faint);
   margin-top: 20px;
   margin-bottom: 6px;
@@ -7446,7 +7493,7 @@ html.hosted-mode.minimal-style [data-cc-panel-title] {
 }
 html.hosted-mode.minimal-style [data-cc-sec-count] {
   margin-left: 2px;
-  font-family: var(--pd-font-mono);
+  font-family: var(--pd-font-ui);
   font-size: 11px;
   font-weight: 400;
   color: var(--pd-ink-faint);
@@ -7454,6 +7501,31 @@ html.hosted-mode.minimal-style [data-cc-sec-count] {
      as "1 3". */
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* With no top bar, the account and notification menus hang from the rail's
+   foot (Sidebar [data-cc-rail-foot]): they open upward and to the right of
+   their button, over the page, rather than down off the screen. */
+@media (min-width: 768px) {
+  [data-cc-rail-foot] .cc-topbar-menu {
+    position: absolute;
+    top: auto;
+    bottom: calc(100% + 8px);
+    left: 0;
+    right: auto;
+    margin-top: 0;
+    max-height: calc(100vh - 6rem);
+  }
+}
+
+/* A message's hover toolbar (quote, copy, more) on a touch screen: a tap
+   leaves :hover stuck, and the bar then sits over the reply's first line.
+   Hosted mode keeps it to pointers that hover; the conversation's menu keeps
+   copy and the rest. */
+@media not ((hover: hover) and (pointer: fine)) {
+  html.hosted-mode :is([data-cc-user-message-toolbar], [data-cc-assistant-message-toolbar]) {
+    display: none !important;
+  }
 }
 
 /* The shortcuts sheet's section headings in sentence case, as the palette's. */
@@ -7541,13 +7613,10 @@ html.hosted-mode.minimal-style [data-sv-working-dot] > .animate-ping {
   opacity: 0.35;
 }
 
-/* A list's open or focused row (ListRowShell) as Whisk marks its selected
-   row: a rust rule on the left edge over the hover paper, never the
-   developer's cyan, which hosted mode spends on outcomes. Inline links read
-   in ink and underline on hover. */
 /* One language with the rail and the nav, as Whisk keeps it: hover is a
-   plain paper shift, the open row the accent's 12% tint with no bar, and
-   the keyboard cursor raised paper with an inset hairline, drawn only once
+   plain paper shift, and the open row and the keyboard cursor both take the
+   rail's selected fill with no bar, never the developer's cyan. Inline links
+   read in ink and underline on hover. The cursor is drawn only once
    the keyboard has moved it (lib/keyboardCursor sets data-kbd-cursor), so a
    touch screen never shows a cursor nobody placed. */
 html.hosted-mode.minimal-style [data-list-row-state] {
@@ -7557,8 +7626,10 @@ html.hosted-mode.minimal-style [data-list-row-state="active"] {
   background: var(--hosted-selected) !important;
 }
 html.hosted-mode.minimal-style[data-kbd-cursor] [data-list-row-state="focused"] {
-  background: var(--pd-bg-raised) !important;
-  box-shadow: inset 0 0 0 1px var(--pd-rule-strong);
+  /* The rail's selected fill, so the list and the rail share one selection
+     look; a hairline ring was too faint to find on dark paper. */
+  background: var(--hosted-selected) !important;
+  box-shadow: none;
 }
 html.hosted-mode.minimal-style:not([data-kbd-cursor]) [data-list-row-state="focused"] {
   background: transparent !important;
@@ -7646,15 +7717,41 @@ html.hosted-mode.minimal-style [data-inbox-section="hosted_stopped"] > span::bef
 }
 
 /* A row's time, as Whisk's time column: the interface face with tabular
-   numerals in faint ink, the accent where the row waits on the person. */
+   numerals in faint ink, and the accent only on a row that is new, so the
+   accent means one thing. A row waiting on the person says so by its
+   section and its dot, never by an alarm-coloured time. */
 html.hosted-mode.minimal-style [data-sv-time] {
   font-family: var(--pd-font-ui);
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   color: var(--pd-ink-faint);
+  transition: opacity 120ms ease;
 }
-html.hosted-mode.minimal-style div:has(> :is([data-inbox-section="needs_input"], [data-inbox-section="questions"])) [data-sv-time] {
+html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:has([data-sv-titlerow] > [aria-label="Unread"]) [data-sv-time] {
   color: var(--pd-accent);
+}
+/* Hosted rows carry no rule of their own, as Whisk's list: the section
+   headings' hairlines are the only lines, so nine unread rows read as a list
+   and not a table. */
+html.hosted-mode.minimal-style [data-sv-rail] div:has(> [data-session-id])::after {
+  content: none;
+}
+/* Hover hands the time column to the row's actions: one slot, two states,
+   so the time is never partly covered. Hosted rows keep one action, Pin;
+   the star shows only on a row already starred. */
+html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:is(:hover, :focus-within) [data-sv-time] {
+  opacity: 0;
+}
+html.hosted-mode.minimal-style [data-sv-rail] [data-sv-fav="off"] {
+  display: none;
+}
+html.hosted-mode.minimal-style [data-sv-rail] [data-session-id] [data-sv-fade] {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding-left: 24px;
+  transition: opacity 120ms ease;
 }
 
 /* The set-aside lists (Closed, Stashed, Snoozed) head like Done: the same
@@ -7744,13 +7841,26 @@ html.hosted-mode.minimal-style [data-cc-settings-icon] { display: none; }
   -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
   mask-image: linear-gradient(to bottom, #000 55%, transparent);
 }
-[data-cc-made-note-body] table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+/* A table's text columns share the width (max-width 0 lets them truncate
+   inside an auto layout) while a column of figures keeps only its own
+   (HostedMadeLine numericColumns marks it). On a narrow card only the first
+   two columns show, so a phone reads "Tent with rainfly  1" rather than three
+   clipped cells. */
+[data-cc-made-note-card] { container-type: inline-size; }
+[data-cc-made-note-body] table { border-collapse: collapse; width: 100%; table-layout: auto; }
 [data-cc-made-note-body] td {
+  max-width: 0;
   padding: 1px 12px 1px 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+}
+[data-cc-made-note-body] td[data-num] { width: 1%; max-width: none; }
+[data-cc-made-note-body] td:last-child { padding-right: 0; }
+@container (max-width: 440px) {
+  [data-cc-made-note-body] td:nth-child(n + 3) { display: none; }
+  [data-cc-made-note-body] td:nth-child(2) { padding-right: 0; }
 }
 [data-cc-made-note-body] tr[data-head] td { color: var(--pd-ink); font-weight: 500; }
 [data-cc-made-note-open] {
@@ -7768,5 +7878,51 @@ html.hosted-mode [data-cc-compose-sheet] {
   border-color: var(--pd-rule);
 }
 html.hosted-mode [data-cc-compose-sheet] :is([data-sv-composer], [data-sv-composer] > *, form) {
+  background: transparent;
+}
+
+/* A hosted transcript scrolled under its header fades into it over 24px,
+   as a note card fades at its foot, instead of cutting a line in half at the
+   rule. At the top of the conversation there is nothing above, so the fade
+   grows with the first 24px of scroll (a scroll-driven length) and the first
+   line is never dimmed. */
+@property --cc-feed-fade {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes cc-feed-fade {
+  from { --cc-feed-fade: 0px; }
+  to { --cc-feed-fade: 24px; }
+}
+@supports (animation-timeline: scroll()) {
+  html.hosted-mode [data-cc-conversation] [data-sv-feed] {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--cc-feed-fade));
+    mask-image: linear-gradient(to bottom, transparent, #000 var(--cc-feed-fade));
+    animation: cc-feed-fade linear both;
+    animation-timeline: scroll(self);
+    animation-range: 0px 24px;
+  }
+}
+
+/* A hosted list page's title sits on the frame's inner edge (HOSTED_PAGE_PAD:
+   16px, 24px from sm up), where Routines and Approvals put theirs. */
+html.hosted-mode [data-list-view] .cc-panel__head {
+  padding-left: 16px;
+}
+@media (min-width: 640px) {
+  html.hosted-mode [data-list-view] .cc-panel__head { padding-left: 24px; }
+}
+
+/* The rail's search, as Whisk draws its own: a quiet 32px field on a
+   hairline with an 8px radius, on the sidebar's own surface. */
+html.hosted-mode.minimal-style [data-cc-rail-search] input {
+  height: 32px;
+  border-radius: 8px;
+  border-color: var(--pd-rule);
+  background: transparent;
+}
+html.hosted-mode.minimal-style [data-cc-rail-search] input:is(:hover, :focus) {
+  border-color: var(--pd-rule-strong);
   background: transparent;
 }

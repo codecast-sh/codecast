@@ -431,6 +431,20 @@ export function questionAsStatement(question: string): string {
   return /^[A-Z][a-z]/.test(q) ? q[0].toLowerCase() + q.slice(1) : q;
 }
 
+/** An answered yes or no said back as one phrase, with no colon in it: the
+ *  question's verb gives way to what it was about ("Set up the routine "X"?"
+ *  answered no reads 'You said no to the routine “X”'). A question that names
+ *  no thing by a quoted name, or any other answer, keeps "answer: question". */
+export function answeredLine(label: string, question: string): string {
+  const said = answerSaid(label);
+  const statement = questionAsStatement(question);
+  const yesOrNo = label === APPROVAL_ANSWERS.approve || label === APPROVAL_ANSWERS.decline;
+  // Only a thing named by its quoted name ("the routine “X”"): "a page on
+  // example.com" read after "You said yes to" says less than the question.
+  const thing = statement.match(/^[a-z]+(?: (?:up|out|off|on|in|back|over|away|down))?\s+((?:the|a|an|this|that|your|my)\s[^\u201c]*\u201c[^\u201d]+\u201d)$/);
+  return yesOrNo && thing ? `${said} to ${thing[1]}` : `${said}: ${statement}`;
+}
+
 /** Whether the person said no to one of this conversation's approvals after
  *  `since` (their last message): the composer then invites a change rather
  *  than a new chore. Given `now`, only a no from the last DECLINE_HINT_MS. */
