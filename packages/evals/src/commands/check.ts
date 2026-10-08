@@ -18,6 +18,7 @@ import { homePaths } from '../paths';
 import { checkMinutes, DAILY_USD, patchSurfaceState, perRepPeakUsd, perRepUsd, readState, repCostsByModel, spentToday, staleness, suggestedBudget, type EvalsState } from '../state';
 import { evalSignals, reportSignals, type SurfaceVerdict } from '../signals';
 import type { SurfaceMeta } from '../surface';
+import { sendsThinkingOff } from '../models';
 import { publishSite } from './publish';
 import { pickSurfaces } from './stale';
 import { batchSet, BISECT_CADENCE, CADENCE_BASELINE_BATCHES, majority, positiveNumber, setVerdict } from './verdict';
@@ -160,6 +161,14 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
       console.log('nothing changed');
       return 0;
     }
+  }
+
+  // Claude Code cannot turn a model's thinking off, so a replay of a model
+  // prod posts with thinking off measures a request prod never sends (ct-57981).
+  if (!flags.dry) {
+    const unmatched = metas.filter((m) => m.route === 'call' && m.model && sendsThinkingOff(m.model));
+    for (const m of unmatched) console.log(`skipped ${m.id}: prod posts ${m.model} with thinking off, which the replay cannot send (ct-57981)`);
+    metas = metas.filter((m) => !unmatched.includes(m));
   }
 
   const all = await store.list();
