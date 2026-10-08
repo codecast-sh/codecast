@@ -54,11 +54,13 @@ import {
   resolveAssigneeToUserId,
   resolveParentTask,
 } from "./tasks";
+import { releaseDependents } from "./taskWaits";
 import { verifyApiToken } from "./apiTokens";
 import { installationCoversRepo } from "./githubApp";
 import { connectionForWork } from "./oauthConnectors";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
+import { mintProjectShortId } from "./lib/projectShortId";
 
 /** A provider issue normalized to one shape before it touches a task (S2). */
 export const normalizedIssueValidator = v.object({
@@ -687,11 +689,14 @@ async function updateTaskFromIssue(
     await history(ctx, task._id, "updated", field, task[field] ?? "", diff[field] ?? "");
   }
 
+  const before = { ...task };
   await ctx.db.patch(task._id, patch);
 
   if (diff.status && task.plan_id) {
     await recalcPlanProgress(ctx, task.plan_id, task._id, diff.status);
   }
+  // A close on the provider releases the tasks it blocked (task-graph.md TG2).
+  await releaseDependents(ctx, before, diff.status);
   return diff;
 }
 
@@ -1522,7 +1527,7 @@ async function addSourceFor(
     // No project named: the imported container gets one of its own, so the
     // tasks land somewhere a person can find them (S1.3).
     const projectId = await db.insert("projects", {
-      short_id: `pj-${now.toString(36)}`,
+      short_id: await mintProjectShortId(ctx, now),
       title: args.name,
       description: `Imported from ${args.provider}`,
       status: "active",

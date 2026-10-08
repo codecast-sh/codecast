@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildTaskStartBody, startedLines } from "./taskClaim.js";
+import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, readyCountLine, startedLines, taskClaimant, taskHintBody, unclaimedLine } from "./taskClaim.js";
+import { readTaskPulseFor, recordTaskStart } from "./taskPulse.js";
+import { resolveTaskModelFull } from "./agents/prompts.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 
 describe("buildTaskStartBody", () => {
@@ -164,5 +167,78 @@ describe("the task verbs never guess the session", () => {
       expect(action.includes("detectCurrentSessionId("), `${verb} must not guess the session`).toBe(false);
       expect(action.includes("ownSessionId(getRealCwd())"), `${verb} reads the caller's own session`).toBe(true);
     }
+  });
+});
+
+describe("cast task ready --claim and the execution hints (task-graph.md TG7-TG9)", () => {
+  test("a claim is for the session, else the person; it never sends an assignee, which filters the frontier", () => {
+    expect(taskClaimant("sess-1")).toEqual({ conversation_id: "sess-1" });
+    expect(taskClaimant(null)).toEqual({ assignee: "me" });
+    expect(buildTaskClaimBody({ plan_id: "pl-1" }, "sess-1")).toEqual({ plan_id: "pl-1", conversation_id: "sess-1" });
+    expect(buildTaskClaimBody({ plan_id: "pl-1" }, null, { stale: true })).toEqual({ plan_id: "pl-1", stale: true });
+  });
+
+  test("a claim that took nothing says when more ready tasks wait past those tried", () => {
+    expect(unclaimedLine({ skipped: [] })).toBe("No ready tasks to claim.");
+    expect(unclaimedLine({ skipped: [{}, {}], more: true })).toMatch(/^No task claimed, passed over 2\. More ready tasks exist/);
+  });
+
+  test("a start records the pulse and binds the plan whatever the output mode", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "claim-pulse-"));
+    const prev = process.env.CODECAST_DIR;
+    process.env.CODECAST_DIR = dir;
+    try {
+      const binds: string[][] = [];
+      expect(await recordTaskStart("sess-1", "ct-7", "pl-2", async (plan, session) => { binds.push([plan, session]); })).toBe("pl-2");
+      expect(readTaskPulseFor("sess-1")).toEqual({ task: "ct-7", plan: "pl-2" });
+      expect(binds).toEqual([["pl-2", "sess-1"]]);
+      // A failed bind keeps the pulse; a person's start has no session to record.
+      expect(await recordTaskStart("sess-2", "ct-8", "pl-3", async () => { throw new Error("offline"); })).toBeNull();
+      expect(readTaskPulseFor("sess-2")).toEqual({ task: "ct-8", plan: "pl-3" });
+      expect(await recordTaskStart(null, "ct-9", undefined, async () => {})).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.CODECAST_DIR;
+      else process.env.CODECAST_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("ready --claim --json records the start before printing it", () => {
+    // Agents claim with --json, and the pulse is how a session finds its task
+    // again after compaction (TG10): the JSON path must not skip it.
+    const src = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
+    const at = src.indexOf(`work\n  .command("ready")`);
+    expect(at).toBeGreaterThan(-1);
+    const action = src.slice(at, src.indexOf("\nwork\n", at + 1));
+    const json = action.slice(action.indexOf("if (options.json)"));
+    const started = json.indexOf("afterTaskStarted(");
+    expect(started).toBeGreaterThan(-1);
+    expect(started).toBeLessThan(json.indexOf("printJson(claim)"));
+  });
+
+  test("--effort is checked by name and '' clears; --ephemeral only ever sets", () => {
+    expect(taskHintBody({ model: "sonnet", effort: "xhigh", ephemeral: true })).toEqual({ model: "sonnet", effort: "xhigh", ephemeral: true });
+    expect(taskHintBody({ effort: "", model: "" })).toEqual({ effort: "", model: "" });
+    expect(taskHintBody({})).toEqual({});
+    expect(() => taskHintBody({ effort: "huge" })).toThrow(/Unknown --effort "huge"/);
+  });
+
+  test("stale rows fold into a count unless --stale", () => {
+    const rows = [{ id: 1 }, { id: 2, stale: true }, { id: 3, stale: false }];
+    expect(foldStaleTasks(rows, false)).toEqual({ shown: [{ id: 1 }, { id: 3, stale: false }], folded: 1 });
+    expect(foldStaleTasks(rows, true)).toEqual({ shown: rows, folded: 0 });
+  });
+
+  test("a frontier cut at the list limit reports floors, not counts", () => {
+    expect(readyCountLine(2, 1, 3)).toBe("2 ready, 1 more untouched 30+ days (--stale lists them)");
+    expect(readyCountLine(4, 0, 4)).toBe("4 ready");
+    expect(readyCountLine(290, 10, READY_LIST_LIMIT)).toBe("290+ ready, 10+ more untouched 30+ days (--stale lists them)");
+  });
+
+  test("a task's own effort wins over the plan stylesheet's; a model alone keeps none", () => {
+    const plan = { model_stylesheet: "* { model: sonnet; reasoning_effort: low; }" };
+    expect(resolveTaskModelFull(plan, { effort: "max" })).toMatchObject({ model: "sonnet", reasoning_effort: "max" });
+    expect(resolveTaskModelFull(plan, {})).toMatchObject({ model: "sonnet", reasoning_effort: "low" });
+    expect(resolveTaskModelFull({}, { model: "opus", effort: "high" })).toMatchObject({ model: "opus", reasoning_effort: "high" });
   });
 });

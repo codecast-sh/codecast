@@ -13,7 +13,8 @@ import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { MobileIdentityFace, useSessionIdentityRow } from '@/components/identity';
 import { openLink } from '@/lib/links';
-import { useModeWords } from '@codecast/web/lib/surfaces';
+import { useHostedMode, useModeWords } from '@codecast/web/lib/surfaces';
+import { formatRowTime, sentenceCase, sessionCardTitle } from '@codecast/web/lib/sessionCard';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 import {
@@ -97,6 +98,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "team_session_start": return { name: "play-circle", color: Theme.blue };
     case "task_completed": return { name: "check-circle", color: Theme.greenBright };
     case "task_failed": return { name: "exclamation-circle", color: Theme.red };
+    case "task_unblocked": return { name: "unlock", color: Theme.green };
     case "task_assigned": return { name: "user-plus", color: Theme.accent };
     case "task_commented":
     case "doc_commented": return { name: "comment-o", color: Theme.cyan };
@@ -112,6 +114,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "card_waiting": return { name: "question-circle", color: Theme.orange };
     case "change_shipped": return { name: "rocket", color: Theme.green };
     case "cause_reopened": return { name: "undo", color: Theme.red };
+    case "decision_answered_for_you": return { name: "question-circle", color: Theme.yellow };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }
@@ -123,6 +126,10 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   onMarkRead: () => void;
 }) {
   const Theme = useTheme();
+  // Hosted mode reads the web bell's hosted rows: the event word in muted
+  // ink, the rail's time words, a title with a capital first letter, and no
+  // coloured type badge on the face (only the unread dot keeps the accent).
+  const hosted = useHostedMode();
   const icon = notificationIcon(notification.type);
   const { name: actorName, avatar: avatarUrl } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
@@ -132,17 +139,25 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   // conversation, so it would otherwise show the Claude Code logo next to a
   // report about a frozen machine.
   const isSessionNotif = showsAgentIcon(notification) || notification.type === "team_session_start";
-  const label = sessionLabel(notification.conversation);
+  // A hosted conversation is named by the inbox's rule (sessionCardTitle:
+  // its ask until the assistant names it), read from the store row, since
+  // the notification's own copy of the conversation often has no title yet.
+  const cardTitle = useInboxStore((s) => {
+    const id = hosted && notification.conversation_id ? String(notification.conversation_id) : undefined;
+    const row = id ? (s.sessions[id] ?? s.conversations[id]) : undefined;
+    return row ? sessionCardTitle(row as any) : null;
+  });
+  const label = cardTitle || sessionLabel(notification.conversation);
 
   // The title is what the notification is about — the session, else the person.
   // The event itself is a small colored word, never the headline.
   const typeLbl = notificationTypeLabel(notification.type, notification.conversation?.agent_type);
-  const title = label || actorName || typeLbl;
+  const title = hosted ? sentenceCase(label || actorName || typeLbl) : label || actorName || typeLbl;
   const who = actorName || (isSessionNotif ? notificationAgentName(agentType) : null);
   const showWho = !!who && who !== title;
   // Don't echo the type when it already IS the title (a bare task/plan row with
   // no session or actor to name).
-  const showType = title !== typeLbl;
+  const showType = title.toLowerCase() !== typeLbl.toLowerCase();
 
   return (
     <TouchableOpacity
@@ -162,10 +177,10 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
           <MobileIdentityFace row={identityRow} size={38} fallback={<AgentLogoSvg agentType={agentType} size={38} />} />
         ) : (
           <RNView style={styles.avatarFallback}>
-            <FontAwesome name={icon.name} size={16} color={icon.color} />
+            <FontAwesome name={icon.name} size={16} color={hosted ? Theme.textMuted : icon.color} />
           </RNView>
         )}
-        {(avatarUrl || isSessionNotif) && (
+        {(avatarUrl || isSessionNotif) && !hosted && (
           <RNView style={[styles.iconBadge, { backgroundColor: icon.color }]}>
             <FontAwesome name={icon.name} size={8} color="#fff" />
           </RNView>
@@ -180,7 +195,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
             {title}
           </RNText>
           <RNText style={styles.notificationTime}>
-            {formatRelativeTime(notification.created_at)}
+            {hosted ? formatRowTime(notification.created_at, true) : formatRelativeTime(notification.created_at)}
           </RNText>
           {!notification.read && <RNView style={styles.unreadDot} />}
         </RNView>
@@ -190,7 +205,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
               <RNText style={styles.metaWho} numberOfLines={1}>{who}</RNText>
             )}
             {showType && (
-              <RNText style={[styles.metaType, { color: typeColorNative(notification.type) }]} numberOfLines={1}>
+              <RNText style={[styles.metaType, { color: hosted ? Theme.textMuted : typeColorNative(notification.type) }]} numberOfLines={1}>
                 {typeLbl}
               </RNText>
             )}
@@ -229,6 +244,8 @@ export default function NotificationsScreen() {
   const navigation = useNavigation();
   // The session filter is named by mode (lib/surfaces MODE_WORDS).
   const words = useModeWords();
+  const hosted = useHostedMode();
+  const hasTeam = useInboxStore((s) => ((s.teams as unknown[] | undefined) ?? []).some(Boolean));
 
   // The persisted store list (fed app-wide by useSyncWorkspaceData), newest
   // first. The live answer only tells a cold cache apart from an empty inbox;
@@ -320,8 +337,10 @@ export default function NotificationsScreen() {
     { key: "all", label: "All" },
     { key: "unread", label: unreadCount > 0 ? `Unread (${unreadCount})` : "Unread" },
     { key: "sessions", label: words.conversations },
-    { key: "tasks", label: "Tasks" },
-    { key: "social", label: "Social" },
+    { key: "tasks", label: words.tasksPage },
+    // Mentions, comments and invites come from teammates; a hosted person
+    // with no team gets none, so the filter steps out.
+    ...(hosted && !hasTeam ? [] : [{ key: "social" as const, label: "Social" }]),
   ];
 
   const renderEmpty = () => (
@@ -390,7 +409,9 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+// The family look keeps unread quiet, as the web bell does in hosted mode:
+// an accent dot and a 600 title, no accent wash or bar.
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -431,7 +452,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   headerActionText: {
     fontSize: 14,
-    color: Theme.accent,
+    color: look === 'family' ? Theme.textMuted : Theme.accent,
     fontWeight: '600',
   },
   sectionHeader: {
@@ -443,9 +464,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   sectionHeaderText: {
     fontSize: 12,
     fontWeight: '600',
-    color: Theme.textMuted0,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    color: look === 'family' ? Theme.textMuted : Theme.textMuted0,
+    textTransform: look === 'family' ? 'none' : 'uppercase',
+    letterSpacing: look === 'family' ? 0 : 0.5,
+    ...(look === 'family' ? { fontSize: 13 } : null),
   },
   listContent: {
     paddingBottom: Spacing.xl,
@@ -460,14 +482,14 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     backgroundColor: Theme.bg,
   },
   notificationUnread: {
-    backgroundColor: `${Theme.accent}0d`,
+    backgroundColor: look === 'family' ? Theme.bg : `${Theme.accent}0d`,
   },
   unreadBar: {
     position: 'absolute',
     left: 0,
     top: 0,
     bottom: 0,
-    width: 3,
+    width: look === 'family' ? 0 : 3,
     backgroundColor: Theme.accent,
   },
   avatarContainer: {
@@ -528,7 +550,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: Theme.accent,
+    backgroundColor: look === 'family' ? Theme.orange : Theme.accent,
     marginLeft: 6,
   },
   metaRow: {

@@ -17,12 +17,13 @@ import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
-import { REPLAY_CHUNK_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
+import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./replays";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
 import { handleFaceRequest } from "./callFace";
 import { sentryWebhook, setEventGroupStatus } from "./sources/sentry";
 import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
+import { claimFrontier } from "./taskFrontier";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,
@@ -1605,6 +1606,7 @@ cliRoute("/cli/decide/answer", (ctx, body) =>
     // A person at a plain shell has no session (decisions-as-documents.md
     // D2): the CLI sends null, and the validator takes undefined only.
     session_id: body.session_id ?? undefined,
+    for_human: body.for_human ?? undefined,
     answer_index: body.answer_index,
     answer_json: body.answer_json,
     answer_text: body.answer_text,
@@ -4238,6 +4240,21 @@ cliRoute("/cli/session/unread", async (ctx, body) => {
 // Team chat. Every one of these authorizes the caller inside the function — this
 // route only forwards the request body, so the mutation's own argument list is
 // what keeps identity and scope out of the caller's hands.
+//
+// The CLI prints messages by a short id prefix, so each message-id field is
+// resolved to the full id first (chat.resolveMessageRef); the function still
+// checks access itself.
+async function withChatMessageIds(ctx: any, body: any, ...fields: string[]) {
+  for (const field of fields) {
+    if (typeof body?.[field] !== "string") continue;
+    const { id, error } = await ctx.runQuery(internal.chat.resolveMessageRef, {
+      api_token: body.api_token, ref: body[field],
+    });
+    if (!id) throw new ConvexError({ code: "NOT_FOUND", message: error });
+    body[field] = id;
+  }
+  return body;
+}
 cliRoute("/cli/chat/channels", async (ctx, body) => {
   return await ctx.runQuery(api.chat.listChannels, body);
 });
@@ -4248,36 +4265,36 @@ cliRoute("/cli/chat/read", async (ctx, body) => {
   return await ctx.runQuery(api.chat.listMessages, body);
 });
 cliRoute("/cli/chat/thread", async (ctx, body) => {
-  return await ctx.runQuery(api.chat.getThread, body);
+  return await ctx.runQuery(api.chat.getThread, await withChatMessageIds(ctx, body, "root_id"));
 });
 cliRoute("/cli/chat/message", async (ctx, body) => {
-  return await ctx.runQuery(api.chat.getMessage, body);
+  return await ctx.runQuery(api.chat.getMessage, await withChatMessageIds(ctx, body, "message_id"));
 });
 cliRoute("/cli/chat/search", async (ctx, body) => {
   return await ctx.runQuery(api.chat.searchMessages, body);
 });
 cliRoute("/cli/chat/send", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.sendMessage, body);
+  return await ctx.runMutation(api.chat.sendMessage, await withChatMessageIds(ctx, body, "thread_root_id"));
 });
 cliRoute("/cli/chat/mark-read", async (ctx, body) => {
   return await ctx.runMutation(api.chat.markRead, body);
 });
 // What the anchor runs to fill the placeholder already showing in the thread.
 cliRoute("/cli/chat/reply", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.replyAsAnchor, body);
+  return await ctx.runMutation(api.chat.replyAsAnchor, await withChatMessageIds(ctx, body, "message_id"));
 });
 // Stop the anchor answering plain replies in one thread, or hand it a thread it
 // has not spoken in. body: { api_token, root_id, follow }.
 cliRoute("/cli/chat/anchor-follow", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.setAnchorFollow, body);
+  return await ctx.runMutation(api.chat.setAnchorFollow, await withChatMessageIds(ctx, body, "root_id"));
 });
 cliRoute("/cli/chat/react", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.toggleReaction, body);
+  return await ctx.runMutation(api.chat.toggleReaction, await withChatMessageIds(ctx, body, "message_id"));
 });
 // Stop one in-flight anchor turn now, instead of waiting out the deadline.
 // body: { api_token, message_id } — the thinking placeholder's id.
 cliRoute("/cli/chat/stop", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.stopAnchorReply, body);
+  return await ctx.runMutation(api.chat.stopAnchorReply, await withChatMessageIds(ctx, body, "message_id"));
 });
 // Archive (or restore) a channel. body: { api_token, channel_id, archived }.
 cliRoute("/cli/chat/archive", async (ctx, body) => {
@@ -4344,6 +4361,9 @@ cliRoute("/cli/signal/ls", async (ctx, body) => {
 });
 cliRoute("/cli/signal/show", async (ctx, body) => {
   return await ctx.runQuery(api.signals.showForCli, body);
+});
+cliRoute("/cli/signal/move", async (ctx, body) => {
+  return await ctx.runMutation(api.signals.moveForCli, body);
 });
 // A repo's resolved line profile onto its projects (line-profile.md LP3).
 // device_id is the publisher's machine, where an edit of the file is routed.
@@ -4414,11 +4434,31 @@ cliRoute("/cli/work/update", async (ctx, body) => {
 cliRoute("/cli/work/comment", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.addComment, body);
 });
+// `cast task ready --claim`: start the first ready task for the caller (TG7).
+cliRoute("/cli/work/claim", async (ctx, body) => {
+  return await claimFrontier(ctx, body);
+});
 cliRoute("/cli/work/dep", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.addDep, body);
 });
 cliRoute("/cli/work/undep", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.removeDep, body);
+});
+cliRoute("/cli/work/wait", async (ctx, body) => {
+  return await ctx.runMutation(api.taskWaits.addWait, body);
+});
+cliRoute("/cli/work/unwait", async (ctx, body) => {
+  return await ctx.runMutation(api.taskWaits.removeWait, body);
+});
+// Links that do not block (TG5): supersede moves the old task's dependents.
+cliRoute("/cli/work/supersede", async (ctx, body) => {
+  return await ctx.runMutation(api.taskLinks.supersede, body);
+});
+cliRoute("/cli/work/relate", async (ctx, body) => {
+  return await ctx.runMutation(api.taskLinks.relate, body);
+});
+cliRoute("/cli/work/unrelate", async (ctx, body) => {
+  return await ctx.runMutation(api.taskLinks.unrelate, body);
 });
 cliRoute("/cli/work/context", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.context, body);
@@ -5150,6 +5190,8 @@ http.route({ path: REPLAY_CHUNK_PATH, method: "OPTIONS", handler: replayChunkPre
 // The player page (replay.codecast.sh) trades its capability for the DOM capture's signed URLs.
 http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "GET", handler: replayPlayerManifest });
 http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "OPTIONS", handler: replayPlayerManifestPreflight });
+// The player worker asks before each frame request starts a browser: the capability opens and its budget has room.
+http.route({ path: REPLAY_FRAME_ADMIT_PATH, method: "POST", handler: replayFrameAdmit });
 
 // One-click unsubscribe for the notification digest (emails/digest.ts). Lives
 // under /cli/ because Caddy forwards only that prefix to HTTP actions. GET
