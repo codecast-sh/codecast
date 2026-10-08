@@ -15,7 +15,7 @@
  * `cast check-watch` process wrapping tsc's watch mode; it records each
  * pass in a state file (in progress, finished at, error count, the
  * diagnostics) that `cast check` reads. A watcher nobody has asked for in
- * a while exits on its own, and the machine keeps at most MAX_WATCHERS
+ * a while exits on its own, and the machine keeps at most machineCap("check")
  * alive: each holds a program in memory, and a fleet of worktrees could
  * otherwise recreate the pile this replaces.
  *
@@ -42,6 +42,7 @@ import { spawn, spawnSync } from "./proc.js";
 import { acquireFileLock } from "./lockFile.js";
 import { isPidAlive } from "./workspace/chrome.js";
 import { startLaunchdJob, unloadOwnLaunchdJob } from "./launchdJob.js";
+import { machineCap } from "./machineCaps.js";
 
 /** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
 export interface CheckProject {
@@ -128,8 +129,57 @@ export function resolveProjects(root: string, names: string[], cwd = process.cwd
   });
 }
 
+/**
+ * Repo-relative paths in a project's program, read from its watcher's build
+ * info (tsc writes every file of the program there); null before the
+ * project's first pass on this tree.
+ */
+export function programFiles(root: string, project: CheckProject): Set<string> | null {
+  const dir = watchDir(root, project.name);
+  try {
+    const info = JSON.parse(fs.readFileSync(buildInfoPath(dir), "utf-8")) as { fileNames?: unknown };
+    if (!Array.isArray(info.fileNames)) return null;
+    const files = new Set<string>();
+    for (const name of info.fileNames) {
+      if (typeof name !== "string") continue;
+      const rel = path.relative(root, path.resolve(dir, name));
+      if (!rel.startsWith("..")) files.add(rel.split(path.sep).join("/"));
+    }
+    return files;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The projects a set of changed files can affect: a project whose program
+ * holds one of them, or, for a file no program has seen yet (new, or a
+ * project never built here), one whose tsconfig sits above it.
+ */
+export function projectsTouching(root: string, projects: CheckProject[], changed: string[]): CheckProject[] {
+  const code = changed.filter((f) => /\.(m|c)?[jt]sx?$|(^|\/)(tsconfig[^/]*|package)\.json$/.test(f));
+  if (!code.length) return [];
+  return projects.filter((p) => {
+    const files = programFiles(root, p);
+    const dir = path.dirname(p.tsconfig);
+    const under = (f: string) => dir === "." || f.startsWith(`${dir}/`);
+    return code.some((f) => files?.has(f) || ((!files || !files.has(f)) && under(f) && !otherProjectOwns(root, projects, p, f)));
+  });
+}
+
+/** A git command's output lines in `root`; throws with git's message when it fails (a bad ref). */
+export function gitLines(root: string, args: string[]): string[] {
+  const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+  if (r.status !== 0) throw new Error(String(r.stderr || `git ${args[0]} failed`).trim());
+  return String(r.stdout).split("\n").filter(Boolean);
+}
+
+/** Another project's program already holds `f`, so a nested project's tsconfig above it says nothing. */
+function otherProjectOwns(root: string, projects: CheckProject[], self: CheckProject, f: string): boolean {
+  return projects.some((q) => q !== self && !!programFiles(root, q)?.has(f));
+}
+
 /** Live watchers this machine keeps at most; the least recently asked is stopped to make room. */
-export const MAX_WATCHERS = Math.max(1, parseInt(process.env.CAST_CHECK_MAX_WATCHERS ?? "", 10) || 6);
 
 /** How often a waiting asker refreshes `askedAt`, and how long without one leaves a running pass unwanted. */
 export const ASK_HEARTBEAT_MS = 30_000;
@@ -655,7 +705,7 @@ async function startWhenSlotFrees(
 ): Promise<boolean> {
   const project = target.name;
   const dir = watchDir(root, project);
-  const max = opts.maxWatchers ?? MAX_WATCHERS;
+  const max = opts.maxWatchers ?? machineCap("check");
   fs.mkdirSync(queueDir(), { recursive: true });
   fs.mkdirSync(dir, { recursive: true });
   const at = queuePlace(dir);

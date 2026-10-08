@@ -558,10 +558,10 @@ test("changes that ended differently: each group carries its own word or its own
 
 test("several changes to a goal that exists read change by change under one sentence and one answer", () => {
   const m = mount({ card: cardOf([G1, G9, G10], "Proud relationships"), ordinal: 9, onAnswer });
-  expect(q("[data-subject-sentence]").textContent).toBe("Move Proud relationships under the purpose, measure it by Trust breaks per day and have Agent Quality carry it.");
+  expect(q("[data-subject-sentence]").textContent).toBe("Move Proud relationships under the mission, measure it by Trust breaks per day and have Agent Quality carry it.");
   expect(qa("[data-subject-group]").length).toBe(2);
   expect(field("parent").getAttribute("data-field-before")).toBe("at the top level");
-  expect(field("parent").getAttribute("data-field-after")).toBe("the purpose");
+  expect(field("parent").getAttribute("data-field-after")).toBe("the mission");
   expect(field("projects").getAttribute("data-field-before")).toBe("no project");
   // A list that gains an entry: the kept names, then the new one behind a quiet plus.
   expect(field("projects").textContent).toBe("+ Agent Quality");
@@ -581,7 +581,7 @@ test("a goal's projects read as one run of names, measures as written, the owner
   purpose.done();
 
   const child = mount({ card: cardOf([G1, G2], "Improve conversion"), ordinal: 2, onAnswer });
-  expect(q("[data-subject-sentence]").textContent).toBe("Add the goal Improve conversion under the purpose.");
+  expect(q("[data-subject-sentence]").textContent).toBe("Add the goal Improve conversion under the mission.");
   expect(field("metrics").textContent).toBe("Email to intro rate, target 0.20%Cold email reply rate, target 1% higher (Cameron)");
   expect(field("metrics").children[0].children.length).toBe(2);
   expect(field("projects").textContent).toBe("Matching & Funnel");

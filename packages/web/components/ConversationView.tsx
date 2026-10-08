@@ -454,8 +454,14 @@ const ConversationViewInner = (
   const stickyGapRef = useRef<{ prevIdx: number } | null>(null);
   const dismissedStickyIdsRef = useRef<Set<string>>(new Set());
   const stickyElRef = useRef<HTMLDivElement>(null);
+  // Last measured card height. The card unmounts while hidden, and the
+  // next-prompt test must keep using its height then, or hide/show alternate.
+  const stickyHeightRef = useRef(0);
   const stickyPrefDisabled = useInboxStore(s => s.clientState.ui?.sticky_headers_disabled ?? false);
-  const stickyDisabled = stickyPrefDisabled || !stickyPrompt;
+  // Hosted conversations are short chats whose header already names them, so
+  // a pinned first ask over the reply only reads as a rendering glitch.
+  const stickyShown = useSurface("conversation.stickyPrompt");
+  const stickyDisabled = stickyPrefDisabled || !stickyPrompt || !stickyShown;
   const updateUI = useInboxStore(s => s.updateClientUI);
   const headerRef = useRef<HTMLElement>(null);
   // Zen mode on desktop: the head ROW is the window titlebar (drag +
@@ -1193,7 +1199,10 @@ const ConversationViewInner = (
       header.style.setProperty("--conv-sticky-h", "0px");
       return;
     }
-    const update = () => header.style.setProperty("--conv-sticky-h", `${el.offsetHeight}px`);
+    const update = () => {
+      stickyHeightRef.current = el.offsetHeight;
+      header.style.setProperty("--conv-sticky-h", `${el.offsetHeight}px`);
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -1504,7 +1513,7 @@ const ConversationViewInner = (
       const hasTextContent = msg.content && msg.content.trim().length > 0;
       const receiptToolCount = turnAggregates.receiptOf.get(msg._id)?.reduce((n, e) => n + e.tools.length, 0) ?? 0;
       const groupHeight = receiptToolCount > 0 && expandedGroups.has(msg._id) ? Math.min(receiptToolCount * 36, 400) : 0;
-      if (msg.tool_calls?.some(isAlwaysVisibleToolCall)) return 200 + groupHeight;
+      if (msg.tool_calls?.some((tc) => isAlwaysVisibleToolCall(tc))) return 200 + groupHeight;
       // A tool-only receipt owner is just the one receipt row (plus its open group).
       if (!hasTextContent && receiptToolCount > 0) return 28 + groupHeight;
       if (groupHeight) return 200 + groupHeight;
@@ -2156,7 +2165,7 @@ const ConversationViewInner = (
           return;
         }
         let hideForNextMsg = false;
-        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? 0);
+        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? stickyHeightRef.current);
         const nextArrayIdx = stickyUserMsgIndices.indexOf(stickyResolved.index) + 1;
         if (nextArrayIdx > 0 && nextArrayIdx < stickyUserMsgIndices.length) {
           const nextTlIdx = stickyUserMsgIndices[nextArrayIdx];
@@ -2447,8 +2456,8 @@ const ConversationViewInner = (
   maybeLoadNewerRef.current = () => {
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!sc || !pp.onLoadNewer) return;
-    if (!loadNewerArmedRef.current) return;
+    if (!sc || !pp.onLoadNewer || sc.clientHeight === 0) return;
+    if (!loadNewerArmedRef.current && sc.scrollHeight > sc.clientHeight) return;
     if (!shouldLoadNewer({
       nearBottom: sc.scrollHeight - sc.scrollTop - sc.clientHeight < BOTTOM_LOAD_TRIGGER_PX,
       hasMoreBelow: pp.hasMoreBelow,
@@ -2468,17 +2477,20 @@ const ConversationViewInner = (
     updateScrollProgress(virtualizer);
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize, virtualizer, updateScrollProgress]);
 
-  // A window shorter than the viewport fills itself: no scroll-up can arm a
-  // load on a list that cannot scroll. Re-checked as rows land and loads end.
-  // A landed page holds a short cooldown, so check again once it lapses.
+  // A window shorter than the viewport fills itself, in both directions: no
+  // wheel can arm a load on a list that cannot scroll (a share link opening on
+  // a first page of folded tool calls sat on "Later messages" until the reader
+  // wheeled again, one page per gesture). Re-checked as rows land and loads
+  // end. A landed page holds a short cooldown, so check again once it lapses.
   useWatchEffect(() => {
     if (!initialScrollDone) return;
-    maybeLoadOlderRef.current();
+    const fill = () => { maybeLoadOlderRef.current(); maybeLoadNewerRef.current(); };
+    fill();
     const wait = paginationCooldownRef.current - Date.now();
     if (wait <= 0) return;
-    const timer = setTimeout(() => maybeLoadOlderRef.current(), wait + 16);
+    const timer = setTimeout(fill, wait + 16);
     return () => clearTimeout(timer);
-  }, [initialScrollDone, timeline.length, totalSize, hasMoreAbove, isLoadingOlder]);
+  }, [initialScrollDone, timeline.length, totalSize, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer]);
 
   // Pixel-perfect page mount, both directions. The virtualizer's own
   // anchorTo:'end' is estimate-based and doesn't hold the scroll when a page
