@@ -11,8 +11,9 @@ const cy = (id: string) => box(id).y + box(id).h / 2;
 
 describe("layoutLineMap", () => {
   test("the main row sits close under the stage names, and the sources rise into the room the arcs leave", () => {
-    // The stage names take the canvas's top 22px; the main row starts about 48px under them, a little more when loops arc over it (LX2).
-    expect(box("causes").y - 22).toBeLessThanOrEqual(64);
+    // The stage names take the canvas's top 22px; the main row starts about 48px under them, a little more when loops arc over it (LX2):
+    // rebase back to implement is the widest arc.
+    expect(box("causes").y - 22).toBeLessThanOrEqual(72);
     // Many sources: the column starts no lower than the highest arc over the path, so the last pill stays inside the stage.
     const many = buildLineMap({ ...F.rows, finders: [...F.finders, ...["a", "b", "c", "d", "e"].map((x) => ({ id: x, source: x, kind: "any" as const, fingerprint: `${x}:{id}` }))], now: F.NOW, windowMs: 7 * F.DAY });
     const l = layoutLineMap(many);
@@ -39,7 +40,7 @@ describe("layoutLineMap", () => {
   });
 
   test("the path every cause takes runs along one lane, left to right", () => {
-    const main = ["signals", "causes", "ground", "analyze", "prove", "red", "implement", "verify", "eval", "review", "decide", "ship", "merge", "watch", "end:held"];
+    const main = ["signals", "causes", "ground", "analyze", "prove", "red", "implement", "verify", "eval", "review", "decide", "rebase", "ship", "watch", "end:held"];
     for (const id of main) expect(cy(id)).toBe(cy("causes"));
     for (let i = 1; i < main.length; i++) expect(box(main[i]).x).toBeGreaterThan(box(main[i - 1]).x);
   });
@@ -69,7 +70,10 @@ describe("layoutLineMap", () => {
   test("arrow keys move to the nearest node that way", () => {
     expect(neighbor(layout, "ground", "right")).toBe("analyze");
     expect(neighbor(layout, "analyze", "left")).toBe("ground");
-    expect(neighbor(layout, "prove", "down")).toBe("dissolve");
+    // A line cause's own prove and build stations sit right under the ones they stand in for.
+    expect(neighbor(layout, "prove", "down")).toBe("prove_line");
+    expect(box("implement_line").col).toBe(box("implement").col);
+    expect(map.edges.find((e) => e.id === "red->prove_line")?.kind).toBe("loop");
     expect(neighbor(layout, "causes", "left")).toBe("signals");
     expect(neighbor(layout, "end:held", "right")).toBeNull();
   });

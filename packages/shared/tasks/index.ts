@@ -18,6 +18,7 @@ export * from "./statuses";
 export * from "./relatedDocs";
 export * from "./foreignText";
 export * from "./planForeignText";
+export * from "./graph";
 
 // ---------------------------------------------------------------------------
 // Origin

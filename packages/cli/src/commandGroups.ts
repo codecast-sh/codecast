@@ -85,7 +85,7 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   },
   {
     token: "land",
-    description: `Find the work every worktree and cloud host holds that main does not, and release finished trees`,
+    description: `Find the work every worktree and cloud host holds that main does not, release finished trees, and level a checkout onto its upstream`,
     load: () => import("./land/cli.js").then((m) => m.registerLandCommand),
   },
   {
@@ -166,6 +166,7 @@ Subcommands:
   cast decide show <sd>               One decision with its document, ladder and holder
   cast decide recommend <sd> <n>      A role on the ladder recommends option n (within 5 minutes; --note -)
   cast decide answer <sd> <n>         Answer: n | "1,3" (multi) | "2>1>3" (rank) | --form k=v (form)
+                                      --for-human: from a session, as your human, only at their explicit word
 
 Ask flags: --task ct-N (default: the bound task) --station s --stack ds-N --category c
   --kind single|multi|rank|form --doc file.md|- --spec spec.json --option-body n=file.md
@@ -264,6 +265,7 @@ is grounded against: its own project's, else its workspace's.`,
   cast expectations show [--project <ref>] [--at <version>] [--brief] [--json]
   cast expectations propose <file|-> [--project <ref>] [--hold]
   cast expectations apply|drop <xp-N>
+  cast expectations routine [--project <ref>]
 
 --brief is what a judge reads: the active lines with ids under the version a
 finding cites. A proposal that only adds lines, each in a person's quoted,
@@ -367,6 +369,8 @@ Subcommands:
   cast ship run --session <id>          Ship a session's diff
   cast ship run --pr 123                Ship a pull request; this one merges once green
   cast ship run --task ct-42 --dry-run  Print what Ship would do, start nothing
+  cast ship checkout --dry-run          Plan shipping everything uncommitted in this shared checkout, by session
+  cast ship checkout --plan             Ship that plan: commit, replay onto upstream, level, check, deploy, push
   cast ship mark --surface backend      Mark HEAD of this checkout as deployed
   cast ship mark --surface web --sha <sha> --version 1.2.3`,
     load: () => import("./shipCommand.js").then((m) => m.registerShipCommand),
