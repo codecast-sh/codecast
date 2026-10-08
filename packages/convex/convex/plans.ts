@@ -35,6 +35,7 @@ import { docSourceForPlanSource } from "@codecast/shared/docs";
 import { renderFencedPlanRecord, renderFencedPlanTasks } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
+import { graphOutside } from "./lib/taskGraph";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 export { canAccessPlan };
@@ -946,7 +947,15 @@ export const get = query({
     // Merge legacy arrays + new entries into unified comments timeline
     const comments = mergePlanEntries(plan);
 
-    return { ...plan, tasks, doc_content, comments };
+    // The blockers and parents the plan's tasks name outside it, so the CLI's
+    // planReadiness resolves them instead of holding them unknown (TG1).
+    const outside = await graphOutside(ctx, tasks);
+    const graph_outside = {
+      tasks: outside.tasks.map((t) => ({ _id: t._id, short_id: t.short_id, status: t.status })),
+      searched: outside.searched,
+    };
+
+    return { ...plan, tasks, doc_content, comments, graph_outside };
   },
 });
 
