@@ -26,6 +26,8 @@ export function useLocalDeviceId(ready: boolean): string | null {
         if (!stopped && endpoint && !isOverrideEndpoint(endpoint)) {
           found = true;
           setLocal({ viewer, deviceId: endpoint.deviceId });
+          // Shared with readers that cannot probe per mount (an inbox card).
+          useInboxStore.setState({ localDevice: { viewer, deviceId: endpoint.deviceId } });
         }
       } catch (error) {
         if (!stopped) captureException(error);
@@ -46,4 +48,17 @@ export function useLocalDeviceId(ready: boolean): string | null {
   }, [convex, viewer, ready, isWebSocketConnected]);
 
   return local && local.viewer === viewer ? local.deviceId : null;
+}
+
+/** The probe, mounted once per window (DashboardSyncEffects) so the store's
+ *  localDevice is known whether or not any chip that probes is on screen. */
+export function LocalDeviceProbe() {
+  useLocalDeviceId(true);
+  return null;
+}
+
+/** This window's machine from the store, for the viewer it was found for. */
+export function localDeviceIdOf(s: { localDevice: { viewer: string; deviceId: string } | null; currentUser?: { _id?: unknown } | null }): string | null {
+  const viewer = s.currentUser?._id;
+  return s.localDevice && viewer && s.localDevice.viewer === String(viewer) ? s.localDevice.deviceId : null;
 }

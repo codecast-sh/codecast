@@ -27,13 +27,14 @@ import { altChordDirection } from "../shortcuts";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useReviewComposer } from "./reviewContext";
-import { Copy, Ellipsis, Forward, Link2 } from "lucide-react";
+import { ChevronLeft, Copy, Forward, Link2, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
 import { messageLink } from "../lib/conversationFormat";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { parseMessageHash } from "../lib/messageHash";
 import { useTeamFeature } from "../lib/teamFeatures";
+import { TOOLBAR_BTN, TOOLBAR_SHELL } from "./conversation/toolbarStyles";
 
 const RightCommentRail = lazy(() => import("./comments/RightCommentRail").then((m) => ({ default: m.RightCommentRail })));
 
@@ -545,11 +546,12 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
         ))}
 
       {/* Mirror of the quote handle on the RIGHT gutter: the block's actions.
-          The handle opens a column under it, in the gutter: comment for your
-          team (when comment tools are on), link to this paragraph, copy it,
-          send it to chat. The open menu stays on its block while the pointer
-          moves on. */}
-      {editingId === null && (menuBlock ?? hoverIndex) !== null && (() => {
+          The handle opens a strip to its left in the message toolbar's look:
+          comment for your team (when comment tools are on), link to this
+          paragraph, copy it, send it to chat. The open menu stays on its block
+          while the pointer moves on. The first block has no handle: the
+          message toolbar already sits over it with the message-wide actions. */}
+      {editingId === null && (menuBlock ?? hoverIndex ?? 0) > 0 && (() => {
         const i = (menuBlock ?? hoverIndex)!;
         const top = rects[i]?.top ?? hoverTop;
         const open = menuBlock === i;
@@ -566,32 +568,30 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => setMenuBlock(open ? null : i)}
             >
-              <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
+              <ChevronLeft className="cc-block-comment-chevron w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            {open && (
-              <div className="cc-block-menu" role="menu" style={{ top: `calc(${top}px + 1.6rem)` }}>
+            {/* Mounted while the handle is up, so it slides out of the handle
+                and back into it rather than popping. */}
+            <div className={`cc-block-menu ${TOOLBAR_SHELL}`} role="menu" data-open={open} inert={!open} style={{ top }}>
                 {commentsEnabled && (
-                  <button type="button" role="menuitem" title="Comment for your team" aria-label="Comment for your team" onClick={() => runBlockAction(i, "comment")}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-                    </svg>
+                  <button type="button" role="menuitem" className={TOOLBAR_BTN} title="Comment for your team" aria-label="Comment for your team" onClick={() => runBlockAction(i, "comment")}>
+                    <MessageCircle className="w-4 h-4" aria-hidden="true" />
                   </button>
                 )}
                 {linkable && (
-                  <button type="button" role="menuitem" title="Copy link to paragraph" aria-label="Copy link to paragraph" onClick={() => runBlockAction(i, "link")}>
-                    <Link2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <button type="button" role="menuitem" className={TOOLBAR_BTN} title="Copy link to paragraph" aria-label="Copy link to paragraph" onClick={() => runBlockAction(i, "link")}>
+                    <Link2 className="w-4 h-4" aria-hidden="true" />
                   </button>
                 )}
-                <button type="button" role="menuitem" title="Copy paragraph" aria-label="Copy paragraph" onClick={() => runBlockAction(i, "copy")}>
-                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                <button type="button" role="menuitem" className={TOOLBAR_BTN} title="Copy paragraph" aria-label="Copy paragraph" onClick={() => runBlockAction(i, "copy")}>
+                  <Copy className="w-4 h-4" aria-hidden="true" />
                 </button>
                 {linkable && chatOn && (
-                  <button type="button" role="menuitem" title="Send to chat" aria-label="Send paragraph to chat" onClick={() => runBlockAction(i, "chat")}>
-                    <Forward className="w-3.5 h-3.5" aria-hidden="true" />
+                  <button type="button" role="menuitem" className={TOOLBAR_BTN} title="Send to chat" aria-label="Send paragraph to chat" onClick={() => runBlockAction(i, "chat")}>
+                    <Forward className="w-4 h-4" aria-hidden="true" />
                   </button>
                 )}
-              </div>
-            )}
+            </div>
           </div>
         );
       })()}

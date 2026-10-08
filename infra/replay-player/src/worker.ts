@@ -16,15 +16,35 @@
 // A frame is the same page in frame mode, loaded by Cloudflare Browser
 // Rendering (the `BROWSER` binding, Workers Paid): it draws the page at a
 // time, waits for the replayed images and fonts, and screenshots the stage.
-// A request's capability is checked against Convex before a browser starts,
-// so a forged one costs one GET and no browser time.
+// A request is admitted by Convex before a browser starts (POST
+// REPLAY_FRAME_ADMIT_PATH): the capability opens, and it and the person it
+// names still have frame budget (REPLAY_FRAME_LIMITS.requests_per_cap,
+// requests_per_person), so a forged capability costs one POST and a valid
+// one buys a bounded number of browser sessions.
+//
+// What the replayed page may fetch. A recording names its own images,
+// stylesheets and fonts, and anyone holding a source's public ingest key can
+// upload a recording that names any URL, so a replay readable in a workspace
+// is no promise about the hosts it names. By default the page loads nothing
+// remote in either mode: its CSP allows no remote host for styles, images,
+// fonts or media, so remote images show as empty boxes (stylesheets are
+// inlined by the recorder and still apply). In interactive mode the viewer
+// may opt in on one view (`assets=remote`, which the player offers as a
+// button naming the hosts): only then does the viewer's browser fetch them
+// over https, and those hosts learn the viewer's IP and user agent (never a
+// referrer). Frame mode never opts in, and the renderer also intercepts every
+// request its browser makes and lets through only this worker, Convex, the
+// replays bucket (REPLAYS_BUCKET_URL) and data:/blob:, so Cloudflare's
+// browser never fetches a URL a recording chose.
 import puppeteer, { type BrowserWorker } from "@cloudflare/puppeteer";
 import {
+  REPLAY_FRAME_ADMIT_PATH,
   REPLAY_FRAME_LIMITS,
   REPLAY_FRAME_PATH,
   REPLAY_MANIFEST_ORIGIN,
   REPLAY_PLAYER_MANIFEST_PATH,
   REPLAY_PLAYER_ORIGIN,
+  parseReplayPlayerUrl,
   replayPlayerUrl,
   type ReplayFrame,
   type ReplayFrameRequest,
@@ -39,21 +59,49 @@ export interface Env {
   CONVEX_ORIGIN?: string;
   /** This worker's own public origin, which the renderer loads the page from. Defaults to replay.codecast.sh. */
   PLAYER_ORIGIN?: string;
+  /**
+   * The replays bucket, path style: `https://<account>.r2.cloudflarestorage.com/<bucket>/`,
+   * the prefix every signed DOM chunk URL Convex hands out starts with. The
+   * page and the renderer read chunks from here and nowhere else in R2;
+   * unset, they read from no bucket at all.
+   */
+  REPLAYS_BUCKET_URL?: string;
+}
+
+/** The replays bucket as an origin and a path prefix, or null when unset or malformed. */
+export function replaysBucket(url: string | undefined): { origin: string; prefix: string } | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const prefix = u.pathname.endsWith("/") ? u.pathname : `${u.pathname}/`;
+    if (u.protocol !== "https:" || prefix === "/") return null;
+    return { origin: u.origin, prefix };
+  } catch {
+    return null;
+  }
 }
 
 const json = (status: number, body: unknown, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extra } });
 
-/** The CSP the player page runs under. Scripts are this origin's alone; the replayed page's own styles, images and fonts load from wherever it named them. */
-export function playerCsp(convexOrigin: string): string {
+/**
+ * The CSP the player page runs under. Scripts are this origin's alone, and
+ * the page reads only Convex and the replays bucket. The replayed page's own
+ * remote styles, images, fonts and media load only when the viewer opted in
+ * on this view (`remoteAssets`, interactive mode); otherwise nothing remote
+ * loads (see the header).
+ */
+export function playerCsp(convexOrigin: string, bucketUrl: string | undefined, opts: { mode?: "interactive" | "frame"; remoteAssets?: boolean } = {}): string {
+  const remote = opts.mode !== "frame" && opts.remoteAssets ? " https:" : "";
+  const bucket = replaysBucket(bucketUrl);
   return [
     "default-src 'none'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline' https: data: blob:",
-    "img-src https: http: data: blob:",
-    "font-src https: data:",
-    "media-src https: data: blob:",
-    `connect-src ${convexOrigin} https://*.r2.cloudflarestorage.com`,
+    `style-src 'self' 'unsafe-inline'${remote} data: blob:`,
+    `img-src${remote} data: blob:`,
+    `font-src${remote} data:`,
+    `media-src${remote} data: blob:`,
+    `connect-src ${convexOrigin}${bucket ? ` ${bucket.origin}${bucket.prefix}` : ""}`,
     "frame-src 'self' about:",
     "base-uri 'none'",
     "form-action 'none'",
@@ -80,8 +128,12 @@ export function playerPage(convexOrigin: string): string {
   #stage iframe { border: 0; background: #fff; }
   #status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: #555; background: #fafafa; }
   #controls { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px; box-sizing: border-box; background: #111; color: #eee; }
-  #controls button, #controls select { font: inherit; background: #222; color: #eee; border: 1px solid #333; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  #controls button, #controls select, #strip button { font: inherit; background: #222; color: #eee; border: 1px solid #333; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   #scrub { flex: 1; accent-color: #6aa3ff; }
+  #strip { position: absolute; left: 0; right: 0; bottom: 0; height: 28px; display: flex; align-items: center; padding: 0 6px; box-sizing: border-box; background: #111; }
+  #controls #remote, #strip #remote { min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #9aa4ad; background: transparent; border: 1px solid transparent; }
+  #strip #remote { max-width: 100%; padding: 2px 8px; }
+  #controls #remote:hover, #strip #remote:hover, #remote:focus-visible { color: #eee; border-color: #333; background: #1b1b1b; }
   #clock { font-variant-numeric: tabular-nums; min-width: 96px; text-align: right; }
   [hidden] { display: none !important; }
 </style>
@@ -89,11 +141,13 @@ export function playerPage(convexOrigin: string): string {
 <body data-manifest-origin="${convexOrigin}" data-manifest-path="${REPLAY_PLAYER_MANIFEST_PATH}">
 <div id="stage"></div>
 <div id="status" hidden></div>
+<div id="strip" hidden></div>
 <div id="controls" hidden>
   <button id="toggle" type="button">Play</button>
   <input id="scrub" type="range" min="0" max="0" step="100" value="0" aria-label="Position">
   <span id="clock">0:00 / 0:00</span>
   <select id="speed" aria-label="Speed"></select>
+  <button id="remote" type="button" hidden></button>
 </div>
 <script src="/player.js"></script>
 </body>
@@ -111,20 +165,49 @@ export function validateFrameRequest(body: unknown): ReplayFrameRequest | string
   return { cap: b.cap, times_ms: [...(b.times_ms as number[])].sort((x, y) => x - y) };
 }
 
-/** Whether Convex opens this capability (the manifest route answers 200), without starting a browser. */
-async function capabilityOpens(convexOrigin: string, cap: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
-  const res = await fetchImpl(`${convexOrigin}${REPLAY_PLAYER_MANIFEST_PATH}?cap=${encodeURIComponent(cap)}`);
+/**
+ * Whether Convex admits a frame request on this capability: 204 opens it, and
+ * a refusal is relayed as the response to send (404 dead, 429 past budget).
+ */
+async function admitFrames(convexOrigin: string, cap: string, fetchImpl: typeof fetch = fetch): Promise<Response | null> {
+  const res = await fetchImpl(`${convexOrigin}${REPLAY_FRAME_ADMIT_PATH}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cap }) });
   await res.body?.cancel().catch(() => {});
-  return res.ok;
+  if (res.ok) return null;
+  if (res.status === 429) {
+    return json(429, { error: "This replay link has used its frames for now; try again in a few minutes." }, { "Retry-After": res.headers.get("Retry-After") ?? "60" });
+  }
+  if (res.status === 404) return json(404, { error: "This replay link has expired or does not exist. Ask for a fresh one." });
+  return json(503, { error: `The frame request could not be checked (${res.status}); try again.` }, { "Retry-After": "5" });
+}
+
+/** Whether the frame renderer's browser may fetch this URL: the player, Convex, the replays bucket, and inline data. */
+export function frameRequestAllowed(url: string, origins: { player: string; convex: string; bucket?: string }): boolean {
+  if (url.startsWith("data:") || url.startsWith("blob:") || url === "about:blank" || url === "about:srcdoc") return true;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.origin === new URL(origins.player).origin || u.origin === new URL(origins.convex).origin) return true;
+  const bucket = replaysBucket(origins.bucket);
+  return !!bucket && u.origin === bucket.origin && u.pathname.startsWith(bucket.prefix);
 }
 
 type PageState = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; t_ms: number; url: string | null; width: number; height: number; outline: string };
 
 async function renderFrames(env: Env, req: ReplayFrameRequest): Promise<ReplayFrame[]> {
   const origin = env.PLAYER_ORIGIN || REPLAY_PLAYER_ORIGIN;
+  const origins = { player: origin, convex: env.CONVEX_ORIGIN || REPLAY_MANIFEST_ORIGIN, bucket: env.REPLAYS_BUCKET_URL };
   const browser = await puppeteer.launch(env.BROWSER);
   try {
     const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (r.isInterceptResolutionHandled()) return;
+      if (frameRequestAllowed(r.url(), origins)) r.continue().catch(() => {});
+      else r.abort("blockedbyclient").catch(() => {});
+    });
     await page.setViewport({ width: REPLAY_FRAME_LIMITS.max_width, height: REPLAY_FRAME_LIMITS.max_height, deviceScaleFactor: 1 });
     await page.goto(replayPlayerUrl({ cap: req.cap, t_ms: req.times_ms[0], mode: "frame" }, origin), { waitUntil: "load", timeout: 30_000 });
     await page.waitForFunction("window.__codecastReplay && window.__codecastReplay.state !== 'loading'", { timeout: 60_000 });
@@ -163,8 +246,8 @@ export async function handleFrame(request: Request, env: Env, deps: { fetch?: ty
   }
   const req = validateFrameRequest(body);
   if (typeof req === "string") return json(400, { error: req });
-  const convexOrigin = env.CONVEX_ORIGIN || REPLAY_MANIFEST_ORIGIN;
-  if (!(await capabilityOpens(convexOrigin, req.cap, deps.fetch))) return json(404, { error: "This replay link has expired or does not exist. Ask for a fresh one." });
+  const refused = await admitFrames(env.CONVEX_ORIGIN || REPLAY_MANIFEST_ORIGIN, req.cap, deps.fetch);
+  if (refused) return refused;
   try {
     return json(200, { frames: await (deps.render ?? renderFrames)(env, req) });
   } catch (err) {
@@ -187,10 +270,11 @@ export default {
     }
     if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
     if (/^\/p\/[^/]+\/?$/.test(url.pathname)) {
+      const params = parseReplayPlayerUrl(request.url);
       return new Response(playerPage(convexOrigin), {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
-          "Content-Security-Policy": playerCsp(convexOrigin),
+          "Content-Security-Policy": playerCsp(convexOrigin, env.REPLAYS_BUCKET_URL, { mode: params?.mode, remoteAssets: params?.remote_assets }),
           "Cache-Control": "no-store",
           "Referrer-Policy": "no-referrer",
           "X-Content-Type-Options": "nosniff",
