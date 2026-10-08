@@ -8,8 +8,10 @@
 // its words; why saves on Cmd+Enter and Escape cancels; every entry is edited
 // in its own row (a milestone's day moves and keeps its key and source); a
 // source says who said it with a face and a note shows its words; a draft or
-// an open form never follows the page to another goal; and a goal with no
-// record says so in one quiet sentence a section.
+// an open form never follows the sheet to another goal; and a goal with no
+// record draws none of its parts, only the row that starts one, with no
+// sentence saying a part is empty. Why is mounted above the record the way a
+// goal's sheet draws it, and capped, it shows Read all only where it is cut.
 // Run: bun test components/initiatives/InitiativeRecord.mount.test.tsx
 import { test } from "bun:test";
 import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
@@ -65,7 +67,7 @@ async function verifyRecord() {
   mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: any) => React.createElement("div", { "data-markdown": true }, content) }));
 
   const { createRoot } = await import("react-dom/client");
-  const { InitiativeRecord } = await import("./InitiativeRecord");
+  const { InitiativeRecord, Written } = await import("./InitiativeRecord");
   let root = createRoot(document.getElementById("root")!);
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
   const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
@@ -82,7 +84,13 @@ async function verifyRecord() {
   };
   let shown = "init-org";
   // The page paints from the store: after a write, the row it is handed is the store's.
-  const paint = async () => act(async () => root.render(React.createElement(InitiativeRecord, { initiative: rows.find((r) => r._id === shown)!, all: rows, now: fx.FIXTURE_NOW })));
+  // As a goal's sheet draws it: Why, then the record, the two keyed by the goal.
+  const paint = async () => {
+    const goal = rows.find((r) => r._id === shown)!;
+    await act(async () => root.render(React.createElement(React.Fragment, { key: goal._id },
+      React.createElement(Written, { initiative: goal, field: "why", label: "Why", rows: 4, markdown: true, fallback: goal.description, placeholder: "" }),
+      React.createElement(InitiativeRecord, { initiative: goal, now: fx.FIXTURE_NOW }))));
+  };
   const mount = async (id: string) => {
     shown = id;
     await act(async () => root.unmount());
@@ -297,21 +305,55 @@ async function verifyRecord() {
   await press(q("[data-initiative-field='done_when']"), "Enter", { ctrlKey: true });
   assert.equal(last(), `update:init-org:${JSON.stringify({ done_when: null })}`);
 
-  // ── a goal with no record: one quiet sentence a section ──
+  // ── a goal with no record: no part drawn, no sentence about an empty one ──
   await mount("init-orphan");
-  assert.deepEqual(attrs("[data-initiative-section]", "data-initiative-section"), ["why", "done_when", "milestones", "questions", "decisions", "sources"]);
-  assert.match(q("[data-initiative-section='why']")!.textContent!, /Nobody has said why this matters yet\./);
-  assert.match(q("[data-initiative-section='done_when']")!.textContent!, /Nobody has said what done looks like yet\./);
-  assert.match(q("[data-initiative-section='milestones']")!.textContent!, /No milestones yet\./);
-  assert.match(q("[data-initiative-section='questions']")!.textContent!, /Nothing is waiting on an answer\./);
-  assert.match(q("[data-initiative-section='decisions']")!.textContent!, /No decisions recorded yet\./);
-  assert.match(q("[data-initiative-section='sources']")!.textContent!, /Nobody has said where this goal was stated\./);
+  assert.deepEqual(attrs("[data-initiative-section]", "data-initiative-section"), ["why"], "Why with the word that writes it, and nothing else");
+  assert.match(q("[data-initiative-section='why']")!.textContent!, /^Why\s*Write$/);
+  assert.deepEqual(attrs("[data-initiative-add-part]", "data-initiative-add-part"), ["done_when", "milestones", "questions", "decisions", "sources"]);
+  assert.doesNotMatch(document.body.textContent!, /Nobody|No milestones|Nothing is waiting|No decisions/);
+  assert.equal(document.querySelectorAll("p.italic, .italic").length, 0, "no column of italics");
   assert.equal(q("[data-initiative-answered]"), null);
   assert.equal(q("[data-initiative-milestone-counts]"), null);
+  // Starting a part opens it with its form ready, and the row stops offering it.
+  await click(q("[data-initiative-add-part='milestones']"));
+  assert.deepEqual(attrs("[data-initiative-section]", "data-initiative-section"), ["why", "milestones"]);
+  assert.ok(q("[data-initiative-form='milestones']"), "the form is open");
+  assert.deepEqual(attrs("[data-initiative-add-part]", "data-initiative-add-part"), ["done_when", "questions", "decisions", "sources"]);
+  // A description stands in for an unwritten why, and the editor still writes why.
+  rows = rows.map((r) => (r._id === "init-orphan" ? { ...r, description: "Phones do what the desktop does." } : r));
+  await paint();
+  assert.equal(q("[data-initiative-section='why'] [data-markdown]")!.textContent, "Phones do what the desktop does.");
+  await click(q("[data-initiative-edit='why']"));
+  await type(q("[data-initiative-field='why']"), "Half the team reads on a phone.");
+  await press(q("[data-initiative-field='why']"), "Enter", { metaKey: true });
+  assert.equal(last(), `update:init-orphan:${JSON.stringify({ why: "Half the team reads on a phone." })}`);
+
+  // ── a capped Why: held to a glance with Read all, only where the words are cut ──
+  // jsdom lays nothing out, so the clamp box reports how tall its words run.
+  let runs = 400;
+  const proto = (dom.window as any).HTMLElement.prototype;
+  Object.defineProperty(proto, "scrollHeight", { configurable: true, get(this: HTMLElement) { return this.parentElement?.hasAttribute("data-clamped") ? runs : 0; } });
+  const capped = async () => {
+    await act(async () => root.unmount());
+    root = createRoot(document.getElementById("root")!);
+    await act(async () => root.render(React.createElement(Written, { initiative: rows.find((r) => r._id === "init-org")!, field: "why", label: "Why", rows: 4, markdown: true, clamp: true, placeholder: "" })));
+  };
+  await capped();
+  assert.equal(q("[data-clamped]")!.getAttribute("data-clamped"), "cut");
+  assert.equal(q("[data-clamp-toggle]")!.textContent, "Read all");
+  await click(q("[data-clamp-toggle]"));
+  assert.equal(q("[data-clamped]")!.getAttribute("data-clamped"), "open", "Read all lifts the cap");
+  assert.equal(q("[data-clamp-toggle]")!.textContent, "Show less");
+  assert.ok(q("[data-initiative-edit='why']"), "Edit stays in the section head");
+  runs = 0;
+  await capped();
+  assert.equal(q("[data-clamped]")!.getAttribute("data-clamped"), "whole");
+  assert.equal(q("[data-clamp-toggle]"), null, "words that fit get no toggle");
+  delete proto.scrollHeight;
 
   await act(async () => root.unmount());
 }
 
-test("the intent record mounts: sections in order, milestones marked, a question answered, a source read, why saved", async () => {
+test("the goal record mounts: parts in order, milestones marked, a question answered, a source read, why saved, nothing empty drawn", async () => {
   await verifyRecord();
 }, 600_000);

@@ -59,6 +59,7 @@ import { installationCoversRepo } from "./githubApp";
 import { connectionForWork } from "./oauthConnectors";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
+import { mintProjectShortId } from "./lib/projectShortId";
 
 /** A provider issue normalized to one shape before it touches a task (S2). */
 export const normalizedIssueValidator = v.object({
@@ -1522,7 +1523,7 @@ async function addSourceFor(
     // No project named: the imported container gets one of its own, so the
     // tasks land somewhere a person can find them (S1.3).
     const projectId = await db.insert("projects", {
-      short_id: `pj-${now.toString(36)}`,
+      short_id: await mintProjectShortId(ctx, now),
       title: args.name,
       description: `Imported from ${args.provider}`,
       status: "active",

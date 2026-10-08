@@ -274,6 +274,7 @@ cast events ls --since 24h [-w]           # transitions: new and regressed error
 cast events groups --status open          # grouped facts with counts; events show eg-N for samples and the stack
 cast events resolve eg-N --in <release>   # once the fix ships (ignore eg-N for noise)
 cast replay show rp-N                     # what the person did, as text; replay repro rp-N writes a Playwright test
+cast replay snap rp-N@1:23                # the page at that moment: a PNG to Read, with its URL, visible text, console and network
 cast metrics ls                           # watched numbers; metrics query "<hogql>" --source <s> reads PostHog live
 cast connector readers <source>           # what the product lets you read; connector read <source> <reader> --arg k=v
 cast connector do <source> <action>       # runs only an action a person granted
@@ -1090,6 +1091,8 @@ cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorro
 A withdraw arrives after the human has read the ask, so get it right before posting. To see how a card renders, mount the component on a fixture row or open an answered one. The context renders as markdown, \`cast-canvas\` blocks included, and most decisions read faster as a picture; keep prose for the reasoning a picture cannot carry. A bare question is useless: the queue shows nothing else unless they open the session.
 
 \`cast decide edit\` and \`cast decide cancel\` act on this session's open decision and keep its spot in the queue. An answered decision cannot be edited; act on the answer. Before ending a long turn and whenever you post, cancel open asks the work has moved past: an answer to a question that stopped mattering costs attention and earns nothing. Answers often land an hour later and disagree, and everything built on an advisory default is then work to unwind; if reversing would cost more than waiting, block.
+
+A decision is your human's to answer. When they tell you in this conversation to answer one ("approve sd-494", "go with option 2 on both"), \`cast decide answer sd-N <n> --for-human\` records it as their answer, carried by this session. Do it only on their explicit word or their explicit agreement to a choice you named, never on your own reading of what they would want, and never for a question you asked yourself.
 `;
 
 export const DECIDE_SECTION: SectionSpec = {

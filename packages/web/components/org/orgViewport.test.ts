@@ -166,6 +166,74 @@ describe("panIntoView (a focus pans by the least that shows the card)", () => {
   });
 });
 
+describe("a shallow, wide org (the This week map's 0.42 floor)", () => {
+  // Ten roots in one row and a role under each: far wider than the pane, and short.
+  const wide = Array.from({ length: 10 }, (_, i) => [
+    { id: `person:${i}`, kind: "person", x: i * 280, y: 0, w: 240, h: 90 },
+    { id: `role:${i}`, kind: "role", x: i * 280, y: 140, w: 240, h: 110 },
+  ]).flat();
+
+  it("does not shrink to a thumbnail it cannot fit anyway: it reads at full size from the left", () => {
+    const fit = fitTarget(wide, 600 - FIT_PAD * 2, 1000 - FIT_PAD * 2, 0.42)!;
+    expect(fit.whole).toBe(false);
+    expect(fit.zoom).toBe(1);
+    const vp = computeOrgViewport(wide, 600, 1000, 0, null, 0, 0.42)!;
+    expect(vp.zoom).toBe(1);
+    expect(vp.x).toBeCloseTo(FIT_PAD, 5);
+    expect(vp.y).toBeCloseTo(FIT_PAD, 5);
+    // The rest is reached by the edge pills.
+    expect(hiddenRoots(wide as never, vp, 600).right.length).toBeGreaterThan(0);
+  });
+
+  it("a tall tree still never fits under the floor", () => {
+    const tall = wide.map((n) => ({ ...n, y: n.y * 10, h: n.h * 10 }));
+    expect(fitTarget(tall, 552, 952, 0.42)!.zoom).toBe(0.42);
+  });
+
+  it("a row that fits by width at the floor still fits by width", () => {
+    const three = wide.filter((n) => Number(n.id.split(":")[1]) < 3);
+    const fit = fitTarget(three, 552, 80, 0.42)!;
+    expect(fit.whole).toBe(false);
+    expect(fit.zoom).toBeCloseTo(552 / (2 * 280 + 240), 5);
+  });
+});
+
+describe("panIntoView in center mode (the card whose sheet is open)", () => {
+  const wide = Array.from({ length: 10 }, (_, i) => [
+    { id: `person:${i}`, kind: "person", x: i * 280, y: 0, w: 240, h: 90 },
+    { id: `role:${i}`, kind: "role", x: i * 280, y: 140, w: 240, h: 110 },
+  ]).flat();
+  const strip = { w: 450, h: 1100 };
+  const centre = (id: string, vp: { x: number; zoom: number }) => { const n = wide.find((b) => b.id === id)!; return (n.x + n.w / 2) * vp.zoom + vp.x; };
+
+  it("puts the card in the middle of the strip the sheet leaves, at a readable zoom", () => {
+    const small = { x: FIT_PAD, y: FIT_PAD, zoom: 0.42 };
+    const vp = panIntoView(wide, "role:4", small, strip, "center")!;
+    expect(vp.zoom).toBe(MIN_READABLE_ZOOM);
+    expect(centre("role:4", vp)).toBeCloseTo(strip.w / 2, 5);
+    // Down the page it moves only if it must: the role row stays where the zoom put it, inside the strip.
+    const n = wide.find((b) => b.id === "role:4")!;
+    expect((n.y + n.h) * vp.zoom + vp.y).toBeLessThanOrEqual(strip.h);
+  });
+
+  it("keeps the viewer's zoom when it is readable, and is held to the tree at its ends", () => {
+    const at = { x: FIT_PAD, y: FIT_PAD, zoom: 1 };
+    const first = panIntoView(wide, "person:0", at, strip, "center");
+    // The first card cannot reach the middle without a blank strip at the tree's start: nothing moves.
+    expect(first).toBeNull();
+    const mid = panIntoView(wide, "person:5", at, strip, "center")!;
+    expect(mid.zoom).toBe(1);
+    expect(centre("person:5", mid)).toBeCloseTo(strip.w / 2, 5);
+    // A second ask once centred asks for nothing.
+    expect(panIntoView(wide, "person:5", mid, strip, "center")).toBeNull();
+  });
+
+  it("least mode is unchanged: a visible card does not move", () => {
+    const at = { x: FIT_PAD, y: FIT_PAD, zoom: 1 };
+    expect(panIntoView(wide, "person:0", at, strip)).toBeNull();
+  });
+});
+
 describe("crossing a zoom stop (orgZoom)", () => {
   const box = (id: string, y: number, h: number) => ({ id, x: 0, y, w: 100, h });
   // The layout on screen (tall close cards), and the shorter one that replaces it.
