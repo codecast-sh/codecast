@@ -93,7 +93,7 @@
 .peekBox.peekBox { padding: 14px; }
 .peek { display: flex; flex-direction: column; }
 .peekHead { display: flex; align-items: center; gap: var(--s2); }
-.peekHead b { margin-right: 4px; font: var(--t-h2); font-variation-settings: var(--voice-axes); }
+.peekHead b { margin-right: 4px; font: var(--t-h2); }
 .peekHead small { min-width: 0; font: 400 12.5px/1.3 var(--ui); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .summary { margin-top: 10px; font: 600 14px/1.4 var(--ui); overflow-wrap: anywhere; }
 .request {
