@@ -53,7 +53,7 @@ function allRepoRoots(): string[] {
  * the inbox listing (`cast sessions`) stands in. It omits subagent rows, whose
  * trees are still caught by a running process or recent edits.
  */
-async function readRoster(): Promise<{ rows: RosterRow[] | null; status: string }> {
+export async function readRoster(): Promise<{ rows: RosterRow[] | null; status: string }> {
   // The Convex client logs (slow-query warnings) to stdout, which would corrupt --json.
   const log = console.log;
   console.log = console.error;
@@ -70,15 +70,19 @@ async function readRoster(): Promise<{ rows: RosterRow[] | null; status: string 
     console.log = log;
   }
   try {
-    const { stdout } = await execFileAsync("cast", ["sessions", "--json", "-n", "1000"], { encoding: "utf-8", timeout: 120_000, maxBuffer: 256 * 1024 * 1024 });
-    const json = JSON.parse(String(stdout).slice(String(stdout).indexOf("{")));
-    const rows = Object.values(json).filter(Array.isArray).flat()
-      .filter((r: any) => r && typeof r === "object" && "work_state" in r)
-      .map((r: any): RosterRow => ({ short_id: String(r.id).slice(0, 7), title: r.title ?? null, work_state: r.work_state, project_path: r.project_path ?? null, updated_at: r.updated_at ?? null }));
-    return { rows, status: `ok (inbox listing; hostSessions failed: ${first})` };
+    return { rows: await inboxRoster(), status: `ok (inbox listing; hostSessions failed: ${first})` };
   } catch (err) {
     return { rows: null, status: `hostSessions failed (${first}); inbox listing failed (${String((err as Error)?.message ?? err).split("\n")[0]})` };
   }
+}
+
+/** The inbox listing (`cast sessions`) as roster rows; omits subagent rows. */
+export async function inboxRoster(): Promise<RosterRow[]> {
+  const { stdout } = await execFileAsync("cast", ["sessions", "--json", "-n", "1000"], { encoding: "utf-8", timeout: 120_000, maxBuffer: 256 * 1024 * 1024 });
+  const json = JSON.parse(String(stdout).slice(String(stdout).indexOf("{")));
+  return Object.values(json).filter(Array.isArray).flat()
+    .filter((r: any) => r && typeof r === "object" && "work_state" in r)
+    .map((r: any): RosterRow => ({ short_id: String(r.id).slice(0, 7), title: r.title ?? null, work_state: r.work_state, project_path: r.project_path ?? null, updated_at: r.updated_at ?? null }));
 }
 
 async function scanLocal(opts: ScanOpts): Promise<LandScan> {
@@ -225,6 +229,34 @@ branch as refs/codecast/land-archive/<branch>.`);
       if (!report) { console.error(`no worktree at ${dir}`); process.exit(1); }
       const only: FileVerdict[] | undefined = opts.only || opts.both ? [...(opts.only ? ["only" as const] : []), ...(opts.both ? ["both" as const] : [])] : undefined;
       process.stdout.write(await treePatch(report, only));
+    });
+
+  land
+    .command("level")
+    .description("Move this checkout onto its upstream in place: rewrite only files nobody here changed, keep every local edit")
+    .option("--to <ref>", "the commit to level onto (default: the upstream, origin/main)")
+    .option("--no-fetch", "use the upstream ref already on disk")
+    .option("--dry-run", "report what would be written, write nothing")
+    .option("--json", "machine-readable output")
+    .action(async (opts: { to?: string; fetch?: boolean; dryRun?: boolean; json?: boolean }) => {
+      const { levelCheckout } = await import("./level.js");
+      const { upstreamRef } = await import("./shipCheckout.js");
+      const root = await repoRootOf(process.cwd());
+      const target = opts.to ?? await upstreamRef(root);
+      if (!opts.to && opts.fetch !== false) {
+        const [remote, ...branch] = target.split("/");
+        await execFileAsync("git", ["-C", root, "fetch", "--quiet", remote, branch.join("/")]).catch(() => {});
+      }
+      const r = await levelCheckout(root, target, { dryRun: opts.dryRun });
+      if (opts.json) { console.log(JSON.stringify(r, null, 2)); if (!r.ok) process.exitCode = 1; return; }
+      if (r.from === r.to) { console.log(`Already level with ${target} (${r.to.slice(0, 9)})`); return; }
+      const verb = opts.dryRun ? "Would level" : r.ok ? "Levelled" : "Did not level";
+      console.log(`${verb} ${r.from.slice(0, 9)} -> ${r.to.slice(0, 9)} (${target}): ${r.written.length} written, ${r.deleted.length} deleted, ${r.merged.length} merged, ${r.absorbed.length} absorbed`);
+      if (!r.ok) {
+        console.log(fmt.error(r.reason ?? "failed"));
+        for (const c of r.conflicts) console.log(`  ${fmt.path(c)}`);
+        process.exitCode = 1;
+      }
     });
 
   addScanOptions(land.command("prune [trees...]").description("Archive and release the stale, landed and empty trees (or just the named ones)"))

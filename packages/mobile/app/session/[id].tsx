@@ -60,9 +60,20 @@ import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { ApprovalCard } from '@/components/hosted/ApprovalCard';
-import { HostedStep } from '@/components/hosted/Steps';
-import { LANE_COPY, answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
+import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
+import { hostedApprovalAnswer, hostedApprovalState, type HostedApprovalState } from '@codecast/web/lib/hostedApproval';
+import { HostedSources, HostedStep } from '@/components/hosted/Steps';
+import { ReplyChips } from '@/components/hosted/ReplyChips';
+import { searchedSources } from '@codecast/web/lib/hostedReceipt';
+import { HostedNoticeRow } from '@/components/hosted/Notice';
+import { foldHostedRetries, hostedNoticeKind, lastAskOf } from '@codecast/web/lib/hostedNotice';
+import { Serif } from '@/constants/fonts';
+import { sendDisc, useHostedTheme } from '@/components/hosted/hostedTheme';
+import { hostedComposerWords, hostedLastExchange } from '@codecast/web/lib/hostedComposer';
+import { useAllowanceOut } from '@codecast/web/components/simple/usePlanFigures';
+import { hostedConnectionWords } from '@codecast/web/components/conversation/HostedConnection';
+import { useLinkDown } from '@/hooks/useLinkDown';
+import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
@@ -71,7 +82,7 @@ import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
-import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
+import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
 import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
@@ -2507,6 +2518,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   bookmarkedSet?: Set<string>;
 }) {
   const Theme = useTheme();
+  // Hosted voices are the family look's; developer mode draws a hosted
+  // conversation as it draws any other.
+  const familyLook = useActiveLook() === 'family';
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -2628,6 +2642,15 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return null;
   }
 
+  // A hosted conversation reads as two voices, as on the web: the person's
+  // words a quiet note in the interface face, the assistant's reply a letter
+  // in the reading face, and its narration before a step in the receipt's
+  // size and ink. Neither carries a name and time header.
+  const hostedVoice = hostedAgent && familyLook;
+  const bodyStyle = !hostedVoice
+    ? [styles.bubbleText, isUser ? styles.userText : styles.assistantText]
+    : isUser ? styles.hostedUserText : hasToolCalls ? styles.hostedNarration : styles.hostedReply;
+
   const handleTapToExpand = () => {
     if (globalCollapsed && !localExpanded) {
       setLocalExpanded(true);
@@ -2638,8 +2661,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   return (
     <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : undefined}>
       <RNView
-        style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
-        {showHeader && !isToolCallOnly && (
+        style={[styles.messageBubble, isUser ? (hostedVoice ? styles.hostedUserBubble : styles.userBubble) : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
+        {showHeader && !isToolCallOnly && !hostedVoice && (
         <RNView style={styles.bubbleHeader}>
           {isUser ? (
             <RNView style={styles.userAvatar}>
@@ -2689,7 +2712,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         >
           {(() => {
             if (typeof content !== 'string') {
-              return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+              return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
             }
             const apiError = parseApiErrorContent(content);
             if (apiError) {
@@ -2711,13 +2734,13 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return parseSkillBlocks(content).map((part, idx) =>
                 part.type === 'skill'
                   ? <SkillBlockCard key={idx} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
-                  : <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+                  : <MarkdownContent key={idx} text={part.content} baseStyle={bodyStyle} isUser={isUser} />
               );
             }
             if (content.includes('<teammate-message')) {
               return parseTeammateMessages(content).map((part, idx) =>
                 part.type === 'text'
-                  ? <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+                  ? <MarkdownContent key={idx} text={part.content} baseStyle={bodyStyle} isUser={isUser} />
                   : <TeammateMessageCard key={idx} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
               );
             }
@@ -2734,7 +2757,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                 );
               }
             }
-            return <MarkdownContent text={content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />;
+            return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
           })()}
           {((isLongContent && !contentExpanded) || (!isUser && estimatedOverflow && !contentExpanded) || (isUser && estimatedOverflow && !userContentExpanded)) && (
             <LinearGradient
@@ -2863,6 +2886,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               />
             );
           })}
+          {hostedAgent ? (
+            <HostedSources sources={searchedSources(message.tool_calls!, (tc) => message.tool_results?.find(r => r.tool_use_id === tc.id) || globalToolResultMap?.[tc.id])} />
+          ) : null}
         </RNView>
       )}
 
@@ -2936,6 +2962,18 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 }) {
   const Theme = useTheme();
   const hostedWorking = useConversationWorking(conversationId as string) && hosted && !waitsOnAnswer;
+  // The family look's send is the hosted composers' ring and ink disc.
+  const familyLook = useActiveLook() === 'family';
+  const { c: hostedColors } = useHostedTheme();
+  const answeredBefore = useInboxStore((s) => hosted && (s.messages[conversationId as string] ?? []).some((m: { role?: string }) => m.role === 'assistant'));
+  const hostedLast = useInboxStore((s) => (hosted ? hostedLastExchange(s.messages[conversationId as string] as any, s.sessionDecisions, conversationId as string, Date.now()) : null));
+  // A used-up month holds the send and says why in the box, as the web's
+  // composer does (usePlanFigures useAllowanceOut).
+  const allowanceOut = useAllowanceOut(hosted);
+  // A dropped link is said in the status slot, with what happens to a
+  // message still waiting to go (the web's HostedConnection words).
+  const linkDown = useLinkDown();
+  const unsent = useInboxStore((s) => hosted && (s.pendingMessages[conversationId as string] ?? []).length > 0);
   const words = useModeWords();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
@@ -3117,6 +3155,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
       message,
     ).trim();
     if (!trimmedMessage && selectedImages.length === 0) return;
+    if (allowanceOut) return;
     setError(null);
 
     const images: OptimisticImage[] = selectedImages.map(img => img.storageId
@@ -3147,16 +3186,23 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     setExpanded(false);
   };
 
-  const canSend = !!message.trim() || selectedImages.length > 0;
+  const canSend = (!!message.trim() || selectedImages.length > 0) && !allowanceOut;
   const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
   const agentWorking = !!agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus);
-  // A hosted turn has no process to interrupt, so it never offers stop.
-  const showStop = agentWorking && isOwner && !canSend && !hosted;
+  // While a turn works and the box is empty, send becomes Stop. A hosted
+  // turn stops through the store's stopHostedTurn, the web's visible Stop,
+  // so stopping never rests on a gesture a person who does not code would
+  // not know.
+  const showStop = !canSend && (hosted ? hostedWorking : agentWorking && isOwner);
 
   // The interrupt is the shared store action (web's Escape); the daemon judges
   // whether the agent is mid-turn and paints the interruption line.
   const handleStop = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (hosted) {
+      useInboxStore.getState().stopHostedTurn(conversationId);
+      return;
+    }
     useInboxStore.getState().sendEscape(conversationId).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : 'Could not stop the agent');
     });
@@ -3197,8 +3243,12 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 
   // Status lives in the otherwise-empty middle of the button row: zero extra
   // height, and it can never overlap the conversation.
-  const statusMeta = hostedWorking
-    ? { color: AGENT_STATUS_META.working.color, label: LANE_COPY.conversation.working }
+  // A hosted wait reads as the web's one wait: "Getting started…" before
+  // the first reply, "Thinking…" after, in quiet ink in the family look.
+  const statusMeta = hosted && linkDown
+    ? { color: Theme.textMuted, dot: Theme.textMuted0, label: hostedConnectionWords(linkDown, unsent) }
+    : hostedWorking
+    ? { color: familyLook ? Theme.textMuted : AGENT_STATUS_META.working.color, dot: familyLook ? Theme.text : AGENT_STATUS_META.working.color, label: answeredBefore ? 'Thinking…' : 'Getting started…' }
     : managedSession?.managed && !hosted
       ? AGENT_STATUS_META[managedSession.agent_status ?? '']
       : undefined;
@@ -3213,8 +3263,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
       <RNView style={styles.composerSpacer}>
         {statusMeta && (
           <RNView style={styles.composerStatus}>
-            <PulsingDot color={statusMeta.color} />
-            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.composerStatusText, { color: statusMeta.color }]}>
+            <PulsingDot color={(statusMeta as { dot?: string }).dot ?? statusMeta.color} />
+            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} numberOfLines={2} style={[styles.composerStatusText, { color: statusMeta.color, flexShrink: 1 }]}>
               {statusMeta.label}
             </RNText>
           </RNView>
@@ -3228,7 +3278,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           stop: the same interrupt web's Escape sends. Typing turns it back
           into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled, familyLook && sendDisc(hostedColors, 'family', canSend || showStop).style]}
         onPress={showStop ? handleStop : handleSend}
         activeOpacity={0.7}
         delayPressIn={0}
@@ -3238,20 +3288,23 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
         accessibilityLabel={showStop ? words.stopWorking : 'Send'}
       >
         {showStop
-          ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name="arrow-up" size={14} color="#fff" />}
+          ? <FontAwesome name="stop" size={11} color={familyLook ? sendDisc(hostedColors, 'family', true).icon : '#fff'} />
+          : <FontAwesome name="arrow-up" size={14} color={familyLook ? sendDisc(hostedColors, 'family', canSend).icon : '#fff'} />}
       </NativePressable>
     </RNView>
   );
 
+  // The web composer's resting words for the same exchange (lib/hostedComposer).
   const placeholder = hosted
-    ? (waitsOnAnswer ? LANE_COPY.conversation.change : LANE_COPY.conversation.reply)
+    ? allowanceOut ?? hostedComposerWords(hostedLast, waitsOnAnswer)
     : isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
 
   // Suggestion pills (off-by-default pref, same stamped key as web). Idle =
   // the agent is not actively producing; a pill tap sends its text directly
   // through the shared dispatch, long-press fills the composer instead.
-  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  // Hosted mode has no reply suggestion (surface composer.suggestion).
+  const suggestionsOn = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  const suggestionsEnabled = useSurface('composer.suggestion') && suggestionsOn;
 
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
@@ -3276,7 +3329,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
             styles.textInput,
             // Grow with the text up to a third of the screen; beyond that it scrolls.
             { maxHeight: Math.round(winHeight * 0.33) },
-            inputHeight > 44 && styles.textInputWithExpand,
+            inputHeight > 44 && !!message && styles.textInputWithExpand,
           ]}
           value={message}
           onChangeText={onChangeText}
@@ -3288,7 +3341,9 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           maxFontSizeMultiplier={CHROME_FONT_CAP}
           onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
         />
-        {inputHeight > 44 && (
+        {/* Only typed text earns it: a long placeholder (a held month's
+            sentence) wraps too, and has nothing to expand. */}
+        {inputHeight > 44 && !!message && (
           <TouchableOpacity
             style={styles.expandButton}
             onPress={() => setExpanded(true)}
@@ -3515,6 +3570,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const gitChips = useSurface('gitChips');
   const internalsShown = useSurface('conversation.internals');
   const diffSurface = useSurface('diff');
+  const stickyPromptShown = useSurface('conversation.stickyPrompt');
   const words = useModeWords();
   // The store's server dispatch is wired once, at the root (StoreSyncBridge
   // mounts useSyncCore above every screen), and must not be wired again here:
@@ -3549,6 +3605,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
+  // Whether anything sits above the visible window (the hosted top fade).
+  const [hasAbove, setHasAbove] = useState(false);
   const flatListLayoutHeightRef = useRef(0);
   const lastContentHeightRef = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
@@ -3647,6 +3705,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // resume, tool calls read as plain steps (HostedStep), and the approvals it
   // waits on sit at the foot of the transcript with the actual draft.
   const hosted = isHostedAgentType(conversation?.agent_type);
+  const familyLook = useActiveLook() === 'family';
   // The registry decides what a mode shows on any conversation (a local
   // session opened in assistant mode too); `hosted` adds what a hosted
   // conversation never has. Internals: restart, resume, folding, token counts.
@@ -3654,6 +3713,25 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const diffShown = diffSurface && !hosted;
   const approvals = useConversationApprovals(String(conversation?._id ?? id));
   const hostedApprovals = hosted ? approvals : NO_APPROVALS;
+  // The family look's jump arrows are solid sheet discs, as its other
+  // controls are: the developer's ghost disc reads as a smudge over the
+  // reading face.
+  const { c: hostedColors } = useHostedTheme();
+  const jumpFamily = { backgroundColor: hostedColors.sheet, opacity: 1, borderColor: hostedColors.lineStrong, shadowOpacity: 0.08, shadowRadius: 6 };
+  // Where the parked approval stands, read from the transcript and the
+  // decision rows (lib/hostedApproval), as the web reads it: once answered,
+  // the card's place holds "You said yes. On it…" until the turn moves on;
+  // before its row lands, a quiet "Getting the card ready…".
+  const hostedApprovalAt = useInboxStore((st): HostedApprovalState => {
+    if (!hosted) return 'none';
+    const key = String(conversation?._id ?? id);
+    return hostedApprovalState(st.messages[key] as any, Object.values(st.sessionDecisions) as any[], key);
+  });
+  const parkedStatus = useManagedSessionFields(String(conversation?._id ?? id))?.agent_status === 'permission_blocked';
+  const settledAnswer = hostedApprovals.length === 0 ? hostedApprovalAnswer(hostedApprovalAt) : null;
+  const hostedTurnRunning = useConversationWorking(String(conversation?._id ?? id)) && hosted;
+  const linkDown = useLinkDown();
+  const cardPending = hostedApprovals.length === 0 && hostedApprovalAt === 'pending' && parkedStatus;
   // A failed send tries again through the store's one retry rule
   // (retryPendingSend, which the web's failed bubble uses too, and which also
   // covers a conversation whose create never landed). This screen only
@@ -3763,6 +3841,17 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   }, [conversation?.messages, commits, pullRequests]);
 
   const invertedMessages = useMemo(() => [...allMessages].reverse(), [allMessages]);
+  // A hosted turn that failed and was tried again reads as one turn, as on
+  // the web: the earlier notices and the repeated request fold away and the
+  // shown notice counts the attempts (lib/hostedNotice foldHostedRetries).
+  const retryFold = useMemo(() => {
+    if (!hosted) return null;
+    const rows = allMessages.map((m) => ({
+      ...m,
+      person: m.role === 'user' && !isToolResultCarrier(m) && !!m.content && !m.content.trim().startsWith('<') && !parseDecisionAnswer(m.content),
+    }));
+    return { ...foldHostedRetries(rows), personTurns: rows.filter((r) => r.person).length };
+  }, [hosted, allMessages]);
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -4253,6 +4342,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const activeStickyId = stickyActive?.id ?? null;
 
   const stickyPrompt = useMemo<StickyPrompt | null>(() => {
+    // Hosted mode has no sticky prompt (surface conversation.stickyPrompt).
+    if (!stickyPromptShown) return null;
     // Mid jump the window is reloading and activeStickyId churns; the claim
     // that the visible output belongs to prompt N is wrong until the target
     // message lands. The pill names the TARGET instead, in its pending form,
@@ -4275,7 +4366,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     return { id: row._id, ordinal: row.originalIndex + 1, text: row.display };
     // dismissedStickyVersion stands in for the Set, which mutates in place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScrolled, promptCount, pendingScrollId, highlightedMessageId, stickyActive, activeStickyId, dismissedStickyVersion, navRowById]);
+  }, [stickyPromptShown, userScrolled, promptCount, pendingScrollId, highlightedMessageId, stickyActive, activeStickyId, dismissedStickyVersion, navRowById]);
 
   const navTicks = useMemo(() => {
     // activeStickyId is always a sticky eligible user message, so it is in
@@ -4664,6 +4755,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
     const distanceFromTop = scrollHeight - offset - clientHeight;
     setIsNearTop(distanceFromTop < 96);
+    setHasAbove(distanceFromTop > 4);
 
     const progress = scrollHeight > clientHeight ? 1 - (offset / (scrollHeight - clientHeight)) : 0;
     scrollProgressAnim.setValue(progress);
@@ -4806,8 +4898,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             {huddle.enabled && huddle.inRoom > 0 && <RNView style={styles.moreLiveDot} />}
           </TouchableOpacity>
         </SessionHeaderBar>
+        {/* A hosted conversation in hosted mode is named by its title alone,
+            as on the web: the strip would only repeat "Codecast assistant"
+            and a time, so it folds to nothing (its layout reports 0 and the
+            list starts under the title bar). */}
         <Animated.View
-          style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }]}
+          style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }, hosted && !internalsShown && styles.foldedStrip]}
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
         >
             <RNView style={styles.floatingSessionCard}>
@@ -5014,12 +5110,14 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           }}
           onContentSizeChange={(_w, h) => {
             lastContentHeightRef.current = h;
+            setHasAbove(h - lastScrollYRef.current - flatListLayoutHeightRef.current > 4);
           }}
           // The list is inverted, so its header is the foot of the transcript:
           // what a hosted conversation waits on the person for.
-          ListHeaderComponent={hostedApprovals.length > 0 ? (
+          ListHeaderComponent={hostedApprovals.length > 0 || settledAnswer || cardPending ? (
             <RNView style={{ gap: 12, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }}>
               {hostedApprovals.map((d, n) => <ApprovalCard key={d._id} decision={d} index={n} />)}
+              {settledAnswer ? <ApprovalSettled label={settledAnswer} /> : cardPending ? <ApprovalPending /> : null}
             </RNView>
           ) : null}
           ListFooterComponent={
@@ -5084,6 +5182,23 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             // Hide standalone tool result messages (they're shown inline with tool calls)
             if (isToolResultCarrier(item)) {
               return null;
+            }
+            if (retryFold?.hidden.has(item._id)) return null;
+
+            // A hosted turn's stop notice: one calm block with its move, and
+            // only the last row's notice offers one (components/hosted/Notice).
+            const notice = hosted && item.role === 'assistant' ? hostedNoticeKind(item) : null;
+            if (notice) {
+              return (
+                <HostedNoticeRow
+                  kind={notice}
+                  content={item.content || ''}
+                  conversationId={String(conversation._id)}
+                  retryText={lastAskOf(allMessages.slice(0, originalIndex))}
+                  live={originalIndex === allMessages.length - 1}
+                  retries={(retryFold?.attempts.get(item._id) ?? 1) - 1}
+                />
+              );
             }
 
             // An approval's answer in a hosted conversation: a quiet note
@@ -5272,9 +5387,20 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                   childConversationMap={conversation.child_conversation_map}
                   bookmarkedSet={bookmarkedSet}
               />
+                {hosted && item.role === 'assistant' && originalIndex === allMessages.length - 1 ? (
+                  <RNView style={{ paddingHorizontal: 16 }}>
+                    <ReplyChips
+                      conversationId={String(conversation._id)}
+                      reply={item.content}
+                      asked={lastAskOf(allMessages.slice(0, originalIndex))}
+                      personTurns={retryFold?.personTurns ?? 0}
+                      working={hostedTurnRunning}
+                    />
+                  </RNView>
+                ) : null}
                 {isQueued && (
                   <RNView style={styles.pendingStatusRow}>
-                    <RNText style={styles.pendingStatusText}>Queued</RNText>
+                    <RNText style={styles.pendingStatusText}>{hosted && linkDown ? hostedConnectionWords(linkDown, true) : 'Queued'}</RNText>
                   </RNView>
                 )}
                 {isFailed && (
@@ -5285,7 +5411,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     </RNText>
                     {item._clientId ? (
                       <Pressable onPress={() => retryFailedSend(item._clientId!, item.content ?? '')} hitSlop={8} accessibilityRole="button">
-                        <RNText style={[styles.pendingStatusText, { color: Theme.cyan, fontWeight: '600' }]}>Try again</RNText>
+                        <RNText style={[styles.pendingStatusText, { color: hosted ? Theme.text : Theme.cyan, fontWeight: '600' }]}>Try again</RNText>
                       </Pressable>
                     ) : null}
                   </RNView>
@@ -5359,6 +5485,17 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           /* maintainVisibleContentPosition removed - was causing blank screen by fighting scroll offset */
           keyboardShouldPersistTaps="always"
         />
+        {/* The hosted transcript's top edge, as the web's: a 24px fade under
+            the title once the reading has scrolled past the first line, so
+            lines slide out of view rather than being cut, and the first line
+            is never dimmed. */}
+        {hosted && familyLook && hasAbove && (
+          <LinearGradient
+            colors={[Theme.bg, Theme.bg + '00']}
+            style={{ position: 'absolute', left: 0, right: 0, top: insets.top + HEADER_BAR_HEIGHT, height: 24 }}
+            pointerEvents="none"
+          />
+        )}
         <MessageTickRail
           ticks={navTicks}
           promptCount={promptCount}
@@ -5408,7 +5545,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             >
               <TouchableOpacity
                 onPress={handleJumpToStart}
-                style={styles.jumpButton}
+                style={[styles.jumpButton, familyLook && jumpFamily]}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel="Jump to first message"
@@ -5416,7 +5553,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 {jumpingToStart ? (
                   <ActivityIndicator size="small" color={Theme.textDim} />
                 ) : (
-                  <FontAwesome name="angle-up" size={18} color={Theme.textDim} />
+                  <FontAwesome name="angle-up" size={18} color={familyLook ? hostedColors.ink2 : Theme.textDim} />
                 )}
               </TouchableOpacity>
             </Animated.View>
@@ -5425,7 +5562,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             <RNView style={styles.jumpBottomButtonWrap} pointerEvents="box-none">
               <TouchableOpacity
                 onPress={handleJumpToEnd}
-                style={styles.jumpButton}
+                style={[styles.jumpButton, familyLook && jumpFamily]}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel="Jump to latest message"
@@ -5433,7 +5570,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 {jumpingToEnd ? (
                   <ActivityIndicator size="small" color={Theme.textDim} />
                 ) : (
-                  <FontAwesome name="angle-down" size={18} color={Theme.textDim} />
+                  <FontAwesome name="angle-down" size={18} color={familyLook ? hostedColors.ink2 : Theme.textDim} />
                 )}
                 {newMessageCount > 0 && (
                   <RNView style={styles.jumpBadge}>
@@ -5524,7 +5661,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -5554,8 +5691,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   headerIconBtn: S.headerIconBtn,
   headerFace: { marginRight: 8 },
+  // The family look names a conversation in the reading face, as the web's
+  // hosted conversation header does.
   headerTitleText: {
     ...S.headerTitleText,
+    ...(look === 'family' ? { fontFamily: Serif.regular, fontSize: 18, fontWeight: '500' as const } : null),
     color: Theme.text,
   },
   headerTitlePress: {
@@ -5666,6 +5806,39 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   assistantText: {
     color: Theme.text,
+  },
+  // Hosted voices (MessageBubble bodyStyle): the web's hosted-mode sizes,
+  // 14px for the person, a 17px letter for the reply, 13.5px muted narration.
+  foldedStrip: {
+    height: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    borderBottomWidth: 0,
+    overflow: 'hidden',
+  },
+  hostedUserBubble: {
+    alignSelf: 'stretch',
+    marginTop: 14,
+    marginBottom: 6,
+    paddingTop: 10,
+    backgroundColor: Theme.userBubble,
+    borderRadius: 10,
+  },
+  hostedUserText: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: Theme.text,
+  },
+  hostedReply: {
+    fontFamily: Serif.regular,
+    fontSize: 17,
+    lineHeight: 26,
+    color: Theme.text,
+  },
+  hostedNarration: {
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: Theme.textMuted,
   },
   thinkingBlock: {
     marginHorizontal: 14,

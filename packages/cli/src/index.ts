@@ -115,7 +115,7 @@ import {
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
-import { agentDisplayName, normalizeSubagentCaps } from "@codecast/shared/contracts";
+import { agentDisplayName, CHEAP_MODEL, normalizeSubagentCaps } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
@@ -2710,145 +2710,24 @@ async function promptStableEnablement(): Promise<void> {
   }
 }
 
+// Bare `cast sync`: the daemon's unsynced sweep uploads whatever trails its
+// synced position, with the daemon's own ingest (subagents nest under their
+// parent, secrets are redacted, the conversation cache is shared). A stopped
+// daemon runs that sweep on start; a running one on SIGUSR2, unless its build
+// is stale and the bounce restarts it into the same startup sweep.
 async function runSync(): Promise<void> {
   const config = readConfig();
-
   if (!config?.auth_token || !config?.user_id) {
     console.error("Not authenticated. Run 'cast auth' first.");
     process.exit(1);
   }
-
-  const projectsPath = path.join(process.env.HOME || "", ".claude", "projects");
-
-  if (!fs.existsSync(projectsPath)) {
-    console.log("No Claude Code projects found at:", projectsPath);
-    return;
+  const pid = getDaemonPid();
+  if (pid === null) {
+    startDaemon();
+  } else if (!bounceDaemonIfBuildChanged(true)) {
+    process.kill(pid, "SIGUSR2");
   }
-
-  console.log(`\n${fmt.muted("Finding unsynced conversations...")}\n`);
-
-  const sessionFiles = await glob("**/*.jsonl", {
-    cwd: projectsPath,
-    absolute: true,
-  });
-
-  if (sessionFiles.length === 0) {
-    console.log("No session files found.");
-    return;
-  }
-
-  const unsyncedFiles: Array<{ path: string; size: number; position: number }> = [];
-
-  for (const filePath of sessionFiles) {
-    try {
-      // Manual sync is not an escape hatch around selected-project privacy.
-      // Keep its candidate set identical to the daemon and reconciliation.
-      if (!isTranscriptFileInSyncScope(filePath, config)) continue;
-      const stats = fs.statSync(filePath);
-      const position = getPosition(filePath);
-
-      if (position < stats.size) {
-        unsyncedFiles.push({
-          path: filePath,
-          size: stats.size,
-          position,
-        });
-      }
-    } catch (err) {
-      continue;
-    }
-  }
-
-  if (unsyncedFiles.length === 0) {
-    console.log(`${fmt.success(icons.check)} ${fmt.muted("All conversations are already synced.")}`);
-    return;
-  }
-
-  console.log(`${fmt.muted("Syncing")} ${fmt.number(unsyncedFiles.length)} ${fmt.muted("conversations...")}\n`);
-
-  const syncService = new SyncService({
-    convexUrl: config.convex_url || CONVEX_URL,
-    authToken: config.auth_token,
-    userId: config.user_id,
-  });
-
-  let syncedCount = 0;
-  let errorCount = 0;
-
-  for (const file of unsyncedFiles) {
-    try {
-      const content = fs.readFileSync(file.path, "utf-8");
-      const lines = content.split("\n");
-      const newLines = lines.slice(Math.floor(file.position / (file.size / lines.length)));
-
-      if (newLines.length === 0) {
-        continue;
-      }
-
-      const messages = parseSessionFile(newLines.join("\n"));
-
-      if (messages.length === 0) {
-        continue;
-      }
-
-      const sessionId = path.basename(file.path, ".jsonl");
-      const projectDir = path.basename(path.dirname(file.path));
-      const projectPath = readProjectPathFromSession(file.path) || ("/" + projectDir.slice(1).replace(/-/g, "/"));
-      const slug = extractSlug(content);
-
-      let conversationId: string | null = null;
-
-      try {
-        conversationId = await syncService.createConversation({
-          userId: config.user_id!,
-          teamId: config.team_id,
-          sessionId,
-          agentType: "claude_code",
-          projectPath,
-          slug,
-          startedAt: messages[0]?.timestamp || Date.now(),
-        });
-      } catch (err) {
-        const errorMsg = (err as Error).message;
-        if (errorMsg.includes("already exists")) {
-          continue;
-        }
-        throw err;
-      }
-
-      if (conversationId) {
-        for (const msg of messages) {
-          await syncService.addMessage({
-            conversationId,
-            messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: msg.content,
-            timestamp: msg.timestamp,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            files: msg.files,
-            subtype: msg.subtype,
-          });
-        }
-      }
-
-      setPosition(file.path, file.size);
-      syncedCount++;
-
-      process.stdout.write(`\rSynced ${syncedCount}/${unsyncedFiles.length} conversations...`);
-    } catch (err) {
-      errorCount++;
-    }
-  }
-
-  console.log(`\n\n${fmt.success(icons.check)} ${c.bold}Sync complete!${c.reset}`);
-  console.log(`  ${fmt.muted("Synced")}  ${fmt.number(syncedCount)} ${fmt.muted("conversations")}`);
-
-  if (errorCount > 0) {
-    console.log(`  ${fmt.error("Errors")}  ${fmt.number(errorCount)}`);
-  }
+  console.log(`${fmt.success(icons.check)} ${fmt.muted("The daemon is uploading unsynced conversations; progress is in")} ${fmt.cmd("~/.codecast/daemon.log")}`);
 }
 
 async function syncSingleSession(sessionId: string, projectRoot: string): Promise<boolean> {
@@ -5721,6 +5600,8 @@ program
 const syncCommand = program
   .command("sync")
   .description("Sync a cloud session's folder with the laptop (status, pull, push, diff, start, stop, keep); bare, upload unsynced conversations")
+  // An unknown verb (`cast sync ls`) is an error, never the bare upload.
+  .allowExcessArguments(false)
   .action(async () => {
     await runSync();
   });
@@ -12713,9 +12594,9 @@ program
     let llmSearchTerms: string[] = [];
     try {
       const expansion = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: CHEAP_MODEL,
         max_tokens: 128,
-        temperature: 0.2,
+        thinking: { type: "disabled" },
         messages: [
           {
             role: "user",
@@ -12911,8 +12792,9 @@ Question: ${query}`,
 
       // Call Haiku for RAG
       const response = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: CHEAP_MODEL,
         max_tokens: 1024,
+        thinking: { type: "disabled" },
         messages: [
           {
             role: "user",
@@ -20014,8 +19896,9 @@ plan
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          model: CHEAP_MODEL,
           max_tokens: 1000,
+          thinking: { type: "disabled" },
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -20841,6 +20724,7 @@ workflow
         if (createResult?.run_id) {
           runOpts.runId = createResult.run_id;
           runOpts.runSession = createResult.primary_conversation_id;
+          runOpts.spawnerSession ??= createResult.spawner_conversation_id || undefined;
         }
       } catch (err: any) {
         if (runRegistrationIsFatal({ detach: options.detach, taskId: runOpts.taskId, planId: runOpts.planId })) {

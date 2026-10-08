@@ -4355,6 +4355,9 @@ export default defineSchema({
       v.literal("card_waiting"),
       v.literal("change_shipped"),
       v.literal("cause_reopened"),
+      // Someone outside a decision's people answered or dismissed it for
+      // them (sessionDecisions.noticeAnsweredForPeople).
+      v.literal("decision_answered_for_you"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
       // join (to its admins), and an admin let them in (to them).
       v.literal("team_join_request"),
@@ -4685,6 +4688,9 @@ export default defineSchema({
       v.object({
         kind: v.union(v.literal("user"), v.literal("role"), v.literal("policy")),
         id: v.string(),
+        // A person's answer given by their agent at their word (`cast decide
+        // answer --for-human`): the session that carried it.
+        via: v.optional(v.id("conversations")),
       })
     ),
     // Set when a role answered under a grant.
@@ -5248,6 +5254,9 @@ export default defineSchema({
     project_path: v.optional(v.string()),
     target_date: v.optional(v.number()),
     labels: v.optional(v.array(v.string())),
+    // The key a web create painted its stub under; the synced row carrying it
+    // supersedes that stub (the projects collection's altKey).
+    client_key: v.optional(v.string()),
     // ── Charter (docs/architecture/org-staffing.md S7) ──
     // The direction a role reads before the task list: the goal, how success
     // is measured, how urgent, which role owns the line, what it will not do,
