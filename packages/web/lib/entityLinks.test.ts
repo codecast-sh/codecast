@@ -223,7 +223,7 @@ describe("buildEntityUrl", () => {
     expect(buildEntityUrl("plan", "pl-42")).toBe("https://codecast.sh/plans/pl-42");
     expect(buildEntityUrl("session", CONVEX_ID)).toBe(`https://codecast.sh/conversation/${CONVEX_ID}`);
     expect(buildEntityUrl("doc", CONVEX_ID)).toBe(`https://codecast.sh/docs/${CONVEX_ID}`);
-    expect(buildEntityUrl("project", "proj-1")).toBe("https://codecast.sh/projects/proj-1");
+    expect(buildEntityUrl("project", "pj-1")).toBe("https://codecast.sh/org/pj-1");
   });
 
   test("accepts url-segment aliases and a custom base (trailing slash trimmed)", () => {
@@ -597,9 +597,10 @@ describe("initiatives (in-N)", () => {
     expect(entityMentionRegex().exec("the @[checkout in-app] flow")?.slice(1, 3)).toEqual(["checkout in-app", undefined]);
   });
 
-  test("an initiative routes to its goal page and its url parses back, old address included", () => {
-    expect(entityRoute("initiative", "in-7")).toBe("/goals/in-7");
-    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/goals/in-7");
+  test("an initiative routes to its sheet on the Org screen and its url parses back, old addresses included", () => {
+    expect(entityRoute("initiative", "in-7")).toBe("/org/in-7");
+    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/org/in-7");
+    expect(parseEntityUrl("https://codecast.sh/org/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(parseEntityUrl("https://codecast.sh/goals/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(parseEntityUrl("https://codecast.sh/initiatives/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(normalizeEntityType("initiatives")).toBe("initiative");
@@ -629,9 +630,9 @@ describe("proposals (op-N)", () => {
     expect(buildEntityUrl("proposal", "op-3")).toBe("https://codecast.sh/org?proposal=op-3");
     expect(parseEntityUrl("https://codecast.sh/org?proposal=op-3")).toEqual({ type: "proposal", id: "op-3" });
     expect(parseEntityUrl("/org?proposal=op-3")).toEqual({ type: "proposal", id: "op-3" });
-    // The org page alone, or a role's page under it, names no proposal.
+    // The org page alone names no proposal, and a role's sheet under it names the role.
     expect(parseEntityUrl("/org")).toBeNull();
-    expect(parseEntityUrl("https://codecast.sh/org/or-7")).toBeNull();
+    expect(parseEntityUrl("https://codecast.sh/org/or-7")).toEqual({ type: "role", id: "or-7" });
     expect(normalizeEntityType("org")).toBe("proposal");
   });
 

@@ -403,7 +403,7 @@ export interface PrintArgsInput {
 }
 
 /** `--session-id <id>` for a claude launch, unless the configured args already pin one. */
-function claudeSessionIdArgs(assigned: string | null | undefined, configuredArgs: string): string[] {
+export function claudeSessionIdArgs(assigned: string | null | undefined, configuredArgs: string): string[] {
   return assigned && !configuredArgs.includes("--session-id") ? ["--session-id", assigned] : [];
 }
 
