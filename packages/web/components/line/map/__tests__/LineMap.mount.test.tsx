@@ -97,7 +97,7 @@ test("the map draws every node and edge of the model, wider where more crossed, 
   expect(host.querySelector("[data-map-mark='implement']")?.textContent).toContain("past three times the usual");
   // A node says what is here now (the big number) and what passed, in words; an empty node says empty.
   expect(host.querySelector("[data-map-node='implement'] .lmap-here")?.textContent).toBe("1");
-  expect(host.querySelector("[data-map-node='implement'] .lmap-through")?.textContent).toMatch(/^\d+ through$/);
+  expect(host.querySelector("[data-map-node='implement'] .lmap-through")?.textContent).toMatch(/^\d+ runs?$/);
   const empty = [...host.querySelectorAll<HTMLElement>("[data-map-node][data-empty='true']")];
   // An end is a terminal: it has had none yet, not an empty box.
   for (const n of empty) expect(n.querySelector(".lmap-empty-word")?.textContent).toBe(n.dataset.kind === "end" ? "none yet" : "empty");

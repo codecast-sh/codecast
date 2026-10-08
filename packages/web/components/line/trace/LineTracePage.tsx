@@ -5,7 +5,7 @@
 // with everything else dimmed, loops drawn twice; beside it, the story step
 // by step. Hovering a step lights the node it happened at. Paints from the
 // store (useLineTrace); the words are lib/line/lineTrace's.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUpRight, ChevronRight, CircleStop, Play, RotateCcw } from "lucide-react";
@@ -27,6 +27,7 @@ import { DOT, TraceStory } from "./TraceStory";
 import { useLineTrace } from "./useLineTrace";
 import { useLineCauseActions } from "../map/useLineCause";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import "./trace.css";
 
 /** A card's headline in a few words, lower case, for the answer button ("intro emails say what each person wants"). */
@@ -206,7 +207,7 @@ function PathStrip({ trace, focusNode, onFocusNode, full, onFull }: { trace: Lin
   // One value says where it is (lineTrace hereNodeId), the same the header reads.
   const current = trace.hereNodeId && chips.some((c) => c.nodeId === trace.hereNodeId) ? trace.hereNodeId : null;
   // After commit, when the chips have their widths; block "nearest" keeps the page where it is.
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = row.current;
     const chip = current ? el?.querySelector<HTMLElement>(`[data-trace-chip="${CSS.escape(current)}"]`) : null;
     if (!el || !chip) return;
