@@ -4,8 +4,9 @@ import { useActiveTeamFeature, useWorkspaceFeatureState } from '@/lib/teamFeatur
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { router as appRouter, useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { Ionicons } from '@expo/vector-icons';
 import { Theme, Spacing, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
 import {
   SessionData, SwipeableSessionItem, sessionTitle, agentLabel, agentColor,
@@ -16,7 +17,12 @@ import {
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
   sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
+  hostedOnlyInbox, hostedStatusSections, pendingSendIdsOf, HOSTED_UNFOLDABLE_SECTIONS,
 } from '@codecast/web/store/inboxStore';
+import { awaitingOkIds } from '@codecast/web/lib/decisionQueue';
+import { hostedRowTitle } from '@codecast/web/lib/hostedRowTitle';
+import { hostedStopsSig, splitHostedStops } from '@codecast/web/lib/hostedNotice';
+import { sameNameSuffixes } from '@codecast/web/lib/sameNameSuffix';
 import {
   AGENT_MODEL_CONFIG, AGENT_PICKER_OPTIONS, compareMachineChips, featuredModelOptions, fromConvexAgentType, isHostedAgentType, launchRailOptions, toConvexAgentType,
   type AgentClientId, type DeviceModelInventory,
@@ -28,6 +34,8 @@ import { useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from 
 import { useHostedMode, useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { AssistantIntro, AssistantStart } from '@/components/hosted/AssistantStart';
+import { LANE_COPY } from '@codecast/web/components/simple/lane';
+import { Serif, pageCountLook, pageTitleFace } from '@/constants/fonts';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
@@ -46,6 +54,10 @@ import { useQuery } from 'convex/react';
 import { mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
 import { showActionSheet } from '@/lib/actionSheet';
+
+/** How a hosted inbox section draws: its same-name suffixes, whether it
+ *  waits on the person (the accent dot), and whether it never folds. */
+type HostedSectionOpts = { suffixes?: ReadonlyMap<string, string>; attention?: boolean; fixed?: boolean };
 
 // Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
@@ -234,6 +246,10 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
   const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
   const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
   const hosted = isHostedAgentType(agentId);
+  // Hosted mode's sheet is one question, the web's compose heading, and
+  // files no label (surface inbox.labelStrip).
+  const hostedSheet = useHostedMode() && hosted;
+  const labelStrip = useSurface('inbox.labelStrip');
   // The pinned agents, and always the hosted assistant: the phone has no
   // palette to reach it from, and it is the one agent that needs no machine.
   const pinnedOptions = usePinnedPickerOptions(agentId);
@@ -475,12 +491,16 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <RNView style={modalStyles.header}>
-          <RNText style={modalStyles.title}>{words.newConversation}</RNText>
+          <RNText style={[modalStyles.title, hostedSheet && modalStyles.hostedSheetTitle]}>{hostedSheet ? LANE_COPY.intro.sheetTitle : words.newConversation}</RNText>
           <TouchableOpacity
             onPress={onClose}
             hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+            accessibilityLabel="Close"
           >
-            <FontAwesome name="times" size={20} color={Theme.textMuted} />
+            {/* The hosted sheet's close is a thin stroke, as its starters' arrows are. */}
+            {hostedSheet
+              ? <Ionicons name="close" size={24} color={Theme.textMuted} />
+              : <FontAwesome name="times" size={20} color={Theme.textMuted} />}
           </TouchableOpacity>
         </RNView>
 
@@ -526,7 +546,14 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
               its sheet is the first ask. */}
           {hosted ? (
             <RNView style={{ marginTop: onlyHosted ? Spacing.sm : Spacing.lg }}>
-              <AssistantStart key={seed ?? ''} seed={seed} onStart={startHosted} />
+              <AssistantStart
+                key={seed ?? ''}
+                seed={seed}
+                onStart={startHosted}
+                // The sheet is a native modal: close it first, so the Plan
+                // page opens in front rather than under it.
+                onOpenPlan={() => { onClose(); appRouter.push('/settings/plan' as never); }}
+              />
             </RNView>
           ) : (<>
           {/* Machine row. One machine is no choice at all, so it only appears
@@ -713,7 +740,7 @@ function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible
           </RNView>
           </>)}
 
-          {labels.length > 0 && (
+          {labels.length > 0 && labelStrip && (
             <RNView style={modalStyles.labelPillRow}>
               <TouchableOpacity
                 style={[modalStyles.labelPill, !chosenLabel && modalStyles.labelPillEmpty]}
@@ -792,6 +819,8 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     borderBottomColor: Theme.borderLight,
   },
   title: { fontSize: 18, fontWeight: "600", color: Theme.text },
+  // The hosted sheet's question, in the reading face.
+  hostedSheetTitle: { fontFamily: Serif.regular, fontSize: 22, fontWeight: "500" },
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   bodyContent: { paddingBottom: Spacing.lg },
   // Web's muted micro-headers: small caps, letterspaced, quiet.
@@ -1122,6 +1151,12 @@ export default function InboxScreen() {
   // Unread has its own signature: sessionsWakeSig deliberately omits
   // updated_at, which is exactly the number the read model compares against.
   const unreadSig = useInboxStore((s) => sessionUnreadWakeSig(s));
+  // The Assistant scope (lib/assistantScope): in hosted mode the inbox holds
+  // the assistant's conversations and folds them into the web rail's words
+  // (hostedStatusSections), stops in their own "Couldn't finish".
+  const hostedOnly = useInboxStore((s) => hostedOnlyInbox(s.clientState?.ui ?? {}));
+  const awaitingSig = useInboxStore((s) => (hostedOnly ? [...awaitingOkIds(s.sessionDecisions)].sort().join(',') : ''));
+  const stopsSig = useInboxStore((s) => (hostedOnly ? hostedStopsSig(s.sessions, s.messages) : ''));
   const sessions = useInboxStore.getState().sessions;
   // placeInboxRows' trust-TTL adaptation (stale "working" → needs-input) and
   // the rows' relative times are time-driven, not field-driven — a signature
@@ -1231,12 +1266,13 @@ export default function InboxScreen() {
       projectFilters: activeProjectFilter ? [{ id: activeProjectFilter, path: null, exclude: false }] : undefined,
       bucketFilters: activeBucketFilter ? [{ id: activeBucketFilter, exclude: false }] : undefined,
       bucketByConv,
+      hostedOnly,
     }),
-    [activeProjectFilter, activeBucketFilter, bucketByConv]);
+    [activeProjectFilter, activeBucketFilter, bucketByConv, hostedOnly]);
   const chipFilter = useCallback((items: InboxSession[]) => {
-    if (!activeProjectFilter && !activeBucketFilter) return items;
+    if (!activeProjectFilter && !activeBucketFilter && !hostedOnly) return items;
     return items.filter(chipMatches);
-  }, [activeProjectFilter, activeBucketFilter, chipMatches]);
+  }, [activeProjectFilter, activeBucketFilter, hostedOnly, chipMatches]);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchQuery(text);
@@ -1401,9 +1437,10 @@ export default function InboxScreen() {
     [unreadSig],
   );
 
-  const renderSessionItem = useCallback((s: InboxSession) => (
+  const renderSessionItem = useCallback((s: InboxSession, titleSuffix?: string) => (
     <SwipeableSessionItem
       key={s._id}
+      titleSuffix={titleSuffix}
       session={s as SessionData}
       isUnread={!!unreadByConv[s._id]}
       onPress={() => router.push(`/session/${s._id}`)}
@@ -1424,17 +1461,43 @@ export default function InboxScreen() {
   // `count` is the chokepoint's section count (flat cards plus members nested
   // under a same-bucket lead) — the header number web, the tally and the CLI
   // agree on; items.length is only the flat cards.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number) => {
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number, hosted?: HostedSectionOpts) => {
     if (items.length === 0) return null;
     const key = collapseKey ?? label;
-    const collapsed = !!collapsedSections?.[key];
+    // A hosted section that never folds (New) ignores a stored fold.
+    const collapsed = !hosted?.fixed && !!collapsedSections?.[key];
+    const rows = collapsed ? null : items.map((row) => renderSessionItem(row, hosted?.suffixes?.get(String(row._id))));
+    if (hosted) {
+      // The web rail's hosted headings: sentence case in the interface face,
+      // muted ink, the count beside it, and one accent dot on what waits on
+      // the person.
+      return (
+        <RNView key={key}>
+          <TouchableOpacity
+            style={[styles.sectionHeader, styles.hostedSectionHeader]}
+            onPress={hosted.fixed ? undefined : () => toggleCollapsedSection(key)}
+            disabled={hosted.fixed}
+            activeOpacity={0.7}
+            accessibilityRole="header"
+          >
+            {hosted.attention ? <RNView style={styles.hostedSectionDot} /> : null}
+            <RNText style={styles.hostedSectionTitle}>{label}</RNText>
+            <RNText style={styles.hostedSectionCount}>{count ?? items.length}</RNText>
+            {hosted.fixed ? null : (
+              <FontAwesome name={collapsed ? "chevron-right" : "chevron-down"} size={8} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
+            )}
+          </TouchableOpacity>
+          {rows}
+        </RNView>
+      );
+    }
     return (
       <RNView key={key}>
         <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleCollapsedSection(key)} activeOpacity={0.7}>
           <FontAwesome name={collapsed ? "chevron-right" : "chevron-down"} size={9} color={Theme.textMuted0} />
           <RNText style={[styles.sectionTitle, color ? { color } : undefined]}>{label} ({count ?? items.length})</RNText>
         </TouchableOpacity>
-        {!collapsed && items.map(renderSessionItem)}
+        {rows}
       </RNView>
     );
   }, [renderSessionItem, collapsedSections, toggleCollapsedSection]);
@@ -1561,6 +1624,35 @@ export default function InboxScreen() {
       }
       return sections.filter(Boolean);
     }
+    if (hostedOnly) {
+      // The Assistant scope's sections, the web rail's (hostedStatusSections):
+      // Your move, then Couldn't finish, Working on it, New, Earlier (or
+      // Done), and Drafts. The collapse keys are the web's, so a fold
+      // round-trips with the desktop.
+      const st = useInboxStore.getState();
+      const awaiting = awaitingOkIds(st.sessionDecisions);
+      const sending = pendingSendIdsOf(st);
+      const { asks, stopped } = splitHostedStops(statusNeedsInput, (id) => st.messages[id]);
+      const hostedSections = hostedStatusSections(
+        { pinned: filteredPinned, questions: filteredQuestions, needsInput: asks, newSessions: filteredNew, working: statusWorking, done: statusDone, dormant: statusDormant },
+        (id) => awaiting.has(id), (id) => sending.has(id), (id) => !!unreadByConv[id],
+      );
+      // Same-name rows get a muted day or time after the title.
+      const suffixes = sameNameSuffixes([...hostedSections.flatMap(([rows]) => rows), ...stopped], (row) => hostedRowTitle(st, row._id), coarseNow);
+      const anyNew = hostedSections.some(([rows, k]) => k === 'new_results' && rows.length > 0);
+      const opts = (key: string, attention = false): HostedSectionOpts => ({ suffixes, attention, fixed: HOSTED_UNFOLDABLE_SECTIONS.has(key) });
+      for (const [rows, key] of hostedSections) {
+        if (key === 'needs_input') {
+          sections.push(renderSection(words.sectionNeedsInput, rows, undefined, 'Needs Input', undefined, opts(key, true)));
+          sections.push(renderSection("Couldn't finish", stopped, undefined, 'hosted_stopped', undefined, opts('hosted_stopped')));
+        } else if (key === 'pinned') sections.push(renderSection('Pinned', rows, undefined, 'Pinned', undefined, opts(key)));
+        else if (key === 'working') sections.push(renderSection(words.sectionWorking, rows, undefined, 'working', undefined, opts(key)));
+        else if (key === 'new_results') sections.push(renderSection('New', rows, undefined, 'new_results', undefined, opts(key)));
+        else if (key === 'done') sections.push(renderSection(anyNew ? 'Earlier' : 'Done', rows, undefined, 'done', undefined, opts(key)));
+        else sections.push(renderSection('Drafts', rows, undefined, 'drafts', undefined, opts(key)));
+      }
+      return sections.filter(Boolean);
+    }
     // Questions lead: a session that asked you something is your move before
     // anything else, pinned or not — same order as the web panel.
     sections.push(renderSection(words.sectionQuestions, filteredQuestions, Theme.violet, "questions"));
@@ -1579,7 +1671,7 @@ export default function InboxScreen() {
     sections.push(renderSection(words.sectionDormant, statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words, hostedOnly, awaitingSig, stopsSig, pendingSendSig, unreadByConv, coarseNow]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -1709,7 +1801,9 @@ export default function InboxScreen() {
         {/* Title-side badges (counts that link elsewhere) sit here. */}
         {!isSearching && <DecisionsBadge />}
         <RNView style={{ flex: 1 }} />
-        {!searchOpen && (
+        {/* Hosted mode has one way into search, the field over the list (as
+            the web rail has one under the wordmark). */}
+        {!searchOpen && !hostedMode && (
           <TouchableOpacity
             style={styles.headerIconBtn}
             onPress={() => setSearchOpen(true)}
@@ -1874,21 +1968,23 @@ export default function InboxScreen() {
       />
 
       <RNView style={styles.fabContainer} pointerEvents="box-none">
+        {/* Hosted mode's new conversation is the family's ink disc, as send
+            is; developer mode keeps the action blue. */}
         <TouchableOpacity
-          style={styles.fab}
+          style={[styles.fab, hostedMode && styles.fabHosted]}
           onPress={() => openNewSession()}
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel={words.newConversation}
         >
-          <FontAwesome name="plus" size={18} color="#fff" />
+          <FontAwesome name="plus" size={18} color={hostedMode ? Theme.bg : '#fff'} />
         </TouchableOpacity>
       </RNView>
     </SafeAreaView>
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -1903,12 +1999,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     gap: 8,
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    ...pageTitleFace(look),
     color: Theme.text,
   },
   countBadge: {
-    backgroundColor: Theme.accent,
+    ...pageCountLook(look, Theme.accent, Theme.textMuted, Theme.bg).badge,
     borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -1917,8 +2012,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   countBadgeText: {
     fontSize: 12,
-    fontWeight: '700',
-    color: Theme.bg,
+    ...pageCountLook(look, Theme.accent, Theme.textMuted, Theme.bg).text,
   },
   headerIconBtn: {
     width: 34,
@@ -1939,7 +2033,21 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 14,
     color: Theme.blue,
   },
-  searchReveal: {
+  // The family look draws it as the web rail's search field: a bordered
+  // field, left-aligned, in the same 44pt the pull-down reveal hides.
+  searchReveal: look === 'family' ? {
+    height: 34,
+    marginVertical: 5,
+    marginHorizontal: Spacing.md,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+    backgroundColor: Theme.bgAlt,
+  } : {
     height: 44,
     marginHorizontal: Spacing.md,
     flexDirection: 'row',
@@ -1961,8 +2069,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     height: 6,
     borderRadius: 3,
   },
+  // Room under the last row for the floating + (48pt, 24pt up), so the
+  // last row's time can scroll clear of it.
   listContent: {
-    paddingBottom: Spacing.xl,
+    paddingBottom: 88,
   },
   emptyList: {
     flexGrow: 1,
@@ -1995,6 +2105,30 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.textMuted0,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  hostedSectionHeader: {
+    gap: 7,
+    paddingTop: 14,
+    paddingBottom: 6,
+    backgroundColor: Theme.bg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
+  },
+  hostedSectionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.accent,
+  },
+  hostedSectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Theme.textMuted,
+  },
+  hostedSectionCount: {
+    fontSize: 12,
+    color: Theme.textMuted0,
+    fontVariant: ['tabular-nums'],
   },
   hiddenToggleRow: {
     flexDirection: 'row',
@@ -2205,5 +2339,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 6,
     elevation: 6,
+  },
+  fabHosted: {
+    backgroundColor: Theme.text,
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
   },
 }));
