@@ -1,0 +1,213 @@
+# The task graph: blockers, waits, links and readiness
+
+Tasks already carry `blocked_by`/`blocks`. This makes the graph decide what
+can be worked next: one definition of "ready", blockers that wait on the
+world outside the graph (a PR, CI, a decision, a time), links that record how
+work relates without blocking it, and plans that write their own order.
+
+The test for every piece: an agent asking "what can I start?" gets a short,
+true answer, and a person looking at a task can see why it is not moving.
+
+## TG1. One readiness function
+
+`packages/shared/tasks/graph.ts` owns the definition. Convex (`tasks.list`,
+`tasks.webList`, `tasks.getReadyTasks`), the CLI (`planReadiness.ts`) and the
+web all call it; none keeps its own copy.
+
+A task is **unblocked** when every task in `blocked_by` is done or dropped
+and every wait in `waits` is met. A task is **ready** when it is unblocked,
+its status is `open`, its triage status is active (or unset), it is not
+superseded, and its parent is not being worked (`in_progress`/`in_review`)
+unless the caller asks for subtasks.
+
+The function is pure. It takes the task and a `statusOf(shortId)` lookup, so
+a blocker outside the current page (another project, filtered out, already
+done) is resolved by the caller from the database, never inferred from its
+absence. A blocker id that resolves to nothing does not block; it is reported
+as `missing` so the UI can offer to remove it.
+
+`blockersOf(task, statusOf)` returns the open blockers as typed entries
+(`{kind: "task", ref}` or the wait itself). Readiness, the CLI's "blocked by"
+lines, the row tooltip and the task page all render from that one list.
+
+"Ready" in the CLI matches `cast task ready`. The web says **unblocked**,
+because `readiness` already names the line's grounding verdict (LE5).
+
+## TG2. Waits: blockers outside the graph
+
+A wait is a blocker on something that is not a task. Kinds:
+
+| kind | met when | fails when |
+|---|---|---|
+| `pr_merged` | the PR merges | the PR closes without merging |
+| `pr_checks_green` | the PR's `checks_state` becomes `success` | never; red checks stay waiting (the chip shows red) |
+| `decision` | the `sd-N` decision is answered | it is dismissed or withdrawn |
+| `time` | the clock passes `at` | never |
+
+Waits live on the task row (`tasks.waits`), so they sync to every client with
+the row and have exactly one home. Each entry: `id` (stable within the task),
+`kind`, its target (`repository` + `pr_number`, `decision`, or `at`),
+`state` (`waiting | met | failed`), `created_at`, `created_by`, `settled_at`,
+and a short `note` written when it settles ("merged", "answered: Ship it",
+"closed without merging"). A met or failed wait stays on the row as history
+until someone removes it; a failed wait keeps blocking.
+
+`waiting_since` (indexed, sparse) is set while any wait is `waiting` and
+cleared otherwise. It is never written directly: every change to `waits`
+goes through one helper (`writeWaits` in `convex/taskWaits.ts`) that
+recomputes it. Events find their tasks through that index, so an event costs
+one indexed read of the waiting tasks, never a scan.
+
+### Settling
+
+- PR events: `firePrTrigger` (`prShepherd.ts`) is the one place derived PR
+  events leave. It also calls `settlePrWaits(ctx, eventType, pr)` for
+  `pr_merged`, `pr_closed` and `pr_checks_green`. A wait matches on the
+  normalized repository and number, and only for a task routed to the PR's
+  team or owned by one of its members.
+- Decisions: `settleResolution` (`sessionDecisions.ts`) calls
+  `settleTaskWaits(ctx, row, verdict)`. `reopenCore` puts a met decision wait
+  back to `waiting`.
+- Time: creating a `time` wait schedules one `runAt` job. The job re-reads
+  the task and settles the wait only if it still exists and is still
+  waiting, so removing a wait needs no cancellation.
+- Creating a wait checks the target first: a PR already merged or a decision
+  already answered is met at once (and says so). A PR codecast cannot see
+  (no app installation, not in `pull_requests`) is refused with the reason;
+  a wait that can never settle is a trap.
+
+### When a task unblocks
+
+The moment a task's last blocker clears (a wait settles, or a task in its
+`blocked_by` closes, via `afterStatusMove`), `onUnblocked` runs once:
+
+1. a system comment on the task: "Unblocked: PR #42 merged".
+2. If a session owns the task (`conversations.active_task_id`), that session
+   gets a message saying what cleared and that the task is ready. This is how
+   an agent parks: it sets a wait on its own task and ends its turn.
+3. Otherwise a `task_unblocked` notification to the assignee when the
+   assignee is a person.
+
+A failed wait posts a `blocker` comment instead and wakes the owner the same
+way, because someone has to re-plan.
+
+## TG3. One grammar for blocker refs
+
+`parseBlockerRef` in `packages/shared/tasks/graph.ts`, used by the CLI flags,
+the web's add-blocker palette and the server:
+
+| input | means |
+|---|---|
+| `ct-123` | task blocker (`blocked_by`) |
+| `#42`, `owner/repo#42`, a PR URL | `pr_merged` |
+| the same with `:checks` (alias `:ci`) | `pr_checks_green` |
+| `sd-412` | `decision` |
+| `30m`, `2h`, `3d`, an ISO date or datetime | `time` |
+
+A bare `#42` resolves its repository from the task's project, then the
+caller's git remote (CLI), and fails with the candidates when ambiguous.
+
+## TG4. Edges that cannot loop
+
+`addDep`, `create` with `blocked_by`, and `update` with `blocked_by` reject
+an edge that closes a loop. The error names the path: "ct-9 already waits on
+ct-5 (ct-5 → ct-7 → ct-9); this edge would close a loop." The check is
+`findPath(from, to)` in `graph.ts`, run over the workspace's open edges.
+`getTopologicalOrder` moves there too.
+
+## TG5. Links that do not block
+
+- `found_during` (task short id, indexed): the task this one was found while
+  working on. The server fills it on create when the creating session is
+  bound to a task and the new task is not that task's own subtask or plan
+  step; `--found-during` sets it explicitly and `--found-during none` skips
+  it. The task page shows "Found during ct-12", and the source task lists
+  what was found while working on it.
+- `superseded_by` (task short id): this task was replaced. Superseding drops
+  the old task with a note and **moves its dependents**: anything blocked by
+  the old task becomes blocked by the replacement, because a dropped blocker
+  would otherwise silently release them. Marking a duplicate does the same
+  through the same helper (`redirectDependents`).
+- `related` (task short ids, mirrored on both sides like `blocks`): see-also.
+
+## TG6. Plans that write their own order
+
+`cast plan create --steps -` and `cast plan steps <plan> -` read steps from
+stdin, one per line. Lines separated by a blank line form waves: steps in a
+wave are independent, and every step in a wave waits on every step of the
+wave before it. `cast plan steps` appends after the plan's current last wave.
+
+```
+Design the schema
+
+Build the API
+Build the UI
+
+Review in the real app
+```
+
+The plan guidance in `snippets.ts` and the `cast-plan` skill teach this form
+and the one rule agents get backwards: say what a step *needs* ("Review needs
+Build"), never what comes first.
+
+`cast plan template save <plan>` stores a plan's steps and edges as a
+`plan_templates` row, so a plan worth repeating can be instantiated again.
+
+## TG7. Claiming the frontier
+
+`cast task ready --claim` picks the highest-priority ready task matching the
+filters and claims it for the calling session in one mutation (status
+`in_progress`, ownership, pulse), so two agents pulling from the same queue
+never take the same task.
+
+`cast task ready` sorts by priority, then plan order, and folds tasks nobody
+has touched in 30 days into a count (`--stale` lists them), so the frontier
+reads as the work that is live.
+
+## TG8. Execution hints
+
+Tasks keep `model` and gain `effort` (`low | medium | high | xhigh | max`).
+`cast task create/update --model --effort` set them; `cast plan orchestrate`
+and `autopilot` read them through `resolveTaskModel` before spawning, since a
+model and effort are fixed at launch.
+
+## TG9. Short-lived tasks
+
+`ephemeral: true` marks operational bookkeeping with no value once done (a
+routine's checklist, a probe). Ephemeral tasks work like any task but stay
+out of the board's default views, the feed and notifications, and leave the
+ready frontier of everyone but their owner. `cast task create --ephemeral`
+sets it; `cast task keep <id>` clears it. Nothing is deleted.
+
+## TG10. Context survives compaction
+
+A SessionStart job, independent of stable mode, reads the hook input's
+`source`. On `compact` and `resume`, if the session is bound to a task (task
+pulse), it prints a compact block: the task, its status, its open blockers
+and waits, the last progress comment, and the plan. Startup sessions are
+left alone; the bound task is already in front of them.
+
+## TG11. A history that covers the graph
+
+Every change to `blocked_by`, `waits`, `found_during`, `superseded_by`,
+`related` and `labels` writes `task_history`, through one helper
+(`recordTaskChange`) that the existing status/priority/title/assignee writes
+also use. The task timeline renders them: "Waiting on PR #42", "Unblocked:
+PR #42 merged", "Found during ct-12".
+
+## TG12. Surfaces
+
+- **Task page.** One editable "Blocked by" row lists task blockers and waits
+  together, each with its live pill (`EntityIdPill`, `PrStatusChip`, a time
+  pill), its state, and a remove control; "Add blocker…" opens the palette,
+  which accepts task search and any TG3 ref. "Blocks", "Found during",
+  "Found here" and "Related" sit beside it. A superseded task shows the
+  replacement at the top.
+- **Task rows.** A blocked task shows one glyph distinct from the session
+  count, with a tooltip that names what it waits on.
+- **Tasks board.** An "Unblocked" view next to Active.
+- **Plan graph.** Waits appear as small nodes feeding their task; colors use
+  sol tokens.
+- **Mobile.** The task screen lists blockers and waits, read-only.
+- **CLI.** `cast task show` and `context` print blockers, waits and links in
+  the same order as the web.

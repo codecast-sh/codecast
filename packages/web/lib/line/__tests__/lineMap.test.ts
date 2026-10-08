@@ -83,7 +83,7 @@ describe("buildLineMap: nodes from the definition", () => {
     for (const s of stations) expect(ids).toContain(s);
     const at = (id: string) => node(m, id).col;
     expect(at(SIGNALS_NODE)).toBeLessThan(at(CAUSES_NODE));
-    for (const [a, b] of [["ground", "analyze"], ["analyze", "prove"], ["prove", "red"], ["red", "implement"], ["implement", "verify"], ["review", "card_draft"], ["card", "decide"], ["decide", "ship"], ["ship", "merge"], ["merge", "watch"], ["watch", "end:held"]]) {
+    for (const [a, b] of [["ground", "analyze"], ["analyze", "prove"], ["prove", "red"], ["red", "implement"], ["implement", "verify"], ["review", "card_draft"], ["card", "decide"], ["decide", "rebase"], ["rebase", "ship"], ["ship", "watch"], ["watch", "end:held"]]) {
       expect(at(a)).toBeLessThan(at(b));
     }
     // The node list itself reads left to right.
