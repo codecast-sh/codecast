@@ -211,7 +211,9 @@ export function parseStableHookClient(value: string | undefined): StableHookClie
     : "claude";
 }
 
-function wrapForClient(client: StableHookClient, text: string): string {
+/** A SessionStart block in the envelope `client` reads it from (also the
+ *  task context after compaction, taskContextHook.ts). */
+export function wrapForClient(client: StableHookClient, text: string): string {
   switch (client) {
     case "codex":
       return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } })}\n`;
@@ -349,7 +351,7 @@ export function installStableHook(): void {
 // dot-dir is absent, so enabling stable mode on a machine without a client
 // touches nothing of that client's.
 
-function codecastHooksDir(): string {
+export function codecastHooksDir(): string {
   return path.join(defaultConfigDir(), "hooks");
 }
 
@@ -378,14 +380,23 @@ function ensureCodexHooksFeature(codexDir: string): void {
  * additionalContextLimit 0 disables Codex's default 2,500-token spill-to-file
  * truncation — the feed must arrive whole or not at all. */
 export function installStableHookCodex(): void {
-  const home = process.env.HOME || "";
-  const codexDir = path.join(home, ".codex");
-  if (!fs.existsSync(codexDir)) return;
+  installCodexSessionStartHook(() => writeStableHookScript("codex"), "stable-context", 30);
+}
 
+export function removeStableHookCodex(): void {
+  removeCodexSessionStartHook(path.join(codecastHooksDir(), "stable-feed-codex.sh"), "stable-context");
+}
+
+/** Register a SessionStart script in ~/.codex/hooks.json (written by
+ *  `writeScript`, which returns its path), turning on Codex's hooks flag. A
+ *  no-op without ~/.codex. Never throws: hooks are an optional enhancement. */
+export function installCodexSessionStartHook(writeScript: () => string, what: string, timeout: number): void {
+  const codexDir = path.join(process.env.HOME || "", ".codex");
+  if (!fs.existsSync(codexDir)) return;
   try {
     ensureCodexHooksFeature(codexDir);
-    const hookFile = writeStableHookScript("codex");
-    editHarnessJson(path.join(codexDir, "hooks.json"), "stable-context", (config) => {
+    const hookFile = writeScript();
+    editHarnessJson(path.join(codexDir, "hooks.json"), what, (config) => {
       if (!config.hooks) config.hooks = {};
       if (!config.hooks.SessionStart) config.hooks.SessionStart = [];
       const present = (config.hooks.SessionStart as any[]).some((matcher: any) =>
@@ -393,21 +404,17 @@ export function installStableHookCodex(): void {
       );
       if (present) return;
       config.hooks.SessionStart.push({
-        hooks: [{ type: "command", command: hookFile, additionalContextLimit: 0, timeout: 30 }],
+        hooks: [{ type: "command", command: hookFile, additionalContextLimit: 0, timeout }],
       });
     });
-  } catch {
-    // Hook install is an optional enhancement — never break the caller.
-  }
+  } catch {}
 }
 
-export function removeStableHookCodex(): void {
-  const home = process.env.HOME || "";
-  const hookFile = path.join(codecastHooksDir(), "stable-feed-codex.sh");
-  try { removeHarnessFile(hookFile, "stable-context"); } catch {}
-
+/** Delete a SessionStart script and its ~/.codex/hooks.json entry. */
+export function removeCodexSessionStartHook(hookFile: string, what: string): void {
+  try { removeHarnessFile(hookFile, what); } catch {}
   try {
-    editHarnessJson(path.join(home, ".codex", "hooks.json"), "stable-context", (config) => {
+    editHarnessJson(path.join(process.env.HOME || "", ".codex", "hooks.json"), what, (config) => {
       if (!config.hooks?.SessionStart) return;
       for (const matcher of config.hooks.SessionStart) {
         if (matcher.hooks) {
