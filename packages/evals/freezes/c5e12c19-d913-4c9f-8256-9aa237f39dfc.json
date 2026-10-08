@@ -1,0 +1,26 @@
+{
+  "name": "ground checkout-totals-wrong",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:checkout-totals-wrong"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "ground:checkout-totals-wrong",
+    "title": "ground checkout-totals-wrong"
+  },
+  "asOf": "2026-09-20T12:00:00.000Z",
+  "trigger": {
+    "type": "ground"
+  },
+  "meta": {
+    "surface": "ground",
+    "visibility": "public",
+    "snapshot": "fixtures/ground/checkout-totals-wrong.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "c5e12c19-d913-4c9f-8256-9aa237f39dfc",
+  "createdAt": "2026-10-07T17:29:33.805Z"
+}
