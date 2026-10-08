@@ -81,3 +81,34 @@ export function useLineAdmission(projectId: string | null): {
   }, [role]);
   return { admission, role, setOn, setSlots };
 }
+
+/** Every project's admission at once, for the overview of all lines: the
+ *  role whose area holds each, its switch and pause, and whether starting is
+ *  off everywhere (one sweep count says it for all). Slots and hands are left
+ *  unknown here: a project's own line reads them. */
+export function useLineAdmissions(projects: ReadonlyArray<{ _id: string; workspace?: string | null }>): ReadonlyMap<string, LineAdmission> {
+  useSyncOrgTreeFeeder();
+  const sig = useInboxStore((s) => {
+    const t = s.orgTree;
+    return t ? `${t.workspace.kind}:${t.workspace.id}\n${t.roles.map(roleSig).join("\n")}` : "";
+  });
+  const roles = useMemo(() => {
+    const tree = useInboxStore.getState().orgTree;
+    if (!tree) return null;
+    const ws = `${tree.workspace.kind}:${tree.workspace.id}`;
+    const out = new Map<string, OrgRole | null>();
+    for (const p of projects) if (p.workspace === ws) out.set(p._id, lineRoleOf(tree.roles, p._id));
+    return out;
+  }, [sig, projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  const any = roles ? [...roles.values()].find((r): r is OrgRole => !!r) : undefined;
+  const queue = useQueryNoThrow(api.orgLine.queue, any ? { role_id: any._id } : "skip").data;
+  return useMemo(() => {
+    const out = new Map<string, LineAdmission>();
+    for (const [id, role] of roles ?? []) {
+      out.set(id, role
+        ? { role: { id: role._id, handle: role.handle, paused: role.status !== "active" }, on: autonomyOn(role.trust), sweepOff: queue?.sweep_on === false, slots: role.caps?.cards ?? DEFAULT_LINE_CARDS_CAP, busy: null, hands: null, handsCap: null }
+        : { role: null, on: false, slots: DEFAULT_LINE_CARDS_CAP, busy: null, hands: null, handsCap: null });
+    }
+    return out;
+  }, [roles, queue]);
+}

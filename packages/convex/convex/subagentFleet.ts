@@ -14,7 +14,7 @@
 // which reports back here; blocked and killed workers keep their worktree, and
 // the parent is told either way.
 import { v } from "convex/values";
-import { mutation } from "./functions";
+import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
@@ -99,6 +99,22 @@ export async function fleetRowsOf(ctx: { db: any }, userId: Id<"users">): Promis
       .take(SLOT_SCAN);
   return [...(await read("running")), ...(await read("queued"))];
 }
+
+/**
+ * The caller's running and queued workers, for `cast queue`: queued ones in
+ * the order the drain will start them, each with the caps it was queued under.
+ */
+export const queueStatus = query({
+  args: { api_token: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Authentication required");
+    const docs = await fleetRowsOf(ctx, auth.userId);
+    return docs
+      .map((doc) => ({ ...slotRowOf(doc), title: typeof doc.title === "string" ? doc.title : null }))
+      .sort((a, b) => (a.slot === b.slot ? a.at - b.at : a.slot === "running" ? -1 : 1));
+  },
+});
 
 /** Start every queued worker the limits now admit. Returns the started ids. */
 export async function drainFleet(ctx: any, userId: Id<"users">): Promise<string[]> {

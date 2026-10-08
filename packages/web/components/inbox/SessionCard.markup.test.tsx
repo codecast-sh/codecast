@@ -19,17 +19,23 @@ const NOW = Date.UTC(2026, 8, 30, 18, 0);
 Date.now = () => NOW;
 const MIN = 60_000;
 
+let LOCAL: { viewer: string; deviceId: string } | null = { viewer: "me", deviceId: "laptop-here" };
+const UI = { show_model_badge: true, show_agent_icon: true, show_branch_pill: true, personify_sessions: false } as Record<string, unknown>;
+
 const readState = mockInboxStore(() => ({
   machineRoster: [
     { device_id: "cloud-linux", is_remote: true, platform: "linux", online: false, last_seen: 1, label: "Cloud Linux" },
+    { device_id: "laptop-here", is_remote: false, platform: "darwin", online: true, last_seen: 1, label: "This laptop" },
+    { device_id: "laptop-other", is_remote: false, platform: "darwin", online: true, last_seen: 1, label: "Desk Mac" },
   ],
   machineRosterLive: true,
+  localDevice: LOCAL,
   currentUser: { _id: "me" },
   teamMembers: [
     { _id: "me", name: "Ashot Petrosian", email: "a@x.org" },
     { _id: "u-ann", name: "Ann Lee", email: "ann@x.org", avatar_url: null, presence_state: "active", viewing_conversation_id: "c-viewed" },
   ],
-  clientState: { ui: { show_model_badge: true, show_agent_icon: true, show_branch_pill: true, personify_sessions: false } },
+  clientState: { ui: UI },
   drafts: { "c-draft": { draft_message: "try the retry budget again" } },
   pendingMessages: { "c-pending": [{ _id: "pm1", status: "pending", content: "go" }] },
   sessionCommands: {},
@@ -148,4 +154,35 @@ describe("SessionCard markup is stable across the view split", () => {
       expect(render(overrides, props)).toMatchSnapshot();
     });
   }
+});
+
+describe("machine icon beside the title", () => {
+  const mark = (owner: string) => render({ _id: `c-on-${owner}`, owner_device_id: owner }).match(/data-sv-device="(\w+)"/)?.[1] ?? null;
+
+  test("cloud machine gets the cloud mark, another machine the small one, this machine none", () => {
+    expect(mark("cloud-linux")).toBe("cloud");
+    expect(mark("laptop-other")).toBe("elsewhere");
+    expect(mark("laptop-here")).toBeNull();
+  });
+
+  test("a window that does not know its machine marks only the cloud", () => {
+    const was = LOCAL;
+    LOCAL = null;
+    try {
+      expect(mark("cloud-linux")).toBe("cloud");
+      expect(mark("laptop-other")).toBeNull();
+    } finally {
+      LOCAL = was;
+    }
+  });
+
+  test("the setting turns it off", () => {
+    UI.show_device_icon = false;
+    try {
+      expect(mark("cloud-linux")).toBeNull();
+      expect(mark("laptop-other")).toBeNull();
+    } finally {
+      delete UI.show_device_icon;
+    }
+  });
 });
