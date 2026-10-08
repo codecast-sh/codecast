@@ -1,4 +1,5 @@
 import { refuseSeatKill } from "./lib/seatKill";
+import { isClaudeSubagentSessionId } from "./lib/claudeSubagentSession";
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
@@ -1400,7 +1401,8 @@ export const createConversation = mutation({
       parent_conversation_id: parentConversationId,
       ...(args.fork && forkOrigin ? daemonForkFields(forkOrigin, args.fork, now) : {}),
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
-        (!!parentConversationId && !args.parent_message_uuid) || undefined,
+        (!!parentConversationId && !args.parent_message_uuid) ||
+        (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)) || undefined,
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
@@ -10229,16 +10231,44 @@ export function _resetChildAuqProbeCacheForTests(): void {
 // checked BEFORE a probe is enqueued — a parent already asking through a
 // pending `cast decide` (alreadyAsking) or a sibling's permission block never
 // spends a message read — and cache hits answer without one.
+//
+// A child's ask rests on its trusted status, which decays with time alone (a
+// heartbeat ages out, a status outlives its trust), so the lift does too.
+// `askingAt` answers for any instant over what this execution read, and
+// `liftDeadlines` names the instants it can change: the overlay ships them
+// as the parent's bucket deadline, so the replica, which holds only the
+// child_asking fact, drops the lift when the server would.
 export async function buildAskingParents(
   ctx: any,
   childrenByParent: Map<string, any[]>,
   maps: Pick<InboxSessionMaps, "liveConvIds" | "agentStatusMap" | "openTasksMap"> & Partial<Pick<InboxSessionMaps, "lastHeartbeatMap">>,
   now: number,
   alreadyAsking?: ReadonlySet<string>,
-): Promise<{ asking: Set<string>; probedAuqOpen: Map<string, boolean> }> {
+): Promise<{
+  asking: Set<string>;
+  probedAuqOpen: Map<string, boolean>;
+  askingAt: (pid: string, t: number) => boolean;
+  liftDeadlines: (pid: string) => Array<number | null>;
+}> {
   const asking = new Set<string>();
   const probedAuqOpen = new Map<string, boolean>();
   const probes: Array<{ pid: string; cid: string; convId: Id<"conversations">; key: string }> = [];
+  const probeKey = (c: any) => `${c._id.toString()}:${c.message_count ?? 0}`;
+  // What a child's status says about its ask at instant t: a permission
+  // prompt, a status under which an AskUserQuestion poll may be open, or none.
+  const childAskAt = (c: any, t: number): "permission" | "poll" | null => {
+    const cid = c._id.toString();
+    const status = trustedAgentStatus(
+      maps.agentStatusMap.get(cid), c.updated_at, t, isLiveAt(maps, cid, t), verifiedWaitingFor(maps, cid, t),
+    );
+    // A permission prompt is the child's own ask (ownAsk) whatever its
+    // message count, so it lifts the parent the same way on every side.
+    if (status === "permission_blocked") return "permission";
+    // Only a child with content can hold an AskUserQuestion poll: an empty
+    // one never spends the probe's message read.
+    if ((c.message_count ?? 0) > 0 && status !== undefined && status !== "idle") return "poll";
+    return null;
+  };
   for (const [pid, children] of childrenByParent) {
     if (alreadyAsking?.has(pid)) { asking.add(pid); continue; }
     for (const c of children) {
@@ -10247,16 +10277,10 @@ export async function buildAskingParents(
       // A child's own pending `cast decide` (a spawned subagent worker posts
       // on ITS session) lifts the parent exactly as its open prompt does.
       if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
-      const status = trustedAgentStatus(
-        maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now),
-      );
-      // A permission prompt is the child's own ask (ownAsk) whatever its
-      // message count, so it lifts the parent the same way on every side.
-      if (status === "permission_blocked") { asking.add(pid); break; }
-      // Only a child with content can hold an AskUserQuestion poll: an empty
-      // one never spends the probe's message read.
-      if ((c.message_count ?? 0) > 0 && status !== undefined && status !== "idle") {
-        const key = `${cid}:${c.message_count ?? 0}`;
+      const ask = childAskAt(c, now);
+      if (ask === "permission") { asking.add(pid); break; }
+      if (ask === "poll") {
+        const key = probeKey(c);
         const hit = childAuqProbeCache.get(key);
         if (hit !== undefined) {
           probedAuqOpen.set(cid, hit);
@@ -10279,7 +10303,20 @@ export async function buildAskingParents(
     probedAuqOpen.set(p.cid, open);
     if (open) asking.add(p.pid);
   });
-  return { asking, probedAuqOpen };
+  const askingAt = (pid: string, t: number): boolean => {
+    if (alreadyAsking?.has(pid)) return true;
+    return (childrenByParent.get(pid) ?? []).some((c) => {
+      if (c.inbox_killed_at) return false;
+      if (alreadyAsking?.has(c._id.toString())) return true;
+      const ask = childAskAt(c, t);
+      // A poll this execution never read (its parent resolved first) is not
+      // known closed, so it keeps the lift.
+      return ask === "permission" || (ask === "poll" && (probedAuqOpen.get(c._id.toString()) ?? childAuqProbeCache.get(probeKey(c))) !== false);
+    });
+  };
+  const liftDeadlines = (pid: string): Array<number | null> => (childrenByParent.get(pid) ?? []).flatMap((c) =>
+    rowLiveDeadlines({ updated_at: c.updated_at, last_heartbeat: maps.lastHeartbeatMap?.get(c._id.toString()) ?? null }));
+  return { asking, probedAuqOpen, askingAt, liftDeadlines };
 }
 
 // A row's own ask: an open AskUserQuestion poll or a permission prompt. An
@@ -10476,11 +10513,11 @@ function placeLivenessRowAt(
   maps: InboxSessionMaps,
   reads: LivenessRowReads,
   producingUntil: number | null,
-  askingFor: (lv: LivenessFields) => boolean,
+  askingFor: (lv: LivenessFields, t: number) => boolean,
   t: number,
 ): { lv: LivenessFields; asking: boolean; placement: InboxPlacement } {
   const lv = deriveLivenessAt(conv, maps, reads, producingUntil, t);
-  const asking = askingFor(lv);
+  const asking = askingFor(lv, t);
   return { lv, asking, placement: placeConversationRow(conv, lv, asking, reads.lastUserMessage, t) };
 }
 
@@ -10576,7 +10613,7 @@ export async function computeSessionsLiveness(
   const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId);
   const pool = await hydrateLivePool(ctx, conversations, maps, pendingDecisionIds);
   const childrenByParent = groupPoolChildren(pool);
-  const { asking: askingParents, probedAuqOpen } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
+  const { asking: askingParents, probedAuqOpen, askingAt: childAskingAt, liftDeadlines } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
   const uid = userId.toString();
   const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv));
 
@@ -10620,14 +10657,15 @@ export async function computeSessionsLiveness(
   shownConvs.forEach((conv, i) => {
     const cid = conv._id.toString();
     const producingUntil = producingUntilFor(cid);
-    const askingFor = (lv: LivenessFields) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
+    const askingFor = (lv: LivenessFields, t: number) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || (askingParents.has(cid) && childAskingAt(cid, t));
     const placeAt = (t: number): InboxPlacement => placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, t).placement;
     const { lv, asking, placement } = placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, now);
     const stale = computeBucketStale(
       // The shared deadline list over the SHIPPED facts: the replica's
       // recompute scheduler reads the same list, so no time term exists on
-      // one side only (C2).
-      { deadlines: rowLiveDeadlines({ ...conv, ...lv }), placeAt, current: placement.bucket },
+      // one side only (C2). The child_asking fact decays with the asking
+      // children's own clocks, so their deadlines join the parent's.
+      { deadlines: [...rowLiveDeadlines({ ...conv, ...lv }), ...(askingParents.has(cid) ? liftDeadlines(cid) : [])], placeAt, current: placement.bucket },
       now,
     );
     liveness[cid] = {
@@ -11706,7 +11744,7 @@ export const cliSetSessionVisibility = mutation({
     // already-dismissed session (whose worker a daemon bug may have revived) —
     // a re-asserted quiet dismiss still doesn't.
     const { action: outcome, canceledSchedules, canceledMessages, cascaded, teardownEnqueued } =
-      await applyHideTransition(ctx, conv, patch, { forceKill: args.action === "kill" });
+      await applyHideTransition(ctx, conv, patch, { forceKill: args.action === "kill", cause: `cli:${args.action}` });
     return {
       ok: true as const,
       short_id: shortId,
@@ -13592,7 +13630,7 @@ export async function enqueueKillAndResume(
   // requestId: the client's id for this restart (store restartSession).
   // It lands on the resume row, the one whose outcome IS the restart's, so the
   // row the click painted settles from it. A replayed request queues nothing.
-  opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string; requestId?: string } = {},
+  opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string; requestId?: string; cause?: string } = {},
 ) {
   const now = Date.now();
   // Throws for a hosted conversation: no daemon kills or resumes it.
@@ -13671,6 +13709,7 @@ export async function enqueueKillAndResume(
       // as a user kill, marks the conversation completed, and Codex keeps
       // answering under the old thread (ct-51691).
       ...(opts.switchAgent ? { switch_agent: true } : {}),
+      cause: opts.cause ?? (opts.switchAgent ? "switch_agent" : "kill_and_resume"),
     }),
     created_at: now,
   });
@@ -13689,7 +13728,7 @@ export async function enqueueKillAndResume(
 
 /** The kill itself, for every caller that has already authenticated: the
  *  daemon teardown, the completed stamp, and the sweeps that keep it dead. */
-export async function killConversation(ctx: any, userId: Id<"users">, args: { conversation_id: Id<"conversations">; mark_completed?: boolean; session_id?: string }, opts?: { retiring?: boolean }) {
+export async function killConversation(ctx: any, userId: Id<"users">, args: { conversation_id: Id<"conversations">; mark_completed?: boolean; session_id?: string }, opts?: { retiring?: boolean; cause?: string }) {
   const conv = await ctx.db.get(args.conversation_id);
   // The runner, or the session's second-party owner — same rule as
   // restartSession/dispatch.sendMessage. An owned session kills from the
@@ -13708,6 +13747,7 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
     args: JSON.stringify({
       conversation_id: args.conversation_id,
       session_id: args.session_id ?? conv?.session_id,
+      cause: opts?.cause ?? "killSession",
     }),
     created_at: Date.now(),
   });
@@ -13755,7 +13795,7 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
     // unconditional enqueue above: this mutation IS an explicit kill gesture,
     // so an already-hidden child whose worker came back gets torn down again
     // rather than skipped — the group comes down as one unit.
-    await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true });
+    await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true, cause: opts?.cause ?? "killSession" });
     if (!conv.persistent) await subagentEnded(ctx, conv, "killed");
   }
   return { existed: !!conv, canceled_schedules: canceledSchedules, canceled_messages: canceledMessages };
@@ -13806,7 +13846,7 @@ export const restartSession = mutation({
     // Daemon commands are polled by the RUNNER's daemon — for a second-party
     // owner restarting a session run by another account, address the commands
     // to the runner, not the caller (same routing as dispatch.resumeSession).
-    await enqueueKillAndResume(ctx, conv.user_id, conv, { requestId: args.request_id });
+    await enqueueKillAndResume(ctx, conv.user_id, conv, { requestId: args.request_id, cause: "restart" });
     return { conversation_id: conv._id, restored };
   },
 });
@@ -13827,7 +13867,7 @@ export const repairSession = mutation({
     if (!conv.session_id) throw new Error("No session to repair");
 
     // Runner-routed for the same reason as restartSession above.
-    await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true, requestId: args.request_id });
+    await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true, requestId: args.request_id, cause: "repair" });
     return { conversation_id: conv._id, restored };
   },
 });
@@ -13869,7 +13909,7 @@ export const switchSessionProject = mutation({
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
       command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      args: JSON.stringify({ conversation_id: args.conversation_id, cause: "switch_project" }),
       created_at: now,
     });
 

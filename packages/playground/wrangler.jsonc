@@ -1,0 +1,21 @@
+// The public shell: dist/ (vite build against .env.production) as static
+// assets with SPA fallback. The worker runs first only for page paths, where
+// a link unfurler may need an app's preview instead of index.html.
+{
+  "name": "clayground",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-25",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/*", "!/assets/*", "!/fonts/*"]
+  },
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "playclayground.com", "custom_domain": true },
+    { "pattern": "www.playclayground.com", "custom_domain": true }
+  ],
+  "vars": { "RUN_ORIGIN": "https://giant-clam-714.convex.site" },
+  "observability": { "enabled": true }
+}
