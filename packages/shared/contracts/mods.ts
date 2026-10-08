@@ -9,6 +9,8 @@
 // below. The mod never touches the app's DOM: it returns element trees, and
 // codecast draws them with its own components.
 
+import { themeErrors, type ModTheme } from "./theme";
+
 /** Bumped when the host and the SDK baked into a mod stop understanding each other. */
 export const MOD_PROTOCOL = 1;
 
@@ -127,6 +129,8 @@ export type ModManifest = {
   fences?: ModFence[];
   sidebar?: ModSidebar[];
   objects?: ModObjectKind[];
+  /** Color themes the person can pick in Settings (contracts/theme.ts): data, applied app-wide. */
+  themes?: ModTheme[];
   /**
    * The local half: a module the codecast daemon runs on a machine you own,
    * with that machine's full access (files, processes, network, env). It runs
@@ -152,7 +156,7 @@ export function validateManifest(raw: unknown): ManifestCheck {
   const errors: string[] = [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, errors: ["the manifest must be a JSON object"] };
   const m = raw as Record<string, unknown>;
-  const known = new Set(["name", "title", "description", "version", "icon", "main", "permissions", "panes", "commands", "fences", "sidebar", "objects", "local", "agents", "$schema"]);
+  const known = new Set(["name", "title", "description", "version", "icon", "main", "permissions", "panes", "commands", "fences", "sidebar", "objects", "themes", "local", "agents", "$schema"]);
   for (const key of Object.keys(m)) if (!known.has(key)) errors.push(`unknown key "${key}"`);
   if (typeof m.name !== "string" || !MOD_NAME_RE.test(m.name)) errors.push(`name must be 2 to 40 characters of a-z, 0-9 and -, starting with a letter`);
   if (typeof m.agents === "string" && m.agents.length > 2000) errors.push("agents holds at most 2000 characters");
@@ -226,6 +230,7 @@ export function validateManifest(raw: unknown): ManifestCheck {
       }
     }
   }
+  if (m.themes !== undefined) errors.push(...themeErrors(m.themes));
   return errors.length ? { ok: false, errors } : { ok: true, manifest: m as unknown as ModManifest };
 }
 

@@ -7,7 +7,7 @@
 // on the machine holding the checkout (useLineProfileEdits), which writes
 // `.codecast/line.toml` in place and republishes. The Stations section is
 // LineStations.
-import { useEffect, useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
+import { useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { useSyncDevices } from "../../../hooks/useSyncDevices";
@@ -20,6 +20,7 @@ import { useLineProfileEditor } from "./useLineProfileEdits";
 import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { LineStations } from "./LineStations";
 import "../line.css";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import "./settings.css";
 
 const NAV = [...LINE_SECTIONS.map((s) => ({ id: s.id, title: s.title })), { id: "stations", title: "Stations" }];
@@ -39,7 +40,7 @@ export function LineSettingsPage({ project: pinned }: { project?: string } = {})
   const ready = !!project && !!lp;
   // Once per arrival: a later render must never pull the reader back up.
   const landed = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     // A station scrolls itself into view once its panel opens (LineStations).
     if (!ready || !target.section || target.station) return;
     const key = `${project?._id}:${target.section}`;
