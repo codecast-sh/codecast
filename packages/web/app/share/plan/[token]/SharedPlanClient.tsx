@@ -24,7 +24,7 @@ export default function SharedPlanClient() {
               at={plan.created_at}
               meta={pct !== null ? <span>{progress.done} of {progress.total} tasks done</span> : null}
             />
-            {plan.goal && <Callout label="Goal">{plan.goal}</Callout>}
+            {plan.goal && <Callout label="What it is for">{plan.goal}</Callout>}
             {pct !== null && (
               <div style={{ margin: "-12px 0 36px", height: 6, borderRadius: 99, background: "var(--rule)", overflow: "hidden" }}>
                 <div style={{ width: `${pct}%`, height: "100%", background: "linear-gradient(90deg, #859900, #2aa198)" }} />

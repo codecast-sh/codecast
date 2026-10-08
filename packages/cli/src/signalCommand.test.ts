@@ -106,6 +106,12 @@ describe("cast signal on the wire", () => {
     expect(logs.join("\n")).toContain("--kind, --title");
   });
 
+  test("move sends the key, the cause it leaves, and where it goes", async () => {
+    answer = () => ({ from: "ct-7", to: "ct-9", moved: 2, created: true });
+    await run("move", "--fingerprint", "union:cluster:c1", "--from", "ct-7", "--title", "Held call cards dial outside hours", "--json");
+    expect(calls[0]).toEqual({ path: "/cli/signal/move", body: { fingerprint: "union:cluster:c1", from: "ct-7", title: "Held call cards dial outside hours", project_path: "/repo", conversation_id: "s1" } });
+  });
+
   test("ls --fingerprint asks the server for that one key in the workspace", async () => {
     answer = () => ({ signals: [] });
     await run("ls", "--fingerprint", "union:cluster:c1", "-n", "1", "--json");
