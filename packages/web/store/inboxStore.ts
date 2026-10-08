@@ -3,7 +3,10 @@ import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceO
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
+import type { GraphRefStatus, TaskWait } from "@codecast/shared/tasks";
+import { addWaitDraft, removeBlockerEdge, removeBlocksEdge, removeWaitDraft, rollbackWaitDraft, setBlockerEdge, setRelatedEdge, type TaskWaitInput } from "./taskGraphDraft";
 import { carryRingStubs } from "../lib/calls/ringStubs";
+import { carryNodeSessions } from "../lib/workflowRun";
 import { runFilesOf } from "../lib/calls/callVideo";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
@@ -70,7 +73,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -286,7 +289,7 @@ import {
 import { bindOptimisticMessageWriter, createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
-import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
+import { attachProjectStubDraft, createInitiativeSlice, detachProjectStubDraft, moveProjectInGoals, moveProjectInLocks, rekeyInitiativeProjectDraft, type InitiativeSliceActions } from "./initiativeSlice";
 import { createProjectUpdatesSlice, type ProjectUpdatesSliceActions } from "./projectUpdatesSlice";
 import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
 import { createLineSlice, type LineSliceActions } from "./lineSlice";
@@ -515,6 +518,8 @@ export type FeedCollection =
 export type ProjectItem = {
   _id: string;
   short_id?: string;
+  /** A web create's stub key, stored on the server row so it supersedes the stub. */
+  client_key?: string;
   title: string;
   description?: string;
   status: string;
@@ -1231,6 +1236,20 @@ export type TaskItem = {
   labels?: string[];
   blocked_by?: string[];
   blocks?: string[];
+  // The task graph (docs/architecture/task-graph.md): blockers outside the
+  // graph (TG2), and links that do not block (TG5), all task short ids.
+  waits?: TaskWait[];
+  found_during?: string;
+  superseded_by?: string;
+  related?: string[];
+  /** Graph refs the detail looked up that name no task (taskMining
+   *  webGetTaskDetail): `statusLookup`'s `searched`, so they read as not
+   *  found rather than unknown. Detail-only, preserved across list deltas. */
+  graph_missing?: string[];
+  /** The list's snapshot of its blocker and parent refs (convex
+   *  lib/taskGraph stampGraphStatus), read beneath the store's live rows
+   *  (lib/taskBlockers). Preserved across rows that lack it (the detail). */
+  graph_status?: GraphRefStatus[];
   user_id?: string;
   assignee?: string;
   assignee_info?: { name: string; image?: string } | null;
@@ -1339,7 +1358,8 @@ export type DecisionKind = "single" | "multi" | "rank" | "form";
 export type DecisionAnswerInput = { index?: number; text?: string; json?: any } | { dismiss: true };
 export type DecisionFormField = { key: string; label: string; type: "text" | "number" | "select" | "bool"; options?: string[] };
 export type DecisionHop = { role_id: string; recommendation?: number; note?: string; at: number };
-export type DecisionParty = { kind: "user" | "role" | "policy"; id: string };
+// `via`: the session that carried a person's answer at their word (cast decide answer --for-human).
+export type DecisionParty = { kind: "user" | "role" | "policy"; id: string; via?: string };
 
 export type SessionDecisionItem = {
   _id: string;
@@ -1444,6 +1464,30 @@ export type HandledDecisionItem = SessionDecisionItem & {
 // The document page's context (sessionDecisions.getWithDoc), keyed by the
 // decision id: the doc body, the task, the stack, the ladder with role names,
 // the people, the holder role, and the grant offer.
+// The discussion of one decision (convex decisionDiscussion.discussion): who
+// owns it, resolved now, and each ask with the owner's reply read from its
+// transcript. One row per decision viewed, keyed by the decision's Convex id.
+export type DecisionDiscussionOwnerVia = "asker" | "run" | "lead" | "workspace";
+export type DecisionDiscussionTurn = {
+  client_id: string;
+  text: string;
+  at: number;
+  user_id: string;
+  by: string;
+  conversation_id: string;
+  delivered: boolean;
+  reply: { text: string; at: number } | null;
+};
+export type DecisionDiscussionItem = {
+  _id: string;
+  decision_short_id?: string;
+  owner: { conversation_id: string; short_id?: string; name: string; via: DecisionDiscussionOwnerVia } | null;
+  turns: DecisionDiscussionTurn[];
+};
+/** A person's words to a decision's owner on their way: painted at once,
+ *  retired when the server's row carries the same client id. */
+export type DecisionDiscussionSend = { client_id: string; text: string; at: number };
+
 export type DecisionDetailItem = {
   _id: string;
   decision: SessionDecisionItem;
@@ -1800,6 +1844,10 @@ export type ClientUI = {
   // Show each session's agent client icon (Claude Code, opencode, …) next to
   // its title in the inbox list. On by default; read as `!== false`.
   show_agent_icon?: boolean;
+  // Mark where a session runs in the inbox list: a cloud icon for a cloud
+  // machine, a small device icon for one of your other machines. On by
+  // default; read as `!== false`.
+  show_device_icon?: boolean;
   // Give EVERY session a character — an animal face and a name — instead of
   // only the ones somebody personified by hand (session-characters.md S2).
   // Off by default: a face is a choice, not something that happens to you.
@@ -1842,6 +1890,19 @@ export type ClientUI = {
   // second one. Stamped LWW: the phone sees the laptop's review too. The
   // page derives reviewing, ended or nothing from it (staffingModel.reviewRunState).
   org_review_run?: { since: number; session_id: string | null; workspace: string } | null;
+  // A pass of the expectations proposer started from a project's
+  // Expectations page, per project id (components/expectations/draftExpectations):
+  // when, how (its routine's trigger, or a fresh session) and the session.
+  // The page reads it as "reading" until a proposal newer than it lands.
+  expectations_drafts?: Record<string, { since: number; session_id?: string | null; via: "routine" | "session" }>;
+  // The goals, projects and people opened in place on the Org screen's
+  // document (components/company/CompanyDocument). Absent until the person
+  // opens or folds one, and the document opens on its most pressing goal
+  // until then. Stamped LWW: a goal opened on the laptop is open on the phone.
+  org_expanded?: string[];
+  // How the Org screen's company pane reads the company: the document
+  // ("read", the default) or the map. Stamped LWW, like org_expanded.
+  org_view?: "read" | "map";
   // Which view the people window shows: the wall of faces (default) or the
   // roster list. Unstamped, so it stays a per-device reading preference like
   // the sidebar and zen mode — the window is a different size on every machine,
@@ -1926,6 +1987,8 @@ export type ClientUI = {
   // The color of your own messages in the Minimal style: a preset id or a
   // #rrggbb hex (lib/bubbleColor.ts). Follows the person, so it is stamped.
   user_bubble_color?: string;
+  // The color theme a mod offers, as "<mod name>/<theme id>" (lib/theme/colorTheme.ts); empty or absent is codecast's own palette.
+  color_theme?: string;
   // Minimal hides the schedule, plan and workflow strips under a conversation's
   // header; true brings them back. Classic always shows them.
   show_session_context?: boolean;
@@ -4023,6 +4086,11 @@ export function isUnsentConversation(s: { message_count?: number; last_user_mess
   return !sending && !(s.message_count ?? 0) && !s.last_user_message;
 }
 
+/** Hosted sections that never fold: New holds the results the Inbox count
+ *  counts, so a fold an old click stored is ignored by the render and the
+ *  keyboard walk alike. */
+export const HOSTED_UNFOLDABLE_SECTIONS: ReadonlySet<string> = new Set(["new_results"]);
+
 export function hostedStatusSections<T extends { _id: string; updated_at?: number; message_count?: number; last_user_message?: string | null }>(placed: {
   pinned: T[]; questions: T[]; needsInput: T[]; newSessions: T[]; working: T[]; done: T[]; dormant: T[];
 }, awaitsOk: (id: string) => boolean = () => false, sending: (id: string) => boolean = () => false, unread: (id: string) => boolean = () => false): Array<[T[], "pinned" | "needs_input" | "working" | "new_results" | "done" | "drafts"]> {
@@ -4084,7 +4152,7 @@ export function visualOrderSessions(
   ];
   const result: InboxSession[] = [];
   for (const [section, key] of sections) {
-    if (collapsed?.[key]) continue;
+    if (collapsed?.[key] && !(opts.hostedOnly && HOSTED_UNFOLDABLE_SECTIONS.has(key))) continue;
     for (const s of section) {
       // The shared predicate (chipMatchesSession) so the walk and the render
       // can never disagree — including the mid-create stub carve-out.
@@ -5941,6 +6009,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // reads the roster only when this is true, so a stale cache can never veto
   // a freshly cloned path.
   machineRosterLive: boolean;
+  // The machine this window runs on, as its daemon answered the local probe
+  // (hooks/useLocalDeviceId), keyed by the viewer it was found for. Per
+  // window and never persisted: another window may sit on another machine.
+  localDevice: { viewer: string; deviceId: string } | null;
   setMachineRoster: (devices: MachineCandidate[]) => void;
   /** Drop machines from the roster (Settings > Machines). The server refuses
    *  an online machine, whose next heartbeat would list it again. */
@@ -5948,6 +6020,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Open one of your machines to exactly these teams (empty = private).
    *  Settings > Machines; the server home is device_shares. */
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  setDeviceSnippet: (deviceId: string, change: DeviceSnippetChange) => Promise<unknown>;
   /** Start, stop or adjust keeping a cloud session's folder in step with a laptop copy (dispatch setLocalMirror → cloud_live_sync on that laptop): a mode, a conflict pick, or watch-only's overwrite. */
   setLocalMirror: (conversationId: string, enable: boolean, deviceId?: string, opts?: { overwrite?: boolean; mode?: import("@codecast/shared/contracts").LocalMirrorMode; resolve?: import("@codecast/shared/contracts").MirrorResolve }) => void;
   /** Wake, sleep, apply setup, save or delete an image on a cloud host (dispatch cloudHostAction → cloud_host_action on the laptop that manages it). */
@@ -6026,6 +6099,15 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   decisionStacks: Record<string, DecisionStackItem>;
   handledDecisions: Record<string, HandledDecisionItem>;
   decisionDetails: Record<string, DecisionDetailItem>;
+  decisionDiscussions: Record<string, DecisionDiscussionItem>;
+  // Local echoes of discussDecision, by decision id. Ephemeral like
+  // questionResolutions: a reload reads server truth.
+  discussionSends: Record<string, DecisionDiscussionSend[]>;
+  // A person's words to the session that owns a decision (decisionDiscussion.ts).
+  // Resolves with the server's answer; a refusal comes back as { error } (sendDiscussion).
+  discussDecision: (decisionId: string, text: string, clientId: string) => Promise<unknown>;
+  // Takes back a local echo the server refused.
+  dropDiscussionSend: (decisionId: string, clientId: string) => void;
   // Resolve a decision locally (status flips instantly; patch rides the
   // outbox) and, for answers, send the chosen option into the session as a
   // normal user message. `text` is the free-form escape hatch. The promise is
@@ -6315,12 +6397,24 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; status_id?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; sort_order?: number; duplicate_of?: string; from_call?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
+  // The task graph (docs/architecture/task-graph.md TG12): the task page's
+  // Blocked by row and the add-blocker palette. Each paints every row the
+  // edge lives on; a refusal (a loop, a PR codecast cannot see) rolls back.
+  addBlocker: (shortId: string, blocker: string) => Promise<any>;
+  removeBlocker: (shortId: string, blocker: string, forms?: string[]) => Promise<any>;
+  removeBlocks: (shortId: string, dependent: string) => Promise<any>;
+  addWait: (shortId: string, input: TaskWaitInput) => Promise<any>;
+  /** A refused addWait: its painted wait off, what it displaced back (lib/dispatchBinding). */
+  rollbackWait: (shortId: string, waitId: string) => void;
+  removeWait: (shortId: string, waitId: string) => Promise<any>;
+  relateTasks: (shortId: string, other: string) => Promise<any>;
+  unrelateTasks: (shortId: string, other: string) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; status_id?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string; from_call?: string }) => Promise<any>;
   clearSavedViewTombstones: () => void;
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
-  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
+  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string; workspace?: "personal" | "team"; team_id?: string; client_key?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   promoteDocToPlan: (docId: string) => Promise<any>;
   ensurePlanDoc: (planShortId: string) => Promise<any>;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
@@ -7062,7 +7156,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     // creator, assignee_info and plan. They stay preserved so a row without
     // them (an older server's list, the create stub's rekey) keeps the cached
     // thread.
-    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight"],
+    preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight", "graph_missing", "graph_status"],
   },
   // The decision queue. NOT delta: listForUser returns the complete visible
   // window (pending + 24h of resolved) on every push, so absence means the
@@ -7191,6 +7285,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   teamMembers: { ...REGISTRY_SYNC_OPTS.teamMembers, normalize: (list: any) => (Array.isArray(list) ? list.map(quantizePresence) : list) },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list", normalize: (list: any, state: any) => reconcileFavoritesWithLocks(list ?? [], state) },
+  // Run feeds overlay with different session budgets: a bare node keeps the
+  // session another feed attached (lib/workflowRun carryNodeSessions).
+  workflowRuns: { ...REGISTRY_SYNC_OPTS.workflowRuns, normalize: (rows: any, state: any) => carryNodeSessions(rows, state?.workflowRuns) },
 };
 
 // Rename pending protection entries from oldId → newId so field
@@ -7208,6 +7305,8 @@ function rekeyPending(pending: Record<string, any>, oldId: string, newId: string
       delete pending[key];
     }
   }
+  // A goal's list that holds the stub follows it to the real id.
+  if (oldId !== newId) moveProjectInLocks(pending, oldId, newId);
 }
 
 type SessionLaunchSnapshot = {
@@ -7642,6 +7741,10 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     if (row.conversation_id === oldId) row.conversation_id = newId;
     if (row.bucket_id === oldId) row.bucket_id = newId;
   }
+  // A project stub listed under a goal: the list follows the project when its
+  // server row supersedes the stub. The lock on the list moves in rekeyPending,
+  // which owns the pending map syncTable commits.
+  if (draft.initiatives) moveProjectInGoals(draft.initiatives, oldId, newId);
   if (draft.buckets[oldId]) {
     for (const row of [...Object.values(draft.sessions), ...Object.values(draft.conversations)] as any[]) {
       if (row._postCreateBucketId === oldId) row._postCreateBucketId = newId;
@@ -9004,6 +9107,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   machineRoster: [],
   machineRosterLive: false,
+  localDevice: null,
   setMachineRoster: sync(function (this: Draft, devices: MachineCandidate[]) {
     this.machineRoster = devices;
     this.machineRosterLive = true;
@@ -9037,6 +9141,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setDeviceShares: action(function (this: Draft, deviceId: string, teamIds: string[]) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
+  }),
+  // A snippet or machine setting on one device paints on its roster row; the
+  // setDeviceSnippet side effect sends the device its apply_snippet command.
+  setDeviceSnippet: asyncAction(function (this: Draft, deviceId: string, change: DeviceSnippetChange) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.settings = settingsAfterSnippet(row.settings, change);
   }),
   sessionThreads: null,
   wallet: null,
@@ -9198,6 +9308,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   decisionStacks: {},
   handledDecisions: {},
   decisionDetails: {},
+  decisionDiscussions: {},
+  discussionSends: {},
   questionResolutions: {},
   // sync(): local-only bookkeeping — the mark never dispatches; server truth
   // arrives on its own rail (awaiting_input / agent_status) and expires it.
@@ -9211,10 +9323,26 @@ const inboxStoreConfig = (set: any, get: any) => ({
   answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
     answerDecisionDraft(this, decisionId, answer);
   }),
-  // A decision the viewer holds but whose queue row they lack: a role on its
-  // ladder heard it first (org-staffing.md S28), so no inbox row put it in
-  // sessionDecisions, yet the viewer is one of its people and the server
-  // takes their answer. The document page's copy becomes the row, here and
+  // The words paint at once as a local echo; the discussDecision side effect
+  // delivers them to the owner and records the ask, and the discussion feed's
+  // row carrying the same client id retires the echo (lib/decisionDiscussion).
+  // A refusal (discussCore's { error }) is returned, not thrown, so the caller
+  // awaits it and takes the echo back (lib/decisionDiscussion sendDiscussion).
+  discussDecision: asyncAction(function (this: Draft, decisionId: string, text: string, clientId: string) {
+    const sends = (this.discussionSends[decisionId] ??= []);
+    if (!sends.some((x) => x.client_id === clientId)) sends.push({ client_id: clientId, text: text.trim(), at: Date.now() });
+  }),
+  dropDiscussionSend: sync(function (this: Draft, decisionId: string, clientId: string) {
+    const sends = this.discussionSends[decisionId];
+    if (!sends) return;
+    const kept = sends.filter((x) => x.client_id !== clientId);
+    if (kept.length) this.discussionSends[decisionId] = kept;
+    else delete this.discussionSends[decisionId];
+  }),
+  // A decision the viewer may answer but whose queue row they lack: a role on
+  // its ladder heard it first (org-staffing.md S28), or it was asked of
+  // somebody else, so no inbox row put it in sessionDecisions, yet the server
+  // takes the viewer's answer. The document page's copy becomes the row, here and
   // not inside answerDecision, because the answer reaches the server only as
   // field patches on a row that already exists.
   adoptDecision: sync(function (this: Draft, decisionId: string) {
@@ -11162,6 +11290,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // decision is made on plain objects; only the final assignment touches the
     // draft.
     const prevCollection = base[field] || {};
+    if (config.normalize) incoming = config.normalize(incoming, base);
     // Single-writer enforcement (sync-convergence C1): stamp fields never land
     // on a row, whichever channel delivered it. Copy-on-write per row so an
     // untouched payload keeps its identities.
@@ -12546,6 +12675,40 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
+  // The task graph: draft writes in ./taskGraphDraft, the real write in the
+  // same-named side effect (convex/dispatch.ts). The adds are asyncActions so
+  // the palette can tell a landed pick from a refused one.
+  addBlocker: asyncAction(function (this: Draft, shortId: string, blocker: string) {
+    setBlockerEdge(this.tasks, shortId, blocker, true);
+  }),
+  // Every form the edge is stored under goes in one draft; the side effect
+  // reads only [shortId, blocker], since the server drops every form too.
+  removeBlocker: action(function (this: Draft, shortId: string, blocker: string, forms: string[] = []) {
+    removeBlockerEdge(this.tasks, shortId, blocker, forms);
+  }),
+  // The same edge removed from the blocker's side, so a Blocks entry whose
+  // mirror drifted (or whose dependent is unreadable) still goes.
+  removeBlocks: action(function (this: Draft, shortId: string, dependent: string) {
+    removeBlocksEdge(this.tasks, shortId, dependent);
+  }),
+  addWait: asyncAction(function (this: Draft, shortId: string, input: TaskWaitInput) {
+    addWaitDraft(this.tasks, shortId, input, this.currentUser?._id ? String(this.currentUser._id) : undefined);
+  }),
+  // `waits` holds no lock to roll back, so a refusal from any caller (the
+  // palette, an undo, an outbox replay) lands here.
+  rollbackWait: sync(function (this: Draft, shortId: string, waitId: string) {
+    rollbackWaitDraft(this.tasks, shortId, waitId);
+  }),
+  removeWait: action(function (this: Draft, shortId: string, waitId: string) {
+    removeWaitDraft(this.tasks, shortId, waitId);
+  }),
+  relateTasks: asyncAction(function (this: Draft, shortId: string, other: string) {
+    setRelatedEdge(this.tasks, shortId, other, true);
+  }),
+  unrelateTasks: action(function (this: Draft, shortId: string, other: string) {
+    setRelatedEdge(this.tasks, shortId, other, false);
+  }),
+
   // Plans are a protected store collection with no serverTable, so the local
   // mutation here is field-protected but only the updatePlan side-effect writes
   // to Convex (it delegates to plans.webUpdate for progress recalc + doc sync).
@@ -12701,10 +12864,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   // Creates route through the single dispatch path (no direct useMutation) and
-  // delegate to the existing webCreate mutation, which returns the real id. We
-  // intentionally do NOT add an optimistic stub: every caller awaits the result
-  // and navigates to the new record's own page, and delta-synced lists don't
-  // prune, so a temp stub would linger as a duplicate. receiptAsyncAction keeps
+  // delegate to the existing webCreate mutation, which returns the real id.
+  // Docs and plans paint no stub: their callers navigate to the new record's
+  // own page, and their delta-synced lists have no altKey to retire a stub.
+  // A project carries one (see createProject below). receiptAsyncAction keeps
   // its Promise pending across an unwired window and resolves it from the exact
   // durable command receipt, preserving the caller's navigation continuation.
   createDoc: receiptAsyncAction(function (
@@ -12721,12 +12884,41 @@ const inboxStoreConfig = (set: any, get: any) => ({
   ) {
     return continuation ? { continuation } : undefined;
   }),
+  // A project create that names a `client_key` paints a stub row under it at
+  // once; the server stores the key and the synced row supersedes the stub
+  // (the projects altKey). Created from a goal's sheet it also sits under the
+  // goal in the same draft, and the server attaches it in the create's own
+  // transaction (attachToInitiative); the acknowledgement moves the goal's
+  // list to the real id.
   createProject: receiptAsyncAction(function (
     this: Draft,
-    _opts: Record<string, any>,
+    opts: { title: string; client_key?: string; workspace?: "personal" | "team"; team_id?: string; [k: string]: any },
     continuation?: DurableCreateContinuation,
   ) {
-    return continuation ? { continuation } : undefined;
+    const stubId = opts?.client_key;
+    const title = (opts?.title || "").trim();
+    const me = String(this.currentUser?._id ?? "");
+    const team = opts?.workspace === "team" && opts.team_id ? opts.team_id : undefined;
+    // The stub needs the workspace it will land in, or no list would show it.
+    if (stubId && title && (team || me)) {
+      const now = Date.now();
+      this.projects[stubId] = {
+        _id: stubId,
+        client_key: stubId,
+        title,
+        status: opts.status || "active",
+        ...(team ? { team_id: team } : {}),
+        workspace: team ? `team:${team}` : `user:${me}`,
+        task_counts: { total: 0, done: 0, in_progress: 0 },
+        plan_count: 0,
+        doc_count: 0,
+        active_plan_count: 0,
+        created_at: now,
+        updated_at: now,
+      } as ProjectItem;
+      if (continuation?.kind === "attachToInitiative") attachProjectStubDraft(this, continuation.initiativeId, stubId);
+    }
+    return continuation ? { continuation, ...(stubId ? { stubId } : {}) } : stubId ? { stubId } : undefined;
   }),
   // Low-frequency doc/plan/conversation ops: route through dispatch and delegate
   // to the existing mutations. asyncAction surfaces the server result for the
@@ -13115,6 +13307,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
     _commandId: string,
   ) {
     const seedTarget = { createDoc: "docs", createPlan: "plans", createProject: "projects" } as const;
+    if (actionName === "createProject" && continuation.kind === "attachToInitiative") {
+      // The server attached the project in the create's transaction. The row
+      // carries the stub's key: the stub becomes the real row here (or already
+      // has, if the feed's push came first) and the goal's list follows it.
+      const row = serverResult?.row;
+      const stubId = typeof row?.client_key === "string" ? row.client_key : null;
+      if (!row || typeof row._id !== "string" || !stubId) return;
+      if (this.projects[stubId]) {
+        if (!this.projects[row._id]) this.projects[row._id] = { ...this.projects[stubId], ...row };
+        delete this.projects[stubId];
+      }
+      delete this.pending[`projects:${stubId}`];
+      rekeyInitiativeProjectDraft(this as any, stubId, row._id);
+      return;
+    }
     if (actionName in seedTarget) {
       // The receipt carries the inserted row. Seed the collection so the detail
       // page (which paints from the store) has its row before the view moves;
@@ -13189,6 +13396,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
         }
       }
       return ["buckets", "bucketAssignments", "sessions", "conversations", "pending"];
+    }
+
+    if (actionName === "createProject") {
+      const stubId = localResult.stubId;
+      if (typeof stubId !== "string") return false;
+      delete this.projects[stubId];
+      delete this.pending[`projects:${stubId}`];
+      detachProjectStubDraft(this as any, stubId);
+      return ["projects", "initiatives", "pending"];
     }
 
     if (actionName === "deleteCallRecording") {
@@ -14195,9 +14411,18 @@ function patchMyProfileInDraft(draft: any, patch: MyProfilePatch) {
   if (me) Object.assign(me, patch);
 }
 
-/** A person the decision was asked of, while a person (not a role) holds it. */
+/**
+ * Anyone the server let read the decision may answer it (sessionDecisions
+ * userMayRead); when it is held by somebody else, the page warns and the
+ * server tells its people who answered for them.
+ */
 export function mayAnswerFromDocument(detail: DecisionDetailItem, meId: string): boolean {
-  return !!meId && detail.decision.holder?.kind !== "role" && detail.asked_users.some((u) => u._id === meId);
+  return !!meId && !!detail;
+}
+
+/** Answering would act for somebody else: a role holds it, or the viewer is not one of its people. */
+export function answersForOthers(detail: DecisionDetailItem, meId: string): boolean {
+  return detail.decision.holder?.kind === "role" || !detail.asked_users.some((u) => u._id === meId);
 }
 
 /**
@@ -14926,7 +15151,7 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
   _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions,
-  _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo,
+  _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
 export const __inboxStoreWindowBindings = {

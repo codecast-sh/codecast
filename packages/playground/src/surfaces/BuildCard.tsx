@@ -5,15 +5,16 @@
 // the card wakes while Clay works. The build line along the top carries
 // progress. The steps and the clock are for eyes; the stream's status line
 // says each change of state to a screen reader once.
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import type { BuildView, MessageView } from "../../convex/messages";
-import type { NarrationLine } from "../../convex/validators";
+import { RETRYABLE_FAILURES, type NarrationLine } from "../../convex/validators";
 import { useCopy } from "../lib/clipboard";
 import { errorData } from "../lib/errors";
 import { chatTime, clock, plural } from "../lib/format";
 import { useIdentity, useVisitorMutation } from "../lib/identity";
 import { absolute, appUrl, versionUrl } from "../lib/router";
+import { useClamped } from "../lib/useClamped";
 import { useNow } from "../lib/useNow";
 import { BuildLine, buildProgress } from "../ui/BuildLine";
 import { Blob } from "../ui/Blob";
@@ -23,11 +24,15 @@ import { Dots } from "../ui/Dots";
 import { Face, type Person } from "../ui/Face";
 import { CheckIcon, LinkIcon, RestoreIcon } from "../ui/icons";
 import { Spinner } from "../ui/Spinner";
+import { useTip } from "../ui/Tip";
 import { useToast } from "../ui/Toast";
 import { useBuildProgress } from "../data/builds";
-import { restoreSaid, reverseOf, versionLine, versionSummary } from "../lib/versionCopy";
-import { useAppState, useComposer } from "./appState";
+import { useBuildsPaused } from "../data/budget";
+import { restoreSaid, versionLine, versionSummary } from "../lib/versionCopy";
+import { useAppState, useAskChange } from "./appState";
+import { ChatMessage, ClayRow } from "./ChatMessage";
 import { lineLabel, useBusy } from "./buildTicker";
+import { ReverseButton, TryIt, useReverse, useSummary } from "./versionActions";
 import s from "./BuildCard.module.css";
 
 export function BuildCard({ m, b }: { m: MessageView; b: BuildView }) {
@@ -72,28 +77,18 @@ function Asker({ m, fact }: { m: MessageView; fact?: ReactNode }) {
   );
 }
 
-/** The asker's own words, clamped to `lines`. Words that overflow the clamp
- *  make it a toggle, for a tap or a key. */
-function Request({ m, lines = 3 }: { m: MessageView; lines?: number }) {
+/** The asker's own words, clamped to three lines. Words that overflow the
+ *  clamp make it a toggle, for a tap or a key. */
+function Request({ m }: { m: MessageView }) {
   const [open, setOpen] = useState(false);
   const text = useRef<HTMLParagraphElement>(null);
-  const [clamped, setClamped] = useState(false);
-  useLayoutEffect(() => {
-    const el = text.current;
-    if (!el || open) return;
-    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [m.body, open, lines]);
-  const toggle = clamped || open;
+  const toggle = useClamped(text, open, m.body) || open;
   return (
     <>
       <p
         ref={text}
         className={`${s.request} ${toggle ? s.toggle : ""}`}
-        style={{ WebkitLineClamp: open ? "unset" : lines }}
+        style={{ WebkitLineClamp: open ? "unset" : 3 }}
         {...(toggle && {
           role: "button",
           tabIndex: 0,
@@ -203,11 +198,6 @@ function Live({ m, b }: { m: MessageView; b: BuildView }) {
 /** A folded row's tooltip: what it did, then who asked for it, in their words. */
 const asked = (m: MessageView, summary: string) => `${summary}\n${m.author?.name ?? "Someone"} asked: ${m.body}`;
 
-export function useSummary(b: BuildView) {
-  const { versionByNumber } = useAppState();
-  return b.summary ?? versionByNumber.get(b.result_version ?? 0)?.summary ?? "";
-}
-
 /** A version that is no longer live, folded to one log row: the version,
  *  what it did (a restore with the restore glyph and its verb), who and
  *  when. The whole row shows it to you; "See it" says so on hover or focus.
@@ -232,7 +222,7 @@ function FoldedRow({ id, n, summary, person, at, title, restore = false }: { id:
       <span className={s.foldedSummary}>{summary}</span>
       {person && <Face person={person} size={20} />}
       <span className={s.trail}>
-        <span className={s.foldedMeta}>{isViewing ? "Viewing" : `${person ? `${person.name} · ` : ""}${chatTime(at, now)}`}</span>
+        <span className={s.foldedMeta}>{isViewing ? "Viewing" : chatTime(at, now)}</span>
         <span className={s.seeIt} aria-hidden>{isViewing ? "Back to live" : "See it"}</span>
       </span>
     </button>
@@ -244,31 +234,12 @@ function Superseded({ m, b, n }: { m: MessageView; b: BuildView; n: number }) {
   return <FoldedRow id={m.id} n={n} summary={summary} person={m.author} at={b.finished_at ?? m.created_at} title={asked(m, summary)} />;
 }
 
-/** The one-click way back from `n` while it is live (versionCopy
- *  reverseOf): Undo on a build, Bring back on an undo, busy until done. */
-export function useReverse(n: number) {
-  const { restore, versionByNumber } = useAppState();
-  const [busy, setBusy] = useState(false);
-  const entry = versionByNumber.get(n);
-  const back = entry ? reverseOf(entry, versionByNumber) : null;
-  if (!back) return null;
-  return {
-    ...back,
-    busy,
-    run: async () => {
-      setBusy(true);
-      await restore(back.target, n);
-      setBusy(false);
-    },
-  };
-}
-
 /** The card of the live version (DESIGN 6.5): the green line, "v15 is live",
  *  and one actions row that ends in its meta and its link. Celebrates only
  *  the version that just landed on this screen, not one scrolled back into.
  *  `share`: the maker's own first version, the moment to pass it around, so
  *  copying the app's link leads. */
-function LiveShell({ id, n, aside, actions, meta, share = false, children }: { id: string; n: number; aside: ReactNode; actions: ReactNode; meta?: string; share?: boolean; children: ReactNode }) {
+function LiveShell({ id, n, aside, actions, meta, share = false, children }: { id: string; n: number; aside: ReactNode; actions: ReactNode; meta?: ReactNode; share?: boolean; children: ReactNode }) {
   const { app, flashLive, cheer } = useAppState();
   const { copied, copy } = useCopy();
   const [celebrate] = useState(() => cheer === n);
@@ -304,18 +275,8 @@ function LiveShell({ id, n, aside, actions, meta, share = false, children }: { i
   );
 }
 
-/** Undo, or Bring back, busy until the version it restores is live. */
-export function ReverseButton({ r, variant, className }: { r: NonNullable<ReturnType<typeof useReverse>>; variant?: "quiet" | "text"; className?: string }) {
-  return (
-    <Button variant={variant} className={className} busy={r.busy} onClick={r.run}>
-      {!r.busy && <RestoreIcon />}
-      {r.busy ? r.busyLabel : r.label}
-    </Button>
-  );
-}
-
 function LiveNow({ m, b, n }: { m: MessageView; b: BuildView; n: number }) {
-  const summary = useSummary(b);
+  const summary = useSummary(b) || m.body;
   const { files_touched } = useBuildProgress(b.id);
   const { versionByNumber } = useAppState();
   const { me } = useIdentity();
@@ -326,7 +287,15 @@ function LiveNow({ m, b, n }: { m: MessageView; b: BuildView; n: number }) {
   const undo = useReverse(n);
   const changed = files_touched.filter((f) => f.how !== "read").length;
   const took = b.started_at && b.finished_at ? `Built in ${clock(b.finished_at - b.started_at)}` : null;
-  const meta = [took, changed > 0 ? `${plural(changed, "file")} changed` : null].filter(Boolean).join(" · ");
+  const files = changed > 0 ? `${plural(changed, "file")} changed` : null;
+  // On a narrow card the file count goes first, so the time never truncates.
+  const meta = (took || files) && (
+    <>
+      {took}
+      {took && files && <span className={s.metaMore}> · {files}</span>}
+      {!took && files}
+    </>
+  );
   return (
     <LiveShell
       id={m.id}
@@ -336,8 +305,7 @@ function LiveNow({ m, b, n }: { m: MessageView; b: BuildView; n: number }) {
       share={madeByYou}
       actions={undo && <ReverseButton r={undo} />}
     >
-      <Request m={m} lines={2} />
-      {summary && <p className={s.summary}>{summary}</p>}
+      <p className={s.summary} title={summary}>{summary}</p>
       {tryIt && <TryIt text={tryIt} className={s.tryIt} />}
     </LiveShell>
   );
@@ -375,13 +343,64 @@ export function RestoreCard({ m, note }: { m: MessageView; note: RestoreNote }) 
   );
 }
 
+/** A build that didn't go live. A decline is Clay's answer to the request,
+ *  so it reads as a reply, not a failure. A real failure is a card offering
+ *  what can work: Try again where the same words can get through, Edit where
+ *  the request has to change. Once a newer version has landed, it folds to
+ *  one log row, which opens it again. */
 function Failed({ m, b }: { m: MessageView; b: BuildView }) {
-  const composer = useComposer();
+  const { versionByNumber, landed } = useAppState();
+  const at = b.finished_at ?? m.created_at;
+  const [open, setOpen] = useState(false);
+  if (b.failure === "declined") return <Declined m={m} b={b} />;
+  const newer = (versionByNumber.get(landed)?.created_at ?? 0) > at;
+  if (newer && !open) return <FailedRow m={m} at={at} onOpen={() => setOpen(true)} />;
+  return <FailedCard m={m} b={b} at={at} />;
+}
+
+/** Clay said no, and why: the request as the asker said it, then Clay's
+ *  reply with a way to put it another way. */
+function Declined({ m, b }: { m: MessageView; b: BuildView }) {
+  const { me } = useIdentity();
+  const askChange = useAskChange();
+  const now = useNow(30_000);
+  return (
+    <div data-id={m.id}>
+      <ChatMessage m={m} grouped={false} now={now} mine={m.author?.id === me.id} sharedName={false} />
+      <ClayRow at={b.finished_at ?? m.created_at} now={now} action={<Button variant="text" onClick={() => askChange(m.body, m.element)}>Edit</Button>}>
+        {b.error ?? "Clay left this one as it is."}
+      </ClayRow>
+    </div>
+  );
+}
+
+function FailedRow({ m, at, onOpen }: { m: MessageView; at: number; onOpen: () => void }) {
+  const now = useNow(60_000);
+  return (
+    <button className={`${s.folded} ${s.foldedFailed}`} data-id={m.id} title={m.author ? `${m.author.name} asked: ${m.body}` : m.body} aria-label={`Didn't make it: ${m.body}${m.author ? `, ${m.author.name}` : ""}. Show`} onClick={onOpen}>
+      <span className={s.bang} aria-hidden>!</span>
+      <span className={s.foldedV}>Didn't make it</span>
+      <span className={s.foldedSummary}>{m.body}</span>
+      {m.author && <Face person={m.author} size={20} />}
+      <span className={s.trail}>
+        <span className={s.foldedMeta}>{chatTime(at, now)}</span>
+        <span className={s.seeIt} aria-hidden>Show</span>
+      </span>
+    </button>
+  );
+}
+
+function FailedCard({ m, b, at }: { m: MessageView; b: BuildView; at: number }) {
+  const { app } = useAppState();
+  const askChange = useAskChange();
   const retryBuild = useVisitorMutation(api.builder.queue.retry);
   const toast = useToast();
   const now = useNow(30_000);
   const [details, setDetails] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const retryable = !b.failure || RETRYABLE_FAILURES.includes(b.failure);
+  const paused = useBuildsPaused(app.id);
+  const pausedTip = useTip(paused);
   const retry = async () => {
     setRetrying(true);
     try {
@@ -391,9 +410,9 @@ function Failed({ m, b }: { m: MessageView; b: BuildView }) {
     }
     setRetrying(false);
   };
+  const edit = () => askChange(m.body, m.element);
   // The line stays where the build stopped.
   const stoppedAt = b.started_at && b.finished_at ? buildProgress(b.finished_at - b.started_at) : 8;
-  const at = b.finished_at ?? m.created_at;
   return (
     <article className={s.card} data-id={m.id}>
       <BuildLine progress={stoppedAt} state="failed" />
@@ -408,13 +427,17 @@ function Failed({ m, b }: { m: MessageView; b: BuildView }) {
         <Request m={m} />
         <p className={s.why}>{b.error ?? "Clay couldn't finish this one."}</p>
         <div className={s.actions}>
-          <Button variant="accent" busy={retrying} onClick={retry}>Try again</Button>
-          <Button onClick={() => {
-            composer.setMode("change");
-            composer.setText(m.body);
-            composer.setElement(m.element);
-            composer.focus();
-          }}>Edit</Button>
+          {retryable ? (
+            <>
+              <span className={s.tipped}>
+                <Button variant="accent" busy={retrying} disabled={!!paused} onClick={retry} {...(paused ? pausedTip.describedBy : {})}>Try again</Button>
+                {paused && pausedTip.tip}
+              </span>
+              <Button onClick={edit}>Edit</Button>
+            </>
+          ) : (
+            <Button variant="ink" onClick={edit}>Edit</Button>
+          )}
           <span className={s.grow} />
           {b.error_detail && (
             <Button variant="text" onClick={() => setDetails((d) => !d)} aria-expanded={details}>Details</Button>
@@ -423,14 +446,5 @@ function Failed({ m, b }: { m: MessageView; b: BuildView }) {
         {details && b.error_detail && <pre className={s.details}>{b.error_detail}</pre>}
       </div>
     </article>
-  );
-}
-
-/** What to do to notice a change that shows itself only when used. */
-export function TryIt({ text, className }: { text: string; className?: string }) {
-  return (
-    <p className={className}>
-      <b>Try it</b> {text[0].toLowerCase() + text.slice(1)}
-    </p>
   );
 }
