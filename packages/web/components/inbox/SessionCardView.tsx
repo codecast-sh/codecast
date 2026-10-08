@@ -59,6 +59,8 @@ export type SessionCardChrome = {
   showModelBadge: boolean;
   showAgentIcon: boolean;
   showBranchPill: boolean;
+  /** Mark sessions on a cloud machine or on another of your machines. Absent means shown. */
+  showDeviceIcon?: boolean;
   /** The workspace asks for every session to have a face. */
   personifyAll: boolean;
   /** Branch, worktree and pull request chips at all (lib/surfaces.ts
@@ -136,6 +138,8 @@ export type SessionCardViewProps = {
   anchorIdentity: AnchorIdentity | null;
   /** The cloud host a worktree runs on; a local worktree needs no host. */
   runHost?: Device | null;
+  /** The machine to mark beside the title: a cloud one, or one this window is not on. */
+  placeDevice?: Device | null;
   /** The resolved image thumbnail, when the row shows one. */
   thumbSrc?: string | null;
   /** A plain click opens; the panel reads the event for ⌘/shift selection gestures. */
@@ -190,6 +194,7 @@ export function SessionCardView({
   spawnedByTitle,
   anchorIdentity,
   runHost,
+  placeDevice,
   thumbSrc,
   onSelect,
   onDismiss,
@@ -523,6 +528,9 @@ export function SessionCardView({
       <div
         role="button"
         tabIndex={0}
+        // A hosted row is named by its title and time, so the star and the
+        // state words nested in it never pile into the name a reader hears.
+        aria-label={isHostedAgentType(session.agent_type) ? `${displayTitle}, ${formatRowTime(session.updated_at, true)}` : undefined}
         onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
@@ -586,8 +594,20 @@ export function SessionCardView({
             after={
               <>
               {titleSuffix && <span data-sv-title-suffix className="inline-flex flex-shrink-0 items-baseline gap-1.5 font-normal text-sol-text-dim"><MetaDot /><span>{titleSuffix}</span></span>}
+              {chrome.showDeviceIcon !== false && placeDevice && (
+                <span
+                  data-sv-device={placeDevice.is_remote ? "cloud" : "elsewhere"}
+                  className={`flex-shrink-0 self-center text-sol-text-dim ${placeDevice.is_remote ? "opacity-80" : "opacity-60"}`}
+                  title={placeDevice.is_remote
+                    ? `Runs in the cloud on ${deviceDisplayName(placeDevice)}`
+                    : `Runs on ${deviceDisplayName(placeDevice)}, not this machine`}
+                >
+                  <DeviceIcon d={placeDevice} className={placeDevice.is_remote ? "w-3 h-3" : "w-2.5 h-2.5"} />
+                </span>
+              )}
               <ShortcutTooltip label={isFavorite ? "Unfavorite" : "Favorite"} action="conv.favorite">
                 <button
+                  data-sv-fav={isFavorite ? "on" : "off"}
                   onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }}
                   className={`flex-shrink-0 transition-all ${
                     isFavorite
@@ -783,13 +803,11 @@ export function SessionCardView({
               isPendingWorking={isPendingWorking}
               isRowRestarting={isRowRestarting}
             />
-            {/* A row with a same-name suffix already says when; its time
-                gives the title its room. */}
-            {!titleSuffix && (
-              <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
-                {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
-              </span>
-            )}
+            {/* Every row keeps its time column, so the list scans down one
+                edge; a same-name suffix only adds what the column cannot. */}
+            <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
+              {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
+            </span>
           </div>
         </div>
         <CardParentLinks
