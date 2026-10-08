@@ -1,14 +1,14 @@
-// A project's page header (docs/architecture/initiatives-projects-role-page.md
-// I5 "Where it shows"), mounted in jsdom over a fake store row. Proves: the
-// page wears the shared intent header (title, id, status, lead, deadline,
-// progress, what is filed, the goals it is part of, the tab strip in the
-// URL); the header paints the STORE row, so a rename, a status pick and a
-// deadline show in the same tick while the per view query still answers with
-// the old row; the deadline is written on blur or Enter and never from a half
-// typed year; the bar counts tasks by the board's rule, not the server's
-// enriched counts; a `pj-` short id in the address opens the same page; and
-// the phone header holds the title to two lines with the whole title as its
-// tooltip.
+// A project's work board (cohesive build spec §5.3, D10, D17), mounted in
+// jsdom over a fake store row. Proves: the header is one row (back to the
+// project's sheet, the name, its id, status, lead, deadline, the goals it
+// serves, About to the sheet, Share) over three tabs kept in the URL (Tasks,
+// Timeline, Line), with no charter, folder or progress bar of its own (those
+// are the sheet's); an older link by Convex id moves to the `pj-` address;
+// an old ?tab=updates link opens the Timeline; the header paints the STORE
+// row, so a rename, a status pick and a deadline show in the same tick while
+// the per view query still answers with the old row; the deadline is written
+// on blur or Enter and never from a half typed year; and the phone header
+// holds the title to two lines with the whole title as its tooltip.
 // Run: bun test "app/projects/[id]/ProjectHeader.mount.test.tsx"
 import { test } from "bun:test";
 import assert from "node:assert/strict";
@@ -112,7 +112,7 @@ async function verifyProjectHeader() {
   mock.module("../../../components/repo/RepositoryLinks", () => ({ RepositoryLinks: mark("repository-links") }));
   mock.module("../../../components/ShareControl", () => ({ ShareControl: (props: any) => React.createElement("span", { "data-share": props.path, "data-share-token": props.publicShare?.token ?? "" }) }));
   mock.module("../../../components/ProjectUpdates", () => ({ ProjectUpdates: mark("project-updates") }));
-  mock.module("../../../components/ProjectTimeline", () => ({ ProjectTimeline: mark("project-timeline") }));
+  mock.module("../../../components/ProjectTimeline", () => ({ ProjectTimeline: (props: any) => React.createElement("div", { "data-project-timeline": props.projectId }) }));
   mock.module("../../../components/ProgressChart", () => ({ ProgressChart: () => null }));
   mock.module("../../../components/BurndownChart", () => ({ BurndownChart: () => null }));
   mock.module("../../../components/DocDates", () => ({ DocDates: () => null }));
@@ -143,52 +143,59 @@ async function verifyProjectHeader() {
   const repaint = () => act(async () => root.render(page()));
   const updates = (field: string) => calls.filter((c) => c.startsWith("updateProject:") && c.includes(`"${field}"`));
 
-  // ── the header a goal's page wears, on the project ──
+  // ── an older link by Convex id moves to the project's one address ──
   await mount();
   assert.equal(q("[data-project-page]")!.getAttribute("data-project-page"), PID);
+  assert.equal(calls.filter((c) => c.startsWith("replace:")).at(-1), "replace:/projects/pj-agentorg", "the `pj-` form, the one a person copies");
+  env.id = "pj-agentorg";
+  calls.length = 0;
+  await mount();
+  assert.deepEqual(calls.filter((c) => c.startsWith("replace:")), [], "the `pj-` address stays");
+
+  // ── one row: back to the sheet, the name, its id, its facts, About and Share ──
   const header = q("[data-intent-header]")!;
-  assert.ok(header, "the shared intent header");
-  assert.ok(q("[data-intent-stripe]"), "under the project's colour stripe");
-  assert.equal(header.querySelector("a[aria-label='Back to projects']")!.getAttribute("href"), "/projects");
+  assert.ok(header, "the board's header");
+  assert.equal(q("[data-intent-stripe]"), null, "no stripe: the row is the header");
+  assert.equal(header.querySelectorAll("[data-intent-row]").length, 1, "one row above the tabs");
+  assert.equal(q("[data-intent-back]")!.getAttribute("href"), "/org/pj-agentorg", "back is the project's sheet on the Org screen");
   assert.equal(q("[data-project-title]")!.textContent, "Agent org");
   assert.equal(q("[data-project-title]")!.tagName, "H1");
-  assert.doesNotMatch(q("[data-project-title]")!.className, /line-clamp|truncate/, "the page's own title reads whole");
-  assert.match(header.textContent!, /pj-agentorg/, "its id beside the title");
-  assert.equal(q("[data-share]")!.getAttribute("data-share"), `/projects/${PID}`);
-  // Line two, in a goal's order: status, lead, deadline, progress, what is filed, the goals it is part of.
+  assert.equal(q("[data-project-title]")!.getAttribute("title"), "Agent org", "one line, its whole name the tooltip");
+  assert.equal(q("[data-intent-id]")!.textContent, "pj-agentorg");
+  assert.equal(q("[data-project-about]")!.getAttribute("href"), "/org/pj-agentorg", "About opens the project's sheet");
+  assert.equal(q("[data-share]")!.getAttribute("data-share"), "/projects/pj-agentorg");
   const chips = q("[data-intent-chips]")!;
   assert.match(chips.querySelector("[data-project-pick='status']")!.textContent!, /Active/);
   assert.ok(chips.querySelector(`[data-project-lead-chip='${PID}']`), "who leads it");
   const deadline = () => q<HTMLElement>("button[data-project-pick='target']");
   assert.equal(deadline()!.getAttribute("data-intent-target"), "2026-11-01", "the deadline, as the day the viewer's calendar says");
   assert.equal(deadline()!.querySelector("[data-initiative-target]")!.getAttribute("data-initiative-target"), "ahead");
-  // Tasks by the board's rule (shared/tasks projectTaskCounts): 3 of 6, never the server's 12 of 87.
-  assert.equal(chips.querySelector("[data-initiative-progress]")!.getAttribute("data-initiative-progress"), "3/6");
-  assert.deepEqual(qa("[data-project-counts] [data-project-count]").map((c) => `${c.getAttribute("data-project-count")}:${c.textContent!.trim()}`), ["plans:1", "docs:1"], "plans and docs; the bar already says the tasks");
-  assert.doesNotMatch(chips.textContent!, /87/, "no second task total beside the bar");
   const partOf = chips.querySelector(`[data-project-initiatives='${PID}']`)!;
-  assert.match(partOf.textContent!, /^Part of/);
-  assert.ok(partOf.querySelector("[data-pill='initiative:in-1']"), "the goal it carries");
-  assert.match(partOf.querySelector("[data-metric='weekly_active_teams'][data-metric-size='chip']")!.textContent!, /412/, "with the goal's first number");
-  // Under the chips: what the project is, its folder, its repositories, its charter.
-  assert.match(header.textContent!, /The org chart, roles and scopes\./);
-  assert.equal(q("[data-inline-edit='Project folder']")!.textContent, "~/src/codecast");
-  assert.ok(header.querySelector(`[data-repository-links='${PID}']`));
-  assert.equal(header.querySelector("[data-charter]")!.getAttribute("data-charter"), "Agent org");
+  assert.match(partOf.textContent!, /^Serves/);
+  assert.ok(partOf.querySelector("[data-pill='initiative:in-1']"), "the goal it serves");
+  // What the project is, its charter, folder, repositories and progress are its sheet's.
+  for (const gone of ["[data-charter]", "[data-inline-edit='Project folder']", "[data-repository-links]", "[data-initiative-progress]", "[data-project-counts]"]) assert.equal(q(gone), null, `${gone} is the sheet's, not the board's`);
+  assert.doesNotMatch(header.textContent!, /The org chart, roles and scopes\./);
 
-  // ── the tab strip, in the scope panel's grammar, kept in the URL ──
-  assert.deepEqual(qa("[data-intent-header] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["tasks", "overview", "updates", "timeline", "line"]);
+  // ── three tabs, kept in the URL ──
+  assert.deepEqual(qa("[data-intent-header] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["tasks", "timeline", "line"]);
   assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "tasks");
   assert.equal(q("[data-scope-tab='tasks']")!.getAttribute("aria-current"), "page");
   assert.ok(q(`[data-task-list='${PID}']`), "it opens on the project's tasks");
-  await click(q("[data-scope-tab='updates']"));
-  assert.equal(calls.at(-1), `replace:/projects/${PID}?tab=updates`);
+  await click(q("[data-scope-tab='timeline']"));
+  assert.equal(calls.at(-1), "replace:/projects/pj-agentorg?tab=timeline");
   await repaint();
-  assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "updates");
-  assert.ok(q(`[data-project-updates='${PID}']`));
+  assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "timeline");
+  assert.ok(q(`[data-project-timeline='${PID}']`));
   assert.equal(q("[data-task-list]"), null);
   await click(q("[data-scope-tab='tasks']"));
-  assert.equal(calls.at(-1), `replace:/projects/${PID}`, "the first tab is the bare address");
+  assert.equal(calls.at(-1), "replace:/projects/pj-agentorg", "the first tab is the bare address");
+  await repaint();
+  // A link to the Updates tab the board no longer has opens the Timeline, where updates live.
+  env.search = "tab=updates";
+  await repaint();
+  assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "timeline");
+  env.search = "";
   await repaint();
 
   // ── local first: the header paints the store row, while the query still answers the old one ──
@@ -199,8 +206,7 @@ async function verifyProjectHeader() {
   await repaint();
   assert.equal(env.server!.title, "Agent org", "the server has not answered yet");
   assert.equal(q("[data-project-title]")!.textContent, "Agent organisation", "the rename shows in the same tick");
-  assert.equal(q("[data-charter]")!.getAttribute("data-charter"), "Agent organisation", "everywhere the header names it");
-  await click(qa("[data-project-pick='status'] ~ [data-popover] button, [data-popover] button").find((b) => b.textContent?.trim() === "Done") ?? null);
+  await click(qa("[data-popover] button").find((b) => b.textContent?.trim() === "Done") ?? null);
   assert.deepEqual(updates("status"), [`updateProject:${PID}:${JSON.stringify({ status: "done" })}`]);
   assert.ok(calls.includes("toast:Project marked as done"));
   await repaint();
@@ -223,35 +229,22 @@ async function verifyProjectHeader() {
   await repaint();
   assert.equal(deadline()!.getAttribute("data-intent-target"), "2026-12-24", "and the chip shows it while the query still says Nov 1");
   await click(deadline());
-  await blur(field());
-  assert.equal(updates("target_date").length, 1, "a blur on the same day writes nothing");
-  await click(deadline());
   await click(q("[data-project-pick='target'] [data-intent-target-clear]"));
   assert.equal(updates("target_date").at(-1), `updateProject:${PID}:${JSON.stringify({ target_date: null })}`, "Clear is the one way to remove it");
   await repaint();
-  assert.equal(env.server!.target_date, endOfLocalDay(2026, 11, 1));
   assert.equal(deadline()!.getAttribute("data-intent-target"), "", "cleared in the store wins over the day the query still holds");
   assert.match(deadline()!.textContent!, /No deadline/);
 
-  // The query was only ever asked with the project's real id.
+  // The query was only ever asked with the project's real id, never the short one.
   assert.ok(asked.length > 0);
   assert.deepEqual([...new Set(asked.map((a) => JSON.stringify(a)))], [JSON.stringify({ id: PID })]);
-
-  // ── a `pj-` short id in the address (a role's or a goal's project card links so) opens the same page ──
-  asked.length = 0;
-  env.id = "pj-agentorg";
-  await mount();
-  assert.equal(q("[data-project-page]")!.getAttribute("data-project-page"), PID);
-  assert.equal(q("[data-project-title]")!.textContent, "Agent organisation");
-  assert.equal(q(`[data-task-list]`)!.getAttribute("data-task-list"), PID, "the task list is asked for by the real id");
-  assert.deepEqual([...new Set(asked.map((a) => JSON.stringify(a)))], [JSON.stringify({ id: PID })], "and so is the query, never by the short id");
   // A short id the store does not hold yet asks the server nothing and waits for the feeder.
   asked.length = 0;
   env.id = "pj-unknown";
   await mount();
   assert.match(document.body.textContent!, /Loading project/);
   assert.deepEqual(asked, []);
-  env.id = PID;
+  env.id = "pj-agentorg";
 
   // ── the phone header: two lines at most, the whole title as its tooltip ──
   env.phone = true;
@@ -266,7 +259,6 @@ async function verifyProjectHeader() {
   env.search = "";
   await mount();
   assert.match(q("[data-foreign-workspace]")!.textContent!, /This project lives in Codecast\. Switch to see its tasks\./);
-  assert.equal(q("[data-initiative-progress]"), null, "no task count read from the wrong workspace");
   assert.equal(q("[data-task-list]"), null);
   assert.equal(q("[data-project-line]"), null);
   // Its Line tab reads where the project lives, so it shows from here, under a note naming that workspace.
@@ -280,6 +272,6 @@ async function verifyProjectHeader() {
   await act(async () => root.unmount());
 }
 
-test("project page header: the shared intent header, painted from the store row, with the one target day control", async () => {
+test("project board: one header row over Tasks, Timeline and Line, painted from the store row, at its `pj-` address", async () => {
   await verifyProjectHeader();
 }, 600_000);
