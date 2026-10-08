@@ -34,6 +34,10 @@ import { LineMapPanel, AskProjectPick, useProjectTitle } from "./LineMapPanel";
 import type { useLineAdmission } from "./useLineAdmission";
 import { cn } from "../../../lib/utils";
 import { projectLineVersions } from "../../../lib/line/runReport";
+import { lineMetrics } from "../../../lib/line/lineMetrics";
+import { lineMetricsPhrases, windowWords } from "../../../lib/line/lineMetricsWords";
+import { graphForMap, graphFromIds, graphKeyOf, isCodecastLine, pickGraph, projectGraphs, type GraphEdgeIn, type GraphNodeIn, type ProjectGraph } from "../../../lib/line/lineGraphs";
+import { useRunGraph } from "../../../hooks/useSyncWorkflows";
 import "./lineMap.css";
 
 export type LineMapRows = { signals: LineSignal[]; tasks: LineCauseTask[]; runs: LineFlowRun[]; decisions: LineDecision[] };
@@ -226,13 +230,34 @@ function LineAsk({ projectId: own, node }: { projectId: string | null; node: Map
 }
 
 const WINDOWS = Object.keys(LINE_MAP_WINDOWS) as LineMapWindow[];
+
+/** How the line's quality is going over the map's window (lineMetrics, LM8):
+ *  expectation breaks a day, the share of signals that joined a known cause,
+ *  and the fixes that held, as one sentence under the bar. */
+function LineMapQuality({ rows, now, windowMs, window: w }: { rows: LineMapRows; now: number; windowMs: number; window: LineMapWindow }) {
+  const phrases = useMemo(() => lineMetricsPhrases(lineMetrics({
+    signals: rows.signals, tasks: rows.tasks, runs: rows.runs, window: { from: now - windowMs, to: now }, now,
+  })), [rows.signals, rows.tasks, rows.runs, now, windowMs]);
+  const lead = windowWords(w);
+  return (
+    <p className="lmap-note lmap-quality" data-map-quality data-window={w}>
+      <span className="lmap-quality-lead">In {lead}:</span>{" "}
+      {phrases.map((p, i) => (
+        <span key={p.key} data-map-quality-metric={p.key} data-empty={p.num === null ? "true" : undefined} title={p.tip}>
+          {i > 0 && <span className="lmap-quality-sep" aria-hidden> · </span>}
+          {p.num !== null && <b>{p.num}</b>}{p.text}
+        </span>
+      ))}
+    </p>
+  );
+}
 const KEY_DIR: Record<string, MapDirection> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", h: "left", l: "right", k: "up", j: "down" };
 
 // Every gate answer a run took, for the rounds of a loop the run row overwrote (lineMap runVisits).
 const isGateDecision = (d: { workflow_run_id?: string; gate_node_id?: string }) => !!d.workflow_run_id && !!d.gate_node_id;
 const gateSig = (d: SessionDecisionItem & { gate_node_id?: string }) => `${d.status}|${d.answer_index ?? ""}|${d.updated_at ?? 0}`;
 
-export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEnd, footEnd, admit }: {
+export function LineMapView({ projectId, rows: allRows, flow, now, note, lineParam, barEnd, footEnd, admit }: {
   /** The project whose line this is; null draws the shipped line for work under no project. */
   projectId: string | null;
   /** The project's rows, already scoped (lineFlow scopeLine). */
@@ -254,9 +279,26 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   const { state, set } = useLineMapUrl(lineParam);
   const windowMs = LINE_MAP_WINDOWS[state.window];
 
-  // The line's actual graph and its declared finders.
+  // The graphs this project's work actually runs (lineGraphs), each read off
+  // its runs: codecast's line from the project's own copy, the repo's or the
+  // shipped one; any other graph from the row its newest run ran, or, when
+  // that row cannot be read, from the stations its runs recorded.
+  const graphs = useMemo(() => (projectId ? projectGraphs(allRows.runs as MapRun[], allRows.signals) : []), [projectId, allRows.runs, allRows.signals]);
+  const graphKey = pickGraph(graphs, state.graph);
+  const picked = graphs.find((g) => g.key === graphKey) ?? null;
+  const ownLine = isCodecastLine(graphKey);
   const stations = useProjectStations(projectId ?? "");
-  const graph: LineGraph | null = useMemo(() => (projectId ? { nodes: stations.nodes, edges: stations.edges } : null), [projectId, stations.nodes, stations.edges]);
+  const row = useRunGraph(ownLine ? null : picked?.runId, ownLine ? null : picked?.workflowId);
+  const source: { nodes: GraphNodeIn[]; edges: GraphEdgeIn[] } | null = useMemo(() => {
+    if (!projectId) return null;
+    if (ownLine) return { nodes: stations.nodes, edges: stations.edges };
+    if (row?.nodes?.length) return { nodes: row.nodes, edges: row.edges ?? [] };
+    return graphFromIds(picked?.nodeIds ?? []);
+  }, [projectId, ownLine, stations.nodes, stations.edges, row, picked]);
+  const graph: LineGraph | null = useMemo(() => (source ? (ownLine ? source : graphForMap(source.nodes, source.edges)) as LineGraph : null), [source, ownLine]);
+  // The runs drawn are the ones that ran the graph on show; the queue, the
+  // signals and the cards stay the whole project's.
+  const rows = useMemo(() => (graphs.length > 1 ? { ...allRows, runs: allRows.runs.filter((r) => graphKeyOf(r as MapRun) === graphKey) } : allRows), [allRows, graphs.length, graphKey]);
   const lp = useInboxStore((s) => (projectId ? ((s.projects as Record<string, { line_profile?: PublishedLineProfile | null }>)[projectId]?.line_profile ?? null) : null));
   const answered = useCollectionRows<SessionDecisionItem & MapDecision>("sessionDecisions", { where: isGateDecision as (d: SessionDecisionItem) => boolean, sig: gateSig });
   const decisions = useMemo(() => {
@@ -275,7 +317,7 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   // What each version of this project's line delivered, for a station's history (LX3).
   const versions = useMemo(() => (projectId ? projectLineVersions(rows) : undefined), [projectId, rows]);
   // A trace: any ref the line knows, drawn as a path.
-  const traceRows: TraceRows = useMemo(() => ({ signals: rows.signals as MapSignal[], tasks: rows.tasks, runs: rows.runs as MapRun[], decisions }), [rows, decisions]);
+  const traceRows: TraceRows = useMemo(() => ({ signals: allRows.signals as MapSignal[], tasks: allRows.tasks, runs: allRows.runs as MapRun[], decisions }), [allRows, decisions]);
   const trace = useMemo(() => {
     if (!state.trace) return null;
     const resolved = resolveTraceRef(state.trace, traceRows);
@@ -289,7 +331,7 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   const openAt = useMemo(() => openTarget(map.nodes, asks), [map.nodes, asks]);
   // Sources past the fifth fold into one pill until it is opened, never the
   // open node, the opening one or one on a trace's path (LX2).
-  const lineKey = projectId ?? "none";
+  const lineKey = `${projectId ?? "none"}:${graphKey}`;
   const shown = useMemo(() => {
     if (sourcesOpen === lineKey) return map;
     return foldSources(map, new Set([state.node ?? "", openAt ?? "", ...(trace?.pathNodeIds ?? [])]));
@@ -356,8 +398,11 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
   const empty = map.nodes.every((n) => n.through === 0 && n.now.length === 0);
 
   return (
-    <div className="lmap-view" data-line-map-view data-window={state.window}>
+    <div className="lmap-view" data-line-map-view data-window={state.window} data-map-graph={graphKey}>
       <div className="lmap-main">
+        {projectId && graphs.length > 0 && (graphs.length > 1 || !ownLine) && (
+          <GraphTabs graphs={graphs} selected={graphKey} onSelect={(key) => set({ graph: key === graphs[0]?.key ? null : key, node: null, edge: null, trace: null })} unread={!ownLine && row === null} />
+        )}
         <div className="lmap-bar">
           <div className="lmap-windows" role="group" aria-label="Window">
             {WINDOWS.map((w) => (
@@ -379,6 +424,7 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
           )}
           {barEnd && <span>{barEnd}</span>}
         </div>
+        {!empty && <LineMapQuality rows={rows} now={now} windowMs={windowMs} window={state.window} />}
         {empty && (note ?? <p className="lmap-note" data-map-empty>Nothing passed through this line in the last {state.window}. The map shows its stations; counts fill in as work arrives.</p>)}
         {state.trace && (
           <div className="lmap-trace-bar" data-map-trace={state.trace}>
@@ -395,7 +441,7 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
         )}
         {/* Keyed by the line, so each line opens on its own work (openTarget), never at the last line's scroll. */}
         <LineMap
-          key={projectId ?? "none"}
+          key={lineKey}
           className="lmap-fit"
           map={shown}
           layout={layout}
@@ -445,8 +491,30 @@ export function LineMapView({ projectId, rows, flow, now, note, lineParam, barEn
           onClose={close}
           admit={admit}
           versions={versions}
+          stations={ownLine ? null : source}
+          graphTitle={picked?.title ?? null}
         />
       ) : null}
+    </div>
+  );
+}
+
+/** The graphs this project's work runs, one tab each, labeled by the work
+ *  that goes through it (lineGraphs projectGraphs). `unread`: the graph's own
+ *  row could not be read, so its stations come from what its runs recorded. */
+function GraphTabs({ graphs, selected, onSelect, unread }: { graphs: ProjectGraph[]; selected: string; onSelect: (key: string) => void; unread: boolean }) {
+  return (
+    <div className="lmap-graphs" data-map-graphs>
+      <span className="lmap-graphs-lead">{graphs.length > 1 ? `Work here runs through ${graphs.length} lines` : "Work here runs through"}</span>
+      <div className="lmap-graphs-tabs" role="tablist" aria-label="Lines this project runs">
+        {graphs.map((g) => (
+          <button key={g.key} type="button" role="tab" aria-selected={g.key === selected} onClick={() => onSelect(g.key)} className="lmap-graph-tab" data-map-graph-tab={g.key}>
+            <b>{g.title}</b>
+            <span>{g.work}{g.live ? `, ${g.live} running now` : ""}</span>
+          </button>
+        ))}
+      </div>
+      {unread && <span className="lmap-graphs-note" data-map-graph-partial>Drawn from the steps its runs recorded; its full instructions are not shared with you.</span>}
     </div>
   );
 }

@@ -38,3 +38,19 @@ names are not used by derivative works.
 
 The requirement for fonts to remain under this license does not apply to any
 document created using the fonts or their derivatives.
+
+## Instrument Sans
+
+Copyright 2022 The Instrument Sans Project Authors (https://github.com/Instrument/instrument-sans)
+
+Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
+Static instances from Google Fonts. Hosted mode's interface face, the same
+face the web and Whisk load through @platform/design.
+
+## Newsreader
+
+Copyright 2020 The Newsreader Project Authors (https://github.com/productiontype/Newsreader)
+
+Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
+Static instances from Google Fonts. Hosted mode's reading face, for what the
+assistant writes.
