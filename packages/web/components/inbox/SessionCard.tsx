@@ -22,10 +22,10 @@ import { memberListSig, rosterIdentity } from "../../hooks/useTeamRoster";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../../hooks/useSyncAnchors";
 import { viewersOf, viewersSig } from "../presence/memberPresence";
 import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
+import { localDeviceIdOf } from "../../hooks/useLocalDeviceId";
 import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration } from "../../lib/sessionCard";
-import { hostedTitle } from "../../lib/conversationTitle";
-import { firstUserPromptOf } from "../../hooks/useForkTree";
+import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { useSurface } from "../../lib/surfaces";
@@ -42,7 +42,7 @@ function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
   // In the Assistant scope every row is the assistant's, so its mark says
   // nothing there; Everything keeps it to tell the assistant from people.
-  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) && !assistantScopeOnly(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) && !assistantScopeOnly(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -97,15 +97,7 @@ export type SessionCardProps = Pick<
   onPin?: (id: string) => void;
 };
 
-type TitleState = Pick<ReturnType<typeof useInboxStore.getState>, "conversations" | "sessions" | "messages" | "pendingMessages">;
-
-/** What a hosted rail row is called: hostedTitle over the conversation row,
- *  the session row, and the first ask in the transcript (or the send still on
- *  its way). The rail and its same-name suffix both read it. */
-export function hostedRowTitle(s: TitleState, id: string): string {
-  return hostedTitle(s.conversations[id] as any, s.sessions[id] as any, () =>
-    firstUserPromptOf([...(s.messages[id] ?? []), ...(s.pendingMessages[id] ?? [])]));
-}
+export { hostedRowTitle };
 
 export const SessionCard = memo(function SessionCard({
   session: row,
@@ -149,6 +141,7 @@ export const SessionCard = memo(function SessionCard({
     (s) => convAuthorSig(s.conversations[cardId]),
     // The roster's own object, Object.is-stable between roster pushes.
     (s) => rosterDeviceOf(s.machineRoster as any, deviceId),
+    (s) => localDeviceIdOf(s),
     (s) => memberListSig(s.teamMembers),
     (s) => anchorIdentitySig((s as any).anchors, anchorId),
     // Teammates who have this session open (their faces in the meta row and
@@ -189,6 +182,10 @@ export const SessionCard = memo(function SessionCard({
   // host earns an icon: a worktree on your own laptop needs no explaining.
   const ownerDevice = rosterDeviceOf(st.machineRoster as any, deviceId);
   const runHost = ownerDevice && deviceWakesOnUse(ownerDevice) ? ownerDevice : null;
+  // Where the session runs, when that is worth a glance: any cloud machine,
+  // or another of your machines when this window knows which one it is on.
+  const localDeviceId = localDeviceIdOf(st);
+  const placeDevice = ownerDevice && (ownerDevice.is_remote || (localDeviceId && ownerDevice.device_id !== localDeviceId)) ? ownerDevice : null;
   const chromeSig = cardChromeSig(st.clientState);
   const showGitChips = useSurface("gitChips");
   const chrome = useMemo<SessionCardChrome>(() => ({
@@ -196,6 +193,7 @@ export const SessionCard = memo(function SessionCard({
     showAgentIcon: chromeSig[1] === "1",
     personifyAll: chromeSig[3] === "1",
     showBranchPill: chromeSig[4] === "1",
+    showDeviceIcon: chromeSig[5] === "1",
     showGitChips,
   }), [chromeSig, showGitChips]);
   // Cache-first bytes: a thumbnail seen once paints locally (and offline)
@@ -325,6 +323,7 @@ export const SessionCard = memo(function SessionCard({
       spawnedByTitle={spawnedByTitleOf(st, spawnedById)}
       anchorIdentity={anchorIdentity}
       runHost={runHost}
+      placeDevice={placeDevice}
       thumbSrc={thumbSrc}
       selecting={selecting}
       onToggleSelect={toggleSelect}
