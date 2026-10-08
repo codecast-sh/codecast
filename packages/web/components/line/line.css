@@ -692,3 +692,28 @@ html:not(.dark) .line-rail[data-live="true"] { box-shadow: none; }
 @media (prefers-reduced-motion: reduce) {
   .line-col, .line-ghost::before, .line-ghost-col, .line-start, .line-rail[data-live="true"], .line-lamp::after, .line-lamp[data-kind="failing"], .line-live-dot { animation: none !important; }
 }
+
+/* The overview of every project's line (LineOverview): one card per project,
+   what needs you and what is stuck leading, revealed in a short stagger. */
+.line-overview-summary { font-size: 14px; line-height: 1.5; margin: 6px 0 14px; }
+.line-overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 10px; max-width: 1280px; }
+.line-overview-grid > li { animation: line-overview-in 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: calc(min(var(--i, 0), 12) * 35ms); }
+@keyframes line-overview-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .line-overview-grid > li { animation: none; } }
+.line-overview-card {
+  width: 100%; height: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 6px; text-align: left;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  background: color-mix(in srgb, var(--sol-text) 2.5%, transparent);
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.line-overview-card:hover { border-color: var(--sol-border); background: color-mix(in srgb, var(--sol-text) 4.5%, transparent); }
+.line-overview-card[data-tone="ask"] { border-color: color-mix(in srgb, var(--sol-yellow) 45%, var(--sol-border)); }
+.line-overview-card[data-tone="warn"] { border-left: 3px solid color-mix(in srgb, var(--sol-orange) 70%, transparent); }
+.line-overview-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.line-overview-head b { font-size: 13.5px; font-weight: 600; color: var(--sol-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line-overview-open { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.line-overview-card:hover .line-overview-open { color: var(--sol-blue); }
+.line-overview-ask { font-size: 12.5px; font-weight: 600; color: var(--sol-yellow); }
+.line-overview-stuck { font-size: 12.5px; line-height: 1.45; color: color-mix(in srgb, var(--sol-orange) 88%, var(--sol-text)); }
+.line-overview-doing { font-size: 12.5px; line-height: 1.45; color: var(--sol-text-muted); }
+.line-overview-graphs, .line-overview-sources { font-size: 11.5px; line-height: 1.5; color: var(--sol-text-dim); }
