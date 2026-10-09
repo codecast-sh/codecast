@@ -9,13 +9,14 @@
 // Presentational: it paints a LineMap and reports clicks. `highlightPath`
 // (map node ids in order, loops repeated) draws one item's path with the
 // rest dimmed, which is how a trace (LX4) shows on the map.
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { CAUSES_NODE, type LineMap as LineMapModel, type MapEdge, type MapNode } from "../../../lib/line/lineMap";
-import { edgeWidth, layoutLineMap, neighbor, pathEdges, type MapLayout } from "../../../lib/line/lineMapLayout";
+import { MARK_GAP, MARK_SPILL, edgeWidth, layoutLineMap, neighbor, pathEdges, type MapLayout } from "../../../lib/line/lineMapLayout";
 import { cn } from "../../../lib/utils";
 import { EdgeArrows } from "../EdgeArrows";
 import { edgeAttrs, useScrollEdges } from "../useScrollEdges";
 import "../line.css";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import "./lineMap.css";
 
 export type LineMapProps = {
@@ -65,7 +66,7 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
   // first paint), so the viewer's own scrolling is never undone. A selection
   // or a trace scrolls by its own effect below.
   const placed = useRef<{ at: string; left: number } | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scroller.current;
     if (!el || !openAt) return;
     const was = placed.current;
@@ -88,8 +89,10 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
   // gutters (or hides when it no longer fits). Cards waiting past an edge ride
   // its arrow. Direct attribute writes on scroll, so scrolling re-renders nothing.
   const [waiting, setWaiting] = useState({ left: 0, right: 0 });
+  // The stages past each edge, so the arrow says what scrolling that way shows.
+  const [past, setPast] = useState<{ left: string[]; right: string[] }>({ left: [], right: [] });
   const decideId = useMemo(() => map.nodes.find((n) => n.kind === "decide")?.id ?? null, [map.nodes]);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scroller.current;
     const canvas = el?.querySelector<HTMLElement>(".lmap-canvas");
     if (!el || !canvas) return;
@@ -143,6 +146,14 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
         s.style.textIndent = indent > 0 ? `${indent}px` : "";
         flag(s, "data-cut", Math.min(p.x + p.w, x1) - from < p.label.length * PHASE_CH);
       }
+      const left: string[] = [];
+      const right: string[] = [];
+      for (const p of layout.phases) {
+        if (p.x + p.w / 2 < x0 && !left.includes(p.label)) left.push(p.label);
+        if (p.x + p.w / 2 > x1 && !right.includes(p.label)) right.push(p.label);
+      }
+      left.reverse();
+      setPast((was) => (was.left.join() === left.join() && was.right.join() === right.join() ? was : { left, right }));
       const b = decideId && asks > 0 ? layout.boxes.get(decideId) : undefined;
       const mid = b ? b.x + b.w / 2 : NaN;
       const next = { left: mid < x0 ? asks : 0, right: mid > x1 ? asks : 0 };
@@ -168,7 +179,7 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
   // Where the map sat before a panel opened, so closing it puts the map back (LX3).
   const prevSelected = useRef<string | null>(selectedNode ?? null);
   const beforePanel = useRef<{ left: number; top: number } | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scroller.current;
     if (!el) return;
     if (selectedNode && !prevSelected.current) beforePanel.current = { left: el.scrollLeft, top: el.scrollTop };
@@ -193,7 +204,7 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
   // The panel closed: back to where the map sat before it opened, and with
   // no such place (the page opened on a node), the left gutter rule alone,
   // so no source pill or stage label is left cut at the edge (LX3).
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scroller.current;
     const was = prevSelected.current;
     prevSelected.current = selectedNode ?? null;
@@ -203,12 +214,34 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
     const left = uncutLeft(el, layout, zoom, back ? back.left : el.scrollLeft);
     el.scrollTo({ left, top: back ? back.top : el.scrollTop });
   }, [selectedNode, layout, zoom]);
-  // A trace scrolls to where its path starts.
-  const first = highlightPath?.[0];
-  useEffect(() => {
-    if (!first) return;
-    scroller.current?.querySelector<HTMLElement>(nodeSel(first))?.scrollIntoView?.({ block: "nearest", inline: "start", behavior: "smooth" });
-  }, [first]);
+  // A trace opens on where its path ends (where the item is, or where it
+  // stopped), and follows the step the reader points at in its story.
+  // The last step of the path the map draws (a graph's folded terminal steps are its ends).
+  const last = [...(highlightPath ?? [])].reverse().find((id) => !id.startsWith("end:") && layout.boxes.has(id)) ?? highlightPath?.[highlightPath.length - 1];
+  const follow = tracing && focusedNode && onPath.has(focusedNode) ? focusedNode : last;
+  // Once per target: the node may draw only after the graph arrives, and a
+  // later refresh of the same map never moves the reader's own scroll.
+  const followed = useRef<string | null>(null);
+  useWatchEffect(() => {
+    if (!follow || followed.current === follow) return;
+    // The frame may still be laying out (no width yet): try again shortly
+    // until the node really sits in view, then never again for this target.
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const place = () => {
+      const el = scroller.current;
+      const node = el?.querySelector<HTMLElement>(nodeSel(follow));
+      if (el && node && el.clientWidth > 0) {
+        node.scrollIntoView?.({ block: "nearest", inline: "center", behavior: "auto" });
+        const box = el.getBoundingClientRect();
+        const r = node.getBoundingClientRect();
+        if (r.left >= box.left - 1 && r.right <= box.right + 1) { followed.current = follow; return; }
+      }
+      if (++tries < 20) timer = setTimeout(place, 100);
+    };
+    place();
+    return () => clearTimeout(timer);
+  }, [follow, layout]);
 
   return (
     <div className={cn("lmap-frame", className)} data-line-map data-tracing={tracing ? "true" : undefined}>
@@ -216,7 +249,7 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
       <div className="lmap-canvas" style={{ width: layout.width, height: layout.height, ...(zoom !== 1 ? { zoom } : {}) }} data-zoom={zoom !== 1 ? zoom : undefined}>
         <div className="lmap-phases" aria-hidden>
           {layout.phases.map((p) => (
-            <span key={p.key} className="lmap-phase" style={{ left: p.x, width: p.w }} data-map-phase={p.key}>{p.label}</span>
+            <span key={p.key} className="lmap-phase" style={{ left: p.x, width: p.w, top: p.y }} data-map-phase={p.key}>{p.label}</span>
           ))}
         </div>
 
@@ -246,9 +279,9 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
                 <path d={p.d} className="lmap-edge-hit" />
                 <path d={p.d} className="lmap-edge-line" style={{ strokeWidth: w }} />
                 {flowing && <path d={p.d} className="lmap-edge-flow" style={{ animationDuration: `${Math.max(1.6, 4 - e.count * 0.2)}s` }} />}
-                {p.labelAt && (e.label || (on && (pathHops.get(e.id) ?? 0) > 1)) && (
-                  <text x={p.labelAt.x} y={p.labelAt.y} className="lmap-edge-label" textAnchor="middle">
-                    {[e.label, on && (pathHops.get(e.id) ?? 0) > 1 ? `x${pathHops.get(e.id)}` : e.count > 0 ? String(e.count) : null].filter(Boolean).join("  ")}
+                {p.labelAt && (p.note || e.label || (on && (pathHops.get(e.id) ?? 0) > 1)) && (
+                  <text x={p.labelAt.x} y={p.labelAt.y} className="lmap-edge-label" textAnchor="middle" data-map-edge-note={p.note ? "" : undefined}>
+                    {[p.note ?? e.label, on && (pathHops.get(e.id) ?? 0) > 1 ? `x${pathHops.get(e.id)}` : e.count > 0 ? String(e.count) : null].filter(Boolean).join("  ")}
                   </text>
                 )}
               </g>
@@ -276,13 +309,11 @@ export const LineMap = memo(function LineMap({ map, layout: given, selectedNode,
         })}
       </div>
     </div>
-    <EdgeArrows scroller={scroller} edges={edges} label="the line" waiting={waiting} />
+    <EdgeArrows scroller={scroller} edges={edges} label="the line" waiting={waiting} names={past} />
     </div>
   );
 });
 
-/** A mark's distance under its node: past the selected ring (3px outset) with room to spare, so the ring never cuts its words. */
-const MARK_GAP = 8;
 /** The room kept at the scroller's left edge, so a source pill never clips there. */
 const GUTTER = 24;
 /** An edge arrow's gutter: the arrow (22px) and its inset, where no label is drawn. */
@@ -365,6 +396,9 @@ function useIntakeZoom(scroller: RefObject<HTMLDivElement | null>, layout: MapLa
     ro.observe(el);
     return () => ro.disconnect();
   }, [scroller]);
+  // A line folded onto rows (lineMapLayout bands) steps back to fit its
+  // widest row in the column, down to the floor where words stop reading.
+  if (layout.bands > 1 && width) max = Math.max(INTAKE_ZOOM_MIN, Math.min(max, Math.floor(((width - 2 * GUTTER) / layout.width) * 100) / 100));
   if (max >= 1 || !selected || !width || !isIntake(layout, selected)) return max;
   const b = layout.boxes.get(selected)!;
   const fit = (width - 2 * GUTTER) / (b.x + b.w);
@@ -386,34 +420,28 @@ function uncutLeft(el: HTMLElement, layout: MapLayout, zoom: number, x: number, 
   return Math.round(nx);
 }
 
-/** The pill the sources past the fifth fold into (LX2). */
+/** The one stacked chip the sources fold into (LX2). */
 export const MORE_SOURCES = "sources:more";
-const SOURCES_SHOWN = 5;
 const sourceRank = (n: MapNode) => (n.marks.some((m) => m.level === "fail") ? 2 : n.marks.some((m) => m.level === "warn") ? 1 : 0);
 
-/** The map with its sources past the fifth folded into one "+N more
- *  sources" pill, so the Sense column fits the stage's height (LX2). The
- *  five kept are the ones in trouble first, then the most filed, in the
- *  map's own order; `pinned` ids (the open node, a trace's path) always
- *  stay. The pill's count is what the folded ones filed, and their edges
- *  merge into its own. */
+/** The map with its sources folded into one stacked chip ("6 sources"), so
+ *  the intake takes one node's height and the stations lead (LX2). A source
+ *  in trouble and the `pinned` ids (the open node, a trace's path) stay out
+ *  beside it. The chip's count is what the folded ones filed, and their
+ *  edges merge into its own. Opening the chip draws every source. */
 export function foldSources(map: LineMapModel, pinned: ReadonlySet<string> = new Set()): LineMapModel {
   const sources = map.nodes.filter((n) => n.kind === "source");
-  if (sources.length <= SOURCES_SHOWN + 1) return map;
-  const kept = new Set(sources.filter((n) => pinned.has(n.id)).map((n) => n.id));
-  for (const n of [...sources].sort((a, b) => sourceRank(b) - sourceRank(a) || b.through - a.through)) {
-    if (kept.size >= SOURCES_SHOWN) break;
-    kept.add(n.id);
-  }
+  if (sources.length <= 2) return map;
+  const kept = new Set(sources.filter((n) => pinned.has(n.id) || sourceRank(n) > 0).map((n) => n.id));
   const folded = sources.filter((n) => !kept.has(n.id));
   if (folded.length < 2) return map;
   const gone = new Set(folded.map((n) => n.id));
-  const last = sources.filter((n) => kept.has(n.id)).pop() ?? folded[0];
   const more: MapNode = {
-    id: MORE_SOURCES, kind: "source", label: `+${folded.length} more sources`, phase: folded[0].phase, col: folded[0].col, main: false,
+    id: MORE_SOURCES, kind: "source", label: kept.size ? `+${folded.length} more sources` : `${folded.length} sources`, phase: folded[0].phase, col: folded[0].col, main: false,
     now: [], through: folded.reduce((t, n) => t + n.through, 0), passed: [], marks: [], medianMs: null, failed: 0,
   };
-  const nodes = map.nodes.flatMap((n) => (gone.has(n.id) ? [] : n === last ? [n, more] : [n]));
+  // The chip takes the first folded source's place, so the order holds.
+  const nodes = map.nodes.flatMap((n) => (n === folded[0] ? [more] : gone.has(n.id) ? [] : [n]));
   // Each edge into or out of a folded source becomes the pill's, one per far end and kind.
   const merged = new Map<string, MapEdge>();
   const edges: MapEdge[] = [];
@@ -448,11 +476,11 @@ export function throughWord(n: Pick<MapNode, "kind">): string {
   if (n.kind === "source" || n.kind === "signals" || n.kind === "expectations") return "filed";
   if (n.kind === "causes") return "new";
   if (n.kind === "end") return "ended";
-  return "through";
+  return "runs";
 }
 
-/** The window's count in words: "5 through", "12 filed". */
-export const throughWords = (n: Pick<MapNode, "kind" | "through">) => `${n.through} ${throughWord(n)}`;
+/** The window's count in words: "5 runs", "1 run", "12 filed". */
+export const throughWords = (n: Pick<MapNode, "kind" | "through">) => `${n.through} ${n.through === 1 && throughWord(n) === "runs" ? "run" : throughWord(n)}`;
 
 /** How a node is doing at a glance: what its lamp shows. */
 export function nodeTone(n: MapNode, asks = 0): "fail" | "warn" | "ask" | "live" | "idle" | "info" {
@@ -491,12 +519,12 @@ function MapNodeView({ node: n, style, asks, selected, focused, on, visits, wind
   // opened here shows under the node (LX2).
   const trouble = n.marks.some((m) => m.level !== "info");
   const mark: (Omit<MapNode["marks"][number], "level"> & { level: MapNode["marks"][number]["level"] | "ask" }) | undefined = asks > 0 && !trouble
-    ? { level: "ask", words: `${asks === 1 ? "A card waits" : `${asks} cards wait`} on your answer`, short: "Awaiting you" }
+    ? { level: "ask", words: `${asks === 1 ? "A decision waits" : `${asks} decisions wait`} on your answer`, short: "Waiting on you" }
     : n.marks[0];
   const marks = mark?.level === "ask" ? [mark, ...n.marks] : n.marks;
   const passed = throughWords(n);
   const empty = here === 0 && n.through === 0;
-  const label = `${n.label}: ${empty ? "empty" : `${here > 0 ? `${here} ${asks > 0 ? "waiting on you" : "here now"}, ` : ""}${passed} in the last ${windowLabel}`}${n.marks.length ? `. ${n.marks.map((m) => m.words).join(". ")}` : ""}`;
+  const label = `${n.label}${n.plainLabel ? ` (${n.plainLabel})` : ""}: ${empty ? "empty" : `${here > 0 ? `${here} ${asks > 0 ? "waiting on you" : "here now"}, ` : ""}${passed} in the last ${windowLabel}`}${n.marks.length ? `. ${n.marks.map((m) => m.words).join(". ")}` : ""}`;
   return (
     <>
       <button
@@ -516,11 +544,13 @@ function MapNodeView({ node: n, style, asks, selected, focused, on, visits, wind
         data-focused={focused ? "true" : undefined}
         data-on={on ? "true" : undefined}
         data-compact={compact ? "true" : undefined}
+        data-who={n.who}
         data-empty={empty ? "true" : undefined}
       >
         <span className="lmap-node-head">
           <span className="lmap-lamp" data-tone={tone} />
           <span className="lmap-node-label">{n.label}</span>
+          {n.who === "person" && <span className="lmap-you" title="You decide at this step">you</span>}
           {visits > 1 && <span className="lmap-visits" title={`${visits} visits on this path`}>x{visits}</span>}
         </span>
         {/* One reading per node: what is here now as the big number (only when
@@ -534,7 +564,7 @@ function MapNodeView({ node: n, style, asks, selected, focused, on, visits, wind
               {!compact && here > 0 && (
                 <span className="lmap-here" data-ask={asks > 0 ? "true" : undefined}>
                   {/* With a count beside it the big number stands alone (the legend names it). */}
-                  <b>{here}</b>{asks > 0 ? " ask" : n.through > 0 ? "" : " here"}
+                  <b>{here}</b>{asks > 0 ? " for you" : n.through > 0 ? "" : " here"}
                 </span>
               )}
               {/* A card waiting on you is the node's one reading; what passed waits in the tooltip. */}
@@ -547,7 +577,8 @@ function MapNodeView({ node: n, style, asks, selected, focused, on, visits, wind
         <span
           className="lmap-mark"
           data-level={mark.level}
-          style={{ left: style.left as number, top: (style.top as number) + (style.height as number) + MARK_GAP, width: style.width as number }}
+          // Into most of the column gap on each side, so a short sentence fits whole and neighbours' marks still keep apart.
+          style={{ left: (style.left as number) - MARK_SPILL, top: (style.top as number) + (style.height as number) + MARK_GAP, width: (style.width as number) + 2 * MARK_SPILL }}
           title={marks.map((m) => m.words).join("\n")}
           data-map-mark={n.id}
         >

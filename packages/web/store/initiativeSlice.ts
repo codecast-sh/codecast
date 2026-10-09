@@ -84,6 +84,61 @@ function coverOwnerScope(draft: InitiativeDraft, initiative: InitiativeRow | und
   pushRoleFieldsIntent(draft, role._id, { scope: { project_ids: [...role.scope.project_ids, ...gained], plan_ids: role.scope.plan_ids } });
 }
 
+type ProjectLocks = Record<string, { type: string; value?: any; seen?: unknown[] }>;
+type PendingDraft = { initiatives: Record<string, InitiativeRow>; pending: ProjectLocks };
+
+const swapProject = (ids: string[], from: string, next: string | null) =>
+  next === null ? ids.filter((p) => p !== from) : [...new Set(ids.map((p) => (p === from ? next : p)))];
+
+/** Moves one project id in every goal's list to `next` (or out of it when
+ *  `next` is null). */
+export function moveProjectInGoals(initiatives: Record<string, InitiativeRow>, from: string, next: string | null): void {
+  for (const row of Object.values(initiatives)) {
+    if (row.project_ids.includes(from)) row.project_ids = swapProject(row.project_ids, from, next);
+  }
+}
+
+/** The same move in every lock that holds a goal's list. Entries are replaced,
+ *  never mutated, so a shallow copy of the pending map is safe to pass. A lock
+ *  whose value the server has already sent retires here, since no later push
+ *  would. */
+export function moveProjectInLocks(pending: ProjectLocks, from: string, next: string | null): void {
+  for (const [key, entry] of Object.entries(pending)) {
+    if (entry.type !== "field" || !key.startsWith("initiatives:") || !key.endsWith(":project_ids")) continue;
+    if (!Array.isArray(entry.value) || !entry.value.includes(from)) continue;
+    const value = swapProject(entry.value, from, next);
+    const last = entry.seen?.[entry.seen.length - 1];
+    if (last !== undefined && JSON.stringify(last) === JSON.stringify(value)) delete pending[key];
+    else pending[key] = { ...entry, value };
+  }
+}
+
+function moveInitiativeProject(draft: PendingDraft, from: string, next: string | null): void {
+  moveProjectInGoals(draft.initiatives, from, next);
+  moveProjectInLocks(draft.pending, from, next);
+}
+
+/** A project created from a goal's sheet sits under the goal by its stub id
+ *  until the server answers (createProject's attachToInitiative continuation).
+ *  The owner role's scope is the server's to widen, in the create's own
+ *  transaction: a stub id has nothing to scope. */
+export function attachProjectStubDraft(draft: { initiatives: Record<string, InitiativeRow> }, initiativeId: string, stubId: string): void {
+  const row = draft.initiatives[initiativeId];
+  if (!row || row.project_ids.includes(stubId)) return;
+  row.project_ids = [...row.project_ids, stubId];
+  row.updated_at = Date.now();
+}
+
+/** The real id replaces the stub wherever a goal lists it. */
+export function rekeyInitiativeProjectDraft(draft: PendingDraft, stubId: string, realId: string): void {
+  if (stubId !== realId) moveInitiativeProject(draft, stubId, realId);
+}
+
+/** A refused create leaves no stub behind in any goal. */
+export function detachProjectStubDraft(draft: PendingDraft, stubId: string): void {
+  moveInitiativeProject(draft, stubId, null);
+}
+
 export function createInitiativeSlice(): InitiativeSliceActions {
   return {
     createInitiative: action(function (this: InitiativeDraft, input: CreateInitiativeInput) {

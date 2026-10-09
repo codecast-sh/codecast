@@ -305,7 +305,7 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
         </div>
         <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2 text-center`}>Hire your {EXECUTIVE_ASSISTANT_NAME}</h1>
         <p className="text-sm text-sol-text-muted mb-4 leading-relaxed text-center">
-          Your right hand: it keeps your goals in view, answers anything, sends what a lead owns to that lead, and brings every decision with a recommendation. It lives here in the header, on every page.
+          Your right hand: it keeps your focus in view, answers anything, sends what a lead owns to that lead, and brings every decision with a recommendation. It lives here in the header, on every page.
         </p>
         <div className="space-y-3">
           <div>
