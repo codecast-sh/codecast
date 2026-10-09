@@ -772,3 +772,41 @@ describe("replays (rp-N)", () => {
     expect(html).not.toContain("shop.example.com");
   });
 });
+
+// The company's objects (a goal, a project, a role, a person) each open their
+// sheet on the Org screen, `/org/<ref>`. A project and a role are named by
+// their short ids in prose; a person by a link to their address.
+describe("the company's objects (or-N, pj-…, @person)", () => {
+  const PROJECT = { _id: "ux72qtvpbmmrmwcjqmhzawejsx8bq9gm", short_id: "pj-mf3k2a", title: "Lead lists", status: "active" };
+  const ROLE = { _id: "vx72qtvpbmmrmwcjqmhzawejsx8bq9gm", short_id: "or-3", name: "Calling lead", handle: "calling", status: "active" };
+  const PERSON = { _id: "wx72qtvpbmmrmwcjqmhzawejsx8bq9gm", name: "Samvit", github_username: "samvit" };
+  useInboxStore.setState({
+    projects: { [PROJECT._id]: PROJECT },
+    orgTree: { workspace: { kind: "team", id: "t", name: "Union" }, people: [], roles: [ROLE], anchors: [], generated_at: 0 },
+    teamMembers: [PERSON],
+  } as any);
+
+  test("a role and a project read as their names and open their sheet", () => {
+    const html = render("Ask or-3 about pj-mf3k2a.");
+    expect(pillTexts(html)).toEqual(["Calling lead", "Lead lists"]);
+    expect(html).toContain('href="/org/or-3"');
+    expect(html).toContain('href="/org/pj-mf3k2a"');
+  });
+
+  test("a link to a person's address reads as their name", () => {
+    const html = render("Talk to [Samvit](/org/@samvit) first.");
+    expect(pillText(html)).toBe("Samvit");
+    expect(html).toContain('href="/org/@samvit"');
+  });
+
+  test("a link to a project's board is the same project, opened as its sheet", () => {
+    const html = render(`See https://codecast.sh/projects/${PROJECT._id} for the list.`);
+    expect(pillText(html)).toBe("Lead lists");
+    expect(html).toContain('href="/org/pj-mf3k2a"');
+  });
+
+  test("words that start like a role stay prose", () => {
+    const html = render("Do it now or-else.");
+    expect(pillTexts(html)).toEqual([]);
+  });
+});
