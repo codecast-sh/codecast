@@ -29,7 +29,7 @@ import { ghostScopeNames, ORG_SIZES, personNodeId, quietChipLines, roleNodeId, w
 import { proposalChangeRows, type ProposalTreeFace, type ProposalTreeRow } from "./proposalTree";
 
 /** What the lens reads off a project row. */
-export type GoalProject = { _id: string; title: string; short_id?: string; status?: string; owner_role_id?: string };
+export type GoalProject = { _id: string; title: string; short_id?: string; client_key?: string; status?: string; owner_role_id?: string };
 
 /** A change as a goal or project card wears it: the tag it leads with, and
  *  whether it is accepted (drawn solid until the store carries it). */
@@ -477,9 +477,13 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
     };
     for (const p of loose) projectRow({ id: p._id, title: p.title, short_id: p.short_id, status: p.status, lead: leadOf(p) }, LOOSE_NODE_ID, lx + S.indent);
   }
+  // The company's tally counts every project it holds, under a goal or under
+  // none, the way the document's state line does: the loose card says the
+  // split. A proposed project is not held yet, and a done one is not counted.
+  const held = input.projects.filter((p) => drawnProjects.has(p._id) && p.status !== "done").length;
   const top = nodes[0];
-  if (top.kind === "company") top.projects = drawnProjects.size - loose.length;
-  else if (top.kind === "goal" && top.root) top.root.projects = drawnProjects.size - loose.length;
+  if (top.kind === "company") top.projects = held;
+  else if (top.kind === "goal" && top.root) top.root.projects = held;
 
   // The column: one card per person or role. The Goals lens draws the owners,
   // each level with the first thing it owns. The map's Everything draws the

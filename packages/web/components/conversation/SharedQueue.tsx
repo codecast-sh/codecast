@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { ArrowDown, ArrowUp, Combine, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Combine, X, Zap } from "lucide-react";
 import { jointAuthors } from "@codecast/shared/contracts/jointMessage";
 import { useInboxStore } from "../../store/inboxStore";
 import { canSteer, isHeldForTurnEnd, partsOf, queueRowsOf, type QueueRow } from "../../lib/sharedQueue";
@@ -32,6 +32,14 @@ export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQ
 
   const move = (row: QueueRow, beforeId: string | null) => st.reorderQueued(conversationId, row.message_id, beforeId);
   const merge = (row: QueueRow, into: QueueRow) => st.mergeQueued(conversationId, row.message_id, into.message_id);
+  // Interrupt and send: the row goes to the front of what still waits, then
+  // Escape stops the turn. The daemon takes the head of the line next, and a
+  // stopped turn releases rows held for its end (managedSessions).
+  const firstWaiting = rows.find(canSteer);
+  const sendNow = (row: QueueRow) => {
+    if (firstWaiting && firstWaiting !== row) move(row, firstWaiting.message_id);
+    st.sendEscape(conversationId);
+  };
 
   return (
     <div data-sv-shared-queue className="mx-auto conv-col px-2 sm:px-4">
@@ -65,6 +73,9 @@ export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQ
                 {isHeldForTurnEnd(row) && !steerable && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">after this turn</span>}
                 {steerable && (
                   <span className="ml-auto shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                    <QueueButton label="Interrupt the agent and send this next" disabled={false} onClick={() => sendNow(row)}>
+                      <Zap className="w-3 h-3" /><span className="ml-1">Interrupt &amp; send</span>
+                    </QueueButton>
                     <QueueButton label="Move up" disabled={!prev || !canSteer(prev)} onClick={() => prev && move(row, prev.message_id)}><ArrowUp className="w-3 h-3" /></QueueButton>
                     <QueueButton label="Move down" disabled={!next} onClick={() => next && move(row, rows[i + 2]?.message_id ?? null)}><ArrowDown className="w-3 h-3" /></QueueButton>
                     <QueueButton label="Merge with the next one into one turn" disabled={!next || !canSteer(next)} onClick={() => next && merge(next, row)}>
