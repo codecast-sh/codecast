@@ -565,6 +565,23 @@ export function taskBlockerLine(b: TitledTaskBlocker, inline?: (s: string) => st
   return taskRefLine({ ...b, short_id: b.ref }, inline);
 }
 
+/**
+ * One wait as a text "Blocked by" list prints it: what it waits on, its state
+ * word, and its state in the same brackets `taskRefLine` puts a task's status
+ * in. A mixed list is read cold, where a met wait's word differs from a
+ * waiting one's only by tense ("checks green" vs "checks to go green"), so
+ * every entry carries the marker that says whether it still holds: "PR #42 to
+ * merge [waiting]", "PR #42 checks green [met]", "PR #7 closed without
+ * merging [failed]". A page with a pill per wait shows the state in its tone
+ * instead (`waitTone`, `waitWordFails`). `inline` cleans the word for a
+ * reader that feeds the line to an agent.
+ */
+export function waitRefLine(w: TaskWait, opts: WaitLabelOptions & { closed?: boolean; checks?: string | null; inline?: (s: string) => string } = {}): string {
+  const inline = opts.inline ?? ((s: string) => s);
+  const word = inline(waitStateWord(w, opts));
+  return `${waitSubject(w, opts)}${word ? ` ${word}` : ""} [${w.state}]`;
+}
+
 /** Why a task is not ready, in words an agent can act on: "blocked by ct-12,
  *  PR #42 merges", "its parent is being worked". `task` is the row judged. */
 export function notReadyLabel(task: GraphTask, r: Extract<Readiness, { ready: false }>, opts: WaitLabelOptions = {}): string {

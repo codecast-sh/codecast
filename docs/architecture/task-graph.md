@@ -318,4 +318,8 @@ read later; relative words ("Thu 09:00") are only for live rendering.
   sol tokens.
 - **Mobile.** The task screen lists blockers and waits, read-only.
 - **CLI.** `cast task show` and `context` print blockers, waits and links in
-  the same order as the web.
+  the same order as the web. The text list has no pill to carry a state, so
+  every Blocked by entry ends in a bracketed one: a task's status
+  (`taskRefLine`) and a wait's state (`waitRefLine`, "PR #42 to merge
+  [waiting]", "PR #42 checks green [met]"). Without it a met wait reads as
+  holding, since its word differs from a waiting one's only by tense.
