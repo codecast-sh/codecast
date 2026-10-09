@@ -103,9 +103,9 @@ export function describeVerification(v: SyncVerification | undefined): string {
   if (!v.headsMatch) {
     return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
   }
-  const tree = v.remoteDirty === 0 ? "clean working tree"
+  const tree = v.remoteDirty === 0 ? "working tree identical to the source's"
     : v.remoteDirty == null ? "working-tree state unknown"
-    : `WARNING: ${v.remoteDirty} uncommitted change(s) already in the destination tree`;
+    : `WARNING: ${v.remoteDirty} file(s) in the destination tree differ from the source's`;
   return `branch ${v.branch} at ${v.localHead.slice(0, 8)}, destination HEAD matches, ${tree}`;
 }
 

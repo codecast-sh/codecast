@@ -3,7 +3,7 @@
 // shows. queue.ts and run.ts apply them.
 import { APP_DAILY_BUDGET_USD, GLOBAL_DAILY_BUDGET_USD, IDEA_MAX, IDEAS_MAX, NARRATION_LINE_MAX, NARRATION_LINES_MAX, VISITOR_DAILY_BUDGET_USD } from "../lib/limits";
 import { clipLine, oneLine } from "../lib/text";
-import type { NarrationLine } from "../validators";
+import type { FailureKind, NarrationLine } from "../validators";
 
 export type QueueRow<Id> = { _id: Id; status: "queued" | "building" | "live" | "failed"; _creationTime: number };
 
@@ -15,21 +15,39 @@ export function nextInLine<Id>(rows: readonly QueueRow<Id>[]): Id | null {
   return queued[0]?._id ?? null;
 }
 
-export type Refusal = { error: string; detail: string };
+export type Refusal = { kind: FailureKind; error: string; detail: string };
 
-/** Why a build may not start now, or null when it may. The global budget is
- *  the circuit breaker; the app's and the asker's own budgets are what keep
- *  one app or one person from spending it. */
-export function startRefusal(opts: { paused: boolean; appSpent: number; globalSpent: number; visitorSpent: number }): Refusal | null {
-  if (opts.paused) return { error: "Building is paused right now. Try again in a little while.", detail: "builds are switched off (PLAYGROUND_BUILDS_OFF)" };
-  if (opts.globalSpent >= GLOBAL_DAILY_BUDGET_USD) {
-    return { error: "Clayground has used today's building budget. Try again tomorrow.", detail: `global daily budget of $${GLOBAL_DAILY_BUDGET_USD} spent` };
+/** The daily spend budgets a build counts toward. */
+export type Budget = "global" | "app" | "visitor";
+export type Over = Record<Budget, boolean>;
+
+export const SPEND_BUDGET_USD: Record<Budget, number> = {
+  global: GLOBAL_DAILY_BUDGET_USD,
+  app: APP_DAILY_BUDGET_USD,
+  visitor: VISITOR_DAILY_BUDGET_USD,
+};
+
+/** Which budgets today's spend has used up. */
+export const overBudget = (spent: Record<Budget, number>): Over => ({
+  global: spent.global >= SPEND_BUDGET_USD.global,
+  app: spent.app >= SPEND_BUDGET_USD.app,
+  visitor: spent.visitor >= SPEND_BUDGET_USD.visitor,
+});
+
+/** Why a build may not start now, or null when it may. `over` says which
+ *  daily budgets are spent. The global budget is the circuit breaker; the
+ *  app's and the asker's own budgets are what keep one app or one person from
+ *  spending it. */
+export function startRefusal(opts: { paused: boolean; over: Over }): Refusal | null {
+  if (opts.paused) return { kind: "refused", error: "Building is paused right now. Try again in a little while.", detail: "builds are switched off (PLAYGROUND_BUILDS_OFF)" };
+  if (opts.over.global) {
+    return { kind: "refused", error: "Clayground has used today's building budget. Try again tomorrow.", detail: `global daily budget of $${GLOBAL_DAILY_BUDGET_USD} spent` };
   }
-  if (opts.appSpent >= APP_DAILY_BUDGET_USD) {
-    return { error: "This app has used today's building budget. Try again tomorrow, or fork it.", detail: `app daily budget of $${APP_DAILY_BUDGET_USD} spent` };
+  if (opts.over.app) {
+    return { kind: "refused", error: "This app has used today's building budget. Try again tomorrow, or fork it.", detail: `app daily budget of $${APP_DAILY_BUDGET_USD} spent` };
   }
-  if (opts.visitorSpent >= VISITOR_DAILY_BUDGET_USD) {
-    return { error: "You've asked for a lot of changes today. Chat still works, and changes are back tomorrow.", detail: `visitor daily budget of $${VISITOR_DAILY_BUDGET_USD} spent` };
+  if (opts.over.visitor) {
+    return { kind: "refused", error: "You've asked for a lot of changes today. Chat still works, and changes are back tomorrow.", detail: `visitor daily budget of $${VISITOR_DAILY_BUDGET_USD} spent` };
   }
   return null;
 }
@@ -60,16 +78,16 @@ export function cleanIdeas(raw: readonly string[]): string[] {
 export function failureFor(outcome: Exclude<Outcome, { kind: "finished" }>): Refusal {
   switch (outcome.kind) {
     case "declined":
-      return { error: outcome.reason, detail: `declined: ${outcome.reason}` };
+      return { kind: "declined", error: outcome.reason, detail: `declined: ${outcome.reason}` };
     case "unchanged":
-      return { error: "Clay finished without changing anything. Try saying it another way.", detail: "the draft matched the base version" };
+      return { kind: "unchanged", error: "Clay finished without changing anything. Try saying it another way.", detail: "the draft matched the base version" };
     case "invalid":
-      return { error: "The code Clay wrote didn't run, even after fixing it.", detail: outcome.problems.join("\n") };
+      return { kind: "invalid", error: "The code Clay wrote didn't run, even after fixing it.", detail: outcome.problems.join("\n") };
     case "stopped":
-      if (outcome.reason === "time") return { error: "It ran out of time on a big change. Try a smaller step.", detail: outcome.error ?? "deadline passed" };
-      if (outcome.reason === "budget") return { error: "It hit the spending limit for one change. Try a smaller step.", detail: outcome.error ?? "cost ceiling reached" };
-      if (outcome.reason === "done") return { error: "Clay stopped before finishing. Try again.", detail: "the model ended its turn without calling finish" };
-      return { error: "Clay couldn't reach its model. Try again in a moment.", detail: outcome.error ?? outcome.reason };
+      if (outcome.reason === "time") return { kind: "time", error: "It ran out of time on a big change. Try a smaller step.", detail: outcome.error ?? "deadline passed" };
+      if (outcome.reason === "budget") return { kind: "budget", error: "It hit the spending limit for one change. Try a smaller step.", detail: outcome.error ?? "cost ceiling reached" };
+      if (outcome.reason === "done") return { kind: "stopped", error: "Clay stopped before finishing. Try again.", detail: "the model ended its turn without calling finish" };
+      return { kind: "unreachable", error: "Clay couldn't reach its model. Try again in a moment.", detail: outcome.error ?? outcome.reason };
   }
 }
 

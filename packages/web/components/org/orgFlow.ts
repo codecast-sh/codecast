@@ -1,4 +1,4 @@
-// How work flows through the org (the health page): each role's week as a
+// How work flows through the org (the map's This week): each role's week as a
 // daily series, the weight of every edge on the map, and what a change to a
 // limit or a share of load would have done to the same week. Pure: it reads
 // org.tree and org.health and nothing else, so the map, the volume table and

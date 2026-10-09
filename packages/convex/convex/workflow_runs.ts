@@ -5,8 +5,9 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
-import { askCore, finalizeAnswer, normalizeVerdict, personMayResolve, withdrawCore, type AnsweredBy } from "./sessionDecisions";
+import { askCore, finalizeAnswer, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
+import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, isLineRun, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
@@ -167,11 +168,16 @@ export async function pauseAtGateCore(
   let decision: { id: Id<"session_decisions">; short_id?: string } | null = null;
   const askerId = run.spawner_conversation_id ?? run.primary_conversation_id;
   const asker = askerId ? await ctx.db.get(askerId) : null;
-  if (asker) {
+  if (!asker) return { error: "the gate could not ask anyone: the run has no session to ask from" };
+  {
     const [first, ...rest] = args.prompt.split("\n");
     const question = first.trim() || args.node_id;
     const body = rest.join("\n").trim();
-    const ask = (card?: ChangeCard) => askCore(ctx, auth, {
+    // The run asks through its asker, which may be a session another account
+    // owns (the project lead's, chosen at create for a run started outside a
+    // session): ask as that session's owner, or askCore refuses it as not ours.
+    const askAs = { userId: asker.user_id as Id<"users"> };
+    const ask = (card?: ChangeCard) => askCore(ctx, askAs, {
       session_id: asker.session_id,
       question,
       context_md: body || undefined,
@@ -199,6 +205,9 @@ export async function pauseAtGateCore(
       if (task && holder?.kind === "user" && (args.card || args.node_id === CARD_GATE_NODE_ID)) {
         await noticeCardWaiting(ctx, task, holder.id as Id<"users">, asked.short_id, args.card?.headline);
       }
+    } else {
+      // A gate nobody was asked must not wait forever in silence.
+      return { error: `the gate could not ask anyone: ${asked?.error ?? "no answer from the decision rail"}` };
     }
   }
 
@@ -242,9 +251,9 @@ export async function answerGateCore(ctx: Ctx, run: any, response: string, by: A
   const trimmed = response.trim();
   const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
   if (decision && decision.status === "pending") {
-    // The run panel answers under the same rule as the decision card: only
-    // a person the gate was asked of (or its owner) may answer it.
-    if (by.user_id && !personMayResolve(decision, by.user_id)) return { error: "Unauthorized: not your decision" };
+    // The run panel answers under the same rule as the decision card: anyone
+    // who may read the gate may answer it, and its people hear about it.
+    if (by.user_id && !(await userMayRead(ctx as any, by.user_id, decision))) return { error: "Unauthorized: not your decision" };
     const idx = gateChoiceIndex(run.gate_choices, trimmed);
     const verdict = normalizeVerdict(decision, idx >= 0
       ? { status: "answered", answer_index: idx, answer_text: trimmed }
@@ -547,6 +556,17 @@ export async function createRunCore(
   return { run_id: runId, primary_conversation_id: primaryConvId };
 }
 
+// A run started from outside any session (a product's own planner calling
+// `cast workflow run --detach`) runs as the lead of its cause's project, the
+// way the sweep's runs do (orgLine.startLineRun): its gates climb that role's
+// ladder to the person who answers for the project (line-profile.md LP6).
+// Without it the card asks nobody.
+export async function projectLeadSession(ctx: Ctx, task: any): Promise<any | null> {
+  const lead = await projectLeadRole(ctx, task);
+  const anchor = lead?.anchor_id ? await ctx.db.get(lead.anchor_id) : null;
+  return (anchor as any)?.conversation_id ? await ctx.db.get((anchor as any).conversation_id) : null;
+}
+
 export const createFromCli = mutation({
   args: {
     api_token: v.string(),
@@ -573,11 +593,12 @@ export const createFromCli = mutation({
     const userId = result.userId;
 
     const now = Date.now();
-    const spawner = args.spawner_session ? await findConversationByAnyRef(ctx, args.spawner_session, userId) : null;
-
     const taskRow: any = args.task_id
       ? await ctx.db.query("tasks").withIndex("by_short_id", q => q.eq("short_id", args.task_id!)).first()
       : null;
+    const spawner = args.spawner_session
+      ? await findConversationByAnyRef(ctx, args.spawner_session, userId)
+      : await projectLeadSession(ctx, taskRow);
     const planRow: any = args.plan_id
       ? await ctx.db.query("plans").withIndex("by_short_id", q => q.eq("short_id", args.plan_id!)).first()
       : null;
@@ -605,7 +626,9 @@ export const createFromCli = mutation({
       now,
     });
     if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: args.run_on_device, now });
-    return { run_id, primary_conversation_id };
+    // The session the run speaks as, resolved here when the caller had none,
+    // so a runner in the foreground asks its failure decisions through it.
+    return { run_id, primary_conversation_id, spawner_conversation_id: spawner?._id ?? null };
   },
 });
 
@@ -616,20 +639,41 @@ export const createFromCli = mutation({
 // runs ingested before session_id stamping; routine/graph nodes carry a real session_id
 // already. `budget` caps conversation lookups so list queries stay bounded — runs are
 // enriched most-recent-first and older ones degrade to plain (non-clickable) rows.
-async function withAgentSessions(ctx: any, run: any, budget = { reads: 200 }) {
+/** `cast task handoff`'s comment (taskClaim.handoffCommentText): "Handoff: <status>", a blank line, the evidence. */
+const HANDOFF_COMMENT = /^Handoff: (\w+)\s*\n?([\s\S]*)$/;
+
+/** Each station session's last handoff on the run's task, by conversation id:
+ *  how a builder ended (done, blocked, needs_context) is its handoff, which
+ *  lives on the task, not on the session. */
+async function handoffsByConversation(ctx: any, run: any, budget: { reads: number }): Promise<Map<string, { status: string; note: string; at: number }>> {
+  const out = new Map<string, { status: string; note: string; at: number }>();
+  if (!run.task_id || !run.node_statuses.some((n: any) => n.session_id) || budget.reads <= 0) return out;
+  budget.reads--;
+  const comments = await ctx.db.query("task_comments")
+    .withIndex("by_task_created", (q: any) => q.eq("task_id", run.task_id))
+    .order("desc")
+    .take(200);
+  for (const c of comments) {
+    const m = c.conversation_id && c.comment_type === "review" ? String(c.text ?? "").match(HANDOFF_COMMENT) : null;
+    if (m && !out.has(String(c.conversation_id))) out.set(String(c.conversation_id), { status: m[1], note: m[2].trim().slice(0, 600), at: c.created_at });
+  }
+  return out;
+}
+
+export async function withAgentSessions(ctx: any, run: any, budget = { reads: 200 }) {
   if (!run?.node_statuses?.length) return run;
   const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  const handoffs = await handoffsByConversation(ctx, run, budget);
   const node_statuses = await Promise.all(run.node_statuses.map(async (node: any) => {
     const sessionId = node.session_id
       || (run.run_kind === "workflow" && node.node_id ? `agent-${node.node_id}` : null);
     if (!sessionId || budget.reads <= 0) return node;
     budget.reads--;
-    const conv = await ctx.db
-      .query("conversations")
-      .withIndex("by_session_id", (q: any) => q.eq("session_id", sessionId))
-      .filter((q: any) => q.eq(q.field("user_id"), run.user_id))
-      .first();
+    // A line station's node carries its hand's short id (runner spawnHand), a
+    // dynamic workflow's agent its session id: any ref resolves, the run's own user's only.
+    const conv: any = await findConversationByAnyRef(ctx, sessionId, run.user_id);
     if (!conv) return node;
+    const handoff = handoffs.get(String(conv._id));
     return {
       ...node,
       session: {
@@ -643,6 +687,14 @@ async function withAgentSessions(ctx: any, run: any, budget = { reads: 200 }) {
         updated_at: conv.updated_at,
         agent_type: conv.agent_type,
         parent_conversation_id: conv.parent_conversation_id,
+        // What the station reported (`cast state`): the run report words a
+        // station by its own report, not by its node id.
+        state: conv.thread_state,
+        state_status: conv.thread_state_status,
+        result: conv.thread_state_result,
+        // What happened to it: killed (with no message, it never started) and how it handed off.
+        ...(conv.inbox_killed_at ? { killed: true } : {}),
+        ...(handoff ? { handoff } : {}),
       },
     };
   }));
@@ -1131,6 +1183,23 @@ export const setPrimarySession = mutation({
 });
 
 // the-line.md L4: a gate is a decision. See pauseAtGateCore.
+// Repair: a paused run whose gate asked nobody (its ask failed) is asked
+// again from the prompt and choices the run stored. The runner waiting on it
+// picks the answer up through poll-gate as usual.
+export const reaskGate = internalMutation({
+  args: { run_id: v.id("workflow_runs") },
+  handler: async (ctx, args) => {
+    const run: any = await ctx.db.get(args.run_id);
+    if (!run || run.status !== "paused" || run.gate_decision_id || !run.gate_prompt) return { error: "not a paused run with an unasked gate" };
+    return pauseAtGateCore(ctx, { userId: run.user_id }, {
+      run_id: args.run_id,
+      node_id: run.gate_node_id ?? run.current_node_id,
+      prompt: run.gate_prompt,
+      choices: run.gate_choices ?? [],
+    });
+  },
+});
+
 export const pauseAtGate = mutation({
   args: {
     api_token: v.string(),
@@ -1458,5 +1527,22 @@ export const repairLineCauseStatus = internalMutation({
       if (!args.dry_run) await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, ...(next !== "open" && end ? { closedAt: end.at } : {}) });
     }
     return { scanned: page.page.length, moved, restamped, skipped, cursor: page.continueCursor, done: page.isDone };
+  },
+});
+
+// The graph a run ran, for a viewer who may read the run (line-map.md LX5):
+// a project's causes run more than one graph (codecast's line, a repo's own
+// such as Union's AgentWatch), each pushed under the user whose daemon ran
+// it, so a teammate reading the project's line reaches the row through the
+// run rather than through ownership. The raw row, the shape workflows.webGet
+// returns, so it lands in the same store collection.
+export const graphOfRun = query({
+  args: { run_id: v.id("workflow_runs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const run = await ctx.db.get(args.run_id);
+    if (!run?.workflow_id || !(await canReadRun(ctx, userId, run))) return null;
+    return await ctx.db.get(run.workflow_id);
   },
 });

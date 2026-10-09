@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { brief, forProject, lines, personEditCore, propose, resolve, resolveProposalCore, retract, show } from "./expectations";
+import { brief, forProject, lines, overview, personEditCore, propose, resolve, resolveProposalCore, retract, show } from "./expectations";
 import { settleExpectationCard } from "./lib/expectationsApply";
 
 const INDEXES = schemaIndexes(schema);
@@ -293,7 +293,7 @@ describe("a person's edits from the web (line-map.md LX3, LX5)", () => {
   test("outside the project, nothing is written", async () => {
     const ctx = await makeCtx();
     await expect(personEditCore(ctx, OUTSIDER as any, "projects_calls", { op: "add", part: "Calls", text: "Callbacks happen only when the contact asked for one." })).rejects.toThrow(/not found/);
-    await expect(personEditCore(ctx, OWNER as any, "projects_calls", { op: "edit", id: "ex-callers-call-1" } as any)).rejects.toThrow(/adds a line or retires/);
+    await expect(personEditCore(ctx, OWNER as any, "projects_calls", { op: "move", id: "ex-callers-call-1" } as any)).rejects.toThrow(/adds, changes or retires/);
   });
 
   test("Apply on the panel answers the proposal's card, the same decision the queue holds", async () => {
@@ -313,5 +313,84 @@ describe("a person's edits from the web (line-map.md LX3, LX5)", () => {
 
 /** The same tables, read as another signed-in person. */
 async function makeCtxSharing(ctx: any, user: string) {
+  return { ...ctx, auth: { async getUserIdentity() { return { subject: user }; } } };
+}
+
+describe("the Expectations page (usage, sources, history, edits)", () => {
+  const DAY = 86_400_000;
+  const signal = (n: number, subject: string, ageDays: number, task = "tasks_cause") => ({
+    _id: `signals_${n}`, user_id: OWNER, team_id: TEAM, workspace: `team:${TEAM}`, short_id: `sg-${n}`, source: "judge", kind: "prompt_miss",
+    fingerprint: `f${n}`, title: `Finding ${n}`, subject, observed_at: Date.now() - ageDays * DAY, created_at: Date.now() - ageDays * DAY, task_id: task, attach: "judge",
+  });
+  async function seeded(asUser = MATE) {
+    const ctx = await makeCtx(asUser);
+    await run(propose, ctx, { ...scope(), summary: "Seed", ops: [
+      { op: "add", part: "Calls", text: "A call card's facts are true.", citations: [QUOTED] },
+      { op: "add", part: "Callbacks", text: "Callbacks happen only when the contact asked for one.", citations: [{ kind: "chat", ref: "#team/chat_messages_person", quote: "Callbacks only when the contact asked for one.", when: "2026-10-01" }] },
+    ] });
+    await ctx.db.insert("tasks", { _id: "tasks_cause", short_id: "ct-9", title: "Card shows a wrong fact", status: "open" });
+    for (const [i, sg] of [signal(1, "ex-callers-call-1", 2), signal(2, "ex-callers-call-1", 10), signal(3, "ex-callers-call-1", 40), signal(4, "comms", 1)].entries()) await ctx.db.insert("signals", { ...sg, _id: `signals_${i + 1}` });
+    return ctx;
+  }
+
+  test("a line's breaks are the signals whose subject is its id: this week, the last 30 days, with the causes they opened", async () => {
+    const ctx = await seeded();
+    const tab = await run(forProject, ctx, { project_id: "projects_calls" });
+    expect(tab.usage.lines["ex-callers-call-1"]).toMatchObject({ d7: 1, d30: 2 });
+    expect(tab.usage.lines["ex-callers-call-1"].findings.map((f: any) => f.short_id)).toEqual(["sg-1", "sg-2"]);
+    expect(tab.usage.lines["ex-callers-call-1"].findings[0].cause).toMatchObject({ short_id: "ct-9", title: "Card shows a wrong fact" });
+    expect(tab.usage.lines["ex-callers-call-2"]).toBeUndefined();
+  });
+
+  test("each source names who said it: the call's speaker at its segment, the chat line's author", async () => {
+    const ctx = await seeded();
+    const tab = await run(forProject, ctx, { project_id: "projects_calls" });
+    expect(tab.sources["call:cl-96:718"]).toEqual({ who: "Ashot" });
+    expect(tab.sources["chat:#team/chat_messages_person"]).toEqual({ who: "Cam" });
+    expect(tab.person).toBe("Ashot");
+  });
+
+  test("history: each version says what it changed, who applied it and from which proposal", async () => {
+    const ctx = await seeded();
+    await personEditCore(ctx, OWNER as any, "projects_calls", { op: "retire", id: "ex-callers-call-2", reason: "Callbacks moved to the desk" });
+    const tab = await run(forProject, ctx, { project_id: "projects_calls" });
+    expect(tab.versions[0]).toMatchObject({ version: 2, retired: 1, added: 0, applied_by: "Ashot", proposal: "xp-2", proposed_by: "Ashot", how: "person" });
+    expect(tab.versions[1]).toMatchObject({ version: 1, added: 2, how: "auto" });
+  });
+
+  test("a change to a line applies for the project's person and waits for anyone else; settling a question clears it on their words", async () => {
+    const ctx = await seeded();
+    await run(propose, ctx, { ...scope(), summary: "Contest", ops: [{ op: "edit", id: "ex-callers-call-1", note: "True for every caller, or only brokers?", citations: [BARE] }] });
+    await run(resolve, ctx, { api_token: `tok-${OWNER}`, proposal: "xp-2", action: "apply" });
+    const mate = await personEditCore(ctx, MATE as any, "projects_calls", { op: "edit", id: "ex-callers-call-1", text: "A call card's facts are true for brokers." });
+    expect(mate).toMatchObject({ status: "open" });
+    const settled = await personEditCore(ctx, OWNER as any, "projects_calls", { op: "edit", id: "ex-callers-call-1", note: "", why: "Every caller, ruled on the Oct 6 call" });
+    expect(settled).toMatchObject({ status: "applied", version: 3 });
+    const line = (await run(show, ctx, scope())).doc.items.find((e: any) => e.id === "ex-callers-call-1");
+    expect(line.note).toBeUndefined();
+    expect(line.citations.at(-1)).toMatchObject({ kind: "person", ref: OWNER, quote: "Every caller, ruled on the Oct 6 call" });
+  });
+
+  test("a line added by hand keeps the source the person named beside their own words", async () => {
+    const ctx = await seeded();
+    await personEditCore(ctx, OWNER as any, "projects_calls", { op: "add", part: "Calls", text: "A callback names who asked for it.", source: { kind: "task", ref: "ct-9", quote: "say who asked", when: "2026-10-05" } });
+    const line = (await run(show, ctx, scope())).doc.items.at(-1);
+    expect(line.citations.map((c: any) => c.kind)).toEqual(["person", "task"]);
+  });
+
+  test("the overview lists every project's document with its breaks, the most broken lines first", async () => {
+    const ctx = await seeded();
+    await ctx.db.insert("projects", { _id: "projects_empty", user_id: OWNER, team_id: TEAM, workspace: `team:${TEAM}`, title: "Billing", status: "active", created_at: 1, updated_at: 1 });
+    const rows = await run(overview, ctx, { team_id: TEAM });
+    const calls = rows.find((r: any) => r._id === "projects_calls");
+    expect(calls).toMatchObject({ workspace: `team:${TEAM}`, version: 1, active: 2, parts: 2, breaks7: 1, breaks30: 2, broken: 1, open_proposals: 0 });
+    expect(calls.most_broken).toEqual([{ id: "ex-callers-call-1", text: "A call card's facts are true.", part: "Calls", d7: 1, d30: 2 }]);
+    expect(rows.find((r: any) => r._id === "projects_empty")).toMatchObject({ version: 0, active: 0 });
+    expect(await run(overview, await makeCtxAs(ctx, OUTSIDER), { team_id: TEAM })).toEqual([]);
+  });
+});
+
+/** The same tables, read as another signed-in user. */
+function makeCtxAs(ctx: any, user: string) {
   return { ...ctx, auth: { async getUserIdentity() { return { subject: user }; } } };
 }

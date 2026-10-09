@@ -102,6 +102,10 @@ describe("resultPreview", () => {
   test("is the trimmed head of the output, 800 chars at most, and undefined when empty", () => {
     expect(resultPreview("  hi \n")).toBe("hi");
     expect(resultPreview("x".repeat(1000))).toHaveLength(800);
+    // A station script's closing JSON result is what its node shows.
+    expect(resultPreview('bun test v1\n(pass) one\n 1 pass\n{"green": true, "why": "repro.sh passes with the change"}\n')).toBe('{"green": true, "why": "repro.sh passes with the change"}');
+    expect(resultPreview('{"dissolved": "no_repro"}\nok Completed ct-1')).toBe('{"dissolved": "no_repro"}\nok Completed ct-1');
+    expect(resultPreview('log\n{"green": true}')).toBe('log\n{"green": true}');
     expect(resultPreview("   ")).toBeUndefined();
   });
 });
