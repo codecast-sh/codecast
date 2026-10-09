@@ -224,17 +224,23 @@ describe("describeDecision — why the account changed", () => {
   });
 })
 
-describe("recoveryModeOf — ask-first is the default", () => {
-  test("a machine that never chose asks before switching", () => {
-    expect(recoveryModeOf({})).toBe("ask");
+describe("recoveryModeOf — off is the default", () => {
+  test("a machine that never chose recovers nothing", () => {
+    expect(recoveryModeOf({})).toBe("off");
+    expect(recoveryModeOf({ cc_recovery_ask: false })).toBe("off");
   });
 
   test("an explicit auto-switch opt-in is kept", () => {
     expect(recoveryModeOf({ cc_auto_switch: true })).toBe("auto");
   });
 
-  test("turning asking off leaves same-account resume", () => {
-    expect(recoveryModeOf({ cc_recovery_ask: false })).toBe("resume");
+  test("an explicit resume opt-in is kept", () => {
+    expect(recoveryModeOf({ cc_auto_continue: true })).toBe("resume");
+    expect(recoveryModeOf({ cc_recovery_ask: false, cc_auto_continue: true })).toBe("resume");
+  });
+
+  test("an explicit ask opt-in is kept", () => {
+    expect(recoveryModeOf({ cc_recovery_ask: true, cc_auto_continue: true })).toBe("ask");
   });
 
   test("opting out of resume entirely is off, whatever the ask flag says", () => {

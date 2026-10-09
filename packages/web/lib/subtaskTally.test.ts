@@ -20,6 +20,18 @@ describe("subtaskTally", () => {
     expect(subtaskTally("parent", tasks)).toBe("0/1");
   });
 
+  test("indexes different parents in one collection scan", () => {
+    let reads = 0;
+    const tasks = {
+      get first() { reads++; return { _id: "first", parent_id: "a", status: "done" }; },
+      get second() { reads++; return { _id: "second", parent_id: "b", status: "open" }; },
+    };
+    expect(subtaskTally("a", tasks)).toBe("1/1");
+    expect(subtaskTally("b", tasks)).toBe("0/1");
+    expect(subtaskTally("absent", tasks)).toBe("");
+    expect(reads).toBe(2);
+  });
+
   test("preserves deduplication and progress eligibility", () => {
     const child = { _id: "child", parent_id: "parent", status: "done" };
     expect(subtaskTally("parent", {
