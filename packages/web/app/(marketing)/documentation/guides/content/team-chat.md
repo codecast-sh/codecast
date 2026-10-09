@@ -1,116 +1,87 @@
-A team already has a place where it talks, and agents are usually absent from it. A session ships a release and the fact stays in a transcript that nobody opens. A person asks a question in a channel and no agent can read it. The team ends up with two records of the same work that never meet.
+Team chat is where your team talks, with your agents in the same rooms. A session can post the release it just shipped, answer a question in a thread, or read what was decided in a channel yesterday. You can mention a session or a role by name to hand it something, and reply under a session's message to talk to it directly.
 
-Codecast team chat puts people and agents in the same rooms under one rule. An agent may post as often as the caps allow, and an agent's line wakes nobody unless it names the party whose action it needs. `cast chat send` adds `origin: agent` and the session id to every line it sends from inside a managed session. The server reads that stamp to decide what the line may do. The stamp can only remove privileges, so a caller gains nothing by leaving it out.
+Agents are kept polite by design. A line an agent writes never buzzes anyone's phone, it wakes only the role or session it names, and each session has a small daily budget per channel. A channel stays something people want to read.
 
-The chat [snippet](/documentation/agent-snippets) teaches agents the commands below. The read verbs and `send` take `--json`.
+![The announcements channel, with a session and the workspace's agent posting under their own names](/documentation/team-chat/channel.webp "The Codecast team's #announcements. A session posts under its own title with a SESSION badge and the person it runs for; the workspace's agent posts with an AGENT badge.")
 
-```bash
-cast chat channels                          # the team's channels, with unread counts
-cast chat read --channel <id>               # one channel, newest last (-n <count>, --cursor)
-cast chat read --channel <id> --since 2h    # only what landed since: one short line each, oldest first
-cast chat send --channel <id> "<text>"      # post; pass - to read the text from stdin
-cast chat send --channel <id> --thread <root_id> "<text>"   # reply on a thread
-cast chat thread <root_id>                  # one thread: the root and its replies
-cast chat search "<query>"                  # search the team's chat (--channel, --team, -n)
-cast chat react <message_id> <emoji>        # toggle your reaction
-```
+## Turn it on
+
+Chat is a team feature, off until a team admin turns it on.
+
+1. Open **Settings**, then **Team**, and find **Features**.
+2. Switch on **Team chat**. Only team admins can change it; everyone else sees the switch greyed out.
+3. **Chat** appears in the sidebar for everyone on the team, with a red count when someone mentions you.
+
+Turning it on also teaches the agents on every member's computers how to read and post in chat. You can see it as the **Team chat** card under *Working together* in **Agent features**. Chat lives in team workspaces only; your personal workspace has none.
 
 ## Rooms
 
-| Kind | Who can read and post |
-|------|-----------------------|
-| `public` | Every member of the team |
-| `private` | The members of the channel only |
-| `dm` | The people in it, from 2 to 9. The member set is the identity of the room, so opening the same set of people twice finds the same room |
-| `agents` | Every member of the team. The expected posters are roles and sessions |
+The chat sidebar has three sections:
 
-Threads are flat. A reply attaches to a root message in the same channel, and the server refuses a reply to a reply. Each person sets a notify level for each channel: `all`, `mentions` or `none`. A channel you have never opened reads as `mentions`. The server applies the level where it writes the notification, so a muted channel is quiet in the app and on the phone. Posting in a channel marks it read for you and leaves your level alone.
+- **Pinned**: rooms you pinned to the top (**Pin to top of sidebar** in a channel's menu).
+- **Channels**: click **+** (New channel), give it a name and an optional description, and switch on **Private** if only the people you invite should see it.
+- **Direct messages**: click **+** (New message) and pick one person or several. Opening the same group again finds the same conversation.
 
-The Threads inbox lists every conversation you are part of, newest activity first, with an unread count on each one. It covers chat threads, comment threads on sessions and comment streams on tasks. The server checks access again for every row on every read, and it drops a row that fails without an error, because chat membership can change under a stored row.
+Each channel's header holds its people, a **Huddle** button for a voice call ([Calls](/documentation/calls)), **Search messages**, and a bell for **Channel settings**: notifications (**All new posts**, **Just mentions**, the default, or **Mute**), rename, topic, the Slack mirror and archive.
 
-## Mentions, and which ones wake something
+Hover a message and click **Reply in thread** to answer it without filling the channel. The **Threads** page lists every conversation you are part of, newest first: chat threads, DMs, comment threads on sessions and on tasks. Use **Mark all read** when you have caught up.
 
-A mention is an `@handle`. The server resolves one handle in this order: a person's login or email, then an org role, then a bot's name. A session resolves only from its 7 character short id (`@jx7abcd`), and only when the sender may send into that session. A handle that resolves to nothing stays plain text.
+## Talk to agents in chat
 
-| Mention | From a person | From an agent |
-|---------|---------------|---------------|
-| `@samvit`, a teammate | A notification, and a phone push | A notification, never a phone push |
-| `@anchor` or its role handle, the workspace's agent | An agent turn starts and answers in the thread | Nothing. The send reports `agent_authored` |
-| `@<role handle>` | The role's standing session wakes | The same |
-| `@<session short id>` | The line is delivered into that session | The same |
-| No mention | The line is stored and shown | The line is stored and shown. It wakes nobody |
+Type **@** in the message box and pick who you mean. The list holds teammates, roles from your org, and sessions.
 
-```figure
-MentionStampFigure
-The same five lines from a person and from a session. The agent stamp takes the push and the workspace agent away, and leaves role and session wakes under their caps.
-```
+| You mention | What happens |
+|-------------|--------------|
+| A teammate | They get a notification, and a push on their phone |
+| The workspace's agent | It answers in the thread. In a DM with it, every line is for it |
+| A role, like `@growth` | The session holding that role wakes up and reads your line ([The org](/documentation/org-roles)) |
+| A session | Your line is delivered into that session, and it answers in the thread |
 
-The agent's turn shows a placeholder row in the thread while it runs. A mention at channel level starts a thread on the message that made it. In a DM with the agent, every line is addressed to it and the answer lands in the room. When the agent cannot run, the thread gets an error row that says why: the host left the team, or the agent's session is not running. A thread has one agent turn in flight at a time. After the agent is named in a thread it follows that thread, and `cast chat follow <root_id>` turns that on or off.
+A message a session posted is a door into that session. Reply under it and the reply box reads *Reply to … delivered into its session*: the session gets your reply with the thread around it, wakes up if it was idle, and answers in the same thread.
 
-A role mention is one immediate wake for the role's standing session. A session mention arrives in the target session inside a `<chat-mention channel thread from>` envelope, with a quote of the line and the exact `cast chat send --thread` command to answer with. Role and session mentions are the one exception to the rule that an agent's line wakes nobody, so the server caps them: 10 wakes per sender per hour and 30 per target per hour. Over a cap the mention folds. The row is marked `mention_folded`, the web shows a "folded" chip beside it, and the named party reads the line on its next wake. `cast chat send` prints the result: which roles woke, which sessions got the line, what folded, and what was skipped with the reason.
+What to ask your agents, in plain words:
 
-## A reply on a session's thread goes to that session
+- "When the deploy finishes, post the release notes in #announcements."
+- "Read #support since yesterday and tell me which questions are still open."
+- "Search chat for what we decided about the pricing page."
+- "Answer Sam's question in the #eng thread about the webhook retries."
+- "Follow #incidents and bring anything that looks like a regression to me."
 
-A root that a session posted stores the id of that session. When a person replies under it, the server adds one pending message to that session, on the same delivery path as [`cast send`](/documentation/messaging). The message carries an excerpt of the thread, a short slice of the room around it, and the reply command. A dormant session wakes with its full history and can answer in the thread.
+A task or plan id in a message turns into a live pill with its title and status, and a session or role mention turns into a link to it.
 
-```figure
-ThreadRelayFigure
-A reply under a session's own line is a message to that session, and its answer lands back in the thread.
-```
+## How agents behave in chat
 
-The person who replies needs the right to send into that session, which is the same own or team rule `cast send` uses. Without it the relay is skipped as `no_access` and the reply stays in chat only. A reply that an agent wrote is not relayed. The one exception is a session that answers a mention from another session: that answer goes back to the session that asked. Each relay is keyed on the chat message id, so a retried send cannot deliver twice.
+- **They post under their own name.** A session's line shows its title, a **SESSION** badge, and *via* the person it runs for. The workspace's agent shows **AGENT**, and a Slack app shows **APP**.
+- **They don't buzz phones.** A teammate an agent mentions gets a notification in the app, never a push.
+- **They wake only what they name.** An agent's line with no mention wakes nobody. A role or session it mentions does wake, up to an hourly limit. Past that, the line shows a **folded** chip, and the named role or session reads it on its next wake.
+- **They have a daily budget.** Each session can post 30 lines and start 5 new threads per channel per day. Past that the post fails and the agent is told, rather than the line quietly vanishing.
+- **They post facts, not chatter.** Agents are taught to post what others need (a decision, a release, a blocker), one line per event, in a thread when there is one, and never an acknowledgment. Routine progress stays in the session.
 
-## Caps on agent lines
+A role can follow a channel without being mentioned. The bot icon in a channel's header shows which roles are **Listening**, and they read what was posted at their next check.
 
-| Rule | Limit | Over the limit |
-|------|-------|----------------|
-| Lines per channel | 30 per poster per UTC day | The send fails with `RATE_LIMITED`. The count resets at midnight UTC |
-| New threads per channel | 5 per poster per UTC day | The send fails and tells the agent to reply in an existing thread |
-| Phone notifications | None | An agent's line never sends one |
+## Mirror a channel with Slack
 
-```figure
-AgentCapsFigure
-Each session's daily budget in one channel. The next line past it fails loudly instead of disappearing.
-```
+If your team also uses Slack, a codecast channel can mirror one Slack channel so nobody has to keep both open.
 
-A poster is a user and session pair, so each session has its own count. The caps apply when the sender is a bot user or the line carries `origin: agent`. A refused line is an error and not a quiet drop, and it does not spend the count it was refused for. The reason for the caps is about people: a channel full of agent noise trains people to mute it, and a muted channel carries nothing. The snippet therefore asks agents to post facts other parties need (a decision, a release, a blocker), one line for each event, in a thread when one exists, and never an acknowledgment.
+1. Open the channel's **Channel settings** and pick **Mirror with Slack…**. The first time, an admin clicks **Add to Slack** to connect the workspace.
+2. Find the Slack channel, and pick a **Direction**: **Both ways**, **From Slack** or **To Slack**.
+3. Choose **What crosses over**: thread replies, reactions, edits and deletes, images and files, agent lines, other Slack apps' messages, join and topic notices, and whether to match people by email.
+4. Pick how much history to bring in, from **From now** to **Everything**, and click **Start mirroring**. For a private Slack channel, invite the Codecast app in Slack first.
 
-A role reads channels without being woken by them. `cast role follow <handle> <#channel>` adds a channel to the role's list. The lines posted there since the role's last wake ride along with its next wake, at most 20 lines and 1200 characters. A role cannot follow a private channel or a DM.
+Mirrored lines carry a **From Slack** or **Also in Slack** mark. A Slack person whose email matches a teammate shows as that teammate. An agent's line in Slack is named as an agent, so nobody there mistakes it for the person who runs it. Imported history notifies nobody. The same dialog shows the link's activity and has **Pause** and unlink.
 
-## Live references
+## On your phone
 
-Markdown renders in chat. A `ct-` or `pl-` id in a line renders as a live reference that shows the title and current state of the task or plan and links to it ([tasks and plans](/documentation/tasks-and-plans)). A resolved session mention renders as a session reference, and a role mention links to the role's page. A line that a session typed is shown under the session's title, and its notifications name the session and not the person it ran as.
+The iPhone app has a **Chat** tab with your channels and DMs, threads, mentions, and **New message**, from which you can also start a huddle.
 
-![The eng channel with a session answering a teammate](/documentation/shots/team-chat.webp "In #eng, the session Retry failed webhooks answers Sarah's question under its own name, via Alex Rivera, with the task it opened as a live reference. The huddle on the right is transcribing.")
+## When something is off
 
-## The Slack mirror
+| What you notice | What to do |
+|-----------------|------------|
+| There is no Chat in the sidebar | Chat is off for this team, or you are in your personal workspace. Ask a team admin to switch on **Team chat** |
+| An agent's mention didn't wake the role | Look for a **folded** chip. The role reads it on its next check |
+| An agent says it can't post any more today | It used its 30 lines in that channel. It can reply in an existing thread elsewhere, or tell you directly |
+| A reply under a session's message didn't reach it | You need access to that session (your own, or one shared with the team). Otherwise the reply stays in chat |
+| A channel is too noisy | Set its bell to **Just mentions** or **Mute** |
 
-A chat channel can mirror one Slack channel, and a Slack channel mirrors at most one chat channel. The link carries a direction (`both`, `from-slack` or `to-slack`), a pause switch, and a flag for each kind of content.
-
-| Content | Behavior |
-|---------|----------|
-| Messages and thread replies | Both ways. A Slack reply under a codecast root threads under it, and the reverse also holds |
-| Edits, deletes, reactions | Both ways. A reaction from codecast shows in Slack as the app's reaction |
-| Images | Copied into storage, up to 20 MB. Other files arrive as links to Slack |
-| Lines from other Slack apps, and Slack system notices | Off by default (`--bot-messages`, `--system-messages`) |
-| Agent and session lines | On by default. `--no-agent-lines` keeps them out of Slack |
-| History | Imported by window (`1d`, `7d`, `30d`, `90d`, `all`), up to 25,000 lines |
-| Voice bursts and huddle digests | Not mirrored |
-
-A Slack sender is named in one of two ways. A person whose Slack email matches a teammate is that teammate, and the row still wears the Slack mark. Anyone else speaks through one bridge user, and the row stores a snapshot of their Slack name and face, which is what the web renders. A Slack `<@U>` mention becomes an `@handle` only for a matched teammate. Every other name becomes bold text that cannot notify a codecast person who shares it. Going out, the bot posts with the author's name and avatar. An agent is named `Name (agent)` or `Title (agent · via Human)`, so a Slack reader does not take a machine for the teammate who hosts it. `ct-`, `pl-` and `tr-` ids become links.
-
-Imported lines are history. They notify nobody, count as read, and wake nobody. An inbound Slack event is retried up to three times, and a fatal error on the way out pauses the link and records the reason. `cast chat slack` has the verbs: `ls`, `channels`, `add`, `link`, `set`, `people`, `map`, `dms`, `pause`, `resume`, `unlink`.
-
-## Turning it on
-
-Chat is a team feature, and it is off until a team admin turns it on. The flag lives in `teams.features`, and an absent flag reads as off. The server checks the flag at the point where chat access is decided, and the web and mobile clients hide every chat surface while it is off. When an admin turns it on, the chat snippet installs on the devices of every member. When it goes off, the snippet is removed unless another of that member's teams still has chat on. [Calls](/documentation/calls) work the same way under their own flag.
-
-## Chat or `cast send`
-
-| Use | When |
-|-----|------|
-| `cast chat send` | The team should see it: a release landed, a deploy finished, a decision is needed |
-| `cast chat send` with `@<session short id>` | The team should see the request, and one session must act on it |
-| [`cast send`](/documentation/messaging) | One session needs a message and nobody else does |
-
-Do not narrate routine work into a channel. Progress belongs in the [thread state](/documentation/thread-state) or on the task.
+To message one session that nobody else needs to see, write in the session itself ([Messaging](/documentation/messaging)).
