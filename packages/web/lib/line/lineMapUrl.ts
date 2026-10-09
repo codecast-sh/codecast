@@ -1,7 +1,8 @@
 // The map's state lives in its URL, so any panel, window or trace on it is a
 // link (docs/architecture/line-map.md LX1, LX3): `?node=<id>` or `?edge=<id>`
 // opens a panel, `?window=24h|7d|30d` picks the window, `?trace=<ref>` draws
-// one thing's path. `node=line` is the panel for the whole line's settings,
+// one thing's path, `?graph=<key>` picks which of the project's graphs is
+// drawn (lineGraphs projectGraphs). `node=line` is the panel for the whole line's settings,
 // and `section=` scrolls it, which is where /line/settings lands.
 import { LINE_MAP_WINDOWS, type LineMapWindow } from "./lineMap";
 
@@ -9,7 +10,7 @@ import { LINE_MAP_WINDOWS, type LineMapWindow } from "./lineMap";
 export const LINE_SETTINGS_NODE = "line";
 export const DEFAULT_MAP_WINDOW: LineMapWindow = "7d";
 
-export type LineMapState = { node: string | null; edge: string | null; window: LineMapWindow; trace: string | null; section: string | null };
+export type LineMapState = { node: string | null; edge: string | null; window: LineMapWindow; trace: string | null; section: string | null; graph: string | null };
 
 type Search = { get(key: string): string | null } | null | undefined;
 
@@ -25,6 +26,7 @@ export function readLineMapState(search: Search): LineMapState {
     window: isWindow(w) ? w : DEFAULT_MAP_WINDOW,
     trace: search?.get("trace") || null,
     section: search?.get("section") || null,
+    graph: search?.get("graph") || null,
   };
 }
 

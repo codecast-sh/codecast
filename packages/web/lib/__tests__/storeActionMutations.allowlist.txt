@@ -26,7 +26,6 @@ components/CollabComposer.tsx 1
 components/ConversationView.tsx 2
 components/DesktopProvider.tsx 1
 components/GlobalSessionPanel.tsx 1
-components/NewSnippetsBanner.tsx 1
 components/PlanDetailPanel.tsx 1
 components/TriggerContextPanel.tsx 1
 components/WatchButton.tsx 1
@@ -37,7 +36,6 @@ components/chat/SlackPeopleDialog.tsx 1
 components/decisions/DecisionDocument.tsx 1
 components/pr/PRActions.tsx 1
 components/settings/OtherAddresses.tsx 2
-components/settings/useDeviceSettingsPanel.ts 1
 components/team/InvitePanel.tsx 2
 hooks/useBulkMoveSessions.ts 1
 hooks/useCallSync.ts 1
