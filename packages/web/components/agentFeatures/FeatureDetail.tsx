@@ -23,12 +23,15 @@ export function FeatureDialog({
   slug,
   feature,
   control,
+  setup,
   onClose,
 }: {
   slug: string | null;
   /** The catalog entry; null for Stable context, which is not one. */
   feature: SnippetDescriptor | null;
   control: React.ReactNode;
+  /** The one-time step on the machine a feature needs before agents can use it. */
+  setup?: React.ReactNode;
   onClose: () => void;
 }) {
   const e = slug ? FEATURE_EXPLAINERS[slug] : undefined;
@@ -59,6 +62,8 @@ export function FeatureDialog({
 
         <div className="scrollbar-auto min-h-0 flex-1 overflow-y-auto">
           <FeatureVignette slug={slug} className="h-[210px] rounded-none border-0 border-b border-sol-border/50 text-[11px]" />
+
+          {setup && <div className="border-b border-sol-border/50 px-6 py-5">{setup}</div>}
 
           <div className="grid gap-x-8 gap-y-6 px-6 py-6 sm:grid-cols-2">
             <ExplainList title="What you'll see" items={e.youSee} dot={tone.dot} />

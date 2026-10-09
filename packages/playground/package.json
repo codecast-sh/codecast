@@ -7,7 +7,9 @@
     "build": "vite build",
     "convex": "convex dev",
     "test": "bun test",
-    "build:sdk": "bun scripts/build-sdk.ts"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:sdk": "bun scripts/build-sdk.ts",
+    "deploy": "bun scripts/deploy.ts"
   },
   "dependencies": {
     "@codecast/shared": "workspace:*",
