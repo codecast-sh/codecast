@@ -12,6 +12,7 @@ import {
   blockersHoldingBack,
   dependencyLoopChecker,
   frontierOrder,
+  GRAPH_LINK_CAP,
   isTerminalTaskStatus,
   parentStatusLookup,
   parseBlockerRef,
@@ -85,10 +86,6 @@ export async function graphOutside(ctx: ReadCtx, page: Doc<"tasks">[]): Promise<
   }
   return await readInWorkspace(ctx, referrers);
 }
-
-/** How many `blocks` and how many `related` tasks one task page or `cast task
- *  show` reads. Its blockers are read whole: readiness needs every one. */
-export const GRAPH_LINK_CAP = 50;
 
 /**
  * The tasks one task's graph names (TG5, TG12): its blockers, what it
@@ -293,6 +290,11 @@ export function storedGraphRefs(
  * and stamp updated_at. A blocked_by change is the task's own history (TG11);
  * blocks only mirrors other rows' blocked_by and records none. `task` is the
  * row as read before the write; a `next` it already holds writes nothing.
+ *
+ * The one exception the spec sanctions (TG11) is `tasks.update`, which
+ * overwrites both arrays inside the single bag it patches and records their
+ * history itself (its `trackFields`). A step added here is missed by
+ * `cast task update --blocked-by`/`--blocks` unless it is added there too.
  */
 export async function writeEdges(
   ctx: Pick<MutationCtx, "db">,
@@ -303,9 +305,43 @@ export async function writeEdges(
   now = Date.now(),
 ): Promise<void> {
   const prev = task[field] ?? [];
-  if (prev.length === next.length && prev.every((r, i) => r === next[i])) return;
+  if (sameRefs(prev, next)) return;
   await ctx.db.patch(task._id, { [field]: next, updated_at: now });
   if (field === "blocked_by") await recordTaskChange(ctx, task._id, by, [["blocked_by", prev, next]], now);
+}
+
+const sameRefs = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((r, i) => r === b[i]);
+
+/** The link fields and what each one holds, for `writeLink`. */
+type LinkFields = { related: string[]; found_during: string | undefined; superseded_by: string | undefined };
+
+/**
+ * The one writer of a task's links that do not block (TG5): set `related`, or
+ * set or clear `found_during` or `superseded_by`, stamp updated_at and record
+ * the change (TG11). `task` is the row as read before the write; a `next` it
+ * already holds writes nothing, so a caller passes what it wants stored
+ * rather than checking first.
+ *
+ * One exception, as for `writeEdges`: `tasks.update` sets `found_during` in
+ * the single bag it patches and records that history itself, so a step added
+ * here is missed by `cast task update --found-during`. `related` and
+ * `superseded_by` have no second writer.
+ */
+export async function writeLink<F extends keyof LinkFields>(
+  ctx: Pick<MutationCtx, "db">,
+  task: Pick<Doc<"tasks">, "_id" | "related" | "found_during" | "superseded_by">,
+  field: F,
+  next: LinkFields[F],
+  by: TaskChangeBy,
+  now = Date.now(),
+): Promise<void> {
+  const prev = task[field];
+  const same = field === "related"
+    ? sameRefs((prev as string[]) ?? [], (next as string[]) ?? [])
+    : (prev ?? "") === (next ?? "");
+  if (same) return;
+  await ctx.db.patch(task._id, { [field]: next, updated_at: now });
+  await recordTaskChange(ctx, task._id, by, [[field, prev, next]], now);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,8 +365,7 @@ async function walkUpstream(ctx: ReadCtx, start: DepNode, workspace: AuthorizedW
   const nodes = new Map<string, DepNode>([[start.short_id, start]]);
   const looked = new Set<string>();
   for (;;) {
-    const { shortIds, ids } = blockerRefs(nodes.values());
-    const refs = [...shortIds, ...ids].filter((r) => !looked.has(r));
+    const refs = blockerRefs(nodes.values()).filter((r) => !looked.has(r));
     if (!refs.length) return nodes;
     if (nodes.size >= LOOP_WALK_CAP) {
       throw new Error(`Cannot check ${start.short_id}'s dependencies for a loop: more than ${LOOP_WALK_CAP} open tasks wait behind it.`);
@@ -352,6 +387,38 @@ export async function openUpstream(ctx: ReadCtx, task: Doc<"tasks">, workspace: 
   const nodes = await walkUpstream(ctx, depNode(task), workspace);
   nodes.delete(task.short_id);
   return new Set(nodes.keys());
+}
+
+/**
+ * The stored blockers of `task` whose edge is part of a loop, each with the
+ * error naming the path, judged among the open tasks of `workspace`. An edge
+ * is checked when it is written (assertDependencyEdges), but only against
+ * open tasks: an edge through a done or dropped task holds nothing back, so
+ * it is accepted, and the moment that task leaves a terminal status the loop
+ * is live and holds every task in it for good. Every loop through `task` runs
+ * through one of its own `blocked_by` edges, so the edges named here break all
+ * of them when they are cut (taskLinks cutReopenedLoops). A graph too large to
+ * walk whole (walkUpstream's cap) names none: nothing can be proved about
+ * those edges, and a reopen is not a write that may fail.
+ */
+export async function loopedBlockers(
+  ctx: ReadCtx,
+  task: Doc<"tasks">,
+  workspace: AuthorizedWorkspace,
+): Promise<{ ref: string; error: string }[]> {
+  const refs = task.blocked_by ?? [];
+  if (!refs.length || !openIn(workspace)(task)) return [];
+  let nodes: Map<string, DepNode>;
+  try {
+    nodes = await walkUpstream(ctx, depNode(task), workspace);
+  } catch {
+    return [];
+  }
+  const loopError = dependencyLoopChecker(nodes.values());
+  return refs.flatMap((ref) => {
+    const error = loopError(task.short_id, ref);
+    return error ? [{ ref, error }] : [];
+  });
 }
 
 /**
