@@ -117,7 +117,8 @@ function StepRow({ step: s }: { step: ReportStep }) {
   return (
     <li className="flex items-baseline gap-2 text-[12.5px] min-w-0" data-run-step={s.id} data-step-state={s.state}>
       <Icon className={cn("w-3.5 h-3.5 shrink-0 self-center", mark.cls)} />
-      <span className="hidden sm:inline-block w-20 shrink-0 truncate text-[11px] text-sol-text-dim/60" data-step-label>{s.label}</span>
+      {/* Wide enough for a step's whole plain name; a longer one wraps rather than cuts. */}
+      <span className="hidden sm:inline-block w-32 shrink-0 break-words leading-snug text-[11px] text-sol-text-dim/60" data-step-label>{s.label}</span>
       {s.href ? (
         <Link href={s.href} className={cn("group min-w-0 truncate hover:text-sol-blue hover:underline decoration-sol-blue/40 underline-offset-2", tone)} title={s.hrefTitle} data-step-link>
           {s.result}

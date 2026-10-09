@@ -54,11 +54,14 @@ import {
   resolveAssigneeToUserId,
   resolveParentTask,
 } from "./tasks";
+import { afterStatusEdges } from "./taskLinks";
+import { recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
 import { verifyApiToken } from "./apiTokens";
 import { installationCoversRepo } from "./githubApp";
 import { connectionForWork } from "./oauthConnectors";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
+import { mintProjectShortId } from "./lib/projectShortId";
 
 /** A provider issue normalized to one shape before it touches a task (S2). */
 export const normalizedIssueValidator = v.object({
@@ -214,6 +217,10 @@ function externalFor(
   };
 }
 
+/** A provider's change, as the task's field history records it (TG11). */
+const SYNC: TaskChangeBy = { actor_type: "system" };
+
+/** A sync event on the task's history; field changes go through recordTaskChange. */
 async function history(
   ctx: any,
   taskId: Id<"tasks">,
@@ -597,7 +604,7 @@ async function linkParent(
   }
   const now = Date.now();
   await ctx.db.patch(task._id, { parent_id: want ? want._id : undefined, updated_at: now });
-  await history(ctx, task._id, "updated", "parent", task.parent_id ?? "", want?._id ?? "");
+  await recordTaskChange(ctx, task._id, SYNC, [["parent", task.parent_id, want?._id]], now);
   await reconcilePlanMembership(ctx, task._id, task.plan_id, !!want);
   return "moved";
 }
@@ -682,16 +689,17 @@ async function updateTaskFromIssue(
   // the old category); the same rule every status write in tasks.ts applies.
   if (diff.status !== undefined && diff.status !== task.status) patch.status_id = undefined;
 
-  for (const field of ["status", "title", "assignee", "priority"] as const) {
-    if (diff[field] === undefined) continue;
-    await history(ctx, task._id, "updated", field, task[field] ?? "", diff[field] ?? "");
-  }
-
+  const fields = (["status", "title", "assignee", "priority"] as const).filter((f) => diff[f] !== undefined);
+  await recordTaskChange(ctx, task._id, SYNC, fields.map((f): TaskFieldChange => [f, task[f], diff[f]]), now);
   await ctx.db.patch(task._id, patch);
 
   if (diff.status && task.plan_id) {
     await recalcPlanProgress(ctx, task.plan_id, task._id, diff.status);
   }
+  // A close on the provider releases the tasks it blocked (task-graph.md TG2),
+  // a dropped duplicate hands them to its canonical and a reopen takes back
+  // what a supersede moved (TG5).
+  await afterStatusEdges(ctx, task, diff.status);
   return diff;
 }
 
@@ -1188,7 +1196,9 @@ export const newTaskPushContext = internalQuery({
   args: { task_id: v.id("tasks") },
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.task_id);
-    if (!task || task.external || !task.project_id) return null;
+    // Ephemeral bookkeeping (task-graph.md TG9) never becomes a provider
+    // issue: outsiders would see it, and codecast cannot take it back.
+    if (!task || task.external || task.ephemeral || !task.project_id) return null;
     const source = await ctx.db
       .query("issue_sync_sources")
       .withIndex("by_project", (q: any) => q.eq("project_id", task.project_id))
@@ -1522,7 +1532,7 @@ async function addSourceFor(
     // No project named: the imported container gets one of its own, so the
     // tasks land somewhere a person can find them (S1.3).
     const projectId = await db.insert("projects", {
-      short_id: `pj-${now.toString(36)}`,
+      short_id: await mintProjectShortId(ctx, now),
       title: args.name,
       description: `Imported from ${args.provider}`,
       status: "active",
