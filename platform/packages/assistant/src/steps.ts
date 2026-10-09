@@ -143,6 +143,9 @@ type Phrase = (input: Record<string, any>, result: ToolResultLike | undefined) =
 
 // The assistant's tools by what they do. A name matches the first rule whose
 // pattern it fits.
+/** Tools that read a web page. */
+const PAGE_READ = /fetch|read_?page|browse|open_?url|web_?read/i;
+
 const PHRASES: Array<[RegExp, Phrase]> = [
   [/^suggest_reply$|(suggest|write).*reply/i, () => ["Wrote a reply in your voice", "write a reply in your voice"]],
   [/summar(y|ize).*(thread|mail|email)/i, () => ["Summed up an email", "sum up an email"]],
@@ -180,7 +183,7 @@ const PHRASES: Array<[RegExp, Phrase]> = [
     const what = q ? ` for ${q}` : "";
     return [`Searched the web${what}`, `search the web${what}`];
   }],
-  [/fetch|read_?page|browse|open_?url|web_?read/i, (i) => {
+  [PAGE_READ, (i) => {
     const host = hostOf(i.url);
     const what = host ? `a page on ${host}` : "a web page";
     return [`Read ${what}`, `read ${what}`];
@@ -229,11 +232,12 @@ export function stepOutcome(result?: ToolResultLike): StepOutcome {
 }
 
 /** A result's words, whether stored as text, as JSON text, or as the
- *  engine's content blocks. */
-function resultText(raw: unknown): string {
+ *  engine's content blocks. Blocks join on a line break, so a list one
+ *  block ends with (a search's sources) keeps its lines. */
+export function resultText(raw: unknown): string {
   const v = parsedObject(raw) ?? raw;
   if (typeof v === "string") return v;
-  if (Array.isArray(v)) return v.map((b) => (b && typeof b === "object" && typeof (b as any).text === "string" ? (b as any).text : typeof b === "string" ? b : "")).join(" ");
+  if (Array.isArray(v)) return v.map((b) => (b && typeof b === "object" && typeof (b as any).text === "string" ? (b as any).text : typeof b === "string" ? b : "")).join("\n");
   return typeof raw === "string" ? raw : "";
 }
 
@@ -275,7 +279,8 @@ export function stepText(call: ToolCallLike, result?: ToolResultLike, opts: { as
     case "pending":
       return opts.asking ? `Waiting for your go-ahead to ${todo}` : stepOngoing(call);
     case "declined":
-      return `Didn't ${todo} (you said no)`;
+      // The card's no reads "Not now", so the receipt repeats that verb.
+      return `Didn't ${todo} (you said not now)`;
     case "not_run":
       return `Didn't ${todo}`;
     case "failed":
@@ -297,6 +302,17 @@ function phrased(call: ToolCallLike, result?: ToolResultLike): Words | null {
 export function stepAsk(call: ToolCallLike): string | null {
   const words = phrased(call);
   return words ? words[1][0].toUpperCase() + words[1].slice(1) : null;
+}
+
+/** Why a call that looks harmless still asks, for the card to say under
+ *  its question. Reading a page sends nothing, but a page the person did not
+ *  name came from a search or another page, and opening it could carry their
+ *  data to that site (web.ts pageAllowedWithoutAsking), so the card says
+ *  why it checks. Null for a call whose ask explains itself. */
+export function stepAskWhy(call: ToolCallLike): string | null {
+  return PAGE_READ.test(call.name ?? "")
+    ? "You didn't name this site, so I check with you before opening it."
+    : null;
 }
 
 /** How many steps a folded run shows by default. */

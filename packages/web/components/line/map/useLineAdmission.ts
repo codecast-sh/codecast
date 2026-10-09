@@ -53,11 +53,15 @@ export function useLineAdmission(projectId: string | null): {
     if (!projectId || !tree || !workspace || `${tree.workspace.kind}:${tree.workspace.id}` !== workspace) return { role: null, known: false };
     return { role: lineRoleOf(tree.roles, projectId), known: true };
   }, [sig, projectId, workspace]); // eslint-disable-line react-hooks/exhaustive-deps
-  const queue = useQueryNoThrow(api.orgLine.queue, role ? { role_id: role._id } : "skip").data;
+  const { data: queue, error: queueError } = useQueryNoThrow(api.orgLine.queue, role ? { role_id: role._id } : "skip");
   const admission = useMemo<LineAdmission | undefined>(() => {
     if (projectId === NO_PROJECT) return NO_PROJECT_ADMISSION;
     if (!known) return undefined;
     if (!role) return { role: null, on: false, slots: DEFAULT_LINE_CARDS_CAP, busy: null, hands: null, handsCap: null };
+    // Until the sweep's count arrives, whether starting is off everywhere is
+    // unknown: say nothing rather than name the wrong reason. A failed count
+    // still paints the role's own switch.
+    if (queue === undefined && !queueError) return undefined;
     const caps = role.caps;
     return {
       role: { id: role._id, handle: role.handle, paused: role.status !== "active" },
@@ -69,7 +73,7 @@ export function useLineAdmission(projectId: string | null): {
       hands: queue?.hands ?? null,
       handsCap: queue?.hands_cap ?? caps?.hands_per_day ?? DEFAULT_ROLE_CAPS.hands_per_day,
     };
-  }, [projectId, known, role, queue]);
+  }, [projectId, known, role, queue, queueError]);
 
   const setOn = useCallback((on: boolean) => {
     if (role) useInboxStore.getState().updateOrgRole(role._id, { trust: trustForSwitch(on) });
@@ -80,4 +84,38 @@ export function useLineAdmission(projectId: string | null): {
     useInboxStore.getState().updateOrgRole(role._id, { caps });
   }, [role]);
   return { admission, role, setOn, setSlots };
+}
+
+/** Every project's admission at once, for the overview of all lines: the
+ *  role whose area holds each, its switch and pause, and whether starting is
+ *  off everywhere (one sweep count says it for all). Slots and hands are left
+ *  unknown here: a project's own line reads them. */
+export function useLineAdmissions(projects: ReadonlyArray<{ _id: string; workspace?: string | null }>): ReadonlyMap<string, LineAdmission> {
+  useSyncOrgTreeFeeder();
+  const sig = useInboxStore((s) => {
+    const t = s.orgTree;
+    return t ? `${t.workspace.kind}:${t.workspace.id}\n${t.roles.map(roleSig).join("\n")}` : "";
+  });
+  const roles = useMemo(() => {
+    const tree = useInboxStore.getState().orgTree;
+    if (!tree) return null;
+    const ws = `${tree.workspace.kind}:${tree.workspace.id}`;
+    const out = new Map<string, OrgRole | null>();
+    for (const p of projects) if (p.workspace === ws) out.set(p._id, lineRoleOf(tree.roles, p._id));
+    return out;
+  }, [sig, projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  const any = roles ? [...roles.values()].find((r): r is OrgRole => !!r) : undefined;
+  const queue = useQueryNoThrow(api.orgLine.queue, any ? { role_id: any._id } : "skip").data;
+  return useMemo(() => {
+    const out = new Map<string, LineAdmission>();
+    // Until the sweep's count arrives, whether starting is off everywhere is
+    // unknown: say nothing rather than name the wrong reason.
+    if (any && !queue) return out;
+    for (const [id, role] of roles ?? []) {
+      out.set(id, role
+        ? { role: { id: role._id, handle: role.handle, paused: role.status !== "active" }, on: autonomyOn(role.trust), sweepOff: queue?.sweep_on === false, slots: role.caps?.cards ?? DEFAULT_LINE_CARDS_CAP, busy: null, hands: null, handsCap: null }
+        : { role: null, on: false, slots: DEFAULT_LINE_CARDS_CAP, busy: null, hands: null, handsCap: null });
+    }
+    return out;
+  }, [roles, queue]);
 }
