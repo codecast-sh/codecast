@@ -380,7 +380,10 @@ async function resolveIfDone(ctx: Ctx, proposal: ProposalRow, now: number): Prom
 }
 
 // Proposals posted before S24 carry a queue card; once the proposal is
-// settled, that card leaves the queue.
+// settled, that card leaves the queue. Withdrawing the card schedules the
+// settle of the task waits on it (task-graph.md TG2), so every caller runs in
+// a mutation; the module's Ctx cannot say so, because the same structural
+// type serves this file's read paths.
 async function clearDecision(ctx: Ctx, proposal: ProposalRow, now: number): Promise<void> {
   if (!proposal.decision_id) return;
   const d = await ctx.db.get(proposal.decision_id);

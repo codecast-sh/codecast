@@ -20,6 +20,7 @@ import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
+import { parseWorkspaceKey } from "./resolveWorkspace.js";
 import { scopeFor } from "./signalCommand.js";
 import { GROUP_KINDS, GROUP_STATUSES, bucketSeries } from "@codecast/shared/contracts/ingest";
 import { fenceProductText } from "@codecast/shared/contracts";
@@ -194,7 +195,8 @@ export async function watchEvents(
  */
 export function groupScopeProblem(group: Pick<GroupRow, "short_id" | "workspace">, scope: { workspace?: string; team_id?: string; [k: string]: unknown }, team: string): string | null {
   if (!scope.workspace || !group.workspace) return null;
-  const inScope = scope.workspace === "team" ? group.workspace === `team:${scope.team_id}` : group.workspace.startsWith("user:");
+  const ws = parseWorkspaceKey(group.workspace);
+  const inScope = scope.workspace === "team" ? ws?.kind === "team" && ws.teamId === scope.team_id : ws?.kind === "personal";
   if (inScope) return null;
   const named = scope.workspace === "team" ? `the ${team} workspace` : "your personal workspace";
   return `${group.short_id} is not in ${named}. eg-N names one group everywhere; drop --team to reach it where it lives.`;

@@ -147,6 +147,12 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     row("project", "Move to project…", Folder, "j"),
     row("parent", "Set parent…", CornerDownRight, "t"),
     row("blocker", "Add blocker…", Hourglass, "b"),
+    // The same edge from the other side (TG12), so making another task wait on
+    // this one never means opening that task — from a board row either. Worded
+    // as the act, not as the "Blocks" row's label, which is what tells the
+    // direction on the task page. `found_during` is left to the task page: it
+    // corrects a link the server guessed, not a routine move from a row.
+    row("blocks", "Make a task wait on this…", Hourglass),
     row("related", "Link related task…", Link2, "k"),
     ...(targets.some(t => t.parent_id) ? [row("remove_parent", "Remove parent", CornerDownRight)] : []),
     row("agent_run", "Start agent run…", Bot, "g"),

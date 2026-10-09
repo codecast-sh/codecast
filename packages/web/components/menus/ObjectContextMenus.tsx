@@ -218,6 +218,9 @@ export function TaskMenuItems({
       <CtxItem icon={Tag} onSelect={() => openPaletteMode(tasks, "task", "labels")}>Labels…</CtxItem>
       <CtxItem icon={CornerDownRight} onSelect={() => openPaletteMode(tasks, "task", "parent")}>Set parent…</CtxItem>
       <CtxItem icon={Hourglass} onSelect={() => openPaletteMode(tasks, "task", "blocker")}>Add blocker…</CtxItem>
+      {/* The same edge from the other side (TG12): from a row too, making
+          another task wait on this one never means opening that task. */}
+      <CtxItem icon={Hourglass} onSelect={() => openPaletteMode(tasks, "task", "blocks")}>Make a task wait on this…</CtxItem>
       <CtxItem icon={Link2} onSelect={() => openPaletteMode(tasks, "task", "related")}>Link related task…</CtxItem>
       {hasParent && (
         <CtxItem
