@@ -97,7 +97,7 @@ test("the map draws every node and edge of the model, wider where more crossed, 
   expect(host.querySelector("[data-map-mark='implement']")?.textContent).toContain("past three times the usual");
   // A node says what is here now (the big number) and what passed, in words; an empty node says empty.
   expect(host.querySelector("[data-map-node='implement'] .lmap-here")?.textContent).toBe("1");
-  expect(host.querySelector("[data-map-node='implement'] .lmap-through")?.textContent).toMatch(/^\d+ through$/);
+  expect(host.querySelector("[data-map-node='implement'] .lmap-through")?.textContent).toMatch(/^\d+ runs?$/);
   const empty = [...host.querySelectorAll<HTMLElement>("[data-map-node][data-empty='true']")];
   // An end is a terminal: it has had none yet, not an empty box.
   for (const n of empty) expect(n.querySelector(".lmap-empty-word")?.textContent).toBe(n.dataset.kind === "end" ? "none yet" : "empty");
@@ -142,6 +142,28 @@ test("the line page draws the project's map; ?node opens that node's panel with 
   await act(async () => { ask.click(); });
   expect(panel.querySelector("[data-change-composer]")?.getAttribute("data-change-composer")).toBe("line:station:implement");
   await done();
+});
+
+test("a panel opens on the tab that has something to show, and names a shop-talk step in plain words with the file's label under it", async () => {
+  // Nothing sits at Verify now, but runs went through it: the panel opens on Through, never an empty Now.
+  search = new URLSearchParams("project=pr-1&window=30d&node=verify");
+  let m = await render(React.createElement(LinePage));
+  const verify = m.host.querySelector("[data-map-panel='verify']")!;
+  expect(verify.querySelector("[data-map-nav='through']")?.getAttribute("aria-selected")).toBe("true");
+  expect(verify.querySelector<HTMLElement>("[data-map-section='now']")?.hidden ?? true).toBe(true);
+  await m.done();
+  // Work sits at Build now: its panel opens on Now.
+  search = new URLSearchParams("project=pr-1&window=30d&node=implement");
+  m = await render(React.createElement(LinePage));
+  expect(m.host.querySelector("[data-map-panel='implement'] [data-map-nav='now']")?.getAttribute("aria-selected")).toBe("true");
+  await m.done();
+  search = new URLSearchParams("project=pr-1&window=30d&node=red");
+  m = await render(React.createElement(LinePage));
+  const red = m.host.querySelector("[data-map-panel='red']")!;
+  expect(red.querySelector("h2")?.textContent).toBe("Confirm the test fails");
+  expect(red.querySelector("[data-map-file-label]")?.textContent).toContain("Red");
+  expect(m.host.querySelector("[data-map-node='red'] .lmap-node-label")?.textContent).toBe("Confirm the test fails");
+  await m.done();
 });
 
 test("Esc closes the panel; a click on a node opens it; an item click traces it", async () => {
@@ -218,7 +240,10 @@ test("a panel open keeps the first column past the gutter and the open node's ne
     for (const node of ["causes", "signals"]) {
       search = new URLSearchParams(`project=pr-1&window=30d&node=${node}`);
       const m = await render(React.createElement(LinePage));
-      expect(m.host.querySelector(".lmap-canvas")?.getAttribute("data-zoom")).toBe("0.85");
+      // A line folded onto rows steps back past the panel's 0.85 to fit its row, never under the 0.7 floor.
+      const z = Number(m.host.querySelector(".lmap-canvas")?.getAttribute("data-zoom"));
+      expect(z).toBeLessThanOrEqual(0.85);
+      expect(z).toBeGreaterThanOrEqual(0.7);
       expect(firstColumn(m.host).l).toBeGreaterThanOrEqual(24);
       expect(box(m.host, "ground").r).toBeLessThanOrEqual(width);
       await m.done();
@@ -274,9 +299,9 @@ test("Causes says why nothing starts, first in Health and under the node, with t
   search = new URLSearchParams("project=pr-1&window=30d&node=causes");
   const { host, done } = await render(React.createElement(LinePage));
   const panel = host.querySelector("[data-map-panel='causes']")!;
-  expect(panel.querySelector("[data-map-health] p")?.textContent).toBe("Admission is off for @aq-line, so nothing starts on its own.");
-  expect(host.querySelector("[data-map-mark='causes']")?.textContent).toContain("Admission off");
-  expect(host.querySelector("[data-line-headline]")?.textContent).toContain("admission is off for @aq-line");
+  expect(panel.querySelector("[data-map-health] p")?.textContent).toBe("@aq-line has automatic starting off, so nothing starts on its own.");
+  expect(host.querySelector("[data-map-mark='causes']")?.textContent).toContain("Starting off");
+  expect(host.querySelector("[data-line-headline]")?.textContent).toContain("@aq-line has automatic starting off");
   const row = panel.querySelector<HTMLElement>("[data-map-admission]")!;
   expect(row.dataset.mapAdmission).toBe("off");
   await act(async () => { row.querySelector<HTMLElement>("[data-map-admission-switch]")!.click(); });
@@ -377,37 +402,28 @@ test("a panel on Causes keeps the sources at the gutter, stepping the map back t
   }
 });
 
-// Reported in rounds 8, 9 and 10: a tab click jumps the body to its section
-// at once (behavior "auto", never smooth, which stalls in a background tab)
-// and lights that tab.
-test("a panel tab jumps the body to its section at once and lights the tab", async () => {
+// Reported in rounds 8, 9 and 10, then by the person on /line: a tab kept
+// "Now" lit after another was picked. The tabs switch the panel: the picked
+// section shows, the others hide, and the tab stays lit; a link's section
+// (?section=health) opens on that tab.
+test("a panel tab switches the body to its section and lights the tab", async () => {
   search = new URLSearchParams("project=pr-1&window=30d&node=causes");
   const { host, done } = await render(React.createElement(LinePage));
   const panel = host.querySelector<HTMLElement>("[data-map-panel='causes']")!;
-  const body = panel.querySelector<HTMLElement>(".lmap-panel-body")!;
-  let scrollTop = 0;
-  const calls: Array<{ top?: number; behavior?: string }> = [];
-  Object.defineProperty(body, "scrollTop", { configurable: true, get: () => scrollTop, set: (v: number) => { scrollTop = v; } });
-  Object.defineProperty(body, "clientHeight", { configurable: true, get: () => 300 });
-  Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => 2000 });
-  body.getBoundingClientRect = () => ({ top: 100, bottom: 400, left: 0, right: 400, width: 400, height: 300, x: 0, y: 100, toJSON() {} }) as DOMRect;
-  // Each section sits 500px under the one before, in the body's scrolled content.
-  const ids = ["now", "through", "health", "definition"];
-  for (const [i, id] of ids.entries()) {
-    const sec = body.querySelector<HTMLElement>(`#lmap-${id}`)!;
-    sec.getBoundingClientRect = () => ({ top: 100 + i * 500 - scrollTop, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON() {} }) as DOMRect;
-  }
-  body.scrollTo = ((o: { top?: number; behavior?: ScrollBehavior }) => { calls.push(o); if (o.top != null) scrollTop = o.top; }) as any;
-  const tab = panel.querySelector<HTMLElement>("[data-map-nav='health']")!;
+  const shown = () => [...panel.querySelectorAll<HTMLElement>("[data-map-section]")].filter((s) => !s.hidden).map((s) => s.dataset.mapSection);
+  expect(shown()).toEqual(["now"]);
+  const tab = panel.querySelector<HTMLElement>("[data-map-nav='definition']")!;
   await act(async () => { tab.click(); });
-  expect(calls).toEqual([{ top: 996, behavior: "auto" }]);
-  expect(scrollTop).toBe(996);
+  expect(shown()).toEqual(["definition"]);
   expect(tab.getAttribute("aria-current")).toBe("true");
   expect(panel.querySelector("[data-map-nav='now']")?.getAttribute("aria-current")).toBeNull();
-  // The scroll event the jump fires keeps the picked tab lit.
-  await act(async () => { body.dispatchEvent(new dom.window.Event("scroll")); });
-  expect(tab.getAttribute("aria-current")).toBe("true");
   await done();
+  search = new URLSearchParams("project=pr-1&window=30d&node=causes&section=health");
+  const again = await render(React.createElement(LinePage));
+  const p2 = again.host.querySelector<HTMLElement>("[data-map-panel='causes']")!;
+  expect(p2.querySelector("[data-map-nav='health']")?.getAttribute("aria-current")).toBe("true");
+  expect([...p2.querySelectorAll<HTMLElement>("[data-map-section]")].filter((s) => !s.hidden).map((s) => s.dataset.mapSection)).toEqual(["health"]);
+  await again.done();
 });
 
 // Round 10: admission on, slots free, causes ready long ago and nothing
@@ -424,7 +440,7 @@ test("Causes names a stalled sweep in Health and under the node, and starts the 
   search = new URLSearchParams("project=pr-1&window=30d&node=causes");
   const { host, done } = await render(React.createElement(LinePage));
   const panel = host.querySelector("[data-map-panel='causes']")!;
-  expect(panel.querySelector("[data-map-health] p")?.textContent).toMatch(/^Admission is on with a free slot and \d+ causes? ready, but nothing has started in \w+\. The sweep that starts the top one every two minutes is not running; start it by hand\.$/);
+  expect(panel.querySelector("[data-map-health] p")?.textContent).toMatch(/^Starting is on, with room for more and \d+ causes? ready, but nothing has started in \w+\. The check that starts the top one every two minutes is not running; start it by hand\.$/);
   expect(host.querySelector("[data-map-mark='causes']")?.textContent).toMatch(/^No start in \w+/);
   expect(panel.querySelector("[data-map-admission] [role='status']")?.textContent).toMatch(/^No start in/);
   const start = panel.querySelector<HTMLElement>("[data-map-start-top-button]")!;

@@ -48,6 +48,7 @@ import { clipFade } from "./CollapsibleBody";
 import { PlanBoardView } from "./PlanBoardView";
 import { PlanGraphView } from "./PlanGraphView";
 import { PlanOriginSession } from "./PlanOriginSession";
+import { TaskBlockedMark } from "./tasks/TaskBlockedMark";
 import { LivePulseDot } from "./SessionActivityLine";
 
 const api = _api as any;
@@ -752,6 +753,11 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     {taskSessions.length} sess
                   </span>
                 )}
+                {/* Fixed slots, so the priority and chevron line up down the list
+                    whether the mark is an hourglass, one with a count, or nothing. */}
+                <span className="w-7 flex justify-end flex-shrink-0">
+                  <TaskBlockedMark task={task} small />
+                </span>
                 {PriorityIcon && pc && (
                   <button
                     onClick={() => cyclePriority(task.short_id, task.priority || "medium")}
@@ -761,10 +767,12 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     <PriorityIcon className={`w-3 h-3 ${pc.color}`} />
                   </button>
                 )}
-                {hasDetail && (
+                {hasDetail ? (
                   <button onClick={() => setExpandedTask(isExpanded ? null : task._id)}>
                     <ChevronRight className={`w-3 h-3 text-gray-400 dark:text-gray-500 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                   </button>
+                ) : (
+                  <span className="w-3 flex-shrink-0" aria-hidden />
                 )}
               </div>
               {isExpanded && (

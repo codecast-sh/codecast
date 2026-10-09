@@ -42,6 +42,7 @@ import { cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 import { registerHostCreateCommand } from "./create.js";
+import type { MacDesktop } from "./macLogin.js";
 import { remoteExec } from "../browser/remote.js";
 
 const OK = fmt.success(icons.check);
@@ -488,6 +489,35 @@ export function briefError(err: unknown, max = 140): string {
 }
 
 /** Run something that talks to another system; hand back its failure as text. */
+/**
+ * Autologin takes effect at boot, so a Mac whose session login is not yet its
+ * desktop needs one. A box running no agent session restarts now (a new host
+ * is the ordinary case); a busy one keeps its sessions and is told the cost.
+ */
+async function settleMacDesktop(up: CloudHost, remote: RemoteHost, report: { desktop: MacDesktop; previous: string | null }): Promise<void> {
+  const { macDesktop, macRunsSessions } = await import("./provisionMac.js");
+  const handover = report.previous ? `, taking the console from ${report.previous}` : "";
+  if (report.desktop === "live") {
+    console.log(`${OK} ${remote.user} is signed into the desktop: cast computer and a headed browser work there`);
+  } else if (report.desktop === "password-unknown") {
+    console.log(fmt.muted(`  ${remote.user} has a password Codecast does not hold, so it cannot sign in at boot; until it is signed in on the console, cast computer refuses and the browser runs headless`));
+  } else if (macRunsSessions(remote)) {
+    console.log(fmt.muted(`  ${remote.user} signs into the desktop at the next boot${handover}; restarting now would end the sessions running there (sudo shutdown -r now on the Mac when that is fine)`));
+  } else {
+    console.log(fmt.muted(`  restarting so ${remote.user} signs into the desktop${handover}…`));
+    remoteExec(remote, "sudo -n shutdown -r now >/dev/null 2>&1 &", 30_000);
+    await new Promise((r) => setTimeout(r, 60_000));
+    await ensureUp(up, (m) => console.log(fmt.muted(`  ${m}`)));
+    // SSH answers before loginwindow has finished signing the login in.
+    const deadline = Date.now() + 3 * 60_000;
+    while (macDesktop(remote).desktop !== "live") {
+      if (Date.now() > deadline) die(`${remote.user} is still not signed into the Mac's desktop after a restart`);
+      await new Promise((r) => setTimeout(r, 10_000));
+    }
+    console.log(`${OK} ${remote.user} is signed into the desktop: cast computer and a headed browser work there`);
+  }
+}
+
 async function guard<T>(fn: () => Promise<T> | T): Promise<{ value?: T; error?: string }> {
   try {
     return { value: await fn() };
@@ -929,6 +959,7 @@ export function buildHostsCommand(parent: Command): Command {
           const report = await provisionMacHost(remote, { skipDaemon: !o.daemon, gitIdentity: o.gitIdentity }, (m) => console.log(fmt.muted(`  ${m}`)));
           patchHost(up.id, { deviceId: report.deviceId, platform: "darwin", idleStopMinutes: 0 });
           console.log(`${OK} Mac ready: ${report.version}, device ${report.deviceId}`);
+          await settleMacDesktop(up, remote, report);
           console.log(fmt.muted("  Mac auto-stop is disabled. AWS dedicated host charges continue until the host is released."));
           return;
         }

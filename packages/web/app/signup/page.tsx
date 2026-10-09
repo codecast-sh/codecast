@@ -52,15 +52,6 @@ function SignUpForm() {
           </p>
         </div>
 
-        {/* The fork for someone who does not write code, before the developer
-            form: the hosted assistant's onboarding, which signs them in on its
-            own. */}
-        {redirectTo !== LANE_PATHS.welcome ? (
-          <div className="mb-6 flex justify-center">
-            <AssistantWayIn location="signup" tone="app" />
-          </div>
-        ) : null}
-
         <div className="bg-sol-bg-alt backdrop-blur-sm border border-sol-border rounded-xl p-8 shadow-xl">
           <AuthProviderButtons verb="up" redirectTo={redirectTo} />
 
@@ -160,6 +151,13 @@ function SignUpForm() {
           </p>
         </div>
 
+        {/* A quiet fork for someone who does not write code: the hosted
+            assistant's onboarding, which signs them in on its own. */}
+        {redirectTo !== LANE_PATHS.welcome ? (
+          <div className="mt-6 flex justify-center">
+            <AssistantWayIn />
+          </div>
+        ) : null}
       </div>
     </main>
   );
