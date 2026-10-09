@@ -16,6 +16,7 @@ import { Badge } from "../ui/badge";
 import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useLocalWaitTimes } from "../../hooks/useLocalWaitTimes";
 import { EarlierButton } from "../threads/readerFold";
 import { useReaderFold } from "../../hooks/useReaderFold";
 import { objectHref } from "../../lib/entityLinks";
@@ -155,7 +156,13 @@ export function TaskCommentItem({
   /** Fold a long body (the Threads reader). */
   clamp?: boolean;
 }) {
-  const body = <MarkdownRenderer content={comment.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />;
+  // A stored absolute wait moment (the system "Unblocked" comment is written
+  // with one on purpose) reads in the viewer's clock, as the Blocked by row's
+  // pill and the timeline's history line do (TG11), the stored words on
+  // hover. One screen, one spelling of one moment.
+  const local = useLocalWaitTimes(comment.text);
+  const rendered = <MarkdownRenderer content={local.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />;
+  const body = local.title ? <div title={local.title}>{rendered}</div> : rendered;
   return (
     <div className="py-2.5 relative">
       <div className="flex items-center gap-2 mb-1.5">

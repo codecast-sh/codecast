@@ -40,7 +40,8 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { TaskCommentComposer, UserBadge } from "../../../components/tasks/TaskCommentStream";
 import { TaskSessionLink, TaskTimeline } from "../../../components/tasks/TaskTimeline";
-import { SupersededBanner, TaskRelations } from "../../../components/tasks/TaskRelations";
+import { RemoveButton, SupersededBanner, TaskRelations } from "../../../components/tasks/TaskRelations";
+import { hasTaskRelations, removeTaskParent } from "../../../lib/taskRelations";
 import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -417,6 +418,13 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     closeTaskWithGuard(shortId, status);
   }, []);
 
+  // Where the graph block sits in the properties card: a task something holds
+  // leads with it, because "what is holding this?" is then the page's first
+  // question and the creation date is no answer to it. A task with no graph
+  // would otherwise open the card with five add verbs and push Created and
+  // Labels below them, so there the block closes the card instead.
+  const relations = useMemo(() => (data ? hasTaskRelations(data as unknown as TaskItem, allTasks as Record<string, TaskItem>) : false), [data, allTasks]);
+
   // The parent breadcrumb resolves live from the store, so a re-parent
   // elsewhere updates the chip instantly.
   const parentRow = useMemo(() => {
@@ -609,18 +617,23 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           <SupersededBanner task={data} />
 
-          {/* Parent breadcrumb — a subtask never renders context-free */}
+          {/* Parent breadcrumb — a subtask never renders context-free, and
+              this is the page's one statement of its parent (TG12 gives the
+              relation grid no Parent row), so detaching lives here too. */}
           {(data as any).parent_id && (
-            <button
-              onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)}
-              className="flex items-center gap-1.5 mb-2 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors group"
-              title={parentRow ? `Open ${parentRow.short_id}` : "Parent task"}
-            >
-              <CornerDownRight className="w-3 h-3 flex-shrink-0" />
-              <span>Subtask of</span>
-              <span className="font-mono">{parentRow?.short_id ?? "…"}</span>
-              {parentRow && <span className="text-sol-text-muted group-hover:text-sol-cyan truncate max-w-[24rem]">{parentRow.title}</span>}
-            </button>
+            <div className="group/line flex items-center gap-1.5 mb-2 text-xs">
+              <button
+                onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)}
+                className="group flex items-center gap-1.5 min-w-0 rounded text-sol-text-dim hover:text-sol-cyan focus-visible:text-sol-cyan transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan focus-visible:outline-offset-2"
+                title={parentRow ? `Open ${parentRow.short_id}` : "Parent task"}
+              >
+                <CornerDownRight className="w-3 h-3 flex-shrink-0" />
+                <span>Subtask of</span>
+                <span className="font-mono">{parentRow?.short_id ?? "…"}</span>
+                {parentRow && <span className="text-sol-text-muted group-hover:text-sol-cyan truncate max-w-[24rem]">{parentRow.title}</span>}
+              </button>
+              <RemoveButton label="Remove parent" onClick={() => removeTaskParent(data.short_id)} />
+            </div>
           )}
 
           {/* Title */}
@@ -677,6 +690,14 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* Secondary properties */}
           <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">
+            {/* The task graph (task-graph.md TG12): blockers and waits, then
+                the links. First in the card whenever there is a graph to read,
+                because on a stuck task "what is holding this?" is the page's
+                first question — the creation date and the confidence bar are
+                not answers to it. With no graph the block is nothing but its
+                adds, so it closes the card instead of leading with verbs
+                (`relations`). */}
+            {relations && <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />}
             {/* Provider twin (issue-sync S1.1): where the task came from and how
                 fresh the mirror is. The row reads plainly on its own: state,
                 unmapped assignee, last sync, and the error when the last sync
@@ -770,9 +791,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                 </div>
               </div>
             )}
-
-            {/* The task graph (task-graph.md TG12): blockers and waits, then links and the parent */}
-            <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />
+            {/* No graph: the adds close the card, below the facts. */}
+            {!relations && <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />}
           </div>
 
           {/* Decisions bound to this task (D3): open cards, settled ones
