@@ -9,14 +9,14 @@ import { BUILD_INLINE_FILES_BYTES } from "../lib/limits";
 import { BUILDER_EFFORT, buildPrompt } from "../prompts";
 import { runBuilder } from "./agent";
 import { Draft } from "./draft";
-import { Narration, Throttle, failureFor, openingLine } from "./rules";
+import { Narration, Throttle, failureFor, openingLine, type Refusal } from "./rules";
 
 /** How often the card's narration is written while Clay works. */
 const NARRATE_EVERY_MS = 250;
 
 type Report =
   | { ok: true; summary: string; name?: string; ideas?: string[]; spotlight?: string; try?: string; files: { path: string; text: string }[] }
-  | { ok: false; error: string; detail: string };
+  | ({ ok: false } & Refusal);
 
 export const build = internalAction({
   args: { build_id: v.id("builds") },

@@ -39,6 +39,8 @@ it stale; `index.ts` captures, replays and gates it.
 | changes-story | call | one Changes story from its commits, gated sessions and PRs |
 | changes-edition | call | a Changes day's edition from its stories |
 | route | call | the semantic router: which role an unplaced request belongs to (org-staffing.md S35) |
+| ground | call | the line's ground step (the-line-end-to-end.md LE5): goal, category, risk and readiness for one cause over its goals brief (`groundRequest`); the line's ground station carries the same definitions |
+| card-write | call | the line's card words station (`line/card_write.md`) over one assembled card, as the runner briefs it |
 | org-review | agent | the org analyzer over a served workspace |
 | role-wake | agent | a role's trigger frame over its served reads |
 | anchor-brief | agent | a standing session's opening, and for a fixture the turns after it |
