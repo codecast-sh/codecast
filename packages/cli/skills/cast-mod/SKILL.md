@@ -1,6 +1,6 @@
 ---
 name: cast-mod
-description: Make a codecast mod, a small sandboxed module that adds panes, commands and new kinds of blocks agents can draw to the codecast app, and that reads the person's sessions, tasks, plans, PRs and more. Use when asked to customize, extend or add something to codecast's interface, to build a dashboard or view over the fleet inside codecast, or when a fenced block type should render richly everywhere.
+description: Make a codecast mod, a small sandboxed module that adds panes, commands and new kinds of blocks agents can draw to the codecast app, and that reads the person's sessions, tasks, plans, PRs and more. Use when asked to customize, extend, retheme or add something to codecast's interface, to build a dashboard or view over the fleet inside codecast, or when a fenced block type should render richly everywhere.
 argument-hint: "<what the mod should do>"
 ---
 
@@ -53,16 +53,36 @@ it is right.
   most views. Reach for `Canvas` only for drawing the elements cannot express.
 - Keep a mod's own values in `$.state` (they survive reloads and redraw the
   mod), not in module variables.
-- When the person tracks a kind of thing (bugs, incidents, experiments,
-  customers), declare it under `objects`: a prefix, statuses and typed fields.
-  Every object gets a `<prefix>-<n>` short id that renders as a live pill, a
-  list at `/objects/<prefix>`, a page at `/o/<id>` (draw its top with
-  `on("ui.render", { object: "<prefix>" })`) and `cast obj` verbs, with no code
-  of yours. Read them with `$.data.list("objects", { where: { prefix } })` and
-  write with `$.objects`.
-- A fence is how agents use what the mod adds: declare it, draw it in
-  `on("ui.render", { fence })`, and any agent's ```<lang> block renders that way
-  for everyone who has the mod.
+- Start from the nouns. When the mod is about things the person names and
+  follows (contacts, bugs, incidents, experiments, customers), make them an
+  object kind under `objects`: a prefix, statuses and typed fields, before any
+  view. Every object gets a `<prefix>-<n>` short id that reads as a live
+  reference wherever codecast renders text, the same way a task does: its
+  title inline, a hover card built from its status and fields, and a caret that
+  opens its page right under the line. It also gets a list at
+  `/objects/<prefix>`, a page at `/o/<id>` and `cast obj` verbs, with no code
+  of yours. Put the rich view on that page (`on("ui.render", { object:
+  "<prefix>" })`), so it shows wherever the object is expanded. Choose fields
+  that make a useful preview: the hover card shows the first few filled ones.
+  Read them with `$.data.list("objects", { where: { prefix } })` and write with
+  `$.objects`.
+- The mod's `agents` text is how every other agent learns to use it. For an
+  object kind, it should say to mention an object by its short id in prose
+  (and to file one with `cast obj create` when a conversation turns up a new
+  one), not to draw a card for it.
+- A fence is for a view that is not one object: a comparison, a live query, a
+  chart of many. Declare it, draw it in `on("ui.render", { fence })`, and any
+  agent's ```<lang> block renders that way for everyone who has the mod.
+- The elements already look like codecast. Compose them plainly (a `Card`,
+  `Row`s of `Text` with `tone="muted"` for secondary facts, `Badge` for state,
+  `Button variant="ghost"` for quiet actions) and leave out colors, sizes and
+  spacing unless the view needs them.
+- To restyle the app, declare `themes`: an id, a title, and a `light` and/or
+  `dark` palette of hex values per token (`bg`, `bg-alt`, `card`, `border`,
+  `text`, `text-muted`, `text-dim`, `link`, the nine accents) plus `font-ui`
+  and `font-mono` stacks. The person picks it in Settings > Appearance, and it
+  recolors every surface, Tailwind's color scales included. A theme is data
+  only: there is no CSS hook, so it survives every change to the app.
 
 ## The local half
 
@@ -72,9 +92,10 @@ behind your network), add `"local": { "main": "local.ts" }` and export
 on a timer with `$.publish`, `on("local.call", { method })` to answer the UI's
 `$.local.call`, `on("session.state")` to react to any session changing who
 acts next with no window open. The UI reads published values with
-`$.local.get` and redraws when they change. The daemon runs it only where a person approved that exact
-version with `cast mod approve <name>` in a terminal, so after a push that
-changes it, tell the person to run that; you cannot approve it for them.
+`$.local.get` and redraws when they change. The daemon on each of the
+person's machines starts it within 30s of a push and restarts it when it
+changes; `cast mod local` shows where it runs, `cast mod revoke <name>` stops
+it on one machine.
 `bun add -d @types/bun` in the folder types `node:` imports for the editor.
 
 When it is done, give the person the pane's link and say what it adds and what

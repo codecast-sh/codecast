@@ -37,6 +37,7 @@ import { CircleFace } from "../calls/FaceCircle";
 import { getCallTiles, subscribeCallTiles, type ParticipantTile } from "../../lib/calls/callManager";
 import { useFaceKey, useWalkieFaces, type FaceKey } from "../presence/useFaceKey";
 import { useOpenDm } from "../../hooks/useOpenDm";
+import { openFacePanel, useFaceChatBadge } from "../../lib/chat/faceChat";
 import { FaceCard, GuestFaceCard } from "./FaceCard";
 import { useWalkieLevelVar } from "../../hooks/useWalkie";
 import { useVideoFrame } from "../../lib/calls/videoFrames";
@@ -223,6 +224,9 @@ function FaceSeat({
   const presence = PRESENCE_OF[entry.state];
   const canOpen = callsEnabled || !entry.me;
   const openDm = useOpenDm();
+  // Red is messages: what they said that this window showed and you have
+  // not opened, plus DM unread beyond it (lib/chat/faceChat).
+  const chat = useFaceChatBadge(entry.id, entry.unread);
 
   return (
     <div
@@ -232,6 +236,7 @@ function FaceSeat({
       data-card={cardOpen ? "1" : undefined}
       data-hold={key.holding ? "1" : undefined}
       data-ask={entry.ask > 0 ? entry.ask : undefined}
+      data-chat-loud={chat.loud && chat.count > 0 && !stacked ? "1" : undefined}
       data-stacked={stacked ? "1" : undefined}
       data-folded={folded ? "1" : undefined}
       aria-hidden={folded || undefined}
@@ -295,22 +300,26 @@ function FaceSeat({
       ) : (
         presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />
       )}
-      {/* The count is a door: one click goes straight to the conversation.
-          The card under the face says the same thing in words. */}
-      {entry.unread > 0 && !stacked && (
+      {/* The count is a door: one click opens what they have been saying,
+          under the face, with a reply box. Off the header (the float, the
+          stage) there is no panel to open, so it goes to the conversation. */}
+      {chat.count > 0 && !stacked && (
         <button
+          key={chat.count}
           type="button"
           className="face-unread"
-          aria-label={`${entry.unread} unread from ${entry.name}: open the conversation`}
-          title={`${entry.unread} unread: open the conversation`}
+          aria-label={`${chat.count} unread from ${entry.name}: show their messages`}
+          title={`${chat.count} unread: show their messages`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            openDm([entry.id]);
+            if (density === "bar") openFacePanel(entry.id);
+            else openDm([entry.id]);
           }}
         >
-          {entry.unread > 99 ? "99+" : entry.unread}
+          {chat.loud ? "@" : ""}
+          {chat.count > 99 ? "99+" : chat.count}
         </button>
       )}
       {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
