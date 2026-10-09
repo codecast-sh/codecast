@@ -29,7 +29,7 @@ import { laptopHome, trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.j
 import { AGENT_AUTH_RECEIVER } from "./agentAuthReceiver.py.js";
 import { deviceId as localDeviceId } from "./device.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
-import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
+import { applySnapshotFastForward, createWipSnapshot, isWipSnapshotMessage, remoteSnapshotScript } from "../wipSnapshot.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { readLocalCredential, readLocalCredentialAsync } from "../ccKeychain.js";
 import { remapContextPaths } from "../cloud/mirror/transform.js";
@@ -104,24 +104,31 @@ export function slugToCwd(slug: string): string | null {
  * the project-dir slug (CC collapses both "/" and "." to "-", which is not
  * losslessly reversible).
  */
-function cwdFromTranscript(jsonlPath: string): string | null {
+export function cwdFromTranscript(jsonlPath: string, slug = path.basename(path.dirname(jsonlPath))): string | null {
   // The LAST cwd, not the first: a session that has travelled between
   // machines carries entries stamped with every home it has had, and after a
   // round trip the file can even BEGIN with the remote's path (observed live:
   // first line /home/ubuntu/work/…, last line /Users/…). The newest entry is
   // the only one that reflects where the session runs now.
+  // A record's cwd also follows the agent's own `cd`, so the newest entry whose
+  // slug is the transcript's project folder wins: that is where the agent was
+  // launched and resumes. A `cd packages/web` otherwise moved the session into
+  // a host checkout named "web" (2026-10-09).
   let last: string | null = null;
+  let launch: string | null = null;
   try {
     const text = fs.readFileSync(jsonlPath, "utf-8");
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
         const rec = JSON.parse(line) as { cwd?: string };
-        if (rec.cwd) last = rec.cwd;
+        if (!rec.cwd) continue;
+        last = rec.cwd;
+        if (cwdToSlug(rec.cwd) === slug) launch = rec.cwd;
       } catch { /* skip non-JSON line */ }
     }
   } catch { /* unreadable */ }
-  return last;
+  return launch ?? last;
 }
 
 /** Locate a session's JSONL + cwd on this machine by session id. */
@@ -760,6 +767,26 @@ export interface MoveResult {
  */
 export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
   return path.posix.join(host.remoteBaseDir, path.basename(localGitRoot));
+}
+
+/**
+ * When the host's checkout of a repository is busy, a move lands in its own
+ * clone beside it (`<checkout>-mv-<batch>`, migrate/io.ts). The clone stands in
+ * for that checkout the way a worktree does: the session belongs to the same
+ * repository, so its root (and the project the app names it by) is the
+ * checkout's, not the clone folder's.
+ */
+export const MOVE_CLONE_RE = /-mv-[a-z0-9]+$/;
+
+export function moveClonePath(main: string, batchId: string): string {
+  return `${main}-mv-${batchId.replace(/^mg-/, "").slice(0, 8)}`;
+}
+
+/** The checkout a move clone stands in for, or `root` itself when it is not one (or that checkout is gone). */
+export function checkoutOfMoveClone(root: string, exists: (p: string) => boolean = (p) => fs.existsSync(path.join(p, ".git"))): string {
+  if (!MOVE_CLONE_RE.test(root)) return root;
+  const main = root.replace(MOVE_CLONE_RE, "");
+  return exists(main) ? main : root;
 }
 
 /**
