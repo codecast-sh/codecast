@@ -60,6 +60,28 @@ describe("taskResume.context", () => {
     expect(out.blockers).toEqual([{ kind: "task", ref: "ct-3", status: "in_progress", title: "Title ct-3" }]);
   });
 
+  // The block is the surface that tells a session to park, and TG2 keeps a red
+  // checks wait waiting forever, so it needs the PR's checks_state the way
+  // `cast task show` has it (taskLinks.waitChecks).
+  test("a still-waiting checks wait ships its PR's checks state; nothing else asks for one", async () => {
+    const waits = [
+      { id: "w1", kind: "pr_checks_green", repository: "acme/app", pr_number: 42, state: "waiting", created_at: 1 },
+      { id: "w2", kind: "pr_merged", repository: "acme/app", pr_number: 42, state: "waiting", created_at: 1 },
+    ];
+    const tables = {
+      tasks: [task("ct-1", { waits })],
+      team_memberships: [{ _id: "tm_1", user_id: USER, team_id: "team_a", role: "member" }],
+      pull_requests: [{ _id: "pr_42", team_id: "team_a", repository: "acme/app", number: 42, state: "open", checks_state: "failure", created_at: 1, updated_at: 1 }],
+    };
+    const out = await read(tables, { short_id: "ct-1" });
+    expect(out.blockers.map((b: any) => [b.id, b.checks])).toEqual([["w1", "failure"], ["w2", undefined]]);
+
+    // A PR in a team the reader is not in lends nothing: the wait then reads as
+    // what it waits for rather than claiming anything about the CI.
+    const hidden = await read({ ...tables, team_memberships: [] }, { short_id: "ct-1" });
+    expect(hidden.blockers.map((b: any) => b.checks)).toEqual([undefined, undefined]);
+  });
+
   test("a blocker an older row names by its Convex id ships its short id", async () => {
     const out = await read({ tasks: [task("ct-1", { blocked_by: ["task_ct-3"] }), task("ct-3")] }, { short_id: "ct-1" });
     expect(out.blockers).toEqual([{ kind: "task", ref: "ct-3", status: "open", title: "Title ct-3" }]);
@@ -139,7 +161,32 @@ describe("taskResume.context", () => {
       expect("lost" in released || "filed" in released).toBe(false);
     });
 
-    test("a task the session only filed was never its to lose: a worker claiming it, or it closing, is no loss", async () => {
+      test("a closed task holds nothing: a session still bound to one is not told to park", async () => {
+      // Closing clears the binding now, but a row written before that, or one
+      // a reconciler has not reached, still names the task. The block it
+      // restores must not read "Blocked by: PR #42 to merge" and send the
+      // session dormant: no unblock path (settleWaits, releaseDependents)
+      // passes a terminal status, so nothing would ever wake it.
+      const wait = { id: "w1", kind: "pr_merged", repository: "acme/api", pr_number: 42, state: "waiting", created_at: 1 };
+      const blocked = { blocked_by: ["ct-2"], waits: [wait] };
+      const open = await read({
+        tasks: [task("ct-1", blocked), task("ct-2")],
+        conversations: [conv({ active_task_id: "task_ct-1" })],
+      }, { session_id: "sess-1" });
+      expect(open.held).toBe(true);
+      expect(open.blockers).toHaveLength(2);
+      for (const status of ["done", "dropped"]) {
+        const closed = await read({
+          tasks: [task("ct-1", { ...blocked, status }), task("ct-2")],
+          conversations: [conv({ active_task_id: "task_ct-1" })],
+        }, { session_id: "sess-1" });
+        expect(closed.task.status).toBe(status);
+        expect(closed.held).toBe(true);
+        expect(closed.blockers).toEqual([]);
+      }
+    });
+
+  test("a task the session only filed was never its to lose: a worker claiming it, or it closing, is no loss", async () => {
       const claimed = await read(claimedTables, { short_id: "ct-1", session_id: "sess-1" });
       expect(claimed).toMatchObject({ filed: true, held: false });
       expect("lost" in claimed).toBe(false);

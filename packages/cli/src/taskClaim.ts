@@ -47,7 +47,10 @@ export function unclaimedLine(claim: { skipped?: unknown[]; more?: boolean; stal
   const others = n ? ` ${n} ready task${n === 1 ? " is" : "s are"} assigned to others or held by a decision (cast task ready lists them).` : "";
   if (!claim?.more) return `No ready tasks to claim.${stale}${others}`;
   const passed = claim.skipped?.length ? `, passed over ${claim.skipped.length}` : "";
-  return `No task claimed${passed}. More ready tasks exist past those tried: narrow with --plan, --project or -q.${stale}`;
+  // Both counts ride on both wordings: a queue the autopilot has to judge
+  // workable is told how much of it belongs to someone else whether or not
+  // candidates were left untried.
+  return `No task claimed${passed}. More ready tasks exist past those tried: narrow with --plan, --project or -q.${stale}${others}`;
 }
 
 // `--model`, `--effort` and `--ephemeral` on create and update (task-graph.md
