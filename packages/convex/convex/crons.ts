@@ -392,6 +392,18 @@ crons.interval(
 );
 
 crons.interval(
+  // Every wait settles from one scheduled job, and Convex does not retry one
+  // that threw, so a settle that failed leaves the task and every dependent of
+  // it blocked on a moment, a PR or a decision nothing will look at again
+  // (task-graph.md TG2). The sweep settles each still-waiting wait from its own
+  // target; that is idempotent, so it writes nothing when every job did run.
+  "settle overdue task waits",
+  { minutes: 15 },
+  internal.taskWaits.settleOverdueWaits,
+  {}
+);
+
+crons.interval(
   // A person who reports to a role hears once a day at most that a high
   // priority goal of theirs has stalled (org-roles-run-work.md R6).
   "tell people about stalled goals",

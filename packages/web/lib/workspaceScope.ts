@@ -19,11 +19,13 @@
 //
 // Legacy rows (minted before the field existed, or cached in IDB from an older
 // client) have no `workspace`; for them the predicate falls back to the raw
-// team tag, which the server backfill makes equivalent for un-linked rows.
+// team tag, which the server backfill makes equivalent for un-linked rows, and
+// a row carrying neither tag is personal to its owner (`user_id`).
 
 export type WorkspaceKey = string;
 
-type WorkspaceScoped = { workspace?: string | null; team_id?: string | null };
+// `user_id` is as the server types it (a Convex id), so it is stringified here.
+type WorkspaceScoped = { workspace?: string | null; team_id?: string | null; user_id?: unknown };
 
 /**
  * The viewer's active workspace key. Team when the active-team pointer is
@@ -93,10 +95,15 @@ export function workspaceDisplayName(
   return ws.id === viewerId ? "your personal workspace" : "another workspace";
 }
 
-/** A row's own access key, from its stored key (or the legacy team tag): the
- *  scope of a view relative to that row, such as a task's blockers. */
+/** A row's own access key, from its stored key (or the legacy tags): the
+ *  scope of a view relative to that row, such as a task's blockers. A legacy
+ *  row carrying neither key nor team is personal to its owner, which is what
+ *  the server answers for it too (access.ts workspaceForResource) — reading
+ *  it as "no workspace" would empty every view scoped to such a row. */
 export function workspaceKeyOfRow(row: WorkspaceScoped): WorkspaceKey | null {
-  return row.workspace ?? (row.team_id ? `team:${row.team_id}` : null);
+  if (row.workspace) return row.workspace;
+  if (row.team_id) return `team:${row.team_id}`;
+  return row.user_id ? `user:${String(row.user_id)}` : null;
 }
 
 /** A row's workspace as a ref, from its stored key (or the legacy team tag). */
