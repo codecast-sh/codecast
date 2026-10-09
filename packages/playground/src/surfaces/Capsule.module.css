@@ -19,6 +19,9 @@
   font: 600 13px/1 var(--ui); font-feature-settings: "tnum" 1; transition: background var(--t-quick);
 }
 .people:hover { background: var(--sunk); --ring: var(--sunk); }
+/* Offline: who is here is unknown, so the count gives way to a muted mark. */
+.offline { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.offlineDot { width: 7px; height: 7px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--ink-3); }
 .divider { width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
 .tool {
   position: relative; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; color: var(--ink-2);
@@ -69,11 +72,11 @@
 }
 .tab .badge { top: 2px; right: 2px; }
 .calloutHead { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.calloutTitle { font: 650 13.5px/1.2 var(--voice); font-variation-settings: var(--voice-axes); }
+.calloutTitle { font: 650 13.5px/1.2 var(--ui); }
 .liveWord { color: var(--live); }
 .calloutWho { margin-left: auto; display: flex; align-items: center; gap: 6px; min-width: 0; font: var(--t-meta); color: var(--ink-3); }
 .calloutName { min-width: 0; max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
-.calloutClock { font: var(--t-mono); font-variation-settings: var(--mono-axes); color: var(--ink-3); font-feature-settings: "tnum" 1; }
+.calloutClock { font: var(--t-mono); color: var(--ink-3); font-feature-settings: "tnum" 1; }
 .calloutLine {
   font: 400 12.5px/1.35 var(--ui); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   animation: global(arrive) var(--t-quick) var(--ease-out);
