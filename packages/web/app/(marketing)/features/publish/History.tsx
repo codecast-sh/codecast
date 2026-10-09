@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { SOL, Terminal } from "../../blog/blogChrome";
+import { SOL } from "../../blog/blogChrome";
 import { C, CYAN, Caption, Section } from "./kit";
+import { Shot } from "../kit";
 
 const SLUG = "k3Vd9QpLm2Xa";
 
@@ -98,30 +99,18 @@ export function History() {
   return (
     <Section
       id="history"
-      n="03"
+      n="02"
       title="Every version stays. Compare any two. Restore without losing one."
-      lede={<>Each publish is a numbered version. The link always serves the newest, and every older one keeps its own address, a line-by-line diff against any other, and a one-command way back.</>}
+      lede={<>Each publish is a numbered version. The link always serves the newest. The version chip in the page&apos;s bar opens its history: every older version keeps its own address, a line-by-line diff against the current one, and a way back.</>}
     >
       <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-10 lg:gap-12">
         <div className="min-w-0">
           <div className="pt-8">
             <VersionRail />
           </div>
-          <div className="mt-10 [&>div]:my-0">
-            <Terminal label="restore">
-              <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> cast publish rollback {SLUG} 2</span>{"\n"}
-              <span style={{ color: SOL.green }}>✓</span> Rolled back to v2 — now <span style={{ color: SOL.yellow }}>v4</span>{"\n\n"}
-              <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> cast publish versions churn-audit.md</span>{"\n"}
-              <span style={{ color: SOL.base2 }}>Q3 churn audit</span> <span style={{ color: SOL.base01 }}>({SLUG})</span>{"\n"}
-              {VERSIONS.map((v) => (
-                <span key={v.v} className="block">
-                  {"  "}<span style={{ color: SOL.yellow }}>v{v.v}</span>  {v.when.padStart(4)}  {v.size.padStart(7)}
-                  {v.v === 4 && <span style={{ color: SOL.green }}> ← current</span>}
-                </span>
-              ))}
-              <span style={{ color: SOL.base01 }}>  restore: cast publish rollback {SLUG} &lt;n&gt;</span>{"\n"}
-              <span style={{ color: SOL.base01 }}>  compare: https://{"codecast.sh/a/"}{SLUG}?diff=&lt;a&gt;..&lt;b&gt;</span>
-            </Terminal>
+          <div className="mt-10 max-w-[300px]">
+            <Shot src="/features/publish/version-history.webp" alt="A published page's bar with the v3 chip open: v3 marked current, and v2 and v1 each with a diff link and how long ago they were published" width={592} height={300} />
+            <Caption>The version chip on a real page. Opened by its owner, each older row also offers restore.</Caption>
           </div>
           <div className="mt-8 px-1 grid grid-cols-[auto_1fr] gap-x-5 gap-y-3 font-mono text-[12.5px]">
             {[
@@ -144,7 +133,7 @@ export function History() {
           </Caption>
           <p className="mt-8 text-[15px] leading-7" style={{ color: SOL.base01 }}>
             A rollback never rewrites history. It publishes the old content as the next version, so the version you rolled away from is still there if you
-            change your mind. On the page, the version menu puts a diff link beside each older version, and the owner panel can roll back from the browser. To start a separate page from the same file, publish with <C>--new</C>.
+            change your mind. Agents do the same from a terminal with <C>cast publish rollback</C>, and start a separate page from the same file with <C>--new</C>.
           </p>
         </div>
       </div>
