@@ -7,10 +7,10 @@ import { BLUE, HOST, Pane, SESSION, delay } from "./kit";
 /** One step the host reports while a cloud spawn prepares it. */
 const HOST_STEPS: { text: ReactNode; d: number }[] = [
   { text: <>woke the host <span style={{ color: SOL.base01 }}>stopped → running</span></>, d: 1.9 },
-  { text: <>fetched <b className="font-medium" style={{ color: SOL.base2 }}>~/work/shop</b> <span style={{ color: SOL.base01 }}>kept its HEAD</span></>, d: 2.3 },
+  { text: <>fetched <b className="font-medium" style={{ color: SOL.base2 }}>~/src/shop</b> <span style={{ color: SOL.base01 }}>kept its HEAD</span></>, d: 2.3 },
   { text: <>copied <b className="font-medium" style={{ color: SOL.base2 }}>.env.local</b> <span style={{ color: SOL.base01 }}>setup.copy</span></>, d: 2.7 },
   { text: <>agent logins pushed <span style={{ color: SOL.base01 }}>claude, codex</span></>, d: 3.1 },
-  { text: <>cast ws acquire <b className="font-medium" style={{ color: SOL.base2 }}>port-v1-routes</b></>, d: 3.5 },
+  { text: <>worktree <b className="font-medium" style={{ color: SOL.base2 }}>port-v1-routes</b> <span style={{ color: SOL.base01 }}>made on the host</span></>, d: 3.5 },
   { text: <>branch <b className="font-medium" style={{ color: SOL.base2 }}>feature/checkout</b> <span style={{ color: SOL.base01 }}>reset to a41c9e2, v1.ts uncommitted again</span></>, d: 3.9 },
 ];
 
@@ -85,11 +85,14 @@ function LaptopSide() {
     <div className="space-y-5 min-w-0">
       <Pane machine="laptop" title={<>~/src/shop <span style={{ color: SOL.base1 }}>· feature/checkout</span></>} right={<span style={{ color: SOL.base1 }}>{"your laptop"}</span>}>
         <pre className="font-mono text-[12px] leading-[1.8] overflow-x-auto" style={{ color: SOL.base00 }}>
-          <span><span style={{ color: SOL.green }}>$</span> git status --short{"\n"}</span>
+          <span style={{ color: SOL.base1 }}>uncommitted{"\n"}</span>
           <span style={{ color: SOL.yellow }}>{" M"}</span> src/routes/v1.ts{"\n"}
           <span style={{ color: SOL.red }}>??</span> .env.local <span style={{ color: SOL.base1 }}>(ignored)</span>{"\n"}
           <span className="cl-anim cl-type inline-block" style={delay(0.3)}>
-            <span style={{ color: SOL.green }}>$</span> <span style={{ color: SOL.base02 }}>cast spawn --cloud &quot;port the v1 routes&quot;</span>
+            <span style={{ color: SOL.base1 }}>new session ›</span> <span style={{ color: SOL.base02 }}>port the v1 routes</span>
+          </span>{"\n"}
+          <span className="cl-anim cl-fade inline-block" style={delay(1.1)}>
+            <span style={{ color: SOL.violet }}>● run in the cloud</span> <span style={{ color: SOL.base1 }}>· start from my checkout</span>
           </span>{"\n"}
           <span className="cl-anim cl-fade inline-block" style={delay(1.5)}>
             <span style={{ color: SOL.base1 }}>snapshot a41c9e2 + 1 change → refs/codecast/cloud/…</span>
@@ -178,7 +181,7 @@ export function HeroDiptych() {
         <Wire vertical />
         <div className="cl-night -mx-5 px-5 sm:-mx-8 sm:px-8 py-10 lg:!bg-none lg:!bg-transparent lg:mx-0 lg:px-0 lg:py-16 lg:pl-6">
           <HostSide />
-          <p className="mt-5 font-mono text-[11.5px] leading-5" style={{ color: SOL.base01 }}>One cloud spawn, condensed: your laptop on the left, your host on the right, one conversation throughout.</p>
+          <p className="mt-5 font-mono text-[11.5px] leading-5" style={{ color: SOL.base01 }}>One cloud session, condensed: your laptop on the left, your host on the right, one conversation throughout.</p>
         </div>
       </div>
     </div>

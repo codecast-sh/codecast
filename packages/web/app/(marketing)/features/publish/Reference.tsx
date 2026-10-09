@@ -57,9 +57,8 @@ export function Reference() {
     <Section
       id="reference"
       n="08"
-      tone="sand"
-      title="Command reference."
-      lede={<>A <C>&lt;target&gt;</C> is a slug or the local path you published. Every command takes <C>--json</C>. Everything the page&apos;s owner panel does in the browser is also a command, so an agent never needs the browser to manage a page.</>}
+      title="For scripts and agents: every command."
+      lede={<>Agents learn these from their instructions; you only need them to script it yourself. Everything the page&apos;s own menus do is also a command, so an agent never needs the browser to manage a page. A <C>&lt;target&gt;</C> is a slug or the local path published, and every command takes <C>--json</C>.</>}
     >
       <div className="flex gap-1 rounded-lg p-1 w-fit" role="tablist" style={{ backgroundColor: "rgba(0,43,54,.06)" }}>
         {GROUPS.map((x, i) => (

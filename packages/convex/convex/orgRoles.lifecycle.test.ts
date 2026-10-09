@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { applyCancel, applyPause } from "./agentTasks";
 import { briefingFor, performRebriefRoles } from "./anchors";
-import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
+import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, performMoveRole, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
 import { performReparentSession } from "./sessionOwnership";
 import { killConversation } from "./conversations";
@@ -305,5 +305,49 @@ describe("a wake reaches the role the way cast send does", () => {
     const res = await performWakeRole(ctx, PEER as any, { role_id: String(role._id), message: "how is infra?" });
     const row = tables.pending_messages.find((m) => String(m._id) === String(res.pending_message_id))!;
     expect(row.content).toContain('<user-message from="Peer"');
+  });
+});
+
+describe("moving a role to the caller's machine", () => {
+  async function peerHostedLead() {
+    const w = world({
+      devices: [{ _id: "d1", user_id: ME, device_id: "mydev", label: "My-MacBook" }, { _id: "d2", user_id: PEER, device_id: "peerdev", label: "Peer-MacBook" }],
+    });
+    w.tables.conversations.push({ _id: "peerseat", user_id: PEER, session_id: "s-peer", short_id: "jxpeer1", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 3, team_id: TEAM, project_path: "/Users/peer/repo", owner_device_id: "peerdev", owner_user_id: ME });
+    w.tables.session_owners.push({ _id: "so-peer", conversation_id: "peerseat", user_id: ME });
+    const role = await performCreateRole(w.ctx, ME as any, { name: "Infra lead", handle: "infra", team_id: TEAM, host_user_id: PEER as any });
+    await performProvisionRole(w.ctx, ME as any, { role_id: String(role._id), adopt_conversation_id: "peerseat" });
+    const anchor = () => w.tables.anchors.find((a) => String(a.org_role_id) === String(role._id))!;
+    anchor().project_path = "/Users/peer/repo";
+    return { ...w, role, anchor };
+  }
+
+  test("an admin becomes the host on the role and its anchor, the seat runs on their device, and the folder is theirs", async () => {
+    const { ctx, tables, role, anchor } = await peerHostedLead();
+    const result = await performMoveRole(ctx, ME as any, { role_id: String(role._id), device_id: "mydev", dir: "/Users/me/repo" });
+
+    const row = tables.org_roles.find((r) => String(r._id) === String(role._id))!;
+    expect(String(row.host_user_id)).toBe(ME);
+    expect(String(anchor().host_user_id)).toBe(ME);
+    expect(anchor().project_path).toBe("/Users/me/repo");
+    const seat = tables.conversations.find((c) => c._id === anchor().conversation_id)!;
+    expect(seat.owner_device_id).toBe("mydev");
+    expect(String(seat.user_id)).toBe(ME);
+    expect(result.session?.cross_user).toBe(true);
+    expect(result.host_moved).toBe(true);
+  });
+
+  test("a member who neither hosts nor admins the role is refused, and nothing changes", async () => {
+    const { ctx, tables, role, anchor } = await peerHostedLead();
+    const OTHER = "u".repeat(31) + "o";
+    tables.users.push({ _id: OTHER, name: "Other", email: "other@x.ai" });
+    tables.team_memberships.push({ _id: "m3", user_id: OTHER, team_id: TEAM, role: "member", joined_at: 1 });
+    await expect(performMoveRole(ctx, OTHER as any, { role_id: String(role._id), dir: "/Users/peer/other" })).rejects.toThrow();
+    expect(anchor().project_path).toBe("/Users/peer/repo");
+  });
+
+  test("a relative folder is refused", async () => {
+    const { ctx, role } = await peerHostedLead();
+    await expect(performMoveRole(ctx, ME as any, { role_id: String(role._id), dir: "repo" })).rejects.toThrow(/absolute/);
   });
 });
