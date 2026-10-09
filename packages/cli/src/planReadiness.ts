@@ -42,6 +42,11 @@ export function planReadiness<T extends GraphTask & { _id?: unknown; short_id?: 
   const moves = new Map<T, boolean>();
   const willMove = (t: T): boolean => {
     if (moves.has(t)) return moves.get(t)!;
+    // The cycle guard, not a redundant write: a blocker chain can loop back
+    // onto `t` (TG4 rejects an edge that closes a loop, but one stored through
+    // a task that has since closed survives), and `clears` recurses along it.
+    // The provisional `false` makes that recursion read "this one does not
+    // move by itself" and stop; the real answer replaces it below.
     moves.set(t, false);
     const v = verdicts.get(t)!;
     const result = v.ready || v.reason === "parent_active" || v.reason === "ephemeral" || (v.reason === "blocked" && (v.blockers ?? []).every(clears));
@@ -79,8 +84,8 @@ export function parkedNote({ parked, ephemeral }: Pick<PlanReadiness<unknown>, "
   return parts.length ? parts.join("; ") : null;
 }
 
-/** Why each stuck task will not move ("ct-4: blocked by PR #42 merges (failed:
- *  closed without merging)"), for a plan that stalled on them. */
+/** Why each stuck task will not move ("ct-4: blocked by PR #42 to merge
+ *  (failed: closed without merging)"), for a plan that stalled on them. */
 export function stuckNote<T extends GraphTask & { short_id?: string }>(r: Pick<PlanReadiness<T>, "stuck" | "verdicts">, words: WaitLabelOptions = {}): string | null {
   const lines = r.stuck.map((t) => {
     const v = r.verdicts.get(t)!;

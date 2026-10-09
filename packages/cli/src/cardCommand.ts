@@ -29,6 +29,7 @@ import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 import { printPublishResult, publishOnce } from "./publish.js";
+import { parseWorkspaceKey, workspaceScope } from "./resolveWorkspace.js";
 import { runGit } from "./repoMirror.js";
 import { stdinText } from "./sendBody.js";
 
@@ -110,10 +111,10 @@ export function runCost(runs: Array<{ created_at?: number; updated_at: number; t
 // finds its codecast project.
 export function taskWorkspaceScope(task: { workspace?: string; project_id?: string }) {
   const project = task.project_id ? { project: String(task.project_id) } : {};
-  const key = task.workspace ?? "";
-  if (key.startsWith("team:")) return { workspace: "team" as const, team_id: key.slice(5), ...project };
-  if (key.startsWith("user:")) return { workspace: "personal" as const, ...project };
-  return { project_path: process.cwd(), ...project };
+  const ws = parseWorkspaceKey(task.workspace);
+  // A row from an older server carries no key: the directory decides, as it
+  // does for any read that names no workspace.
+  return ws ? { ...workspaceScope(ws), ...project } : { project_path: process.cwd(), ...project };
 }
 
 async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void> {
