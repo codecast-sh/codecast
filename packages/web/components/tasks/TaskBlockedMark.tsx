@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Ban, Check, Hourglass, type LucideIcon } from "lucide-react";
-import { isTerminalTaskStatus, waitTone, type WaitState } from "@codecast/shared/tasks";
+import { isTerminalTaskStatus, waitTone, type WaitState, type WaitTone } from "@codecast/shared/tasks";
 import { useInboxStore } from "../../store/inboxStore";
 import { blockerStatusSig, storeBlockedMark, WAIT_TONE_STYLE, type BoardTask } from "../../lib/taskBlockers";
 
@@ -8,20 +8,23 @@ import { blockerStatusSig, storeBlockedMark, WAIT_TONE_STYLE, type BoardTask } f
  * never the warning triangle, which marks urgent priority on the same rows. */
 export const FailedWaitIcon = Ban;
 
-type WaitStyle = { icon: LucideIcon; token: string; text: string };
+/** `tone` is the `waitTone` the style came from, so a caller that also dims
+ *  the whole line reads the one decision instead of re-deriving it. */
+type WaitStyle = { icon: LucideIcon; tone: WaitTone; token: string; text: string };
 
 const WAIT_ICON: Record<WaitState, LucideIcon> = { waiting: Hourglass, met: Check, failed: FailedWaitIcon };
 
 /** Each wait state's glyph in its own colour (`WAIT_TONE_STYLE`). Where it
  *  sits on a task, read `waitStateStyle`. */
 export const WAIT_STATE_STYLE = Object.fromEntries(
-  Object.entries(WAIT_ICON).map(([state, icon]) => [state, { icon, ...WAIT_TONE_STYLE[state as WaitState] }]),
+  Object.entries(WAIT_ICON).map(([state, icon]) => [state, { icon, tone: state as WaitState, ...WAIT_TONE_STYLE[state as WaitState] }]),
 ) as Record<WaitState, WaitStyle>;
 
 /** A wait's glyph on a task in `status`, in its `waitTone`: its state's
  *  colour while it holds something, dim past that. */
 export function waitStateStyle(state: WaitState, status: string | null | undefined, opts?: { untilClosed?: boolean }): WaitStyle {
-  return { icon: WAIT_ICON[state], ...WAIT_TONE_STYLE[waitTone(state, status, opts)] };
+  const tone = waitTone(state, status, opts);
+  return { icon: WAIT_ICON[state], tone, ...WAIT_TONE_STYLE[tone] };
 }
 
 /**

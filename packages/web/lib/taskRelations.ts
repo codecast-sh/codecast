@@ -4,6 +4,7 @@
 // addBlocker/addWait/relateTasks, whose side effects make the real write.
 import {
   dependencyLoopChecker,
+  GRAPH_LINK_CAP,
   isActiveTask,
   isCleared,
   isTerminalTaskStatus,
@@ -28,6 +29,7 @@ import { useInboxStore, type TaskItem } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { waitIsOn } from "../store/taskGraphDraft";
 import { counted, undoAsOne } from "../store/undo/labels";
+import { lookup } from "./liveEntities";
 import { storeStatusOf, type BoardTask } from "./taskBlockers";
 import { filterByWorkspace, workspaceKeyOfRow } from "./workspaceScope";
 
@@ -58,11 +60,41 @@ export function blockerLines(task: GraphTask, statusOf: StatusOf): BlockerLine[]
   return lines;
 }
 
-/** The store's tasks that were found while working on `task` (TG5), in its workspace. */
+/** The store's tasks that were found while working on `task` (TG5), in its
+ *  workspace, oldest first and stopped at the shared cap, so the page and
+ *  `cast task show` list the same tasks (convex foundHereRows). */
 export function foundHereOf(task: Pick<TaskItem, "short_id" | "workspace" | "team_id">, tasks: Record<string, TaskItem>): TaskItem[] {
   return sameWorkspace(tasks, task)
     .filter((t) => t.found_during === task.short_id)
-    .sort((a, b) => a.created_at - b.created_at);
+    .sort((a, b) => a.created_at - b.created_at)
+    .slice(0, GRAPH_LINK_CAP);
+}
+
+/** `task`'s `blocks` mirror as every surface prints it (convex taskLinksOf):
+ *  stopped at the shared cap, and without an entry the client can see has
+ *  gone stale — a dependent whose row it holds and whose `blocked_by` no
+ *  longer names this task. An entry whose row the store lacks stays, so an
+ *  unloaded dependent is never hidden. */
+export function blocksOf(task: TaskItem, tasks: Record<string, TaskItem>): string[] {
+  const self = new Set([task.short_id, String(task._id)]);
+  const home = workspaceKeyOfRow(task);
+  // Capped before the stale ones are dropped, exactly as the server reads it,
+  // so both name the same tasks on a row that got past the cap.
+  return (task.blocks ?? [])
+    .slice(0, GRAPH_LINK_CAP)
+    .filter((ref) => {
+      const row = lookup(tasks, ref);
+      // Only a live row in this task's workspace can answer: the server reads
+      // the mirror no further either (taskLinksOf's readableLink).
+      if (!row || workspaceKeyOfRow(row) !== home) return true;
+      return ((row.blocked_by ?? []) as string[]).some((r) => self.has(r));
+    });
+}
+
+/** `task`'s see-also links at the same cap, so the page and `cast task show`
+ *  list the same tasks even on a row that got past the write-time cap. */
+export function relatedOf(task: TaskItem): string[] {
+  return (task.related ?? []).slice(0, GRAPH_LINK_CAP);
 }
 
 /** The store's tasks in `task`'s own workspace: what its relations may name. */
@@ -81,10 +113,22 @@ const isWaiting = (w: TaskWait) => w.state === "waiting";
 const stands = (w: TaskWait) => !waitIsReplaceable(w);
 
 // ---------------------------------------------------------------------------
-// The palette (modes "blocker" and "related")
+// The palette (modes "blocker", "blocks" and "related")
 // ---------------------------------------------------------------------------
 
-export type RelationMode = "blocker" | "related";
+/** Which edge the palette writes: a blocker of the target ("blocker"), a
+ *  task that waits on the target ("blocks", the Blocks row's own add, which
+ *  writes the same edge from the other side), or a see-also link. */
+export type RelationMode = "blocker" | "related" | "blocks";
+
+/** The modes that edit the one dependency edge, in either direction. */
+const isDepMode = (mode: RelationMode) => mode === "blocker" || mode === "blocks";
+
+/** Whether a palette mode is one of the relation searches, for the palette's
+ *  branches: one list, so a mode added here reaches every one of them. */
+export function isRelationMode(mode: string | null | undefined): mode is RelationMode {
+  return mode === "blocker" || mode === "blocks" || mode === "related";
+}
 
 /** A palette row: a task to link, or (blocker) a wait parsed from the query.
  *  A task row carries what its line draws (`task`); `warn` marks a hint that
@@ -102,7 +146,8 @@ export type RelationItem = {
 export type RelationTask = { ref: string; title?: string; status?: string };
 
 /** The task links a mode edits on `t`. */
-const linksOf = (t: TaskItem, mode: RelationMode): string[] => (mode === "blocker" ? t.blocked_by : t.related) ?? [];
+const linksOf = (t: TaskItem, mode: RelationMode): string[] =>
+  (mode === "blocker" ? t.blocked_by : mode === "blocks" ? t.blocks : t.related) ?? [];
 
 /** Where a row sits: list rows carry their plan and project ids untyped. */
 type Placed = { plan_id?: string; project_id?: string; project_path?: string };
@@ -148,6 +193,7 @@ export function parseRelationQuery(search: string, mode: RelationMode, now = Dat
   const ref = parseBlockerRef(text, { now, timeZone });
   if (!ref.ok) return ref.unrecognized ? { error: ref.error, unrecognized: true } : { error: ref.error };
   if (ref.kind === "task") return { pick: { kind: "task", ref: ref.ref } };
+  if (mode === "blocks") return { error: `A task that waits on this one is a task (ct-12), not ${text}`, unrecognized: true };
   if (mode === "related") return { error: `A related link is to a task (ct-12), not ${text}`, unrecognized: true };
   return { pick: { kind: "wait", target: waitTargetOf(ref) } };
 }
@@ -158,14 +204,30 @@ export function parseRelationQuery(search: string, mode: RelationMode, now = Dat
  * workspace, built on first use, so marking every candidate reads the
  * collection once.
  */
-function loopChecker(tasks: Record<string, TaskItem>): (task: TaskItem, ref: string) => string | null {
+function loopChecker(tasks: Record<string, TaskItem>): (owner: TaskItem, task: string, blocker: string) => string | null {
   const byWorkspace = new Map<string | null, (task: string, blocker: string) => string | null>();
-  return (task, ref) => {
-    const key = workspaceKeyOfRow(task);
+  return (owner, task, blocker) => {
+    const key = workspaceKeyOfRow(owner);
     let check = byWorkspace.get(key);
-    if (!check) byWorkspace.set(key, (check = dependencyLoopChecker(sameWorkspace(tasks, task).filter((t) => !isTerminalTaskStatus(t.status)))));
-    return check(task.short_id, ref);
+    if (!check) byWorkspace.set(key, (check = dependencyLoopChecker(sameWorkspace(tasks, owner).filter((t) => !isTerminalTaskStatus(t.status)))));
+    return check(task, blocker);
   };
+}
+
+/** The edge a pick writes, as the loop checker reads it: which task would
+ *  wait, and on what. "blocks" is the same edge from the other side, so the
+ *  check is the same one, with its ends swapped. */
+const depEdge = (mode: RelationMode, target: TaskItem, ref: string): [task: string, blocker: string] =>
+  mode === "blocks" ? [ref, target.short_id] : [target.short_id, ref];
+
+/** Whether the link a pick would write is already on `target`. For "blocks"
+ *  both rows are read: the dependent's own `blocked_by` is the authority for
+ *  the edge (by either form it may name the task under), and the mirror alone
+ *  can lag it, so a pick on a task that already waits is never offered as new. */
+function alreadyLinked(mode: RelationMode, target: TaskItem, ref: string, row: TaskItem | undefined): boolean {
+  if (mode !== "blocks") return linksOf(target, mode).includes(ref);
+  const forms = [target.short_id, String(target._id)];
+  return (target.blocks ?? []).includes(ref) || ((row?.blocked_by ?? []) as string[]).some((r) => forms.includes(r));
 }
 
 /** The palette rows for `targets`: the parsed ref first, then open, active
@@ -182,9 +244,12 @@ export function relationItems(
 ): RelationItem[] {
   const target = targets[0];
   if (!target) return [];
-  const linked = new Set(targets.flatMap((t) => [t.short_id, ...linksOf(t, mode)]));
+  const selves = new Set(targets.map((t) => t.short_id));
   const rows = sameWorkspace(tasks, target);
   const byShort = new Map(rows.map((t) => [t.short_id, t]));
+  // What a pick would not change, on any target (the loose list) or on all of
+  // them (the pasted ref's hint).
+  const linkedAny = (ref: string, row?: TaskItem) => targets.some((t) => alreadyLinked(mode, t, ref, row));
   const loops = loopChecker(tasks);
   const q = search.trim().toLowerCase();
   const out: RelationItem[] = [];
@@ -202,15 +267,17 @@ export function relationItems(
       // A pasted ref that is already linked is still listed, saying why a pick would change nothing.
       const ref = parsed.pick.ref;
       const self = targets.some((t) => t.short_id === ref);
-      const already = targets.every((t) => linksOf(t, mode).includes(ref));
+      const already = targets.every((t) => alreadyLinked(mode, t, ref, byShort.get(ref)));
       const item = taskItem(mode, ref, byShort.get(ref), targets, loops);
-      const hint = self ? "this task" : already ? (mode === "blocker" ? "already a blocker" : "already linked") : item.hint;
+      const alreadyWords = mode === "blocker" ? "already a blocker" : mode === "blocks" ? "already waiting on this" : "already linked";
+      const hint = self ? "this task" : already ? alreadyWords : item.hint;
       out.push({ ...item, ...(hint ? { hint } : {}) });
     }
   }
   const loose = rows
     .filter((t) =>
-      !linked.has(t.short_id) &&
+      !selves.has(t.short_id) &&
+      !linkedAny(t.short_id, t) &&
       !out.some((i) => i.pick.kind === "task" && i.pick.ref === t.short_id) &&
       !isTerminalTaskStatus(t.status) &&
       isActiveTask(t) &&
@@ -223,7 +290,7 @@ export function relationItems(
 }
 
 function taskItem(mode: RelationMode, ref: string, row: TaskItem | undefined, targets: TaskItem[], loops: ReturnType<typeof loopChecker>): RelationItem {
-  const loop = mode === "blocker" && targets.some((t) => t.short_id !== ref && loops(t, ref));
+  const loop = isDepMode(mode) && targets.some((t) => t.short_id !== ref && loops(t, ...depEdge(mode, t, ref)));
   return {
     key: `task:${ref}`,
     label: row?.title ? `${ref}  ${row.title}` : ref,
@@ -276,10 +343,16 @@ export function applyRelationPick(mode: RelationMode, targets: TaskItem[], pick:
     const parked = `${nameOf(fresh)} will wait ${on} once it reaches the server`;
     return { ok: true, pending: true, message: `Checking PR ${prRef(pick.target, { fullRef: true })} for ${nameOf(fresh)}…`, parked, landed };
   }
-  if (targets.some((t) => t.short_id === pick.ref)) return { ok: false, message: `A task can't ${mode === "blocker" ? "wait on" : "relate to"} itself` };
-  const fresh = targets.filter((t) => !linksOf(t, mode).includes(pick.ref));
+  if (targets.some((t) => t.short_id === pick.ref)) return { ok: false, message: `A task can't ${mode === "related" ? "relate to" : "wait on"} itself` };
+  const row = lookup(s.tasks as Record<string, TaskItem>, pick.ref);
+  const fresh = targets.filter((t) => !alreadyLinked(mode, t, pick.ref, row));
   if (!fresh.length) {
-    return { ok: false, message: mode === "blocker" ? `${names} already ${waits(targets)} on ${pick.ref}` : `${names} already linked to ${pick.ref}` };
+    return {
+      ok: false,
+      message: mode === "blocker" ? `${names} already ${waits(targets)} on ${pick.ref}`
+        : mode === "blocks" ? `${pick.ref} already waits on ${names}`
+        : `${names} already linked to ${pick.ref}`,
+    };
   }
   if (mode === "related") {
     const writes = undoAsOne(`Linked ${counted(fresh.length, "task")} to ${pick.ref}`, () => fresh.map((t) => s.relateTasks(t.short_id, pick.ref)));
@@ -287,8 +360,14 @@ export function applyRelationPick(mode: RelationMode, targets: TaskItem[], pick:
   }
   const loops = loopChecker(s.tasks as Record<string, TaskItem>);
   for (const t of fresh) {
-    const loop = loops(t, pick.ref);
+    const loop = loops(t, ...depEdge(mode, t, pick.ref));
     if (loop) return { ok: false, message: loop };
+  }
+  // "blocks" writes the one edge from the other side: the picked task waits on
+  // this one, so addBlocker is called with its ends swapped.
+  if (mode === "blocks") {
+    const writes = undoAsOne(`Made ${pick.ref} wait on ${counted(fresh.length, "task")}`, () => fresh.map((t) => s.addBlocker(pick.ref, t.short_id)));
+    return sent(`${pick.ref} waits on ${nameOf(fresh)}`, writes);
   }
   const writes = undoAsOne(`Made ${counted(fresh.length, "task")} wait on ${pick.ref}`, () => fresh.map((t) => s.addBlocker(t.short_id, pick.ref)));
   return sent(`${nameOf(fresh)} ${waits(fresh)} on ${pick.ref}`, writes);

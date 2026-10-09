@@ -3,6 +3,7 @@ import type { PrWaitTarget, TaskWait } from "@codecast/shared/tasks";
 import {
   createPlanSteps,
   depAddedLine,
+  noWaitRemovedLine,
   offFrontierLines,
   parkAfterBlocking,
   planStepBase,
@@ -41,7 +42,7 @@ describe("routeBlockerRef", () => {
     expect(() => routeBlockerRef("whenever", { removing: true })).toThrow(/\. A wait can also be removed by its id/);
     // A met time wait stays as history, so removing it may name a past time.
     expect(routeBlockerRef("2026-01-01T09:00Z", { removing: true }).kind).toBe("wait");
-    expect(() => routeBlockerRef("2026-01-01T09:00Z")).toThrow(/in the past/);
+    expect(() => routeBlockerRef("2026-01-01T09:00Z")).toThrow(/already past/);
     expect(() => routeBlockerRef("wmg3k2p1x4")).toThrow();
   });
 
@@ -100,10 +101,23 @@ test("depAddedLine: a finished blocker blocks nothing", () => {
   expect(depAddedLine("ct-9", "ct-5", { success: true } as any)).toBe("ct-9 is blocked by ct-5");
 });
 
+describe("noWaitRemovedLine", () => {
+  test("a removal that matched nothing names the handle given and where the real ones are", () => {
+    expect(noWaitRemovedLine("ct-5", { kind: "wait_id", id: "wzzzzzzzzzz" }))
+      .toBe("ct-5 has no wait with id wzzzzzzzzzz; cast task show ct-5 lists its waits");
+    expect(noWaitRemovedLine("ct-5", { kind: "wait", ref: "#42", barePr: true }))
+      .toBe("ct-5 has no wait on #42; cast task show ct-5 lists its waits");
+  });
+});
+
 describe("parkAfterBlocking", () => {
   const open = [prWait("waiting")];
   test("a session holding the task is told how to park on it", () => {
-    expect(parkAfterBlocking("s1", "ct-5", open, { task: "CT-005", started: true })).toMatch(/^Until it clears, run cast state --status dormant "Waiting on PR #42"/);
+    // The work is underway: this session started the task and got far enough
+    // to find a new blocker, so parking is its call — the same words the
+    // compaction block gives the same task in the same state.
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "CT-005", started: true }))
+      .toMatch(/^If the work cannot go on until it clears, run cast state --status dormant "Waiting on PR #42"/);
   });
 
   test("a session that filed or never held the task is told nothing wakes it", () => {
@@ -140,7 +154,7 @@ describe("taskGraphSections", () => {
       {
         label: "Blocked by",
         holds: true,
-        items: ["ct-1 Design [done]", "ct-2 (not found)", "ct-3 (status unknown)", "PR #42 to merge · id w42", "PR #7 closed without merging · id w7"],
+        items: ["ct-1 Design [done]", "ct-2 (not found)", "ct-3 (status unknown)", "PR #42 to merge [waiting]", "PR #7 closed without merging [failed]"],
       },
       { label: "Blocks", items: ["ct-9 Ship [open]"] },
       { label: "Found during", items: ["ct-4 Audit [in_progress]"] },
@@ -152,14 +166,38 @@ describe("taskGraphSections", () => {
     const [s] = taskGraphSections({ waits: [prWait("met", "merged")] }, { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "dropped" }] });
     expect(s.holds).toBe(false);
     expect(s.label).toBe("Blocked by (cleared)");
-    expect(s.items).toEqual(["ct-1 A [dropped]", "PR #42 merged · id w42"]);
+    expect(s.items).toEqual(["ct-1 A [dropped]", "PR #42 merged [met]"]);
   });
 
-  test("a missing task holds nothing; the wait id takes the reader's style", () => {
-    const [s] = taskGraphSections({ waits: [prWait("waiting")] }, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] }, { waitId: (x) => `<${x}>` });
+  test("a missing task holds nothing; only a time wait carries its id, in the reader's style", () => {
+    const words = { waitId: (x: string) => `<${x}>`, now: NOW };
+    const [s] = taskGraphSections({ waits: [prWait("waiting")] }, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] }, words);
     expect(s.holds).toBe(true);
-    expect(s.items[1]).toBe("PR #42 to merge< · id w42>");
+    // A PR or decision wait is removed by its target (waitRemoveRef), so its
+    // internal id is noise on the line; a time wait's id is the handle.
+    expect(s.items[1]).toBe("PR #42 to merge [waiting]");
+    expect(taskGraphSections({ waits: [{ kind: "decision", decision: "sd-4", id: "wq7z", state: "waiting", created_at: NOW }] }, null, words)[0].items)
+      .toEqual(["sd-4 to be answered [waiting]"]);
+    expect(taskGraphSections({ waits: [{ kind: "time", at: NOW + 7_200_000, id: "wt1", state: "waiting", created_at: NOW }] }, null, words)[0].items)
+      .toEqual(["14:00 in 2h [waiting]< · id wt1>"]);
     expect(taskGraphSections({}, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] })[0].holds).toBe(false);
+  });
+
+  test("a mixed list marks every entry, so a met or failed wait is not read as holding", () => {
+    const [s] = taskGraphSections(
+      { waits: [prWait("waiting", undefined, 8), { ...prWait("met", "checks green", 8), kind: "pr_checks_green", id: "w8c" }, prWait("failed", "closed without merging", 9)] },
+      { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "open" }] },
+    );
+    // Every line ends in a bracketed state, the way a task blocker does: the
+    // two #8 waits differ only by tense otherwise ("to merge" / "checks green").
+    expect(s.items).toEqual([
+      "ct-1 A [open]",
+      "PR #8 to merge [waiting]",
+      "PR #8 checks green [met]",
+      "PR #9 closed without merging [failed]",
+    ]);
+    expect(s.items.every((i) => /\[(open|done|dropped|waiting|met|failed)\]/.test(i))).toBe(true);
+    expect(s.label).toBe("Blocked by");
   });
 
   test("the replacement is its own line, never a section after the rest", () => {
@@ -267,6 +305,9 @@ describe("plan steps", () => {
     expect(planWorkspace({ workspace: "user:u1", team_id: "t1" })).toEqual({ workspace: "personal" });
     expect(planWorkspace({ team_id: "t2" })).toEqual({ workspace: "team", team_id: "t2" });
     expect(planWorkspace(undefined)).toEqual({});
+    // A key this CLI cannot read names nothing, the way it grants nothing: it
+    // never falls through to the routing team, which is not access.
+    expect(planWorkspace({ workspace: "restricted:r1", team_id: "t1" })).toEqual({});
   });
 
   test("createPlanSteps: a refused step names what was filed and how to add the rest", async () => {
@@ -301,7 +342,8 @@ describe("plan steps", () => {
     n = 0;
     const base = { source: "human", project_id: "proj1", workspace: "team", team_id: "team_a" };
     const advice = await createPlanSteps(failing, "pl-1", stepsFromText("A\nB\nC\n\nD :: it ships\nE"), { base }).catch((e) => e.message);
-    expect(advice).toContain("  cast task create 'C' --plan pl-1 --found-during none --human --project 'proj1' --team 'team_a'\n");
+    // A team id is a bare word, so it is printed unquoted (teamFlagFor/shq).
+    expect(advice).toContain("  cast task create 'C' --plan pl-1 --found-during none --human --project 'proj1' --team team_a\n");
     expect(advice).toContain("cast plan steps pl-1 --human - <<'STEPS'\nD :: it ships\nE\nSTEPS");
   });
 
