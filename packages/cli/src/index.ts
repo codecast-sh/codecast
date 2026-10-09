@@ -89,9 +89,12 @@ import {
   foreignProse,
   renderFencedPlanRecord,
   renderFencedPlanTasks,
+  AGENT_WAIT_WORDS,
   graphChange,
   graphChangeText,
+  isTaskBeingWorked,
   isTerminalTaskStatus,
+  localWaitTimes,
   openBlockerLabels,
   parkingLine,
   READY_MEANS,
@@ -110,10 +113,15 @@ import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
 import {
+  filedElsewhereLine,
+  outOfReachLine,
   loadWorkspaceRoster,
+  projectFlagFor,
   resolveWorkspaceForRead,
   resolveWorkspaceForWrite,
+  teamFlagFor,
   workspaceArgs,
+  workspaceFromKey,
   workspaceScope,
   workspaceLabel,
   workspaceHasFeature,
@@ -132,9 +140,9 @@ import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
 import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness.js";
-import { listedBlockers, listedReady } from "./listedReadiness.js";
+import { listedBlockerEntries, listedBlockers, listedReady } from "./listedReadiness.js";
 import { checkoutWords } from "./checkoutWords.js";
-import { applyBlockers, BLOCKER_REFS_HELP, createPlanSteps, planStepBase, planTemplate, offFrontierLines, registerTaskGraphCommands, routeBlockerRef, splitRefs, stepsFromText, stepsFromTitles, supersededLine, taskGraphSections, waitAddedLine, waitScope, writerOf, type GraphDeps } from "./taskGraphCommands.js";
+import { applyBlockers, BLOCKER_REFS_HELP, createPlanSteps, depAddedLine, holdingBlockers, parkHeldLine, planStepBase, planTemplate, offFrontierLines, registerTaskGraphCommands, routeBlockerRef, splitRefs, stepsFromText, stepsFromTitles, supersededLine, taskGraphSections, waitAddedLine, waitScope, writerOf, type GraphDeps } from "./taskGraphCommands.js";
 import type { PlanStep } from "@codecast/shared/tasks";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
@@ -234,7 +242,7 @@ import { resolveOwnTarget } from "./ownTarget.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
-import { clearTaskPulse, clearTaskPulseIfBound, readTaskPulseFor, recordTaskFiled, recordTaskStart, writeTaskPulse } from "./taskPulse.js";
+import { clearTaskPulse, clearTaskPulseIfBound, readTaskPulseFor, recordTaskFiled, recordTaskStart, writeTaskPulse, type TaskPulse } from "./taskPulse.js";
 import type { MachineCapKey } from "./machineCaps.js";
 
 const program = new Command();
@@ -945,7 +953,7 @@ function installSlashCommand(): void {
   }
 }
 
-function readTaskPulse(): { task?: string; plan?: string } | null {
+function readTaskPulse(): TaskPulse | null {
   return readTaskPulseFor(detectCurrentSessionId());
 }
 
@@ -15898,6 +15906,65 @@ async function readWorkspace(explicitTeam?: string): Promise<Workspace> {
   return resolveWorkspaceForRead(await workspaceRoster(), explicitTeam);
 }
 
+/**
+ * What a `--plan` read that came back empty should add: the plan holds work
+ * this read did not cover, either because it is filed in another WORKSPACE or
+ * because it was filed from another DIRECTORY. A plan is read by short id in
+ * any workspace its reader can see, so the lookup answers even when the list
+ * did not — and each claim is then PROVED by running the same read with that
+ * one filter lifted (`reread`) rather than inferred, because an unscoped
+ * read's workspace is the server's to resolve from the directory mappings, and
+ * a list has other ways of coming back empty (a project filter, which the
+ * server answers without the path wrapper at all). Null when neither read
+ * finds anything either, which is when "nothing found" is honest.
+ * `command` is the read to print, without its `--team`.
+ */
+async function planScopeNote(planId: string, command: string, reread: (scope: Record<string, any>) => Promise<any>): Promise<string | null> {
+  const plan = await tryCliPost("/cli/plans/get", { short_id: planId });
+  if (!plan) return null;
+  const rowsOf = async (scope: Record<string, any>) => {
+    const rows = await reread(scope).catch(() => null);
+    return Array.isArray(rows) ? rows : [];
+  };
+  const here = workspaceFromKey(await workspaceRoster(), plan.workspace);
+  const scope = here ? workspaceScope(here) : {};
+  const elsewhere = here ? filedElsewhereLine(planId, here, (await rowsOf(scope)).length, command) : null;
+  if (elsewhere) return elsewhere;
+  // The workspace is one of two filters. A read scoped to the plan's own
+  // workspace comes back empty too when this DIRECTORY emptied it, so lift the
+  // path filter as well and let the answer prove which it was: with the path
+  // gone a plan filed from another checkout answers, and a list emptied by
+  // anything else stays empty and says nothing (outOfReachLine).
+  const unreached = await rowsOf({ ...scope, project_path: undefined });
+  return outOfReachLine(planId, unreached.length, `cast plan status ${planId}`, await planReachNote(unreached, command, here, reread));
+}
+
+/** The read that DOES answer tasks this directory put out of reach, for
+ *  `outOfReachLine`: a project filter, the one narrowing `tasks.list` answers
+ *  without the path wrapper at all. Named only once it has been RUN with the
+ *  path still in place and answered, the way every other claim in these lines
+ *  is proved, and with the count it returned, since a plan may hold tasks in
+ *  no project that it does not reach. Null when the tasks name no project or
+ *  the read comes back empty; then the checkout they were filed from is all
+ *  there is to say. */
+async function planReachNote(
+  unreached: any[],
+  command: string,
+  here: Workspace | null,
+  reread: (scope: Record<string, any>) => Promise<any>,
+): Promise<{ reach?: { command: string; found: number } | null; checkout?: string | null }> {
+  const scope = here ? workspaceScope(here) : {};
+  const checkout = unreached.map((t) => t.project_path).find((p) => typeof p === "string" && p) ?? null;
+  const projectId = unreached.map((t) => t.project_id).find(Boolean);
+  if (!projectId) return { checkout };
+  const project = await tryCliPost("/cli/projects/get", { id: projectId });
+  if (!project?.title) return { checkout };
+  const reached = await reread({ ...scope, project_id: projectId }).catch(() => null);
+  const found = Array.isArray(reached) ? reached.length : 0;
+  if (!found) return { checkout };
+  return { reach: { command: `${command}${projectFlagFor(project.title)}${teamFlagFor(here)}`, found } };
+}
+
 /** Team features (chat, calls) are opt-in per team. A command for an off
  *  feature stops here with the same words the server would use, instead of
  *  answering with an empty list that reads as "nothing happened yet". */
@@ -16454,12 +16521,19 @@ work
       body.project_path = getRealCwd();
 
       const result = await cliPost("/cli/work/create", body);
-      if (options.json) created.push({ short_id: result.short_id, title: t, ...(result.waits?.length ? { waits: result.waits } : {}), ...(result.found_during ? { found_during: result.found_during } : {}) });
+      if (options.json) created.push({ short_id: result.short_id, title: t, ...(result.blockers?.length ? { blockers: result.blockers } : {}), ...(result.waits?.length ? { waits: result.waits } : {}), ...(result.found_during ? { found_during: result.found_during } : {}) });
       else {
         console.log(`${c.green}ok${c.reset} Created ${c.cyan}${result.short_id}${c.reset}: ${t}`);
+        // Every blocker --blocked-by added is confirmed, tasks before waits as
+        // the graph lists them (TG12): a silent edge leaves the agent to spend a
+        // cast task show finding out whether it landed. depAddedLine is the line
+        // cast task dep prints, terminal blocker and all.
+        for (const b of result.blockers ?? []) console.log(fmt.muted(`  ${depAddedLine(result.short_id, b.ref, { blocker_status: b.status })}`));
         for (const added of result.waits ?? []) console.log(fmt.muted(`  ${waitAddedLine(result.short_id, added, checkoutWords(getRealCwd()))}`));
         // The session's bound task, linked by default (TG5): say so, and how not to.
-        if (result.found_during) console.log(fmt.muted(`  found during ${result.found_during}${options.foundDuring ? "" : " (pass --found-during none when filing unrelated work)"}`));
+        // The link the server set is correctable, so the nudge names the
+        // command that undoes it rather than a flag this create is past.
+        if (result.found_during) console.log(fmt.muted(`  found during ${result.found_during}${options.foundDuring ? "" : ` (cast task update ${result.short_id} --found-during none if it was unrelated work)`}`));
       }
       // Subtasks never rebind the session's task pulse — the loop is "claim
       // the parent once, advance subtasks under it".
@@ -16512,6 +16586,12 @@ work
     }
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No tasks found."));
+      // An empty list names no scope: say when the plan's own workspace answers,
+      // or when the plan holds work no read from this directory can reach.
+      const elsewhere = options.plan
+        ? await planScopeNote(options.plan, `cast task ls --plan ${options.plan}`, (scope) => cliPost("/cli/work/list", { ...body, ...scope }))
+        : null;
+      if (elsewhere) console.log(fmt.muted(elsewhere));
       return;
     }
     // Nest subtasks under their parents (shared with the web list so the two
@@ -16647,11 +16727,14 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   if (t.history?.length) {
     console.log(`\n  ${c.bold}History (${t.history.length})${c.reset}`);
     for (const h of t.history) {
-      // Graph changes in the web timeline's words (task-graph.md TG11).
+      // Graph changes in the web timeline's words (task-graph.md TG11), their
+      // stored UTC moment in this reader's clock (localWaitTimes, as the web's
+      // GraphText does it) — the graph lines above print the same wait live, and
+      // one screen says one moment one way.
       const graph = graphChange(h);
       const what = h.action === "created"
         ? "created this task"
-        : graph ? graphChangeText(graph) : `${h.field}: ${h.old_value || "none"} to ${h.new_value || "none"}`;
+        : graph ? localWaitTimes(graphChangeText(graph), { now: Date.now() }) : `${h.field}: ${h.old_value || "none"} to ${h.new_value || "none"}`;
       const from = h.session ? ` ${c.dim}in ${h.session}${c.reset}` : "";
       const actor = !h.actor || h.actor === "system" ? "codecast" : h.actor;
       console.log(`  ${c.dim}${new Date(h.created_at).toLocaleString()}${c.reset}  ${actor} ${what}${from}`);
@@ -16671,7 +16754,12 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
     for (const cm of comments) {
       const ago = formatMs(Date.now() - cm.created_at);
       const typeIcon = COMMENT_TYPE_ICONS[cm.comment_type] || COMMENT_TYPE_ICONS.note;
-      console.log(`  ${typeIcon} ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
+      // The system comments the graph writes ("Unblocked: Oct 9, 2026 03:23
+      // UTC passed") store their moment absolute, so they go through the same
+      // rewrite as the history lines above (TG11): the graph lines on this
+      // screen print the same wait live, and one screen says one moment one
+      // way. A no-op on text naming no stored moment, which is most comments.
+      console.log(`  ${typeIcon} ${c.dim}${cm.author} (${ago} ago):${c.reset} ${localWaitTimes(cm.text, { now: Date.now() })}`);
     }
   }
   // The line (the-line.md L10): decisions, runs, evidence. Empty sections are skipped.
@@ -16692,9 +16780,10 @@ async function afterTaskStarted(shortId: string, sessionId: string | null, resul
   const boundPlan = await recordTaskStart(sessionId, shortId, result.plan_id, (planId, session) =>
     cliPost("/cli/plans/bind", { short_id: planId, session_id: session }));
   if (opts.quiet) return;
-  const blockers = listedBlockers({ open_blockers: result.open_blockers ?? [] }, checkoutWords(getRealCwd()));
+  const words = checkoutWords(getRealCwd());
+  const blockers = listedBlockers({ open_blockers: result.open_blockers ?? [] }, words);
   // A session now holds a task that cannot move yet: say how to park it.
-  const park = sessionId && blockers.length ? ` ${parkingLine((result.open_blockers ?? []).filter((b: unknown) => typeof b === "object"), shortId)}` : "";
+  const park = sessionId && blockers.length ? ` ${parkingLine(listedBlockerEntries(result), shortId, words)}` : "";
   if (blockers.length) console.log(fmt.muted(`Still blocked by: ${blockers.join(", ")}.${park}`));
   for (const line of startedLines(result)) console.log(`${c.dim}${line}${c.reset}`);
   if (boundPlan) console.log(`${c.dim}Session bound to plan ${boundPlan}${c.reset}`);
@@ -16912,6 +17001,7 @@ work
   .option("--watch-days <n>", "Watch the cause after ship: a signal within N days reopens it, a quiet watch closes it as resolved; 0 ends the watch")
   .option("--model <model>", "Model a session spawned for this task launches with; '' clears")
   .option("--effort <level>", "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max; '' clears")
+  .option("--found-during <task_id>", "The task this was found while working on; none or '' clears the link the filing session set")
   .action(async (shortId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId };
@@ -16947,6 +17037,7 @@ work
     if (options.projectPath !== undefined) body.project_path = options.projectPath;
     if (options.plan) body.plan_id = options.plan;
     if (options.fromCall !== undefined) body.from_call = await taskCallArg(options.fromCall);
+    if (options.foundDuring !== undefined) body.found_during = options.foundDuring;
     await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${shortId}${c.reset}`);
   });
@@ -16990,7 +17081,7 @@ work
   .option("--blocks <id>", "This task blocks one other task <id>, which then waits on it")
   .option("--blocked-by <refs>", BLOCKER_REFS_HELP)
   .option("--remove-blocks <id>", "Remove: this task no longer blocks <id>")
-  .option("--remove-blocked-by <refs>", "Remove blockers, written as for --blocked-by, or by a wait's id (cast task show prints it after each wait). A time wait is removed by its id or its absolute time, since 2h names a new moment each time it is read")
+  .option("--remove-blocked-by <refs>", "Remove blockers, written as for --blocked-by: a task by its id, a PR or decision wait by what it waits on (\"#42\", #42:checks, sd-4). A time wait goes by the `id w…` that cast task show and context print after it, or by its time written out, since 2h names a new moment each time it is read. A written-out time with no zone (2026-10-14T09:00) is read in this machine's zone; add Z for UTC (2026-10-14T09:00Z), which is the zone cast task context prints a wait in")
   .action(async (shortId: string, options: any) => {
     if (!options.blocks && !options.blockedBy && !options.removeBlocks && !options.removeBlockedBy) {
       console.error("Specify --blocks, --blocked-by, --remove-blocks, or --remove-blocked-by");
@@ -17046,10 +17137,12 @@ work
   .description("Get full context for a task (for agents)")
   .argument("[short_id]", "Task short ID (omit with --current)")
   .option("--current", "Use the task bound to the current session")
-  .option("--json", "Output as JSON (task, parent, subtasks, comments, sessions, project, relatedDocs, links: blocked_by with statuses, blocks, found_during, found_here, related, superseded_by; waits ride on task.waits)")
+  .option("--json", "Output as JSON (task, parent, subtasks, comments, sessions, project, relatedDocs, links: blocked_by with statuses, blocks, found_during, found_here, related, superseded_by; not_ready: why cast task ready leaves it out (null when ready); waits ride on task.waits)")
   .action(async (shortId: string | undefined, options: any) => {
+    // Read whether or not --current named the task: a session reading the task
+    // it holds gets the parking line below, which only its own pulse can say.
+    const pulse = readTaskPulse();
     if (options.current || !shortId) {
-      const pulse = readTaskPulse();
       if (!pulse?.task) {
         console.error("No task bound to current session. Use: cast task start <id>");
         process.exit(1);
@@ -17075,7 +17168,10 @@ work
     if (result.parent) {
       console.log(`Subtask of: ${result.parent.short_id} ${inlineForeignText(result.parent.title)} [${result.parent.status}]`);
     }
-    const foreignBlock = renderFencedTaskRecord({ ...t, comments: result.comments });
+    // The title is printed above as this command's own heading, so a task
+    // whose only prose IS its title gets no block: the fence would carry a
+    // restatement of the line above it.
+    const foreignBlock = renderFencedTaskRecord({ ...t, comments: result.comments }, "reference", { title: true });
     if (foreignBlock) console.log(`\n${foreignBlock}`);
     if (result.project) {
       console.log(`\nProject: ${inlineForeignText(result.project.title)}`);
@@ -17094,9 +17190,19 @@ work
       };
       for (const sub of result.subtasks) printSub(sub, "");
     }
-    // Each wait ends with its id, which --remove-blocked-by takes.
-    const graph = taskGraphSections(t, result.links, { inline: inlineForeignText, ...checkoutWords(getRealCwd()) });
+    // A time wait ends with its id, which --remove-blocked-by takes. The moment
+    // itself is absolute here: this output is read by an agent, beside the stored
+    // history, the unblock comment, the wake message and a claim's skip reason
+    // (taskFrontier), all of which name the date, the year and the zone.
+    const words = { ...AGENT_WAIT_WORDS, ...checkoutWords(getRealCwd()) };
+    const graph = taskGraphSections(t, result.links, { inline: inlineForeignText, ...words });
     const offFrontier = offFrontierLines(t, result.not_ready);
+    // The same parking line `cast task start` and the compaction block print,
+    // for the session that holds this task: `offFrontierReason` says nothing
+    // for a blocked task (its Blocked by lines say why), and this is the
+    // surface the installed snippet names for regrounding, so without it an
+    // agent that reground here would read its blockers and no instruction.
+    const park = parkHeldLine(pulse, t.short_id, holdingBlockers(t, result.links), { ...words, underway: isTaskBeingWorked(t.status) });
     if (graph.length || offFrontier.length) {
       console.log(`\n## Graph`);
       for (const s of graph) {
@@ -17104,6 +17210,7 @@ work
         else console.log([`${s.label}:`, ...s.items.map((item) => `- ${item}`)].join("\n"));
       }
       for (const l of offFrontier) console.log(l);
+      if (park) console.log(park);
     }
     if (result.relatedDocs?.length) {
       // Why: a linked plan doc is prose someone else wrote, and this command
@@ -17172,7 +17279,15 @@ work
       }
       for (const s of claim?.skipped ?? []) console.log(fmt.muted(`  passed over ${s.short_id}: ${s.reason}`));
       if (!claim?.task) {
-        console.log(fmt.muted(unclaimedLine(claim)));
+        // The same proved cause the list spelling prints below: `--claim` is
+        // the autopilot's entry point, and an agent told "nothing to claim"
+        // where the truth is "not in this workspace, not from this directory"
+        // reads it as no work left and stops (TG12).
+        const elsewhere = options.plan
+          ? await planScopeNote(options.plan, `cast task ready --plan ${options.plan}`, (scope) =>
+              cliPost("/cli/work/list", { ...buildTaskClaimBody(filters, sessionId), ...scope, ready: true, limit: READY_LIST_LIMIT }))
+          : null;
+        console.log(fmt.muted(`${unclaimedLine(claim)}${elsewhere ? ` ${elsewhere}` : ""}`));
         return;
       }
       console.log(`${c.green}ok${c.reset} Claimed ${c.cyan}${claim.task.short_id}${c.reset} ${inlineForeignText(claim.task.title)}`);
@@ -17187,8 +17302,16 @@ work
       return;
     }
     if (!Array.isArray(tasks) || tasks.length === 0) {
-      // An empty frontier is a finished plan or a held one: say where to tell.
-      console.log(fmt.muted(`No ready tasks. ${options.plan ? `cast plan status ${options.plan} shows what holds the rest.` : "cast task ls shows blocked work."}`));
+      // An empty frontier is a finished plan or a held one — or a plan this
+      // read did not cover at all (another workspace, or a directory no step
+      // of it was filed from), which is not "no work" and not "held" either,
+      // so it replaces the pointer rather than following it.
+      const elsewhere = options.plan
+        ? await planScopeNote(options.plan, `cast task ready --plan ${options.plan}`, (scope) =>
+            cliPost("/cli/work/list", { ...buildTaskClaimBody(filters, sessionId), ...scope, ready: true, limit: READY_LIST_LIMIT }))
+        : null;
+      const why = elsewhere ?? (options.plan ? `cast plan status ${options.plan} shows what holds the rest.` : "cast task ls shows blocked work.");
+      console.log(fmt.muted(`No ready tasks. ${why}`));
       return;
     }
     const { shown, folded } = foldStaleTasks(tasks, !!options.stale);
@@ -18406,10 +18529,26 @@ plan
     const createdTasks: Array<{ short_id: string; title: string }> = [];
     say(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
 
+    // Where the plan actually landed: this create names no workspace, so the
+    // server decided (the session's team, else the directory rule) and says so
+    // in its answer. The steps are filed there explicitly rather than
+    // re-derived, and the next step printed below names it too.
+    let readScope = "";
     if (steps) {
       const deps = taskGraphDeps();
+      // A server older than this field names no workspace in its answer; one
+      // read of the plan still learns it, which is what this did unconditionally.
+      const filed = result.workspace
+        ? { workspace: result.workspace, team_id: result.team_id }
+        : (await tryCliPost("/cli/plans/get", { short_id: result.short_id })) ?? {};
+      // Named outright, not compared against this shell: the line is run later,
+      // in a directory whose own mapping the CLI cannot see (the server resolves
+      // a read from directory mappings, this process from the active pointer),
+      // and --claim is a write besides. An explicit workspace lands right from
+      // anywhere; a dropped one can land nowhere.
+      readScope = teamFlagFor(workspaceFromKey(await workspaceRoster(), filed.workspace));
       try {
-        const base = planStepBase(deps, { human: options.human, sessionId, plan: { project_id: body.project_id } });
+        const base = planStepBase(deps, { human: options.human, sessionId, plan: { ...filed, ...(body.project_id ? { project_id: body.project_id } : {}) } });
         createdTasks.push(...(await createPlanSteps(deps, result.short_id, steps, { base, say })));
       } catch (err) {
         console.error((err as Error).message);
@@ -18419,7 +18558,7 @@ plan
     }
     // The way forward closes the output, after any steps.
     if (sessionId && !options.fromSession) say(fmt.muted(`  Run ${c.cyan}cast plan bind ${result.short_id}${c.reset} to bind this session to the plan`));
-    if (steps) say(fmt.muted(`  ${c.cyan}cast task ready --plan ${result.short_id} --claim${c.reset} takes the first ready step`));
+    if (steps) say(fmt.muted(`  ${c.cyan}cast task ready --plan ${result.short_id}${readScope} --claim${c.reset} takes the first ready step`));
     if (options.json) printJson({ short_id: result.short_id, title, tasks: createdTasks });
   });
 
@@ -18533,7 +18672,11 @@ function renderPlanContext(p: any): string {
   ];
   const planBlock = renderFencedPlanRecord(p, PLAN_COMMENT_AGE);
   if (planBlock) out.push(`\n${planBlock}`);
-  const taskBlock = renderFencedPlanTasks(p.tasks, p, { descriptions: true, words: checkoutWords(getRealCwd()) });
+  // A time wait is named absolute here for the same reason `cast task context`
+  // names it so (AGENT_WAIT_WORDS): this is the plan half of the regrounding
+  // pair the installed snippet names, read beside that command's lines and the
+  // compaction block's, and a bare local "10:54" with no day reads as past.
+  const taskBlock = renderFencedPlanTasks(p.tasks, p, { descriptions: true, words: { ...AGENT_WAIT_WORDS, ...checkoutWords(getRealCwd()) } });
   if (taskBlock) out.push(`\n${taskBlock}`);
   return `${out.join("\n")}\n`;
 }
@@ -20377,7 +20520,9 @@ plan
       lines.push("");
       lines.push("## Tasks");
       const { statusOf } = planReadiness<any>(plan.tasks, plan.graph_outside);
-      const words = checkoutWords(getRealCwd());
+      // A markdown file is read later by definition, in whatever zone opens
+      // it, so its time waits carry the date and the zone (AGENT_WAIT_WORDS).
+      const words = { ...AGENT_WAIT_WORDS, ...checkoutWords(getRealCwd()) };
       for (const t of plan.tasks) {
         const done = t.status === "done";
         const check = done ? "x" : " ";

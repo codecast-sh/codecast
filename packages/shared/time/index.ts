@@ -108,6 +108,25 @@ export function relTimeShort(ms: number, now: number = Date.now()): string {
   return `${Math.floor(diff / DAY)}d`;
 }
 
+/**
+ * The same compact form for time that is still to come, e.g. "in 2h" read as
+ * `in ${relTimeUntil(at)}`. It CEILS where `relTimeShort` floors, because the
+ * two spans mean opposite things: an elapsed span has already happened, so
+ * naming less of it than passed is honest, while a span still to come has not,
+ * and a deadline 1h59m away that reads "1h" promises something sooner than the
+ * truth. Ceiling makes the word an upper bound: the moment lands within it.
+ * Each unit rolls up at its own limit, so 59m30s is "1h" rather than "60m".
+ */
+export function relTimeUntil(at: number, now: number = Date.now()): string {
+  const diff = at - now;
+  if (diff < MINUTE) return "now";
+  const minutes = Math.ceil(diff / MINUTE);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.ceil(diff / HOUR);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.ceil(diff / DAY)}d`;
+}
+
 /** "just now" / "12m ago" / "3h ago" / "2d ago" — relTimeShort with the
  *  suffix; one set of thresholds for every relative stamp. */
 export function formatRelative(ts: number, now: number = Date.now()): string {

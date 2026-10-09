@@ -5,7 +5,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { addWait, linkPrWaits, removeWait, settleDecision, settlePr, settleTimeWait } from "./taskWaits";
+import { addWait, isTaskUnblocked, removeWait, settleDecision, settlePr, settleTimeWait } from "./taskWaits";
+import { linkPrWaits } from "./migrations";
 import { firePrTrigger, patchPullRequest } from "./prShepherd";
 import { reopenCore, settleClientResolution, withdrawCore } from "./sessionDecisions";
 import { create, update } from "./tasks";
@@ -133,7 +134,7 @@ const call = (fn: any, ctx: any, args: any) => fn._handler(ctx, { api_token: TOK
 
 describe("setting a wait", () => {
   test("a PR still open waits, and the task enters by_waiting_since", async () => {
-    const { ctx, tables, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42)] });
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42)] });
     const res = await call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` });
     expect(res.met).toBe(false);
     expect(res.wait).toMatchObject({ kind: "pr_merged", repository: REPO, pr_number: 42, state: "waiting", created_by: USER });
@@ -142,7 +143,7 @@ describe("setting a wait", () => {
   });
 
   test("a PR already merged is met at once and says so", async () => {
-    const { ctx, tables, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42, { state: "merged" })] });
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42, { state: "merged" })] });
     const res = await call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` });
     expect(res.met).toBe(true);
     expect(res.wait).toMatchObject({ state: "met", note: "already merged" });
@@ -154,13 +155,13 @@ describe("setting a wait", () => {
   });
 
   test("checks already green meet a checks wait at once", async () => {
-    const { ctx, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42, { checks_state: "success" })] });
+    const { ctx } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42, { checks_state: "success" })] });
     const res = await call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42:checks` });
     expect(res.wait).toMatchObject({ kind: "pr_checks_green", state: "met", note: "already green" });
   });
 
   test("a PR codecast cannot see is refused with the reason", async () => {
-    const { ctx, tables, movePr } = await makeCtx({ tasks: [task("ct-1")] });
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1")] });
     await expect(call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#7` })).rejects.toThrow("codecast cannot see PR acme/app#7: no GitHub app installation of yours covers acme/app.");
     expect(row(tables, "ct-1").waits).toBeUndefined();
   });
@@ -204,12 +205,12 @@ describe("setting a wait", () => {
   });
 
   test("a PR closed without merging is refused: it would never clear", async () => {
-    const { ctx, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42, { state: "closed" })] });
+    const { ctx } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42, { state: "closed" })] });
     await expect(call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` })).rejects.toThrow(/closed without merging/);
   });
 
   test("a bare #42 takes its repository from the task's sessions, else the caller's", async () => {
-    const { ctx, tables, movePr } = await makeCtx({
+    const { ctx, tables } = await makeCtx({
       tasks: [task("ct-1", { conversation_ids: ["conv_x"], project_path: undefined }), task("ct-2", { project_path: undefined })],
       conversations: [{ _id: "conv_x", user_id: USER, git_remote_url: "git@github.com:Acme/App.git", updated_at: 1 }],
       pull_requests: [pr(42), pr(42, { _id: "pr_other", repository: "other/repo" })],
@@ -221,7 +222,7 @@ describe("setting a wait", () => {
   });
 
   test("a bare #42 with two candidate repositories names them", async () => {
-    const { ctx, movePr } = await makeCtx({
+    const { ctx } = await makeCtx({
       tasks: [task("ct-1", { conversation_ids: ["conv_x", "conv_y"] })],
       conversations: [
         { _id: "conv_x", user_id: USER, git_remote_url: "https://github.com/acme/app", updated_at: 1 },
@@ -237,7 +238,7 @@ describe("setting a wait", () => {
   });
 
   test("the same target twice returns the wait already there", async () => {
-    const { ctx, tables, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42)] });
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42)] });
     const first = await call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` });
     const again = await call(addWait, ctx, { short_id: "ct-1", ref: `https://github.com/${REPO}/pull/42` });
     expect(again).toMatchObject({ existing: true, wait: { id: first.wait.id } });
@@ -245,7 +246,7 @@ describe("setting a wait", () => {
   });
 
   test("the web's own wait id is kept, and a client target is rebuilt from its known fields", async () => {
-    const { ctx, tables, movePr } = await makeCtx({ tasks: [task("ct-1")], session_decisions: [decision(4)] });
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1")], session_decisions: [decision(4)] });
     const res = await call(addWait, ctx, { short_id: "ct-1", id: "wmgh2k3l0a1", target: { kind: "decision", decision: "SD-4", state: "met", extra: 1 } });
     expect(res.wait.id).toBe("wmgh2k3l0a1");
     expect(row(tables, "ct-1").waits[0]).toEqual({ kind: "decision", decision: "sd-4", id: "wmgh2k3l0a1", state: "waiting", created_at: res.wait.created_at, created_by: USER });
@@ -262,23 +263,54 @@ describe("setting a wait", () => {
     const { wait } = await call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` });
     expect((await call(removeWait, ctx, { short_id: "ct-1", wait_id: wait.id })).removed).toHaveLength(1);
     expect((await call(removeWait, ctx, { short_id: "ct-1", wait_id: wait.id })).removed).toEqual([]);
-    await expect(call(removeWait, ctx, { short_id: "ct-1", ref: "#42" })).rejects.toThrow(/has no wait on #42/);
+    // By ref it throws, and says where the task's real waits are listed — the
+    // same pointer the CLI's own version of this refusal carries, so the two
+    // spellings of one mistake give one answer (TG12).
+    await expect(call(removeWait, ctx, { short_id: "ct-1", ref: "#42" }))
+      .rejects.toThrow("ct-1 has no wait on #42; cast task show ct-1 lists its waits");
     expect(row(tables, "ct-1").waits).toEqual([]);
   });
 
   test("a task ref is refused: it is a dependency, not a wait", async () => {
-    const { ctx, movePr } = await makeCtx({ tasks: [task("ct-1")] });
+    const { ctx } = await makeCtx({ tasks: [task("ct-1")] });
     await expect(call(addWait, ctx, { short_id: "ct-1", ref: "ct-5" })).rejects.toThrow(/dependency/);
   });
 
   test("removing a wait by ref clears waiting_since and writes history", async () => {
-    const { ctx, tables, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42)] });
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42)] });
     await call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` });
     const { removed } = await call(removeWait, ctx, { short_id: "ct-1", ref: "#42" });
     expect(removed).toHaveLength(1);
     expect(row(tables, "ct-1").waits).toEqual([]);
     expect(row(tables, "ct-1").waiting_since).toBeUndefined();
     expect(tables.task_history.at(-1)).toMatchObject({ field: "waits", old_value: "Waiting on PR #42", new_value: "" });
+  });
+});
+
+describe("what an override may answer for a blocker", () => {
+  // StatusOf's three answers (shared/tasks/graph.ts): a row, `null` for
+  // looked up and gone (clears), `undefined` for not looked up (falls through
+  // to the database). A nullish fallthrough would hand the next caller
+  // database truth where it asked for "gone".
+  const ctxWith = (tasks: any[]) => ({ db: makeFakeDb({ tasks }) }) as any;
+  const held = { _id: "task_1", short_id: "ct-1", user_id: USER, status: "open" };
+  const waiter = { _id: "task_2", short_id: "ct-2", user_id: USER, status: "open", blocked_by: ["ct-1"] } as any;
+
+  test("no override reads the database: an open blocker holds", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter)).toBe(false);
+  });
+
+  test("null means gone, so it clears even though the row is open", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter, () => null)).toBe(true);
+  });
+
+  test("undefined means not looked up, so the database still decides", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter, () => undefined)).toBe(false);
+    expect(await isTaskUnblocked(ctxWith([{ ...held, status: "done" }, waiter]), waiter, () => undefined)).toBe(true);
+  });
+
+  test("a row the override hands back is believed over the database", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter, () => ({ short_id: "ct-1", status: "done" }))).toBe(true);
   });
 });
 
@@ -427,7 +459,7 @@ describe("PR events", () => {
   });
 
   test("another repository's PR with the same number leaves the wait alone", async () => {
-    const { ctx, tables, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42), pr(42, { _id: "pr_other", repository: "other/repo" })] });
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42), pr(42, { _id: "pr_other", repository: "other/repo" })] });
     await call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` });
     await patchPullRequest(ctx, "pr_other" as any, { state: "merged" });
     await (settlePr as any)._handler(ctx, { pr_id: "pr_other" });
@@ -530,7 +562,7 @@ describe("decision waits", () => {
   });
 
   test("an answered decision is met at once; a dismissed one is refused", async () => {
-    const { ctx, movePr } = await makeCtx({
+    const { ctx } = await makeCtx({
       tasks: [task("ct-1")],
       session_decisions: [decision(4, { status: "answered", answer_index: 1 }), decision(5, { status: "dismissed" })],
     });
@@ -542,7 +574,7 @@ describe("decision waits", () => {
 
 describe("time waits", () => {
   test("a time wait schedules its job, which meets it; a removed wait is left alone", async () => {
-    const { ctx, tables, scheduled, movePr } = await makeCtx({ tasks: [task("ct-1"), task("ct-2")] });
+    const { ctx, tables, scheduled } = await makeCtx({ tasks: [task("ct-1"), task("ct-2")] });
     const { wait } = await call(addWait, ctx, { short_id: "ct-1", ref: "2h" });
     expect(scheduled).toEqual([{ at: wait.at, args: { task_id: "task_ct-1", wait_id: wait.id, at: wait.at } }]);
     await (settleTimeWait as any)._handler(ctx, scheduled[0].args);
@@ -558,7 +590,7 @@ describe("time waits", () => {
   });
 
   test("a date with the person's zone lands on their wall time", async () => {
-    const { ctx, movePr } = await makeCtx({ tasks: [task("ct-1")] });
+    const { ctx } = await makeCtx({ tasks: [task("ct-1")] });
     const { wait } = await call(addWait, ctx, { short_id: "ct-1", ref: "2099-01-15T09:00", time_zone: "America/New_York" });
     expect(new Date(wait.at).toISOString()).toBe("2099-01-15T14:00:00.000Z");
   });
@@ -566,7 +598,7 @@ describe("time waits", () => {
 
 describe("blocker tasks closing", () => {
   test("the last open blocker closing unblocks its dependent once; an earlier one does not", async () => {
-    const { ctx, tables, movePr } = await makeCtx({
+    const { ctx, tables } = await makeCtx({
       tasks: [
         task("ct-1", { blocks: ["ct-3"] }),
         task("ct-2", { blocks: ["ct-3"] }),

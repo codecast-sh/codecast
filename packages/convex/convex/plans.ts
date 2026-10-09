@@ -32,10 +32,10 @@ import {
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { docSourceForPlanSource } from "@codecast/shared/docs";
-import { renderFencedPlanRecord, renderFencedPlanTasks } from "@codecast/shared/tasks";
+import { dependencyLoopChecker, renderFencedPlanRecord, renderFencedPlanTasks } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
-import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
+import { graphOutside, sortGraphRefs, stampGraphStatus, taskByRef } from "./lib/taskGraph";
 import { patchDepMirror } from "./tasks";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
@@ -226,7 +226,10 @@ export const create = mutation({
       });
     }
 
-    return { id, short_id, doc_id: docId };
+    // The workspace this create resolved to (the session's team, else the
+    // directory rule): the caller files the plan's steps there and words the
+    // next step's scope from it, without reading the plan back to find out.
+    return { id, short_id, doc_id: docId, workspace: db.workspaceKey, ...(db.axes.team_id ? { team_id: db.axes.team_id } : {}) };
   },
 });
 
@@ -331,6 +334,11 @@ export const fork = mutation({
 
     const now = Date.now();
     const short_id = await nextShortId(ctx.db, "pl");
+    // The plan's log, held here so the edges the fork had to refuse can join
+    // it below without reading the row back.
+    const planEntries: { type: "progress"; timestamp: number; content: string }[] = [
+      { type: "progress", timestamp: now, content: `Forked from ${args.source_short_id}` },
+    ];
 
     const sourceTasks: any[] = [];
     for (const tid of source.task_ids || []) {
@@ -350,14 +358,14 @@ export const fork = mutation({
       progress: { total: sourceTasks.length, done: 0, in_progress: 0, open: sourceTasks.length },
       task_ids: [],
       progress_log: [],
-      entries: [{ type: "progress", timestamp: now, content: `Forked from ${args.source_short_id}` }],
+      entries: planEntries,
       created_at: now,
       updated_at: now,
     } as any);
 
     const oldToNew = new Map<string, string>();
     const taskIds: Id<"tasks">[] = [];
-    const edges: [string, string[]][] = [];
+    const workspace = workspaceForResource({ user_id: auth.userId, team_id: source.team_id });
 
     // Keyed by both ids: older plan rows name a sibling blocker by its `_id`,
     // which must map to the fork's copy, not wait on the original.
@@ -367,11 +375,46 @@ export const fork = mutation({
       oldToNew.set(String(st._id), newShortId);
     }
 
+    // The copies' edges, decided before any insert, because the fork is the
+    // one write path whose tasks are born `open`: a loop among them is live
+    // from the first moment, and `cutReopenedLoops` only ever runs when a task
+    // LEAVES a terminal status, so nothing would cut it. The source may hold
+    // one legitimately (TG4 accepts an edge that runs through a done or
+    // dropped task, which holds nothing back), so the fork refuses each edge
+    // that would close a loop among the copies instead of carrying it over —
+    // the way createFromTemplate keeps only back edges.
+    const nodes = sourceTasks.map((st) => ({ short_id: oldToNew.get(st.short_id)!, blocked_by: [] as string[] }));
+    const nodeOf = new Map(nodes.map((n) => [n.short_id, n]));
+    const dropped: string[] = [];
     for (const st of sourceTasks) {
-      const newShortId = oldToNew.get(st.short_id)!;
+      const node = nodeOf.get(oldToNew.get(st.short_id)!)!;
       // Stored canonical (sortGraphRefs). A source ref that is no task ref
       // at all (#42, a title) blocked nothing there, so the copy drops it.
-      const blockedBy = sortGraphRefs(ctx, (st.blocked_by || []).map((bid: string) => oldToNew.get(bid) || bid)).tasks;
+      for (const ref of sortGraphRefs(ctx, (st.blocked_by || []).map((bid: string) => oldToNew.get(bid) || bid)).tasks) {
+        if (!nodeOf.has(ref)) {
+          // A ref the remap left alone names a task outside the plan. Kept
+          // only when it is a real task in the fork's own workspace: a ref
+          // across workspaces reads as `unknown` forever (readiness never
+          // looks across, `graphOutside`) and patchDepMirror would skip its
+          // mirror, so no release path could ever clear it.
+          const outside = await taskByRef(ctx, ref);
+          if (!outside || !isSameWorkspace(outside, workspace)) {
+            dropped.push(`${node.short_id} → ${ref}`);
+            continue;
+          }
+          node.blocked_by.push(ref);
+          continue;
+        }
+        if (dependencyLoopChecker(nodes)(node.short_id, ref)) {
+          dropped.push(`${node.short_id} → ${ref}`);
+          continue;
+        }
+        node.blocked_by.push(ref);
+      }
+    }
+
+    for (const st of sourceTasks) {
+      const newShortId = oldToNew.get(st.short_id)!;
 
       const tid = await ctx.db.insert("tasks", {
         user_id: auth.userId,
@@ -383,23 +426,26 @@ export const fork = mutation({
         task_type: st.task_type || "task",
         priority: st.priority || "medium",
         status: "open",
-        blocked_by: blockedBy,
+        blocked_by: nodeOf.get(newShortId)!.blocked_by,
         estimated_minutes: st.estimated_minutes,
         source: "fork",
         created_at: now,
         updated_at: now,
       } as any);
       taskIds.push(tid);
-      edges.push([newShortId, blockedBy]);
     }
     // Every fork task is in place first: a blocker may come later in the list.
-    const workspace = workspaceForResource({ user_id: auth.userId, team_id: source.team_id });
-    for (const [shortId, blockedBy] of edges) {
-      for (const dep of blockedBy) await patchDepMirror(ctx, auth.userId, { short_id: shortId, workspace }, dep, "blocks", "add");
+    for (const { short_id: shortId, blocked_by } of nodes) {
+      for (const dep of blocked_by) await patchDepMirror(ctx, auth.userId, { short_id: shortId, workspace }, dep, "blocks", "add");
     }
 
-    await ctx.db.patch(planId, { task_ids: taskIds });
-    return { id: planId, short_id, task_count: taskIds.length };
+    // An edge the fork refused is said where the plan is read, not swallowed:
+    // the copies wait on less than the source did.
+    if (dropped.length) {
+      planEntries.push({ type: "progress", timestamp: now, content: `Dependencies the fork could not carry over (a loop among the copies, or a task outside this workspace): ${dropped.join(", ")}` });
+    }
+    await ctx.db.patch(planId, { task_ids: taskIds, ...(dropped.length ? { entries: planEntries } : {}) });
+    return { id: planId, short_id, task_count: taskIds.length, dropped_dependencies: dropped.length ? dropped : undefined };
   },
 });
 
