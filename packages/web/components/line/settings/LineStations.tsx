@@ -17,7 +17,7 @@
 // the profile's edit path to that machine (useLineStationEdits), and the
 // first one writes the shipped line out into the repo. The workflow copy
 // above is only for a project no machine has published.
-import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -33,6 +33,8 @@ import { EditStatus } from "./LineValueRow";
 import { useLineStationEdits } from "./useLineStationEdits";
 import { useSendThroughLine } from "../map/ChangeComposer";
 import { REPO_LINE_REL_DIR } from "@codecast/shared/contracts/lineProfile";
+import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
+import { readableTemplate } from "../../../lib/line/lineGraphs";
 import { SHIPPED_LINE } from "../../../lib/line/shippedLine.generated";
 import { shortDay, type StationVersion } from "../../../lib/line/runReport";
 import {
@@ -170,7 +172,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
   const panel = useRef<HTMLDivElement>(null);
   const arrived = !!focusStation && selected?.id === focusStation;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (arrived) panel.current?.scrollIntoView({ block: "center" });
   }, [arrived, focusStation]);
 
@@ -387,7 +389,12 @@ function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, edit
 
       {!field && <p className="lset-empty">This station routes the run and carries no prompt or script.</p>}
 
-      {field && !canEdit && (
+      {field === "prompt" && !canEdit && (
+        <div className="lmap-instructions" data-station-prompt>
+          {body.text ? <MarkdownRenderer content={readableTemplate(body.text)} /> : <span style={{ color: "var(--sol-text-dim)" }}>No instructions written yet.</span>}
+        </div>
+      )}
+      {field === "script" && !canEdit && (
         <pre className="text-[11.5px] leading-[1.5] whitespace-pre-wrap max-h-[420px] overflow-auto m-0 p-2 rounded" style={{ fontFamily: "var(--font-mono)", color: "var(--sol-text)", background: "var(--sol-card)" }}>
           {body.text || "(empty)"}
         </pre>
