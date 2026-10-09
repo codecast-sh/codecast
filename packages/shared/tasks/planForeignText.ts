@@ -29,6 +29,7 @@ import {
   inlineForeignText,
 } from "../contracts/fence";
 import { notReadyLabel, prWords, type GraphTask, type WaitLabelOptions } from "./graph";
+import { isTerminalTaskStatus } from "./statuses";
 import { openBlockerLabels, planVerdicts, type GraphOutside } from "./planVerdicts";
 
 /**
@@ -203,8 +204,6 @@ export type PlanTaskListOptions = {
   words?: WaitLabelOptions;
 };
 
-const DONE_STATUSES = new Set(["done", "dropped"]);
-
 /** `why` is what holds the task back, printed after its title. */
 function taskLine(task: ForeignPlanTask, opts: PlanTaskListOptions, why: string | null): string[] {
   const id = inlineForeignText(task.short_id) || "?";
@@ -219,7 +218,7 @@ function taskLine(task: ForeignPlanTask, opts: PlanTaskListOptions, why: string 
     : "";
   const by = why ? ` (${inlineForeignText(why)})` : "";
   const lines = [`- ${id}: ${title}${by}${origin}`];
-  if (opts.descriptions && !DONE_STATUSES.has(String(task.status || ""))) {
+  if (opts.descriptions && !isTerminalTaskStatus(task.status)) {
     const desc = inlineForeignText(task.description);
     if (desc) lines.push(`  ${desc}`);
   }
@@ -249,7 +248,7 @@ export function renderFencedPlanTasks(
   const why = (t: ForeignPlanTask): string | null => {
     const v = verdicts.get(t)!;
     if (!v.ready && v.reason !== "status" && v.reason !== "blocked") return notReadyLabel(t, v, words);
-    if (DONE_STATUSES.has(String(t.status || ""))) return null;
+    if (isTerminalTaskStatus(t.status)) return null;
     const open = openBlockerLabels(t, statusOf, words);
     return open.length ? `blocked by: ${open.join(", ")}` : null;
   };

@@ -91,7 +91,7 @@ describe("planReadiness", () => {
     ]);
     expect(ids(r.waiting)).toEqual([]);
     expect(ids(r.stuck)).toEqual(["ct-2", "ct-3", "ct-4", "ct-6", "ct-7"]);
-    expect(stuckNote(r)).toBe("ct-2: blocked by ct-1, PR #6 merges (failed: closed without merging); ct-3: blocked by ct-99 (status unknown); ct-4: its parent could not be read; ct-6: blocked by ct-5; ct-7: blocked by ct-3");
+    expect(stuckNote(r)).toBe("ct-2: blocked by ct-1, PR #6 to merge (failed: closed without merging); ct-3: blocked by ct-99 (status unknown); ct-4: its parent could not be read; ct-6: blocked by ct-5; ct-7: blocked by ct-3");
     expect(stuckAdvice(r)).toEqual([
       "ct-2: remove it (cast task dep ct-2 --remove-blocked-by o/r#6) or replace it (add the new wait with cast task dep ct-2 --blocked-by; a wait on the same target takes the failed one's place), or change the approach, and say on the task what you decided.",
       "ct-3: a blocker this workspace cannot read; cast task show ct-3 names it",
@@ -113,6 +113,6 @@ describe("openBlockerLabels", () => {
     const pr42 = { kind: "pr_merged", repository: "o/r", pr_number: 42, id: "w1", state: "waiting", created_at: 1 };
     const tasks = [t("ct-1", { status: "done" }), t("ct-2"), t("ct-3", { blocked_by: ["ct-1", "ct-2"], waits: [pr42] })];
     const { statusOf } = planReadiness<any>(tasks);
-    expect(openBlockerLabels(tasks[2] as any, statusOf)).toEqual(["ct-2", "PR #42 merges"]);
+    expect(openBlockerLabels(tasks[2] as any, statusOf)).toEqual(["ct-2", "PR #42 to merge"]);
   });
 });

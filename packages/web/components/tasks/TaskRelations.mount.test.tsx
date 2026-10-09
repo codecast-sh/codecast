@@ -1,8 +1,9 @@
 // The task page's relation rows (task-graph.md TG12), mounted over fixture
 // rows: one Blocked by row holding task blockers and waits with their state,
-// a missing blocker named and removable, the link rows only when they have
-// something (one line offering the adds that have no row), removal through
-// the store actions, and the superseded banner.
+// a missing blocker named and offered for removal, the link rows only when
+// they have something (one line offering the adds that have no row), a stale
+// `blocks` mirror left out, removal through the store actions, and the
+// superseded banner. The parent is the page's breadcrumb, so no row here.
 // Pills are stubbed to their reference: their own resolution is EntityIdPill's.
 import { afterAll, expect, mock, test } from "bun:test";
 import { act } from "react";
@@ -61,20 +62,23 @@ const HOUR = 3_600_000;
 
 const page = task(1, {
   blocked_by: ["ct-2", "ct-3", "ct-404"],
-  blocks: ["ct-5"],
+  // ct-5 still waits on this task; ct-12's row says it no longer does (a
+  // stale mirror); ct-99 is not loaded, so its entry stands.
+  blocks: ["ct-5", "ct-12", "ct-99"],
   related: ["ct-6"],
   found_during: "ct-7",
   waits: [
     { id: "w1", kind: "pr_merged", repository: "o/r", pr_number: 42, state: "waiting", created_at: 0 },
     { id: "w2", kind: "pr_checks_green", repository: "o/r", pr_number: 43, state: "failed", created_at: 0, note: "closed without merging" },
     { id: "w3", kind: "decision", decision: "sd-4", state: "met", created_at: 0, note: "answered: Ship it" },
-    { id: "w4", kind: "time", at: Date.now() + 2 * HOUR + 60_000, state: "waiting", created_at: 0 },
+    // 1h59m out: the countdown rounds up, so the pill reads the span asked for.
+    { id: "w4", kind: "time", at: Date.now() + 2 * HOUR - 60_000, state: "waiting", created_at: 0 },
     { id: "w5", kind: "pr_checks_green", repository: "o/r", pr_number: 44, state: "waiting", created_at: 0 },
     { id: "w6", kind: "pr_checks_green", repository: "o/r", pr_number: 45, state: "waiting", created_at: 0 },
   ],
 });
 const tasks = Object.fromEntries(
-  [page, task(2, { status: "in_progress" }), task(3, { status: "done" }), task(5), task(6), task(7), task(8, { found_during: "ct-1" })].map((t) => [t._id, t]),
+  [page, task(2, { status: "in_progress" }), task(3, { status: "done" }), task(5, { blocked_by: ["ct-1"] }), task(6), task(7), task(8, { found_during: "ct-1" }), task(12)].map((t) => [t._id, t]),
 );
 
 async function mount(node: React.ReactNode) {
@@ -103,7 +107,8 @@ test("one Blocked by row: tasks then waits, each with its state and a word on wh
   expect(lines.map((l) => l.textContent)).toEqual([
     "ct-2",
     "ct-3",
-    "ct-404not found",
+    // A blocker that names no task exists to be cleaned up, so it says the word.
+    "ct-404not foundRemove",
     "o/r#42to merge",
     "o/r#43closed without merging",
     "sd-4answered: Ship it",
@@ -115,6 +120,21 @@ test("one Blocked by row: tasks then waits, each with its state and a word on wh
   expect(lines[1]!.className).toContain("opacity-60");
   expect(lines[4]!.querySelector("span.text-sol-red")!.textContent).toBe("closed without merging");
   expect(lines[7]!.querySelector("span.text-sol-red")!.textContent).toBe("checks failing");
+  // A line's detail truncates at 45% of the column, so its word carries the
+  // whole text on hover the way the time pill carries its date.
+  const titles = (l: HTMLElement) => [...l.querySelectorAll("span[title]")].map((s) => s.getAttribute("title"));
+  expect([titles(lines[2]!), titles(lines[5]!), titles(lines[7]!)]).toEqual([["not found"], ["answered: Ship it"], ["checks failing"]]);
+
+  // Every value in the grid starts at one left edge: each line opens with the
+  // glyph's gutter, whether or not the line has a glyph.
+  const valueLines = [...container.querySelectorAll("[data-relation] [class*='group/line']")] as HTMLElement[];
+  // 9 blockers and waits, 2 of Blocks, and one each of Found during, Found here and Related.
+  expect(valueLines.length).toBe(14);
+  for (const l of valueLines) expect((l.firstElementChild as HTMLElement).className).toContain("w-3");
+
+  // Blocks lists what the server's reader lists: the live dependent and the
+  // one no row answers for, never the entry ct-12's row has moved on from.
+  expect(rowOf(container, "Blocks")!.textContent).toBe("Blocksct-5ct-99");
 
   // Remove: the missing task blocker, a wait, a Blocks edge (from this
   // task's side, so a drifted mirror still goes) and a related link, each through its store action.
@@ -146,6 +166,14 @@ test("a task with no relations shows the blocker add and one line for the other 
   expect([...container.querySelectorAll("[data-relation]")].map((r) => (r as HTMLElement).dataset.relation)).toEqual(["Blocked by", "add"]);
   expect(rowOf(container, "Blocked by")!.textContent).toBe("Blocked byAdd blocker…b");
   expect(rowOf(container, "add")!.textContent).toBe("Link related…kSet parent…t");
+  root.unmount();
+});
+
+test("a subtask states its parent once, on the page's breadcrumb: no row and no offer here", async () => {
+  const child = task(13, { parent_id: "id1" });
+  const { container, root } = await mount(<TaskRelations task={child} tasks={{ id1: page, id13: child }} onAdd={() => {}} />);
+  expect([...container.querySelectorAll("[data-relation]")].map((r) => (r as HTMLElement).dataset.relation)).toEqual(["Blocked by", "add"]);
+  expect(rowOf(container, "add")!.textContent).toBe("Link related…k");
   root.unmount();
 });
 
