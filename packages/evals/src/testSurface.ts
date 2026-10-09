@@ -1,6 +1,6 @@
 import type { ConvoMessage } from '@platform/evals';
 
-import { CALL_MODEL } from './models';
+import { STRONG_MODEL } from './models';
 import type { SurfaceImpl, SurfaceMeta } from './surface';
 
 // `echo`: a surface for tests only (registered when CODECAST_EVALS_TEST=1).
@@ -12,7 +12,8 @@ export const echoMeta: SurfaceMeta = {
   id: 'echo',
   title: 'Echo (tests only)',
   route: 'call',
-  model: CALL_MODEL,
+  // A model the replay can send as prod does; a test names another to see how check treats it.
+  model: process.env.CODECAST_EVALS_TEST_ECHO_MODEL || STRONG_MODEL,
   sources: ['packages/evals/src/testSurface.ts'],
   reps: { check: 2 },
   maxUsdPerRep: 0.001,
