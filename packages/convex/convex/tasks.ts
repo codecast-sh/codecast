@@ -1,6 +1,6 @@
 import { v, type ObjectType, type Validator } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { internalMutation, mutation, query, type MutationCtx } from "./functions";
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
 import { resolveActor, roleOfConversation } from "./lib/actor";
@@ -14,11 +14,11 @@ import { resolveCallRef } from "./transcripts";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { blockersHoldingBack, docRelatesToTask, isStaleTask, readinessOf, topologicalOrder } from "@codecast/shared/tasks";
-import { assertDependencyEdges, offFrontierReason, openBlockersOf, orderFrontier, readinessLookups, readyTasks, requireTaskByRef, stampGraphStatus, storedGraphRefs, taskByRef, writeEdges } from "./lib/taskGraph";
+import { assertDependencyEdges, mirrorNext, offFrontierReason, orderFrontier, readinessLookups, readyTasks, requireTaskByRef, stampGraphStatus, storedGraphRefs, taskByRef, writeEdges } from "./lib/taskGraph";
 import { addWaitsAtCreate, cliCaller, pendingReleases, tellReleased } from "./taskWaits";
 import { commentReaches, executionHintArgs, executionHintPatch, isEphemeralTask } from "./lib/taskExecution";
-import { bySystem, byUser, recordTaskChange, type TaskChangeBy } from "./lib/taskHistory";
-import { afterDuplicateCleared, afterStatusEdges, foundDuringForCreate, redirectDependents, requireLiveReplacement, taskLinksOf } from "./taskLinks";
+import { bySystem, byUser, recordTaskChange, trackedFieldChanges, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
+import { afterDuplicateCleared, afterStatusEdges, foundDuringForCreate, foundDuringUpdate, openBlockersWithChecks, redirectDependents, requireLiveReplacement, stampWaitChecks, taskLinksOf, unlinkDeletedTask } from "./taskLinks";
 import {
   MAX_TASK_DEPTH,
   TASK_STATUS_CATEGORIES,
@@ -26,6 +26,7 @@ import {
   buildTaskSpawnPrompt,
   findTeamTaskStatus,
   isActiveTask,
+  isTaskBeingWorked,
   isTaskStatusCategory,
   isTerminalTaskStatus,
   isHumanOrigin,
@@ -84,6 +85,7 @@ import {
   workspacesMatch,
   visibleInTeamList,
 } from "./lib/access";
+import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { forbidden, notFound } from "./lib/auth";
 import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
 import { changeGuideInputValidator } from "./lib/changeGuideValidator";
@@ -506,7 +508,8 @@ async function liveLineRun(ctx: any, task: any): Promise<any | null> {
 const LINE_CLOSING_STATIONS: ReadonlySet<string> = new Set(["drop", "dissolve"]);
 
 /** What a status move does after its patch, for every writer: the plan's
- *  progress, the status notice, the tasks waiting on it (afterStatusEdges),
+ *  progress, the status notice, the sessions the close releases, the tasks
+ *  waiting on it (afterStatusEdges),
  *  and (LE16) a person's close of a cause
  *  stopping its live line run, so the person's decision wins. A move that
  *  changes nothing does none of it. A move with a conversation is a
@@ -521,6 +524,15 @@ export async function afterStatusMove(
   if (!next || next === task.status) return;
   if (task.plan_id) await recalcPlanProgress(ctx, task.plan_id, task._id, next);
   await notifyTaskStatus(ctx, actorUserId, task, next, conversationId);
+  // A close ends EVERY binding, not just the closing session's: a person or
+  // another session closing the task must not leave a third session held on
+  // a closed task, which has nothing left to advance and no unblock path
+  // that can wake it (every one stops at a terminal status). It lives here
+  // because this is the funnel every writer shares — the CLI's update, the
+  // board's updateTaskAs, moveTaskStatus (the batch, a signal's watch, the
+  // line's runs) — and `conversationId` is passed because the closing
+  // session may not be linked to the task.
+  if (isTerminalTaskStatus(next)) await releaseBoundSessions(ctx, task, conversationId);
   await afterStatusEdges(ctx, task, next, { actorUserId, conversationId });
   if (!conversationId && isTerminalTaskStatus(next)) {
     const run = await liveLineRun(ctx, task);
@@ -1384,10 +1396,23 @@ export const create = mutation({
       estimated_minutes: args.estimated_minutes,
     } as any);
 
+    // Each task blocker as it landed, so the caller can echo the edge and say
+    // when a blocker is already done or dropped and so holds nothing (depAddedLine,
+    // the same line `cast task dep` prints). A ref naming no readable task keeps
+    // the write and reports no status.
+    const blockers: Array<{ ref: string; status?: string }> = [];
     for (const dep of args.blocked_by || []) {
-      await patchDepMirror(ctx, auth.userId, { short_id, workspace: db.workspace }, dep, "blocks", "add");
+      const other = await patchDepMirror(ctx, auth.userId, { short_id, workspace: db.workspace }, dep, "blocks", "add");
+      blockers.push({ ref: other?.short_id ?? dep, ...(other ? { status: other.status } : {}) });
     }
-    if (found_during) await recordTaskChange(ctx, id, { user_id: auth.userId, actor_type: originConv ? "agent" : "user", conversation_id: created_from_conversation }, [["found_during", "", found_during]], now);
+    // The graph fields this create wrote are its first history rows (TG11), so
+    // a blocker named at create reads in the timeline the way `cast task dep`
+    // writes it; the waits of the same create record themselves in writeWaits.
+    const born: TaskFieldChange[] = [
+      ...(args.blocked_by?.length ? [["blocked_by", "", args.blocked_by] as TaskFieldChange] : []),
+      ...(found_during ? [["found_during", "", found_during] as TaskFieldChange] : []),
+    ];
+    if (born.length) await recordTaskChange(ctx, id, { user_id: auth.userId, actor_type: originConv ? "agent" : "user", conversation_id: created_from_conversation }, born, now);
     const waits = await addWaitsAtCreate(ctx, auth.userId, short_id, args);
 
     // Subtasks carry plan_id for context but never join plan.task_ids — the
@@ -1429,7 +1454,7 @@ export const create = mutation({
     // session_bound: the creating session holds a task, so the CLI keeps its
     // pulse there rather than move it to what it filed along the way (TG10).
     // found_during, so the CLI can name the link a bound session made (TG5).
-    return { id, short_id, ...(waits ? { waits } : {}), ...(originConv?.active_task_id ? { session_bound: true } : {}), ...(found_during ? { found_during } : {}) };
+    return { id, short_id, ...(waits ? { waits } : {}), ...(blockers.length ? { blockers } : {}), ...(originConv?.active_task_id ? { session_bound: true } : {}), ...(found_during ? { found_during } : {}) };
   },
 });
 
@@ -1845,7 +1870,12 @@ export const list = query({
         .query("plans")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
         .first();
-      const planTaskIds = new Set((plan?.task_ids || []).map((id: any) => String(id)));
+      // A named read key the caller cannot read is refused, not answered with
+      // an empty page: access, so canAccessPlan and not the workspace this
+      // read resolved to — a plan of the caller's other workspace still names
+      // its own tasks, and the intersection below scopes the answer.
+      if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) notFound("Plan not found");
+      const planTaskIds = new Set((plan.task_ids || []).map((id: any) => String(id)));
       tasks = tasks.filter((t: any) => planTaskIds.has(String(t._id)));
     }
 
@@ -1887,7 +1917,7 @@ export const list = query({
     // Every row carries its verdict and open blockers, so the CLI's "blocked"
     // tag and counts render from the rule, never from a raw blocked_by.
     const lookupsOf = lookupsFor ?? await readinessLookups(ctx, result);
-    return result.map((t: any, i: number) => {
+    return await Promise.all(result.map(async (t: any, i: number) => {
       const { statusOf, parentStatusOf } = lookupsOf(t);
       return {
         ...t,
@@ -1899,13 +1929,18 @@ export const list = query({
         parent_short_id: (t.parent_id ? statusOf(String(t.parent_id)) : undefined)?.short_id ?? undefined,
         // A ready page holds only rows readyTasks already judged ready.
         ready: args.ready ? true : readinessOf(t, { statusOf, parentStatusOf, ...readiness }).ready,
-        // Structured (TG1): the reader labels them, a time wait in its own zone.
-        // A closed task waits on nothing, so no reader marks it blocked.
-        open_blockers: isTerminalTaskStatus(t.status) ? [] : blockersHoldingBack(t, statusOf),
+        // Structured (TG1): the reader labels them, a time wait in its own
+        // zone. A closed task holds nothing, which blockersHoldingBack itself
+        // decides, so no reader marks it blocked. A still-waiting checks wait
+        // carries its PR's checks_state, as `cast task start`'s answer does:
+        // these are the lines that tell an agent to park, and red checks keep
+        // the wait waiting forever (stampWaitChecks, TG2). A row with no checks
+        // wait short-circuits, so a page of ordinary rows costs no extra read.
+        open_blockers: await stampWaitChecks(ctx, auth.userId, t, blockersHoldingBack(t, statusOf)),
         // Untouched 30+ days: the frontier folds it into a count (TG7).
         ...(args.ready ? { stale: isStaleTask(t, now) } : {}),
       };
-    });
+    }));
   },
 });
 
@@ -1914,6 +1949,11 @@ export const get = query({
     api_token: v.string(),
     short_id: v.optional(v.string()),
     id: v.optional(v.string()),
+    /** The asking session: whether it HOLDS the task comes back as `held`. A
+     *  caller's own pulse file cannot answer it — nothing clears the pulse when
+     *  another session takes the task over — and only the holder is woken when
+     *  a blocker clears (TG2), so the CLI's parking line asks here. */
+    conversation_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -1991,9 +2031,19 @@ export const get = query({
       })),
       links: await taskLinksOf(ctx, auth.userId, task),
       not_ready: await offFrontierReason(ctx, task),
+      ...(args.conversation_id ? { held: await heldBySession(ctx, auth.userId, task, args.conversation_id) } : {}),
     };
   },
 });
+
+/** Does `sessionRef` hold this task — the binding on the conversation, the
+ *  same fact `taskResume` answers as `held` and `lost: "claimed"`. Only the
+ *  caller's own session counts: a teammate's shared row says nothing about
+ *  whether the asking session holds the task. */
+async function heldBySession(ctx: QueryCtx, userId: Id<"users">, task: Doc<"tasks">, sessionRef: string): Promise<boolean> {
+  const conv = await findConversationBySessionReference(ctx, sessionRef, userId);
+  return !!conv && String(conv.active_task_id ?? "") === String(task._id);
+}
 
 // "" clears a ground field; any other value is checked by the validator.
 const orClear = <T extends string>(values: readonly T[]) => v.optional(v.union(v.literal(""), ...values.map((x) => v.literal(x))) as unknown as Validator<T | "">);
@@ -2071,6 +2121,9 @@ export const update = mutation({
     watch_days: v.optional(v.number()),
     // model, effort and ephemeral (TG8, TG9); ephemeral:false is `cast task keep`.
     ...executionHintArgs,
+    // TG5: the link create fills from the filing session's bound task,
+    // correctable here; "" or "none" clears it.
+    found_during: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -2109,6 +2162,22 @@ export const update = mutation({
     if (args.promoted !== undefined) updates.promoted = args.promoted;
     const fromCall = await resolveFromCall(ctx, auth.userId, args.from_call);
     if (fromCall !== undefined) updates.from_call = fromCall ?? undefined;
+    // The access key every link this write stores must join: the one the write
+    // LEAVES the task in, not the one it found. On a row with no stored
+    // `workspace` a team move changes the key (workspaceForResource falls back
+    // to team_id), and a link validated against the old key would cross
+    // workspaces the moment the move lands — the thing TG4 forbids, which
+    // readiness then holds as `unknown` forever. The move also carries the
+    // task's EXISTING edges across, so it schedules cutCrossedEdges below, as
+    // the other two paths that move a key do (recomputeWorkspaceForConversation
+    // and teamScopeSweep).
+    const depWorkspace = workspaceForResource({ ...task, team_id: args.team_id ?? task.team_id });
+    // A found_during the server filled itself can be wrong (the filing session
+    // was bound to an unrelated task), so it is writable, through the one rule
+    // the web's repoint also goes through (`foundDuringUpdate`).
+    if (args.found_during !== undefined) {
+      updates.found_during = await foundDuringUpdate(ctx, auth.userId, task, args.found_during, depWorkspace);
+    }
     const targetWorkspace = args.team_id
       ? { type: "team" as const, teamId: args.team_id }
       : task.team_id
@@ -2146,7 +2215,7 @@ export const update = mutation({
         // team move changes it only on a row with no stored key), never the
         // team it is routed to: readiness reads a parent only there.
         const parent = await resolveParentTask(ctx, auth.userId, args.parent, {
-          workspace: workspaceForResource({ ...task, team_id: args.team_id ?? task.team_id }),
+          workspace: depWorkspace,
           child: task,
         });
         updates.parent_id = parent._id;
@@ -2281,14 +2350,7 @@ export const update = mutation({
         const outcome = outcomeOfDeclaration(args.execution_status === "done_with_concerns" ? "done" : args.execution_status ?? (nextStatus === "done" ? "done" : undefined));
         if (outcome) await subagentEnded(ctx, conv, outcome);
       }
-      // Clear active_task_id when task is closed
-      if ((nextStatus === "done" || nextStatus === "dropped") && conv.active_task_id === task._id) {
-        await ctx.db.patch(conv._id, { active_task_id: undefined });
-        // The binding ended: a session held only for it returns to its starter (S35).
-        await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conv._id });
-      }
     }
-
     if (nextStatus === "in_progress") {
       updates.attempt_count = (task.attempt_count || 0) + 1;
       updates.last_attempted_at = now;
@@ -2306,22 +2368,26 @@ export const update = mutation({
     // Did the parent actually change? (Reparent/detach need history + plan reconcile.)
     const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
 
-    // Record history for changed fields
-    const trackFields: [string, any, any][] = [];
-    if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
-    if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
-    if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
-    if ("assignee" in updates && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
-    if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
-    if (args.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", args.review_verdict]);
-    if (args.labels) trackFields.push(["labels", task.labels, args.labels]);
-    if (args.blocked_by) trackFields.push(["blocked_by", prevDeps.blocked_by, args.blocked_by]);
+    // Record history for changed fields (lib/taskHistory, shared with webUpdate),
+    // plus the blocked_by overwrite only this path writes.
+    const trackFields: TaskFieldChange[] = [
+      ...trackedFieldChanges(task, {
+        status: nextStatus,
+        priority: args.priority,
+        title: args.title,
+        ...("assignee" in updates ? { assignee: { to: updates.assignee } } : {}),
+        ...(parentChanged ? { parent: { to: updates.parent_id } } : {}),
+        ...("found_during" in updates ? { found_during: { to: updates.found_during } } : {}),
+        review_verdict: args.review_verdict,
+        labels: args.labels,
+      }),
+      ...(args.blocked_by ? [["blocked_by", prevDeps.blocked_by, args.blocked_by] as TaskFieldChange] : []),
+    ];
 
     // A new edge on either side must stay in the workspace and not close a
-    // loop (TG4). Edges join tasks by their stored access key, as addDep and
-    // readiness judge them, never by the team the task is routed to (a team
-    // move here changes routing, not `workspace`).
-    const depWorkspace = workspaceForResource(task);
+    // loop (TG4). Edges join tasks by their access key (depWorkspace above),
+    // as addDep and readiness judge them, never by the team the task is
+    // routed to.
     await assertDependencyEdges(ctx, { short_id: task.short_id, _id: String(task._id), blocked_by: args.blocked_by ?? prevDeps.blocked_by }, depWorkspace, {
       blocked_by: args.blocked_by?.filter((d) => !prevDeps.blocked_by.includes(d)),
       blocks: args.blocks?.filter((d) => !prevDeps.blocks.includes(d)),
@@ -2336,6 +2402,13 @@ export const update = mutation({
     await recordTaskChange(ctx, task._id, changedBy, trackFields, now);
 
     await patchTask(ctx, task, updates);
+    // The write moved the task's access key (a team move on a row with no
+    // stored `workspace`), so the edges and the parent link it carried over
+    // may now cross workspaces, which readiness cannot read across: cut them
+    // and tell each dependent, the same job the other key-move paths schedule.
+    if (!isSameWorkspace(task, depWorkspace)) {
+      await ctx.scheduler.runAfter(0, internal.taskLinks.cutCrossedEdges, { task_ids: [task._id] });
+    }
     await schedulePushKeptTask(ctx, task, updates);
     if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, actor.name || "unknown", auth.userId);
     if (conv && releasedOwners.length) {
@@ -2400,8 +2473,20 @@ export const update = mutation({
       // which one lost the binding and whether it was still working.
       released_owners: releasedOwners.length ? releasedOwners.map(({ short_id, title, live }) => ({ short_id, title, live })) : undefined,
       // A start of a task still waiting on something says what (TG1), so a
-      // session that picked it by name, not from `ready`, learns it.
-      open_blockers: nextStatus === "in_progress" ? await openBlockersOf(ctx, task) : undefined,
+      // session that picked it by name, not from `ready`, learns it. Judged
+      // against the edges this write STORED: `task` is the row as read before
+      // patchTask, and the same update may have overwritten blocked_by, so
+      // reading `task` alone would omit a blocker the caller just added.
+      // A checks wait carries its PR's checks_state: these entries are printed
+      // as bare words, and the parking advice under them is built from the same
+      // list, so red CI has to read as red here (openBlockersWithChecks, TG10).
+      open_blockers: nextStatus === "in_progress" ? await openBlockersWithChecks(ctx, auth.userId, { ...task, ...updates } as Doc<"tasks">) : undefined,
+      // Whether the work was ALREADY in flight when this start ran (`task` is
+      // the pre-patch row), so a re-start or re-bind of a task this session has
+      // been working is told "if the work cannot go on until it clears" rather
+      // than to go dormant now — the half of the parking pair `cast task
+      // context` already gives the same task in the same state.
+      resumed: nextStatus === "in_progress" ? isTaskBeingWorked(task.status) : undefined,
     };
   },
 });
@@ -2610,6 +2695,11 @@ export const addComment = mutation({
 // the caller already made. The mirror may name `self` by its `_id` (a plan's
 // older rows): that form is the same edge, so it is never added twice and
 // is removed with the short id.
+//
+// Returns the referenced task whenever this caller may read it — the mirror
+// already being right, or skipped across workspaces, counts — so a caller can
+// report what its own edge landed on (its status: a done or dropped blocker
+// holds nothing). Null when the ref names nothing this caller can see.
 export async function patchDepMirror(
   ctx: any,
   userId: Id<"users">,
@@ -2619,17 +2709,15 @@ export async function patchDepMirror(
   op: "add" | "remove",
   // Who made the edit: a blocked_by mirror is the other task's own history (TG11).
   by?: TaskChangeBy,
-) {
+): Promise<Doc<"tasks"> | null> {
   const other = await taskByRef(ctx, otherRef);
-  if (!other || !(await canAccessTask(ctx, userId, other))) return;
-  if (op === "add" && !isSameWorkspace(other, self.workspace)) return;
-  const mirror: string[] = other[mirrorField] || [];
-  const isSelf = (id: string) => id === self.short_id || (!!self._id && id === self._id);
-  if (op === "add" ? mirror.some(isSelf) : !mirror.some(isSelf)) return;
-  const next = op === "add"
-    ? [...mirror, self.short_id]
-    : mirror.filter((id: string) => !isSelf(id));
+  if (!other || !(await canAccessTask(ctx, userId, other))) return null;
+  if (op === "add" && !isSameWorkspace(other, self.workspace)) return other;
+  // Either form is one entry, which is mirrorNext's rule (TG4); writeEdges
+  // writes nothing when the mirror already stands as this edit leaves it.
+  const next = mirrorNext(other[mirrorField] ?? [], op === "add" ? { add: [self] } : { remove: [self] });
   await writeEdges(ctx, other, mirrorField, next, by ?? bySystem);
+  return other;
 }
 
 export const addDep = mutation({
@@ -2671,8 +2759,11 @@ export async function addDepCore(ctx: MutationCtx, userId: Id<"users">, args: De
 
   if (args.blocks) await addEdge(args.blocks, "blocks");
   // A finished blocker holds nothing, which the CLI says rather than "blocked".
+  // On the `blocks` side the blocker is this task, so its own status is the one
+  // the caller needs: the same fact, read by the same words, for an edge given
+  // from either end (depAddedLine).
   const blocker = args.blocked_by ? await addEdge(args.blocked_by, "blocked_by") : null;
-  return { success: true, ...(blocker ? { blocker_status: blocker.status } : {}) };
+  return { success: true, ...(args.blocks ? { task_status: task.status } : {}), ...(blocker ? { blocker_status: blocker.status } : {}) };
 }
 
 export const removeDep = mutation({
@@ -2692,8 +2783,21 @@ export const removeDep = mutation({
 
 /** Remove one edge and its mirror. Removing the last open blocker unblocks the
  *  dependent the way a closing blocker does (TG2), so a session parked on it
- *  is woken. `cast task dep --remove` and the web's Blocked by row. */
-export async function removeDepCore(ctx: MutationCtx, userId: Id<"users">, args: DepEdge, by: TaskChangeBy = byUser(userId)) {
+ *  is woken. `cast task dep --remove` and the web's Blocked by row.
+ *
+ *  `missing: "ignore"` makes an edge that is already gone a no-op instead of
+ *  an error, for a caller whose write may be replayed: the web's durable
+ *  outbox re-drives an entry whose ack was lost, and a removal that did commit
+ *  would otherwise fail on every boot. A caller that reports to a person or an
+ *  agent keeps the default, so `cast task dep --remove-blocked-by` still exits
+ *  non-zero on an edge that was never there (applyBlockers reads that exit). */
+export async function removeDepCore(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  args: DepEdge,
+  by: TaskChangeBy = byUser(userId),
+  opts: { missing?: "throw" | "ignore" } = {},
+) {
   const task = await requireTaskByRef(ctx, userId, args.short_id);
 
   // Removes the edge from this task, plus the mirror edge on the other task
@@ -2707,12 +2811,19 @@ export async function removeDepCore(ctx: MutationCtx, userId: Id<"users">, args:
     const forms = new Set([ref, ...(other ? [other.short_id, String(other._id)] : [])]);
     const otherId = current.find((id) => forms.has(id));
     if (!otherId) {
+      if (opts.missing === "ignore") return;
       // The usual cause is the edge named the other way round: say so, with the remove that fits.
       const [waiter, blocker] = field === "blocked_by" ? [other, task] : [task, other];
       const backwards = !!other && (await canAccessTask(ctx, userId, other))
         && (waiter!.blocked_by ?? []).some((r) => r === blocker!.short_id || r === String(blocker!._id));
-      const hint = backwards ? `; ${waiter!.short_id} waits on ${blocker!.short_id} instead (cast task dep ${waiter!.short_id} --remove-blocked-by ${blocker!.short_id})` : "";
-      throw new Error(`${task.short_id} has no ${field === "blocks" ? "blocks" : "blocked-by"} dependency on ${ref}${hint}`);
+      // The graph's own words ("blocked by", "blocks"), as the add and the
+      // remove success use, and the pointer every other missing-handle error
+      // carries (noWaitOnLine) when the backwards hint has nothing to say.
+      const edge = field === "blocked_by" ? `is not blocked by ${ref}` : `does not block ${ref}`;
+      const hint = backwards
+        ? `; ${waiter!.short_id} waits on ${blocker!.short_id} instead (cast task dep ${waiter!.short_id} --remove-blocked-by ${blocker!.short_id})`
+        : `; cast task show ${task.short_id} lists ${field === "blocked_by" ? "its blockers" : "what it blocks"}`;
+      throw new Error(`${task.short_id} ${edge}${hint}`);
     }
     const next = current.filter((id) => !forms.has(id));
     // The row whose blocked_by loses the edge may be released (TG2).
@@ -3645,6 +3756,10 @@ const webUpdateArgs = {
   review_note: v.optional(v.string()),
   // The call this task came out of (a call ref); "" clears.
   from_call: v.optional(v.string()),
+  // The task this one was found while working on (TG5). The create GUESSES it
+  // from the filing session's bound task, and the task page is where a person
+  // notices a wrong one, so the board repoints it too; "" or "none" clears.
+  found_during: v.optional(v.string()),
   // model, effort and ephemeral (TG8, TG9); "" clears model or effort.
   ...executionHintArgs,
 };
@@ -3700,6 +3815,9 @@ export async function updateTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
   if (args.description !== undefined) updates.description = args.description;
   const fromCall = await resolveFromCall(ctx, userId, args.from_call);
   if (fromCall !== undefined) updates.from_call = fromCall ?? undefined;
+  if (args.found_during !== undefined) {
+    updates.found_during = await foundDuringUpdate(ctx, userId, task, args.found_during);
+  }
   if (args.assignee !== undefined) {
     updates.assignee = await resolveAssigneeStr(ctx, args.assignee, userId, await assigneeScopeOf(ctx, task)) || args.assignee;
   }
@@ -3781,17 +3899,24 @@ export async function updateTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
   const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
 
   const resolvedAssignee = updates.assignee || args.assignee;
-  // Record history for changed fields
-  const trackFields: [string, any, any][] = [];
-  if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
-  if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
-  if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
-  if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
-  if (updates.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", updates.review_verdict.verdict]);
-  if (args.execution_status !== undefined && args.execution_status !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", args.execution_status || ""]);
   const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
-  if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
-  if (args.labels) trackFields.push(["labels", task.labels, args.labels]);
+  // Record history for changed fields (lib/taskHistory, shared with update),
+  // plus the execution_status only the board writes.
+  const trackFields: TaskFieldChange[] = [
+    ...trackedFieldChanges(task, {
+      status: nextStatus,
+      priority: args.priority,
+      title: args.title,
+      ...(args.assignee !== undefined ? { assignee: { to: resolvedAssignee } } : {}),
+      ...(parentChanged ? { parent: { to: updates.parent_id } } : {}),
+      ...("found_during" in updates ? { found_during: { to: updates.found_during } } : {}),
+      review_verdict: updates.review_verdict?.verdict,
+      labels: args.labels,
+    }),
+    ...(args.execution_status !== undefined
+      ? [["execution_status", task.execution_status || "", args.execution_status || ""] as TaskFieldChange]
+      : []),
+  ];
 
   await recordTaskChange(ctx, task._id, byUser(userId), trackFields, now);
 
@@ -4671,44 +4796,6 @@ function getCriticalPath(tasks: TaskNode[]): string[] {
   return path;
 }
 
-export const getReadyTasks = query({
-  args: {
-    api_token: v.string(),
-    plan_id: v.optional(v.string()),
-    project_path: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token, false);
-    if (!auth) throw new Error("Unauthorized");
-
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
-
-    let tasks: any[];
-    if (args.plan_id) {
-      const plan = await ctx.db
-        .query("plans")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
-        .first();
-      if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
-      if (!plan.task_ids) return [];
-      const planTasks: any[] = [];
-      for (const tid of plan.task_ids) {
-        const t = await ctx.db.get(tid);
-        if (
-          t
-          && isSameWorkspace(t, workspaceForResource(plan))
-          && (await canAccessTask(ctx, auth.userId, t))
-        ) planTasks.push(t);
-      }
-      tasks = planTasks;
-    } else {
-      tasks = await db.query("tasks").collect();
-    }
-
-    return (await readyTasks(ctx, tasks, { viewer: String(auth.userId) })).ready;
-  },
-});
-
 export const getDependencyChain = query({
   args: {
     api_token: v.string(),
@@ -4782,9 +4869,12 @@ export const getDependencyChain = query({
   },
 });
 
-// Support path: delete a task outright with its comments and history
+// Support path: delete a task outright with its edges, comments and history
 // (packages/convex/run.sh). The product's own verb is "dropped"; this is for a
-// row its owner wants gone from the database.
+// row its owner wants gone from the database. The edges go through
+// unlinkDeletedTask first (TG2): a dependent left holding a ref to a row that
+// is gone reads it as missing, becomes ready with nobody told, and leaves a
+// session parked on the blocker asleep.
 export const adminDeleteTask = internalMutation({
   args: { short_id: v.string() },
   handler: async (ctx, args) => {
@@ -4793,6 +4883,7 @@ export const adminDeleteTask = internalMutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
     if (!task) return { found: false };
+    await unlinkDeletedTask(ctx, task);
     for (const table of ["task_comments", "task_history"] as const) {
       const rows = await ctx.db
         .query(table)

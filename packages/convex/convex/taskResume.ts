@@ -9,11 +9,12 @@
 import { v } from "convex/values";
 import { query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
-import { canAccessPlan, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
+import { canAccessPlan, canAccessPullRequest, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
+import { prByNumber } from "./lib/gitRefs";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { orderFrontier, readyTasks, taskLookups } from "./lib/taskGraph";
 import { boundSessionsOf } from "./lib/taskOwner";
-import { blockersHoldingBack, isActiveTask, isTerminalTaskStatus, RESUME_SUBTASKS_SHOWN, type TaskResumeContext } from "@codecast/shared/tasks";
+import { blockersHoldingBack, checksWaitPr, isActiveTask, isTerminalTaskStatus, RESUME_SUBTASKS_SHOWN, type Blocker, type TaskResumeContext } from "@codecast/shared/tasks";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 
@@ -58,13 +59,16 @@ export const context = query({
     // caller may read lends its title. Status always ships, as readiness does.
     const { statusOf } = await taskLookups(ctx, task);
     const blockers: TaskResumeContext["blockers"] = [];
+    // A closed task holds nothing, which blockersHoldingBack itself decides
+    // (TG1), so a session still bound to a task somebody else closed is never
+    // told to park on a blocker nothing can settle.
     for (const b of blockersHoldingBack(task, statusOf)) {
       const row = b.kind === "task" ? statusOf(b.ref) : null;
       const found = row && typeof row === "object" ? (row as Doc<"tasks">) : null;
       // Older rows name a blocker by its Convex id; the agent needs the short id.
       const ref = found?.short_id ? { ref: found.short_id } : {};
       const titled = found && (await readable(found));
-      blockers.push({ ...b, ...ref, ...(titled ? { title: titled.title } : {}) });
+      blockers.push({ ...b, ...ref, ...(titled ? { title: titled.title } : {}), ...(await checksOf(ctx, auth.userId, b)) });
     }
 
     // Newest first, until the last progress note: the comments after it are counted.
@@ -92,6 +96,21 @@ export const context = query({
     };
   },
 });
+
+/** The `checks_state` of a checks wait's PR, for the one blocker entry that
+ *  needs it. Without it the block words a red wait "PR #42 checks to go
+ *  green" and the parking advice sends the session dormant on checks that
+ *  have been failing for hours: TG2 keeps such a wait waiting, so only a new
+ *  push can clear it. `checksWaitPr` is the one rule for which waits need the
+ *  read (taskLinks.waitChecks asks it for `cast task show`), so this surface
+ *  and that one speak of the same waits; a PR in a team the reader is not in
+ *  lends nothing. */
+async function checksOf(ctx: QueryCtx, userId: Id<"users">, b: Blocker): Promise<{ checks?: string }> {
+  const target = b.kind === "task" ? null : checksWaitPr(b);
+  if (!target) return {};
+  const pr = await prByNumber(ctx, target.repository, target.pr_number);
+  return pr?.checks_state && (await canAccessPullRequest(ctx, userId, pr)) ? { checks: pr.checks_state } : {};
+}
 
 /** A task the session started but no longer holds: whether it lost it because
  *  the task closed or because another session holds it now. */

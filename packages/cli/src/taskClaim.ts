@@ -47,7 +47,10 @@ export function unclaimedLine(claim: { skipped?: unknown[]; more?: boolean; stal
   const others = n ? ` ${n} ready task${n === 1 ? " is" : "s are"} assigned to others or held by a decision (cast task ready lists them).` : "";
   if (!claim?.more) return `No ready tasks to claim.${stale}${others}`;
   const passed = claim.skipped?.length ? `, passed over ${claim.skipped.length}` : "";
-  return `No task claimed${passed}. More ready tasks exist past those tried: narrow with --plan, --project or -q.${stale}`;
+  // Both counts ride on both wordings: a queue the autopilot has to judge
+  // workable is told how much of it belongs to someone else whether or not
+  // candidates were left untried.
+  return `No task claimed${passed}. More ready tasks exist past those tried: narrow with --plan, --project or -q.${stale}${others}`;
 }
 
 // `--model`, `--effort` and `--ephemeral` on create and update (task-graph.md
@@ -79,9 +82,26 @@ export function foldStaleTasks<T extends { stale?: boolean }>(tasks: T[], showSt
 export const READY_LIST_LIMIT = 300;
 
 /** The frontier's closing count. A list that filled `READY_LIST_LIMIT` was cut
- *  short, stale rows first since they sort last, so both counts are floors. */
+ *  short, stale rows first since they sort last, so both counts are floors.
+ *
+ *  When every ready task was folded away the count is the whole output — no
+ *  rows above it — so it becomes a sentence with somewhere to go, the way the
+ *  genuinely empty frontier gets one. A bare "0 ready, 182 more untouched 30+
+ *  days" is the least guidance on the screen with the MOST available work, and
+ *  reads as a contradiction besides: those 182 ARE ready, just untouched, so
+ *  they are worded as ready rather than as "more", and the staleness window is
+ *  named once, in the words the rows themselves carry. */
 export function readyCountLine(shown: number, folded: number, listed: number): string {
   const floor = listed >= READY_LIST_LIMIT ? "+" : "";
+  if (!shown && folded) {
+    // The window is named ONCE, in the words every other surface uses
+    // (STALE_TASK_WORDS): "no ready task anyone has touched in 30 days" also
+    // parses as "nothing here is ready", which the count then contradicts by
+    // calling all of them ready.
+    return folded === 1
+      ? `The one ready task here is ${STALE_TASK_WORDS}: cast task ready --stale lists it, --stale --claim takes it.`
+      : `All ${folded}${floor} ready tasks here are ${STALE_TASK_WORDS}: cast task ready --stale lists them, --stale --claim takes one.`;
+  }
   const foldNote = folded ? `, ${folded}${floor} more ${STALE_TASK_WORDS} (--stale lists them)` : "";
   return `${shown}${floor} ready${foldNote}`;
 }
