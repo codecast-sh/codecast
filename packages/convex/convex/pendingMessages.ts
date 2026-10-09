@@ -1,4 +1,5 @@
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
+import { noteWriteCause } from "./lifecycleEvents";
 import type { RegisteredMutation } from "convex/server";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
@@ -14,7 +15,8 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter,
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
+import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./devices";
 import {
   messagesCommandCoverageTarget,
@@ -627,6 +629,13 @@ export const sendMessageToSession = mutation({
     if (args.origin && isHostedAgentType(conversation.agent_type)) {
       throw new Error("Only the server sends machine input to a hosted conversation");
     }
+    // A daemon's crash revive is an automatic continue like the server's own,
+    // held to the recovery mode the person chose. Checked here so every daemon
+    // version obeys it.
+    if (isReviveClientId(args.client_id)) {
+      const { primary } = await listOnlineDevices(ctx, authUserId, Date.now());
+      if (!autoRecoveryEnabled(primary)) return null;
+    }
 
     return await enqueuePendingMessage(ctx, conversation, authUserId, {
       content: args.content,
@@ -1056,6 +1065,7 @@ export const updateMessageStatus = mutation({
     device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "daemon:updateMessageStatus");
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1312,6 +1322,7 @@ export const cancelPendingMessage = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "cancelPendingMessage");
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1916,6 +1927,7 @@ async function notifyStuckCrossUserSend(
 
 export const retryStuckMessages: RegisteredMutation<"internal", Record<string, never>, Promise<void>> = internalMutation({
   handler: async (ctx) => {
+    noteWriteCause(ctx, "cron:retryStuckMessages");
     await healAndNotifyStuckMessages(ctx, Date.now());
   },
 });

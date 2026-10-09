@@ -274,7 +274,7 @@ export const FEATURE_EXPLAINERS: Record<string, FeatureExplainer> = {
   limits: {
     pitch: "Hitting a usage limit pauses work instead of ending it.",
     youSee: [
-      "Parked sessions resume at the reset, or move to a saved account with room.",
+      "With recovery on in Claude Accounts, parked sessions resume at the reset, or move to a saved account with room.",
       "Agents finish their step instead of wrapping up early when a limit is near.",
     ],
     agentsUse: [

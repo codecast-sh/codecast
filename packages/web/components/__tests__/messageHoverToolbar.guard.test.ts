@@ -18,7 +18,11 @@ test("message actions stay inert until their own message is hovered or focused",
   expect(userToolbar).not.toMatch(/:\s*"opacity-100"/);
 });
 
-test("the per-reply fork action uses the compact label", () => {
-  expect(source).toContain("<span>Fork</span>");
-  expect(source).not.toContain("<span>Fork here</span>");
+test("the per-reply fork action is a named icon, with no word beside it", () => {
+  const start = source.indexOf('title="Fork the conversation from this message"');
+  expect(start).toBeGreaterThan(-1);
+  const button = source.slice(start, source.indexOf("</button>", start));
+  expect(button).toContain('aria-label="Fork from this message"');
+  expect(button).toContain("<Split ");
+  expect(button).not.toMatch(/>\s*Fork[^<]*</);
 });
