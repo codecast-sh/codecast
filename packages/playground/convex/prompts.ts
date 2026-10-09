@@ -3,6 +3,7 @@
 //
 // - The builder (builder/run.ts): Clay, the agent that changes an app.
 // - Triage (builder/triage.ts): whether an Auto message asks for a change.
+import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { ENTRY_PATH } from "./lib/files";
 import { SDK_DOCS, esmUrl } from "./lib/runtime";
 import { oneLine } from "./lib/text";
@@ -12,7 +13,7 @@ export const BUILDER_MODEL = "claude-sonnet-5-5";
  *  and sets what the app is, so it gets more; a change is usually small and
  *  the room sits and watches it (notes/builder-evals.md, effort runs). */
 export const BUILDER_EFFORT = { first: "high", change: "medium" } as const;
-export const TRIAGE_MODEL = "claude-haiku-4-5-20251001";
+export const TRIAGE_MODEL = CHEAP_MODEL;
 
 // ---------------------------------------------------------------- builder
 
@@ -111,8 +112,11 @@ text replace, best for small changes) or write_file (new files and rewrites);
 read_file only what you were not given. Calls in one turn run in parallel, so
 make independent edits together. Give each change a short "about" in plain
 words for the people watching ("Adding a reset button"). When the draft is
-done, call finish by itself with a one-line summary of what changed, in the
-present tense, for people ("Adds a reset button under the score"), and three
+done, call finish by itself with a summary for people: one sentence in the
+present tense that starts with a verb and names the most visible change,
+under 70 characters ("Makes the count rounder and adds a warm glow"). The
+room shows it on one line after the asker's name, so detail and reasons
+belong in your "about" lines. Add three
 ideas for what people might change next, a few words each and specific to
 this app ("make the frogs harmonize"); the room offers them. When the change
 has one place on screen, give finish its selector as your code renders it,
