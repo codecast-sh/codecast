@@ -1,4 +1,4 @@
-import { spawnSync } from "child_process";
+import { spawnSync } from "./proc.js";
 import * as fs from "fs";
 import * as path from "path";
 

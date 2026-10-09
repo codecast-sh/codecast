@@ -3,12 +3,11 @@
 // project's own line in one place. Its map leads: the stations of its actual
 // graph with the data over them, a panel per node where every value of the
 // line (finders, station prompts, checks, limits) is read and edited in place.
-// Under it, its expectations (ExpectationsPanel) and what each version of
-// the line delivered (LE14).
+// Under it, what each version of the line delivered (LE14). The project's
+// expectations have their own tab (components/expectations/ExpectationsTab).
 import { useMemo } from "react";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { useInboxStore } from "../../store/inboxStore";
-import { useProjectExpectations, useSyncProjectExpectations } from "../../hooks/useSyncProjectExpectations";
 import { isCause, scopeLine } from "../../lib/lineFlow";
 import { lineSettingsHref } from "../../lib/lineSettings";
 import { projectLineVersions, shortDay, type LineVersion } from "../../lib/line/runReport";
@@ -16,7 +15,6 @@ import { LinePage } from "./LinePage";
 import { LineSetup } from "./LineSetup";
 import { useLineFloor, useProjectWorkspace } from "./useLineFloor";
 import { ReportSection } from "./RunReport";
-import { ExpectationsPanel } from "./expectations/ExpectationsPanel";
 import "./line.css";
 
 type Project = { _id: string; short_id?: string | null; title?: string | null; workspace?: string | null; team_id?: string | null; line_profile?: PublishedLineProfile | null };
@@ -30,10 +28,6 @@ export function ProjectLineTab({ projectId }: { projectId: string }) {
   // A line with nothing on it has no flow to draw: it leads with what the
   // line would do here and the one step that starts it.
   const { lineRows } = useLineFloor(projectId, workspace);
-  // Fed here as well as in the panel: whether the project has expectations
-  // decides what the tab leads with, even before the panel mounts.
-  useSyncProjectExpectations(projectId);
-  const hasExpectations = !!useProjectExpectations(projectId)?.doc;
   const versions = useVersions(lineRows, projectId);
   const empty = useMemo(() => {
     const scoped = scopeLine(lineRows, projectId);
@@ -42,19 +36,13 @@ export function ProjectLineTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="max-w-[96rem] mx-auto px-4 sm:px-6 py-5 space-y-8" data-project-line-tab={projectId} data-line-tab-empty={empty ? "" : undefined}>
-      {/* A line with nothing on it but expectations leads with them, and
-          setting the line up is one action in their header. */}
-      {empty && hasExpectations ? (
-        <ExpectationsPanel projectId={projectId} setupHref={lp ? undefined : settings} scroll={false} />
-      ) : empty && !lp ? (
+      {empty && !lp ? (
         <LineSetup title={project?.title ?? "this project"} profiled={false} href={settings} />
       ) : (
-        <div className="rounded-xl border border-sol-border/30 overflow-hidden h-[560px] sm:h-[680px]" data-project-line-flow>
+        <div className="rounded-xl border border-sol-border/30 overflow-hidden h-[max(560px,calc(100vh-11rem))]" data-project-line-flow>
           <LinePage project={projectId} workspace={workspace} />
         </div>
       )}
-
-      {!(empty && hasExpectations) && (lp || !empty) && <ExpectationsPanel projectId={projectId} />}
 
       {!empty && <Versions versions={versions} />}
     </div>
@@ -72,9 +60,9 @@ function useVersions(lineRows: ReturnType<typeof useLineFloor>["lineRows"], proj
 
 function Versions({ versions }: { versions: LineVersion[] }) {
   return (
-    <ReportSection title="Versions" aside="each version of the line, what it changed and what it delivered, newest first">
+    <ReportSection title="Versions of codecast's line" aside="each time its steps changed, what changed and what the runs after it delivered, newest first">
       {versions.length === 0 ? (
-        <p className="text-[12.5px] text-sol-text-dim">No line run on this project yet. Each run records the version of the line it ran, so a change to a station can be compared by what it delivered.</p>
+        <p className="text-[12.5px] text-sol-text-dim">No run of codecast's line on this project yet. Each run records the version it ran, so a change to a step can be compared by what it delivered.</p>
       ) : (
         <table className="cast-table w-full text-[12.5px] tabular-nums" data-line-versions>
           <thead>

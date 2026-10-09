@@ -1,37 +1,48 @@
 "use client";
 
 import { memo } from "react";
-import { ArrowDown, ArrowUp, Combine, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Combine, X, Zap } from "lucide-react";
 import { jointAuthors } from "@codecast/shared/contracts/jointMessage";
 import { useInboxStore } from "../../store/inboxStore";
-import { canSteer, isHeldForTurnEnd, partsOf, queueRowsOf, type QueueRow } from "../../lib/sharedQueue";
+import { isHeldForTurnEnd, partsOf, queueRowsOf, type QueueRow } from "../../lib/sharedQueue";
 import { PresenceAvatar } from "../PresenceFacepile";
 
-// Every message waiting to go into the session, from every person, in the
-// order the session will take them, each with its author's face. Shown when
-// the line is worth seeing: anything queued for the end of the turn (⌘↵),
-// two or more waiting, or one from someone else (an instruction you have not
-// read that the agent is about to act on).
-// Anyone who may send into the session can move a message or fold two into
-// one turn whose parts name each author. Reads the one home of these rows,
-// the conversation's pending status row; never copies it.
+// Messages held for the end of the agent's turn ("Queue for later", ⌘↵),
+// from every person in the session, in the order the session will take them,
+// each with its author's face. A plain send never waits here: it goes in at
+// once and shows as a bubble in the transcript, and so does a held message
+// the moment someone sends it now, since the release flips its status on the
+// local draft. Anyone who may send into the session can move a message or
+// fold two into one turn whose parts name each author. Reads the one home of
+// these rows, the conversation's pending status row; never copies it.
+
+function heldRowsOf(status: any): QueueRow[] {
+  return queueRowsOf(status).filter(isHeldForTurnEnd);
+}
 
 function queueSig(status: any): string {
-  return queueRowsOf(status).map((r) => `${r.message_id}:${r.status}:${r.queue_at ?? ""}:${r.content.length}`).join("|");
+  return heldRowsOf(status).map((r) => `${r.message_id}:${r.queue_at ?? ""}:${r.content.length}`).join("|");
 }
 
 export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQueue }: { conversationId: string; canSteerQueue: boolean }) {
   // Wake only when the line itself changes, not on every status tick.
   useInboxStore((s) => queueSig((s.pendingMessageStatus as any)[conversationId]));
   const st = useInboxStore.getState();
-  const rows = queueRowsOf((st.pendingMessageStatus as any)[conversationId]);
+  const rows = heldRowsOf((st.pendingMessageStatus as any)[conversationId]);
+  if (rows.length === 0) return null;
   const me = st.currentUser?._id ? String(st.currentUser._id) : null;
-  const othersQueued = rows.some((r) => r.from_user_id && r.from_user_id !== me);
-  const held = rows.filter(isHeldForTurnEnd);
-  if (rows.length < 2 && !othersQueued && held.length === 0) return null;
 
   const move = (row: QueueRow, beforeId: string | null) => st.reorderQueued(conversationId, row.message_id, beforeId);
   const merge = (row: QueueRow, into: QueueRow) => st.mergeQueued(conversationId, row.message_id, into.message_id);
+  const release = () => st.releaseQueued(conversationId);
+  // Interrupt and send: the row goes to the front, the line is released (a
+  // stopped turn releases it on the server too, managedSessions), and Escape
+  // stops the turn so the daemon takes the head of the line next.
+  const interruptWith = (row: QueueRow) => {
+    if (rows[0] !== row) move(row, rows[0].message_id);
+    release();
+    st.sendEscape(conversationId);
+  };
 
   return (
     <div data-sv-shared-queue className="mx-auto conv-col px-2 sm:px-4">
@@ -39,9 +50,9 @@ export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQ
         <div className="flex items-center gap-2 px-3 pt-1.5 pb-1 text-[10px] uppercase tracking-wider text-sol-text-dim">
           <span>Up next</span>
           <span className="tabular-nums">{rows.length}</span>
-          {held.length > 0 && <span className="normal-case tracking-normal">· {held.length === rows.length ? "goes in when this turn ends" : `${held.length} wait for the end of this turn`}</span>}
-          {held.length > 0 && canSteerQueue && (
-            <button type="button" onClick={() => st.releaseQueued(conversationId)} className="ml-auto normal-case tracking-normal text-[10px] text-sol-cyan hover:underline">
+          <span className="normal-case tracking-normal">· goes in when this turn ends</span>
+          {canSteerQueue && (
+            <button type="button" onClick={release} className="ml-auto normal-case tracking-normal text-[10px] text-sol-cyan hover:underline">
               Send now
             </button>
           )}
@@ -50,7 +61,6 @@ export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQ
           {rows.map((row, i) => {
             const parts = partsOf(row);
             const who = jointAuthors(parts);
-            const steerable = canSteerQueue && canSteer(row);
             const prev = rows[i - 1];
             const next = rows[i + 1];
             return (
@@ -61,13 +71,14 @@ export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQ
                 <span className="truncate min-w-0 text-sol-text-muted" title={parts.map((p) => `${p.from}: ${p.body}`).join("\n\n")}>
                   {parts.map((p) => p.body).join("  ·  ")}
                 </span>
-                {!canSteer(row) && <span className="ml-auto shrink-0 text-[10px] text-sol-cyan">going in now</span>}
-                {isHeldForTurnEnd(row) && !steerable && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">after this turn</span>}
-                {steerable && (
+                {canSteerQueue && (
                   <span className="ml-auto shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                    <QueueButton label="Move up" disabled={!prev || !canSteer(prev)} onClick={() => prev && move(row, prev.message_id)}><ArrowUp className="w-3 h-3" /></QueueButton>
+                    <QueueButton label="Interrupt the agent and send this next" disabled={false} onClick={() => interruptWith(row)}>
+                      <Zap className="w-3 h-3" /><span className="ml-1">Interrupt &amp; send</span>
+                    </QueueButton>
+                    <QueueButton label="Move up" disabled={!prev} onClick={() => prev && move(row, prev.message_id)}><ArrowUp className="w-3 h-3" /></QueueButton>
                     <QueueButton label="Move down" disabled={!next} onClick={() => next && move(row, rows[i + 2]?.message_id ?? null)}><ArrowDown className="w-3 h-3" /></QueueButton>
-                    <QueueButton label="Merge with the next one into one turn" disabled={!next || !canSteer(next)} onClick={() => next && merge(next, row)}>
+                    <QueueButton label="Merge with the next one into one turn" disabled={!next} onClick={() => next && merge(next, row)}>
                       <Combine className="w-3 h-3" /><span className="ml-1">Merge</span>
                     </QueueButton>
                     {(row.from_user_id === me || st.conversations[conversationId]?.user_id === me) && (
