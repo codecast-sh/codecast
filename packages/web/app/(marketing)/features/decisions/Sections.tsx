@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { KeyCap } from "@/components/KeyboardShortcutsHelp";
 import { SOL } from "../../blog/blogChrome";
 import { PhoneFrame } from "../../productMocks";
-import { AnswerBubble, DefaultTag, FoldPill, LINE, MUTED, DIM, TEXT, OptionRow, Question, QueueRow, Reasoning, ReportEmbed, StackChecklistMock, TypeAnswer, EscapeHatch } from "./mocks";
-import { at, B, C, Dot, Label, Note, Section, Shell, sh, Y } from "./kit";
+import { AnswerBubble, DefaultTag, FoldPill, LINE, MUTED, DIM, TEXT, OptionRow, Question, QueueRow, StackChecklistMock, EscapeHatch } from "./mocks";
+import { at, B, C, Dot, Label, Note, Section, Shot, Y } from "./kit";
 
 /* ── 1. Three ways through a fork ─────────────────────────────────────────── */
 
@@ -55,7 +55,7 @@ export function ThreeWays() {
     <Section
       id="why"
       title="An agent at a fork has two bad options. This is the third."
-      lede={<>It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick alone, and you find out after code depends on the choice. <C>cast decide</C> puts the question in a queue instead. A queued question costs you almost nothing to receive, so the bar for asking drops: a choice the agent would have made silently and mentioned in passing goes to the queue.</>}
+      lede={<>It can stop and ask, which pulls you out of your own work to read a transcript. Or it can pick alone, and you find out after code depends on the choice. Codecast puts the question in a queue instead. A queued question costs you almost nothing to receive, so the bar for asking drops: a choice the agent would have made silently and mentioned in passing goes to the queue.</>}
       aside={<>The tracks below are an illustrative afternoon, not a measurement. The shape is the point: who loses time, and when.</>}
     >
       <div className="grid grid-cols-[72px_1fr] sm:grid-cols-[96px_1fr] gap-3 mb-2">
@@ -73,7 +73,7 @@ export function ThreeWays() {
           <Track d={0.2} who="you" segs={[{ from: 0, to: 0.82, color: you, label: "your work, uninterrupted" }, { from: 0.84, to: 1, color: SOL.orange, label: "reading the diff" }]} />
           <Track d={0.3} who="agent" segs={[{ from: 0, to: 0.2, color: agent, label: "working" }, { from: 0.2, to: 0.84, color: agent, label: "building on its guess" }, { from: 0.86, to: 1, color: SOL.orange, label: "redo", striped: true }]} marks={[{ at: 0.2, label: "picks alone", color: SOL.orange }]} />
         </Lane>
-        <Lane name="cast decide" accent={Y} verdict="The agent asks once with the evidence. You answer in a sitting you chose.">
+        <Lane name="Queue it" accent={Y} verdict="The agent asks once with the evidence. You answer in a sitting you chose.">
           <Track d={0.4} who="you" segs={[{ from: 0, to: 0.62, color: you, label: "your work, uninterrupted" }, { from: 0.63, to: 0.69, color: Y }, { from: 0.71, to: 1, color: you }]} marks={[{ at: 0.66, label: "clear the queue", color: Y }]} />
           <Track d={0.5} who="agent" segs={[{ from: 0, to: 0.2, color: agent, label: "working" }, { from: 0.2, to: 0.66, color: agent, label: "other work, or parked", striped: true }, { from: 0.68, to: 1, color: agent, label: "on your answer" }]} marks={[{ at: 0.2, label: "asks", color: Y }]} />
         </Lane>
@@ -88,72 +88,41 @@ export function ThreeWays() {
   );
 }
 
-/* ── 2. Anatomy: the command and the card it becomes ──────────────────────── */
+/* ── 2. Anatomy: the card, as the app shows it ───────────────────────────── */
 
-type Part = "q" | "o" | "ctx" | "report" | "mode" | null;
+const PARTS: [string, string][] = [
+  ["The question", "one, in large type, so you know what you are deciding before you read anything else"],
+  ["The reasoning", "what the agent found, and why it cannot pick alone"],
+  ["The options", "2 to 9, numbered for the keys, each with what happens if you choose it"],
+  ["The evidence", "a report, a page per option or a long document, when a paragraph is not enough"],
+  ["The answer", "a click or a number key, or Or answer in your own words"],
+];
 
 export function Anatomy() {
-  const [on, setOn] = useState<Part>(null);
-  const flag = (p: Exclude<Part, null>, children: ReactNode) => (
-    <span className="dq-flag rounded px-0.5 -mx-0.5 cursor-default" data-on={on === p} onMouseEnter={() => setOn(p)} onMouseLeave={() => setOn(null)}>
-      {children}
-    </span>
-  );
-  const part = (p: Exclude<Part, null>, children: ReactNode, cls = "") => (
-    <div className={`dq-part ${cls}`} data-on={on === p} onMouseEnter={() => setOn(p)} onMouseLeave={() => setOn(null)}>{children}</div>
-  );
   return (
     <Section
       id="anatomy"
       tone="sand"
       title="The agent writes the whole card. You never open the session."
-      lede={<>One question, 2 to 9 options, and the reasoning: what it found, what each option costs, and why it cannot pick. Text after <C>::</C> in an option becomes the consequence printed under its label, so you compare outcomes where you click. Point at a flag to see where it lands.</>}
-      aside={<>The CLI refuses a bare question: it needs <C>--context</C>, <C>--report</C>, <C>--doc</C> or <C>--card</C>. It prints the card back to the agent, and warns when there is no report and under 200 characters of context, or when no option says what happens if chosen.</>}
+      lede={<>One question, 2 to 9 options, and the reasoning: what it found, what each option costs, and why it cannot pick. Each option carries its consequence under its label, so you compare outcomes where you click.</>}
+      aside={<>An agent cannot post a bare question: codecast refuses one with no reasoning or evidence, and warns the agent when the reasoning is thin or an option does not say what happens if chosen.</>}
     >
-      <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 items-start">
-        <div className="min-w-0">
-          <Label>the agent runs</Label>
-          <Shell>
-            {sh.prompt(<>cast decide {flag("q", sh.str('"Which schema wins?"'))} \</>)}{"\n"}
-            {"  "}{flag("o", <>{sh.flag("-o")} {sh.str('"Frontmatter wins :: the daemon changes"')}</>)} \{"\n"}
-            {"  "}{flag("o", <>{sh.flag("-o")} {sh.str('"Path wins :: old links break"')}</>)} \{"\n"}
-            {"  "}{flag("report", <>{sh.flag("--report")} id-audit.html</>)} \{"\n"}
-            {"  "}{flag("ctx", <>{sh.flag("--context")} - &lt;&lt;&apos;EOF&apos;</>)}{"\n"}
-            {flag("ctx", <>{sh.dim("The daemon writes note ids from the file path. The web index")}{"\n"}{sh.dim("derives them from frontmatter. A rename keeps one id and changes")}{"\n"}{sh.dim("the other, so the same note indexes twice. Either side can be")}{"\n"}{sh.dim("authoritative.")}{"\n"}{sh.dim("EOF")}</>)}{"\n"}
-            {"\n"}
-            {sh.ok("Decision posted:")} Which schema wins?{"\n"}
-            {sh.dim("  id: sd-41")}{"\n"}
-            {sh.dim("  1. Frontmatter wins — the daemon changes")}{"\n"}
-            {sh.dim("  2. Path wins — old links break")}{"\n"}
-            {sh.dim("  report: https://codecast.sh/a/id-audit")}{"\n"}
-            {"\n"}
-            {flag("mode", sh.dim("Blocking: end your turn now. The answer arrives as a user message."))}
-          </Shell>
-          <div className="mt-4 flex flex-wrap gap-2 text-[12px]">
-            {([["q", "the question"], ["o", "-o, :: consequence"], ["ctx", "--context"], ["report", "--report"], ["mode", "blocking"]] as const).map(([p, l]) => (
-              <button key={p} type="button" className="dq-flag font-mono px-2 py-1 rounded border" data-on={on === p} style={{ borderColor: LINE, color: SOL.base01 }} onMouseEnter={() => setOn(p)} onMouseLeave={() => setOn(null)} onFocus={() => setOn(p)} onBlur={() => setOn(null)}>{l}</button>
-            ))}
-          </div>
-        </div>
-        <div className="min-w-0">
-          <Label>you see</Label>
-          <div className="rounded-xl border overflow-hidden" style={{ backgroundColor: SOL.base3, borderColor: LINE }}>
-            <div className="border-b px-4 sm:px-5 h-10 flex items-center gap-2.5" style={{ borderColor: LINE }}>
-              {part("mode", <span className="flex items-center gap-2 px-1 py-0.5 min-w-0"><Dot tier={1} /><span className="text-[13px] truncate" style={{ color: TEXT }}>Note ids drift on rename</span></span>, "min-w-0")}
-              <span className="ml-auto shrink-0 text-[11px]" style={{ color: DIM }}><span className="hidden sm:inline">decision 1 of 2</span><span className="sm:hidden">1/2</span></span>
-            </div>
-            <div className="px-4 sm:px-5 pt-4 pb-5 space-y-4">
-              {part("q", <div className="p-1"><Question>Which schema wins?</Question></div>)}
-              {part("ctx", <div className="p-1"><Reasoning><p>The daemon writes note ids from the file path. The web index derives them from frontmatter. A rename keeps one id and changes the other, so the same note indexes twice. Either side can be authoritative.</p></Reasoning></div>)}
-              {part("report", <div className="p-1"><ReportEmbed slug="id-audit" title="Where each id comes from" rows={[["daemon", "file path"], ["web index", "frontmatter"], ["notes indexed twice", "38"]]} /></div>)}
-              {part("o", <div className="p-1 space-y-2">
-                <OptionRow n={0} primary option={{ label: "Frontmatter wins", description: "the daemon changes" }} />
-                <OptionRow n={1} option={{ label: "Path wins", description: "old links break" }} />
-                <TypeAnswer />
-              </div>)}
-            </div>
-          </div>
-        </div>
+      <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,7fr)_minmax(0,4fr)] gap-8 items-start">
+        <Shot
+          src="/features/decisions/decision-page.webp"
+          alt="A decision's page in codecast: the question in large type, the agent's reasoning, two numbered options each with its consequence, and the answer with who gave it"
+          w={1600}
+          h={1332}
+          caption={<>Every decision has its own page, reached from the card. <b style={{ color: TEXT, fontWeight: 600 }}>Discuss</b> opens a thread about it, and once it is answered the page keeps the choice and who made it.</>}
+        />
+        <ul className="space-y-4">
+          {PARTS.map(([h, d]) => (
+            <li key={h} className="grid grid-cols-[18px_1fr] gap-2">
+              <span className="mt-[9px] w-2 h-2 rounded-full" style={{ backgroundColor: Y }} />
+              <span><span className="text-[15px] font-semibold" style={{ color: TEXT }}>{h}</span><span className="block text-[14px] leading-6" style={{ color: MUTED }}>{d}</span></span>
+            </li>
+          ))}
+        </ul>
       </div>
     </Section>
   );
@@ -166,19 +135,13 @@ export function Modes() {
     <Section
       id="modes"
       title="Wait for the answer, or keep going on a default."
-      lede={<>Blocking is the default: the agent posts and ends its turn, and the session stays parked until you answer. <C>--advisory --default n</C> lets the agent carry on with option n while your answer can still override it.</>}
+      lede={<>Blocking is the default: the agent asks and stops, and the session shows <i>Waiting on your decision</i> until you answer. An advisory ask names a default and the agent carries on with it, while your answer can still override it.</>}
       aside={<>The rule the agent is given: advisory only when the default is cheap to undo. Answers often land an hour later and disagree, and everything built on the default in that hour is work to unwind. If reversing costs more than waiting, block.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] md:grid-cols-2 gap-5">
         <div className="rounded-xl border p-5 flex flex-col" style={{ borderColor: "rgba(181,137,0,.45)", backgroundColor: SOL.base3 }}>
           <div className="flex items-center gap-2 mb-1"><Dot tier={1} /><span className="font-mono font-bold text-[15px]" style={{ color: TEXT }}>blocking</span></div>
           <Note className="mb-4">The session is waiting on your decision. The queue opens it as the full sheet, and it sorts to the top while the session can still take an answer.</Note>
-          <Shell className="mb-4" wrap>
-            {sh.prompt(<>cast decide {sh.str('"Approve dropping agent_runs_v1?"')} \</>)}{"\n"}
-            {"  "}{sh.flag("-o")} {sh.str('"Approve :: frees the last migration"')} {sh.flag("-o")} {sh.str('"Hold"')} \{"\n"}
-            {"  "}{sh.flag("--context")} {sh.str('"Nothing wrote to it in 40 days."')}{"\n"}
-            {sh.dim("Blocking: end your turn now. The answer arrives as a user message.")}
-          </Shell>
           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: LINE }}>
             <div className="text-[11px] font-mono" style={{ color: DIM }}>in the session</div>
             <div className="flex items-center gap-2 text-[12.5px]" style={{ color: TEXT }}><Dot tier={1} />Waiting on your decision</div>
@@ -189,13 +152,6 @@ export function Modes() {
         <div className="rounded-xl border p-5 flex flex-col" style={{ borderColor: "rgba(38,139,210,.4)", backgroundColor: SOL.base3 }}>
           <div className="flex items-center gap-2 mb-1"><Dot tier={3} /><span className="font-mono font-bold text-[15px]" style={{ color: B }}>advisory</span></div>
           <Note className="mb-4">The agent keeps working on its default. In the session view the ask folds to one pill above the composer, so the thread stays the main event. It sorts after every blocking ask in the queue.</Note>
-          <Shell className="mb-4" wrap>
-            {sh.prompt(<>cast decide {sh.str('"Back off or switch keys?"')} \</>)}{"\n"}
-            {"  "}{sh.flag("-o")} {sh.str('"Back off"')} {sh.flag("-o")} {sh.str('"Switch keys"')} {sh.flag("--advisory --default 1")} \{"\n"}
-            {"  "}{sh.flag("--context")} {sh.str('"429s for 4m."')}{"\n"}
-            {sh.dim("Advisory: continue with your default. The human's answer")}{"\n"}
-            {sh.dim("arrives as a message and may override you.")}
-          </Shell>
           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: LINE }}>
             <div className="text-[11px] font-mono" style={{ color: DIM }}>above the composer, folded</div>
             <div className="flex justify-end"><FoldPill label="Asked for your steer" /></div>
@@ -206,7 +162,7 @@ export function Modes() {
           </div>
         </div>
       </div>
-      <Note className="mt-6 max-w-3xl"><C>cast decide edit --blocking</C> turns an advisory ask into a blocking one and clears its default. A blocking ask never answers itself; only an advisory member of a stack with an auto default policy does.</Note>
+      <Note className="mt-6 max-w-3xl">The agent can turn an advisory ask into a blocking one, which clears its default. A blocking ask never answers itself; only an advisory member of a stack with an <b style={{ color: TEXT, fontWeight: 600 }}>Auto default</b> does.</Note>
     </Section>
   );
 }
@@ -241,18 +197,13 @@ export function Evidence() {
       id="evidence"
       tone="sand"
       title="When a paragraph is not enough, the card carries the evidence."
-      lede={<>A decision that deserves proof gets a page. <C>--report</C> publishes an HTML or markdown file through the same path as <C>cast publish</C> and embeds it under the question. <C>--option-page</C> gives each option its own page, so two designs sit side by side. <C>--doc</C> attaches a long markdown body.</>}
-      aside={<>A card with a document, option pages or an answer kind beyond a single choice links to its own page at <C>/decisions/sd-N</C>, where there is room to read.</>}
+      lede={<>A decision that deserves proof gets a page. The agent can attach a report that renders under the question, give each option its own page so two designs sit side by side, or attach a long document.</>}
+      aside={<>A card with a document, option pages or an answer beyond a single choice links to the decision&apos;s own page, where there is room to read.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-6 items-start">
         <div className="min-w-0 space-y-4">
-          <Shell>
-            {sh.prompt(<>cast decide {sh.str('"Which layout?"')} {sh.flag("-o")} {sh.str('"Dense"')} {sh.flag("-o")} {sh.str('"Roomy"')} \</>)}{"\n"}
-            {"  "}{sh.flag("--context")} {sh.str('"Both pass review."')} \{"\n"}
-            {"  "}{sh.flag("--option-page")} 1=dense.html {sh.flag("--option-page")} 2=roomy.html
-          </Shell>
-          <Note>A file publishes like <C>--report</C>. A slug or a codecast page URL attaches a page that already exists, and the server refuses a slug that is not published.</Note>
-          <Note>Beyond one choice, <C>--kind</C> asks for several (<C>multi</C>), an order (<C>rank</C>) or a short <C>form</C>, and <C>--line</C> asks for one line of text. <C>--spec</C> takes the whole decision as JSON, with cost, risk and evidence links per option.</Note>
+          <Note>Each option page opens full size from the card. A report or page can be one the agent built for this question, or a page already published in codecast.</Note>
+          <Note>Beyond one choice, an ask can take several options, an order, a short form, or one line of text. Each option can also carry its cost, risk and links to evidence.</Note>
         </div>
         <div className="min-w-0 rounded-xl border p-4 sm:p-5" style={{ borderColor: LINE, backgroundColor: SOL.base3 }}>
           <div className="mb-3"><Question size="sm">Which layout?</Question></div>
@@ -287,13 +238,13 @@ export function Clearing() {
     <Section
       id="queue"
       title="One sitting, in an order you can predict."
-      lede={<>The queue is ordered by a rule, not a score. Blocked asks whose session can still take an answer come first. Blocked asks on a stopped session come next. Advisory asks come last. Inside each group the oldest is first, because a parked agent costs more the longer it waits.</>}
+      lede={<><b style={{ color: TEXT, fontWeight: 600 }}>Questions</b> in the sidebar counts what is waiting on you and opens the queue as a list; <b style={{ color: TEXT, fontWeight: 600 }}>one at a time</b> walks it as full cards. The order is a rule, not a score. Blocked asks whose session can still take an answer come first. Blocked asks on a stopped session come next. Advisory asks come last. Inside each group the oldest is first, because a parked agent costs more the longer it waits.</>}
       aside={<>Every ask shows its age two ways: wall clock, and how many messages the session has written since. A blocking ask with traffic after it means someone already answered in the thread.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] gap-8 items-start">
         <div className="min-w-0 space-y-6">
           <div>
-            <Label>/questions, in order</Label>
+            <Label>Questions, in order</Label>
             <div className="space-y-2">
               <QueueRow tier={1} session="Retire agent_runs_v1" question="Approve dropping agent_runs_v1?" age="2h ago" />
               <QueueRow tier={1} session="Retry webhook deliveries" question="Exponential backoff or a fixed 30s retry?" age="52m ago" />
@@ -302,7 +253,7 @@ export function Clearing() {
             </div>
           </div>
           <div>
-            <Label>keys in step mode</Label>
+            <Label>keys, one at a time</Label>
             <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2">
               {KEYS.map(([k, v]) => (
                 <div key={k} className="flex items-center gap-3 text-[13.5px]" style={{ color: MUTED }}>
@@ -311,14 +262,12 @@ export function Clearing() {
                 </div>
               ))}
             </div>
-            <Note className="mt-5">An answer marks the row answered at once and sends a normal user message into the asking session, <C>Decision: &lt;label&gt;</C>, rendered as an answer linked back to the ask. Answers from a shell (<C>cast decide answer sd-41 2</C>) write the same message. The first answer wins; a second one changes nothing.</Note>
+            <Note className="mt-5">An answer marks the row answered at once and sends a normal user message into the asking session, <C>Decision: &lt;label&gt;</C>, rendered as an answer linked back to the ask. An answer given from the command line writes the same message. The first answer wins; a second one changes nothing.</Note>
             <Note className="mt-3">A permission prompt and an agent&apos;s terminal question wait in the same queue. On a permission card the digits are off and only <KeyCap size="xs">y</KeyCap> and <KeyCap size="xs">n</KeyCap> answer, so a digit meant for the previous card can never approve something.</Note>
           </div>
         </div>
         <div className="min-w-0 flex flex-col items-center">
-          <PhoneFrame className="w-[268px]" screenClassName="">
-            <PhoneDecisionScreen />
-          </PhoneFrame>
+          <PhoneQueue />
           <Note className="mt-5 text-center max-w-xs">The phone app walks the same queue one decision at a time, and moves to the next one when you answer, skip or dismiss.</Note>
         </div>
       </div>
@@ -328,6 +277,15 @@ export function Clearing() {
 
 import { PhoneDecision as PhoneDecisionScreen } from "./mocks";
 
+/** The phone app walking the queue, one decision at a time. */
+export function PhoneQueue() {
+  return (
+    <PhoneFrame className="w-[268px]" screenClassName="">
+      <PhoneDecisionScreen />
+    </PhoneFrame>
+  );
+}
+
 /* ── 6. Stacks ────────────────────────────────────────────────────────────── */
 
 export function Stacks() {
@@ -336,24 +294,17 @@ export function Stacks() {
       id="stacks"
       tone="sand"
       title="Stacks: an ordered set you clear in one go."
-      lede={<>A stack groups related asks, like everything a launch needs from you, into a checklist with an id such as <C>ds-7</C>. An agent creates one and appends to it, or you tick cards in the queue and group them yourself.</>}
+      lede={<>A stack groups related asks, like everything a launch needs from you, into a checklist with an id such as <C>ds-7</C>. An agent can build one as it asks, or you click <b style={{ color: TEXT, fontWeight: 600 }}>group into a stack</b> in the list, tick the cards and name it.</>}
       aside={<>Blocking members never get an automatic answer. The auto default only answers advisory members, from a server job every 5 minutes, counted from when each joined the stack.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,6fr)_minmax(0,5fr)] gap-6 items-start">
         <div className="min-w-0"><StackChecklistMock /></div>
         <div className="min-w-0 space-y-4">
-          <Shell wrap>
-            {sh.prompt(<>cast stack create {sh.str('"Launch checklist"')} \</>)}{"\n"}{"    "}{sh.flag("--policy")} auto-default:24h{"\n"}
-            {sh.prompt(<>cast decide {sh.str('"Send the launch email?"')} {sh.flag("-o")} ... {sh.flag("--stack")} ds-7</>)}{"\n"}
-            {sh.prompt(<>cast stack policy ds-7 {sh.flag("--due")} tomorrow</>)}{"\n"}
-            {sh.prompt(<>cast stack reorder ds-7 sd-43,sd-41,sd-42</>)}{"\n"}
-            {sh.prompt(<>cast stack delegate ds-7 @release-lead</>)}
-          </Shell>
           <ul className="space-y-3 text-[14.5px] leading-6" style={{ color: SOL.base01 }}>
-            <li><b style={{ color: TEXT }}>Due.</b> <C>--due 3h</C>, <C>tomorrow</C> or a date records when you mean to clear it. Overdue stacks sort first.</li>
-            <li><b style={{ color: TEXT }}>Auto default.</b> <C>--auto-default 24h</C> answers advisory members with their default after the deadline. The checklist also answers them all at once.</li>
+            <li><b style={{ color: TEXT }}>Due.</b> Set on the stack&apos;s page: when you mean to clear it. Overdue stacks sort first.</li>
+            <li><b style={{ color: TEXT }}>Auto default.</b> After that many hours, advisory members are answered with their default. The checklist also answers them all at once.</li>
             <li><b style={{ color: TEXT }}>Keys.</b> <KeyCap size="xs">1</KeyCap> to <KeyCap size="xs">9</KeyCap> answer the current member, <KeyCap size="xs">n</KeyCap> and <KeyCap size="xs">p</KeyCap> move between them.</li>
-            <li><b style={{ color: TEXT }}>Delegate.</b> <C>cast stack delegate</C> hands the stack to a role, which answers every open category for its members. Protected questions still come to a person.</li>
+            <li><b style={{ color: TEXT }}>Delegate to a role.</b> Hands the stack to a role, which answers every open category for its members. Protected questions still come to a person.</li>
             <li><b style={{ color: TEXT }}>Done.</b> A stack closes when every member is resolved: answered, dismissed or withdrawn.</li>
           </ul>
         </div>
@@ -369,30 +320,24 @@ export function KeepTrue() {
     <Section
       id="edit"
       title="An ask stays correct until someone answers it."
-      lede={<>A posted decision belongs to the agent. When the facts change it rewrites the card in place with <C>cast decide edit</C>, which keeps the id, the age and the spot in your queue. When the question stops mattering it withdraws it with <C>cast decide cancel</C>. A stale question costs your attention and earns nothing.</>}
-      aside={<>Staleness is measured. Each ask records the session&apos;s message count when it was posted; after 2 hours or 30 messages the CLI tells the agent to edit or cancel it. Posting the same question again updates the open row instead of adding a second.</>}
+      lede={<>A posted decision belongs to the agent. When the facts change it rewrites the card in place, keeping its age and its spot in your queue. When the question stops mattering it withdraws it, and the conversation shows the ask as withdrawn. A stale question costs your attention and earns nothing.</>}
+      aside={<>Staleness is measured. Each ask records how far the session had got when it was posted; after 2 hours or 30 messages the agent is told to update or withdraw it. Asking the same question again updates the open card instead of adding a second.</>}
     >
-      <Shell>
-        {sh.prompt("cast decide ls")}{"\n"}
-        ● sd-41  Which schema wins?{"\n"}
-        {"    "}still open — asked 3h ago, 42 messages since{"\n"}
-        {"      "}1. Frontmatter wins — the daemon changes{"\n"}
-        {"      "}2. Path wins — old links break{"\n"}
-        ○ sd-39  Ship the migration tonight?{"\n"}
-        {"    "}answered: Ship{"\n"}
-        {"    "}✓ 1. Ship{"\n"}
-        {"      "}2. Wait for Monday{"\n"}
-        {"\n"}
-        {sh.dim("The work has likely moved past an open decision. Withdraw the ones that no longer apply")}{"\n"}
-        {sh.dim("(cast decide cancel <id>), or bring them up to date (cast decide edit <id>) — a stale")}{"\n"}
-        {sh.dim("question in your human's queue costs attention and earns nothing.")}{"\n"}
-        {"\n"}
-        {sh.prompt(<>cast decide edit sd-41 {sh.flag("--context")} - &lt;&lt;&apos;EOF&apos;</>)}{"\n"}
-        {sh.dim("The web index already moved to path ids in #482, so only the daemon is left...")}{"\n"}
-        {sh.dim("EOF")}{"\n"}
-        {sh.ok("Decision updated:")} sd-41{"\n"}
-        {sh.dim("  changed: context_md")}
-      </Shell>
+      <div className="grid grid-cols-[minmax(0,1fr)] md:grid-cols-2 gap-5">
+        <div>
+          <Label>rewritten in place, same spot in the queue</Label>
+          <QueueRow tier={1} session="Note ids drift on rename" question="Which schema wins?" age="3h ago" />
+          <Note className="mt-3">The reasoning now says the web index already moved to path ids, so only the daemon is left to change.</Note>
+        </div>
+        <div>
+          <Label>withdrawn</Label>
+          <div className="rounded-lg border px-4 py-3 flex items-center gap-3" style={{ borderColor: LINE, backgroundColor: "rgba(253,246,227,.55)" }}>
+            <span className="text-[13.5px] line-through truncate" style={{ color: DIM }}>Rebuild the search index tonight or after the freeze?</span>
+            <span className="ml-auto shrink-0 text-[11px] font-mono px-1.5 py-0.5 rounded border" style={{ borderColor: LINE, color: DIM }}>withdrawn</span>
+          </div>
+          <Note className="mt-3">It leaves your queue, and the transcript keeps the ask with its withdrawn mark.</Note>
+        </div>
+      </div>
     </Section>
   );
 }
@@ -418,7 +363,7 @@ export function Belongs() {
       id="rules"
       tone="sand"
       title="What an agent should queue, and what it should never queue."
-      lede={<>The decide snippet (<C>cast install decide</C>) teaches agents where the line is. Because the queue does not interrupt you, the bar sits lower than for an inline question: if the agent would have picked a direction and mentioned it in passing, it queues it.</>}
+      lede={<>Switching on <b style={{ color: TEXT, fontWeight: 600 }}>Decision queue</b> in <b style={{ color: TEXT, fontWeight: 600 }}>Agent features</b> teaches agents where the line is. Because the queue does not interrupt you, the bar sits lower than for an inline question: if the agent would have picked a direction and mentioned it in passing, it queues it.</>}
       aside={<>The card is the whole message. After posting, the agent writes nothing more about it; a reply that only repeats the card ends the turn.</>}
     >
       <div className="grid grid-cols-[minmax(0,1fr)] md:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] gap-5">
@@ -478,7 +423,7 @@ function Toks({ text }: { text: string }) {
 
 export function Reference() {
   return (
-    <Section id="reference" title="Command reference" lede={<>Every flag on this page, in one place. <C>cast decide --help</C> and <C>cast stack --help</C> print the rest.</>}>
+    <Section id="reference" title="For scripts and agents" lede={<>Agents ask through the <C>cast decide</C> command, and anything on this page can be scripted with it. <C>cast decide --help</C> and <C>cast stack --help</C> print the rest.</>}>
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: LINE }}>
         {REF.map(([c, d], i) => (
           <div key={c} className="dq-ref-row grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] gap-x-6 gap-y-1 px-4 sm:px-5 py-3 border-b last:border-b-0" style={{ borderColor: LINE, backgroundColor: i % 2 ? "rgba(238,232,213,.35)" : SOL.base3 }}>
@@ -495,11 +440,11 @@ export function Reference() {
 
 const FAQ: [string, ReactNode][] = [
   ["What happens when I dismiss?", <>The row resolves as dismissed and leaves your queue. The agent is not told. If it should hear no, answer instead, or type a reply with <KeyCap size="xs">t</KeyCap>.</>],
-  ["Can two people answer the same ask?", <>The first answer wins. A second answer to a row that is no longer pending changes nothing, and the CLI says the first answer stands.</>],
-  ["Who receives it?", <>By default, whoever the asking session reports to: its owners and the first person its reporting line reaches. <C>--to</C> names people in the session&apos;s workspace instead.</>],
+  ["Can two people answer the same ask?", <>The first answer wins. A second answer to a row that is no longer pending changes nothing, and the person who answered second is told the first answer stands.</>],
+  ["Who receives it?", <>By default, whoever the asking session reports to: its owners and the first person its reporting line reaches. An agent can name people in the session&apos;s workspace instead.</>],
   ["Can an agent answer for me?", <>On teams using the org chart, a role can recommend an option, and a role holding a grant for that kind of question may answer it. Production, billing, data, access, external and product questions always stay with a person, and a person&apos;s answer always wins the race.</>],
-  ["How many options?", <>2 to 9, mapped to the keys 1 to 9. For more structure use <C>--kind multi</C>, <C>rank</C> or <C>form</C>.</>],
-  ["Does blocking freeze the agent?", <>No. The CLI tells the agent to end its turn, and the snippet says the same. The session parks because the agent stops, not because anything locks it.</>],
+  ["How many options?", <>2 to 9, mapped to the keys 1 to 9. For more structure an ask can take several choices, an order, or a short form.</>],
+  ["Does blocking freeze the agent?", <>No. The agent is told to end its turn after asking. The session parks because the agent stops, not because anything locks it.</>],
   ["Can I change an answer?", <>No. Once a row is answered, an edit or cancel fails and prints the answer. To change course, send the session a message.</>],
   ["What if the agent crashes and retries?", <>Posting the same question from the same session updates the open row, so a retry does not create a duplicate.</>],
 ];

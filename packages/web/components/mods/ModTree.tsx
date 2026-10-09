@@ -12,7 +12,8 @@ import { Switch } from "../ui/switch";
 import { EntityIdPill } from "../EntityIdPill";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { CodeBlock } from "../CodeBlock";
-import { HtmlSnippet } from "../HtmlSnippet";
+import { ShadowCanvas, type CanvasEvent } from "../HtmlSnippet";
+import { sanitizeCanvasHtml } from "../../lib/canvasSanitize";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { hydrateCharts } from "../../lib/castChart";
 import { formatRelativeTime } from "../../lib/conversationFormat";
@@ -35,6 +36,9 @@ const TONES: Record<string, string> = {
 };
 const tone = (t: unknown) => (typeof t === "string" ? TONES[t] : undefined);
 const soft = (t: unknown, pct = 12) => (tone(t) ? `color-mix(in srgb, ${tone(t)} ${pct}%, transparent)` : undefined);
+const surfaceBg = (bg: unknown) => (bg === "card" ? "var(--sol-card)" : bg === "alt" ? "var(--sol-bg-alt)" : bg === "none" ? "transparent" : soft(bg));
+/** The hairline every quiet surface in codecast draws (a canvas block, a panel). */
+const HAIRLINE = "color-mix(in srgb, var(--sol-border) 40%, transparent)";
 const space = (n: unknown) => (typeof n === "number" ? `${n * 4}px` : undefined);
 const dim = (v: unknown) => (typeof v === "number" ? `${v}px` : typeof v === "string" ? v : undefined);
 const isFn = (v: unknown): v is Fn => !!v && typeof v === "object" && typeof (v as Fn).$fn === "string";
@@ -48,6 +52,45 @@ const WEIGHT: Record<string, number> = { normal: 400, medium: 500, semibold: 600
 function useHandler(v: unknown): ((...args: unknown[]) => void) | undefined {
   const { invoke } = useContext(Ctx);
   return isFn(v) ? (...args: unknown[]) => invoke(v.$fn, args) : undefined;
+}
+
+// A mod's own `style`: the properties that shape a surface (edges, radius,
+// spacing, sizes, type, opacity), with every colour drawn from the theme. A
+// colour is a --sol-* token, a color-mix of them, or transparent/currentColor,
+// so a mod restyles freely and still follows light, dark and every theme. A
+// declaration that breaks the rule is dropped, not the whole style.
+const STYLE_PROPS = new Set([
+  "border", "borderTop", "borderRight", "borderBottom", "borderLeft", "borderColor", "borderWidth", "borderStyle",
+  "borderRadius", "outline", "background", "backgroundColor", "color", "opacity", "boxShadow",
+  "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "paddingInline", "paddingBlock",
+  "margin", "marginTop", "marginRight", "marginBottom", "marginLeft", "marginInline", "marginBlock", "gap", "rowGap", "columnGap",
+  "width", "height", "minWidth", "maxWidth", "minHeight", "maxHeight", "flex", "flexBasis", "flexGrow", "flexShrink", "alignSelf",
+  "justifySelf", "gridColumn", "gridRow", "gridTemplateColumns", "overflow", "textAlign", "whiteSpace", "wordBreak",
+  "fontSize", "fontWeight", "fontStyle", "fontFamily", "lineHeight", "letterSpacing", "textTransform", "textDecoration", "fontVariantNumeric",
+]);
+// Words a value may hold besides lengths, numbers and theme variables.
+const STYLE_WORDS = new Set([
+  "transparent", "currentcolor", "inherit", "initial", "none", "auto", "solid", "dashed", "dotted", "double", "in", "srgb", "oklab",
+  "color-mix", "calc", "min", "max", "clamp", "repeat", "minmax", "auto-fit", "auto-fill", "fr", "span", "fit-content", "max-content", "min-content",
+  "hidden", "visible", "scroll", "clip", "left", "right", "center", "start", "end", "justify", "nowrap", "normal", "pre", "pre-wrap", "pre-line",
+  "break-word", "break-all", "keep-all", "italic", "bold", "bolder", "lighter", "uppercase", "lowercase", "capitalize", "underline", "line-through",
+  "tabular-nums", "stretch", "baseline", "inset", "var",
+]);
+export function modStyle(raw: unknown): CSSProperties {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string | number> = {};
+  for (const [key, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!STYLE_PROPS.has(key)) continue;
+    if (typeof v === "number" && Number.isFinite(v)) { out[key] = v; continue; }
+    if (typeof v !== "string" || v.length > 200) continue;
+    const words = v.toLowerCase()
+      .replace(/var\(--(sol|font)-[a-z0-9-]+\)/g, " ")
+      .replace(/-?\d*\.?\d+(px|em|rem|%|fr|ch|deg|vh|vw)?/g, " ")
+      .split(/[\s,()/]+/)
+      .filter(Boolean);
+    if (words.every((w) => STYLE_WORDS.has(w))) out[key] = v;
+  }
+  return out as CSSProperties;
 }
 
 function layoutStyle(p: Record<string, any>, direction: "row" | "column"): CSSProperties {
@@ -69,9 +112,10 @@ function layoutStyle(p: Record<string, any>, direction: "row" | "column"): CSSPr
     overflow: p.scroll ? "auto" : undefined,
     border: p.border ? "1px solid var(--sol-border)" : undefined,
     borderRadius: p.rounded || p.border ? 8 : undefined,
-    background: p.bg === "card" ? "var(--sol-card)" : p.bg === "alt" ? "var(--sol-bg-alt)" : soft(p.bg),
+    background: surfaceBg(p.bg),
     color: tone(p.tone),
     cursor: isFn(p.onPress) ? "pointer" : undefined,
+    ...modStyle(p.style),
   };
 }
 
@@ -94,31 +138,43 @@ function keyOf(n: ModNode, i: number): string {
   return String(i);
 }
 
-function Card({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
+/**
+ * A Card. As the whole of a framed surface (a fence) it is the frame's panel:
+ * the frame draws the border and carries its title and actions in its header,
+ * so the card keeps only its subtitle and body.
+ */
+function Card({ p, c, panel }: { p: Record<string, any>; c: ModNode[]; panel?: boolean }) {
   const accent = tone(p.tone);
   const onPress = useHandler(p.onPress);
-  const hasHead = p.title || p.subtitle || p.actions;
+  const title = panel ? null : p.title;
+  const actions = panel ? null : p.actions;
+  const hasHead = title || p.subtitle || actions;
   return (
     <section
       onClick={onPress ? () => onPress() : undefined}
-      className="rounded-lg border min-w-0"
-      style={{
-        borderColor: accent ? `color-mix(in srgb, ${accent} 35%, var(--sol-border))` : "var(--sol-border)",
-        background: accent ? `color-mix(in srgb, ${accent} 6%, var(--sol-card))` : "var(--sol-card)",
+      className={panel ? "min-w-0" : "rounded-lg border min-w-0"}
+      // Quiet by default, the way a canvas block sits in a message: the
+      // alternate surface and a hairline, tinted when the card has a tone.
+      style={panel ? { cursor: onPress ? "pointer" : undefined } : {
+        borderColor: accent ? `color-mix(in srgb, ${accent} 30%, transparent)` : HAIRLINE,
+        background: p.bg !== undefined ? surfaceBg(p.bg) : accent ? `color-mix(in srgb, ${accent} 6%, var(--sol-bg-alt))` : "var(--sol-bg-alt)",
         cursor: onPress ? "pointer" : undefined,
         width: dim(p.width),
+        ...modStyle(p.style),
       }}
     >
       {hasHead ? (
         <header className="flex items-center gap-2 px-3.5 pt-3 pb-1">
           <div className="min-w-0 flex-1">
-            {p.title ? <div className="text-[13px] font-semibold text-sol-text truncate">{str(p.title)}</div> : null}
+            {title ? <div className="text-[13px] font-semibold text-sol-text truncate">{str(title)}</div> : null}
             {p.subtitle ? <div className="text-[11.5px] text-sol-text-dim truncate">{str(p.subtitle)}</div> : null}
           </div>
-          {p.actions ? <Node n={p.actions as ModNode} /> : null}
+          {actions ? <Node n={actions as ModNode} /> : null}
         </header>
       ) : null}
-      <div style={{ ...layoutStyle({ gap: 2, ...p, pad: p.pad ?? 3.5 }, "column"), border: undefined, background: undefined, color: undefined, cursor: undefined, paddingTop: hasHead ? space(1.5) : undefined, width: undefined }}>
+      {/* Only a card with a header narrows its body's top: an undefined
+          paddingTop would still clear the shorthand's top side. */}
+      <div style={{ ...layoutStyle({ gap: 2, ...p, pad: p.pad ?? 3.5 }, "column"), border: undefined, background: undefined, color: undefined, cursor: undefined, width: undefined, ...(hasHead ? { paddingTop: space(1.5) } : {}) }}>
         <Children c={c} />
       </div>
     </section>
@@ -141,6 +197,7 @@ function Text({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
         minWidth: 0,
         ...(p.truncate ? { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" } : {}),
         ...(lines ? { display: "-webkit-box", WebkitLineClamp: lines, WebkitBoxOrient: "vertical", overflow: "hidden" } : {}),
+        ...modStyle(p.style),
       }}
     >
       <Children c={c} />
@@ -150,17 +207,21 @@ function Text({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
 
 function Heading({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
   const size = p.level === 1 ? "20px" : p.level === 3 ? "13px" : "16px";
-  return <div style={{ fontSize: size, fontWeight: 650, color: tone(p.tone) ?? "var(--sol-text)", letterSpacing: "-0.01em" }}><Children c={c} /></div>;
+  return <div style={{ fontSize: size, fontWeight: 650, color: tone(p.tone) ?? "var(--sol-text)", letterSpacing: "-0.01em", ...modStyle(p.style) }}><Children c={c} /></div>;
 }
 
 function ModButton({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
   const onPress = useHandler(p.onPress);
   const [busy, setBusy] = useState(false);
-  const variant = p.variant === "primary" ? "default" : p.variant === "danger" ? "destructive" : p.variant === "ghost" ? "ghost" : "outline";
+  // Quiet unless asked: a mod's controls sit beside text the way a canvas
+  // block's header controls do. Only primary and danger fill.
+  const variant = p.variant === "primary" ? "default" : p.variant === "danger" ? "destructive" : "ghost";
+  const quiet = p.variant !== "primary" && p.variant !== "danger" && p.variant !== "ghost";
   return (
     <UIButton
       variant={variant as any}
       size={p.size === "md" ? "default" : "sm"}
+      className={quiet ? "border border-[color-mix(in_srgb,var(--sol-border)_40%,transparent)] text-sol-text-muted hover:text-sol-text" : undefined}
       disabled={!!p.disabled || busy}
       title={p.tip ? str(p.tip) : undefined}
       onClick={async (ev) => {
@@ -445,7 +506,7 @@ function ModLink({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
       rel={external ? "noopener noreferrer" : undefined}
       onClick={internal ? (e) => { e.preventDefault(); navigate(href); } : undefined}
       style={{ color: tone(p.tone) ?? "var(--sol-blue)" }}
-      className="hover:underline underline-offset-2"
+      className="no-underline hover:underline decoration-current/40 underline-offset-2"
     >
       <Children c={c} />
     </a>
@@ -458,6 +519,23 @@ function Avatar({ p }: { p: Record<string, any> }) {
   const initials = str(p.name).split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   if (/^https:\/\//.test(src)) return <img src={src} alt={str(p.name)} width={size} height={size} className="rounded-full object-cover" />;
   return <span className="inline-flex items-center justify-center rounded-full bg-sol-bg-alt text-sol-text-muted font-medium" style={{ width: size, height: size, fontSize: size * 0.42 }}>{initials || "?"}</span>;
+}
+
+/**
+ * The mod's own HTML, sanitized and themed like a cast-canvas block, inside
+ * the surface rather than in a frame of its own. An element marked
+ * `data-press="name"` calls `on.name` with its other data-* values; an input
+ * or select marked `data-change="name"` calls it with its value too.
+ */
+function ModCanvas({ p }: { p: Record<string, any> }) {
+  const { invoke } = useContext(Ctx);
+  const html = useMemo(() => sanitizeCanvasHtml(str(p.html)), [p.html]);
+  const on = (p.on ?? {}) as Record<string, unknown>;
+  const onEvent = (e: CanvasEvent) => {
+    const handler = on[e.name];
+    if (isFn(handler)) invoke(handler.$fn, [e.kind === "change" ? { value: e.value, ...e.data } : e.data]);
+  };
+  return <div style={{ minHeight: dim(p.height) }}><ShadowCanvas html={html} onEvent={onEvent} /></div>;
 }
 
 function Unknown({ t }: { t: string }) {
@@ -477,8 +555,8 @@ const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
     case "Row": return <Layout p={p} c={c} direction="row" />;
     case "Column": return <Layout p={p} c={c} direction="column" />;
     case "Grid": {
-      const cols = typeof p.columns === "number" ? `repeat(${p.columns}, minmax(0, 1fr))` : typeof p.columns === "string" ? p.columns : `repeat(auto-fill, minmax(${p.min ?? 180}px, 1fr))`;
-      return <div style={{ display: "grid", gridTemplateColumns: cols, gap: space(p.gap ?? 3), padding: space(p.pad), minWidth: 0 }}><Children c={c} /></div>;
+      const cols = typeof p.columns === "number" ? `repeat(${p.columns}, minmax(0, 1fr))` : typeof p.columns === "string" ? p.columns : `repeat(auto-fit, minmax(${p.min ?? 180}px, 1fr))`;
+      return <div style={{ display: "grid", gridTemplateColumns: cols, gap: space(p.gap ?? 3), padding: space(p.pad), minWidth: 0, ...modStyle(p.style) }}><Children c={c} /></div>;
     }
     case "Card": return <Card p={p} c={c} />;
     case "Text": return <Text p={p} c={c} />;
@@ -495,7 +573,7 @@ const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
     case "Ref": return <Ref id={str(p.id)} label={p.label ? str(p.label) : undefined} />;
     case "Chart": return <Chart p={p} />;
     case "Markdown": return <div className={`min-w-0 ${p.size === "sm" ? "text-[12.5px]" : "text-[13px]"}`}><MarkdownRenderer content={str(p.text)} /></div>;
-    case "Canvas": return <div style={{ minHeight: dim(p.height) }}><HtmlSnippet code={str(p.html)} /></div>;
+    case "Canvas": return <ModCanvas p={p} />;
     case "Code": return <div style={{ maxHeight: dim(p.maxHeight), overflow: p.maxHeight ? "auto" : undefined }}><CodeBlock code={str(p.code)} language={p.lang ? str(p.lang) : undefined} /></div>;
     case "Progress": {
       const max = typeof p.max === "number" && p.max > 0 ? p.max : 100;
@@ -527,7 +605,9 @@ const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
         {p.hint ? <div className="text-[12px] text-sol-text-dim max-w-[340px]">{str(p.hint)}</div> : null}
       </div>
     );
-    case "List": return <div className={`flex flex-col min-w-0 ${p.divided ? "divide-y divide-sol-border" : ""}`}><Children c={c} /></div>;
+    // A divided list's rows meet at straight rules: an item's rounded hover
+    // shape would bend the rule at both ends.
+    case "List": return <div className={`flex flex-col min-w-0 ${p.divided ? "divide-y divide-[color-mix(in_srgb,var(--sol-border)_70%,transparent)] [&>*]:rounded-none" : ""}`}><Children c={c} /></div>;
     case "Item": return <Item p={p} c={c} />;
     case "Time": return <TimeText at={p.at} format={p.format} />;
     case "Avatar": return <Avatar p={p} />;
@@ -536,8 +616,18 @@ const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
   }
 });
 
-export function ModTree({ tree, invoke, navigate }: { tree: ModNode | undefined; invoke: Invoke; navigate: Navigate }) {
+/** The Card a framed surface's tree is, when it is one: it becomes the frame's panel. */
+export function rootCard(tree: ModNode | undefined): { t: string; p?: Record<string, unknown>; c?: ModNode[] } | null {
+  return tree && typeof tree === "object" && tree.t === "Card" ? tree : null;
+}
+
+export function ModTree({ tree, invoke, navigate, framed }: { tree: ModNode | undefined; invoke: Invoke; navigate: Navigate; framed?: boolean }) {
   const value = useMemo(() => ({ invoke, navigate }), [invoke, navigate]);
   if (tree === undefined) return null;
-  return <Ctx.Provider value={value}><Node n={tree} /></Ctx.Provider>;
+  const card = framed ? rootCard(tree) : null;
+  return (
+    <Ctx.Provider value={value}>
+      {card ? <Card p={(card.p ?? {}) as Record<string, any>} c={card.c ?? []} panel /> : <Node n={tree} />}
+    </Ctx.Provider>
+  );
 }

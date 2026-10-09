@@ -8,8 +8,7 @@ import { canAccessConversation } from "./lib/access";
 import { markInsightDirty } from "./lib/changesDirty";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
-import { REDIRECT_PATTERN } from "@codecast/shared/contracts/projectMemory";
-import { consolidateProjectMemory } from "./projectMemory";
+import { REDIRECT_PATTERN } from "@codecast/shared/contracts/redirectWords";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -612,16 +611,6 @@ export const upsertSessionInsight = internalMutation({
       });
     }
     await markInsightDirty(ctx, args.conversation_id, args.team_id);
-    // Zero-inference consolidation: every settle passes here, so this is where
-    // the session's corrections and decisions fold into the project's memory.
-    await consolidateProjectMemory(ctx, {
-      conversation_id: args.conversation_id,
-      team_id: args.team_id,
-      user_id: args.actor_user_id,
-      corrections: args.corrections ?? [],
-      decisions: args.decisions ?? [],
-      now: args.generated_at,
-    });
 
     return insightId;
   },
@@ -721,27 +710,6 @@ export const generateSessionInsight = internalAction({
         await ctx.runMutation(internal.idleSummary.setIdleSummary, {
           conversation_id: context.conversation._id,
           idle_summary: headline,
-        });
-      }
-
-      // Each blocker this insight newly records is a signal (LE3); the door
-      // attaches it to a cause in the insight's workspace.
-      if (blockers.length) {
-        await ctx.scheduler.runAfter(0, internal.signals.ingestInsightBlockers, {
-          conversation_id: context.conversation._id,
-          blockers,
-          previous_blockers: existing?.blockers,
-          goal,
-        });
-      }
-
-      // Auto-mine tasks and docs from this conversation after insight is saved
-      if (context.conversation.actor_user_id) {
-        await ctx.scheduler.runAfter(0, internal.taskMining.mineConversationAfterInsight, {
-          user_id: context.conversation.actor_user_id,
-          team_id: visibleTeam,
-          insight_id: insightId,
-          conversation_id: context.conversation._id,
         });
       }
 

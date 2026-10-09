@@ -1,71 +1,50 @@
-Stable mode injects a feed of recent sessions into every new session at start. The agent's first context window already contains what the team worked on recently: session IDs, titles, work states, message counts, and the opening lines of each conversation. Paired with [messaging](/documentation/messaging), this gives a fleet of sessions ambient awareness of each other: every session knows its neighbors exist, what state they are in, and how to reach them.
+A new agent session usually knows only what you type into it. With Stable context on, it starts already knowing what you and your team have been working on: a short list of recent sessions, each with its title, who ran it, where it stands (working, waiting on someone, done) and how it began. So a fresh session notices that a teammate's agent is halfway through the same part of the code before it starts duplicating the work, and "pick up where we left off yesterday" just works.
 
-Stable mode is enabled through the [snippet system](/documentation/agent-snippets)'s wizard, or directly:
+The list is a set of pointers, not the conversations themselves. When one matters, the agent opens it and reads the details, the same way it looks things up with [Memory](/documentation/memory).
 
-```bash
-cast install stable      # enable (solo)
-cast stable team         # switch mode
-cast install stable --disable
-```
+![The Context section of Agent features: the Stable context card with its Solo, Team and Off choice and the All projects switch, beside the Memory card](/documentation/memory/agent-features.webp "Stable context in Agent features. Pick Solo, Team or Off for each computer; All projects widens the list beyond the folder a session starts in.")
 
-## Solo, team, off
+## Turn it on
 
-Stable is a three-way choice, not a toggle:
+1. Open **Agent features** from your account menu and pick the computer your agents run on.
+2. Find **Stable context** under *Context* and pick how much it shares:
+   - **Solo**: your 10 most recent sessions from the last 7 days.
+   - **Team**: the team's 15 most recent sessions from the last 14 days.
+   - **Off**: new sessions start without a list.
+3. Switch on **All projects** if you want the list drawn from everything you work on, not just the folder the session starts in.
 
-| Mode | Lookback | Items | Framed as |
-|------|----------|-------|-----------|
-| `solo` | 7 days | 10 | what you have been working on |
-| `team` | 14 days | 15 | what the team has been working on |
-| `off` | | | nothing injected |
-
-Both modes read the same feed: the sessions you can see in the current project, which in a project shared with a team includes teammates' sessions with their names attached. Solo is the shorter, more personal view; team reaches further back, so a fresh session starts knowing that a colleague's agent is mid-flight on the same subsystem before it duplicates the work. A global flag (`-g`) widens either mode from the current project to every project you can see.
+New sessions on that computer pick it up from then on. It works for Claude Code, Codex, Cursor, opencode and Grok sessions.
 
 ```figure
 FeedWindowFigure
-Solo keeps up to 10 sessions from the last week, team up to 15 from the last two; an excluded session's place goes to the next one.
+Solo keeps up to 10 sessions from the last week, Team up to 15 from the last two. A session you leave out gives its place to the next one.
 ```
 
-## How injection works
+## What you see
 
-Every agent gets the block from a single builder, so the feed parameters and format can never drift. What differs is how each agent receives it:
+**When you start a session from the app**, the new session screen shows a **Context** line with the sessions it will start with. Open it to change the choice for just this session (**Auto** follows the computer's setting, or pick **Team**, **Solo** or **Off**), and click the **×** on any card to leave that session out.
 
-- **Claude Code**: `cast install stable` registers `cast stable-context` as a SessionStart hook. When a session boots, the hook fetches the feed and prints a `<stable-context>` block that Claude Code folds into the opening context.
-- **Codex**: when the daemon starts a Codex thread, it builds the same block and passes it as developer instructions. Codex sessions started outside the daemon get it from a SessionStart hook of their own.
-- **Cursor, opencode and Grok** each have a path of their own, with the same block.
+**In a conversation**, a line at the top reads *Started with 15 session pointers from the team feed*. Click it to see the cards: exactly what the agent knew when it started, each one a link to that session.
 
-```figure
-InjectionPathsFigure
-One builder serves every agent; the block is recorded for the web, and any failure means the session simply starts without it.
-```
+![A conversation whose top shows the session cards it started with, above a new session screen previewing its cards with an Auto, Team, Solo, Off choice](/documentation/ambient-awareness/stable-context.webp "Top: the sessions a conversation started with, opened. Bottom: a new session's preview, where you can change the choice for this session or leave a card out.")
 
-The injected block looks like this:
+## What changes
 
-```
-<stable-context mode="team">
-This gives you bigger-picture visibility on what has been and is
-being worked on by the team.
+- **Fewer "what were we doing?" openings.** Ask a fresh session "what was I working on yesterday?" and it already knows.
+- **Less duplicated work.** An agent sees that another session is already working on the same thing and can read it first, or, with [Messaging](/documentation/messaging) on, ask it directly.
+- **Sessions waiting on someone stand out.** The list marks which sessions are waiting for input, so an agent can tell you when work it depends on is stuck.
 
-── Session binding Convex error ────────────────────
-   jx7az96 | ● needs input | 41 min ago | 408 msgs | ~/src/codecast
-     1: [user] …first line of the conversation…
-     2: [assistant] …first reply…
-…
-Use: cast read jx7az96 <range>    # read messages by line range
-</stable-context>
-```
+## Limits and privacy
 
-Each entry carries the session's short ID, so the agent can immediately `cast read` any of them for detail, or `cast send` one a message. The feed is oriented toward action, not decoration: "needs input" means the ball is in someone's court, "working" means an agent is mid-flight, and the agent reading the feed is expected to use that.
+- **Only sessions you can see.** Team mode lists teammates' sessions only when they are shared with the team; see [Team sessions](/documentation/team-sessions). Solo lists only yours.
+- **It never holds a session up.** If the list can't be fetched (you're offline, say), the session starts without it.
+- **It is a snapshot.** The list reflects the moment the session started. Later work by other sessions reaches it only if the agent looks.
 
-## Recorded, visible, failure-safe
+## When something is off
 
-What was injected is recorded against the conversation, and the web renders it as cards at the top of the transcript, so a human reading the session later sees exactly which sessions the agent knew about at boot.
-
-A session started from the web gets a preview before it starts: the new-session screen shows the cards the hook will inject, lets you switch the mode for this one session (Auto follows the machine's setting), and lets you drop individual sessions from its feed.
-
-![A conversation whose top shows five session cards it started with, above a new-session screen previewing the cards it will inject with an Auto, Team, Solo, Off switch](/documentation/ambient-awareness/stable-context.webp "Top: the cards a session started with, expanded. Bottom: a new session's preview, with the mode switch for this session.")
-
-Injection is an enhancement, never a boot blocker. The fetch gives up after 15 seconds, and any failure (network down, backend unhealthy, not authenticated) means the session simply starts without the block. Sessions dropped in the preview are excluded from the feed, and the fetch over-fetches by the exclusion count so the feed never shrinks below its normal size.
-
-## Why this changes fleet behavior
-
-Without stable mode, a session knows only what its prompt says. Coordination has to be pushed: someone (human or orchestrator) must tell each worker about the others. With stable mode, coordination can be pulled: any session can notice a neighbor in the feed, read its transcript, and message it. The [messaging guide](/documentation/messaging) shows the patterns this enables: delegation, peer collaboration, and fleets where workers find each other by label. Awareness comes from the feed; action comes from `cast send`.
+| What you notice | What to do |
+|-----------------|------------|
+| No *Started with* line at the top of new sessions | Check that Stable context isn't **Off** for the computer the session runs on |
+| The list is missing a teammate's work | Switch to **Team**, and check that their folder is shared with the team |
+| The list is full of unrelated projects | Switch **All projects** off so it sticks to the session's folder |
+| One session keeps showing up and isn't relevant | Leave it out on the new session screen with its **×** |

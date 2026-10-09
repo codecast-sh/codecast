@@ -886,10 +886,11 @@ export async function performFinishSession(
 }
 
 /**
- * Who holds the host checkout a move would land in, asked BEFORE the push:
- * the push resets that checkout, so a holder's uncommitted work would be lost
- * if the check waited for the handoff. Rows of this batch are the runner's to
- * coordinate (one push per laptop folder) and never count.
+ * Who holds the host checkout a move would land in, asked BEFORE the push by
+ * CLIs released before moves merged into the checkout: their push resets it,
+ * so a holder's uncommitted work would be lost if the check waited for the
+ * handoff, and they land beside it instead. Rows of this batch are the
+ * runner's to coordinate (one push per laptop folder) and never count.
  */
 export async function performCheckoutHolder(ctx: { db: any }, userId: Id<"users">, args: { migration_id: Id<"session_migrations">; project_path: string }) {
   const row = await ctx.db.get(args.migration_id);

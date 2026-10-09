@@ -100,3 +100,23 @@ export function CopyCommand({ cmd, className = "", onDark = false }: { cmd: stri
     </button>
   );
 }
+
+/**
+ * A screenshot of the real app: full width, rounded, lazy unless it sits in
+ * the first screen. `dark` frames it for a dark band.
+ */
+export function Shot({ src, alt, width, height, className = "", eager = false, dark = false }: { src: string; alt: string; width: number; height: number; className?: string; eager?: boolean; dark?: boolean }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      loading={eager ? "eager" : "lazy"}
+      className={`block w-full h-auto rounded-xl border ${className}`}
+      style={dark
+        ? { borderColor: "#0b4a5a", backgroundColor: "#0f2a33", boxShadow: "0 24px 60px -28px rgba(0,0,0,.6)" }
+        : { borderColor: "rgba(88,110,117,.25)", boxShadow: "0 18px 40px -26px rgba(0,43,54,.4)" }}
+    />
+  );
+}

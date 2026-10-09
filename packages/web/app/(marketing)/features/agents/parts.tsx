@@ -170,6 +170,17 @@ export function Term({ label, wrap = false, children }: { label: string; wrap?: 
   );
 }
 
+/** The CLI form of a section, demoted under the app story: a small label, then the terminal. */
+export function ForScripts({ children, note }: { children: ReactNode; note?: ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2 font-mono text-[11.5px] font-semibold uppercase tracking-wide" style={{ color: SOL.base1 }}>For scripts and agents</div>
+      {note && <p className="mb-3 text-[13.5px] leading-[1.6]" style={{ color: SOL.base01 }}>{note}</p>}
+      {children}
+    </div>
+  );
+}
+
 /** Pieces for building terminal captures. */
 export const T = {
   cmd: (s: string) => <span><span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base2 }}> <Whole text={s} /></span>{"\n"}</span>,

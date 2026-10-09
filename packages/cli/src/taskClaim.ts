@@ -1,5 +1,6 @@
 import { ASSIGNEE_MEANS, isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
+import { STALE_TASK_WORDS, TASK_EFFORTS } from "@codecast/shared/tasks";
 
 // `cast task start` claims a task. Who the claim belongs to depends on who ran
 // it. A person at a terminal is the assignee. An agent inside a session runs
@@ -17,11 +18,72 @@ import type { ChangeGuide } from "@codecast/shared/contracts/changeGuide";
 // is the same witness that stamps source:"agent" on create.
 
 export function buildTaskStartBody(shortId: string, sessionId: string | null, opts: { take?: boolean } = {}): Record<string, any> {
-  const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
-  if (sessionId) body.conversation_id = sessionId;
-  else body.assignee = "me";
+  const body: Record<string, any> = { short_id: shortId, status: "in_progress", ...taskClaimant(sessionId) };
   if (opts.take) body.take = true;
   return body;
+}
+
+/** Who a start is for: the session, else the person. */
+export function taskClaimant(sessionId: string | null): { conversation_id: string } | { assignee: "me" } {
+  return sessionId ? { conversation_id: sessionId } : { assignee: "me" };
+}
+
+/** `cast task ready [--claim]`: the ready list's filters and the caller's own
+ *  session; with no session the list and the claim are the person's. A
+ *  session's frontier holds its own ephemeral tasks only (TG9). A claim takes only a
+ *  task that is unassigned or already the caller's (or its role's), and a
+ *  task untouched 30 days only with `--stale` (task-graph.md TG7). */
+export function buildTaskClaimBody(filters: Record<string, any>, sessionId: string | null, opts: { stale?: boolean } = {}): Record<string, any> {
+  return { ...filters, ...(sessionId ? { conversation_id: sessionId } : {}), ...(opts.stale ? { stale: true } : {}) };
+}
+
+/** What a claim that took nothing says, naming `--stale` when stale work was
+ *  passed over and counting the ready tasks it may not take, so an agent told
+ *  there is nothing left does not stop early or read `cast task ready` as a
+ *  contradiction. */
+export function unclaimedLine(claim: { skipped?: unknown[]; more?: boolean; stale_passed?: number; others_passed?: number } | null | undefined): string {
+  const stale = claim?.stale_passed ? ` ${claim.stale_passed} ${STALE_TASK_WORDS} passed over (claim with --stale).` : "";
+  const n = claim?.others_passed ?? 0;
+  const others = n ? ` ${n} ready task${n === 1 ? " is" : "s are"} assigned to others or held by a decision (cast task ready lists them).` : "";
+  if (!claim?.more) return `No ready tasks to claim.${stale}${others}`;
+  const passed = claim.skipped?.length ? `, passed over ${claim.skipped.length}` : "";
+  return `No task claimed${passed}. More ready tasks exist past those tried: narrow with --plan, --project or -q.${stale}`;
+}
+
+// `--model`, `--effort` and `--ephemeral` on create and update (task-graph.md
+// TG8, TG9). An effort is checked here so a typo is refused by name rather
+// than by the server's validator; "" clears a model or an effort.
+export function taskHintBody(options: { model?: string; effort?: string; ephemeral?: boolean }): Record<string, any> {
+  const body: Record<string, any> = {};
+  if (options.model !== undefined) body.model = options.model;
+  if (options.effort !== undefined) {
+    if (options.effort && !(TASK_EFFORTS as readonly string[]).includes(options.effort)) {
+      throw new Error(`Unknown --effort "${options.effort}". Use: ${TASK_EFFORTS.join(", ")}, or '' to clear`);
+    }
+    body.effort = options.effort;
+  }
+  if (options.ephemeral) body.ephemeral = true;
+  return body;
+}
+
+// `cast task ready`: the frontier comes in the order work should be taken, with
+// tasks nobody touched in 30 days last and flagged `stale` (TG7). They fold into
+// a count unless asked for.
+export function foldStaleTasks<T extends { stale?: boolean }>(tasks: T[], showStale: boolean): { shown: T[]; folded: number } {
+  if (showStale) return { shown: tasks, folded: 0 };
+  const shown = tasks.filter((t) => !t.stale);
+  return { shown, folded: tasks.length - shown.length };
+}
+
+/** The most rows `cast task ready` asks for. */
+export const READY_LIST_LIMIT = 300;
+
+/** The frontier's closing count. A list that filled `READY_LIST_LIMIT` was cut
+ *  short, stale rows first since they sort last, so both counts are floors. */
+export function readyCountLine(shown: number, folded: number, listed: number): string {
+  const floor = listed >= READY_LIST_LIMIT ? "+" : "";
+  const foldNote = folded ? `, ${folded}${floor} more ${STALE_TASK_WORDS} (--stale lists them)` : "";
+  return `${shown}${floor} ready${foldNote}`;
 }
 
 // A task has one owning session (convex lib/taskOwner.ts). The start that
