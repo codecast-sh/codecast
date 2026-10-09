@@ -12,6 +12,7 @@ import { verifyApiToken } from "./apiTokens";
 import { canAccessPlan, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { orderFrontier, readyTasks, taskLookups } from "./lib/taskGraph";
+import { stampWaitChecks } from "./lib/waitChecks";
 import { boundSessionsOf } from "./lib/taskOwner";
 import { blockersHoldingBack, isActiveTask, isTerminalTaskStatus, RESUME_SUBTASKS_SHOWN, type TaskResumeContext } from "@codecast/shared/tasks";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -58,7 +59,17 @@ export const context = query({
     // caller may read lends its title. Status always ships, as readiness does.
     const { statusOf } = await taskLookups(ctx, task);
     const blockers: TaskResumeContext["blockers"] = [];
-    for (const b of blockersHoldingBack(task, statusOf)) {
+    // A closed task holds nothing, which blockersHoldingBack itself decides
+    // (TG1), so a session still bound to a task somebody else closed is never
+    // told to park on a blocker nothing can settle.
+    //
+    // Each still-waiting checks wait carries its PR's `checks_state`, read
+    // where every other blocker-wording surface reads it (lib/waitChecks): red
+    // checks keep such a wait waiting forever (TG2), so without it this block
+    // — the one surface that orders a session dormant — would word it "PR #42
+    // checks to go green" and park the session on checks only a new push can
+    // turn green.
+    for (const b of await stampWaitChecks(ctx, auth.userId, task, blockersHoldingBack(task, statusOf))) {
       const row = b.kind === "task" ? statusOf(b.ref) : null;
       const found = row && typeof row === "object" ? (row as Doc<"tasks">) : null;
       // Older rows name a blocker by its Convex id; the agent needs the short id.
@@ -124,7 +135,12 @@ async function openSubtasks(
 /** The task's plan (else the bound one), how far along it is (the progress
  *  the plan keeps, as `cast plan show` prints it), and the step `cast task
  *  ready --plan` would hand this session first: the same members
- *  (plan.task_ids, so no subtasks) and the same readiness. */
+ *  (plan.task_ids, so no subtasks) and the same readiness.
+ *
+ *  `mine` carries which of the two it is, because the fallback plans (the one
+ *  the hook passed, the session's binding) are the session's, not the task's:
+ *  a session bound to a plan routinely starts a task filed outside it, and the
+ *  block must not word that as a step of the plan (resume.ts). */
 async function planOf(
   ctx: QueryCtx,
   userId: Id<"users">,
@@ -152,6 +168,7 @@ async function planOf(
     short_id: plan.short_id,
     title: plan.title,
     status: plan.status,
+    mine: !!task.plan_id,
     ...(plan.progress ? { done: plan.progress.done, total: plan.progress.total } : {}),
     next: next ? { short_id: next.short_id, title: next.title, priority: next.priority } : null,
   };

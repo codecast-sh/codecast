@@ -20,19 +20,34 @@ import { freePort } from "../instance.js";
 import { isRealSession, realSessionKey } from "../engine.js";
 import { withAdvancedClone } from "../advanced.js";
 import { BRIDGE_STORE_URL, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
+import { resetRemoteDeviceForTests } from "../../remote/device.js";
 
 let dir: string;
 let prevEnv: string | undefined;
+let prevRemoteEnv: string | undefined;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-real-test-"));
   prevEnv = process.env.CODECAST_DIR;
   process.env.CODECAST_DIR = dir;
+  // Every target decision below routes through `hostOwnsBrowser()`, so the
+  // default target is "the human's Chrome" only on a device that is not
+  // remote. On a cloud host both of `isRemoteDevice()`'s sources say remote —
+  // the launch variable and a marker file under the config dir, cached for the
+  // process — so clear the variable and drop the cached verdict. The config dir
+  // is this test's own already, so the marker lookup finds nothing there. The
+  // remote-host cases set the variable back for themselves.
+  prevRemoteEnv = process.env.CODECAST_REMOTE_DEVICE;
+  delete process.env.CODECAST_REMOTE_DEVICE;
+  resetRemoteDeviceForTests();
 });
 
 afterEach(() => {
   if (prevEnv === undefined) delete process.env.CODECAST_DIR;
   else process.env.CODECAST_DIR = prevEnv;
+  if (prevRemoteEnv === undefined) delete process.env.CODECAST_REMOTE_DEVICE;
+  else process.env.CODECAST_REMOTE_DEVICE = prevRemoteEnv;
+  resetRemoteDeviceForTests();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

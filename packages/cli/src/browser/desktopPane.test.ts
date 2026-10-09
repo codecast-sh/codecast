@@ -18,20 +18,33 @@ import { explicitTarget, isPaneMode, isRealMode, rememberedDesktopPane, setStick
 import { baseSessionKey, engineSessionKey, isPaneSession, isRealSession, paneSessionKey, realSessionKey } from "./engine.js";
 import { readBoundTarget } from "./pinnedTab.js";
 import type { CdpTarget } from "./cdp.js";
+import { resetRemoteDeviceForTests } from "../remote/device.js";
 
 const UUID = "509b4b48-c521-4352-bf19-eafa153745bb";
 const OWNER = `session:${UUID}`;
 
 let dir: string;
 let prevEnv: string | undefined;
+let prevRemoteEnv: string | undefined;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-pane-test-"));
   prevEnv = process.env.CODECAST_DIR;
   process.env.CODECAST_DIR = dir;
+  // The sticky target defaults to the human's Chrome only on a device that is
+  // not remote (bridge/real.ts hostOwnsBrowser). A cloud host is remote by two
+  // sources — the launch variable and a marker under the config dir, cached for
+  // the process — so clear the variable and drop the cached verdict; the config
+  // dir above is this test's own, so no marker is found there.
+  prevRemoteEnv = process.env.CODECAST_REMOTE_DEVICE;
+  delete process.env.CODECAST_REMOTE_DEVICE;
+  resetRemoteDeviceForTests();
 });
 afterEach(() => {
   if (prevEnv === undefined) delete process.env.CODECAST_DIR;
   else process.env.CODECAST_DIR = prevEnv;
+  if (prevRemoteEnv === undefined) delete process.env.CODECAST_REMOTE_DEVICE;
+  else process.env.CODECAST_REMOTE_DEVICE = prevRemoteEnv;
+  resetRemoteDeviceForTests();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

@@ -340,3 +340,68 @@ describe("company objects in the palette", () => {
     expect(role).toBeLessThan(paletteItemScore(paletteValue("Private mode", "incognito"), q));
   });
 });
+
+describe("the relation acts (task-graph.md TG12)", () => {
+  test("a relation's palette row, its field and its icon all come from the one record", async () => {
+    const { RELATION_ACT, RELATION_MODES, relationPlaceholder } = await import("../relationActs");
+    const rows = paletteActions("task", [{ _id: "t1", short_id: "ct-1" }], "me", true);
+    for (const mode of [...RELATION_MODES, "parent" as const]) {
+      const row = rows.find((r) => r.key === mode);
+      // `found_during` is left to the task page (it corrects a link the server
+      // guessed), so it has no palette row of its own; its words still have
+      // to match the field, which is what the test below checks.
+      if (row) expect(row.label).toBe(RELATION_ACT[mode]);
+      // The field says the act, so a gesture is never renamed mid-way.
+      expect(relationPlaceholder(mode).startsWith(RELATION_ACT[mode].replace(/…$/, " —"))).toBe(true);
+    }
+    // The one row offered as a REPOINT (found_during, a link the server
+    // guessed) opens a field saying that act, not the setting one.
+    const { RELATION_REPOINT } = await import("../relationActs");
+    expect(relationPlaceholder("found_during", { repoint: true }).startsWith(RELATION_REPOINT.found_during!.replace(/…$/, " —"))).toBe(true);
+    // Every other mode has no repoint wording and falls back to its act.
+    for (const mode of RELATION_MODES) {
+      if (!RELATION_REPOINT[mode]) expect(relationPlaceholder(mode, { repoint: true })).toBe(relationPlaceholder(mode));
+    }
+    // The two DIRECTIONS of one edge are the pair readers invert, so the icon
+    // column has to tell them apart without being read.
+    const icon = (key: string) => rows.find((r) => r.key === key)!.icon;
+    expect(icon("blocks")).not.toBe(icon("blocker"));
+  });
+
+  test("a relation's letter comes from the one record the sheet and the KeyCaps read", async () => {
+    const { RELATION_KEY, RELATION_MODES, relationKey, relationModeForKey } = await import("../relationActs");
+    const rows = paletteActions("task", [{ _id: "t1", short_id: "ct-1" }], "me", true);
+    for (const mode of [...RELATION_MODES, "parent" as const]) {
+      const row = rows.find((r) => r.key === mode);
+      if (row) expect(row.hotkey).toBe(relationKey(mode));
+      // The reverse is exact, so a letter can never open a mode the caps and
+      // the shortcuts sheet advertise differently.
+      const key = relationKey(mode);
+      if (key) expect(relationModeForKey(key)).toBe(mode);
+    }
+    // The shortcuts sheet's own defs read the same record (shortcuts/registry).
+    const { SHORTCUTS } = await import("../../shortcuts/registry");
+    const keyFor = (action: string) => SHORTCUTS.find((d) => d.action === action && d.when === "tasks")!.key;
+    expect(keyFor("task.blocker")).toBe(RELATION_KEY.blocker);
+    expect(keyFor("task.related")).toBe(RELATION_KEY.related);
+    expect(keyFor("task.parent")).toBe(RELATION_KEY.parent);
+  });
+
+  // Hosted mode draws no Blocked by row, no row glyph and no Unblocked view
+  // (`tasks.internals`), so a blocker written there would hold the to-do back
+  // with nothing on screen saying why: write-with-no-read is the one
+  // combination that cannot be right.
+  test("hosted mode offers no graph write, and keeps the parent", () => {
+    const task = { _id: "t1", short_id: "ct-1", parent_id: "t0" };
+    const hosted = paletteActions("task", [task], "me", false, surfaceMode(true, true)).map((a) => a.key);
+    expect(hosted).not.toContain("blocker");
+    expect(hosted).not.toContain("blocks");
+    expect(hosted).not.toContain("related");
+    expect(hosted).toContain("parent");
+    expect(hosted).toContain("remove_parent");
+    const dev = paletteActions("task", [task], "me", false).map((a) => a.key);
+    expect(dev).toContain("blocker");
+    expect(dev).toContain("blocks");
+    expect(dev).toContain("related");
+  });
+});

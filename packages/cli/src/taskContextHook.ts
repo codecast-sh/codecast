@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatTaskResume, formatTaskResumeUnavailable, restoresTaskContext, type TaskResumeContext } from "@codecast/shared/tasks";
 import { readTaskPulseFor } from "./taskPulse.js";
-import { checkoutWords } from "./checkoutWords.js";
+import { agentWords } from "./checkoutWords.js";
 import { codecastHooksDir, installCodexSessionStartHook, removeCodexSessionStartHook, wrapForClient, type StableHookClient, type StableContextConfig } from "./stableContext.js";
 import { HOOK_FEATURE_ON, HOOK_FIELDS_READ } from "./hookJson.js";
 import { writeHarnessFile } from "./harness.js";
@@ -96,12 +96,25 @@ type HookPayload = { session_id?: string; sessionId?: string; source?: string; c
  * task it holds or its pulse names. `read` is the server call: null when the
  * server answers with nothing, a throw when it could not answer, and then the
  * pulse's task is all the block can say.
+ *
+ * Cursor is excluded, and cannot be supported as long as its hooks stay as
+ * they are: it imports Claude's user hooks and runs them with its own payload
+ * (marked `cursor_version`), and that payload cannot say a compaction
+ * happened. Its `sessionStart` fires only when a new composer conversation is
+ * created and carries `session_id`, `is_background_agent` and `composer_mode`
+ * — no `source` and no resume event — so a block keyed on the one event Cursor
+ * has would print on every new conversation, which is exactly the session
+ * TG10 leaves alone. Compaction is visible there only through `preCompact`,
+ * which is observational: its one output, `user_message`, is shown to the
+ * person, not added to the agent's context. So nothing prints under Cursor
+ * rather than printing at the wrong moment.
  */
 export async function taskContextFor(
   payload: HookPayload,
   read: (body: { short_id?: string; started?: boolean; plan_id?: string; session_id: string }) => Promise<TaskResumeContext | null>,
   now = Date.now(),
 ): Promise<string | null> {
+  // `cursor_version`: a Cursor payload, which has no compaction to key on (above).
   if (payload.cursor_version || !restoresTaskContext(payload.source)) return null;
   const sessionId = payload.session_id || payload.sessionId;
   if (!sessionId) return null;
@@ -112,7 +125,13 @@ export async function taskContextFor(
       ...(pulse?.plan ? { plan_id: pulse.plan } : {}),
       session_id: sessionId,
     });
-    return context?.task ? formatTaskResume(context, { now, ...checkoutWords(payload.cwd || process.cwd()) }) : null;
+    // A time wait is named absolute here (TG11): this block is read by an
+    // agent, beside the stored history, the unblock comment, the wake message
+    // and `cast task context`, which all name the date, the year and the zone
+    // — and the agent is told to copy the parking line's `cast state` text
+    // verbatim, where a bare local-clock "14:00" is pinned, read later by
+    // other sessions in other zones, and meaningless once the day turns.
+    return context?.task ? formatTaskResume(context, { now, ...agentWords(payload.cwd || process.cwd()) }) : null;
   } catch {
     return pulse?.task ? formatTaskResumeUnavailable(pulse.task, pulse.plan || undefined) : null;
   }

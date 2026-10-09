@@ -202,10 +202,11 @@ import { typedAddress } from "../lib/browserPaneLinks";
 import { openBeside, openBrowserPane } from "../lib/stage";
 import { isTriageBarCompact } from "./triage/graduation";
 import { setTaskParent, closeTaskWithGuard, updateTasksAsOne } from "../lib/taskActions";
-import { applyRelationPick, relationItems, reportRelationPick, type RelationTask } from "../lib/taskRelations";
+import { applyRelationPick, relationItems, relationQueryAnswered, reportRelationPick, type RelationTask } from "../lib/taskRelations";
+import { isRelationMode, relationPlaceholder } from "../lib/relationActs";
 import { taskVisual } from "./TaskStatusBadge";
-import { WAIT_STATE_STYLE } from "./tasks/TaskBlockedMark";
-import { RelationQueryHint, relationQueryError } from "./tasks/TaskRelations";
+import { WAIT_STATE_STYLE } from "../lib/taskWaitStyle";
+import { RelationQueryHint } from "./tasks/TaskRelations";
 import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../lib/palettePick";
 import { isHostedUi } from "./simple/lanePaths";
 import { actionShownNow, isHostedMode, modeWordsNow, useAssistantScope, useHostedMode, useModeWords, useSurfaceMode } from "../lib/surfaces";
@@ -224,7 +225,7 @@ function withRelationIcon<T extends { task?: RelationTask }>(item: T): T & { ico
   return { ...item, icon: v.icon, color: v.color };
 }
 
-type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "session_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "blocker" | "related" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "session_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "blocker" | "blocks" | "related" | "found_during" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -731,7 +732,7 @@ export function ActionSubmenu({
         .map((a) => ({ ...a, type: "agent" as const, image: undefined }));
     }
     // A task search, or (blocker) any blocker ref pasted whole (lib/taskRelations).
-    if (mode === "blocker" || mode === "related") {
+    if (isRelationMode(mode)) {
       return relationItems(mode, search, targets as TaskItem[], useInboxStore.getState().tasks as Record<string, TaskItem>).map(withRelationIcon);
     }
     if (mode === "parent") {
@@ -1085,7 +1086,7 @@ export function ActionSubmenu({
         applyTaskUpdate({ assignee: item.key });
         const member = (teamMembers || []).find((m: any) => m._id === item.key);
         toast.success(item.key ? `Assigned to ${item.face ? item.label : memberDisplayName(member, "user")}` : "Unassigned");
-      } else if (mode === "blocker" || mode === "related") {
+      } else if (isRelationMode(mode)) {
         const res = applyRelationPick(mode, targets as TaskItem[], item.pick);
         reportRelationPick(res);
         if (!res.ok) return;
@@ -1246,9 +1247,14 @@ export function ActionSubmenu({
     mode === "device" ? "Move to machine — pick where these sessions run…" :
     mode === "model" ? "Change model & effort..." :
     mode === "view" ? "Switch view — filter by label or project..." :
-    mode === "parent" ? "Set parent — search tasks..." :
-    mode === "blocker" ? "Add blocker — search tasks..." :
-    mode === "related" ? "Link a related task — search tasks..." :
+    // Every relation field is worded by the one per-mode record its button
+    // and its menu item read (`relationPlaceholder`), so the field a gesture
+    // opens never renames the gesture. A blocker is any of TG3's refs, not
+    // only a task; the hint under the field carries the exact forms.
+    // `found_during` already holding a link is a REPOINT, which is how the
+    // task page's row offers it; the target carries the link, so the field
+    // says the same act the button did without the gesture carrying a flag.
+    mode === "parent" || isRelationMode(mode) ? relationPlaceholder(mode, { repoint: mode === "found_during" && !!targets[0]?.found_during }) :
     mode === "layout_save" ? "Save current layout — type a name..." :
     mode === "layout_update" ? "Update layout to the current arrangement..." :
     mode === "layout_rename" ? (renameId ? "Rename layout — type the new name..." : "Rename layout — pick one...") :
@@ -1362,11 +1368,15 @@ export function ActionSubmenu({
           className="flex-1 text-sm bg-transparent text-sol-text placeholder:text-sol-text-dim/60 outline-none"
         />
       </div>
-      {(mode === "blocker" || mode === "related") && (
+      {isRelationMode(mode) && (
         <RelationQueryHint mode={mode} search={search} matched={items.length > 0} targets={targets as TaskItem[]} />
       )}
       <div ref={listRef} className="max-h-[320px] overflow-y-auto py-1">
-        {items.length === 0 && !((mode === "blocker" || mode === "related") && relationQueryError(search, mode, false)) && (
+        {/* The hint above answers a ref it refused, so repeating "No results"
+            under it would crowd one failure with two readings. Prose is not
+            that: it is a search that matched nothing, which the hint says
+            nothing about (`relationQueryAnswered`), so the row stays. */}
+        {items.length === 0 && !(isRelationMode(mode) && relationQueryAnswered(search, mode)) && (
           <div className="px-4 py-6 text-center text-sm text-sol-text-dim">No results</div>
         )}
         {items.map((item: any, i: number) => {
@@ -2230,7 +2240,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "session_delete", "bucket", "model", "parent", "blocker", "related", "character"].includes(actionKey)) {
+    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "session_delete", "bucket", "model", "parent", "blocker", "blocks", "related", "found_during", "character"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
