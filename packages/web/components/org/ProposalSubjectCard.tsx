@@ -7,18 +7,23 @@
 // that says what the send will do, and the composer's send applies the
 // approvals and tells the agent, in words, what was rejected and what was
 // said. The only boxes are things a person can press; the rest is type on
-// hairlines, and colour appears only on a priority dot, a state word, the
-// band's wash and the frame's one filled button.
+// hairlines, and colour appears only on a priority dot, a state word and the
+// band's wash. Nothing on the card is filled: the composer's send is the one
+// filled button, because it is the one press that acts.
 //
 // Callback driven: no store, no router. The ledger hands it a `SubjectCard`
 // from `proposalSubjects`, this card's pending `answer`, `onAnswer` to put,
 // replace or withdraw it, and `focused` from the store's orgFocusChangeId.
-import React, { useEffect, useRef, useState, type ButtonHTMLAttributes } from "react";
+import React, { useRef, useState, type ButtonHTMLAttributes } from "react";
 import Link from "next/link";
 import { AlertTriangle, Check, CheckSquare, Flag, FolderClosed, ListChecks, Sparkles } from "lucide-react";
 import { passageDiff, type ChangeField, type PassagePart } from "@codecast/shared/contracts/orgChangeWords";
 import { isOrgChangeDecidable, ORG_REPLY_WORDS, type OrgChangeReply, type OrgChangeStatus, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { useMountEffect } from "../../hooks/useMountEffect";
+import { EntityIdPill } from "../EntityIdPill";
+import { TASK_STATUS, type TaskStatus } from "../TaskStatusBadge";
+import { PLAN_STATUS_CONFIG } from "../../lib/planStatus";
+import { PROJECT_STATUS, type ProjectStatus } from "../../lib/projectStatus";
 import { useOverflows } from "../../hooks/useOverflows";
 import { cn } from "../../lib/utils";
 import { PRIORITY_META } from "../charter/charterMeta";
@@ -31,9 +36,11 @@ import { TakeoverEdit } from "./TakeoverEdit";
 import { CHIP_STATUS, GHOST } from "./orgMeta";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import { useOrgHover } from "./proposalContexts";
+import { lightChanges, useChangeLit } from "./lines/changeLight";
 import { changeReply, fieldText, subjectStatusWords, type SubjectCard, type SubjectStatus } from "./proposalSubjects";
 import type { ProposalTreeFace } from "./proposalTree";
 import { StagedBand, stagedWash } from "./StagedBand";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 // ---------------------------------------------------------------- the face
 
@@ -250,13 +257,13 @@ export function useAnswerField(answer: SubjectAnswer | null | undefined, onAnswe
   return { open, setOpen: setFieldOpen, field };
 }
 
-/** The three answers on an entry that waits. Approve is the quiet outline
- *  (the filled lead on a card that stands alone). Reject opens the field;
- *  Reply opens it with the verdict as it stands. */
-export function AnswerControls({ answer, retry, filled, dense, onAnswer, onOpen, open }: {
+/** The three answers on an entry that waits. Approve is a quiet outline,
+ *  never filled: an answer only stages, and the composer's send is the one
+ *  filled button that acts. Reject opens the field; Reply opens it with the
+ *  verdict as it stands. */
+export function AnswerControls({ answer, retry, dense, onAnswer, onOpen, open }: {
   answer: SubjectAnswer | null | undefined;
   retry: boolean;
-  filled?: boolean;
   /** Tighter words, for a strip that must fit a chart card. */
   dense?: boolean;
   onAnswer: (answer: SubjectAnswer | null) => void;
@@ -271,11 +278,9 @@ export function AnswerControls({ answer, retry, filled, dense, onAnswer, onOpen,
     onAnswer({ verdict: v, ...(answer?.text ? { text: answer.text } : {}) });
     onOpen(v === "reject");
   };
-  // One filled button per frame: only a card that stands alone fills its Approve, and only until it is pressed.
-  const fill = !!filled && !retry && verdict !== "approve";
   return (
     <>
-      <OrgButton size="sm" quiet={!fill} primary={fill} className={tight} aria-pressed={verdict === "approve"} onClick={() => toggle("approve")} data-subject-approve>
+      <OrgButton size="sm" quiet className={tight} aria-pressed={verdict === "approve"} onClick={() => toggle("approve")} data-subject-approve>
         {verdict === "approve" && <Check className="-ml-0.5 h-3 w-3" aria-hidden />}
         {retry ? "Retry" : ORG_REPLY_WORDS.approve.act}
       </OrgButton>
@@ -385,6 +390,44 @@ function Value({ field, side, face, struck = false, clamp = true }: { field: Cha
   }
 }
 
+/** The kind of record a status field moves, which picks its vocabulary. */
+export type RecordKind = "task" | "plan" | "project";
+
+/** A record's status as the record's own pages draw it: glyph, word, colour. Null for a word none of them knows. */
+function statusLook(record: RecordKind | undefined, words: string) {
+  const key = words.trim().replace(/ /g, "_");
+  const look = record === "plan" ? PLAN_STATUS_CONFIG[key] : record === "project" ? PROJECT_STATUS[key as ProjectStatus] : TASK_STATUS[key as TaskStatus];
+  return look ? { Icon: look.icon, label: look.label, color: look.color } : null;
+}
+
+/** A status that moves, the thing a person approves: what it leaves struck
+ *  on a red wash, what it becomes on a green one, each with the record's own
+ *  status glyph, at the size of the sentence. */
+function StatusMove({ field, record }: { field: ChangeField; record?: RecordKind }) {
+  const was = field.before && !field.before.none ? statusLook(record, field.before.text) : null;
+  const now = field.after && !field.after.none ? statusLook(record, field.after.text) : null;
+  if (!now) return null;
+  const chip = "inline-flex items-center gap-1.5 rounded-md px-2 py-[2px] text-[13.5px] leading-[22px] no-underline";
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1" data-status-move>
+      {was && (
+        <>
+          <del className={cn(chip, "bg-[color-mix(in_srgb,var(--sol-red)_12%,transparent)]", RED)} data-diff="removed">
+            <was.Icon className={cn("h-3.5 w-3.5 shrink-0 opacity-70", was.color)} />
+            <span className={STRUCK}>{was.label}</span>
+          </del>
+          <span aria-hidden className={cn("font-medium", MUTED)}>→</span>
+          <span className="sr-only">becomes</span>
+        </>
+      )}
+      <ins className={cn(chip, "bg-[color-mix(in_srgb,var(--sol-green)_16%,transparent)] font-semibold text-[color:var(--ink-green)]")} data-diff="added">
+        <now.Icon className={cn("h-3.5 w-3.5 shrink-0", now.color)} />
+        {now.label}
+      </ins>
+    </span>
+  );
+}
+
 /** A list that gains entries: the kept names, then the new ones behind a quiet plus. */
 function Added({ field }: { field: ChangeField }) {
   const before = new Set((field.before?.items ?? []).map((x) => x.toLowerCase()));
@@ -397,7 +440,7 @@ function Added({ field }: { field: ChangeField }) {
  *  what it becomes. Before and after share a line when they fit; when they do
  *  not, the after drops to its own line behind the arrow. A field whose
  *  before equals its after (op same) is never drawn. */
-export function Field({ field, face = () => undefined, tone = TEXT, clamp = true, label = field.label }: { field: ChangeField; face?: FaceOf; tone?: string; clamp?: boolean; label?: string }) {
+export function Field({ field, face = () => undefined, tone = TEXT, clamp = true, label = field.label, record }: { field: ChangeField; face?: FaceOf; tone?: string; clamp?: boolean; label?: string; record?: RecordKind }) {
   const { before, after, op, kind } = field;
   const long = kind === "text" && op === "change" && !!before && !!after && !before.none && !after.none && before.text.length > LONG_TEXT && after.text.length > LONG_TEXT;
   const passage = kind === "passage" ? field.diff ?? [] : long ? passageDiff(before!.text, after!.text) : null;
@@ -405,6 +448,7 @@ export function Field({ field, face = () => undefined, tone = TEXT, clamp = true
   const gone = !!before && !before.none && (op === "change" || op === "clear");
   // Entries a change takes away, with no list in hand to compare.
   const taken = op === "remove" && !before;
+  const move = kind === "status" && !!after && !after.none && !!statusLook(record, after.text);
   return (
     <>
       <dt className={cn("m-0 whitespace-nowrap font-normal", LABEL, QUIET)}>{label}</dt>
@@ -415,7 +459,7 @@ export function Field({ field, face = () => undefined, tone = TEXT, clamp = true
         data-field-before={fieldText(before)}
         data-field-after={fieldText(after)}
       >
-        {passage ? <PassageDiff parts={passage} /> : kind === "list" && op === "add" ? <Added field={field} /> : (
+        {move ? <StatusMove field={field} record={record} /> : passage ? <PassageDiff parts={passage} /> : kind === "list" && op === "add" ? <Added field={field} /> : (
           <>
             {before && <span className={cn("min-w-0 max-w-full", QUIET)}><Value field={field} side="before" face={face} struck={gone} clamp={clamp} /></span>}
             {after && (before ? (
@@ -435,20 +479,61 @@ export function Field({ field, face = () => undefined, tone = TEXT, clamp = true
 }
 
 /** The fields of one change as a definition list; a run of charter passages shares one label. */
-function Fields({ fields, faces, tone, clamp, className }: { fields: readonly ChangeField[]; faces: SubjectCard["faces"]; tone: string; clamp: boolean; className?: string }) {
+/** The label gutter fits the longest label ("Measured by"), and widens for a card that carries a longer one. */
+function gutterOf(labels: readonly string[]) {
+  return Math.max(86, Math.ceil(Math.max(0, ...labels.map((l) => l.length)) * 6.7) + 6);
+}
+
+function Fields({ fields, faces, tone, clamp, record, gutter, extra, className }: { fields: readonly ChangeField[]; faces: SubjectCard["faces"]; tone: string; clamp: boolean; record?: RecordKind; gutter?: number; extra?: React.ReactNode; className?: string }) {
   const drawn = fields.filter((f) => f.op !== "same");
-  if (!drawn.length) return null;
-  // The label gutter fits the longest label ("Measured by"), and widens for a card that carries a longer one.
-  const gutter = Math.max(86, Math.ceil(Math.max(0, ...drawn.map((f) => f.label.length)) * 6.7) + 6);
+  if (!drawn.length && !extra) return null;
   return (
-    <dl className={cn("m-0 grid items-baseline gap-y-[2px]", className)} style={{ gridTemplateColumns: `${gutter}px minmax(0, 1fr)` }}>
+    <dl className={cn("m-0 grid items-baseline gap-y-[3px]", className)} style={{ gridTemplateColumns: `${gutter ?? gutterOf(drawn.map((f) => f.label))}px minmax(0, 1fr)` }}>
       {drawn.map((f, i) => {
         const prev = drawn[i - 1];
         const shared = f.kind === "passage" && prev?.kind === "passage" && prev.label === f.label && prev.seq === f.seq;
-        return <Field key={`${f.seq}:${f.key}:${i}`} field={f} face={(side) => faces[`${f.seq}:${f.key}:${side}`]} tone={tone} clamp={clamp} label={shared ? "" : f.label} />;
+        return <Field key={`${f.seq}:${f.key}:${i}`} field={f} face={(side) => faces[`${f.seq}:${f.key}:${side}`]} tone={tone} clamp={clamp} label={shared ? "" : f.label} record={record} />;
       })}
+      {extra}
     </dl>
   );
+}
+
+/** A row of the field grid that is not a field: the reason, the evidence, where a record sits. */
+function LedgerRow({ label, className, children, ...rest }: { label: string; className?: string; children: React.ReactNode } & DataHooks) {
+  return (
+    <>
+      <dt className={cn("m-0 whitespace-nowrap font-normal", LABEL, QUIET)}>{label}</dt>
+      <dd className={cn("m-0 min-w-0 max-w-[70ch] [overflow-wrap:anywhere] [text-wrap:pretty]", VALUE, className)} {...rest}>{children}</dd>
+    </>
+  );
+}
+
+/** One piece of evidence: a link when it has a place, its words when not. */
+function Source({ source }: { source: SubjectCard["evidence"][number] }) {
+  if (!source.href) return <span className="block">{source.label}</span>;
+  return /^https?:/i.test(source.href)
+    ? <a href={source.href} target="_blank" rel="noreferrer" className={cn("block", LEDGER_LINK)}>{source.label}</a>
+    : <Link href={source.href} className={cn("block", LEDGER_LINK)}>{source.label}</Link>;
+}
+
+/** The evidence, each piece on its own line; past three, the first two and the word for the rest. */
+function Evidence({ sources }: { sources: SubjectCard["evidence"] }) {
+  const [open, setOpen] = useState(false);
+  const shown = open || sources.length <= 3 ? sources : sources.slice(0, 2);
+  return (
+    <span className="block space-y-0.5" {...LEDGER_STOP}>
+      {shown.map((source, i) => <Source key={i} source={source} />)}
+      {sources.length > 3 && <ClampWord open={open} onToggle={() => setOpen((v) => !v)} />}
+    </span>
+  );
+}
+
+/** Where a record sits, from the change itself: a task's plan (else its project), a plan's project. */
+function recordHome(change: OrgProposalChange["change"]): { type: "plan" | "project"; id: string } | null {
+  if (change.kind === "task_status") return change.plan ? { type: "plan", id: change.plan } : change.project ? { type: "project", id: change.project } : null;
+  if (change.kind === "plan_status" && change.project) return { type: "project", id: change.project };
+  return null;
 }
 
 // ---------------------------------------------------------------- verdicts and state
@@ -480,10 +565,23 @@ export function FailNote({ note, className }: { note: string; className?: string
   return <p className={cn("m-0 text-[12.5px] leading-[1.55]", TEXT, className)} data-failed-note><b className={cn("font-semibold", RED)}>{note ? "Failed:" : "Failed."}</b>{note ? ` ${note}` : ""}</p>;
 }
 
-/** The subject's name is the sentence's one bold run. */
-export function Sentence({ text, span, name }: { text: string; span: [number, number] | null; name: string }) {
+/** The subject's name is the sentence's one bold run, or `subject` in its
+ *  place: a record that exists reads as its pill, the way codecast names it
+ *  everywhere else. */
+export function Sentence({ text, span, name, subject }: { text: string; span: [number, number] | null; name: string; subject?: React.ReactNode }) {
   if (!span) return <>{text}</>;
-  return <>{text.slice(0, span[0])}<b className={name}>{text.slice(span[0], span[1])}</b>{text.slice(span[1])}</>;
+  return <>{text.slice(0, span[0])}{subject ?? <b className={name}>{text.slice(span[0], span[1])}</b>}{text.slice(span[1])}</>;
+}
+
+/** The pill for a record a change names, when the change names one that already exists. */
+export function recordRef(change: OrgProposalChange["change"]): { type: "task" | "plan"; id: string } | null {
+  if (change.kind === "task_status") return { type: "task", id: change.task };
+  if (change.kind === "plan_status") return { type: "plan", id: change.plan };
+  return null;
+}
+
+export function RecordPill({ type, id, title }: { type: "task" | "plan"; id: string; title: string }) {
+  return <span className="inline-flex min-w-0 max-w-full align-bottom" {...LEDGER_STOP} data-subject-pill={type}><EntityIdPill id={id} type={type} label={title} wide /></span>;
 }
 
 // ---------------------------------------------------------------- layout
@@ -527,8 +625,6 @@ export type ProposalSubjectCardProps = {
   ordinal?: number;
   /** Where the answers sit. Absent: the card asks its own width (wide over 560px). */
   layout?: "wide" | "narrow";
-  /** A card that stands alone in its frame: its Approve is the frame's one filled button, until pressed. */
-  lead?: boolean;
   /** This card's pending answer, from the batch. */
   answer?: SubjectAnswer | null;
   /** Put, replace (same verdict, new words) or withdraw (null) this card's answer. Absent: read only. */
@@ -568,22 +664,24 @@ function groupsOf(card: SubjectCard, split: boolean): Group[] {
 /** Scroll the focused entry into view once, when it mounts focused. */
 export function useFocusScroll(ref: React.RefObject<HTMLElement | null>, focused: boolean | undefined) {
   const done = useRef(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!focused || done.current) return;
     done.current = true;
     ref.current?.scrollIntoView?.({ block: "center" });
   }, [focused, ref]);
 }
 
-export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAnswer, takeover, revisedNew, focused, className }: ProposalSubjectCardProps) {
+export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, takeover, revisedNew, focused, className }: ProposalSubjectCardProps) {
   const hover = useOrgHover();
+  // A ghost line on the company document points at one of this card's
+  // changes, or this card points at its line (lightChanges on hover).
+  const lit = useChangeLit(card.change_ids);
   const rootRef = useRef<HTMLDivElement>(null);
   useFocusScroll(rootRef, focused);
   // "Leave the sessions where they are": the tick is read from the pending
   // approval once there is one, and kept here only until there is.
   const [leaveLocal, setLeaveLocal] = useState(false);
   const leave = answer?.leave_sessions ?? leaveLocal;
-  const [sourcesOpen, setSourcesOpen] = useState(false);
   // An entry decided in this view keeps its height, so nothing jumps under the
   // pointer while someone answers down the list. It folds to its sentence the
   // next time it mounts.
@@ -598,7 +696,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
   const put = (a: SubjectAnswer | null) => onAnswer?.(a && a.verdict === "approve" && leave ? { ...a, leave_sessions: true } : a);
   const { open, setOpen: setFieldOpen, field: replyField } = useAnswerField(answer, onAnswer && put, card.waiting > 0);
   const onLeave = (v: boolean) => { setLeaveLocal(v); if (answer?.verdict === "approve") onAnswer?.(v ? { ...answer, leave_sessions: true } : { verdict: answer.verdict, ...(answer.text ? { text: answer.text } : {}) }); };
-  const controls = (retry: boolean, filled?: boolean) => <AnswerControls answer={answer} retry={retry} filled={filled} onAnswer={put} open={open} onOpen={setFieldOpen} />;
+  const controls = (retry: boolean) => <AnswerControls answer={answer} retry={retry} onAnswer={put} open={open} onOpen={setFieldOpen} />;
   const words = <span className={cn("text-[12.5px] leading-[21px]", MUTED)} data-subject-state={state}>{subjectStatusWords(card)}</span>;
   // The stored answer the row still carries (a rejection's words, a note), once the send went.
   const stored = (change: OrgProposalChange | null) => (change ? changeReply(change) : card.reply);
@@ -617,6 +715,11 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
   const nameTone = state === "applied" ? cn("font-semibold", SOFT) : state === "skipped" ? "font-medium" : "font-bold";
   const numberTone = card.status === "failed" ? RED : QUIET;
   const leadId = card.changes[0]?._id ?? card.change_ids[0];
+  const record: RecordKind | undefined = card.face.kind === "record" ? card.face.record : card.kind === "project" ? "project" : undefined;
+  const pillRef = card.changes[0] ? recordRef(card.changes[0].change) : null;
+  // A card that only moves a record's status says it twice in words ("Mark the task X as dropped", then Status): the record heads the entry and the move says the rest.
+  const statusOnly = !!pillRef && !split && card.rows.length > 0 && card.rows.every((r) => r.kind === "status");
+  const home = card.changes[0] ? recordHome(card.changes[0].change) : null;
 
   const mode: LedgerLayout = layout ?? "auto";
   const groups = settled && state === "skipped" ? [] : groupsOf(card, split);
@@ -627,20 +730,33 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
     : card.waiting === 0 ? <StateWord status={card.status} />
     : !onAnswer ? words
     : staged ? null
-    : controls(card.status === "failed", lead);
+    : controls(card.status === "failed");
   const revisionKind = (seq: number) => card.changes.find((c) => c.seq === seq)?.revision?.kind;
-  const sources = card.evidence;
+  const sources = settled ? [] : card.evidence;
   const field = replyField({});
+  // One grid for the whole entry: fields, where the record sits, why, and the evidence share a gutter.
+  const gutter = gutterOf([...card.rows.map((r) => r.label), "Evidence"]);
+  const tail = (reasons: readonly string[], last: boolean) => (
+    <>
+      {last && home && <LedgerRow label={home.type === "plan" ? "Plan" : "Project"} data-subject-home={home.type}><RecordPill {...home} title={home.id} /></LedgerRow>}
+      {!settled && reasons.length > 0 && (
+        <LedgerRow label="Why" className={cn("leading-[1.6] space-y-1", EASE, state === "accepted" ? QUIET : SOFT)} data-subject-reasons>
+          {reasons.map((reason) => <Clamp key={reason} lines={4}>{reason}</Clamp>)}
+        </LedgerRow>
+      )}
+      {last && sources.length > 0 && <LedgerRow label="Evidence" className={cn("leading-[1.6]", MUTED)} data-subject-sources={sources.length}><Evidence sources={sources} /></LedgerRow>}
+    </>
+  );
 
   return (
     <div
       ref={rootRef}
-      className={cn("not-prose min-w-0 text-left", LEDGER_INKS, !layout && "[container-type:inline-size]", ordinal != null && "border-t", className)}
-      style={{ borderColor: LEDGER_HAIR }}
-      onMouseEnter={hover ? () => hover(leadId) : undefined}
-      onMouseLeave={hover ? () => hover(null) : undefined}
-      onFocus={hover ? () => hover(leadId) : undefined}
-      onBlur={hover ? () => hover(null) : undefined}
+      className={cn("not-prose min-w-0 text-left transition-[background-color,box-shadow] duration-150", LEDGER_INKS, !layout && "[container-type:inline-size]", ordinal != null && "border-t", className)}
+      style={{ borderColor: LEDGER_HAIR, ...(lit ? { background: "color-mix(in srgb, var(--sol-violet) 11%, transparent)", boxShadow: "inset 2px 0 0 var(--sol-violet)" } : {}) }}
+      onMouseEnter={() => { hover?.(leadId); lightChanges(card.change_ids); }}
+      onMouseLeave={() => { hover?.(null); lightChanges(null); }}
+      onFocus={() => { hover?.(leadId); lightChanges(card.change_ids); }}
+      onBlur={() => { hover?.(null); lightChanges(null); }}
       data-layout={mode}
       data-settled={settled || undefined}
       data-subject={card.key}
@@ -650,6 +766,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
       data-subject-answer={answer?.verdict}
       data-revised-new={revisedNew || undefined}
       data-focused={focused || undefined}
+      data-lit={lit || undefined}
     >
       <div
         className={cn("grid items-baseline", AT.grid[mode], ordinal != null && AT.pad[mode])}
@@ -657,7 +774,9 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
       >
         {ordinal != null && <span className={cn("col-start-1 text-[11px] leading-[20px] tabular-nums", EASE, numberTone)} data-subject-ordinal>{ordinal}</span>}
         <p className={cn("col-start-2 m-0 font-normal [overflow-wrap:anywhere] [text-wrap:pretty]", SENTENCE, EASE, sentenceTone)} data-subject-sentence>
-          <Sentence text={text} span={span} name={nameTone} />
+          {statusOnly && pillRef
+            ? <><RecordPill {...pillRef} title={card.title} /><span className="sr-only">{text}</span></>
+            : <Sentence text={text} span={span} name={nameTone} subject={pillRef && <RecordPill {...pillRef} title={card.title} />} />}
         </p>
         {top && <div className={cn(SLOT, AT.verdicts[mode])} {...LEDGER_STOP} data-subject-verdicts>{top}</div>}
 
@@ -671,13 +790,8 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
           return (
             <React.Fragment key={group.key}>
               <div className={cn("col-start-2 min-w-0", i === 0 ? "mt-2" : "mt-[18px]")} data-subject-group={group.change?.seq ?? "all"}>
-                <Fields fields={group.rows} faces={card.faces} tone={groupTone(split ? status : state)} clamp={!card.purpose} />
+                <Fields fields={group.rows} faces={card.faces} tone={groupTone(split ? status : state)} clamp={!card.purpose} record={record} gutter={gutter} extra={tail(group.reasons, i === groups.length - 1)} />
                 {failed && <FailNote note={failed.note} className="mt-1.5" />}
-                {!settled && group.reasons.length > 0 && (
-                  <div className={cn("mt-2 max-w-[70ch] space-y-1 text-[12.5px] leading-[1.6] [text-wrap:pretty]", EASE, state === "accepted" ? QUIET : MUTED)} data-subject-reasons>
-                    {group.reasons.map((reason) => <Clamp key={reason}>{reason}</Clamp>)}
-                  </div>
-                )}
                 {/* On a card whose changes ended differently each group carries the words said about it. */}
                 {split && group.change && (
                   <>
@@ -709,21 +823,8 @@ export function ProposalSubjectCard({ card, ordinal, layout, lead, answer, onAns
 
         {takeover && onAnswer && card.waiting > 0 && !staged && <div className="col-start-2 mt-2" {...LEDGER_STOP}><TakeoverEdit phrase={takeover.phrase} leave={leave} onLeave={onLeave} /></div>}
 
-        {!settled && sources.length > 0 && (
-          <div className={cn("col-start-2 mt-[5px] flex min-w-0 flex-wrap items-baseline gap-x-3 text-[11px] leading-[18px]", QUIET)} {...LEDGER_STOP}>
-            <span className={cn("min-w-0", sourcesOpen && sources.length > 1 && "basis-full")} data-subject-sources={sources.length}>
-              <button type="button" className={sourcesOpen ? undefined : LEDGER_LINK} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((v) => !v)}>
-                {sourcesOpen ? (sources.length === 1 ? "Source:" : "Sources:") : `${sources.length} ${sources.length === 1 ? "source" : "sources"}`}
-              </button>
-              {sourcesOpen && sources.map((source, i) => {
-                const where = cn(sources.length > 1 ? "block" : "ml-[1ch]", MUTED);
-                if (!source.href) return <span key={i} className={where}>{source.label}</span>;
-                return /^https?:/i.test(source.href)
-                  ? <a key={i} href={source.href} target="_blank" rel="noreferrer" className={cn(where, LEDGER_LINK)}>{source.label}</a>
-                  : <Link key={i} href={source.href} className={cn(where, LEDGER_LINK)}>{source.label}</Link>;
-              })}
-            </span>
-          </div>
+        {groups.length === 0 && (home || sources.length > 0) && (
+          <div className="col-start-2 mt-2 min-w-0"><Fields fields={[]} faces={card.faces} tone={TEXT} clamp record={record} gutter={gutter} extra={tail([], true)} /></div>
         )}
 
         {/* The staged answer, and the field. Keyed siblings: a note's first keystroke mounts the band without remounting the textarea under the caret. */}

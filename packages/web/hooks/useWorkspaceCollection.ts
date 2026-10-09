@@ -90,6 +90,7 @@ export function defaultFieldSig(row: any): string {
  * instead of) the live row. Stubs pass: keyed by their temp _id.
  */
 export function workspaceRows<T = any>(table: WorkspaceScopedTable, coll: Record<string, T>, key: WorkspaceKey | null): T[] {
+  if (!key) return [];
   const listed = collectionRowListed(table);
   const rows: T[] = [];
   for (const id in coll) {

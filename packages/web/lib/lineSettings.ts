@@ -53,16 +53,16 @@ const COMMAND_FIELDS: Record<(typeof COMMAND_KEYS)[number], FieldWords & { label
 
 /** What each cap holds, one per shared caps key. */
 const CAPS_FIELDS: Record<(typeof CAPS_KEYS)[number], FieldWords & { label: string }> = {
-  cards: { label: "Cards", unit: "open", what: "The line starts no new build while this many cards wait on you." },
+  cards: { label: "Waiting decisions", unit: "waiting", what: "The line starts no new build while this many finished fixes wait for your decision." },
 };
 
 /** The sections as written; LINE_SECTIONS below adds each field's kind. Finders (Listens to) render their own rows. */
 const SECTION_DECLS: Array<Omit<LineSection, "fields"> & { fields: FieldDecl[] }> = [
-  { id: "listens", title: "Listens to", what: "Finders: the automatic sources that file problems into this line, like an error tracker or the evals, and when each last filed.", fields: [] },
+  { id: "listens", title: "Sources", what: "What reports problems into this line on its own, like an error tracker or the evals: what each watches, how much it reported, and whether it has gone quiet.", fields: [] },
   {
     id: "holds",
     title: "Holds work to",
-    what: "What the review station reads before it passes a change.",
+    what: "What the review step reads before it passes a change.",
     fields: [
       { key: "principles", label: "Principles", what: "This project's own principles files, read beside the shared set.", placeholder: "docs/principles.md" },
       { key: "prompting", label: "Prompting standard", what: "The standard a change to a prompt is held to.", placeholder: LINE_PROFILE_DEFAULTS.prompting },
@@ -71,13 +71,13 @@ const SECTION_DECLS: Array<Omit<LineSection, "fields"> & { fields: FieldDecl[] }
   {
     id: "checks",
     title: "Checks a change",
-    what: "The commands each station runs on a change before it reaches you.",
+    what: "The checks each step runs on a change before it reaches you.",
     fields: COMMAND_KEYS.map((k) => ({ key: `commands.${k}`, ...COMMAND_FIELDS[k] })),
   },
   {
     id: "limits",
     title: "Limits",
-    what: "How big a change may be, how long a shipped one is watched, and how many cards may wait on you.",
+    what: "How big a change may be, how long a shipped one is watched, and how many finished fixes may wait for your decision.",
     fields: [
       { key: "size_budget", label: "Size budget", unit: "lines", what: "A change larger than this is split before it builds." },
       { key: "watch_days", label: "Watch", unit: "days", what: "A shipped cause stays watched this long; a repeat of its signal reopens it." },
@@ -216,11 +216,11 @@ export function lineWriteGate(lp: Facts, roster: RosterDevice[] | null, checkout
   // editable, and the first edit writes the file on the viewer's machine that
   // last ran a session there, whose republish makes it the line (LX5).
   if (!lp && checkout) return { writable: true, device: "your machine with this checkout", file, first: true };
-  if (!lp) return { writable: false, device: null, file, reason: "No machine has published this line yet. Run cast line profile --publish in the project's checkout." };
+  if (!lp) return { writable: false, device: null, file, reason: "This line's settings live in a file in the project's repository, and no machine has uploaded them yet. Run one session in the project's folder on your machine: the settings then show here, and your first change writes the file and uploads it." };
   if (!lp.root || !lp.device_id || !hasProfileFacts(lp)) {
-    return { writable: false, device: null, file, reason: "An older cast published this line, without the machine that holds the file. Run cast line profile --publish there with a current cast." };
+    return { writable: false, device: null, file, reason: "An older codecast uploaded these settings without saying which machine holds the file, so edits have nowhere to go. They become editable here once that machine runs the current codecast and uploads them again." };
   }
-  if (lp.default === false) return { writable: false, device: null, file, reason: "Only this project's finders are declared, in another project's profile. Edit them in that project's file." };
+  if (lp.default === false) return { writable: false, device: null, file, reason: "Only this project's sources are set, from another project's settings file. Change them on that project's line." };
   if (!roster) return { writable: true, device: "the publishing machine", file };
   const device = roster.find((d) => d.device_id === lp.device_id);
   if (!device) return { writable: false, device: null, file, reason: "The file is on a teammate's machine. Its owner can edit it, here or in the file." };
