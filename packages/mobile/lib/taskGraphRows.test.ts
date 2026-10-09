@@ -71,6 +71,15 @@ describe('taskGraphView', () => {
     expect(view.supersededBy).toEqual({ ref: 'ct-50', title: undefined });
   });
 
+  it('a ref the workspace rule refuses is nameless as well as unknown', () => {
+    const outside = { b7: { _id: 'b7', short_id: 'ct-7', status: 'done', title: 'Someone else task', workspace: 'user:u2' } };
+    const view = taskGraphView({ workspace: 'team:t1', blocked_by: ['ct-7'], found_during: 'ct-7' }, outside);
+    // The status is unknown, so the title must be too: one line never mixes an
+    // answer the graph refuses with one it gives.
+    expect(view.blockedBy[0]).toEqual({ key: 'task:ct-7', kind: 'task', ref: 'ct-7', status: 'unknown', stateLabel: 'status unknown', title: undefined, cleared: false });
+    expect(view.foundDuring).toEqual({ ref: 'ct-7', title: undefined });
+  });
+
   it('a task with no graph has nothing to show', () => {
     expect(taskGraphView({}, tasks)).toEqual({ blockedBy: [], unblocked: true, foundDuring: null, supersededBy: null });
   });

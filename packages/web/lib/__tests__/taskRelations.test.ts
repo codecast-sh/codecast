@@ -4,9 +4,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
 import { addWaitDraft, removeBlockerEdge, removeBlocksEdge, removeWaitDraft, setBlockerEdge, setRelatedEdge } from "../../store/taskGraphDraft";
-import { applyRelationPick, blockerForms, blockerLines, foundHereOf, parseRelationQuery, relationItems, storeBlockerLines } from "../taskRelations";
+import { applyRelationPick, blockerForms, blockerLines, blocksOf, foundHereOf, parseRelationQuery, relatedOf, relationItems, storeBlockerLines } from "../taskRelations";
 import { storeStatusOf } from "../taskBlockers";
-import { graphChange, waitTargetOf } from "@codecast/shared/tasks";
+import { graphChange, GRAPH_LINK_CAP, waitTargetOf } from "@codecast/shared/tasks";
 
 const WS = "team:t1";
 const NOW = Date.UTC(2026, 9, 8, 12);
@@ -49,6 +49,38 @@ describe("found here", () => {
   test("the store's tasks found during this one, in its workspace, oldest first", () => {
     const tasks = rows(task(1), task(5, { found_during: "ct-1" }), task(4, { found_during: "ct-1" }), task(6, { found_during: "ct-1", workspace: "user:x" }));
     expect(foundHereOf(task(1), tasks).map((t) => t.short_id)).toEqual(["ct-4", "ct-5"]);
+  });
+
+  test("a legacy row carrying no workspace key is personal to its owner, so its relations still read", () => {
+    const legacy = (n: number, over: Record<string, any> = {}) => task(n, { workspace: undefined, team_id: undefined, user_id: "u1", ...over });
+    const tasks = rows(legacy(1), legacy(4, { found_during: "ct-1" }), task(6, { found_during: "ct-1" }));
+    expect(foundHereOf(legacy(1), tasks).map((t) => t.short_id)).toEqual(["ct-4"]);
+  });
+});
+
+describe("the link mirrors", () => {
+  test("blocks lists what the dependent still names, keeps a ref no row answers for, and stops at the cap", () => {
+    const tasks = rows(
+      task(1, { blocks: ["ct-2", "id3", "ct-4", "ct-99"] }),
+      task(2, { blocked_by: ["ct-1"] }),
+      // Named by this task's _id, the form an older plan row stores.
+      task(3, { blocked_by: ["id1"] }),
+      // Its row has moved on: the mirror entry is stale.
+      task(4, { blocked_by: ["ct-7"] }),
+    );
+    expect(blocksOf(tasks.id1, tasks)).toEqual(["ct-2", "id3", "ct-99"]);
+    const many = task(1, { blocks: Array.from({ length: 60 }, (_, i) => `ct-${i + 100}`) });
+    expect(blocksOf(many, rows(many)).length).toBe(GRAPH_LINK_CAP);
+  });
+
+  test("a dependent in another workspace is no answer, so its entry stands", () => {
+    const tasks = rows(task(1, { blocks: ["ct-2"] }), task(2, { workspace: "user:x", blocked_by: ["ct-9"] }));
+    expect(blocksOf(tasks.id1, tasks)).toEqual(["ct-2"]);
+  });
+
+  test("related stops at the same cap", () => {
+    expect(relatedOf(task(1)).length).toBe(0);
+    expect(relatedOf(task(1, { related: Array.from({ length: 60 }, (_, i) => `ct-${i + 100}`) })).length).toBe(GRAPH_LINK_CAP);
   });
 });
 
@@ -237,7 +269,8 @@ describe("draft writes", () => {
 describe("the timeline's graph rows", () => {
   test("blockers, links and waits read as what happened", () => {
     expect(graphChange({ field: "blocked_by", old_value: "ct-1", new_value: "ct-1, ct-2" })).toEqual({ tone: "blocked", clauses: [{ verb: "made it wait on", refs: ["ct-2"] }] });
-    expect(graphChange({ field: "blocked_by", old_value: "ct-1, ct-2", new_value: "ct-2" })).toEqual({ tone: "met", clauses: [{ verb: "removed blocker", refs: ["ct-1"] }] });
+    // A removal is withdrawn, not met: green beside "removed blocker ct-1" would read as "ct-1 finished".
+    expect(graphChange({ field: "blocked_by", old_value: "ct-1, ct-2", new_value: "ct-2" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "removed blocker", refs: ["ct-1"] }] });
     expect(graphChange({ field: "related", old_value: "", new_value: "ct-3" })).toEqual({ tone: "link", clauses: [{ verb: "marked it related to", refs: ["ct-3"] }] });
     expect(graphChange({ field: "found_during", old_value: "", new_value: "ct-12" })!.clauses[0]).toEqual({ verb: "found it while working on", refs: ["ct-12"] });
     expect(graphChange({ field: "superseded_by", old_value: "", new_value: "ct-9" })!.clauses[0]).toEqual({ verb: "superseded it with", refs: ["ct-9"] });
@@ -246,8 +279,8 @@ describe("the timeline's graph rows", () => {
     expect(graphChange({ field: "waits", old_value: "Waiting on PR #42", new_value: "PR #42 merged" })!.tone).toBe("met");
     expect(graphChange({ field: "waits", old_value: "Waiting on PR #42", new_value: "Wait on PR #42 failed: closed without merging" })!.tone).toBe("failed");
     expect(graphChange({ field: "waits", old_value: "sd-4 answered", new_value: "Waiting on sd-4" })!.clauses[0]).toEqual({ verb: "reopened the wait", text: "on sd-4" });
-    expect(graphChange({ field: "waits", old_value: "Waiting on sd-4", new_value: "" })!.clauses[0]).toEqual({ verb: "stopped waiting", text: "on sd-4" });
-    expect(graphChange({ field: "waits", old_value: "PR #42 merged", new_value: "" })!.clauses[0]).toEqual({ verb: "removed the wait:", text: "PR #42 merged" });
+    expect(graphChange({ field: "waits", old_value: "Waiting on sd-4", new_value: "" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "stopped waiting", text: "on sd-4" }] });
+    expect(graphChange({ field: "waits", old_value: "PR #42 merged", new_value: "" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "removed the wait:", text: "PR #42 merged" }] });
     expect(graphChange({ field: "status", old_value: "open", new_value: "done" })).toBeNull();
   });
 });
