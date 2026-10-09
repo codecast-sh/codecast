@@ -36,21 +36,3 @@ export function StatusPill({ status }: { status: OrgChangeStatus }) {
     </span>
   );
 }
-
-/** A proposal holding only changes a person never sees drawn (a limit,
- *  S23.2): what changes, in plain words, no unit named. Alongside drawn rows
- *  a quiet change adds nothing to the card. */
-export function QuietLines({ tree, changes, className }: { tree: OrgTree | null; changes: readonly OrgProposalChange[]; className?: string }) {
-  const quiet = useMemo(() => proposalQuietLines(tree, changes), [tree, changes]);
-  if (quiet.length === 0) return null;
-  return (
-    <div className={cn("not-prose space-y-1", className)} data-proposal-quiet={quiet.length}>
-      {quiet.map((q) => (
-        <div key={q.change_id} className="flex flex-wrap items-center gap-1.5 text-[12px] leading-snug" style={{ color: q.status === "skipped" ? "var(--sol-text-dim)" : "var(--sol-text)" }} data-quiet-line={q.change_id}>
-          <span className={cn(q.status === "skipped" && "line-through")}>{q.line}</span>
-          {q.status !== "proposed" && <StatusPill status={q.status} />}
-        </div>
-      ))}
-    </div>
-  );
-}

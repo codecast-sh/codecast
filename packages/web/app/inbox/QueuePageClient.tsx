@@ -21,7 +21,7 @@ import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { ConversationSharePopover } from "../../components/ConversationSharePopover";
-import { SessionErrorBanner, SessionResumeBanner, sessionLooksAbandoned } from "../../components/SessionErrorBanner";
+import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { EmptyState } from "../../components/EmptyState";
 import { useFirstRun } from "../../lib/firstRun";
@@ -36,14 +36,12 @@ import { InboxShortcuts, OrgTreeFeeder } from "../../components/inbox/InboxEffec
 import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
-import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
 import { requestSessionRestart } from "../../lib/sessionCommands";
-import { SeatHeadControls, SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
+import { SeatHeadControls, SeatHeadState, type SeatStall } from "../../components/org/scope/SeatHead";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
 // the inbox loads it only when a seat is opened. The dynamic import also keeps
 // the two modules out of a static cycle: the role page mounts InboxConversation.
-const ScopePageInner = lazy(() => import("../../components/org/scope/ScopePage").then((m) => ({ default: m.ScopePageInner })));
 
 /** What the role page asks of the pane when the session is a role's standing
  *  session (initiatives-projects-role-page.md I3). The pane stays the session
@@ -95,8 +93,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     setResumeState("idle");
     forceRestartAttemptedRef.current = false;
   }
-
-  const looksAbandoned = sessionLooksAbandoned(conversation, isIdle);
 
   useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
@@ -172,9 +168,8 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     : resumeState === "resuming" || resumeState === "sent" ? "Resuming…"
     : resumeState === "failed" ? "Resume timed out"
     : sessionError ? "Session error"
-    : looksAbandoned ? "Unresponsive"
     : null;
-  const stallAction = stallWord === "Resume timed out" ? "Retry" : stallWord === "Session error" || stallWord === "Unresponsive" ? "Resume" : null;
+  const stallAction = stallWord === "Resume timed out" ? "Retry" : stallWord === "Session error" ? "Resume" : null;
   const seatHeadState = useMemo(() => {
     if (!seat || headOpen) return undefined;
     const stall: SeatStall = stallWord ? { word: stallWord, ...(stallAction ? { action: { label: stallAction, onClick: handleManualResume } } : {}) } : null;
@@ -220,7 +215,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       {isOwnSession && chromeShown && (
         <SessionResumeBanner
           resumeState={resumeState}
-          looksAbandoned={looksAbandoned && !sessionError}
           onResume={handleManualResume}
         />
       )}
@@ -287,60 +281,24 @@ function SeatEarlier({ count, open, onToggle }: { count: number; open: boolean; 
   );
 }
 
-/** The pane's own props, handed through the role page to the conversation it
- *  mounts, plus the way out to the plain view. */
+/** The pane's own props as the role page (ScopePage) mounts them, plus its way out. */
 export type SeatSession = Omit<InboxConversationProps, "seat"> & { onSessionView: () => void };
 
 /**
- * What opening a session renders (initiatives-projects-role-page.md I3). A
- * role's standing session is the role page: the conversation with the scope
- * beside it, in place, at the session's own address. Every way a session
- * opens (a card, the chart, a pill, the palette, a link) ends in this pane, so
- * the rule lives here once. A hand is a session and keeps the session page.
- *
- * "Session view" is a view, not a setting: it lasts until the person leaves
- * this session, and the next open is the role page again. A page that is not
- * this pane (the role's own route, an initiative) asks for it through
- * lib/sessionViewVisit; the ask is read at mount, on a session change, and
- * when it lands while this pane already shows the seat.
- *
- * The stage pane and the pop out window mount this too, with their own end
- * controls in `headerEnd`, so a seat is the role page there as well.
+ * What opening a session renders: the session. A role's standing session is
+ * a conversation like any other; the role's place in the company, its
+ * settings and its work live on the Org screen, never in front of the thread.
+ * The pop out window and the stage pane mount this too.
  */
 export function SessionPage(props: InboxConversationProps) {
-  const { sessionId, headerEnd } = props;
   const roleId = useInboxStore((s) => {
-    const row = s.sessions[sessionId];
+    const row = s.sessions[props.sessionId];
     return row ? standingRoleIdOf(row) : null;
   });
-  // The role page paints from the org tree. A seat whose role the tree does
-  // not hold (another workspace's, or a cold cache still filling) stays a
-  // plain session rather than a page that says it cannot find the role.
-  const roleKnown = useInboxStore((s) => !!roleId && !!s.orgTree?.roles.some((r) => r._id === roleId));
-  const ask = useSessionViewAsk(sessionId);
-  const [visit, setVisit] = useState(() => ({ sessionId, plain: ask != null, ask }));
-  // A new session, or a new ask for the one on screen: this visit's answer.
-  if (visit.sessionId !== sessionId || (ask != null && ask !== visit.ask)) setVisit({ sessionId, plain: ask != null, ask });
-  useWatchEffect(() => { if (ask != null) settleSessionViewAsk(sessionId); }, [ask, sessionId]);
-  const plain = visit.sessionId === sessionId && visit.plain;
-  const setPlain = useCallback((next: boolean) => setVisit((v) => ({ ...v, sessionId, plain: next })), [sessionId]);
-  const onSessionView = useCallback(() => setPlain(true), [setPlain]);
-  const plainHeaderEnd = useMemo(
-    () => (roleId && roleKnown ? <><RolePageControl onRolePage={() => setPlain(false)} />{headerEnd}</> : headerEnd),
-    [roleId, roleKnown, setPlain, headerEnd],
-  );
-
-  if (roleId && roleKnown && !plain) {
-    return (
-      <Suspense fallback={<ConversationPlaceholder id={sessionId} />}>
-        <ScopePageInner id={roleId} session={{ ...props, onSessionView }} />
-      </Suspense>
-    );
-  }
   return (
     <>
       {roleId && <OrgTreeFeeder />}
-      <InboxConversation {...props} headerEnd={plainHeaderEnd} />
+      <InboxConversation {...props} />
     </>
   );
 }

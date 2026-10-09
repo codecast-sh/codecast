@@ -42,11 +42,12 @@ function ConnectedPreview({ entry, redo, close }: { entry: OrgLogEntry; redo: bo
   return <OrgUndoPreviewCard entry={entry} redo={redo} preview={error ? null : preview} onConfirm={confirm} onCancel={close} />;
 }
 
-export function OrgHistory({ roleId, limit, onMore }: { roleId?: string; limit?: number; onMore?: () => void }) {
+export function OrgHistory({ roleId, projectId, limit, onMore }: { roleId?: string; projectId?: string; limit?: number; onMore?: () => void }) {
   const now = useCoarseNow(60_000);
   const { ready, missing, error } = useSyncOrgLog({ role: roleId ?? null });
   const all = useWorkspaceCollection<OrgLogEntry>("orgLog", entrySig);
-  const entries = useMemo(() => roleId ? all.filter((e) => e.role_ids.includes(roleId)) : all, [all, roleId]);
+  // A project's history: the changes whose subject is the project.
+  const entries = useMemo(() => all.filter((e) => (!roleId || e.role_ids.includes(roleId)) && (!projectId || (e.lead?.subject.type === "project" && e.lead.subject.id === projectId))), [all, roleId, projectId]);
   const state: OrgHistoryState = missing ? "missing" : error ? "error" : ready ? "ready" : "loading";
   return (
     <OrgHistoryView
@@ -55,42 +56,9 @@ export function OrgHistory({ roleId, limit, onMore }: { roleId?: string; limit?:
       state={state}
       limit={limit}
       onMore={onMore}
-      empty={roleId ? "Nothing has changed this role yet. Every change to it shows here, with who made it and a way to take it back." : undefined}
+      empty={roleId ? "Nothing has changed this role yet. Every change to it shows here, with who made it and a way to take it back." : projectId ? "No org change has named this project yet. Its lead, its goals and its status show here when they change." : undefined}
       renderRows={(e) => <ConnectedRows entry={e} />}
       renderPreview={(e, redo, close) => <ConnectedPreview entry={e} redo={redo} close={close} />}
-    />
-  );
-}
-
-/** The DEV preview's record (`?preview=1`): the fixture, with undo and redo
- *  kept in local state so the whole loop can be walked with no server. */
-export function OrgHistoryPreview({ roleId, limit, onMore }: { roleId?: string; limit?: number; onMore?: () => void }) {
-  const now = useCoarseNow(60_000);
-  const fixture = useMemo(() => orgLogFixture(Date.now()), []);
-  const [undone, setUndone] = useState<Record<string, OrgLogEntry["undone_by"] | null>>({});
-  const entries = useMemo(() => fixture.entries
-    .filter((e) => !roleId || e.role_ids.includes(roleId))
-    .map((e) => e._id in undone ? { ...e, undone_by: undone[e._id] ?? undefined } : e), [fixture, undone, roleId]);
-  return (
-    <OrgHistoryView
-      entries={entries}
-      now={now}
-      limit={limit}
-      onMore={onMore}
-      renderRows={(e) => <OrgLogRows entry={e} rows={fixture.rows[e._id]} />}
-      renderPreview={(e, redo, close) => (
-        <OrgUndoPreviewCard
-          entry={e}
-          redo={redo}
-          preview={fixture.previews[e._id] ?? null}
-          onCancel={close}
-          onConfirm={(withBatches) => {
-            const mark = redo ? null : { batch: "preview", user_id: e.actor.user_id, name: e.actor.name, at: Date.now() };
-            setUndone((cur) => ({ ...cur, ...Object.fromEntries([e._id, ...withBatches].map((b) => [b, mark])) }));
-            close();
-          }}
-        />
-      )}
     />
   );
 }

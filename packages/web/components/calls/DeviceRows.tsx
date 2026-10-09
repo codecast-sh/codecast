@@ -99,7 +99,7 @@ function DeviceSelect({ kind, devices, compact }: { kind: Kind; devices: MediaDe
   );
 }
 
-function DeviceOptions({ kind, devices }: { kind: Kind; devices: MediaDeviceInfo[] }) {
+export function DeviceOptions({ kind, devices }: { kind: Kind; devices: MediaDeviceInfo[] }) {
   return (
     <>
       {devices.map((d, i) => (

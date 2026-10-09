@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
-const WHAT_IT_DOES = "The line listens to a project's sources, like its error tracker and its evals, and groups what they file into causes. For each one it proves the problem, builds and checks a fix, and brings you one card to ship, revise or drop. After a ship it watches for the problem to come back.";
+const WHAT_IT_DOES = "The line listens to a project's sources, like its error tracker and its evals, and groups what they report into problems. For each one it proves the problem, builds and checks a fix, and brings it to you to ship, revise or drop. After a ship it watches for the problem to come back.";
 
 /** `title` names the project ("Set up the line for <title>"); `children`
  *  replaces the single action, for a list of projects to start from. */

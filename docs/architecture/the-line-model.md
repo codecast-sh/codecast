@@ -66,7 +66,10 @@ Two kinds of context, used at two different moments.
 
 - **Goals** say what the project is trying to move (initiatives, metrics,
   charters). The ground step reads them to rank causes: which goal does this
-  threaten, how much.
+  threaten, how much. Every brief also offers the line's own goal, `line`:
+  the three numbers of LM8 and every station working. A cause that changes
+  the line itself serves that goal and no product goal (the-line-end-to-end.md
+  LE5).
 - **Expectations** say how the system should behave: what a good reply to a
   broker looks like, when an intro should go out, what a caller should see.
   A finder that judges behavior (an AgentWatch judge, a call grader) compares
@@ -117,7 +120,7 @@ have run) records none. Shapes and the parser: `shared/contracts/expectations.ts
 ## LM6. Changing the line
 
 The line's definition is its profile, its graph and its station prompts. It
-lives in the project's repo (`.codecast/line.toml` and `.codecast/line/`),
+lives in the project's repo (`.codecast/line.toml` and `.codecast/line/*`),
 versioned with the code, and is mirrored to the app so anyone can read it on
 the project's line map (line-map.md LX5). Editing a value on the map writes the
 change to the repo through the machine that published it, which checks it and
@@ -188,9 +191,9 @@ findings or the clusters that group them.
   directory (`~/.local/share/codecast/flowfactory/judge-evals`, hand-run) reads
   every `judge-defects.json` under the repo's `cast-line` run directories,
   fetches the logged judge call behind each finding (read-only), and adds each
-  as a miss moment to `moments.json`, once. The prove prompt does not ask for
-  `judge-defects.json` yet; that instruction is a prompt change and ships with
-  its own before and after evals (prompting.md P9).
+  as a miss moment to `moments.json`, once. The prove prompt (`line/prove.md`)
+  asks for `judge-defects.json` when it finds the findings were the judge's
+  own mistake.
 - **A judge needs the facts it is judging.** It cannot compare behavior with
   an expectation without the state of things at the moment it judges: what
   was delivered and what is still in flight, and the time. A finding that
@@ -219,4 +222,6 @@ store's signals, causes and runs over a window (`lineMetrics`):
 
 A window with nothing to count reports no share rather than zero. The board
 is healthy when the first falls, the second is high and the third holds; the
-number of open findings or clusters is not a goal.
+number of open findings or clusters is not a goal. The line map's headline says all three in words over the map's window
+(`lineMetricsWords.ts`), and they are what the line's own goal (`line`, LM5)
+is measured by.

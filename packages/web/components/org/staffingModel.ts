@@ -26,13 +26,8 @@ import {
 
 // ---------------------------------------------------------------- the head of people
 
-/** The head of people, when hired: a live role with the reserved handle. */
-export function findHeadOfPeople(tree: OrgTree | null): OrgRole | null {
-  return tree?.roles.find((r) => isHeadOfPeopleRole(r) && r.status !== "retired") ?? null;
-}
-
 /** Open proposals, newest first. */
-export function openProposals(rows: OrgProposalRow[]): OrgProposalRow[] {
+export function openProposals<P extends Pick<OrgProposalRow, "status" | "created_at">>(rows: readonly P[]): P[] {
   return rows.filter((p) => p.status === "open").sort((a, b) => b.created_at - a.created_at);
 }
 
@@ -402,67 +397,55 @@ export type AreaRow = { role: OrgRole; area: RoleArea | null; nodeId: string; st
 /** One row per role in tree order, each with its area as health read it.
  *  With no health yet (or a server older than S29) the row still stands: its
  *  status is read from the role row alone (paused, not started, or on
- *  track), so the list never paints empty over a populated chart. */
+ *  track), so the list never paints empty over a populated chart.
+ *  An area never reads "waiting on you" here: whether a role waits on you is
+ *  Waits on you's call alone (waitsOnYou.ts), from the live queue and
+ *  proposals, so a stale snapshot or a blocked pin cannot say otherwise. */
 export function areaRows(tree: OrgTree | null, health: OrgHealth | null): AreaRow[] {
   return rolesInTreeOrder(tree).map((role) => {
     const area = health?.roles.find((r) => r.role_id === role._id)?.area ?? null;
-    const status: AreaStatus = area?.status ?? (role.status === "paused" ? "paused" : !role.standing?.conversation_id ? "not_started" : role.standing.state_status === "blocked" ? "waiting_on_you" : "on_track");
+    const read: AreaStatus = area?.status ?? (role.status === "paused" ? "paused" : !role.standing?.conversation_id ? "not_started" : "on_track");
+    const status: AreaStatus = read === "waiting_on_you" ? "on_track" : read;
     return { role, area, nodeId: parentNodeId({ kind: "role", role_id: role._id }), status, statusWord: AREA_STATUS_WORDS[status], color: AREA_STATUS_COLOR[status] };
   });
 }
 
+/** @deprecated Kept only while company/NowBlock and nowModel import it
+ *  (wave 2). Waits on you (waitsOnYou.ts) is the one list of what waits on
+ *  you; nothing produces the "blocked" or "proposal" variants any more. */
 export type NeedsYouItem =
   | { kind: "decision"; key: string; role: OrgRole | null; item: QueueItem; canAnswerInPlace: boolean }
   | { kind: "blocked"; key: string; role: OrgRole; conversationId: string; line: string }
   | { kind: "proposal"; key: string; proposal: OrgProposalRow; remaining: number };
 
-/** Every conversation the org owns: each role's standing session and the
- *  sessions filed under it. */
-function orgConversationIds(tree: OrgTree | null): Map<string, OrgRole> {
-  const out = new Map<string, OrgRole>();
-  for (const r of tree?.roles ?? []) {
-    if (r.status === "retired") continue;
-    if (r.standing?.conversation_id) out.set(r.standing.conversation_id, r);
-    for (const s of r.sessions) out.set(s._id, r);
-  }
-  return out;
+/** Whether a proposal belongs to a workspace: a team's rows, or the personal
+ *  rows (no team). With no workspace known yet, every row does. The one
+ *  workspace rule for proposals, on the Org screen and in Waits on you. */
+export function inWorkspace(p: Pick<OrgProposalRow, "team_id">, ws: OrgWorkspaceRef | null | undefined): boolean {
+  return !ws || (ws.kind === "team" ? p.team_id === ws.id : !p.team_id);
 }
 
-/**
- * What a person must act on now (S29): decisions the org routed to them (a
- * lead's `cast decide` in its own thread, or one from a session under a role
- * that no role could answer), roles that declared themselves waiting on a
- * person, and proposals still open. A decision and a blocked pin from the
- * same thread are one ask. Oldest first inside each kind; decisions lead.
- */
-export function needsYou(tree: OrgTree | null, health: OrgHealth | null, queue: QueueItem[], proposals: OrgProposalRow[], shown: OrgProposalRow | null): NeedsYouItem[] {
-  const owners = orgConversationIds(tree);
-  const out: NeedsYouItem[] = [];
-  const asked = new Set<string>();
-  for (const item of [...queue].sort((a, b) => a.createdAt - b.createdAt)) {
-    if (item.heldByRole) continue;
-    const role = owners.get(item.conversationId);
-    if (!role) continue;
-    asked.add(item.conversationId);
-    const single = !item.kind || item.kind === "single";
-    out.push({ kind: "decision", key: item.key, role, item, canAnswerInPlace: item.source === "decide" && single && !!item.decisionId && item.options.length > 0 && item.options.length <= 4 });
-  }
-  for (const row of areaRows(tree, health)) {
-    const conv = row.role.standing?.conversation_id;
-    if (!conv || asked.has(conv)) continue;
-    const blocked = row.status === "waiting_on_you" || row.role.standing?.state_status === "blocked";
-    if (!blocked) continue;
-    const line = row.area?.status === "waiting_on_you" ? row.area.status_line.replace(/^Waiting on you:?\s*/, "") : row.role.standing?.state_line ?? "";
-    out.push({ kind: "blocked", key: `blocked:${row.role._id}`, role: row.role, conversationId: conv, line: line || "It raised something for you in its thread." });
-  }
-  for (const p of openProposals(proposals)) {
-    if (shown && p._id === shown._id) continue;
-    out.push({ kind: "proposal", key: `proposal:${p._id}`, proposal: p, remaining: proposalProgress(p).remaining });
-  }
-  return out;
+/** The open proposals of one workspace, newest first. Waits on you reads
+ *  proposals through this one rule. */
+export function workspaceOpenProposals<P extends Pick<OrgProposalRow, "status" | "created_at" | "team_id">>(rows: readonly P[], ws: OrgWorkspaceRef | null | undefined): P[] {
+  return openProposals(rows.filter((p) => inWorkspace(p, ws)));
 }
 
-/** A short label for a flag code, for badges. */
+/** @deprecated What a needs-you row opened (D7); nowModel reads it until wave 2. */
+export type NeedsYouTarget = { kind: "initiative" | "project" | "role"; ref: string };
+
+const CITED_OBJECT = /\b(in-\d+|pj-[a-z0-9]+)\b/gi;
+
+/** The object a decision is about: the first goal or project its words cite
+ *  that this workspace holds, else the role whose thread asked it. */
+export function decisionSubject(item: Pick<QueueItem, "question" | "contextMd">, role: Pick<OrgRole, "short_id"> | null, holds: (ref: string) => boolean): NeedsYouTarget | null {
+  for (const m of `${item.question}\n${item.contextMd ?? ""}`.matchAll(CITED_OBJECT)) {
+    const ref = m[1].toLowerCase();
+    if (holds(ref)) return { kind: ref.startsWith("in-") ? "initiative" : "project", ref };
+  }
+  return role ? { kind: "role", ref: role.short_id } : null;
+}
+
 /** Each finding in the reader's words (S17): what the review saw, not the
  *  code's name for it. The flag's own detail sentence follows it. */
 export const FLAG_LABEL: Record<HealthFlag["code"], string> = {
@@ -493,14 +476,6 @@ export function proposalParam(search: string | null | undefined): string | null 
   } catch {
     return null;
   }
-}
-
-/** The proposal a URL asked for, by short id, else the newest open one. A
- *  named proposal that is not among the rows is null, never another
- *  proposal: the link line (resolveProposalLink) says where it is instead. */
-export function pickProposal(rows: OrgProposalRow[], shortId: string | null): OrgProposalRow | null {
-  if (shortId) return rows.find((p) => p.short_id === shortId) ?? null;
-  return openProposals(rows)[0] ?? null;
 }
 
 // ---------------------------------------------------------------- tenure (S10)
@@ -563,40 +538,6 @@ export function sameWorkspace(a: OrgWorkspaceRef | null | undefined, b: OrgWorks
  */
 export function proposalListScope(teamId: string | undefined): (row: Pick<OrgProposalListRow, "team_id">) => boolean {
   return teamId ? (row) => row.team_id === teamId : (row) => !row.team_id;
-}
-
-export type ProposalLinkState =
-  /** No link, or the linked proposal is in the active workspace. */
-  | { kind: "open" }
-  /** The linked proposal was read and lives in another workspace. */
-  | { kind: "foreign"; shortId: string; row: OrgProposalRow; workspace: OrgWorkspaceRef }
-  /** The server answered and there is no such proposal the viewer can read. */
-  | { kind: "unreadable"; shortId: string }
-  /** The lookup has not answered yet. */
-  | { kind: "loading"; shortId: string };
-
-/**
- * A link carries op-N alone (the queue card, `cast org propose`, the summary
- * page), so it may name a proposal outside the active workspace. The list
- * feeder only fills the active workspace's rows; the get feeder fills the
- * linked one whatever its workspace, so a row that exists but sits elsewhere
- * is a foreign link, and a lookup that answered with nothing is unreadable.
- */
-export function resolveProposalLink(
-  shortId: string | null,
-  rows: OrgProposalRow[],
-  active: OrgWorkspaceRef | null,
-  lookup: { ready: boolean; missing: boolean },
-): ProposalLinkState {
-  if (!shortId) return { kind: "open" };
-  const row = rows.find((p) => p.short_id === shortId);
-  if (row) {
-    const ws = proposalWorkspace(row);
-    if (!active || !ws || sameWorkspace(ws, active)) return { kind: "open" };
-    return { kind: "foreign", shortId, row, workspace: ws };
-  }
-  if (lookup.ready && lookup.missing) return { kind: "unreadable", shortId };
-  return { kind: "loading", shortId };
 }
 
 /** The DEV preview paints fixtures only while `?preview=1` is in the live
