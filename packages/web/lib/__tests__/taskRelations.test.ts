@@ -4,9 +4,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
 import { addWaitDraft, removeBlockerEdge, removeBlocksEdge, removeWaitDraft, setBlockerEdge, setRelatedEdge } from "../../store/taskGraphDraft";
-import { applyRelationPick, blockerForms, blockerLines, foundHereOf, parseRelationQuery, relationItems, storeBlockerLines } from "../taskRelations";
+import { applyRelationPick, blockerForms, blockerLines, blocksOf, foundHereOf, lineStateLabel, parseRelationQuery, relatedOf, relationItems, relationQueryError, storeBlockerLines } from "../taskRelations";
 import { storeStatusOf } from "../taskBlockers";
-import { graphChange, waitTargetOf } from "@codecast/shared/tasks";
+import { graphChange, GRAPH_LINK_CAP, waitTargetOf } from "@codecast/shared/tasks";
 
 const WS = "team:t1";
 const NOW = Date.UTC(2026, 9, 8, 12);
@@ -18,7 +18,7 @@ const task = (n: number, over: Record<string, any> = {}) => ({
 const rows = (...ts: any[]) => Object.fromEntries(ts.map((t) => [t._id, t]));
 
 describe("blockerLines", () => {
-  test("lists every blocker: open, closed as met, looked up and gone as missing, unanswered as unknown, then waits", () => {
+  test("lists every blocker: what still holds first, then what holds nothing — met, missing, cleared waits", () => {
     const tasks = rows(task(2, { status: "in_progress" }), task(3, { status: "done" }));
     const t = task(1, {
       blocked_by: ["ct-2", "id3", "ct-404", "ct-9", "ct-10"],
@@ -28,12 +28,13 @@ describe("blockerLines", () => {
     const lines = blockerLines(t, storeStatusOf(tasks, t));
     expect(lines.map((l) => (l.kind === "task" ? `${l.ref}:${l.state}:${l.raws.join("+")}` : `${l.wait.id}:${l.wait.state}`))).toEqual([
       "ct-2:open:ct-2",
-      // An _id ref reads as its short id but is removed as stored.
+      "ct-10:unknown:ct-10",
+      // Below the fold: nothing here holds the task. An _id ref reads as its
+      // short id but is removed as stored.
       "ct-3:met:id3",
       "ct-404:missing:ct-404",
       // Not in the store: the list row's snapshot answers for it.
       "ct-9:met:ct-9",
-      "ct-10:unknown:ct-10",
       "w1:met",
     ]);
   });
@@ -49,6 +50,61 @@ describe("found here", () => {
   test("the store's tasks found during this one, in its workspace, oldest first", () => {
     const tasks = rows(task(1), task(5, { found_during: "ct-1" }), task(4, { found_during: "ct-1" }), task(6, { found_during: "ct-1", workspace: "user:x" }));
     expect(foundHereOf(task(1), tasks).map((t) => t.short_id)).toEqual(["ct-4", "ct-5"]);
+  });
+
+  test("a legacy row carrying no workspace key is personal to its owner, so its relations still read", () => {
+    const legacy = (n: number, over: Record<string, any> = {}) => task(n, { workspace: undefined, team_id: undefined, user_id: "u1", ...over });
+    // ct-7 is a TEAMMATE's legacy row, in the store because it is assigned to
+    // the viewer (which the server reads as a read grant). It is personal to
+    // its owner, so this row-relative list leaves it out, as the server's does
+    // (convex foundHereRows applies isSameWorkspace).
+    const tasks = rows(legacy(1), legacy(4, { found_during: "ct-1" }), legacy(7, { found_during: "ct-1", user_id: "u2" }), task(6, { found_during: "ct-1" }));
+    expect(foundHereOf(legacy(1), tasks).map((t) => t.short_id)).toEqual(["ct-4"]);
+  });
+});
+
+describe("the link mirrors", () => {
+  test("blocks lists what the dependent still names, keeps a ref no row answers for, and stops at the cap", () => {
+    const tasks = rows(
+      task(1, { blocks: ["ct-2", "id3", "ct-4", "ct-99"] }),
+      task(2, { blocked_by: ["ct-1"] }),
+      // Named by this task's _id, the form an older plan row stores.
+      task(3, { blocked_by: ["id1"] }),
+      // Its row has moved on: the mirror entry is stale.
+      task(4, { blocked_by: ["ct-7"] }),
+    );
+    expect(blocksOf(tasks.id1, tasks)).toEqual(["ct-2", "id3", "ct-99"]);
+    const many = task(1, { blocks: Array.from({ length: 60 }, (_, i) => `ct-${i + 100}`) });
+    expect(blocksOf(many, rows(many)).length).toBe(GRAPH_LINK_CAP);
+  });
+
+  test("a dependent in another workspace is dropped, as the server's reader drops it", () => {
+    // taskLinksOf's readableLink refuses a link outside the task's workspace,
+    // so an entry the page kept would be one `cast task show` never lists.
+    const tasks = rows(task(1, { blocks: ["ct-2"] }), task(2, { workspace: "user:x", blocked_by: ["ct-1"] }));
+    expect(blocksOf(tasks.id1, tasks)).toEqual([]);
+  });
+
+  test("related stops at the same cap", () => {
+    expect(relatedOf(task(1)).length).toBe(0);
+    expect(relatedOf(task(1, { related: Array.from({ length: 60 }, (_, i) => `ct-${i + 100}`) })).length).toBe(GRAPH_LINK_CAP);
+  });
+});
+
+describe("a relations line's state in words", () => {
+  test("every state names what it is about, so a glyph-only line still says it", () => {
+    expect(["waiting", "met", "failed"].map((st) => lineStateLabel(st as any, "blocker")))
+      .toEqual(["still waiting on this blocker", "blocker met", "blocker failed, needs a re-plan"]);
+    expect(["waiting", "met", "failed"].map((st) => lineStateLabel(st as any, "wait")))
+      .toEqual(["still waiting on this wait", "wait met", "wait failed, needs a re-plan"]);
+  });
+
+  // Under a "Blocked by (cleared)" heading an entry that never settled is
+  // history, the word `cast task show` brackets for the same entries, so the
+  // glyph cannot announce a live hold there.
+  test("history says what never settled, in each subject's own terms", () => {
+    expect(lineStateLabel("history", "wait")).toBe("wait left unsettled (history)");
+    expect(lineStateLabel("history", "blocker")).toBe("blocker still open (history)");
   });
 });
 
@@ -66,8 +122,22 @@ describe("the palette", () => {
     expect(parseRelationQuery("  ", "blocker", NOW, TZ)).toBeNull();
     // Text with no ref's shape is flagged, so the hint lists the forms instead of the grammar error.
     expect(parseRelationQuery("tomorrow 9am", "blocker", NOW, TZ)).toMatchObject({ unrecognized: true });
-    expect(parseRelationQuery("#42", "related", NOW, TZ)).toMatchObject({ unrecognized: true });
+    // A ref of the wrong kind for the mode parsed cleanly, so the hint shows
+    // the sentence that says which kind the mode takes.
+    expect(parseRelationQuery("#42", "related", NOW, TZ)).not.toHaveProperty("unrecognized");
     expect(parseRelationQuery("42", "blocker", NOW, TZ)).not.toHaveProperty("unrecognized");
+    // A date whose shape is right and whose value is no moment: the palette
+    // shows what is impossible about it, not the list of forms.
+    expect(parseRelationQuery("2026-02-30", "blocker", NOW, TZ)).toEqual({ error: '"2026-02-30" is not a real moment: check its day of the month' });
+  });
+
+  test("the hint's error is set only once nothing matched and the query reads as no ref", () => {
+    // A title match is never an error, whatever the text looks like.
+    expect(relationQueryError("42", "blocker", true)).toBeNull();
+    expect(relationQueryError("42", "blocker", false)).toMatchObject({ error: expect.stringContaining("ambiguous") });
+    // A readable ref is no error either.
+    expect(relationQueryError("ct-12", "blocker", false)).toBeNull();
+    expect(relationQueryError("", "blocker", false)).toBeNull();
   });
 
   test("a pasted wait comes first, worded as the wait", () => {
@@ -83,6 +153,20 @@ describe("the palette", () => {
     expect(all.find((i) => i.key === "task:ct-3")!.hint).toBe("would close a loop");
     expect(relationItems("blocker", "schema", [tasks.id1], tasks, NOW, TZ).map((i) => i.key)).toEqual(["task:ct-4"]);
     expect(relationItems("related", "", [tasks.id1], tasks, NOW, TZ).map((i) => i.key)).toEqual(["task:ct-4", "task:ct-3", "task:ct-2"]);
+  });
+
+  // A closed blocker holds nothing (TG1/TG4), so the dependency modes offer
+  // only live work. A see-also link and a `found_during` correction normally
+  // point AT finished work (TG5), and `cast task relate` takes one, so a typed
+  // search here reaches it too — while the empty field still lists live work.
+  test("a typed search reaches a closed task for related and found_during, never for the dependency modes", () => {
+    const closed = rows(task(1), task(4, { title: "Ship the schema" }), task(9, { title: "Schema groundwork", status: "done" }), task(8, { title: "Schema spike", status: "dropped" }));
+    expect(relationItems("related", "schema", [closed.id1], closed, NOW, TZ).map((i) => i.key)).toEqual(["task:ct-9", "task:ct-8", "task:ct-4"]);
+    expect(relationItems("found_during", "schema", [closed.id1], closed, NOW, TZ).map((i) => i.key)).toEqual(["task:ct-9", "task:ct-8", "task:ct-4"]);
+    expect(relationItems("blocker", "schema", [closed.id1], closed, NOW, TZ).map((i) => i.key)).toEqual(["task:ct-4"]);
+    expect(relationItems("blocks", "schema", [closed.id1], closed, NOW, TZ).map((i) => i.key)).toEqual(["task:ct-4"]);
+    // The empty field is still a list of live work, in every mode.
+    expect(relationItems("related", "", [closed.id1], closed, NOW, TZ).map((i) => i.key)).toEqual(["task:ct-4"]);
   });
 
   test("offers active work only, the target's plan siblings then its project's first", () => {
@@ -104,6 +188,19 @@ describe("the palette", () => {
     // A ref the store does not hold is the server's to check, and says so.
     expect(relationItems("blocker", "ct-99999", [tasks.id1], tasks, NOW, TZ)[0]).toMatchObject({ key: "task:ct-99999", hint: "not loaded: the server will check it" });
     expect(relationItems("blocker", "ct-4", [tasks.id1], tasks, NOW, TZ)[0]!.hint).toBeUndefined();
+  });
+
+  test("the Blocks add searches the other way: who could wait on this one", () => {
+    // ct-3 already waits on ct-1 (the dependent's own row says so, with no
+    // mirror on ct-1), so it is not offered again; ct-2, which ct-1 waits on,
+    // would close a loop the other way round.
+    const all = relationItems("blocks", "", [tasks.id1], tasks, NOW, TZ);
+    expect(all.map((i) => i.key)).toEqual(["task:ct-4", "task:ct-2"]);
+    expect(all.find((i) => i.key === "task:ct-2")!.hint).toBe("would close a loop");
+    expect(relationItems("blocks", "ct-3", [tasks.id1], tasks, NOW, TZ)[0]).toMatchObject({ key: "task:ct-3", hint: "already waiting on this" });
+    expect(relationItems("blocks", "ct-1", [tasks.id1], tasks, NOW, TZ)[0]).toMatchObject({ hint: "this task" });
+    // It takes a task and nothing else: a wait is a blocker of this task.
+    expect(parseRelationQuery("2h", "blocks", NOW, TZ)).toEqual({ error: "A task that waits on this one is a task (ct-12), not 2h" });
   });
 
   test("the forms offer a bare #42 only with a project, and a date still ahead", () => {
@@ -137,10 +234,20 @@ describe("a palette pick", () => {
     expect(calls[1]).toBe('relateTasks:["ct-1","ct-3"]');
     expect(calls[2]).toMatch(/^addWait:\["ct-1",\{"id":"w[0-9a-z]+","target":\{"kind":"decision","decision":"sd-4"\}\}\]$/);
     expect(calls).toHaveLength(3);
+    // The Blocks add writes the one edge from the other side.
+    useInboxStore.setState({ tasks: rows(task(1), task(3, { blocked_by: ["ct-1"] }), task(4)) } as any);
+    const t1b = useInboxStore.getState().tasks.id1 as any;
+    expect(applyRelationPick("blocks", [t1b], { kind: "task", ref: "ct-4" })).toMatchObject({ ok: true, message: "ct-4 waits on ct-1" });
+    expect(calls.at(-1)).toBe('addBlocker:["ct-4","ct-1"]');
+    // ct-3 already waits on ct-1, and ct-1 waiting on ct-3 is the loop.
+    expect(applyRelationPick("blocks", [t1b], { kind: "task", ref: "ct-3" })).toEqual({ ok: false, message: "ct-3 already waits on ct-1" });
+    expect(applyRelationPick("blocks", [useInboxStore.getState().tasks.id3 as any], { kind: "task", ref: "ct-1" })).toMatchObject({ ok: false, message: expect.stringContaining("loop") });
+    expect(calls).toHaveLength(4);
+
     // Already there: refused, nothing sent.
     useInboxStore.setState({ tasks: rows(task(1, { blocked_by: ["ct-4"] }), task(4)) } as any);
     expect(applyRelationPick("blocker", [useInboxStore.getState().tasks.id1 as any], { kind: "task", ref: "ct-4" })).toEqual({ ok: false, message: "ct-1 already waits on ct-4" });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     // A decision already answered is met at once, and the pick says so.
     useInboxStore.setState({ addWait: () => Promise.resolve({ met: true, wait: { note: "already answered: yes" } }) } as any);
     const met = applyRelationPick("blocker", [useInboxStore.getState().tasks.id1 as any], { kind: "wait", target: { kind: "decision", decision: "sd-5" } });
@@ -237,8 +344,9 @@ describe("draft writes", () => {
 describe("the timeline's graph rows", () => {
   test("blockers, links and waits read as what happened", () => {
     expect(graphChange({ field: "blocked_by", old_value: "ct-1", new_value: "ct-1, ct-2" })).toEqual({ tone: "blocked", clauses: [{ verb: "made it wait on", refs: ["ct-2"] }] });
-    expect(graphChange({ field: "blocked_by", old_value: "ct-1, ct-2", new_value: "ct-2" })).toEqual({ tone: "met", clauses: [{ verb: "removed blocker", refs: ["ct-1"] }] });
-    expect(graphChange({ field: "related", old_value: "", new_value: "ct-3" })).toEqual({ tone: "link", clauses: [{ verb: "marked it related to", refs: ["ct-3"] }] });
+    // A removal is withdrawn, not met: green beside "removed blocker ct-1" would read as "ct-1 finished".
+    expect(graphChange({ field: "blocked_by", old_value: "ct-1, ct-2", new_value: "ct-2" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "removed blocker", refs: ["ct-1"] }] });
+    expect(graphChange({ field: "related", old_value: "", new_value: "ct-3" })).toEqual({ tone: "link", clauses: [{ verb: "linked it to", refs: ["ct-3"] }] });
     expect(graphChange({ field: "found_during", old_value: "", new_value: "ct-12" })!.clauses[0]).toEqual({ verb: "found it while working on", refs: ["ct-12"] });
     expect(graphChange({ field: "superseded_by", old_value: "", new_value: "ct-9" })!.clauses[0]).toEqual({ verb: "superseded it with", refs: ["ct-9"] });
     expect(graphChange({ field: "waits", old_value: "", new_value: "Waiting on PR #42" })).toEqual({ tone: "blocked", clauses: [{ verb: "made it wait", text: "on PR #42" }] });
@@ -246,8 +354,8 @@ describe("the timeline's graph rows", () => {
     expect(graphChange({ field: "waits", old_value: "Waiting on PR #42", new_value: "PR #42 merged" })!.tone).toBe("met");
     expect(graphChange({ field: "waits", old_value: "Waiting on PR #42", new_value: "Wait on PR #42 failed: closed without merging" })!.tone).toBe("failed");
     expect(graphChange({ field: "waits", old_value: "sd-4 answered", new_value: "Waiting on sd-4" })!.clauses[0]).toEqual({ verb: "reopened the wait", text: "on sd-4" });
-    expect(graphChange({ field: "waits", old_value: "Waiting on sd-4", new_value: "" })!.clauses[0]).toEqual({ verb: "stopped waiting", text: "on sd-4" });
-    expect(graphChange({ field: "waits", old_value: "PR #42 merged", new_value: "" })!.clauses[0]).toEqual({ verb: "removed the wait:", text: "PR #42 merged" });
+    expect(graphChange({ field: "waits", old_value: "Waiting on sd-4", new_value: "" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "stopped waiting", text: "on sd-4" }] });
+    expect(graphChange({ field: "waits", old_value: "PR #42 merged", new_value: "" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "removed the wait:", text: "PR #42 merged" }] });
     expect(graphChange({ field: "status", old_value: "open", new_value: "done" })).toBeNull();
   });
 });

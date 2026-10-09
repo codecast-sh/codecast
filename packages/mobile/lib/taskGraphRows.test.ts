@@ -13,17 +13,23 @@ const wait = (over: Partial<TaskWait>): TaskWait =>
   ({ id: 'w1', kind: 'pr_merged', repository: 'codecast-sh/codecast', pr_number: 42, state: 'waiting', created_at: 0, ...over }) as TaskWait;
 
 describe('taskGraphView', () => {
-  it('lists task blockers then waits, cleared ones kept and marked, with titles from the held rows', () => {
+  it('lists what still holds the task, then the cleared history, with titles from the held rows', () => {
     const met = wait({ id: 'w2', kind: 'decision', decision: 'sd-4', state: 'met', note: 'answered: Ship it' } as any);
     const view = taskGraphView({ blocked_by: ['ct-1', 'ct-3', 'ct-77'], waits: [wait({}), met] }, tasks);
     expect(view.unblocked).toBe(false);
+    // The shared reading order (`blockerBand`), the same one the web's row and
+    // `cast task show` print: the screen answers "why is this not moving", so
+    // the cleared entries sit below what still holds rather than between them.
     expect(view.blockedBy).toEqual([
-      { key: 'task:ct-1', kind: 'task', ref: 'ct-1', status: 'done', title: 'Design the schema', cleared: true },
       { key: 'task:ct-3', kind: 'task', ref: 'ct-3', status: 'open', title: 'Build the API', cleared: false },
       // The phone does not hold ct-77, so its state is unknown, never cleared.
       { key: 'task:ct-77', kind: 'task', ref: 'ct-77', status: 'unknown', stateLabel: 'status unknown', title: undefined, cleared: false },
-      { key: 'wait:w1', kind: 'pr_merged', label: 'PR #42 merges', state: 'waiting', word: 'to merge', cleared: false },
-      { key: 'wait:w2', kind: 'decision', label: 'sd-4 answered', state: 'met', word: 'answered: Ship it', cleared: true },
+      // The line is the subject and the word is the predicate, as the task
+      // page splits them between its pill and the word beside it: one wait
+      // never reads "sd-4 answered … to be answered".
+      { key: 'wait:w1', kind: 'pr_merged', label: 'PR codecast-sh/codecast#42', state: 'waiting', word: 'to merge', cleared: false },
+      { key: 'task:ct-1', kind: 'task', ref: 'ct-1', status: 'done', title: 'Design the schema', cleared: true },
+      { key: 'wait:w2', kind: 'decision', label: 'sd-4', state: 'met', word: 'answered: Ship it', cleared: true },
     ]);
   });
 
@@ -37,6 +43,12 @@ describe('taskGraphView', () => {
     const view = taskGraphView({ blocked_by: ['ct-500'], graph_status: [{ ref: 'ct-500', short_id: 'ct-500', status: 'done' }] }, tasks);
     expect(view.blockedBy[0]).toMatchObject({ ref: 'ct-500', status: 'done', cleared: true });
     expect(view.unblocked).toBe(true);
+  });
+
+  it('says nothing for a closed task whose blockers cleared, as on the web', () => {
+    const view = taskGraphView({ status: 'done', blocked_by: ['ct-1'] }, tasks);
+    expect(view.blockedBy[0]).toMatchObject({ ref: 'ct-1', cleared: true });
+    expect(view.unblocked).toBe(false);
   });
 
   it('a wait kind newer than this bundle reads by its name', () => {
@@ -58,10 +70,20 @@ describe('taskGraphView', () => {
     expect(bare).toMatchObject({ word: 'closed without merging' });
   });
 
+  it('names a PR in full, having no checkout to read a bare #42 in', () => {
+    const other = wait({ kind: 'pr_checks_green', repository: 'codecast-sh/issue-sync-test', pr_number: 6 });
+    expect(taskGraphView({ waits: [other] }, tasks).blockedBy[0]).toMatchObject({ label: 'PR codecast-sh/issue-sync-test#6', word: 'checks to go green' });
+  });
+
   it('words a wait the way the web does: a countdown while pending, nothing once the task closed', () => {
     const now = Date.parse('2026-10-08T12:00:00Z');
     const timed = wait({ kind: 'time', at: now + 2 * 3600_000 } as any);
-    expect(taskGraphView({ waits: [timed] }, tasks, now).blockedBy[0]).toMatchObject({ word: 'in 2h' });
+    // A time wait's subject is the moment itself, in the phone's own zone, as
+    // the page's clock pill shows it — never the "until …" clause, whose
+    // predicate the word already carries.
+    const row = taskGraphView({ waits: [timed] }, tasks, now).blockedBy[0];
+    expect(row).toMatchObject({ word: 'in 2h' });
+    expect((row as { label: string }).label).toMatch(/^\d{2}:\d{2}$/);
     expect(taskGraphView({ status: 'done', waits: [wait({})] }, tasks, now).blockedBy[0]).toMatchObject({ word: '' });
   });
 
@@ -69,6 +91,15 @@ describe('taskGraphView', () => {
     const view = taskGraphView({ found_during: 'ct-9', superseded_by: 'ct-50' }, tasks);
     expect(view.foundDuring).toEqual({ ref: 'ct-9', title: 'Ship it' });
     expect(view.supersededBy).toEqual({ ref: 'ct-50', title: undefined });
+  });
+
+  it('a ref the workspace rule refuses is nameless as well as unknown', () => {
+    const outside = { b7: { _id: 'b7', short_id: 'ct-7', status: 'done', title: 'Someone else task', workspace: 'user:u2' } };
+    const view = taskGraphView({ workspace: 'team:t1', blocked_by: ['ct-7'], found_during: 'ct-7' }, outside);
+    // The status is unknown, so the title must be too: one line never mixes an
+    // answer the graph refuses with one it gives.
+    expect(view.blockedBy[0]).toEqual({ key: 'task:ct-7', kind: 'task', ref: 'ct-7', status: 'unknown', stateLabel: 'status unknown', title: undefined, cleared: false });
+    expect(view.foundDuring).toEqual({ ref: 'ct-7', title: undefined });
   });
 
   it('a task with no graph has nothing to show', () => {

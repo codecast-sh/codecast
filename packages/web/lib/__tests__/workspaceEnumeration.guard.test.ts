@@ -72,7 +72,7 @@ describe("workspace enumeration chokepoint", () => {
           ENUM.lastIndex = 0;
           if (!ENUM.test(line)) continue;
           // Wrapped in the shared predicate on the same line is still correct.
-          if (/filterToWorkspace|filterByWorkspace|inActiveWorkspace|inWorkspace/.test(line)) continue;
+          if (/filterToWorkspace|filterByWorkspace|filterSameWorkspace|inActiveWorkspace|inWorkspace|sameWorkspaceAs/.test(line)) continue;
           offenders.push(`${rel}: ${line.trim().slice(0, 100)}`);
         }
       }

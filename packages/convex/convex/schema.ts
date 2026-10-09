@@ -4364,6 +4364,10 @@ export default defineSchema({
       // The last blocker of a task assigned to the recipient cleared and no
       // session owns it (taskWaits.onUnblocked, task-graph.md TG2).
       v.literal("task_unblocked"),
+      // The other end of that path: a wait on the task can no longer clear,
+      // so it keeps blocking until somebody re-plans the task
+      // (taskWaits.onWaitFailed, task-graph.md TG2).
+      v.literal("task_blocked"),
       // Someone outside a decision's people answered or dismissed it for
       // them (sessionDecisions.noticeAnsweredForPeople).
       v.literal("decision_answered_for_you"),
@@ -4670,9 +4674,13 @@ export default defineSchema({
     task_id: v.optional(v.id("tasks")),
     station: v.optional(v.string()),
     // Tasks with a wait on this decision (task-graph.md TG2), so answering,
-    // dismissing or reopening it finds them. Added by taskWaits.writeWaits,
-    // never pruned (a reopen must find its met waits again):
-    // each task is re-read and only its waits on this decision move.
+    // dismissing or reopening it finds them. Added by taskWaits.writeWaits;
+    // a MET wait's task stays listed, because a reopen must find its met waits
+    // again. taskWaits.settleDecision prunes only an id that can never settle
+    // or reopen again — a task that is gone, or one holding no wait naming
+    // this decision at all — so each resolution reads the tasks still bound to
+    // it rather than every task that ever waited. Each task is re-read and
+    // only its waits on this decision move.
     waiting_task_ids: v.optional(v.array(v.id("tasks"))),
     stack_id: v.optional(v.id("decision_stacks")),
     // When it joined its stack; the auto default deadline counts from here.

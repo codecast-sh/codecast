@@ -12,6 +12,7 @@ import {
   blockersHoldingBack,
   dependencyLoopChecker,
   frontierOrder,
+  GRAPH_LINK_CAP,
   isTerminalTaskStatus,
   parentStatusLookup,
   parseBlockerRef,
@@ -85,10 +86,6 @@ export async function graphOutside(ctx: ReadCtx, page: Doc<"tasks">[]): Promise<
   }
   return await readInWorkspace(ctx, referrers);
 }
-
-/** How many `blocks` and how many `related` tasks one task page or `cast task
- *  show` reads. Its blockers are read whole: readiness needs every one. */
-export const GRAPH_LINK_CAP = 50;
 
 /**
  * The tasks one task's graph names (TG5, TG12): its blockers, what it
@@ -235,7 +232,8 @@ export async function orderFrontier<T extends Doc<"tasks">>(ctx: ReadCtx, tasks:
 // ---------------------------------------------------------------------------
 
 /**
- * The refs of a blocked_by or blocks list, sorted by what they name. A tasks
+ * The refs of a blocked_by or blocks list, each routed by what it names: this
+ * partitions them, it does not order them. A tasks
  * `_id` (a plan's older rows name blockers that way) stays as is; any other
  * task ref becomes its canonical short id (ct-012 is ct-12), deduped. This
  * matters because a stored ref that names no task reads as missing, which
@@ -243,7 +241,7 @@ export async function orderFrontier<T extends Doc<"tasks">>(ctx: ReadCtx, tasks:
  * `waits` holds the wait-shaped refs (#42, sd-4, 2h), `refused` the
  * grammar's error for each ref that is neither.
  */
-export function sortGraphRefs(ctx: ReadCtx, refs: readonly string[]): { tasks: string[]; waits: string[]; refused: string[] } {
+export function splitGraphRefs(ctx: ReadCtx, refs: readonly string[]): { tasks: string[]; waits: string[]; refused: string[] } {
   const tasks = new Set<string>();
   const waits: string[] = [];
   const refused: string[] = [];
@@ -262,7 +260,7 @@ export function sortGraphRefs(ctx: ReadCtx, refs: readonly string[]): { tasks: s
 }
 
 /**
- * The blocked_by and blocks a create or update stores (sortGraphRefs), for
+ * The blocked_by and blocks a create or update stores (splitGraphRefs), for
  * the fields `args` names. A create passes `waits`: a wait-shaped blocked_by
  * ref joins its waits (addWaitsAtCreate), as an older CLI still sends one.
  * Any other ref that is not a task is refused with the grammar's error.
@@ -275,7 +273,7 @@ export function storedGraphRefs(
   const out: { blocked_by?: string[]; blocks?: string[]; waits?: string[] } = {};
   for (const field of ["blocked_by", "blocks"] as const) {
     if (!args[field]) continue;
-    const { tasks, waits, refused } = sortGraphRefs(ctx, args[field]);
+    const { tasks, waits, refused } = splitGraphRefs(ctx, args[field]);
     if (refused.length) throw new Error(refused[0]);
     if (waits.length && (field === "blocks" || !opts.waits)) {
       throw new Error(field === "blocks"
@@ -293,6 +291,11 @@ export function storedGraphRefs(
  * and stamp updated_at. A blocked_by change is the task's own history (TG11);
  * blocks only mirrors other rows' blocked_by and records none. `task` is the
  * row as read before the write; a `next` it already holds writes nothing.
+ *
+ * The one exception the spec sanctions (TG11) is `tasks.update`, which
+ * overwrites both arrays inside the single bag it patches and records their
+ * history itself (its `trackFields`). A step added here is missed by
+ * `cast task update --blocked-by`/`--blocks` unless it is added there too.
  */
 export async function writeEdges(
   ctx: Pick<MutationCtx, "db">,
@@ -303,9 +306,80 @@ export async function writeEdges(
   now = Date.now(),
 ): Promise<void> {
   const prev = task[field] ?? [];
-  if (prev.length === next.length && prev.every((r, i) => r === next[i])) return;
+  if (sameRefs(prev, next)) return;
   await ctx.db.patch(task._id, { [field]: next, updated_at: now });
   if (field === "blocked_by") await recordTaskChange(ctx, task._id, by, [["blocked_by", prev, next]], now);
+}
+
+const sameRefs = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((r, i) => r === b[i]);
+
+/** A task as a mirror entry may name it: by its short id, or by its `_id`,
+ *  which a plan's older rows use. Both forms are the same entry (TG4). */
+export type MirrorRef = { short_id: string; _id?: unknown };
+
+/** The forms a stored ref may name `t` by. Every test of "does this list name
+ *  that task" reads this, so the two forms are never compared in two ways. */
+export const taskRefForms = (t: MirrorRef): Set<string> => new Set([t.short_id, ...(t._id ? [String(t._id)] : [])]);
+
+/**
+ * TG4's mirror rule, in one place: what a `blocks`/`blocked_by` mirror holds
+ * once the tasks `edit` names are added to it or taken out. A task the mirror
+ * names by either form is ONE entry, so an add that either form already names
+ * changes nothing, and a remove takes every form of it. An add is stored by
+ * short id. `remove` also takes a bare ref, for a caller dropping an entry it
+ * read off the mirror itself and never resolved to a task.
+ *
+ * It returns the next list rather than writing it: the write is `writeEdges`',
+ * which writes nothing when the row already stands as this edit leaves it. One
+ * home because the rule had three — a dedupe the next edge case has to be
+ * fixed in one place, not found in three.
+ */
+export function mirrorNext(
+  prior: readonly string[],
+  edit: { add: readonly MirrorRef[] } | { remove: readonly (MirrorRef | string)[] },
+): string[] {
+  if ("add" in edit) {
+    const next = [...prior];
+    for (const t of edit.add) {
+      const forms = taskRefForms(t);
+      if (!next.some((r) => forms.has(r))) next.push(t.short_id);
+    }
+    return next;
+  }
+  const named = new Set(edit.remove.flatMap((r) => (typeof r === "string" ? [r] : [...taskRefForms(r)])));
+  return prior.filter((r) => !named.has(r));
+}
+
+/** The link fields and what each one holds, for `writeLink`. */
+type LinkFields = { related: string[]; found_during: string | undefined; superseded_by: string | undefined };
+
+/**
+ * The one writer of a task's links that do not block (TG5): set `related`, or
+ * set or clear `found_during` or `superseded_by`, stamp updated_at and record
+ * the change (TG11). `task` is the row as read before the write; a `next` it
+ * already holds writes nothing, so a caller passes what it wants stored
+ * rather than checking first.
+ *
+ * One exception, as for `writeEdges`: `tasks.update` sets `found_during` in
+ * the single bag it patches and records that history itself, so a step added
+ * here is missed by `cast task update --found-during`. `related` and
+ * `superseded_by` have no second writer.
+ */
+export async function writeLink<F extends keyof LinkFields>(
+  ctx: Pick<MutationCtx, "db">,
+  task: Pick<Doc<"tasks">, "_id" | "related" | "found_during" | "superseded_by">,
+  field: F,
+  next: LinkFields[F],
+  by: TaskChangeBy,
+  now = Date.now(),
+): Promise<void> {
+  const prev = task[field];
+  const same = field === "related"
+    ? sameRefs((prev as string[]) ?? [], (next as string[]) ?? [])
+    : (prev ?? "") === (next ?? "");
+  if (same) return;
+  await ctx.db.patch(task._id, { [field]: next, updated_at: now });
+  await recordTaskChange(ctx, task._id, by, [[field, prev, next]], now);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,8 +403,7 @@ async function walkUpstream(ctx: ReadCtx, start: DepNode, workspace: AuthorizedW
   const nodes = new Map<string, DepNode>([[start.short_id, start]]);
   const looked = new Set<string>();
   for (;;) {
-    const { shortIds, ids } = blockerRefs(nodes.values());
-    const refs = [...shortIds, ...ids].filter((r) => !looked.has(r));
+    const refs = blockerRefs(nodes.values()).filter((r) => !looked.has(r));
     if (!refs.length) return nodes;
     if (nodes.size >= LOOP_WALK_CAP) {
       throw new Error(`Cannot check ${start.short_id}'s dependencies for a loop: more than ${LOOP_WALK_CAP} open tasks wait behind it.`);
@@ -352,6 +425,38 @@ export async function openUpstream(ctx: ReadCtx, task: Doc<"tasks">, workspace: 
   const nodes = await walkUpstream(ctx, depNode(task), workspace);
   nodes.delete(task.short_id);
   return new Set(nodes.keys());
+}
+
+/**
+ * The stored blockers of `task` whose edge is part of a loop, each with the
+ * error naming the path, judged among the open tasks of `workspace`. An edge
+ * is checked when it is written (assertDependencyEdges), but only against
+ * open tasks: an edge through a done or dropped task holds nothing back, so
+ * it is accepted, and the moment that task leaves a terminal status the loop
+ * is live and holds every task in it for good. Every loop through `task` runs
+ * through one of its own `blocked_by` edges, so the edges named here break all
+ * of them when they are cut (taskLinks cutReopenedLoops). A graph too large to
+ * walk whole (walkUpstream's cap) names none: nothing can be proved about
+ * those edges, and a reopen is not a write that may fail.
+ */
+export async function loopedBlockers(
+  ctx: ReadCtx,
+  task: Doc<"tasks">,
+  workspace: AuthorizedWorkspace,
+): Promise<{ ref: string; error: string }[]> {
+  const refs = task.blocked_by ?? [];
+  if (!refs.length || !openIn(workspace)(task)) return [];
+  let nodes: Map<string, DepNode>;
+  try {
+    nodes = await walkUpstream(ctx, depNode(task), workspace);
+  } catch {
+    return [];
+  }
+  const loopError = dependencyLoopChecker(nodes.values());
+  return refs.flatMap((ref) => {
+    const error = loopError(task.short_id, ref);
+    return error ? [{ ref, error }] : [];
+  });
 }
 
 /**
