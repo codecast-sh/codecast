@@ -7,7 +7,7 @@ import { BLUE, HOST, Pane, SESSION, delay } from "./kit";
 /** One step the host reports while a cloud spawn prepares it. */
 const HOST_STEPS: { text: ReactNode; d: number }[] = [
   { text: <>woke the host <span style={{ color: SOL.base01 }}>stopped → running</span></>, d: 1.9 },
-  { text: <>fetched <b className="font-medium" style={{ color: SOL.base2 }}>~/work/shop</b> <span style={{ color: SOL.base01 }}>kept its HEAD</span></>, d: 2.3 },
+  { text: <>fetched <b className="font-medium" style={{ color: SOL.base2 }}>~/src/shop</b> <span style={{ color: SOL.base01 }}>kept its HEAD</span></>, d: 2.3 },
   { text: <>copied <b className="font-medium" style={{ color: SOL.base2 }}>.env.local</b> <span style={{ color: SOL.base01 }}>setup.copy</span></>, d: 2.7 },
   { text: <>agent logins pushed <span style={{ color: SOL.base01 }}>claude, codex</span></>, d: 3.1 },
   { text: <>cast ws acquire <b className="font-medium" style={{ color: SOL.base2 }}>port-v1-routes</b></>, d: 3.5 },
