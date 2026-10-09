@@ -7,7 +7,7 @@ import { goalStateLine, type GoalProgress } from "@codecast/shared/contracts/rol
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { autonomyOn, autonomyWords } from "@codecast/shared/contracts/roleAutonomy";
-import { formatDateSmart, relTimeShort } from "@codecast/shared/time";
+import { formatDateSmart, relTimeUntil } from "@codecast/shared/time";
 import { WAKE_TUNE_HINT, playbookGuideLines, roleWakeOf, wakeWords, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 
 /** A role in one line, as every `cast role` and `cast brief` read heads it. */
@@ -21,8 +21,9 @@ export function routineLine(r: { short_id: string | null; status: string; run_at
   if (!r) return " · no trigger yet";
   if (r.status === "paused") return ` · check paused (${r.short_id ?? "trigger"})`;
   if (!r.run_at) return "";
-  const ms = r.run_at - now;
-  return ` · next check ${ms > 60_000 ? `in ${relTimeShort(now - ms, now)}` : "due now"} (${r.short_id ?? "trigger"})`;
+  // A span still to come reads forward and CEILS (relTimeUntil): a check 1h59m
+  // off that read "1h" would promise something sooner than the truth.
+  return ` · next check ${r.run_at - now > 60_000 ? `in ${relTimeUntil(r.run_at, now)}` : "due now"} (${r.short_id ?? "trigger"})`;
 }
 
 /** How the role's check runs (org-staffing.md S38), read off its trigger:
