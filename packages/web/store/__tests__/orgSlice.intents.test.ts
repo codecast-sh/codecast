@@ -29,7 +29,7 @@ const clone = (): OrgTree => JSON.parse(JSON.stringify(ORG_FIXTURE));
 /** Run a slice action body against a draft, the way the middleware does. */
 function run(data: OrgSliceData, name: keyof ReturnType<typeof createOrgSlice>, ...args: any[]): OrgSliceData {
   const slice = createOrgSlice();
-  return mutate(data, (draft) => { (slice[name] as any).call(draft, ...args); });
+  return mutate(data, (draft) => { (slice[name] as any).call(draft, ...args); }, { enablePatches: { pathAsArray: true } })[0];
 }
 
 describe("org intents", () => {
@@ -156,6 +156,31 @@ describe("org intents", () => {
     st = run(st, "revertOrgIntent", reverted[0]);
     expect(st.orgProposals["p-1"].status).toBe("open");
     expect(st.orgIntents).toEqual([]);
+  });
+
+  it("a reply on a row that already holds a stamp keeps a plain copy of the old stamp, so a later sync can read the intent", async () => {
+    const { pruneOrgIntents } = await import("../orgSlice");
+    const stamped = (): OrgSliceData => {
+      const st = staffing();
+      const changes = st.orgProposalChanges as any;
+      changes["ch-1"] = { ...changes["ch-1"], reply: { verdict: "note", text: "earlier", at: 1, by: SAM } };
+      changes["ch-2"] = { ...changes["ch-2"], reply: { verdict: "note", text: "earlier", at: 1, by: SAM } };
+      return { ...st, orgProposals: { "p-1": { _id: "p-1", short_id: "op-1", status: "open", created_at: 1, reply: { verdict: "note", text: "earlier", at: 1, by: SAM } } } as any };
+    };
+    const st = run(stamped(), "replyOnOrgProposal", "p-1", [
+      { verdict: "reject", change_ids: ["ch-1"], seqs: [1], text: "no" },
+      { verdict: "note", change_ids: ["ch-2"], seqs: [2], text: "again" },
+      { verdict: "note", change_ids: [], seqs: [], text: "whole" },
+    ], { revised_at: 0, seqs: [1, 2] });
+    expect(st.orgIntents).toHaveLength(3);
+    // The next sync transform reads every intent's old stamp through a new draft.
+    const [next] = mutate(st, (draft) => { pruneOrgIntents(draft as any); }, { enablePatches: { pathAsArray: true } });
+    expect(next.orgIntents).toHaveLength(3);
+    expect(JSON.parse(JSON.stringify(st.orgIntents)).map((i: any) => i.reply_from ?? i.from)).toEqual([
+      { verdict: "note", text: "earlier", at: 1, by: SAM },
+      { verdict: "note", text: "earlier", at: 1, by: SAM },
+      { verdict: "note", text: "earlier", at: 1, by: SAM },
+    ]);
   });
 
   it("a reply refused as revised under the reader (S18) puts every row back, and the person hears one line", async () => {

@@ -30,7 +30,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { spawnSync } from "../proc.js";
 import { ComputerError } from "./errors.js";
 import { resolveCastInvocation } from "../castInvocation.js";
-import { HELPER_BUNDLE_ID, helperAppPath, helperExecutablePath, materializeLinuxHelper } from "./helperApp.js";
+import { HELPER_BUNDLE_ID, helperAppPath, helperExecutablePath, materializeHelperApp, materializeLinuxHelper, withPrepareLock } from "./helperApp.js";
 import { stampComputerRaise } from "./instance.js";
 import { spawnObserved, type ObservedLaunch } from "./launchObserver.js";
 import { launchesThroughOpen, noDesktopSessionReason, runOpen } from "./desktopSession.js";
@@ -109,11 +109,10 @@ export type PermissionProbeRoute = "disclaimed" | "open";
 /** Ask the helper what IT is granted. Never exec's the binary in-process. */
 export async function getPermissionStatus(opts: PermissionStatusOptions = {}): Promise<ComputerPermissionStatusResult> {
   if (process.platform !== "darwin" && process.platform !== "linux") return unsupported();
-  // A script, written in a moment: there is no reason to report it missing.
-  if (process.platform === "linux" && !opts.launch) materializeLinuxHelper();
   const appPath = helperAppPath();
   const noDesktop = noDesktopSessionReason();
   if (noDesktop) return unavailable(noDesktop, appPath);
+  if (!opts.launch) await installCarriedHelper();
   if (!helperIsMaterialized()) {
     return unavailable(`${helperExecutablePath()} was not found — run \`cast computer capabilities\` to materialize the helper`, appPath);
   }
@@ -155,6 +154,28 @@ export async function getPermissionStatus(opts: PermissionStatusOptions = {}): P
   } finally {
     probe?.cleanup();
     fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Probe the helper this CLI carries, never one an older release left at the
+ * fixed path. A stale helper signed differently asks TCC with a requirement
+ * the grant does not match, and macOS answers by replacing the grant with a
+ * denial for the stale one: the current helper then reads "not-granted" and
+ * stays that way until someone toggles it again (a cloud Mac, 2026-10-09).
+ */
+async function installCarriedHelper(): Promise<void> {
+  if (process.platform === "linux") {
+    materializeLinuxHelper();
+    return;
+  }
+  const { getVersion } = await import("../update.js");
+  try {
+    await withPrepareLock(() => materializeHelperApp({ version: getVersion() }));
+  } catch (err) {
+    // A source build carries nothing and has nothing installed: the
+    // not-found report below says so.
+    if (!(err instanceof ComputerError)) throw err;
   }
 }
 

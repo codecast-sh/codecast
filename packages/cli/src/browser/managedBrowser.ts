@@ -28,6 +28,7 @@ import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { readHosts, ensureUp, toRemoteHost } from "./cloudHost.js";
 import { fmt, icons } from "../colors.js";
 import { isReachable } from "./recovery.js";
+import { hostOwnsBrowser } from "./bridge/real.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 
 const OK = `${fmt.success(icons.check)}`;
@@ -125,6 +126,10 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       fs.rmSync(userDataDir, { recursive: true, force: true });
       fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
       if (!o.quiet) console.log(`${OK} fresh profile (logged out of everything)`);
+    } else if (hostOwnsBrowser()) {
+      // A host has no human's Chrome to copy: its profile is its own from the
+      // first launch, and logins arrive through `cast browser sync`.
+      fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
     } else {
       const profiles = listRealProfiles(o.channel);
       const pick = o.profile ?? profiles.find((p) => p.lastUsed)?.dir ?? "Default";
@@ -196,7 +201,7 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
     writeState(state);
     console.log(`${OK} browser up — pid ${pid}, CDP 127.0.0.1:${port}${o.headless ? ", headless" : ""}`);
     if (!o.quiet) {
-      if (!o.fresh) {
+      if (sourceProfile) {
         console.log(
           fmt.muted("  This is a COPY of your profile. The agent's browsing never touches your real Chrome,\n") +
             fmt.muted("  and the copy holds live session cookies — `cast browser stop --wipe` removes it."),

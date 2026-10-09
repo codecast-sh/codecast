@@ -10,7 +10,7 @@
 // Not named after its main export: `ProposalSubjects.tsx` and the model's
 // `proposalSubjects.ts` are one path on a disk that ignores case, and a
 // resolver then picks between them by extension.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Check } from "lucide-react";
 import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
 import { isOrgChangeDecidable, ORG_REPLY_WORDS, orgProposalWork, type OrgAskNames } from "@codecast/shared/contracts/orgProposal";
@@ -26,6 +26,7 @@ import { proposalProgressWords, proposalSubjects, recordGroupCards, type RecordG
 import { askNames } from "./staffingAsks";
 import { RecordGroupRow } from "./RecordGroupRow";
 import { LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerClosingRow, LedgerWord, ProposalSubjectCard, type SubjectAnswer } from "./ProposalSubjectCard";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply">;
 /** What a ref of the batch names a proposal by. */
@@ -114,8 +115,8 @@ function useEntryAnswer(key: string | null, comments: readonly PendingComment[] 
   const stale = !!key && !!pending && revisedAt(members) > pending.createdAt;
   // Withdrawn under the reader: the entry says so until they answer again.
   const [revised, setRevised] = useState(false);
-  useEffect(() => { if (stale) { answerProposalCard(key!, ref, null); setRevised(true); } }, [stale]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (pending && !stale) setRevised(false); }, [pending, stale]);
+  useWatchEffect(() => { if (stale) { answerProposalCard(key!, ref, null); setRevised(true); } }, [stale]); // eslint-disable-line react-hooks/exhaustive-deps
+  useWatchEffect(() => { if (pending && !stale) setRevised(false); }, [pending, stale]);
   return { answer: stale ? null : answer, revised, ...(key ? { onAnswer: (a: SubjectAnswer | null) => answerProposalCard(key, ref, a) } : {}) };
 }
 
@@ -196,6 +197,9 @@ function AnsweredGroup({ proposal, batch, group, focus, lone, open, onOpen }: { 
  * proposal), else one subject card per subject, numbered when there are two
  * or more, twelve at a time with "Show all N" past that.
  */
+/** A record group this small opens by itself. */
+const OPEN_GROUP = 6;
+
 export function ProposalEntries({ proposal, changes, entries, batch, limit = 12, className }: {
   proposal: Proposal;
   changes: readonly OrgProposalChange[];
@@ -206,14 +210,15 @@ export function ProposalEntries({ proposal, changes, entries, batch, limit = 12,
   className?: string;
 }) {
   const [all, setAll] = useState(false);
-  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  // A group small enough to read at a glance starts open: what is approved is on the card. A press settles it either way.
+  const [toggled, setToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const focus = useFocusChange(changes);
-  const setOpen = (key: string, v: boolean) => setOpenKeys((prev) => { const next = new Set(prev); if (v) next.add(key); else next.delete(key); return next; });
+  const setOpen = (key: string, v: boolean) => setToggled((prev) => new Map(prev).set(key, v));
   if (entries.records) {
     const lone = entries.groups.length === 1;
     return (
       <div className={cn("not-prose min-w-0", LEDGER_INKS, className)} data-proposal-groups={entries.groups.length}>
-        {entries.groups.map((group) => <AnsweredGroup key={group.key} proposal={proposal} batch={batch} group={group} focus={focus} lone={lone} open={openKeys.has(group.key)} onOpen={(v) => setOpen(group.key, v)} />)}
+        {entries.groups.map((group) => <AnsweredGroup key={group.key} proposal={proposal} batch={batch} group={group} focus={focus} lone={lone} open={toggled.get(group.key) ?? group.rows.length <= OPEN_GROUP} onOpen={(v) => setOpen(group.key, v)} />)}
       </div>
     );
   }
@@ -226,7 +231,7 @@ export function ProposalEntries({ proposal, changes, entries, batch, limit = 12,
       <ol className="m-0 list-none p-0">
         {shown.map((card, i) => (
           <li key={card.key} className="m-0 p-0">
-            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} focusId={focus?._id ?? null} {...(lone ? { lead: true, className: "py-[14px]" } : { ordinal: i + 1 })} />
+            <AnsweredCard proposal={proposal} batch={batch} card={card} number={i + 1} focusId={focus?._id ?? null} {...(lone ? { className: "py-[14px]" } : { ordinal: i + 1 })} />
           </li>
         ))}
       </ol>

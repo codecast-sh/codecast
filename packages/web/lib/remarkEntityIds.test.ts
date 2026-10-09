@@ -215,3 +215,22 @@ describe("an object id inside a file path", () => {
     expect(html.match(/>ct-57458<\/a>/g)?.length).toBe(1);
   });
 });
+
+describe("entityRemarkPlugins the company's objects", () => {
+  // A role (`or-N`) and a project (`pj-…`) are ids in prose like a goal
+  // (`in-N`), so each reaches EntityAwareLink and renders as its pill.
+  test("bare or-, pj- and in- ids become entity links", () => {
+    const html = render("Ask or-3 about pj-mf3k2a, which carries in-2.");
+    for (const id of ["or-3", "pj-mf3k2a", "in-2"]) expect(html).toContain(`>${id}</a>`);
+  });
+
+  test("words that start like a role or a goal stay prose", () => {
+    const html = render("do it now or-else, in an in-app flow, or-ange");
+    expect(html).not.toContain("<a");
+  });
+
+  test("a role inside an @[Title id] mention keeps its id", () => {
+    const html = render("see @[Calling lead or-7] for the list");
+    expect(html).toContain(">or-7</a>");
+  });
+});
