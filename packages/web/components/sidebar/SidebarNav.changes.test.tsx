@@ -8,8 +8,8 @@ import { surfaceMode, type SurfaceMode } from "../../lib/surfaceRules";
 // Changes is a per-team opt-in (teams.features.changes): with the flag off
 // the rail has no Changes row at all, and with it on the row sits under Feed.
 const ACTIVE: SidebarNavActive = {
-  initiatives: false, projects: false, tasks: false, docs: false, code: false, files: false, pages: false,
-  sessions: false, workflows: false, line: false, triggers: false, org: false, rootAgent: false, windows: false,
+  tasks: false, docs: false, code: false, files: false, pages: false,
+  sessions: false, line: false, triggers: false, org: false, rootAgent: false, windows: false,
 };
 const shut = { items: [], expanded: false, onToggle: () => {} };
 
@@ -22,7 +22,7 @@ function rail(changesOn: boolean | undefined, active: SidebarNavActive = ACTIVE,
         feed={<span>feed-row</span>}
         questions={<span>questions-row</span>}
         active={active}
-        projects={shut}
+        openPath={() => {}}
         tasks={shut}
         docs={shut}
         orgOn={false}
@@ -58,11 +58,58 @@ test("the row reads as active on /changes", () => {
 
 test("hosted mode keeps the everyday rows and drops the developer ones", () => {
   const html = rail(true, ACTIVE, surfaceMode(true, true));
-  for (const href of ["/changes", "/projects", "/repo", "/files", "/line", "/ops", "/windows", "/routines"]) expect(html).not.toContain(`href="${href}"`);
-  for (const href of ["/tasks", "/docs", "/pages", "/triggers", "/goals"]) expect(html).toContain(`href="${href}"`);
+  for (const href of ["/changes", "/org", "/repo", "/files", "/pages", "/line", "/ops", "/windows", "/routines"]) expect(html).not.toContain(`href="${href}"`);
+  for (const href of ["/tasks", "/docs", "/triggers"]) expect(html).toContain(`href="${href}"`);
   expect(html).toContain("Routines");
-  expect(html).toContain("Assistant");
   expect(html).not.toContain(">Triggers<");
   // Developer mode, the default, keeps them all.
-  for (const href of ["/projects", "/repo", "/files", "/line", "/ops", "/windows", "/routines"]) expect(rail(false)).toContain(`href="${href}"`);
+  for (const href of ["/org", "/repo", "/files", "/pages", "/line", "/ops", "/windows"]) expect(rail(false)).toContain(`href="${href}"`);
+});
+
+test("Org is the first Work row, with its count and its two read views always under it; no project rows, no chevron, and no Org under Agents", () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarNavView isNarrow={false} inbox={<span>inbox-row</span>} active={ACTIVE} openPath={() => {}} tasks={shut} docs={shut} orgOn orgBadge={<span data-org-count>4</span>} agent={{ label: "Agent", title: "Agent", icon: <span /> }} />
+    </MemoryRouter>,
+  );
+  const work = html.slice(html.indexOf('data-rail-heading="Work"'), html.indexOf('data-rail-heading="Agents"'));
+  const org = work.indexOf('href="/org"');
+  const tasks = work.indexOf('href="/tasks"');
+  expect(org).toBeGreaterThan(0);
+  expect(org).toBeLessThan(tasks);
+  expect(work).toContain("data-org-count");
+  // Goals then Projects, between Org and Tasks, shown without opening anything.
+  const goals = work.indexOf(">Goals<");
+  const projects = work.indexOf(">Projects<");
+  expect(goals).toBeGreaterThan(org);
+  expect(projects).toBeGreaterThan(goals);
+  expect(projects).toBeLessThan(tasks);
+  const orgBlock = work.slice(org, tasks);
+  expect(orgBlock).not.toContain("aria-expanded");
+  expect(orgBlock.match(/data-nav-subrow/g)?.length).toBe(2);
+  const agents = html.slice(html.indexOf('data-rail-heading="Agents"'));
+  expect(agents).not.toContain('href="/org"');
+  expect(agents).toContain('href="/anchor"');
+});
+
+test("each read view lights its own row, not Org's", () => {
+  const html = (active: SidebarNavActive) => renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarNavView isNarrow={false} inbox={<span />} active={active} openPath={() => {}} tasks={shut} docs={shut} orgOn agent={{ label: "Agent", title: "Agent", icon: <span /> }} />
+    </MemoryRouter>,
+  );
+  const current = (h: string) => [...h.matchAll(/aria-current="page"[^>]*>(?:<[^>]+>)*([^<]+)</g)].map((m) => m[1]);
+  expect(current(html({ ...ACTIVE, orgGoals: true }))).toEqual(["Goals"]);
+  expect(current(html({ ...ACTIVE, orgProjects: true }))).toEqual(["Projects"]);
+  expect(current(html({ ...ACTIVE, org: true }))).toEqual([]);
+});
+
+test("Org's views are inert in the narrow rail, where only icons show", () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarNavView isNarrow inbox={<span />} active={ACTIVE} openPath={() => {}} tasks={shut} docs={shut} orgOn agent={{ label: "Agent", title: "Agent", icon: <span /> }} />
+    </MemoryRouter>,
+  );
+  expect(html).toContain('href="/org"');
+  expect(html).not.toContain(">Goals<");
 });
