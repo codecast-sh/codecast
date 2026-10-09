@@ -507,7 +507,7 @@ export function useSyncInboxSessions() {
     // whose create was given up (offline/outage/rate-limit) stops being a
     // permanently stuck ghost. Idempotent server-side, so a stub mid outbox
     // replay just resolves to the same row.
-    for (const stubId of strandedStubs) store.healStrandedStub(stubId).catch(() => {});
+    for (const stubId of strandedStubs) store.healStrandedStub(stubId).catch((err) => captureError(err, { source: "stub-heal", stubId }));
   }, [sweepNonce, hydrated]);
 
   return { activeSessions: inboxSessions };
