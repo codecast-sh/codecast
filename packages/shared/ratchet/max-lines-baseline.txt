@@ -64,7 +64,6 @@ packages/convex/convex/capabilityState.ts 1950
 packages/convex/convex/ccAccountsShared.ts 1150
 packages/convex/convex/chat.test.ts 3800
 packages/convex/convex/chat.ts 4800
-packages/convex/convex/cleanup.ts 850
 packages/convex/convex/cloud.ts 1050
 packages/convex/convex/codeComments.ts 1050
 packages/convex/convex/comments.ts 1450

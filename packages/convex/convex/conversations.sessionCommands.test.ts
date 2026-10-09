@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { requireSessionCommandTarget, getConversationLifecycle, killSession, cliSetSessionVisibility } from "./conversations";
-import { applyHideTransition } from "./cleanup";
+import { applyHideTransition } from "./hideTransition";
 import { shouldShowInInbox } from "./inboxFilters";
 import { makeFakeDb } from "./testDb";
 

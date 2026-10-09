@@ -5,9 +5,10 @@
 // (decisionDiscussion.ts) and its reply lands here, under the question, so
 // nobody has to find the session to have the conversation. The same block
 // sits on the decision page, the queue card and the change card.
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { ArrowUpRight, MessageSquare } from "lucide-react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDecisionDiscussion } from "../../hooks/useDecisionDiscussion";
 import { ownerReason, sendDiscussion, waitingWords } from "../../lib/decisionDiscussion";
@@ -31,7 +32,7 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
   const { ready, owner, thread } = useDecisionDiscussion(decisionId, open || cached || !compact);
   const [refused, setRefused] = useState<string | null>(null);
 
-  useEffect(() => { if (open) box.current?.focus(); }, [open]);
+  useWatchEffect(() => { if (open) box.current?.focus(); }, [open]);
 
   const ownerName = owner?.name ?? "the session that owns it";
   const send = () => {
