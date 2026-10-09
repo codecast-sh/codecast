@@ -64,7 +64,7 @@ export function noteViewNavApplied(): void {
   appliedNavCount++;
 }
 
-function windowFlavor(): string {
+export function windowFlavor(): string {
   if (typeof window === "undefined") return "ssr";
   return window.location?.pathname?.startsWith("/palette") ? "palette" : "main";
 }

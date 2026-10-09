@@ -335,9 +335,11 @@ export function DocListContent() {
     return null;
   }, [group, typeGroups, projectGroups]);
 
+  // The row's time is the one the list is sorted by, so the times read in
+  // order down the list.
   const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => (
-    <DocRow doc={doc} state={state} />
-  ), []);
+    <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} />
+  ), [sort]);
 
   return (
     <GenericListView<DocItem>

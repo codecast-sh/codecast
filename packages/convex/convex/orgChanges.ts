@@ -306,7 +306,7 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
       await syncPrimaryOwnerCache(ctx, current._id);
     }
   }
-  if (w.table === "tasks" && patch.status) await setTaskStatus(ctx, { team_id: current.team_id }, current, patch.status, Date.now());
+  if (w.table === "tasks" && patch.status) await setTaskStatus(ctx, { team_id: current.team_id }, current, patch.status, Date.now(), { actorUserId: userId });
   if (w.table === "anchors" && "status" in patch && current.team_id) {
     const memberships = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", current.bot_user_id).eq("team_id", current.team_id)).collect();
     if (patch.status === "decommissioned") { for (const m of memberships) await ctx.db.delete(m._id); }
