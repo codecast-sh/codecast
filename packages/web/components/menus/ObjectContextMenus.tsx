@@ -32,6 +32,7 @@ import {
   ArrowUp,
   RefreshCw,
   Hourglass,
+  ArrowUpFromLine,
   Link2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -60,6 +61,7 @@ import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { getLabelColor } from "../../lib/labelColors";
+import { RELATION_ACT } from "../../lib/relationActs";
 import { canControlModel } from "../../lib/modelSwitch";
 import { isSessionKilled, isSessionSetAside } from "../../lib/sessionRetirement";
 
@@ -216,9 +218,14 @@ export function TaskMenuItems({
         </CtxSubContent>
       </CtxSub>
       <CtxItem icon={Tag} onSelect={() => openPaletteMode(tasks, "task", "labels")}>Labels…</CtxItem>
-      <CtxItem icon={CornerDownRight} onSelect={() => openPaletteMode(tasks, "task", "parent")}>Set parent…</CtxItem>
-      <CtxItem icon={Hourglass} onSelect={() => openPaletteMode(tasks, "task", "blocker")}>Add blocker…</CtxItem>
-      <CtxItem icon={Link2} onSelect={() => openPaletteMode(tasks, "task", "related")}>Link related task…</CtxItem>
+      <CtxItem icon={CornerDownRight} onSelect={() => openPaletteMode(tasks, "task", "parent")}>{RELATION_ACT.parent}</CtxItem>
+      <CtxItem icon={Hourglass} onSelect={() => openPaletteMode(tasks, "task", "blocker")}>{RELATION_ACT.blocker}</CtxItem>
+      {/* The same edge from the other side (TG12): from a row too, making
+          another task wait on this one never means opening that task. Its own
+          glyph, as in the palette: two directions of one edge drawn with one
+          icon read as one act. */}
+      <CtxItem icon={ArrowUpFromLine} onSelect={() => openPaletteMode(tasks, "task", "blocks")}>{RELATION_ACT.blocks}</CtxItem>
+      <CtxItem icon={Link2} onSelect={() => openPaletteMode(tasks, "task", "related")}>{RELATION_ACT.related}</CtxItem>
       {hasParent && (
         <CtxItem
           icon={CornerDownRight}

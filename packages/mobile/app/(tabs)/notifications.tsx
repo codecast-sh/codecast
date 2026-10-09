@@ -87,6 +87,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "task_completed": return { name: "check-circle", color: Theme.greenBright };
     case "task_failed": return { name: "exclamation-circle", color: Theme.red };
     case "task_unblocked": return { name: "unlock", color: Theme.green };
+    case "task_blocked": return { name: "ban", color: Theme.orange };
     case "task_assigned": return { name: "user-plus", color: Theme.accent };
     case "task_commented":
     case "doc_commented": return { name: "comment-o", color: Theme.cyan };

@@ -280,7 +280,13 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       {internals && task.execution_status && (
         <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0 cq-hide-compact" />
       )}
-      <TaskBlockedMark task={task} className="cq-hide-compact" />
+      {/* Kept at every WIDTH: "can I pick this up" is the row's own question,
+          and a narrow list pane is where triage happens (TG12). Not in hosted
+          mode, though: a hosted to-do list has no dependency graph to read
+          (the board drops the Unblocked pill for the same reason), and the
+          mark's tooltip names blockers by ct- id, the vocabulary this row
+          strips everywhere else. */}
+      {internals && <TaskBlockedMark task={task} />}
       {internals && task.labels && task.labels.length > 0 && (
         <LabelChips labels={task.labels} onLabelClick={onFilterLabel} className="cq-hide-compact" />
       )}
@@ -367,6 +373,11 @@ export function KanbanCard({
   const PriorityIcon = priority.icon;
   const assignee = task.assignee_info;
   const firstLabel = task.labels?.[0];
+  // The same gate the list row applies to the blocked mark: a hosted to-do
+  // board has no dependency graph to read, and the mark's tooltip names
+  // blockers by ct- id. The board is reachable in hosted mode (only the
+  // Unblocked filter is withheld there), so the card has to ask too.
+  const internals = useSurface("tasks.internals");
 
   return (
     <div
@@ -412,7 +423,7 @@ export function KanbanCard({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
-          <TaskBlockedMark task={task} small />
+          {internals && <TaskBlockedMark task={task} small />}
           <TaskLineChip task={task as any} />
           {firstLabel && (() => {
             const lc = getLabelColor(firstLabel);
