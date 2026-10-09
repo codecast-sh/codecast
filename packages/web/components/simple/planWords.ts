@@ -21,6 +21,18 @@ function roughly(n: number): number {
   return Math.floor(n / step) * step;
 }
 
+/** What is left of the month as everyday requests ("About 80 requests left
+ *  this month"), sized like the plan's allowance (TYPICAL_REQUEST_USD) and
+ *  rounded down, so the count never promises more than the money buys. A
+ *  count rationed in requests reads as room; a percentage that moves a point
+ *  per question reads as a meter running out. */
+export function requestsLeftWords(remainingUsd: number): string {
+  const left = remainingUsd / TYPICAL_REQUEST_USD;
+  if (left < 1) return "Less than one request left this month";
+  const n = roughly(left);
+  return `About ${n} request${n === 1 ? "" : "s"} left this month`;
+}
+
 /** How much work a plan includes. The Free month is sized in everyday
  *  requests (TYPICAL_REQUEST_USD, measured), and each paid plan as a multiple
  *  of it, never as a dollar figure beside its price. */

@@ -179,6 +179,7 @@ export function ComposerSendButton({
   quotesOnly = false,
   title,
   label,
+  stop,
 }: {
   canSubmit: boolean;
   bare?: boolean;
@@ -187,7 +188,25 @@ export function ComposerSendButton({
   title?: string;
   /** The words on the button when the send applies answers. */
   label?: string;
+  /** While a turn runs and there is nothing to send, the disc is a Stop
+   *  square: its words (the mode's stopWorking) and what it does. */
+  stop?: { label: string; onStop: () => void };
 }) {
+  if (stop && !bare) {
+    return (
+      <button
+        type="button"
+        onClick={stop.onStop}
+        className="w-8 h-8 rounded-full transition-colors flex items-center justify-center border border-sol-border bg-sol-bg-alt text-sol-text hover:bg-sol-bg-highlight"
+        aria-label={stop.label}
+        title={stop.label}
+        data-cc-send=""
+        data-cc-stop=""
+      >
+        <span aria-hidden className="h-2.5 w-2.5 rounded-[2px] bg-current" />
+      </button>
+    );
+  }
   if (label && !bare) {
     return (
       <button

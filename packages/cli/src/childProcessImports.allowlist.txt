@@ -5,7 +5,6 @@
 #
 # Prune it (drops gone entries, lowers numbers that came down, adds nothing):
 #   cd packages/cli && RATCHET_WRITE=prune bun test src/childProcessImports.ratchet.test.ts
-src/attachTui.tsx 1
 src/browser/appIdentity.ts 1
 src/browser/cloudHost.ts 1
 src/browser/credentials.ts 1

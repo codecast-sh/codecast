@@ -738,9 +738,10 @@ export async function fetchRootOccupant(
   deviceId: string,
   repoPath: string,
   excludeId?: string,
+  opts: { merging?: boolean } = {},
 ): Promise<RootOccupant | null> {
   const rows = (await client.query(api.cloud.hostSessions, { api_token: token, device_id: deviceId })) as CheckoutOccupantRow[];
-  const hit = sharedCheckoutOccupant(rows ?? [], { projectPath: repoPath, excludeId });
+  const hit = sharedCheckoutOccupant(rows ?? [], { projectPath: repoPath, excludeId, merging: opts.merging });
   return hit ? { conversation_id: hit.conversation_id, short_id: hit.short_id ?? hit.conversation_id.slice(0, 7), title: hit.title ?? null } : null;
 }
 
