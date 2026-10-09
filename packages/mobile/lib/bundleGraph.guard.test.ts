@@ -73,8 +73,14 @@ for (const platform of ["ios", "android"] as const) {
     // reports through ../lib/analytics, which has a native twin. The web's
     // router is web only too: its build reads `import.meta`, which Hermes
     // refuses, so one router hook in a shared lane module fails the bundle.
+    // lucide-react is the same shape: it is not in mobile's package.json, so
+    // Metro resolves it out of packages/web/node_modules and bundles every one
+    // of its ~3,800 icons. The phone draws its glyphs from FontAwesome, and
+    // the web's wait icons live apart from the store readers the phone shares
+    // (packages/web/lib/taskWaitStyle.ts vs lib/taskBlockers.ts) to keep it
+    // out.
     test("no web only SDK reaches the native bundle", () => {
-      const WEB_ONLY = ["@sentry/react", "@sentry/browser", "posthog-js", "dexie", "next", "react-router", "react-router-dom"];
+      const WEB_ONLY = ["@sentry/react", "@sentry/browser", "posthog-js", "dexie", "next", "react-router", "react-router-dom", "lucide-react"];
       const hit = [...graph.externals].filter((spec) => WEB_ONLY.some((pkg) => spec === pkg || spec.startsWith(pkg + "/")));
       expect(hit).toEqual([]);
     });
