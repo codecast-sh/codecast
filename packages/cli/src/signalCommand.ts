@@ -6,6 +6,13 @@
 //   cast signal add --source <s> --kind <k> --title <t> [--fingerprint <f>] [--project <ref>] [--detail -] [--url] [--subject] [--goal-hint] [--json]
 //   cast signal ls [--task ct-N | --fingerprint <f>] [--project <ref>] [--source <s>] [--json]
 //   cast signal show sg-N [--json]
+//   cast signal move --fingerprint <f> --from ct-N [--to ct-M | --title <t> --project <ref>] [--json]
+//   cast signal merge --issue <A> --into <B> [--json]
+//   cast signal split --issue <C> --from <A> --source <s> --kind <k> --title <t> [--move sg-1,sg-2] [--json]
+//
+// A product that brings findings (learning-loop.md LL3) files each one with
+// --issue <its issue's key> instead of --fingerprint: the key is exactly one
+// problem, and merge and split follow the product's own issue edits.
 //
 // Routes: /cli/signal/{add,ls,show} in http.ts (signals.ts). A signal lands in
 // a project (line-profile.md LP1): --project, else the repo profile's
@@ -34,6 +41,10 @@ export interface SignalAddOptions {
   subject?: string;
   goalHint?: string;
   role?: string;
+  issue?: string;
+  judge?: string;
+  judgeVersion?: string;
+  severity?: string;
 }
 
 export interface SignalRow {
@@ -47,9 +58,14 @@ export interface SignalRow {
   subject?: string;
   goal_hint?: string;
   role_handle?: string;
+  judge?: string;
+  judge_version?: string;
+  severity?: number;
+  merged_into?: string;
+  split_from?: string;
   observed_at: number;
   created_at: number;
-  attach: "fingerprint" | "judge" | "new" | "person";
+  attach: "fingerprint" | "judge" | "similar" | "new" | "person" | "held";
   reopened: boolean;
   task_short_id?: string;
   task_title?: string;
@@ -59,19 +75,28 @@ export interface SignalRow {
 /** The wire body for `cast signal add`, or the one line that says what is missing.
  *  A finder passes its own fingerprint; a person filing by hand gets one from
  *  the source and title, so the same report filed twice joins one cause. */
-export function signalAddBody(options: SignalAddOptions): Record<string, string> {
+export function signalAddBody(options: SignalAddOptions): Record<string, string | number | boolean> {
+  if (options.issue?.trim() && options.fingerprint?.trim()) throw new Error("Give --issue or --fingerprint, not both: an issue's key is its fingerprint");
   const missing = (["source", "kind", "title"] as const).filter((k) => !options[k]?.trim());
   if (missing.length) throw new Error(`cast signal add needs ${missing.map((k) => `--${k}`).join(", ")}`);
   const kind = options.kind!.trim().toLowerCase();
   if (!(SIGNAL_KINDS as readonly string[]).includes(kind)) {
     throw new Error(`Unknown kind "${options.kind}". Kinds: ${SIGNAL_KINDS.join(", ")}`);
   }
-  const body: Record<string, string> = {
+  const body: Record<string, string | number | boolean> = {
     source: options.source!.trim(),
     kind,
-    fingerprint: options.fingerprint?.trim() || `${options.source!.trim()}:${slugifyHeading(options.title!)}`,
+    fingerprint: options.issue?.trim() || options.fingerprint?.trim() || `${options.source!.trim()}:${slugifyHeading(options.title!)}`,
     title: options.title!.trim(),
   };
+  if (options.issue?.trim()) body.issue = true;
+  if (options.judge?.trim()) body.judge = options.judge.trim();
+  if (options.judgeVersion?.trim()) body.judge_version = options.judgeVersion.trim();
+  if (options.severity?.trim()) {
+    const severity = Number(options.severity);
+    if (!Number.isFinite(severity)) throw new Error(`--severity takes a number, not "${options.severity}"`);
+    body.severity = severity;
+  }
   if (options.detail?.trim()) body.detail_md = options.detail.trim();
   if (options.url?.trim()) body.evidence_url = options.url.trim();
   if (options.subject?.trim()) body.subject = options.subject.trim();
@@ -83,14 +108,16 @@ export function signalAddBody(options: SignalAddOptions): Record<string, string>
 const ATTACH_WORDS: Record<SignalRow["attach"], string> = {
   fingerprint: "same fingerprint",
   judge: "judged the same problem",
+  similar: "read like this problem's findings",
   new: "new cause",
   person: "attached by a person",
+  held: "held: no cause holds its key and no finder opens one",
 };
 
 export function formatSignalList(rows: SignalRow[], now: number = Date.now()): string {
   if (rows.length === 0) return "No signals. File one: cast signal add --source person --kind bug --title \"...\"";
   return rows
-    .map((s) => `${s.short_id}  ${s.source}/${s.kind}  ${s.title}  → ${s.task_short_id ?? "?"} (${ATTACH_WORDS[s.attach]}${s.reopened ? ", reopened it" : ""}; ${formatAge(now - s.created_at)})`)
+    .map((s) => `${s.short_id}  ${s.source}/${s.kind}  ${s.title}  → ${s.task_short_id ?? "no cause"} (${ATTACH_WORDS[s.attach]}${s.reopened ? ", reopened it" : ""}; ${formatAge(now - s.created_at)})`)
     .join("\n");
 }
 
@@ -155,11 +182,15 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .option("--subject <ref>", "The file, surface, prompt id or route it concerns; from a finder that judges behavior, the expectation it breaks (ex-<project>-<n>)")
     .option("--goal-hint <key>", "The initiative metric the finder believes it threatens")
     .option("--role <handle>", "The role whose run introduced what it saw (the fix-loop finder); counted on the health board")
+    .option("--issue <key>", "The product's own issue this finding belongs to (instead of --fingerprint): it joins exactly that issue's problem, never another by judgment")
+    .option("--judge <name>", "The product's judge that made this finding")
+    .option("--judge-version <v>", "That judge's version")
+    .option("--severity <n>", "How bad the judge rated it, on the product's scale")
     .option("--project <ref>", "Project to file it in: id, short id or title (default: the repo profile's [line] project, else none)")
     .option("--team <name|id|personal>", "Workspace to file it in (default: the repo profile's [line] team, else the session's team, else the directory's mapping)")
     .option("--json", "Machine-readable output")
     .action(async (options: SignalAddOptions & { team?: string; project?: string; json?: boolean }) => {
-      let body: Record<string, string>;
+      let body: Record<string, string | number | boolean>;
       try {
         body = signalAddBody(options);
       } catch (err) {
@@ -172,7 +203,9 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
         return;
       }
       const how = ATTACH_WORDS[result.attach as SignalRow["attach"]] ?? result.attach;
-      console.log(`${fmt.success(result.short_id)} → ${result.task_short_id} (${how}; ${result.signal_count} signal${result.signal_count === 1 ? "" : "s"})`);
+      console.log(result.task_short_id
+        ? `${fmt.success(result.short_id)} → ${result.task_short_id} (${how}; ${result.signal_count} signal${result.signal_count === 1 ? "" : "s"})`
+        : `${fmt.success(result.short_id)} (${how})`);
       if (result.reopened) console.log(fmt.muted(`  ${result.task_short_id} was in watch and is open again`));
     });
 
@@ -200,6 +233,74 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     });
 
   signal
+    .command("move")
+    .description("Move one fingerprint's signals off a cause: to another cause, or to a new cause of their own")
+    .requiredOption("--fingerprint <key>", "The fingerprint whose signals move")
+    .requiredOption("--from <ct>", "The cause they are attached to now")
+    .option("--to <ct>", "The cause they move to (default: a new cause)")
+    .option("--title <text>", "A new cause's title (default: the newest signal's)")
+    .option("--project <ref>", "A new cause's project: id, short id or title")
+    .option("--team <name|id|personal>", "Workspace (default: the active one)")
+    .option("--json", "Machine-readable output")
+    .action(async (options: { fingerprint: string; from: string; to?: string; title?: string; project?: string; team?: string; json?: boolean }) => {
+      const result = await apiPost(deps, "/cli/signal/move", {
+        fingerprint: options.fingerprint,
+        from: options.from,
+        to: options.to,
+        title: options.title,
+        ...(await scopeFor(deps, options.team, true, options.project)),
+      });
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`${fmt.success(String(result.moved))} signal${result.moved === 1 ? "" : "s"} moved ${result.from} → ${result.to}${result.created ? " (new cause)" : ""}`);
+    });
+
+  signal
+    .command("merge")
+    .description("Follow a product's merge of two issues: the merged issue's problem folds into the survivor's, and its key resolves there from now on")
+    .requiredOption("--issue <key>", "The issue that was merged away")
+    .requiredOption("--into <key>", "The issue it was merged into")
+    .option("--team <name|id|personal>", "Workspace (default: the repo profile's [line] team, else the active one)")
+    .option("--json", "Machine-readable output")
+    .action(async (options: { issue: string; into: string; team?: string; json?: boolean }) => {
+      const result = await apiPost(deps, "/cli/signal/merge", { issue: options.issue, into: options.into, ...(await scopeFor(deps, options.team, true)) });
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else if (result.already) console.log(fmt.muted(`${result.issue} was already merged into ${result.into}`));
+      else console.log(`${fmt.success(result.issue)} → ${result.into}${result.problem ? ` (${result.problem}${result.folded ? `; ${result.folded} folded into it with ${result.moved} signal${result.moved === 1 ? "" : "s"}` : ""})` : " (no problem open yet)"}`);
+    });
+
+  signal
+    .command("split")
+    .description("Follow a product's split of an issue: the new issue opens its own problem, filed with this signal, and takes the signals named")
+    .requiredOption("--issue <key>", "The new issue's key")
+    .requiredOption("--from <key>", "The issue it was split off")
+    .option("--move <signals>", "Signals (sg-N, comma separated) that now belong to the new issue")
+    .option("--source <name>", "The finder")
+    .option("--kind <kind>", `What it saw: ${SIGNAL_KINDS.join(", ")}`)
+    .option("--title <text>", "The new issue's title")
+    .option("--detail <markdown>", stdinText("The new issue's description"))
+    .option("--url <url>", "Where a person can see it")
+    .option("--subject <ref>", "The expectation it breaks, or what it concerns")
+    .option("--judge <name>", "The product's judge")
+    .option("--judge-version <v>", "That judge's version")
+    .option("--severity <n>", "How bad the judge rated it")
+    .option("--project <ref>", "Project to file it in: id, short id or title")
+    .option("--team <name|id|personal>", "Workspace (default: the repo profile's [line] team, else the active one)")
+    .option("--json", "Machine-readable output")
+    .action(async (options: SignalAddOptions & { from: string; move?: string; team?: string; project?: string; json?: boolean }) => {
+      let body: Record<string, string | number | boolean>;
+      try {
+        body = signalAddBody({ ...options, fingerprint: undefined });
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+      const move = (options.move ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      const project = lineProjectFor(options.team, options.project);
+      const result = await apiPost(deps, "/cli/signal/split", { ...body, from: options.from, ...(move.length ? { move } : {}), ...(await scopeFor(deps, options.team, true, project)) });
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`${fmt.success(result.short_id)} → ${result.task_short_id} (split off ${result.split_from}${result.moved ? `; ${result.moved} signal${result.moved === 1 ? "" : "s"} moved` : ""})`);
+    });
+
+  signal
     .command("show")
     .description("One signal, with the cause it attached to")
     .argument("<signal>", "sg-N")
@@ -213,8 +314,10 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
       const s: SignalRow = result.signal;
       console.log(formatSignalList([s]));
       console.log(fmt.muted(`  fingerprint ${s.fingerprint}${s.subject ? ` · subject ${s.subject}` : ""}${s.goal_hint ? ` · goal ${s.goal_hint}` : ""}`));
+      const judged = [s.judge ? `judge ${s.judge}${s.judge_version ? ` ${s.judge_version}` : ""}` : null, typeof s.severity === "number" ? `severity ${s.severity}` : null, s.merged_into ? `merged into ${s.merged_into}` : null, s.split_from ? `split from ${s.split_from}` : null].filter(Boolean);
+      if (judged.length) console.log(fmt.muted(`  ${judged.join(" · ")}`));
       if (s.evidence_url) console.log(fmt.muted(`  ${s.evidence_url}`));
-      if (result.cause) console.log(fmt.muted(`  ${s.task_short_id} ${s.task_status}: ${result.cause.signal_count} signals, ${result.cause.fingerprints.length} fingerprints`));
+      if (result.cause) console.log(fmt.muted(`  ${s.task_short_id} ${s.task_status}: ${result.cause.signal_count} signals, ${result.cause.fingerprints.length} fingerprints${result.cause.issue_key ? ` · issue ${result.cause.issue_key}${result.cause.merged_keys?.length ? ` (also ${result.cause.merged_keys.join(", ")})` : ""}` : ""}`));
       if (s.detail_md) console.log(`\n${s.detail_md}`);
     });
 }

@@ -13,19 +13,19 @@ import { Video } from "./Video";
 import { Reference } from "./Reference";
 import { Closing, Limits } from "./Limits";
 
-/** /features/publish: the cast publish deep dive. Still mode (`?static` or reduced motion) renders every animation at its end state. */
+/** /features/publish: the Publish deep dive. Still mode (`?static` or reduced motion) renders every animation at its end state. */
 export default function PublishPage() {
   const isStatic = useStillMode();
   return (
     <main className="pb-root" data-static={isStatic ? "" : undefined}>
       <style>{PUBLISH_CSS}</style>
       <Hero />
-      <Inputs />
-      <Live />
+      <Places />
       <History />
       <Comments />
       <Gates />
-      <Places />
+      <Inputs />
+      <Live />
       <Video />
       <Reference />
       <Limits />

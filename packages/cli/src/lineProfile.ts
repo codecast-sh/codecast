@@ -67,7 +67,7 @@ export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K]
 };
 
 export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "finders"] as const;
-export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "project"] as const;
+export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "opens_causes", "project"] as const;
 
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 
@@ -182,6 +182,10 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
           fingerprint: text(f.fingerprint, `${at} fingerprint`),
         };
         if (f.runs !== undefined) finder.runs = text(f.runs, `${at} runs`);
+        if (f.opens_causes !== undefined) {
+          if (typeof f.opens_causes !== "boolean") throw new LineProfileError(`${at} opens_causes must be true or false`);
+          if (f.opens_causes) finder.opens_causes = true;
+        }
         if (f.project !== undefined) finder.project = text(f.project, `${at} project`);
         return finder;
       });
@@ -298,7 +302,7 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
   out.push("", `finders (${p.finders.length}, ${r.sources.finders})`);
   for (const f of p.finders) {
     const kinds = f.kind === "any" ? "any" : f.kind.join(", ");
-    out.push(`  ${f.id}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
+    out.push(`  ${f.id}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.opens_causes ? "  opens causes" : ""}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
   }
   if (r.notes.length) out.push("", ...r.notes.map((n) => `note: ${n}`));
   if (r.warnings.length) out.push("", ...r.warnings.map((w) => `warning: ${w}`));
@@ -345,6 +349,7 @@ export function starterLineProfile(opts: { project: string; team?: string | null
     `# kind = "cohesion"`,
     `# fingerprint = "lesson:<rule>"`,
     `# runs = "the weekly lessons routine"`,
+    `# opens_causes = true             # a signal no cause holds opens one; otherwise it stays a signal`,
     ``,
   ].join("\n");
 }
