@@ -1133,7 +1133,9 @@ export function buildHostsCommand(parent: Command): Command {
     .description("Capture a prepared host as a machine image; cast hosts create then starts new hosts from it")
     .option("--list", "List this account's codecast images instead")
     .option("--delete <ami>", "Delete a saved image and its snapshot")
-    .action(async (id: string | undefined, o: { list?: boolean; delete?: string }) => {
+    .option("--base", "Scrub this host of everything personal and capture it as codecast's base image (codecast maintainers)")
+    .option("--publish-base", "Make the newest base image public, copying it to every base region (rerun until each is public)")
+    .action(async (id: string | undefined, o: { list?: boolean; delete?: string; base?: boolean; publishBase?: boolean }) => {
       const h = pick(id, "no host registered");
       if (h.provider !== "aws") die("images are for AWS hosts");
       const { aws, createImageArgs, imageName, listImages } = await import("./image.js");
@@ -1150,6 +1152,23 @@ export function buildHostsCommand(parent: Command): Command {
           const images = listImages(opts, platform);
           if (!images.length) console.log(fmt.muted("  no codecast images yet"));
           for (const i of images) console.log(`  ${i.id}  ${i.name}  ${fmt.muted(i.created)}${i.source ? fmt.muted(`  from ${i.source}`) : ""}`);
+          return;
+        }
+        if (o.publishBase) {
+          const { publishBaseImages } = await import("./image.js");
+          for (const line of publishBaseImages(opts, platform)) console.log(`  ${line}`);
+          return;
+        }
+        if (o.base) {
+          if (platform !== "darwin") die("the base image is a Mac image");
+          const { baseImageName, createBaseImageArgs, macBaseScrubScript } = await import("./image.js");
+          const { shq } = await import("../remote/session-move.js");
+          const scrub = remoteExec(toRemoteHost(h), `bash -c ${shq(macBaseScrubScript())}`, 120_000);
+          if (!scrub.includes("MAC-BASE-SCRUBBED")) die(`scrub did not finish: ${scrub.slice(-400)}`);
+          const name = baseImageName(platform);
+          const out = aws(opts, createBaseImageArgs(h.id, platform, name));
+          console.log(`${OK} ${out.ImageId}  ${name}  (the host restarts for a consistent snapshot; its SSH keys are gone now)`);
+          console.log(fmt.muted("  once AWS finishes it: cast hosts image --publish-base, rerun until every region is public"));
           return;
         }
         const name = imageName(platform, h.id);

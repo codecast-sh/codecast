@@ -2,12 +2,16 @@
 
 import { useState, type ReactNode } from "react";
 import { SOL } from "../../blog/blogChrome";
+import { KeyCap } from "@/components/KeyboardShortcutsHelp";
+import { isMac } from "@/shortcuts";
 import { Layer, Pane, Run, C, t, VIOLET } from "./kit";
+import { ForScripts } from "../agents/parts";
+import { Shot } from "../decisions/kit";
 
 /**
- * Layer 01: search with operators. Each chip is one operator with a real
- * query and output in the CLI's own format; the record they read is the same
- * one the hero drilled through.
+ * Layer 01: search with operators. The Search page leads; each chip below is
+ * one operator with a real query, shown the way an agent reads it from the
+ * CLI. The record they read is the same one the hero drilled through.
  */
 
 type Hit = { id: string; title: string; when: string; msgs: number; repo: string; quote?: { n: number; role: string; text: string } };
@@ -67,15 +71,29 @@ export function SearchLayer() {
       lede={
         <>
           <p>
-            Every session records what it touched: the files it edited, the commits it made, the pull requests it is linked to, the repository it ran in, who ran it, and when. <C>cast search</C> turns each of those into an operator.
+            Every session records what it touched: the files it edited, the commits it made, the pull requests it is linked to, the repository it ran in, who ran it, and when. The Search page turns each of those into an operator you type into the box: <C>file:</C>, <C>commit:</C>, <C>pr:</C>, <C>label:</C>, <C>author:</C>, <C>repo:</C>, <C>after:</C>, <C>before:</C>.
           </p>
           <p>
-            With no text, an operator lists the matching sessions, newest matching change first. With text, it narrows where the text is searched. Combine them freely. The web app&apos;s search page reads the same query.
+            Open it from anywhere with <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">K</KeyCap> then <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap>. With no text, an operator lists the matching sessions, newest matching change first. With text, it narrows where the text is searched. The URL keeps the whole query, so a narrowed view is a link you can send.
           </p>
-          <OpTable />
         </>
       }
     >
+      <Shot
+        className="mb-5"
+        src="/features/memory/search-page.webp"
+        alt="Codecast's Search page: a search box reading Search sessions with phrases, file:, pr:, commit:, filters for Scope (Everyone, Only mine), Match in (Everything, My prompts), Time (All time, 7d, 30d, 90d) and Sort (Recent, Relevant), and operator chips file:, commit:, pr:, label:, author:, repo:, after:, before:"
+        w={1600}
+        h={760}
+        caption="The Search page before you type. Each chip drops its operator into the box."
+      />
+      <div className="grid sm:grid-cols-2 gap-3 mb-10">
+        <Flag f="Everyone · Only mine" d="Your team's shared sessions, or just your own." />
+        <Flag f="Everything · My prompts" d="Search only what people typed: the instructions and corrections, not the agents' replies." />
+        <Flag f="All time · 7d · 30d · 90d" d="How far back to look." />
+        <Flag f="Recent · Relevant" d="Newest first, or best match first. Keyword and meaning-based search both run either way." />
+      </div>
+      <ForScripts note="Your agents run the same query with cast search before they start a task. Pick an operator to see what it returns.">
       <div className="flex flex-wrap gap-1.5 mb-4" role="tablist" aria-label="Search operators">
         {OPS.map((o, k) => {
           const on = k === i;
@@ -100,12 +118,7 @@ export function SearchLayer() {
       <Pane key={op.op} label="~/src/payments" className="mm-anim mm-open">
         <Result op={op} />
       </Pane>
-      <div className="grid sm:grid-cols-2 gap-3 mt-5">
-        <Flag f="-C 3" d="Show three messages either side of each match, so a hit arrives with its reasoning." />
-        <Flag f="-u" d="Search only what people typed: the instructions and corrections, not the agents' replies." />
-        <Flag f="--keyword / --semantic" d="Both run by default. Force one when you want an exact identifier or a loose idea." />
-        <Flag f="--mine · -m sam · -g" d="Narrow to your sessions or a teammate's, or widen past this team to every team you belong to." />
-      </div>
+      </ForScripts>
     </Layer>
   );
 }
@@ -115,31 +128,6 @@ function Flag({ f, d }: { f: string; d: ReactNode }) {
     <div className="rounded-lg px-3.5 py-3" style={{ backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}` }}>
       <div className="font-mono text-[12.5px] font-semibold mb-1" style={{ color: SOL.base02 }}>{f}</div>
       <div className="text-[13.5px] leading-[1.5]" style={{ color: SOL.base01 }}>{d}</div>
-    </div>
-  );
-}
-
-function OpTable() {
-  const rows: [string, string][] = [
-    ["--label api", "label:api"],
-    ["--mine", "author:me"],
-    ["-m sam", "author:sam"],
-    ["-s 7d", "after:7d"],
-    ["-e 2026-09-01", "before:2026-09-01"],
-  ];
-  return (
-    <div className="text-[14px]">
-      <p className="mb-2" style={{ color: SOL.base01 }}>The flags you already know are the same operators:</p>
-      <div className="grid grid-cols-[auto_auto_1fr] gap-x-3 gap-y-1 font-mono text-[12.5px]">
-        {rows.map(([a, b]) => (
-          <div key={a} className="contents">
-            <span style={{ color: SOL.base02 }}>{a}</span>
-            <span style={{ color: SOL.base1 }}>=</span>
-            <span style={{ color: VIOLET }}>{b}</span>
-          </div>
-        ))}
-      </div>
-      <p className="mt-3 text-[13.5px]" style={{ color: SOL.base1 }}>Times read as <C>7d</C>, <C>2w</C>, <C>24h</C>, <C>yesterday</C> or a date.</p>
     </div>
   );
 }

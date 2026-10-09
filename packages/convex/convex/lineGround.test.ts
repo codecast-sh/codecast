@@ -61,6 +61,8 @@ async function setup() {
     const project = (short_id: string, title: string, goal: string) =>
       ctx.db.insert("projects", { user_id: person, team_id: team, workspace, short_id, title, goal, status: "active", created_at: T0, updated_at: T0 } as any);
     const checkout = await project("pr-1", "Checkout", "Every cart that reaches checkout becomes an order");
+    // sentry's signals open causes: the explicit conversion step (LE4).
+    await ctx.db.patch(checkout, { line_profile: { finders: [{ id: "errors", source: "sentry", kind: ["bug"], fingerprint: "<group>", opens_causes: true }], changed_at: T0 } } as any);
     const avatars = await project("pr-2", "Avatars", "Profiles look like their owners");
     return { person, team, workspace, checkout, avatars };
   });

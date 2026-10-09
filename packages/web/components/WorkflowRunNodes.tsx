@@ -13,8 +13,9 @@ import Link from "next/link";
 import { Bot, CheckCircle2, Circle, GitFork, Loader2, Merge, Terminal, User, XCircle, Zap } from "lucide-react";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
-import { formatRunDuration, runNodeGroups, runNodeLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
+import { formatRunDuration, runNodeGroups, runNodeLine, scriptLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
 import { TaskSessionRow, type TaskLinkedSession } from "./tasks/TaskSessionList";
+import { RailProgress } from "./ContextRail";
 
 const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   agent: Bot,
@@ -94,7 +95,7 @@ function SessionNodeRow({ row, now, onOpen }: { row: RunNodeRow; now: number; on
       tone={stepTone(row)}
       leading={<span className="mt-0.5 flex-shrink-0" data-step-status={row.status}><StepMark row={row} /></span>}
       badge={titled ? <NodeLabelChip label={row.label} /> : undefined}
-      fallbackLine={runNodeLine(row)}
+      fallbackLine={scriptLine(runNodeLine(row))}
       meta={<StepMeta row={row} now={now} />}
     />
   );
@@ -103,7 +104,7 @@ function SessionNodeRow({ row, now, onOpen }: { row: RunNodeRow; now: number; on
 function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
   const TypeIcon = TYPE_ICONS[row.type] ?? Bot;
   const tone = stepTone(row);
-  const line = runNodeLine(row);
+  const line = scriptLine(runNodeLine(row));
   const href = row.session_id ? `/conversation/${row.session_id}` : null;
   const body = (
     <>
@@ -140,7 +141,9 @@ function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
   );
 }
 
-export function WorkflowRunNodes({ run, workflow, className }: { run: any; workflow?: any | null; className?: string }) {
+/** `page` heads each phase the way a page heads a section (its title, what
+ *  it was for, and how far it got); the default is the compact panel header. */
+export function WorkflowRunNodes({ run, workflow, className, headings = "panel" }: { run: any; workflow?: any | null; className?: string; headings?: "panel" | "page" }) {
   const now = useCoarseNow(30_000);
   const openLinkedSession = useOpenLinkedSession();
   const groups = runNodeGroups(run, workflow);
@@ -150,19 +153,27 @@ export function WorkflowRunNodes({ run, workflow, className }: { run: any; workf
   return (
     <div className={className ?? "space-y-2"} data-run-nodes={run?._id ?? ""}>
       {groups.map((g, i) => (
-        <div key={g.title ?? `group-${i}`} className="space-y-0.5">
-          {g.title && (
+        <section key={g.title ?? `group-${i}`} className="space-y-0.5" data-run-phase={g.title ?? ""}>
+          {g.title && (headings === "page" ? (
+            <div className="flex items-baseline gap-3 px-2 pb-1.5">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-sol-text-dim flex-shrink-0">{g.title}</h2>
+              {g.detail && <span className="min-w-0 truncate text-[11.5px] text-sol-text-dim/80" title={g.detail}>{g.detail}</span>}
+              <span className="ml-auto flex items-center gap-1.5 self-center text-[11px]">
+                <RailProgress done={g.rows.filter((r) => r.status === "completed").length} total={g.rows.length} bar={g.rows.some((r) => r.status === "failed") ? "bg-sol-red" : "bg-sol-violet"} />
+              </span>
+            </div>
+          ) : (
             <div className="flex items-center gap-1.5 px-2 pt-1" title={g.detail}>
               <span className="text-[9px] uppercase tracking-wider text-sol-cyan/70 font-semibold">{g.title}</span>
               <span className="text-[9px] text-sol-text-dim/60 tabular-nums">{g.rows.length}</span>
             </div>
-          )}
+          ))}
           {g.rows.map((row) =>
             row.session
               ? <SessionNodeRow key={row.id} row={row} now={now} onOpen={openLinkedSession} />
               : <StepRow key={row.id} row={row} now={now} />,
           )}
-        </div>
+        </section>
       ))}
     </div>
   );

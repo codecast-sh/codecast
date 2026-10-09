@@ -2,7 +2,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { gitSshUrl, remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { gitSshUrl, HOST_EXCLUDES, remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { hostProbeOrigin } from "./hostGit.js";
 import { MANIFEST_REL_PATH } from "../workspace/resolver.js";
 import { collectCopyFiles, manifestCopyEntries, sourceStat, validateRelativePath } from "../workspace/copyFiles.js";
@@ -412,7 +412,7 @@ const exclude = path.resolve(repo, result.stdout.trim());
 fs.mkdirSync(path.dirname(exclude), { recursive: true });
 if (fs.lstatSync(exclude, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error("unsafe excludes");
 const prior = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
-const missing = ["/.codecast/workspaces/", "/.codecast/worktrees/"].filter(rule => !prior.split("\\n").includes(rule));
+const missing = ${JSON.stringify(HOST_EXCLUDES)}.filter(rule => !prior.split("\\n").includes(rule));
 if (missing.length) fs.appendFileSync(exclude, "\\n" + missing.join("\\n") + "\\n", { mode: 0o600 });
 let dir = "/";
 for (const part of path.join(repo, ".codecast/workspaces").split("/").filter(Boolean)) {
