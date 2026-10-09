@@ -7,7 +7,10 @@
 
 import { waitLineParts } from "./graph";
 
-export type GraphTone = "blocked" | "met" | "failed" | "link";
+/** `withdrawn` is an edge someone deleted: a surface draws it dim, never with
+ *  `met`'s green check, because "removed blocker ct-12" and "ct-12 finished"
+ *  say opposite things about whether the work got done. */
+export type GraphTone = "blocked" | "met" | "failed" | "link" | "withdrawn";
 
 /** One clause of a change: words, then the tasks it names, then any text. */
 export type GraphClause = { verb: string; refs?: string[]; text?: string };
@@ -40,14 +43,24 @@ export function graphChange(row: { field?: string; old_value?: string; new_value
       const removed = was.filter((r) => !now.includes(r));
       const blocking = row.field === "blocked_by";
       const clauses: GraphClause[] = [];
-      if (added.length) clauses.push({ verb: blocking ? "made it wait on" : "marked it related to", refs: added });
-      if (removed.length) clauses.push({ verb: blocking ? (added.length ? "and removed" : "removed blocker") : added.length ? "and unmarked" : "unmarked related", refs: removed });
-      return clauses.length ? { tone: blocking ? (added.length ? "blocked" : "met") : "link", clauses } : null;
+      // A related edge reads as the button and undo label that make it ("Link
+      // related task…", "Linked ct-1 and ct-2"), so both clauses here say link
+      // and unlink rather than "related to".
+      if (added.length) clauses.push({ verb: blocking ? "made it wait on" : "linked it to", refs: added });
+      // A removed link reads as the button that removes it ("Unlink ct-6"), so
+      // the clause after the actor parses: "Ashot unlinked ct-6".
+      // Both branches name the edge, never the task alone: after an actor,
+      // "and removed ct-7" reads as the task being deleted, not as a blocker
+      // coming off ("Ashot made it wait on ct-5 and stopped waiting on ct-7").
+      if (removed.length) clauses.push({ verb: blocking ? (added.length ? "and stopped waiting on" : "removed blocker") : added.length ? "and unlinked" : "unlinked", refs: removed });
+      return clauses.length ? { tone: blocking ? (added.length ? "blocked" : "withdrawn") : "link", clauses } : null;
     }
     case "found_during":
       return to
         ? { tone: "link", clauses: [{ verb: "found it while working on", refs: [to] }] }
-        : { tone: "link", clauses: [{ verb: "cleared found during", refs: [from] }] };
+        // The page's own button says "Clear ct-12 as where this was found", so
+        // the clause says the same in the timeline's shape: a verb, then the ref.
+        : { tone: "link", clauses: [{ verb: "cleared where it was found:", refs: [from] }] };
     case "superseded_by":
       return to
         ? { tone: "link", clauses: [{ verb: "superseded it with", refs: [to] }] }
@@ -60,9 +73,10 @@ export function graphChange(row: { field?: string; old_value?: string; new_value
         return { tone: "met", clauses: [clause ? { verb: "made it wait", text: `${clause}, ${note}` } : { verb: "made it wait, already met:", text: to }] };
       }
       if (!to) {
+        // The wait was deleted, whatever state it had reached: withdrawn, not met.
         const { state, clause } = waitLineParts(from);
-        if (!clause) return { tone: "met", clauses: [{ verb: "removed the wait:", text: from }] };
-        return { tone: "met", clauses: [{ verb: state === "waiting" ? "stopped waiting" : "removed the wait", text: clause }] };
+        if (!clause) return { tone: "withdrawn", clauses: [{ verb: "removed the wait:", text: from }] };
+        return { tone: "withdrawn", clauses: [{ verb: state === "waiting" ? "stopped waiting" : "removed the wait", text: clause }] };
       }
       const { state, clause, note } = waitLineParts(to);
       if (state === "waiting") return { tone: "blocked", clauses: [{ verb: "reopened the wait", text: clause }] };

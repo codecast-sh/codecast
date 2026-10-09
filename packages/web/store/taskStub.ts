@@ -8,7 +8,10 @@
 export const taskStubId = (clientKey: string) => `temp_task_${clientKey}`;
 export const isTaskStubId = (id: string) => id.startsWith("temp_task_");
 
-/** A stub with the defaults a fresh task has; `fields` adds or overrides. */
+/** A stub with the defaults a fresh task has; `fields` adds or overrides.
+ *  `createTask` passes the `workspace` key the server will stamp, because a
+ *  row with none answers `workspaceKeyOfRow` with null, which every read
+ *  scoped to a row's own workspace takes as "matches nothing". */
 export function taskCreateStub(clientKey: string, fields: Record<string, unknown>) {
   const now = Date.now();
   return {

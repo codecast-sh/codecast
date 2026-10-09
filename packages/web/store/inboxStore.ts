@@ -270,7 +270,7 @@ export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLi
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { feedCoverMetaKey } from "../lib/feedCatchup";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
-import { activeWorkspaceKey } from "../lib/workspaceScope";
+import { activeWorkspaceKey, workspaceKeyOfRow } from "../lib/workspaceScope";
 import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
 import type { PendingComment } from "../lib/quoteFormat";
 import type { Comment as CommentRow } from "../lib/commentThread";
@@ -6393,7 +6393,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string, subtaskResolution?: "cascade" | "only_parent") => Promise<any>;
-  updateTask: (shortId: string, fields: { status?: string; status_id?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; sort_order?: number; duplicate_of?: string; from_call?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
+  updateTask: (shortId: string, fields: { status?: string; status_id?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string; parent?: string; sort_order?: number; duplicate_of?: string; from_call?: string; found_during?: string; subtask_resolution?: "cascade" | "only_parent" }) => Promise<any>;
   // The task graph (docs/architecture/task-graph.md TG12): the task page's
   // Blocked by row and the add-blocker palette. Each paints every row the
   // edge lives on; a refusal (a loop, a PR codecast cannot see) rolls back.
@@ -12630,8 +12630,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // from the rest.
     const clearStatusId = rest.status_id === "";
     if (clearStatusId) delete rest.status_id;
-    // `from_call` "" unlinks the call; the row stores no field then.
+    // `from_call` "" unlinks the call; the row stores no field then. Likewise
+    // `found_during` "", which the server reads as a clear (TG5).
     if (rest.from_call === "") rest.from_call = undefined;
+    if (rest.found_during === "") rest.found_during = undefined;
     for (const task of copies) {
       if (clearStatusId || (rest.status && rest.status !== (task as any).status && rest.status_id === undefined)) {
         (task as any).status_id = undefined;
@@ -12808,7 +12810,20 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const parentRow = opts.parent
       ? (Object.values(this.tasks).find((t: any) => t.short_id === opts.parent || t._id === opts.parent) as TaskItem | undefined)
       : undefined;
+    // The ACCESS key the server will stamp (lib/accessKeys computeWorkspaceKey):
+    // a subtask takes its parent's, else the team the create is routed to, else
+    // the creator's own personal key. Without it `workspaceKeyOfRow` answers
+    // null for the stub, and every read scoped to a ROW's workspace reads null
+    // as "matches nothing": the stub's readiness would reject its own live
+    // parent (parent_unknown, so the Unblocked view would withhold a fresh
+    // subtask until the echo) and the relation palette would offer no
+    // candidates on it.
+    const teamId = opts.team_id ?? parentRow?.team_id;
+    const workspace = (parentRow ? workspaceKeyOfRow(parentRow) : null)
+      ?? activeWorkspaceKey(teamId, this.currentUser?._id ? String(this.currentUser._id) : null)
+      ?? undefined;
     this.tasks[tempId] = taskCreateStub(opts.client_key, {
+      workspace,
       title: opts.title,
       description: opts.description,
       task_type: opts.task_type || "task",
@@ -12821,7 +12836,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       parent_id: parentRow?._id ?? undefined,
       plan_id: opts.plan_id ?? (parentRow as any)?.plan_id,
       project_id: opts.project_id ?? (parentRow as any)?.project_id,
-      team_id: opts.team_id ?? parentRow?.team_id,
+      team_id: teamId,
       from_call: opts.from_call,
     }) as any as TaskItem;
   }),
