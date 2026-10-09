@@ -6,7 +6,8 @@ import type { ActivityEvent } from "../../convex/activity";
 import type { GalleryCard } from "../../convex/apps";
 import { errorData } from "../lib/errors";
 import { ago, plural } from "../lib/format";
-import { useIdentity, useVisitorMutation, useVisitorQuery } from "../lib/identity";
+import { useMutation, useQuery } from "convex/react";
+import { useMaybeIdentity, useRetryIdentity } from "../lib/identity";
 import { MAKE_PARAM, appUrl, navigate, roomUrl } from "../lib/router";
 import { useMedia } from "../lib/useMedia";
 import { useNow } from "../lib/useNow";
@@ -19,17 +20,18 @@ import { Keys } from "../ui/Keys";
 import { Link } from "../ui/Link";
 import { LiveDot } from "../ui/LiveDot";
 import { useToast } from "../ui/Toast";
+import { StuckNote } from "./StuckNote";
 import { useCharacterPicker } from "./CharacterPicker";
 import { Thumbnail } from "./Thumbnail";
 import { useOpenGraph } from "./openGraph";
 import s from "./Home.module.css";
 
 const EXAMPLES = [
-  "a guestbook where every visitor plants a tiny planet",
+  "a guestbook of tiny planets",
   "a frog choir, one note per person",
-  "a wall of haiku anyone can add a line to",
-  "a paper plane contest, longest throw today wins",
-  "a snack vote for the office, with a live bar chart",
+  "a haiku wall, a line each",
+  "a paper plane contest",
+  "a snack vote with a live chart",
 ];
 
 /** Ideas to start from. One whose kind of app the gallery already shows is
@@ -53,7 +55,7 @@ const JUST_LIVE_MS = 5 * 60_000;
 
 export function Home() {
   useOpenGraph(null);
-  const gallery = useVisitorQuery(api.apps.gallery, { limit: 24 });
+  const gallery = useQuery(api.apps.gallery, { limit: 24 });
   const maker = useRef<MakerHandle>(null);
 
   // "Make your own" from an app's room lands here with the maker ready.
@@ -65,7 +67,8 @@ export function Home() {
 
   const names = gallery?.apps.map((a) => a.name).join("\n") ?? "";
   const starters = STARTERS.filter((st) => !st.like.test(names)).slice(0, STARTERS_SHOWN);
-  const busy = (gallery?.apps[0]?.here_count ?? 0) > 0;
+  // The busiest app takes a double-height tile only when four others can fill the cells beside it.
+  const busy = (gallery?.apps[0]?.here_count ?? 0) > 0 && (gallery?.apps.length ?? 0) >= 5;
 
   return (
     <div className={s.page}>
@@ -119,7 +122,8 @@ export function Home() {
 }
 
 function TopBar() {
-  const { me } = useIdentity();
+  const me = useMaybeIdentity()?.me;
+  const retry = useRetryIdentity();
   const openPicker = useCharacterPicker();
   return (
     <header className={s.top}>
@@ -127,18 +131,22 @@ function TopBar() {
         <Blob size={22} />
         Clayground
       </a>
-      <button className={s.you} onClick={() => openPicker()} aria-label="Change your character">
-        <Face person={me} size={28} />
-        <span className={s.youName}>{me.name}</span>
-        <span className={s.youSub}>that's you</span>
-      </button>
+      {me ? (
+        <button className={s.you} onClick={() => openPicker()} aria-label="Change your character">
+          <Face person={me} size={28} />
+          <span className={s.youName}>{me.name}</span>
+          <span className={s.youSub}>that's you</span>
+        </button>
+      ) : (
+        <StuckNote onRetry={retry} />
+      )}
     </header>
   );
 }
 
 /** The latest things people did anywhere in Clayground; new ones slide in on top. */
 function RightNow() {
-  const events = useVisitorQuery(api.activity.recent, {});
+  const events = useQuery(api.activity.recent, {});
   const now = useNow(30_000);
   const seen = useRef<Set<string> | null>(null);
   if (events && !seen.current) seen.current = new Set(events.map((e) => e.id));
@@ -186,33 +194,46 @@ type MakerHandle = { make: (prompt: string) => void; focus: () => void };
  *  to type into on arrival where there is a keyboard and a pointer; a
  *  phone's keyboard would cover the page, so there it waits for a tap. */
 export function MakerBar({ handle, autoFocus = false }: { handle?: React.RefObject<MakerHandle | null>; autoFocus?: boolean }) {
-  const create = useVisitorMutation(api.apps.create);
+  const identity = useMaybeIdentity();
+  const create = useMutation(api.apps.create);
   const toast = useToast();
+  // Asked before this browser is a visitor (a fast first visit): it goes
+  // the moment it is one.
+  const [waiting, setWaiting] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   // Examples rotate until the person reaches for the field themselves.
   const [reached, setReached] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  const example = useRotatingExample(text === "" && !reached);
+  const example = useRotatingExample(text === "" && !reached, input);
   const typeFirst = useMedia("(hover: hover) and (pointer: fine)");
 
   useEffect(() => {
     if (autoFocus && typeFirst) input.current?.focus({ preventScroll: true });
   }, [autoFocus, typeFirst]);
 
-  const make = async (prompt: string) => {
-    const p = prompt.trim();
-    if (!p || busy) return;
-    setText(p);
-    setBusy(true);
+  const send = async (prompt: string, creds: NonNullable<typeof identity>["creds"]) => {
     try {
-      const { slug } = await create({ prompt: p });
+      const { slug } = await create({ ...creds, prompt });
       navigate(roomUrl(slug));
     } catch (err) {
       setBusy(false);
       toast({ text: errorData(err).message });
     }
   };
+  const make = (prompt: string) => {
+    const p = prompt.trim();
+    if (!p || busy) return;
+    setText(p);
+    setBusy(true);
+    if (identity) void send(p, identity.creds);
+    else setWaiting(p);
+  };
+  useEffect(() => {
+    if (!identity || waiting === null) return;
+    setWaiting(null);
+    void send(waiting, identity.creds);
+  }, [identity, waiting]);
 
   if (handle) handle.current = { make, focus: () => input.current?.focus() };
 
@@ -220,7 +241,7 @@ export function MakerBar({ handle, autoFocus = false }: { handle?: React.RefObje
     <form className={s.maker} onSubmit={(e) => {
       e.preventDefault();
       // An empty field showing an example makes that example.
-      void make(text || (EXAMPLES.includes(example) ? example : ""));
+      make(text || (EXAMPLES.includes(example) ? example : ""));
     }}>
       <label className={s.makerField}>
         <span className="sr-only">Make something</span>
@@ -251,19 +272,32 @@ export function MakerBar({ handle, autoFocus = false }: { handle?: React.RefObje
 const FIRST_EXAMPLE_MS = 1_200;
 const EXAMPLE_MS = 3_200;
 
-/** "Make something", then after a moment idle, a whole example at a time. */
-function useRotatingExample(active: boolean): string {
-  const [i, setI] = useState(-1);
+/** "Make something", then after a moment idle, a whole example at a time:
+ *  only one that fits the field whole at its width now, never one cut off. */
+function useRotatingExample(active: boolean, input: React.RefObject<HTMLInputElement | null>): string {
+  const [example, setExample] = useState(PLACEHOLDER);
   useEffect(() => {
-    if (!active) return setI(-1);
+    if (!active) return setExample(PLACEHOLDER);
+    let n = 0;
     let timer = setTimeout(function next() {
-      setI((n) => n + 1);
+      const fitting = input.current ? EXAMPLES.filter(fits(input.current)) : [];
+      setExample(fitting.length ? fitting[n++ % fitting.length] : PLACEHOLDER);
       timer = setTimeout(next, EXAMPLE_MS);
     }, FIRST_EXAMPLE_MS);
     return () => clearTimeout(timer);
-  }, [active]);
-  return i < 0 ? "Make something" : EXAMPLES[i % EXAMPLES.length];
+  }, [active, input]);
+  return example;
 }
+
+const PLACEHOLDER = "Make something";
+const pen = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+
+/** Whether a text fits `field` whole, in the field's own font. */
+const fits = (field: HTMLInputElement) => (text: string) => {
+  if (!pen) return true;
+  pen.font = getComputedStyle(field).font;
+  return pen.measureText(text).width <= field.clientWidth;
+};
 
 function AppTile({ card, big }: { card: GalleryCard; big: boolean }) {
   const now = useNow(60_000);
