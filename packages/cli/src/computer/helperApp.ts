@@ -47,6 +47,15 @@ export const HELPER_BUNDLE_ID = "sh.codecast.computer";
  *  same team the release signs with and no other. */
 export const HELPER_SIGNING_TEAM = "WRG9THCK9Q";
 
+/** The Developer ID identity of HELPER_SIGNING_TEAM in this machine's
+ *  keychain, or null. A helper signed by anything else is a different app to
+ *  TCC, so the grants a machine already holds would not cover it. */
+export function keychainSigningIdentity(): string | null {
+  if (process.platform !== "darwin") return null;
+  const found = spawnSync("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8", timeout: 30_000 }).stdout ?? "";
+  return new RegExp(`"(Developer ID Application: [^"]*\\(${HELPER_SIGNING_TEAM}\\))"`).exec(found)?.[1] ?? null;
+}
+
 export function computerHome(): string {
   const root = defaultConfigDir();
   return path.join(root, "computer");
