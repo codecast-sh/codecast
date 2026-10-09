@@ -19,6 +19,8 @@ import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { notificationActor } from "../lib/notificationTypes";
+import { deliverChatToFace } from "../lib/chat/faceChat";
 // Arriving chat messages → in-app toasts.
 //
 // Mounted once, app-wide, beside the other background sync effects — the point
@@ -101,6 +103,62 @@ export function useChatToasts(): void {
     toast.dismiss();
   }, []);
 
+  // Every line shown once, whichever door it came through first: the rail
+  // (any line in a room) or a chat notification (a line the server knows is
+  // for you: a mention, a reply in your thread, a DM).
+  const shownRef = useRef<Set<string>>(new Set());
+
+  /** Sound it, then hand it to its author's face in the header, else a toast. */
+  const present = useCallback(
+    (data: ChatToastData, authorId: string, opts: { faceable: boolean; threadRootId?: string; at: number }) => {
+      shownRef.current.add(data.messageId);
+      // Every arrival gets the sound (Slack's rule: a banner is never silent).
+      soundChatMessage(data.messageId);
+      const showToast = () =>
+        toast.custom(
+          (id) => (
+            <ChatToast
+              data={data}
+              onOpen={open}
+              onMuteChannel={mute}
+              onSnooze={snooze}
+              onDismiss={() => toast.dismiss(id)}
+            />
+          ),
+          {
+            // A loud card keeps its own slot (it is about you, and a second mention
+            // must not silently replace the first). Quiet cards from one channel
+            // collapse onto one id, which is what makes a busy room one card.
+            id: toastIdFor(data),
+            duration: data.tier === "loud" ? LOUD_DURATION_MS : QUIET_DURATION_MS,
+          },
+        );
+      // A teammate's line drops from their face in the header instead of
+      // landing as a card over the work (lib/chat/faceChat). Agents, Slack
+      // authors and huddle digests have no face there, and neither does
+      // anyone while the header is hidden: those still toast.
+      const onFace =
+        opts.faceable &&
+        deliverChatToFace(
+          authorId,
+          {
+            messageId: data.messageId,
+            channelId: data.channelId,
+            channelName: data.channelName,
+            isDm: !!data.isDm,
+            threadRootId: opts.threadRootId,
+            preview: data.preview,
+            at: opts.at,
+            loud: data.tier === "loud",
+            count: data.collapsedCount ?? 1,
+          },
+          showToast,
+        );
+      if (!onFace) showToast();
+    },
+    [open, mute, snooze],
+  );
+
   useWatchEffect(() => {
     const state: any = useInboxStore.getState();
     const rail: ChatRailRow[] = state.chatRail ?? [];
@@ -139,6 +197,7 @@ export function useChatToasts(): void {
       if (!last || !prev) continue;
       const messageId = String(last._id);
       if (messageId === prev.messageId) continue;
+      if (shownRef.current.has(messageId)) continue;
       if (last.user_id === viewerId) continue;
 
       const full = messages[messageId];
@@ -223,22 +282,90 @@ export function useChatToasts(): void {
         isCall,
       };
 
-      // Every card gets the sound (Slack's rule: a banner is never silent).
-      // The tier still decides the card's dwell and accent; the sound is one
-      // sound so nobody learns to ignore the "ordinary" one.
-      soundChatMessage(messageId);
-      toast.custom(
-        () => <ChatToast data={data} onOpen={open} onMuteChannel={mute} onSnooze={snooze} />,
+      present(data, String(last.user_id), {
+        faceable: !isCall && !isAgent && !slackAuthor,
+        threadRootId: threadRootId ?? undefined,
+        at: last.created_at ?? Date.now(),
+      });
+    }
+  }, [s, viewerId, railLive, present]);
+
+  // The server's word on lines addressed to you. The rail judges "for me"
+  // only from what this window has loaded: a reply in a thread you are in but
+  // have not opened reads as room chatter, and a mentions-only room drops it,
+  // while the bell already rang and the sound already played (DesktopProvider).
+  // A chat notification is the server saying this line is yours, so one the
+  // rail has not shown arrives here, addressed.
+  const notifSig = useInboxStore((st: any) => chatNotifSig(st.notifications));
+  const notifSeenRef = useRef<Set<string>>(new Set());
+  const mountedAtRef = useRef(Date.now());
+  useWatchEffect(() => {
+    if (!viewerId || !notifSig) return;
+    const st: any = useInboxStore.getState();
+    const members: any[] = st.teamMembers ?? [];
+    for (const n of Object.values(st.notifications ?? {}) as any[]) {
+      if (!isChatNotif(n)) continue;
+      const id = String(n._id);
+      if (notifSeenRef.current.has(id)) continue;
+      notifSeenRef.current.add(id);
+      // Only what lands while this window is up, and only while it is news.
+      if (n.read || n.created_at < mountedAtRef.current || Date.now() - n.created_at > NOTIF_FRESH_MS) continue;
+      const messageId = n.chat_message_id ? String(n.chat_message_id) : "";
+      if (!messageId || shownRef.current.has(messageId)) continue;
+      if ((st.clientState?.ui?.chat_snooze_until ?? 0) > Date.now()) continue;
+      if (hasAppWindow("chat") && desktopAppWindow() !== "chat") continue;
+      const channelId = String(n.entity_id ?? "");
+      const full: ChatMessageRow | undefined = st.chatMessages?.[messageId];
+      const railLast = (st.chatRail ?? []).find((r: ChatRailRow) => String(r.channel_id) === channelId)?.last_message;
+      const fromRail = railLast && String(railLast._id) === messageId ? railLast : undefined;
+      const threadRootId = full?.thread_root_id ?? fromRail?.thread_root_id ?? undefined;
+      const focused = typeof document === "undefined" ? true : document.hasFocus();
+      if (focused && isChatContextOnScreen(channelId, threadRootId)) continue;
+      const authorId = String(n.actor_user_id ?? full?.user_id ?? fromRail?.user_id ?? "");
+      if (!authorId || authorId === viewerId) continue;
+      const author = members.find((m) => String(m?._id) === authorId) ?? knownAgentMember(authorId);
+      const isAgent = !!author?.is_bot || full?.author_kind === "agent" || fromRail?.author_kind === "agent";
+      const isDm = n.type === "chat_dm" || st.chatChannels?.[channelId]?.kind === "dm";
+      const name = memberName(author) || notificationActor(n).name || "Someone";
+      present(
         {
-          // A loud card keeps its own slot (it is about you, and a second mention
-          // must not silently replace the first). Quiet cards from one channel
-          // collapse onto one id, which is what makes a busy room one card.
-          id: toastIdFor(data),
-          duration: tier === "loud" ? LOUD_DURATION_MS : QUIET_DURATION_MS,
+          messageId,
+          channelId,
+          channelName: isDm ? name : st.chatChannels?.[channelId]?.name ?? "channel",
+          isDm,
+          authorName: name,
+          authorAvatarUrl: isAgent ? undefined : author?.image || author?.github_avatar_url || notificationActor(n).avatar,
+          authorIsAgent: isAgent,
+          preview: toastPreview(full?.content ?? fromRail?.preview ?? notifBody(n.message ?? "")),
+          tier: "loud",
+          inThread: n.type === "chat_reply" || !!threadRootId,
         },
+        authorId,
+        { faceable: !isAgent && !full?.external_author, threadRootId, at: n.created_at },
       );
     }
-  }, [s, viewerId, railLive, open, mute, snooze]);
+  }, [notifSig, viewerId, present]);
+}
+
+/** A chat notification lands on screen only while it is this fresh. */
+const NOTIF_FRESH_MS = 2 * 60_000;
+const CHAT_NOTIF_TYPES = new Set(["chat_mention", "chat_reply", "chat_dm"]);
+
+function isChatNotif(n: any): boolean {
+  return !!n && CHAT_NOTIF_TYPES.has(n.type) && !n.quiet;
+}
+
+/** Wake only when the set of unread chat notifications moves. */
+function chatNotifSig(notifications: Record<string, any> | undefined): string {
+  let out = "";
+  for (const n of Object.values(notifications ?? {})) if (isChatNotif(n) && !n.read) out += `${n._id},`;
+  return out;
+}
+
+/** The line itself, without the row's "Cam replied in a thread in #team:" lead. */
+function notifBody(message: string): string {
+  const at = message.indexOf(": ");
+  return at > 0 && at < 80 ? message.slice(at + 2) : message;
 }
 
 function toastIdFor(data: ChatToastData): string {

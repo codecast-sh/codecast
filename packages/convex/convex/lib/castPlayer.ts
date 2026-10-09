@@ -13,7 +13,13 @@
 // --cast-radius, --cast-font, --cast-aspect, or ::part(controls | scrubber |
 // chapters | play-button). Events: "ready", "chapterchange" ({ index, title }),
 // "timeupdate"; properties currentTime, duration, chapters, chapterIndex;
-// methods play(), pause(), seek(seconds), goTo(index).
+// methods play(), pause(), seek(seconds), goTo(index), setMarkers(list).
+//
+// The page timeline: unless a motion page already provides one, the player the
+// viewer last played (else the first) answers window.__castTimeline (time,
+// duration, seek, play, pause, playing, setMarkers), announced once with
+// "cast:timeline-ready" on window. Markers are comment pins on the scrubber; a
+// click seeks there and dispatches "cast:marker" ({ id, t, n }) on window.
 //
 // Kept as source text, not a function: a bundler rewrites a function (helpers
 // hoisted outside its body), so its toString() does not run on its own. Plain
@@ -82,6 +88,12 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     ".tip b{display:block;font-weight:700;font-size:13px;line-height:1.3}",
     ".tip span{opacity:.75;font-variant-numeric:tabular-nums;font-size:12px}",
     ":host([data-drag]) .tip{opacity:1}",
+    ".marks{position:absolute;left:0;right:0;top:0;height:0}",
+    ".mk{all:unset;position:absolute;top:-19px;width:18px;height:18px;margin-left:-9px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#b58900;box-shadow:0 2px 6px rgba(0,0,0,.4),0 0 0 2px var(--bg);cursor:pointer;display:grid;place-items:center;overflow:hidden;transition:transform .14s ease}",
+    ".mk>span{transform:rotate(45deg);font:700 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#000}",
+    ".mk>img{transform:rotate(45deg);width:100%;height:100%;object-fit:cover}",
+    ".mk:hover,.mk:focus-visible{transform:rotate(-45deg) scale(1.18)}",
+    ":host([data-marks]:not([data-started])) .bar{opacity:1;pointer-events:auto}",
     ".row{display:flex;align-items:center;gap:4px;margin-top:2px}",
     "button{font:inherit}",
     "button.ic{flex:none;width:40px;height:40px;border:0;border-radius:11px;background:transparent;color:var(--fg);display:grid;place-items:center;cursor:pointer;transition:background .15s ease,transform .15s ease}",
@@ -155,7 +167,7 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
       '<div class="menu" part="chapters" role="menu"></div>' +
       '<div class="err">This video could not be loaded.</div>' +
       '<div class="bar" part="controls">' +
-        '<div class="scrub" part="scrubber" role="slider" aria-label="Seek" tabindex="-1">' + segs + '<div class="knob"></div><div class="tip"><b></b><span></span></div></div>' +
+        '<div class="scrub" part="scrubber" role="slider" aria-label="Seek" tabindex="-1">' + segs + '<div class="marks"></div><div class="knob"></div><div class="tip"><b></b><span></span></div></div>' +
         '<div class="row">' +
           '<button class="ic pp" aria-label="Play">' + svg("play") + "</button>" +
           (multi ? '<button class="ic skip prev" aria-label="Previous chapter">' + svg("prev") + '</button><button class="ic skip next" aria-label="Next chapter">' + svg("next") + "</button>" : "") +
@@ -231,6 +243,9 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     this._sync();
     this._title();
     this.dispatchEvent(new Event("ready"));
+    claimTimeline(this, false);
+    this.addEventListener("play", function () { claimTimeline(self, true); });
+    window.addEventListener("resize", function () { self._drawMarks(); });
   };
 
   // --- chapters and timing ---
@@ -279,6 +294,7 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     var self = this, known = this.ch.every(function (c) { return c.duration; });
     this.segs.forEach(function (s, k) { s.style.flexGrow = known ? String(self.ch[k].duration) : "1"; });
     this._renderMenu();
+    this._drawMarks();
   };
 
   P._load = function (k, t, play) {
@@ -461,6 +477,66 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
       navigator.mediaSession.setActionHandler("previoustrack", function () { self.prevChapter(); });
     } catch (e) {}
   };
+
+  // --- comment markers: pins on the scrubber at film times ---
+  P.setMarkers = function (list) {
+    this._marks = (Array.isArray(list) ? list : []).filter(function (m) { return m && isFinite(m.t); });
+    if (this._marks.length) this.setAttribute("data-marks", ""); else this.removeAttribute("data-marks");
+    this._drawMarks();
+  };
+  // A film time as an x offset in the scrubber, through the chapter segments.
+  P._xAt = function (t) {
+    var st = this._starts(), k = 0;
+    for (var j = 0; j < st.length; j++) if (t >= st[j]) k = j;
+    var seg = this.segs[k], d = this.ch[k] && this.ch[k].duration;
+    if (!seg || !d) return null;
+    return seg.offsetLeft + Math.max(0, Math.min(1, (t - st[k]) / d)) * seg.offsetWidth;
+  };
+  P._drawMarks = function () {
+    var self = this, box = this.$ && this.$(".marks");
+    if (!box) return;
+    box.innerHTML = "";
+    (this._marks || []).forEach(function (m) {
+      var x = self._xAt(+m.t);
+      if (x === null) return;
+      var b = document.createElement("button");
+      b.className = "mk";
+      b.style.left = x + "px";
+      b.title = fmt(m.t) + (m.label ? "  " + m.label : "");
+      b.setAttribute("aria-label", "Comment " + m.n + " at " + fmt(m.t));
+      b.innerHTML = m.avatar ? '<img alt="" src="' + esc(m.avatar) + '">' : "<span>" + esc(m.n) + "</span>";
+      b.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        self.setAttribute("data-started", "");
+        self.seek(+m.t, false);
+        window.dispatchEvent(new CustomEvent("cast:marker", { detail: { id: m.id || null, t: +m.t, n: m.n } }));
+      });
+      box.appendChild(b);
+    });
+  };
+
+  // --- the page timeline (window.__castTimeline) ---
+  var active = null, marks = [], announced = false;
+  function claimTimeline(player, force) {
+    var cur = window.__castTimeline;
+    if (cur && cur.__source !== "cast-player") return;
+    if (active && !force) return;
+    if (active && active !== player) active.setMarkers([]);
+    active = player;
+    active.setMarkers(marks);
+    window.__castTimeline = {
+      __source: "cast-player",
+      time: function () { return active.currentTime; },
+      duration: function () { return active.duration; },
+      seek: function (t) { active.setAttribute("data-started", ""); active.seek(t); },
+      play: function () { active.play(); },
+      pause: function () { active.pause(); },
+      playing: function () { return !active.paused; },
+      setMarkers: function (list) { marks = list || []; active.setMarkers(marks); }
+    };
+    if (!announced) { announced = true; window.dispatchEvent(new Event("cast:timeline-ready")); }
+  }
 
   // --- scrubber: one timeline over every chapter ---
   P._timeAt = function (clientX) {

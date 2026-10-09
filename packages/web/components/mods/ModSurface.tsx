@@ -31,7 +31,10 @@ export function ModSurfaceView({ runtime, surface, instance, fallback }: { runti
   if (runtime.status === "failed") return <ErrorBox title={`${runtime.row.title ?? runtime.row.name} failed to load`} text={runtime.error ?? "unknown error"} />;
   if (state.pass && state.tree === null && fallback) return <>{fallback}</>;
   return (
-    <div className="min-w-0" data-mod={runtime.row.name}>
+    // A surface draws at the app's UI scale wherever it mounts: a fence sits
+    // inside a message's prose, whose link, list and heading rules would
+    // otherwise restyle the mod's elements.
+    <div className="not-prose min-w-0 text-[13px] leading-normal text-sol-text" data-mod={runtime.row.name}>
       {state.error && state.tree === undefined ? <ErrorBox title={`${runtime.row.title ?? runtime.row.name} could not draw this`} text={state.error} retry={state.retry} /> : null}
       {state.tree === undefined && !state.error ? <div className="h-16 animate-pulse rounded-lg bg-[color-mix(in_srgb,var(--sol-text)_4%,transparent)]" /> : null}
       {/* A tree that throws while drawing breaks only its own surface, never the sidebar or conversation around it. */}
