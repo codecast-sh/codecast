@@ -71,17 +71,22 @@ describe("removeDep", () => {
 
   test("errors clearly when the edge does not exist", async () => {
     const { ctx } = await makeCtx([task("ct-1", { blocks: ["ct-2"] }), task("ct-2", { blocked_by: ["ct-1"] })]);
-    await expect(remove(ctx, { short_id: "ct-2", blocked_by: "ct-nope" })).rejects.toThrow("ct-2 has no blocked-by dependency on ct-nope");
-    await expect(remove(ctx, { short_id: "ct-2", blocks: "ct-1" })).rejects.toThrow("ct-2 has no blocks dependency on ct-1");
+    await expect(remove(ctx, { short_id: "ct-2", blocked_by: "ct-nope" })).rejects.toThrow(
+      "ct-2 is not blocked by ct-nope; cast task show ct-2 lists its blockers");
+    // ct-2 does hold the other side of this edge, so the backwards hint takes
+    // the place of the pointer; the pointer's own wording is covered below.
+    await expect(remove(ctx, { short_id: "ct-2", blocks: "ct-1" })).rejects.toThrow("ct-2 does not block ct-1");
+    await expect(remove(ctx, { short_id: "ct-1", blocks: "ct-404" })).rejects.toThrow(
+      "ct-1 does not block ct-404; cast task show ct-1 lists what it blocks");
   });
 
   // The usual cause is the edge named the other way round.
   test("a remove naming the edge backwards says which way it points", async () => {
     const { ctx } = await makeCtx([task("ct-1", { blocks: ["ct-2"] }), task("ct-2", { blocked_by: ["ct-1"] })]);
     await expect(remove(ctx, { short_id: "ct-1", blocked_by: "ct-2" })).rejects.toThrow(
-      "ct-1 has no blocked-by dependency on ct-2; ct-2 waits on ct-1 instead (cast task dep ct-2 --remove-blocked-by ct-1)");
+      "ct-1 is not blocked by ct-2; ct-2 waits on ct-1 instead (cast task dep ct-2 --remove-blocked-by ct-1)");
     await expect(remove(ctx, { short_id: "ct-2", blocks: "ct-1" })).rejects.toThrow(
-      "ct-2 has no blocks dependency on ct-1; ct-2 waits on ct-1 instead (cast task dep ct-2 --remove-blocked-by ct-1)");
+      "ct-2 does not block ct-1; ct-2 waits on ct-1 instead (cast task dep ct-2 --remove-blocked-by ct-1)");
   });
 
   test("removes a dangling edge whose other task no longer exists", async () => {
@@ -177,5 +182,38 @@ describe("removeDep", () => {
   test("rejects a task the caller cannot access", async () => {
     const { ctx } = await makeCtx([task("ct-x", { user_id: "u_other", blocked_by: ["ct-1"] })]);
     await expect(remove(ctx, { short_id: "ct-x", blocked_by: "ct-1" })).rejects.toThrow("Task ct-x not found");
+  });
+
+  // The web's removal rides the durable outbox, which replays an entry whose
+  // ack never arrived: a removal that committed must not fail on every boot.
+  // The CLI keeps the loud error, since applyBlockers reads its exit code.
+  describe("an edge already gone", () => {
+    const gone = () => [task("ct-1"), task("ct-2")];
+
+    test("is a no-op for a caller that asked to tolerate it", async () => {
+      const { ctx, tables } = await makeCtx(gone());
+      for (const args of [{ blocked_by: "ct-1" }, { blocks: "ct-1" }] as const) {
+        expect(await removeDepCore(ctx, USER as any, { short_id: "ct-2", ...args }, undefined, { missing: "ignore" })).toEqual({ success: true });
+      }
+      expect([row(tables, "ct-2").blocked_by, row(tables, "ct-2").blocks]).toEqual([undefined, undefined]);
+      expect(tables.task_history).toEqual([]);
+      expect(unblockedNotes(tables)).toEqual([]);
+    });
+
+    test("still fails by default, so an agent never reads it as unblocked", async () => {
+      const { ctx } = await makeCtx(gone());
+      await expect(remove(ctx, { short_id: "ct-2", blocked_by: "ct-1" }))
+        .rejects.toThrow("ct-2 is not blocked by ct-1; cast task show ct-2 lists its blockers");
+    });
+
+    test("replaying the real removal twice leaves one history row and one unblock", async () => {
+      const { ctx, tables } = await makeCtx([task("ct-1", { blocks: ["ct-2"] }), task("ct-2", { blocked_by: ["ct-1"] })]);
+      const replay = () => removeDepCore(ctx, USER as any, { short_id: "ct-2", blocked_by: "ct-1" }, undefined, { missing: "ignore" });
+      await replay();
+      await replay();
+      expect([row(tables, "ct-2").blocked_by, row(tables, "ct-1").blocks]).toEqual([[], []]);
+      expect(tables.task_history.filter((h) => h.field === "blocked_by")).toHaveLength(1);
+      expect(unblockedNotes(tables)).toHaveLength(1);
+    });
   });
 });

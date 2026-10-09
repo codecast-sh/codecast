@@ -17,7 +17,7 @@ import { renderGoalsBrief, type GoalsBrief } from "@codecast/shared/contracts/go
 // The shared set ships inside the CLI, so every project reads the same one.
 import SHARED_PRINCIPLES from "../../../docs/principles.md" with { type: "text" };
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { taskWorkspaceScope } from "./cardCommand.js";
+import { callerUserId, taskWorkspaceScope } from "./cardCommand.js";
 import { commandGroup } from "./commandGroups.js";
 import { lineProjectFor, scopeFor } from "./signalCommand.js";
 import { CODECAST_PRINCIPLES, loadLineProfile } from "./lineProfile.js";
@@ -54,7 +54,7 @@ export function registerGoalsCommand(program: Command, deps: PublishDeps): void 
         console.error(`Task not found: ${options.task}`);
         process.exit(1);
       }
-      const scope = task ? taskWorkspaceScope(task) : await scopeFor(deps, options.team, false, lineProjectFor(options.team, options.project));
+      const scope = task ? taskWorkspaceScope(task, await callerUserId(deps)) : await scopeFor(deps, options.team, false, lineProjectFor(options.team, options.project));
       const data: GoalsBrief = await apiPost(deps, "/cli/goals/brief", scope, { read: true });
       const { repoRootOf } = await import("./reviewCommand.js");
       const root = repoRootOf(cwd);

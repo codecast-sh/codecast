@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cliErrorMessage, humanizeConvexError } from "./convexErrors";
+import { cliErrorMessage, humanizeConvexError, unknownServerArg } from "./convexErrors";
 
 describe("humanizeConvexError", () => {
   test("structured ConvexError data answers with its message", () => {
@@ -60,4 +60,27 @@ describe("cliErrorMessage", () => {
 test("String(err) of a wrapped server error, with its own name first", () => {
   const text = String(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught ConvexError: That machine is not yours"));
   expect(humanizeConvexError(text)).toBe("That machine is not yours");
+});
+
+describe("an argument the deployment does not know", () => {
+  // A Convex validator is a closed object, so an argument added after the
+  // running deployment was pushed takes the whole call down with it. CLI
+  // releases auto-update ahead of a convex push, so this is what a person
+  // hits first, and a validator dump tells them nothing.
+  const raw = {
+    message:
+      "[CONVEX A(plans:get)] [Request ID: abc] Server Error\nUncaught ArgumentValidationError: Object contains extra field `conversation_id` that is not in the validator. Validator: v.object({api_token: v.string(), short_id: v.string()})",
+  };
+
+  test("is named, so a read can ask again without it", () => {
+    expect(unknownServerArg(raw)).toBe("conversation_id");
+    expect(unknownServerArg({ message: "Uncaught Error: Task not found" })).toBeNull();
+  });
+
+  test("reads as the cause rather than a validator dump", () => {
+    const line = cliErrorMessage(raw);
+    expect(line).toContain("older than your CLI");
+    expect(line).toContain("conversation_id");
+    expect(line).not.toContain("v.object");
+  });
 });

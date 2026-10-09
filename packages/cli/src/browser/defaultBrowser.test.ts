@@ -69,7 +69,10 @@ async function run(driver: "engine" | "builtin", args: string[], codecastDir?: s
   fs.writeFileSync(stderr, "");
   const child = Bun.spawn([process.execPath, "--eval", script], {
     cwd: import.meta.dir,
-    env: { ...process.env, CODECAST_DIR: dir, AGENT_BROWSER_SOCKET_DIR: path.join(dir, "engine"), CODECAST_SESSION_ID: "", CLAUDE_SESSION_ID: "", CAST_BROWSER_LEGACY: "1", NO_COLOR: "1" },
+    // CODECAST_REMOTE_DEVICE: a cloud host carries it, and the child would
+    // inherit it and route every verb to the host's own Chrome instead of the
+    // human's (bridge/real.ts hostOwnsBrowser). These cases are about a laptop.
+    env: { ...process.env, CODECAST_DIR: dir, AGENT_BROWSER_SOCKET_DIR: path.join(dir, "engine"), CODECAST_SESSION_ID: "", CLAUDE_SESSION_ID: "", CAST_BROWSER_LEGACY: "1", NO_COLOR: "1", CODECAST_REMOTE_DEVICE: "" },
     stdout: Bun.file(stdout),
     stderr: Bun.file(stderr),
   });
