@@ -1,13 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { SOL } from "../../../blog/blogChrome";
 import { Stage, t } from "../../../blog/figureKit";
-import { Label, Sheet, type Ink } from "../figureParts";
 
 /**
- * Figures for "share a session": which of the three needs each tool covers,
- * and what each one shows across the life of one session.
+ * Figures for "share a session": which of the three needs each tool covers.
  */
 
 // ─── Three needs, four tools ───────────────────────────────────────────────
@@ -57,85 +54,6 @@ export function ShareNeedsFigure() {
           ))}
         </div>
       </div>
-    </Stage>
-  );
-}
-
-// ─── One session's life, seen through each tool ────────────────────────────
-
-/** A session runs from START to END; each lane shows when, and what, a reader can see of it. */
-export function SessionLifeFigure() {
-  const X0 = 170;
-  const W = 560;
-  const START = 0.08;
-  const END = 0.62;
-  const x = (f: number) => X0 + f * W;
-  const SWEEP = 3.6;
-  const at = (f: number) => 0.2 + SWEEP * f;
-  const lanes: { name: string; sub: string; ink: Ink; draw: (y: number) => ReactNode }[] = [
-    {
-      name: "Claude Code link",
-      sub: "cloud sessions",
-      ink: "orange",
-      draw: (y) => (
-        <>
-          <circle cx={x(0.3)} cy={y + 9} r={5} fill={SOL.orange} className="bj-pop" style={t(at(0.3))} />
-          <Label x={x(0.3) - 6} y={y + 30} lines={["opened: the latest state, no live updates"]} ink="orange" size={10} className="bj-fade" style={t(at(0.3) + 0.1)} />
-          <circle cx={x(0.88)} cy={y + 9} r={5} fill={SOL.orange} className="bj-pop" style={t(at(0.88))} />
-          <Label x={x(0.88) + 6} y={y + 30} anchor="end" lines={["opened again"]} ink="orange" size={10} className="bj-fade" style={t(at(0.88) + 0.1)} />
-        </>
-      ),
-    },
-    {
-      name: "Remote Control",
-      sub: "claude --rc",
-      ink: "violet",
-      draw: (y) => (
-        <>
-          <rect x={x(START)} y={y + 3} width={(END - START) * W} height={12} rx={3} fill={`${SOL.violet}55`} className="bj-grow" style={t(at(START), SWEEP * (END - START))} />
-          <Label x={x(END) + 10} y={y + 13} lines={["gone when the session ends"]} ink="violet" size={10} className="bj-fade" style={t(at(END))} />
-        </>
-      ),
-    },
-    {
-      name: "codecast",
-      sub: "daemon sync",
-      ink: "cyan",
-      draw: (y) => (
-        <>
-          <rect x={x(START)} y={y + 3} width={(END - START) * W} height={12} rx={3} fill={`${SOL.cyan}88`} className="bj-grow" style={t(at(START), SWEEP * (END - START))} />
-          <rect x={x(END)} y={y + 3} width={(1 - END) * W} height={12} rx={3} fill={`${SOL.cyan}2a`} stroke={SOL.cyan} strokeOpacity={0.4} className="bj-grow" style={t(at(END), SWEEP * (1 - END))} />
-          <Label x={x(START) + 8} y={y + 32} lines={["live, for the team"]} ink="cyan" size={10} className="bj-fade" style={t(at(0.2))} />
-          <Label x={X0 + W} y={y + 32} anchor="end" lines={["kept: search, ask, blame"]} ink="cyan" size={10} className="bj-fade" style={t(at(0.75))} />
-        </>
-      ),
-    },
-  ];
-  return (
-    <Stage minWidth={660}>
-      <Sheet w={760} h={246} label="A shared link shows the latest state when opened, Remote Control is live only while the session runs, codecast streams it live and keeps it afterwards">
-        {() => (
-          <>
-            <text x={16} y={30} fontSize="11" fontWeight={700} fill={SOL.base02}>the session</text>
-            <rect x={x(START)} y={20} width={(END - START) * W} height={16} rx={4} fill={SOL.base02} className="bj-grow" style={t(at(START), SWEEP * (END - START))} />
-            <text x={x(START) + 8} y={32} fontSize="10" fill={SOL.base3} className="bj-fade" style={t(at(START) + 0.3)}>running</text>
-            <text x={x(END) + 8} y={32} fontSize="10" fill={SOL.base01} className="bj-fade" style={t(at(END))}>finished</text>
-            {lanes.map((l, i) => {
-              const y = 66 + i * 52;
-              return (
-                <g key={l.name}>
-                  <text x={16} y={y + 10} fontSize="11" fontWeight={700} fill={SOL[l.ink]}>{l.name}</text>
-                  <text x={16} y={y + 24} fontSize="9.5" fill={SOL.base1}>{l.sub}</text>
-                  <line x1={X0} x2={X0 + W} y1={y + 9} y2={y + 9} stroke={SOL.base2} />
-                  {l.draw(y)}
-                </g>
-              );
-            })}
-            <line x1={X0} x2={X0} y1={16} y2={226} stroke={SOL.base02} strokeWidth={1.2} className="bj-sweep" style={t(0.2, SWEEP, { "--to": `${W}px` })} />
-            <text x={X0} y={238} fontSize="9.5" fill={SOL.base1}>time</text>
-          </>
-        )}
-      </Sheet>
     </Stage>
   );
 }
