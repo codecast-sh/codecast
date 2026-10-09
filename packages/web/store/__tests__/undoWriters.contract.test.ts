@@ -76,6 +76,7 @@ const FIXTURES: Record<string, Fixture> = {
       parent_id: [T_PARENT, T_OTHER],
       sort_order: [1, 2],
       duplicate_of: ["ct-8", "ct-9"],
+      found_during: ["ct-2", "ct-3"],
     },
     forward: (field, value) => {
       if (field === "parent_id") {
