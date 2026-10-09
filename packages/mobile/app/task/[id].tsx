@@ -19,7 +19,7 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono, uiFace } from "@/constants/fonts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
-import { directChildren, isActiveTask, subtaskProgressOf, waitTone, type WaitTone } from "@codecast/shared/tasks";
+import { directChildren, isActiveTask, isTerminalTaskStatus, subtaskProgressOf, waitTone, type WaitTone } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
 import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
 import { useCoarseNow } from "@codecast/web/hooks/useCoarseNow";
@@ -297,23 +297,29 @@ export default function TaskDetailScreen() {
 
         {graph?.foundDuring && <TaskLinkRow icon="search" label="Found during" link={graph.foundDuring} />}
 
-        {task.description && (
-          <RNView style={styles.section}>
-            <CollapsibleBody fadeColor={Theme.bg} height={180}>
-              <MarkdownContent text={task.description} baseStyle={styles.description} />
-            </CollapsibleBody>
-          </RNView>
-        )}
-
+        {/* Relations before the body, as on the web: "what is holding this?" is
+            a stuck task's first question, and a phone's description fold would
+            otherwise bury the answer. */}
         {graph && graph.blockedBy.length > 0 && (
           <RNView style={styles.section}>
             <RNView style={styles.subtaskHeader}>
-              <RNText style={styles.sectionLabel}>Blocked by</RNText>
+              {/* On a closed task every line is history: nothing holds one,
+                  so the heading says so, in the words the web's row and
+                  `cast task show` use for the same section. */}
+              <RNText style={styles.sectionLabel}>{isTerminalTaskStatus(task.status) ? "Blocked by (cleared)" : "Blocked by"}</RNText>
               {graph.unblocked && (
                 <RNText style={[styles.blockerState, { color: Theme.green }]}>unblocked</RNText>
               )}
             </RNView>
             {graph.blockedBy.map((b) => <BlockerRowView key={b.key} row={b} taskStatus={task.status} />)}
+          </RNView>
+        )}
+
+        {task.description && (
+          <RNView style={styles.section}>
+            <CollapsibleBody fadeColor={Theme.bg} height={180}>
+              <MarkdownContent text={task.description} baseStyle={styles.description} />
+            </CollapsibleBody>
           </RNView>
         )}
 
@@ -497,9 +503,12 @@ const WAIT_ICON: Record<Exclude<BlockerRow["kind"], "task">, IconName> = {
 const WAIT_TONE_COLOR = { waiting: "orange", met: "green", failed: "red", dim: "textDim" } as const satisfies Record<WaitTone, keyof typeof Theme>;
 
 /** One Blocked by entry, read-only: a task blocker opens its task (a ref this
- *  viewer cannot read stays plain); a wait shows its condition, its glyph in
- *  the tone the task page explains it with (`waitTone` untilClosed), and the
- *  shared word for its state, red when it fails and dim otherwise, as on the web. */
+ *  viewer cannot read stays plain); a wait names what it waits ON (a PR in
+ *  full, a decision, a moment), its glyph in the tone the task page explains
+ *  it with (`waitTone` untilClosed), and the shared word for its state beside
+ *  it, red when it fails and dim otherwise. Subject and predicate are split
+ *  the way the task page splits them between its pill and the word, so the
+ *  line reads "PR o/r#42 … to merge" and never says "merges" twice. */
 function BlockerRowView({ row, taskStatus }: { row: BlockerRow; taskStatus: string }) {
   const Theme = useTheme();
   const router = useRouter();
