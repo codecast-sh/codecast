@@ -181,6 +181,58 @@ export function workspaceLabel(ws: Workspace): string {
   return ws.kind === "team" ? (ws.name || ws.teamId) : "personal";
 }
 
+/** A row's stored access key (`team:<id>`, `user:<id>`) as a workspace — the
+ *  ONE place the CLI reads one. `null` for a key it cannot read (a row from an
+ *  older server, a future `restricted:`): an unknown key names nothing, the
+ *  way it grants nothing. */
+export function parseWorkspaceKey(key: string | null | undefined): Workspace | null {
+  if (key?.startsWith("team:")) return { kind: "team", teamId: key.slice(5) };
+  if (key?.startsWith("user:")) return { kind: "personal" };
+  return null;
+}
+
+/** The same key with the team's name from the roster, for output that says
+ *  where a row lives. */
+export function workspaceFromKey(roster: WorkspaceRoster, key: string | null | undefined): Workspace | null {
+  const ws = parseWorkspaceKey(key);
+  if (ws?.kind !== "team") return ws;
+  const hit = roster.teams.find((t) => t._id === ws.teamId);
+  return hit ? { ...ws, name: hit.name } : ws;
+}
+
+/** A `--team` value as one shell word: quoted only when a team's name needs it. */
+function teamArg(value: string): string {
+  return /^[A-Za-z0-9._-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * The ` --team …` a printed next step needs so its READ lands where the work
+ * was WRITTEN. A write takes an explicit workspace or the session's team; a
+ * read defaults to the directory's mapping, and on a checkout mapped
+ * elsewhere the two differ — the read then answers nothing, which an agent
+ * reads as "no work" rather than "not here". Empty when they already agree,
+ * and for a workspace this CLI cannot name, where no flag beats a wrong one.
+ */
+export function scopeFlagFor(filed: Workspace | null, here: Workspace): string {
+  if (!filed) return "";
+  if (filed.kind === "personal") return here.kind === "personal" ? "" : " --team personal";
+  if (here.kind === "team" && here.teamId === filed.teamId) return "";
+  return ` --team ${teamArg(filed.name || filed.teamId)}`;
+}
+
+/**
+ * Why a read answered nothing about `ref`: it is filed in another workspace.
+ * An empty list names no scope, so "no ready tasks" and "no tasks found" read
+ * as "there is no work" when the truth is "not in the workspace this
+ * directory reads". Null when the two agree, which is when the empty answer
+ * is the honest one.
+ */
+export function filedElsewhereLine(ref: string, filed: Workspace | null, here: Workspace): string | null {
+  const flag = scopeFlagFor(filed, here);
+  if (!flag || !filed) return null;
+  return `${ref} is in the ${workspaceLabel(filed)} workspace, and this directory reads ${workspaceLabel(here)}: add${flag} to read it.`;
+}
+
 /**
  * Is `key` on for the workspace? A team reads its own flag; the personal
  * workspace is off unless the catalog marks the feature `personal`, in which
