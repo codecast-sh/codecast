@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { createSessionFromCli } from "./spawn";
 import { performSetThreadState, killConversation } from "./conversations";
-import { applyMergeBackReport } from "./subagentFleet";
+import { applyMergeBackReport, drainFleet } from "./subagentFleet";
+import { NEEDS_INPUT_IDLE_CHECK_DELAY_MS } from "./inboxFilters";
 
 const OWNER = "fleet-owner";
 const PARENT = {
@@ -35,6 +36,18 @@ function world() {
 }
 
 describe("the fleet cap", () => {
+  test("a workflow station's hand under its run starts at once, even with the machine full: its run paces it", async () => {
+    const w = world();
+    for (let i = 0; i < 24; i++) await w.spawn(`worker ${i}`, { subagent_caps: { per_session: 50, per_machine: 24 } });
+    const full = await w.spawn("one more worker", { subagent_caps: { per_session: 50, per_machine: 24 } });
+    expect(full.queued).toBe(true);
+    // The runner's spawn: nested under the run's session, on this machine, no fleet limits declared.
+    const hand = await w.spawn("Prove line", { subagent_caps: undefined, spawn_device_id: undefined, device: undefined, merge_back: undefined });
+    expect(hand.queued).toBeUndefined();
+    expect((await w.db.get(hand.conversation_id)).subagent_slot).toBeUndefined();
+    expect(w.pendingFor(hand.conversation_id).map((m: any) => m.content)).toEqual(["Prove line"]);
+  });
+
   test("a spawn past the session's limit queues without starting, and starts when a worker ends done", async () => {
     const w = world();
     const a = await w.spawn("task a");
@@ -84,6 +97,48 @@ describe("the fleet cap", () => {
     // A later done after a conflict tries again: the parent may have resolved it.
     await performSetThreadState(w.ctx as any, await w.db.get(a.conversation_id), "done again", "done");
     expect(w.commands("merge_back")).toHaveLength(2);
+  });
+
+  test("a worker whose turn settles without a declaration gives its slot back, and the queue starts", async () => {
+    const w = world();
+    const a = await w.spawn("task a");
+    const b = await w.spawn("task b");
+    const c = await w.spawn("task c");
+    expect(c.queued).toBe(true);
+    await w.started(a.conversation_id, 1);
+    await w.started(b.conversation_id, 2);
+    const now = Date.now();
+    const slotAt = now - 10 * 60_000;
+    await w.db.patch(a.conversation_id, { subagent_slot_at: slotAt });
+    await w.db.patch(b.conversation_id, { subagent_slot_at: slotAt });
+    // a stopped, waiting on its parent, but only just: inside the idle grace nothing moves.
+    const aSession = await w.db.insert("managed_sessions", { conversation_id: a.conversation_id, agent_status: "idle", agent_status_updated_at: now });
+    // b is parked on a wake of its own, and keeps its slot.
+    await w.db.insert("managed_sessions", { conversation_id: b.conversation_id, agent_status: "dormant", agent_status_updated_at: slotAt + 1 });
+    await drainFleet(w.ctx, OWNER as any);
+    expect((await w.db.get(c.conversation_id)).subagent_slot).toBe("queued");
+
+    await w.db.patch(aSession, { agent_status_updated_at: now - NEEDS_INPUT_IDLE_CHECK_DELAY_MS - 1_000 });
+    await drainFleet(w.ctx, OWNER as any);
+    expect((await w.db.get(a.conversation_id)).subagent_slot).toBeUndefined();
+    expect((await w.db.get(b.conversation_id)).subagent_slot).toBe("running");
+    expect((await w.db.get(c.conversation_id)).subagent_slot).toBe("running");
+    // No declaration, so no merge back.
+    expect(w.commands("merge_back")).toHaveLength(0);
+  });
+
+  test("a worker whose session was reaped gives its slot back once the start window has passed", async () => {
+    const w = world();
+    const a = await w.spawn("task a");
+    const b = await w.spawn("task b");
+    const c = await w.spawn("task c");
+    await drainFleet(w.ctx, OWNER as any);
+    expect((await w.db.get(c.conversation_id)).subagent_slot).toBe("queued");
+    await w.db.patch(a.conversation_id, { subagent_slot_at: Date.now() - 60 * 60_000 });
+    await drainFleet(w.ctx, OWNER as any);
+    expect((await w.db.get(a.conversation_id)).subagent_slot).toBeUndefined();
+    expect((await w.db.get(b.conversation_id)).subagent_slot).toBe("running");
+    expect((await w.db.get(c.conversation_id)).subagent_slot).toBe("running");
   });
 
   test("a kill frees the slot and keeps the worktree", async () => {
