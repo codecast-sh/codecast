@@ -758,6 +758,7 @@
  * left the count floating off the face at 128. The marks also grow with the
  * circle (`--mark-k`, written by FaceRow for the float's sizes). The
  * point itself, `--mark-at`, is declared on the seat. */
+/* Red is messages, everywhere; every other mark on a face is teal. */
 .face-unread {
   position: absolute;
   top: var(--mark-at);
@@ -768,8 +769,10 @@
   padding: 0 4px;
   border-radius: 999px;
   border: 1.5px solid var(--sol-bg);
-  background: var(--sol-cyan);
-  color: var(--sol-bg);
+  background: var(--sol-red);
+  color: #fff;
+  white-space: nowrap;
+  animation: face-unread-pop 460ms cubic-bezier(0.2, 0.9, 0.25, 1.12);
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 700;
@@ -781,6 +784,17 @@
 .face-unread:hover {
   transform: translate(50%, -50%) scale(calc(var(--mark-k, 1) * 1.15));
 }
+/* A new count lands with a small overshoot (the seat remounts the count on
+ * every change, so each arrival pops). */
+@keyframes face-unread-pop {
+  0% { transform: translate(50%, -50%) scale(calc(var(--mark-k, 1) * 0.3)); }
+  55% { transform: translate(50%, -50%) scale(calc(var(--mark-k, 1) * 1.22)); }
+  100% { transform: translate(50%, -50%) scale(var(--mark-k, 1)); }
+}
+/* A line addressed to you is waiting on this face: a red ring until you open it. */
+.face-row .face-seat[data-chat-loud] .face {
+  box-shadow: var(--edge), 0 0 0 calc(var(--edge-w) + 1.5px) var(--sol-bg), 0 0 0 calc(var(--edge-w) + 3px) var(--sol-red);
+}
 
 .face-ask {
   position: absolute;
@@ -791,7 +805,7 @@
   height: 9px;
   border-radius: 50%;
   border: 1.5px solid var(--sol-bg);
-  background: var(--sol-orange);
+  background: var(--sol-cyan);
   pointer-events: none;
 }
 

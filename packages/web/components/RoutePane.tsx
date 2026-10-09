@@ -22,8 +22,10 @@ const DocDetail = lazyPage("@/app/docs/[id]/page", () => import("@/app/docs/[id]
 const Plans = lazyPage("@/app/plans/page", () => import("@/app/plans/page"));
 const Calls = lazyPage("@/app/calls/page", () => import("@/app/calls/page"));
 const PlanDetail = lazyPage("@/app/plans/[id]/page", () => import("@/app/plans/[id]/page"));
-const Projects = lazyPage("@/app/projects/page", () => import("@/app/projects/page"));
 const ProjectDetail = lazyPage("@/app/projects/[id]/page", () => import("@/app/projects/[id]/page"));
+const Goals = lazyPage("@/app/goals/page", () => import("@/app/goals/page"));
+const Goal = lazyPage("@/app/goals/[id]/page", () => import("@/app/goals/[id]/page"));
+const Projects = lazyPage("@/app/projects/page", () => import("@/app/projects/page"));
 const Conversation = lazyPage("@/app/conversation/[id]/page", () => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazyPage("@/app/conversation/[id]/diff/page", () => import("@/app/conversation/[id]/diff/page"));
 const Inbox = lazyPage("@/app/inbox/page", () => import("@/app/inbox/page"));
@@ -37,10 +39,10 @@ const ModObject = lazyPage("@/app/o/page", () => import("@/app/o/page"));
 const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk/page"));
 // A web page as a pane: the address rides the query string (?u= / ?watch=).
 const Browser = lazyPage("@/app/browser/page", () => import("@/app/browser/page"));
-const Org = lazyPage("@/app/org/page", () => import("@/app/org/page"));
+// One component for the Org screen and every object's sheet on it, so opening
+// a sheet reconciles instead of remounting the screen (the conversation and
+// the map keep their place).
 const OrgScope = lazyPage("@/app/org/[id]/page", () => import("@/app/org/[id]/page"));
-const Initiatives = lazyPage("@/app/initiatives/page", () => import("@/app/initiatives/page"));
-const InitiativeDetail = lazyPage("@/app/initiatives/[id]/page", () => import("@/app/initiatives/[id]/page"));
 const Chat = lazyPage("@/app/chat/page", () => import("@/app/chat/page"));
 const Community = lazyPage("@/app/community/page", () => import("@/app/community/page"));
 const Workflows = lazyPage("@/app/workflows/dashboard", () => import("@/app/workflows/dashboard"));
@@ -52,7 +54,6 @@ const TriggerDetail = lazyPage("@/app/triggers/[id]/page", () => import("@/app/t
 const Sessions = lazyPage("@/app/sessions/page", () => import("@/app/sessions/page"));
 const Resources = lazyPage("@/app/resources/page", () => import("@/app/resources/page"));
 const Anchor = lazyPage("@/app/anchor/page", () => import("@/app/anchor/page"));
-const Team = lazyPage("@/app/team/page", () => import("@/app/team/page"));
 const TeamActivity = lazyPage("@/app/team/activity/page", () => import("@/app/team/activity/page"));
 const TeamCharts = lazyPage("@/app/team/charts/page", () => import("@/app/team/charts/page"));
 const TeamMember = lazyPage("@/app/team/[username]/page", () => import("@/app/team/[username]/page"));
@@ -69,6 +70,7 @@ const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/n
 const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
 // The line: the whole factory as one flow (the-line-end-to-end.md LE13).
 const Line = lazyPage("@/app/line/page", () => import("@/app/line/page"));
+const Expectations = lazyPage("@/app/expectations/page", () => import("@/app/expectations/page"));
 const LineSettings = lazyPage("@/app/line/settings/page", () => import("@/app/line/settings/page"));
 const LineTrace = lazyPage("@/app/line/trace/[ref]/page", () => import("@/app/line/trace/[ref]/page"));
 const DecisionDetail = lazyPage("@/app/decisions/[id]/page", () => import("@/app/decisions/[id]/page"));
@@ -150,8 +152,10 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/capabilities$/, paramNames: [], component: Capabilities },
   { pattern: /^\/agent-features$/, paramNames: [], component: AgentFeatures },
   { pattern: /^\/plans$/, paramNames: [], component: Plans },
-  { pattern: /^\/calls$/, paramNames: [], component: Calls },
+  { pattern: /^\/goals$/, paramNames: [], component: Goals },
+  { pattern: /^\/goals\/([^/]+)$/, paramNames: ["id"], component: Goal },
   { pattern: /^\/projects$/, paramNames: [], component: Projects },
+  { pattern: /^\/calls$/, paramNames: [], component: Calls },
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/changes$/, paramNames: [], component: Changes },
@@ -162,10 +166,9 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/o\/([^/]+)$/, paramNames: ["id"], component: ModObject },
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
   { pattern: /^\/browser$/, paramNames: [], component: Browser },
-  { pattern: /^\/org$/, paramNames: [], component: Org },
+  { pattern: /^\/org$/, paramNames: [], component: OrgScope },
   { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },
-  { pattern: /^\/goals$/, paramNames: [], component: Initiatives },
-  { pattern: /^\/goals\/([^/]+)$/, paramNames: ["id"], component: InitiativeDetail },
+  { pattern: /^\/org\/([^/]+)\/([^/]+)$/, paramNames: ["view", "id"], component: OrgScope },
   { pattern: /^\/chat$/, paramNames: [], component: Chat },
   { pattern: /^\/community$/, paramNames: [], component: Community },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
@@ -176,7 +179,6 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/resources$/, paramNames: [], component: Resources },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
-  { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/repo$/, paramNames: [], component: RepoIndex },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/files$/, paramNames: [], component: Vault },
@@ -196,6 +198,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
   { pattern: /^\/line$/, paramNames: [], component: Line },
+  { pattern: /^\/expectations$/, paramNames: [], component: Expectations },
   { pattern: /^\/line\/settings$/, paramNames: [], component: LineSettings },
   { pattern: /^\/line\/trace\/([^/]+)$/, paramNames: ["ref"], component: LineTrace },
   { pattern: /^\/threads$/, paramNames: [], component: Threads },
@@ -259,7 +262,7 @@ export function RoutePane(props: PaneScope) {
 
   const page = (
     <TabParamsCtx.Provider value={ctxValue}>
-      <Suspense fallback={<RouteFallback />}>
+      <Suspense fallback={<RouteFallback path={ctxValue.pathname} />}>
         <Component />
       </Suspense>
     </TabParamsCtx.Provider>

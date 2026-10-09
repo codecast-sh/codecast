@@ -181,7 +181,7 @@ test("a proposed proposal: meta, lead, totals, one entry per subject; Approve st
   expect(growth().getAttribute("data-subject-status")).toBe("proposed");
   expect(growth().querySelector("[data-subject-approve]")).toBeNull();
   expect(growth().querySelector("[data-staged]")!.getAttribute("data-staged")).toBe("approve");
-  expect(growth().querySelector("[data-staged]")!.textContent).toBe("Approved. Applies when you send.Undo");
+  expect(growth().querySelector("[data-staged]")!.textContent).toBe("Approval added to your reply. Nothing changes until you send it.Undo");
   expect(foot(c).querySelector("[data-approve-rest]")!.textContent).toBe("Approve the rest");
   // Undo empties the batch and brings the controls back.
   click(growth().querySelector("[data-staged-undo]")!);
@@ -198,7 +198,7 @@ test("Reject opens the field inside the band; typing writes the body; Enter clos
   const c = q("[data-card='op-1']");
   click(c.querySelector("[data-subject='role:platform'] [data-subject-reject]")!);
   const platform = () => c.querySelector<HTMLElement>("[data-subject='role:platform']")!;
-  expect(platform().querySelector("[data-staged]")!.textContent).toBe("Rejected. Sent when you send.Undo");
+  expect(platform().querySelector("[data-staged]")!.textContent).toBe("Rejection added to your reply. Goes out when you send it.Undo");
   const ta = platform().querySelector<HTMLTextAreaElement>("[data-answer-area] [data-subject-reply-field] textarea")!;
   expect(ta.placeholder).toBe("Why not? Say what you want instead.");
   type(ta, "Not yet");
@@ -293,7 +293,7 @@ test("a failed change keeps the card answerable: Retry, Reject and the note; sta
   expect(failed().querySelector("[data-subject-reject]")).not.toBeNull();
   click(failed().querySelector("[data-subject-approve]")!);
   expect(batch()).toEqual([["role:platform", "approve", "", [1], ["c3-role"], 1, "Head of Platform"]]);
-  expect(failed().querySelector("[data-staged]")!.textContent).toBe("Retry. Runs again when you send.Undo");
+  expect(failed().querySelector("[data-staged]")!.textContent).toBe("Retry added to your reply. Runs again when you send it.Undo");
   React.act(() => root.unmount());
   clearBatch();
   // No bridge at all (team chat drawing the proposal), or a bridge whose composer cannot send: nothing could carry an answer, so none is offered.

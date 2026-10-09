@@ -16,7 +16,7 @@
 // clear, a prior state the inverse verb does not produce); each such case says
 // why at its site.
 import type { CellChange, Invocation, UndoCtx, UndoSpec } from "@platform/engine";
-import { DEFAULT_TASK_STATUS_NAMES, teamTaskStatuses } from "@codecast/shared/tasks";
+import { DEFAULT_TASK_STATUS_NAMES, teamTaskStatuses, waitClause, waitTargetOf, type TaskWait } from "@codecast/shared/tasks";
 import { targetDayOf } from "@codecast/shared/time";
 import { INITIATIVE_RECORD_NOUN, type InitiativeRecordOp } from "@codecast/shared/contracts/initiative";
 import { assigneeLabelOf, resolveAssigneeInfo } from "../../../lib/liveEntities";
@@ -25,6 +25,7 @@ import type { OrgReparentSessionTarget } from "../../orgSlice";
 import { counted, quoted, sessionTitle } from "../labels";
 import { isThinBefore, withSessionsPrior } from "../thinConversation";
 import { undoBlockedByWire } from "../writers";
+import type { TaskWaitInput } from "../../taskGraphDraft";
 
 type Spec = { spec: UndoSpec };
 
@@ -96,6 +97,44 @@ const TASK_SERVER_STAMPS = ["closed_at", "attempt_count", "last_attempted_at"] a
 // The description is edited in DocEditor, which owns its text undo (as the
 // doc body is); a description-only save records nothing.
 const TASK_UNCAPTURED = [...TASK_SERVER_STAMPS, "description"] as const;
+
+// ── The task graph (task-graph.md TG12) ──────────────────────────────────────
+// Off the writer route: tasks.webUpdate writes no blocked_by, waits or
+// related, so each verb's inverse is its pair. A partial undo that skipped
+// the task's row sends nothing for it.
+
+/** Whether this gesture's cells still hold `field` on task `shortId`. */
+function touchesTask(ctx: UndoCtx, shortId: string, field: string): boolean {
+  return cellsOf(ctx, "tasks", field).some((c) => (ctx.before?.tasks?.[c.id] ?? ctx.after?.tasks?.[c.id])?.short_id === shortId);
+}
+
+/** A verb on (task, other) whose undo is `inverse` with the same arguments,
+ *  `other` naming the second task the way the inverse takes it. */
+const graphPair = (
+  field: string,
+  inverse: string,
+  label: (a: string, b: string) => string,
+  other: (ctx: UndoCtx, ref: string) => string = (_ctx, ref) => ref,
+): Spec => ({
+  spec: {
+    label: (ctx) => label(ctx.args[0] as string, other(ctx, ctx.args[1] as string)),
+    inverse: (ctx) => (touchesTask(ctx, ctx.args[0] as string, field) ? [call(inverse, ctx.args[0], other(ctx, ctx.args[1] as string))] : []),
+  },
+});
+
+/** A blocker an older plan row names by `_id`, as its short id: addBlocker
+ *  finds blockers by short id only. */
+const blockerShortId = (ctx: UndoCtx, ref: string): string =>
+  (Object.values(ctx.before?.tasks ?? {}) as any[]).find((t) => String(t?._id) === ref)?.short_id ?? ref;
+
+/** The wait `waitId` on task `shortId` as the gesture found it. */
+function waitBefore(ctx: UndoCtx, shortId: string, waitId: string): TaskWait | undefined {
+  const row = Object.values(ctx.before?.tasks ?? {}).find((t: any) => t?.short_id === shortId) as any;
+  return (row?.waits as TaskWait[] | undefined)?.find((w) => w.id === waitId);
+}
+
+/** A wait addWaitCore's target check refuses outright (TG2). */
+const cannotSetAgain = (w: TaskWait, now = Date.now()): boolean => w.state === "failed" || (w.kind === "time" && w.at <= now);
 
 // ── Plans, projects, initiatives, docs ───────────────────────────────────────
 
@@ -370,6 +409,43 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   updateTaskStatus: viaWriter((ctx) => taskLabel(ctx, ctx.args[0] as string, { status: ctx.args[1] }), {
     ignoreFields: TASK_SERVER_STAMPS,
   }),
+
+  // ── The task graph (inverses: each verb's pair) ────────────────────────────
+  addBlocker: graphPair("blocked_by", "removeBlocker", (a, b) => `Made ${a} wait on ${b}`),
+  removeBlocker: graphPair("blocked_by", "addBlocker", (a, b) => `Removed blocker ${b} from ${a}`, blockerShortId),
+  removeBlocks: {
+    spec: {
+      label: (ctx) => `${ctx.args[1]} no longer waits on ${ctx.args[0]}`,
+      inverse: (ctx) => (touchesTask(ctx, ctx.args[0] as string, "blocks") ? [call("addBlocker", ctx.args[1], ctx.args[0])] : []),
+    },
+  },
+  relateTasks: graphPair("related", "unrelateTasks", (a, b) => `Linked ${a} and ${b}`),
+  unrelateTasks: graphPair("related", "relateTasks", (a, b) => `Unlinked ${a} and ${b}`),
+  addWait: {
+    spec: {
+      label: (ctx) => `Made ${ctx.args[0]} wait ${waitClause((ctx.args[1] as TaskWaitInput).target)}`,
+      inverse: (ctx) => {
+        const [shortId, input] = ctx.args as [string, TaskWaitInput];
+        return touchesTask(ctx, shortId, "waits") ? [call("removeWait", shortId, input.id)] : [];
+      },
+    },
+  },
+  // A wait set again is checked again: one already met lands met. One the
+  // server would refuse to set again (failed, or a time now past) is not
+  // offered back.
+  removeWait: {
+    spec: {
+      label: (ctx) => {
+        const w = waitBefore(ctx, ctx.args[0] as string, ctx.args[1] as string);
+        return w && !cannotSetAgain(w) ? `Removed the wait ${waitClause(w)} from ${ctx.args[0]}` : null;
+      },
+      inverse: (ctx) => {
+        const [shortId, waitId] = ctx.args as [string, string];
+        const w = waitBefore(ctx, shortId, waitId);
+        return w && touchesTask(ctx, shortId, "waits") ? [call("addWait", shortId, { id: w.id, target: waitTargetOf(w) })] : [];
+      },
+    },
+  },
 
   // ── Plans, projects, initiatives (writers: their update verbs) ─────────────
   updatePlan: viaWriter((ctx) => editLabel(planOf(ctx.before, ctx.args[0] as string), ctx.args[1] as Record<string, unknown>, "plan"), {
