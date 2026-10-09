@@ -40,7 +40,10 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { TaskCommentComposer, UserBadge } from "../../../components/tasks/TaskCommentStream";
 import { TaskSessionLink, TaskTimeline } from "../../../components/tasks/TaskTimeline";
-import { SupersededBanner, TaskRelations } from "../../../components/tasks/TaskRelations";
+import { RemoveButton, SupersededBanner, TaskRelations } from "../../../components/tasks/TaskRelations";
+import { PROP_GRID } from "../../../lib/taskPropertyRows";
+import { removeTaskParent } from "../../../lib/taskRelations";
+import { storeBlockedMark, type BoardTask } from "../../../lib/taskBlockers";
 import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -417,6 +420,28 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     closeTaskWithGuard(shortId, status);
   }, []);
 
+  // Where the graph block sits in the properties card: a task something STILL
+  // holds leads with it, because "what is holding this?" is then the page's
+  // first question and the creation date is no answer to it. Any other task
+  // closes the card with it — a see-also link, a `found_during` the server
+  // guessed and a finished task's cleared history are all facts to read after
+  // the facts, not before them, and a task with no graph at all would open
+  // the card with five add verbs. "Still holds" is the shared rule the row
+  // glyph uses (`storeBlockedMark` → blockersHoldingBack), which already
+  // answers "nothing" for a closed task.
+  //
+  // Decided once per task rather than on every render: the block carries the
+  // "Add blocker…" button, so a re-decision would unmount it from the foot of
+  // the card the moment the first blocker is written and remount it at the
+  // head — moving Created, Labels and the button the person just clicked, and
+  // painting the new line where their eye is not. The ordering question only
+  // ever settles on open, which is when it is actually a question.
+  const leadRef = useRef<{ id: string; lead: boolean } | null>(null);
+  if (data && leadRef.current?.id !== data.short_id) {
+    leadRef.current = { id: data.short_id, lead: storeBlockedMark(data as unknown as BoardTask, allTasks as Record<string, any>) !== null };
+  }
+  const relations = leadRef.current?.lead ?? false;
+
   // The parent breadcrumb resolves live from the store, so a re-parent
   // elsewhere updates the chip instantly.
   const parentRow = useMemo(() => {
@@ -609,18 +634,23 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           <SupersededBanner task={data} />
 
-          {/* Parent breadcrumb — a subtask never renders context-free */}
+          {/* Parent breadcrumb — a subtask never renders context-free, and
+              this is the page's one statement of its parent (TG12 gives the
+              relation grid no Parent row), so detaching lives here too. */}
           {(data as any).parent_id && (
-            <button
-              onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)}
-              className="flex items-center gap-1.5 mb-2 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors group"
-              title={parentRow ? `Open ${parentRow.short_id}` : "Parent task"}
-            >
-              <CornerDownRight className="w-3 h-3 flex-shrink-0" />
-              <span>Subtask of</span>
-              <span className="font-mono">{parentRow?.short_id ?? "…"}</span>
-              {parentRow && <span className="text-sol-text-muted group-hover:text-sol-cyan truncate max-w-[24rem]">{parentRow.title}</span>}
-            </button>
+            <div className="group/line flex items-center gap-1.5 mb-2 text-xs">
+              <button
+                onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)}
+                className="group flex items-center gap-1.5 min-w-0 rounded text-sol-text-dim hover:text-sol-cyan focus-visible:text-sol-cyan transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan focus-visible:outline-offset-2"
+                title={parentRow ? `Open ${parentRow.short_id}` : "Parent task"}
+              >
+                <CornerDownRight className="w-3 h-3 flex-shrink-0" />
+                <span>Subtask of</span>
+                <span className="font-mono">{parentRow?.short_id ?? "…"}</span>
+                {parentRow && <span className="text-sol-text-muted group-hover:text-sol-cyan truncate max-w-[24rem]">{parentRow.title}</span>}
+              </button>
+              <RemoveButton label="Remove parent" onClick={() => removeTaskParent(data.short_id)} />
+            </div>
           )}
 
           {/* Title */}
@@ -677,12 +707,20 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* Secondary properties */}
           <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">
+            {/* The task graph (task-graph.md TG12): blockers and waits, then
+                the links. First in the card only while something still HOLDS
+                the task, because on a stuck task "what is holding this?" is
+                the page's first question — the creation date and the
+                confidence bar are not answers to it. Settled once per task
+                (`relations` above), so a blocker added from the block never
+                moves the block. */}
+            {relations && <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />}
             {/* Provider twin (issue-sync S1.1): where the task came from and how
                 fresh the mirror is. The row reads plainly on its own: state,
                 unmapped assignee, last sync, and the error when the last sync
                 failed. */}
             {data.external && (
-              <div className="grid grid-cols-[7rem_1fr] items-start px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <div className={`${PROP_GRID} items-start px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors`}>
                 <span className="text-xs text-sol-text-dim pt-0.5">Issue</span>
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-sol-text-muted min-w-0">
                   <IssueLink external={data.external} />
@@ -709,7 +747,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               </div>
             )}
             {/* Created */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+            <div className={`${PROP_GRID} items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors`}>
               <span className="text-xs text-sol-text-dim">Created</span>
               {/* On a phone the date and the author each stay whole and wrap as units. */}
               <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 min-w-0 text-xs text-sol-text-muted" title={formatDateFull(data.created_at)}>
@@ -732,14 +770,14 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </div>
 
             {data.closed_at && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <div className={`${PROP_GRID} items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors`}>
                 <span className="text-xs text-sol-text-dim">Closed</span>
                 <span className="text-xs text-sol-text-muted" title={formatDateFull(data.closed_at)}>{formatDate(data.closed_at)}</span>
               </div>
             )}
 
             {(data as any).started_at && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <div className={`${PROP_GRID} items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors`}>
                 <span className="text-xs text-sol-text-dim">Started</span>
                 <span className="text-xs text-sol-text-muted" title={formatDateFull((data as any).started_at)}>{formatDate((data as any).started_at)}</span>
               </div>
@@ -747,7 +785,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
             {/* Confidence — visual bar */}
             {data.confidence != null && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <div className={`${PROP_GRID} items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors`}>
                 <span className="text-xs text-sol-text-dim">Confidence</span>
                 <ConfidenceBar value={data.confidence} />
               </div>
@@ -755,7 +793,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
             {/* Labels */}
             {data.labels && data.labels.length > 0 && (
-              <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
+              <div className={`${PROP_GRID} items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors`}>
                 <span className="text-xs text-sol-text-dim">Labels</span>
                 <div className="flex gap-1.5 flex-wrap">
                   {data.labels.map((l: string) => {
@@ -770,9 +808,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                 </div>
               </div>
             )}
-
-            {/* The task graph (task-graph.md TG12): blockers and waits, then links and the parent */}
-            <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />
+            {/* Nothing holding it: the links, the cleared history and the
+                adds close the card, below the facts. */}
+            {!relations && <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />}
           </div>
 
           {/* Decisions bound to this task (D3): open cards, settled ones

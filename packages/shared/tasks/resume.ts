@@ -7,7 +7,8 @@
 
 import { escapeForeignControlChars, fenceForeignText, fenceNonce, inlineForeignText, FOREIGN_TEXT_TRUNCATION_MARKER } from "../contracts/fence";
 import { formatRelative } from "../time";
-import { blockerLabel, blockerWaitingLabel, failedWaitAdvice, isFailedWait, taskBlockerLine, taskRefLine, type Blocker, type WaitLabelOptions } from "./graph";
+import { AGENT_WAIT_WORDS, blockedByLabel, blockerLabel, blockerWaitingLabel, failedWaitAdvice, isFailedWait, isStalledTimeWait, stalledWaitAdvice, taskBlockerLine, taskRefLine, waitSubject, type Blocker, type ChecksOption, type WaitLabelOptions } from "./graph";
+import { isTaskBeingWorked } from "./statuses";
 
 /** The SessionStart sources that lose the conversation the task lived in. */
 const TASK_RESUME_SOURCES = ["compact", "resume"] as const;
@@ -32,8 +33,9 @@ export type TaskResumeContext = {
   /** The task the session touched last (filed, say), when it holds another. */
   recent?: TaskRef;
   /** What holds the task back (graph.ts `blockersHoldingBack`), each task
-   *  one with its title. */
-  blockers: Array<Blocker & { title?: string }>;
+   *  one with its title, and each still-waiting checks wait with its PR's
+   *  `checks_state` (`checksWaitPr`), so red CI reads as red here too. */
+  blockers: Array<Blocker & { title?: string; checks?: string }>;
   /** The task's open subtasks, the first few, and how many more there are;
    *  `truncated` when the task has more children than the server read. */
   subtasks?: { items: TaskRef[]; more: number; truncated?: boolean };
@@ -65,10 +67,12 @@ export const RESUME_SUBTASKS_SHOWN = 3;
 export const TASK_RESUME_MAX_LINES = 35;
 
 /** A task blocker as graph.ts's `taskRefLine`, or a wait in its words, whose
- *  failure note (an answer someone wrote) stays on its line. */
+ *  failure note (an answer someone wrote) stays on its line. A checks wait
+ *  takes its PR's `checks_state`, so this list reads "PR #42 checks failing"
+ *  where `cast task show` does rather than "checks to go green". */
 function blockerLine(b: TaskResumeContext["blockers"][number], opts: WaitLabelOptions): string {
   if (b.kind === "task") return taskBlockerLine(b, inlineForeignText);
-  return blockerLabel(b.note ? { ...b, note: inlineForeignText(b.note) } : b, opts);
+  return blockerLabel(b.note ? { ...b, note: inlineForeignText(b.note) } : b, { ...opts, checks: b.checks });
 }
 
 /** The note with its line breaks, cut in the middle when long. */
@@ -88,21 +92,56 @@ const holds = (c: TaskResumeContext) => !!c.held || (c.held === undefined && !c.
 
 /** Work on the task has started: a session may take a blocked task and get
  *  far with it, so its blockers no longer order it to stop. */
-const underway = (c: TaskResumeContext) => c.task.status === "in_progress" || c.task.status === "in_review";
+const underway = (c: TaskResumeContext) => isTaskBeingWorked(c.task.status);
 
 /** What a session holding a blocked task does with it, from what holds it
  *  (after compaction, and after `cast task start`). A failed wait never
  *  clears, and an open task blocker nobody works may not either, so parking
- *  on either could wait forever. `underway` makes parking the session's call. */
-export function parkingLine(blockers: readonly Blocker[], id: string, opts: { underway?: boolean } = {}): string {
+ *  on either could wait forever. `underway` makes parking the session's call.
+ *  A wait that clears only if somebody else acts says so after the pin: red
+ *  checks need a push, an open task blocker needs an owner.
+ *  The rest of `opts` names the blockers the way the surrounding output does
+ *  (`checkoutWords`): the agent is told to copy the `cast state` line
+ *  verbatim, so a bare "#42" in it would read as this checkout's PR. A time
+ *  wait inside the pin is absolute, in UTC, whatever the caller asked for
+ *  (AGENT_WAIT_WORDS, TG11): the pin is stored and read later, by other
+ *  sessions in other zones and after the day has turned, where a bare "until
+ *  12:53" names no moment and a local "12:53 GMT+5:30" names it in a zone no
+ *  other surface writes. The lines
+ *  around it keep the reader's clock, which is right for words read once. */
+export function parkingLine(blockers: readonly (Blocker & ChecksOption)[], id: string, opts: WaitLabelOptions & { underway?: boolean } = {}): string {
   const failed = blockers.filter(isFailedWait);
   if (failed.length) return `A failed wait will never clear: ${failedWaitAdvice(id, failed)}`;
-  const what = blockers[0] ? `${blockerWaitingLabel(blockers[0])}${blockers.length > 1 ? ` and ${blockers.length - 1} more` : ""}` : "Waiting on its blockers";
-  const until = opts.underway ? "If the work cannot go on until it clears," : "Until it clears,";
+  // A time wait whose moment went by long enough ago that neither its settle
+  // nor the sweep behind it landed is the same trap as a failed one: the
+  // blocker line above says "(overdue by 3d)", and the pin would promise a
+  // wake that has already failed to arrive. So it takes the removal advice
+  // rather than the dormant line (`stalledWaitAdvice`, TG2).
+  const stalled = blockers.filter((b) => isStalledTimeWait(b, { now: opts.now }));
+  if (stalled.length) return `A wait whose moment has gone by was never settled, so no wake is coming: ${stalledWaitAdvice(id, stalled)}`;
+  const what = blockers[0] ? `${blockerWaitingLabel(blockers[0], { ...opts, ...AGENT_WAIT_WORDS })}${blockers.length > 1 ? ` and ${blockers.length - 1} more` : ""}` : "Waiting on its blockers";
+  // The pin lists one blocker and counts the rest, so the sentence around it
+  // has to agree in number with the list above it: a session told "until it
+  // clears" while two blockers hold the task reads as waiting on one of them.
+  const clears = blockers.length > 1 ? "they clear" : "it clears";
+  const until = opts.underway ? `If the work cannot go on until ${clears},` : `Until ${clears},`;
   const park = `${until} run cast state --status dormant "${what}" and end your turn; this session is woken when the last blocker clears.`;
+  // Red checks keep their wait waiting (TG2), and nothing but a new push
+  // turns them green, so a session told to park on one has to know they are
+  // red and that somebody must fix them. The quoted pin stays the condition
+  // the wake is keyed on; this is read once, now, which is when the session
+  // decides whether to go dormant at all.
+  const red = blockers.flatMap((b) => (b.kind === "pr_checks_green" && b.state === "waiting" && b.checks === "failure" ? [waitSubject(b, { ...opts, ...AGENT_WAIT_WORDS })] : []));
   const idle = blockers.flatMap((b) => (b.kind === "task" && "status" in b && b.status === "open" ? [b.ref] : []));
-  if (!idle.length) return park;
-  return `${park} Nobody may be working ${idle.join(", ")}: check with cast task show ${idle[0]}, and if it is unowned, ask in the plan or do it in another session (cast spawn --subagent).`;
+  // "Nobody may be working on ct-9" reads as permission on a surface that is
+  // all about claims and `--take`, so the possibility is said the one way it
+  // cannot be read as a prohibition.
+  const them = idle.length === 1 ? "it" : "them";
+  const notes = [
+    ...(red.length ? [`Checks are failing on ${red.join(", ")} now, so only a new push turns them green: check that somebody is fixing them before you park.`] : []),
+    ...(idle.length ? [`${idle.join(", ")} may have nobody on ${them} yet: check with cast task show ${idle.join(" ")}, and if ${idle.length === 1 ? "it is" : "they are"} unowned, ask in the plan or pick ${them} up in another session (cast spawn --subagent).`] : []),
+  ];
+  return [park, ...notes].join(" ");
 }
 
 /** The closing line's next action: progress on a held task, else other work.
@@ -137,10 +176,16 @@ export function formatTaskResume(c: TaskResumeContext, opts: WaitLabelOptions & 
   ];
   if (c.recent) lines.push(`This session also recently filed or touched ${taskRefLine(c.recent, inlineForeignText)}; it does not hold that one.`);
   if (c.blockers.length) {
-    lines.push("Blocked by:");
+    // The heading comes from graph.ts, so a reword reaches every surface at
+    // once (TG12). Always holding here: the server sends `blockersHoldingBack`.
+    lines.push(`${blockedByLabel(true)}:`);
     for (const b of c.blockers.slice(0, MAX_BLOCKERS)) lines.push(`- ${blockerLine(b, { ...opts, now })}`);
-    if (c.blockers.length > MAX_BLOCKERS) lines.push(`- and ${c.blockers.length - MAX_BLOCKERS} more`);
-    if (holds(c)) lines.push(parkingLine(c.blockers, t.short_id, { underway: underway(c) }));
+    // The remainder names the total too, because the parking line below counts
+    // its own remainder off the one blocker it pins ("Waiting on ct-1 and 6
+    // more"): two bare counts on adjacent lines read as disagreeing about how
+    // much holds the task, and the pin cannot cite a list it is quoted away from.
+    if (c.blockers.length > MAX_BLOCKERS) lines.push(`- and ${c.blockers.length - MAX_BLOCKERS} more (${c.blockers.length} blockers in all)`);
+    if (holds(c)) lines.push(parkingLine(c.blockers, t.short_id, { ...opts, now, underway: underway(c) }));
   }
   if (c.subtasks?.items.length) {
     lines.push("Open subtasks:");
