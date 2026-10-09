@@ -13,6 +13,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots, ownDevice } from "./devices";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
+import { reissueWaitingMigrations } from "./sessionMigrations";
 import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, isPinnableAgentId, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
@@ -690,6 +691,12 @@ export const daemonHeartbeat = mutation({
           await reissueStrandedCloudSpawns(ctx, auth.userId, args.device_id);
         } catch (err) {
           console.warn("[cloud] re-issue on heartbeat failed", err instanceof Error ? err.message : String(err));
+        }
+        // Migrations planned onto this machine while it was offline run now.
+        try {
+          await reissueWaitingMigrations(ctx, auth.userId, args.device_id, now);
+        } catch (err) {
+          console.warn("[migrate] re-issue on heartbeat failed", err instanceof Error ? err.message : String(err));
         }
       }
     }
@@ -1520,6 +1527,10 @@ const RESERVED_USERNAMES = new Set([
   // lib/laneRedirect.ts PAGE_ALIASES), renamed pages' old roots (web
   // lib/renamedPages.ts), and the pages they name.
   "approvals", "plan", "mail", "integrations", "initiatives", "questions", "triggers", "assistant",
+  // The Org screen and the company document's old address, which redirects to it.
+  "org", "company",
+  // The non-developer funnel's address (/everyone, the landing's For everyone).
+  "everyone",
   // Product nouns / safety
   "u", "api", "teams", "codecast", "help", "status", "me", "you", "new", "null", "undefined",
 ]);
