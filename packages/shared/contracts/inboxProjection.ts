@@ -108,7 +108,10 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // idle grace (isSessionIdle), so a finished answer files under done at once.
 // v20: a hosted conversation's armed routine never parks it as dormant: each
 // run's answer files as done or needs_input like any other turn.
-export const INBOX_PROJECTION_VERSION = 20 as const;
+// v21: a child's ask lifts its parent only until child_asking_until: a parent
+// whose asking child's heartbeat aged out leaves QUESTIONS on the replica at
+// the instant it does on the server.
+export const INBOX_PROJECTION_VERSION = 21 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -1203,6 +1206,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   daemon_alive_until?: number | null;
   producing_until?: number | null;
   child_asking?: boolean | null;
+  child_asking_until?: number | null;
   open_tasks?: unknown[] | null;
   open_tasks_at?: number | null;
 }
@@ -1318,6 +1322,7 @@ export interface LiveFactsRow {
   last_heartbeat?: number | null;
   daemon_alive_until?: number | null;
   producing_until?: number | null;
+  child_asking_until?: number | null;
   last_role_is_user?: boolean | null;
   auq_open?: boolean | null;
   awaiting_input?: boolean | null;
@@ -1396,6 +1401,7 @@ export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
     row.last_heartbeat != null ? row.last_heartbeat + HEARTBEAT_ALIVE_MS : null,
     row.daemon_alive_until ?? null,
     row.producing_until ?? null,
+    row.child_asking_until ?? null,
     row.inbox_snoozed_until ?? null,
     row.loop_state?.status === "armed" ? row.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
     // A bare dormant claim outliving its trust (placeProjectableRow).
@@ -1422,6 +1428,12 @@ export function rowLastTurnAllowsPark(row: Pick<ProjectableInboxRow, "last_turn_
 // A subagent child of the row is still producing at instant `t`.
 export function childProducingAt(row: { producing_until?: number | null }, t: number): boolean {
   return row.producing_until != null && t < row.producing_until;
+}
+
+// A child of this row is asking at instant t: the child_asking fact, bounded by
+// child_asking_until. The server's placement and the replica's both read it.
+export function childAskingAt(row: { child_asking?: boolean | null; child_asking_until?: number | null }, t: number): boolean {
+  return !!row.child_asking && (row.child_asking_until == null || t < row.child_asking_until);
 }
 
 export function placeProjectableRow(
@@ -1566,6 +1578,10 @@ export const INBOX_FACT_FIELDS = [
   // A child of this row is asking (the asking rollup's child half), stamped
   // on member rows: the child may sit outside the replica's window (ct-56051).
   "child_asking",
+  // When that child's ask stops counting (its heartbeat ages out of the live
+  // pool, its status outlives its trust): the lift decays with time alone, so the
+  // replica reads it at its own clock (childAskingAt). Null: no time bound.
+  "child_asking_until",
   // What the agent is doing right now (conversations.activity): stamped at
   // message ingest from the newest tool call, cleared when the turn settles.
   // Overlay borne so a tool call never changes the session list result; the

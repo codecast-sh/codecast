@@ -17,6 +17,8 @@ import { SelectBox } from "../../../components/ui/select-box";
 import { useInboxStore, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, type ClientUI } from "../../../store/inboxStore";
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
 import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
+import { useModRows } from "../../../lib/mods/useMods";
+import { availableThemes } from "../../../lib/theme/colorTheme";
 import {
   SettingsField, SettingsLinkRow, SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection,
 } from "../../../components/settings/ui";
@@ -183,9 +185,31 @@ function AppearanceSection() {
           />
         </SettingsField>
       )}
+      {!hosted && <ColorThemeField />}
       {/* Hosted mode sets your words as a quiet note in ink, not a hue. */}
       {visualStyle === "minimal" && !hosted && <BubbleColorField />}
     </SettingsSection>
+  );
+}
+
+/** A color theme from the viewer's mods (manifest `themes`), over either style. */
+function ColorThemeField() {
+  const rows = useModRows();
+  const installed = useInboxStore((s) => s.clientState?.ui?.mods_installed);
+  const current = useInboxStore((s) => s.clientState?.ui?.color_theme) ?? "";
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  const themes = availableThemes(rows, installed ?? []);
+  return (
+    <SettingsField
+      label="Color theme"
+      hint={themes.length ? "Recolors every surface, in light and dark. Themes come from your mods." : "Mods can add color themes. Ask an agent to make one, or install a teammate's from Mods."}
+    >
+      <SelectBox id="color-theme" value={current} onChange={(e) => updateUI({ color_theme: e.target.value })} wrapperClassName="w-full" className="h-9 rounded-md bg-sol-bg text-sm" aria-label="Color theme">
+        <option value="">Codecast</option>
+        {current && !themes.some((t) => t.key === current) && <option value={current}>{current} (unavailable)</option>}
+        {themes.map((t) => <option key={t.key} value={t.key}>{t.theme.title} · {t.modTitle}</option>)}
+      </SelectBox>
+    </SettingsField>
   );
 }
 
@@ -281,6 +305,7 @@ const INTERFACE_TOGGLES: Array<{
   { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", resolve: showsAgentIcon },
   { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false },
   { prefKey: "show_model_badge", label: "Model badge", desc: "Show each session's model in the inbox session list" },
+  { prefKey: "show_device_icon", label: "Machine icon", desc: "Mark inbox sessions that run somewhere else: a cloud icon for a cloud machine, a small device icon for another of your machines", defaultOn: true },
   { prefKey: "show_branch_pill", label: "Branch pill", desc: "Show a pill on inbox cards when a session sits off the default branch: its branch, or the short commit when its checkout is detached", defaultOn: true },
   { prefKey: "comments_enabled", label: "Comments", desc: "Show the tools to leave comments on conversations. You can always read and reply to comments others leave, even with this off." },
   { prefKey: "auto_open_browser_panes", label: "Open agent pane offers", desc: "When an agent offers a page (cast browser pane), open it beside the conversation you are reading instead of waiting for a click" },
