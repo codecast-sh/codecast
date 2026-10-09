@@ -1099,10 +1099,19 @@ export const ingestSnapshot = mutation({
     // newest live run is the current one); a terminal snapshot only claims it
     // when nothing is stamped yet, so a finished wave's final re-post can't
     // steal the pointer back from the wave that's running now.
+    //
+    // The pointer only, never is_workflow_primary: a dynamic run's host is a
+    // person's own session that called the Workflow tool mid-conversation, not
+    // a log the line opened for the run (those are born with the flag, in
+    // create/createFromCli, with a wf-<runId> session_id). The flag says "this
+    // session IS the run's log", and claiming it for a real session took its
+    // composer away for a RunLogEndedBar the moment the run ended, hid its card
+    // from the inbox with the task run logs, and barred it from hosting a
+    // decision discussion.
     if (primaryConvId) {
       const conv = await ctx.db.get(primaryConvId);
       if (conv && conv.workflow_run_id !== runId && (!isTerminal || !conv.workflow_run_id)) {
-        await ctx.db.patch(primaryConvId, { workflow_run_id: runId, is_workflow_primary: true });
+        await ctx.db.patch(primaryConvId, { workflow_run_id: runId });
       }
     }
     return { ok: true, run_id: runId };
@@ -1460,3 +1469,28 @@ export const repairLineCauseStatus = internalMutation({
     return { scanned: page.page.length, moved, restamped, skipped, cursor: page.continueCursor, done: page.isDone };
   },
 });
+
+// Once, for the dynamic runs stamped before ingestSnapshot stopped claiming
+// is_workflow_primary: a person's own session that called the Workflow tool
+// was marked the run's log, so an ended run replaced its composer with the
+// RunLogEndedBar. Clears the flag on every host that is not a log the line
+// opened for the run (a log's session_id is wf-<runId>).
+export const unmarkDynamicRunHosts = internalMutation({
+  args: { dry_run: v.boolean(), cursor: v.optional(v.union(v.string(), v.null())), page: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("workflow_runs")
+      .paginate({ cursor: args.cursor ?? null, numItems: args.page ?? 200 });
+    const cleared: string[] = [];
+    for (const run of page.page) {
+      // Only the Workflow tool's own runs: external_run_id is written by nothing else.
+      if (!run.external_run_id || !run.primary_conversation_id) continue;
+      const conv = await ctx.db.get(run.primary_conversation_id);
+      if (!conv || !conv.is_workflow_primary || conv.session_id === `wf-${run._id}`) continue;
+      cleared.push(conv.session_id);
+      if (!args.dry_run) await ctx.db.patch(conv._id, { is_workflow_primary: false });
+    }
+    return { scanned: page.page.length, cleared, cursor: page.continueCursor, done: page.isDone };
+  },
+});
+
