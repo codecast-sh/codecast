@@ -7,6 +7,8 @@
 // (convex/lib/sessionQueue, pendingMessages.mergeQueuedForUser).
 import { formatJointMessage, jointPartsOf, type JointPart } from "@codecast/shared/contracts/jointMessage";
 import { isWaitingInQueue, queueAtBefore, queueOrder } from "@codecast/convex/convex/lib/sessionQueue";
+import { isBootstrapPrompt, parseScheduledTask, type WaitingSession } from "@codecast/shared/contracts";
+import { parseInboundSessionMessage, parseMachineDeliveredMessage } from "../components/sessionMessage";
 
 export type QueueRow = {
   message_id: string;
@@ -63,3 +65,55 @@ export function partsOf(row: QueueRow): JointPart[] {
 export function isHeldForTurnEnd(row: QueueRow): boolean {
   return row.status === "held" && !!row.queued;
 }
+
+// ── What a row reads as ─────────────────────────────────────────────────────
+// A row's content is the wire form the session will receive. Machinery wraps
+// what it delivers (a trigger run's frame, another session's message), and
+// the queue shows who that is from and what it says, never the wrapper: the
+// same reading the transcript gives the message once it lands.
+
+export type QueueLine =
+  /** Words a person typed (or several people's, merged): shown under their names. */
+  | { kind: "person" }
+  /** A role's opening brief, sent by the person who staffed it. */
+  | { kind: "brief"; text: string }
+  /** A trigger's run: its title, the trigger (tr-N) and the session it fired for, when named. */
+  | { kind: "trigger"; title: string; trigger?: string; waiting?: WaitingSession | null; text: string }
+  /** Another session's, a teammate agent's or a chat thread's words. `ref` is the sending session's short id. */
+  | { kind: "session" | "teammate" | "chat"; source: string; ref?: string; text: string };
+
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+
+export function queueLineOf(row: QueueRow): QueueLine {
+  const frame = parseScheduledTask(row.content);
+  if (frame) return { kind: "trigger", title: frame.title || "Trigger run", trigger: frame.trigger, waiting: frame.waiting, text: oneLine(frame.waiting?.state || frame.body) };
+  const machine = parseMachineDeliveredMessage(row.content);
+  if (machine && machine.kind !== "schedule") {
+    const ref = machine.kind === "session" ? parseInboundSessionMessage(row.content)?.from : undefined;
+    return { kind: machine.kind, source: machine.source, ...(ref && ref !== "unknown" ? { ref } : {}), text: oneLine(machine.body) };
+  }
+  if (isBootstrapPrompt(row.content)) return { kind: "brief", text: oneLine(row.content.split("\n")[0].replace(/\*\*/g, "")) };
+  return { kind: "person" };
+}
+
+/** One line of the queue as drawn: a row, or a run of the same trigger's
+ *  runs waiting back to back, folded under the first. */
+export type QueueGroup = { rows: QueueRow[]; line: QueueLine };
+
+/** The queue as drawn. A trigger that fired many times into a session that
+ *  took none of them (a machine that was away) reads as one line with a
+ *  count, not a wall of the same title. Only waiting rows fold: one going in
+ *  now is its own line. */
+export function queueGroupsOf(rows: QueueRow[]): QueueGroup[] {
+  const groups: QueueGroup[] = [];
+  for (const row of rows) {
+    const line = queueLineOf(row);
+    const last = groups[groups.length - 1];
+    if (last && line.kind === "trigger" && last.line.kind === "trigger" && last.line.title === line.title && canSteer(row) && last.rows.every(canSteer)) last.rows.push(row);
+    else groups.push({ rows: [row], line });
+  }
+  return groups;
+}
+
+/** How many lines the queue shows before the rest fold behind "show more". */
+export const QUEUE_PREVIEW_LINES = 5;

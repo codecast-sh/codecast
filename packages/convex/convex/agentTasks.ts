@@ -22,7 +22,8 @@ import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
 import { isHostedAgentType, triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
-import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
+import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, roleMachineAway, type RoleEventSpec } from "./lib/orgRoutine";
+import { runnerDeviceOf } from "./lib/runnerDevice";
 import { roleServedInitiatives } from "./lib/roleInitiatives";
 import { metricLine } from "@codecast/shared/contracts/initiative";
 import { listOnlineDevices, parkedAccountResetAt, recoveryModeOf } from "./ccAccountsShared";
@@ -1005,12 +1006,13 @@ export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, co
 // when nothing fired: the role cannot be reached (reachableRole), or the
 // person paused or cancelled the trigger, which is their control over it.
 /** The role and the armed trigger that would hear a waiting session, or null
- *  when nothing can: no standing session, the org off, or the person paused
- *  or cancelled the trigger. A seat from before the trigger existed is armed
- *  here, on its first event. */
+ *  when nothing can: no standing session, the org off, the role's machine
+ *  away (roleMachineAway), or the person paused or cancelled the trigger. A
+ *  seat from before the trigger existed is armed here, on its first event. */
 async function roleHearing(ctx: TaskCtx, roleId: Id<"org_roles">, spec: RoleEventSpec = ROLE_NEEDS_INPUT_SPEC): Promise<{ standing: Doc<"conversations">; task: Doc<"agent_tasks"> } | null> {
   const reached = await reachableRole(ctx, roleId);
   if (!reached) return null;
+  if (roleMachineAway(await runnerDeviceOf(ctx, reached.standing), Date.now())) return null;
   const task = await ctx.db.get((await ensureRoleEventTrigger(ctx, reached.role, reached.standing, spec)).id);
   return task && task.status === "scheduled" ? { standing: reached.standing, task } : null;
 }

@@ -7,6 +7,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { canAccessConversation } from "./lib/access";
+import { runnerDeviceOf } from "./lib/runnerDevice";
 import { canReadSessionCommand, requireSessionCommandTarget, findSessionCommandByRequest } from "./daemonCommandUtils";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
@@ -1373,16 +1374,6 @@ export const removeDevices = mutation({
  * index, so no device_id-only index is needed, and a legacy cloned device id
  * under another user can't shadow the real machine.
  */
-async function runnerDeviceOf(ctx: { db: any }, conv: any) {
-  const deviceId = conv.owner_device_id as string | undefined;
-  if (!deviceId) return null;
-  return await ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) =>
-      q.eq("user_id", conv.user_id).eq("device_id", deviceId),
-    )
-    .first();
-}
 
 /**
  * May the viewer treat the machine a conversation runs on as their own — for
