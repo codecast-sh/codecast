@@ -228,7 +228,15 @@ export function useChatToasts(): void {
       // sound so nobody learns to ignore the "ordinary" one.
       soundChatMessage(messageId);
       toast.custom(
-        () => <ChatToast data={data} onOpen={open} onMuteChannel={mute} onSnooze={snooze} />,
+        (id) => (
+          <ChatToast
+            data={data}
+            onOpen={open}
+            onMuteChannel={mute}
+            onSnooze={snooze}
+            onDismiss={() => toast.dismiss(id)}
+          />
+        ),
         {
           // A loud card keeps its own slot (it is about you, and a second mention
           // must not silently replace the first). Quiet cards from one channel

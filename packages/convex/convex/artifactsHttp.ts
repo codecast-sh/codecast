@@ -801,16 +801,18 @@ export const comment = httpAction(async (ctx, request) => {
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
-      // deliver:false = discussion only. Delivery additionally needs the
-      // owner_key — without it the mutation stores the comments as discussion.
-      deliver: body.deliver === false ? false : undefined,
+      // "Send to agent", per batch and per comment. The mutation honors it
+      // only for the owner and verified teammates; anyone else's comments
+      // are stored as discussion whatever the request says.
+      deliver: typeof body.deliver === "boolean" ? body.deliver : undefined,
       owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
       identity_token: typeof body.identity_token === "string" ? body.identity_token : undefined,
       parent_id: typeof body.parent_id === "string" ? body.parent_id : undefined,
       comments: Array.isArray(body.comments)
-        ? body.comments.map((c: { text?: unknown; anchor?: unknown }) => ({
+        ? body.comments.map((c: { text?: unknown; anchor?: unknown; deliver?: unknown }) => ({
             text: String(c?.text ?? ""),
             anchor: typeof c?.anchor === "string" ? c.anchor : undefined,
+            deliver: typeof c?.deliver === "boolean" ? c.deliver : undefined,
           }))
         : [],
     });
@@ -964,6 +966,7 @@ export const serve = httpAction(async (ctx, request) => {
   if (q.get("meta") === "1") {
     const art = await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
     if (!art) return notFound("Page not found");
+    const agent = await ctx.runQuery(internal.artifacts.agentStateBySlug, { slug });
     return new Response(
       JSON.stringify({
         version: art.version,
@@ -973,6 +976,11 @@ export const serve = httpAction(async (ctx, request) => {
         comment_count: art.comments_disabled ? 0 : artifact.comment_count,
         comments: art.comments_disabled ? [] : artifact.open_comments,
         session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, title: artifact.session_title } : null,
+        // The publishing session's live state for the agent chip: state is a
+        // work state (working / needs_input / done / dormant / idle), since
+        // when it last moved, awaiting_since when a comment sent to the agent
+        // has not been answered by a newer version yet.
+        agent,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
         versions: (art.versions as HistoryVersion[]).map((x) => ({
           version: x.version,

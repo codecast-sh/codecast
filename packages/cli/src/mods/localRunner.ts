@@ -1,8 +1,8 @@
 // Runs the local halves of codecast mods on this machine (plan pl-839). The
-// daemon starts this once. Every half runs in its own Bun Worker, and only at
-// a version a person approved on this device (`cast mod approve`, which needs
-// a terminal): a new push changes the hash and the half stops until approved
-// again. The runner relays the half's logs to `cast mod logs` and hands it the
+// daemon starts this once. Every half runs in its own Bun Worker. Only the
+// signed-in user's own mods come back from the server, and only they can push
+// one, so every enabled half runs on each of their machines unless revoked
+// there (`cast mod revoke`); a push that changes the code restarts it. The runner relays the half's logs to `cast mod logs` and hands it the
 // calls the mod's UI makes ($.local.call).
 
 import crypto from "node:crypto";
@@ -11,13 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { defaultConfigDir } from "../config/configDir.js";
 
-export type Approval = { hash: string; at: number };
-
-/**
- * The identity of a local half: a hash of the exact code that would run.
- * Computed here from the code itself, never taken from the server, so an
- * approval names what runs and nothing else can borrow it.
- */
+/** The identity of a local half: a hash of the exact code that runs, so a new push restarts it. */
 export function localHash(code: string): string {
   return crypto.createHash("sha256").update(code).digest("hex").slice(0, 16);
 }
@@ -26,20 +20,21 @@ function modsDir(): string {
   return path.join(process.env.CODECAST_DIR || defaultConfigDir(), "mods");
 }
 
-function approvalsFile(): string {
-  return path.join(modsDir(), "approved.json");
+function revokedFile(): string {
+  return path.join(modsDir(), "revoked.json");
 }
 
-export function readApprovals(): Record<string, Approval> {
-  try { return JSON.parse(fs.readFileSync(approvalsFile(), "utf8")); } catch { return {}; }
+/** The mods this machine does not run, by name. */
+export function readRevoked(): Record<string, { at: number }> {
+  try { return JSON.parse(fs.readFileSync(revokedFile(), "utf8")); } catch { return {}; }
 }
 
-export function writeApproval(name: string, hash: string | null): void {
-  const all = readApprovals();
-  if (hash) all[name] = { hash, at: Date.now() };
+export function setRevoked(name: string, revoked: boolean): void {
+  const all = readRevoked();
+  if (revoked) all[name] = { at: Date.now() };
   else delete all[name];
   fs.mkdirSync(modsDir(), { recursive: true });
-  fs.writeFileSync(approvalsFile(), `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(revokedFile(), `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
 }
 
 type LocalMod = { id: string; name: string; title?: string; rev: number; enabled: boolean; local_code: string; manifest: unknown };
@@ -101,7 +96,7 @@ export function startLocalMods(deps: LocalRunnerDeps): { stop: () => void } {
     if (!ep) return;
     const dir = path.join(modsDir(), "run");
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    // Written on every start, from the code whose hash was approved: never a file left from before.
+    // Written on every start, from the code the server just returned: never a file left from before.
     const file = path.join(dir, `${mod.name}-${hash}.mjs`);
     fs.writeFileSync(file, mod.local_code, { mode: 0o600 });
     const worker = new Worker(file);
@@ -128,16 +123,16 @@ export function startLocalMods(deps: LocalRunnerDeps): { stop: () => void } {
   const sync = async () => {
     let mods: LocalMod[];
     try { mods = (await post("/cli/mods/local", {})).mods ?? []; } catch { return; }
-    const approvals = readApprovals();
+    const revoked = readRevoked();
     const want = new Map<string, { mod: LocalMod; hash: string }>();
     for (const m of mods) {
       if (!m.enabled || !m.local_code) continue;
       const hash = localHash(m.local_code);
-      if (approvals[m.name]?.hash === hash) want.set(m.name, { mod: m, hash });
+      if (!revoked[m.name]) want.set(m.name, { mod: m, hash });
     }
     for (const [name, r] of running) {
       const next = want.get(name);
-      if (!next) stopOne(name, approvals[name] ? "a new version waits for approval (cast mod approve)" : "turned off or not approved");
+      if (!next) stopOne(name, revoked[name] ? "revoked on this machine" : "turned off");
       else if (next.hash !== r.hash) stopOne(name, "a new version");
     }
     for (const [name, { mod, hash }] of want) if (!running.has(name)) {

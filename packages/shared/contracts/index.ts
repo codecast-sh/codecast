@@ -47,6 +47,7 @@ export * from "./orgTemplateBind";
 export * from "./snippets";
 export * from "./featureExplainers";
 export * from "./castPlayer";
+export * from "./castMotion";
 export * from "./harnessHooks";
 export * from "./agentSwitch";
 export * from "./machineSwitch";
@@ -122,6 +123,7 @@ export { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } fro
 export * from "./unattended";
 export * from "./handoffPrompt";
 export * from "./browserExtension";
+export * from "./agentToolSetup";
 export type { AskResult } from "./sessionAsk";
 export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
