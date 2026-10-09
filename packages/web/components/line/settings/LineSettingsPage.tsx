@@ -7,7 +7,7 @@
 // on the machine holding the checkout (useLineProfileEdits), which writes
 // `.codecast/line.toml` in place and republishes. The Stations section is
 // LineStations.
-import { useEffect, useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
+import { useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { useSyncDevices } from "../../../hooks/useSyncDevices";
@@ -20,6 +20,7 @@ import { useLineProfileEditor } from "./useLineProfileEdits";
 import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { LineStations } from "./LineStations";
 import "../line.css";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import "./settings.css";
 
 const NAV = [...LINE_SECTIONS.map((s) => ({ id: s.id, title: s.title })), { id: "stations", title: "Stations" }];
@@ -31,7 +32,9 @@ export function LineSettingsPage({ project: pinned }: { project?: string } = {})
   const project = useMemo(() => projects.find((p) => p._id === line.key) ?? null, [projects, line.key]);
   // The published copy with the edits still travelling laid over it.
   const { edits, gate, device } = useLineProfileEditor(project?._id ?? null);
-  const lp = edits.lp;
+  // Nothing uploaded yet, but a machine of yours holds the project's folder:
+  // the defaults show, editable, and the first change writes the file there.
+  const lp = edits.lp ?? (gate.writable && gate.first ? UNPUBLISHED : null);
   // A link in names a section or a station (lineSettingsHref): the page opens
   // scrolled to it, and the target carries data-lset-target, which flashes once.
   const target = lineSettingsTarget(useSearchParams());
@@ -39,7 +42,7 @@ export function LineSettingsPage({ project: pinned }: { project?: string } = {})
   const ready = !!project && !!lp;
   // Once per arrival: a later render must never pull the reader back up.
   const landed = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     // A station scrolls itself into view once its panel opens (LineStations).
     if (!ready || !target.section || target.station) return;
     const key = `${project?._id}:${target.section}`;
@@ -144,6 +147,8 @@ function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: LineWriteGate }) 
       <p className="lset-plate-says" data-lset-gate={gate.writable ? "writable" : "read-only"}>
         {!gate.writable
           ? <>Read only. {gate.reason}</>
+          : gate.first
+            ? <>These are the defaults: nothing has been uploaded for this line yet. Your first change writes the file on <b>{gate.device}</b> and uploads it.</>
           : gate.away
             ? <><b>{gate.device}</b> has not checked in for a few minutes. An edit waits for it up to {Math.round(DAEMON_COMMAND_TTL_MS / 60_000)} minutes, then is dropped with nothing written.</>
             : <>Edits are written into the file on <b>{gate.device}</b>, comments and order kept, then republished here.</>}
@@ -153,15 +158,18 @@ function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: LineWriteGate }) 
   );
 }
 
+/** A line nothing has uploaded: every value reads as its default (lineValue). */
+const UNPUBLISHED: PublishedLineProfile = { finders: [], changed_at: 0 };
+
 /** No single project chosen, or a project whose line has no profile yet. */
 function Unset({ lineKey, titled, hasLines }: { lineKey: string; titled?: string; hasLines: boolean }) {
   const say = lineKey === ALL_PROJECTS
     ? hasLines
       ? "Settings belong to one project's line. Pick a project above."
-      : <>No project in this workspace has a line yet. A line lives in its repo, in <code>.codecast/line.toml</code>: run <code>cast line profile --publish</code> in the checkout and its settings appear here. A repo without the file publishes the defaults.</>
+      : "No project in this workspace has a line yet. A line's settings live in a file in the project's repository; they show here once a machine with that repository runs a session in it."
     : lineKey === NO_PROJECT
       ? "Work filed under no project has no line file to set."
-      : <>{titled ?? "This project"} has no line file published yet. In its checkout, run <code>cast line profile --publish</code>; a repo without <code>.codecast/line.toml</code> publishes the defaults.</>;
+      : `${titled ?? "This project"}'s line settings have not been uploaded, and codecast does not know which folder holds the project. Run one session in the project's folder on your machine: its settings then show here, and your first change writes them into the repository.`;
   return (
     <div className="flex-1 min-h-0 px-4 sm:px-6 pt-6">
       <p className="lset-empty max-w-[60ch]" data-lset-unset>{say}</p>

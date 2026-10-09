@@ -38,8 +38,11 @@ import {
   type ArtifactLsRow,
 } from "./publishCommand.js";
 import { apiPost, missingRouteError, type PublishDeps } from "./castApi.js";
-import { CAST_PLAYER_GUIDE, pageUsesPlayer } from "@codecast/shared/contracts";
+import { CAST_PLAYER_GUIDE, describePageAnchor, pageIsMotion, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
+import { readPageData, runPublishData } from "./publishData.js";
+import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
+import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
 
 const WATCH_DEBOUNCE_MS = 400;
 const THUMB_TIMEOUT_MS = 10_000;
@@ -69,7 +72,7 @@ export const findChrome = findChromeBinary;
  * testable without spawning a browser. The throwaway profile dir keeps the
  * capture off the human's real profile (which a running Chrome holds locked)
  * and, with the keychain flag, off the macOS keychain when the home has none. */
-export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: string): string[] {
+export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: string, extraArgs: string[] = []): string[] {
   return [
     "--headless=new",
     `--screenshot=${outPng}`,
@@ -79,6 +82,7 @@ export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: 
     "--disable-gpu",
     "--no-first-run",
     ...keychainArgs(),
+    ...extraArgs,
     `file://${entryHtmlAbsPath}`,
   ];
 }
@@ -86,15 +90,15 @@ export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: 
 /** Headless-Chrome 1200x630 screenshot of a local html file → base64 png.
  * ANY failure (no Chrome, timeout, bad exit) returns null silently — a
  * thumbnail must never block or delay a publish beyond its timeout. */
-export function captureThumb(entryHtmlAbsPath: string): string | null {
+export function captureThumb(entryHtmlAbsPath: string, opts: { extraArgs?: string[]; timeoutMs?: number } = {}): string | null {
   try {
     const chrome = findChrome();
     if (!chrome) return null;
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-thumb-"));
     const outPng = path.join(tmpDir, "thumb.png");
     try {
-      const run = spawnSync(chrome, thumbArgs(entryHtmlAbsPath, outPng, path.join(tmpDir, "profile")), {
-        timeout: THUMB_TIMEOUT_MS,
+      const run = spawnSync(chrome, thumbArgs(entryHtmlAbsPath, outPng, path.join(tmpDir, "profile"), opts.extraArgs), {
+        timeout: opts.timeoutMs ?? THUMB_TIMEOUT_MS,
         // SIGTERM (the default) is ignored by a headless Chrome that is still
         // starting under load, and spawnSync then waits on it forever; only
         // SIGKILL honours the timeout.
@@ -123,6 +127,12 @@ interface PublishPayload {
   media?: Array<{ path: string; abs: string; size: number }>;
   /** Local path of the html document a thumbnail should render. */
   entryHtmlPath?: string;
+  /** The bundle's cast-data.json: the live queries the page reads. */
+  data?: unknown;
+  /** The entry is a HyperFrames composition (a motion page). */
+  motion?: boolean;
+  /** Tool output directories a composition's bundle left out (renders/, snapshots/). */
+  skipped?: Array<{ dir: string; files: number; bytes: number }>;
 }
 
 /** Read the file/dir into the /cli/artifacts/publish payload. Throws with a
@@ -130,9 +140,16 @@ interface PublishPayload {
 export function buildPublishPayload(absPath: string, titleOverride?: string): PublishPayload {
   const stat = fs.statSync(absPath);
   if (stat.isDirectory()) {
-    const relPaths = walkBundleDir(absPath);
-    const entry = pickBundleEntry(relPaths);
+    // cast-data.json declares the page's live queries; it travels as data, not as a served file.
+    const data = readPageData(absPath);
+    const walked = walkBundleDir(absPath).filter((p) => p !== PAGE_DATA_FILE);
+    const entry = pickBundleEntry(walked);
     if (!entry.entry) throw new Error(entry.error);
+    const entryHtml = fs.readFileSync(path.join(absPath, entry.entry), "utf-8");
+    // A composition directory holds the render and snapshot output of its own
+    // tools; none of it belongs on the page.
+    const motion = pageIsMotion(entryHtml);
+    const { keep: relPaths, skipped } = motion ? splitMotionOutputs(absPath, walked) : { keep: walked, skipped: [] };
     const files: NonNullable<PublishPayload["files"]> = [];
     const media: NonNullable<PublishPayload["media"]> = [];
     const sizes: Array<{ path: string; size: number }> = [];
@@ -148,13 +165,15 @@ export function buildPublishPayload(absPath: string, titleOverride?: string): Pu
     }
     const sizeError = bundleSizeError(sizes);
     if (sizeError) throw new Error(sizeError);
-    const entryHtml = fs.readFileSync(path.join(absPath, entry.entry), "utf-8");
     return {
       title: resolveArtifactTitle(entryHtml, absPath, titleOverride),
       source_path: absPath,
       kind: "bundle",
       files,
       ...(media.length ? { media } : {}),
+      ...(data ? { data } : {}),
+      ...(motion ? { motion } : {}),
+      ...(skipped.length ? { skipped } : {}),
       entryHtmlPath: path.join(absPath, entry.entry),
     };
   }
@@ -197,7 +216,7 @@ export function describeEvidence(evidence?: { task?: string | null; plan?: strin
 }
 
 export function printPublishResult(
-  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null } },
+  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null }; data?: { workspace: string; queries: number } },
   title: string,
   access?: Record<string, unknown>,
   showsVideo?: boolean,
@@ -214,6 +233,9 @@ export function printPublishResult(
   }
   if (access) {
     console.log(`  ${fmt.label("gates:")} ${describeAccess(access)}`);
+  }
+  if (result.data) {
+    console.log(`  ${fmt.label("data:")} ${result.data.queries} live quer${result.data.queries === 1 ? "y" : "ies"} in ${result.data.workspace}; check them with \`cast publish data ${result.url.split("/").pop()}\``);
   }
   if (showsVideo) {
     console.log(`  ${fmt.label("video:")} plays in the cast player; \`cast publish video\` covers chapters and styling it to the page`);
@@ -467,16 +489,14 @@ async function runComments(
   console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)} — ${open_.length} open`);
   for (const c of open_) {
     const who = c.author_email ? `${c.author_name} <${c.author_email}>` : c.author_name;
-    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(`${who} · v${c.version} · ${ago(c.created_at)}`)}`);
+    // role: "owner" | "teammate" may steer the agent; anyone else is a viewer.
+    const meta = [who, c.role ?? "viewer", `v${c.version}`, ago(c.created_at)];
+    if (c.delivered) meta.push("sent to agent");
+    else if (c.role) meta.push("not sent to agent");
+    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(meta.join(" · "))}`);
     for (const line of String(c.text).split("\n")) console.log(`    ${line}`);
-    if (c.anchor) {
-      try {
-        const snippet = JSON.parse(c.anchor)?.snippet;
-        if (snippet) console.log(fmt.muted(`    ↳ on: "${String(snippet).slice(0, 100)}"`));
-      } catch {
-        /* opaque anchor */
-      }
-    }
+    const where = describePageAnchor(parsePageAnchor(c.anchor));
+    if (where.length) console.log(fmt.muted(`    ↳ ${where.join(", ")}`));
   }
   console.log(fmt.muted(`  resolve: cast publish comments ${row.slug} --resolve <id>  |  --resolve-all`));
 }
@@ -533,6 +553,8 @@ interface PublishOptions {
   /** Evidence (the-line.md L6): the task (ct-N) or plan (pl-N) this page is for. */
   task?: string;
   plan?: string;
+  /** Render a HyperFrames composition directory to MP4 before publishing. */
+  render?: boolean;
 }
 
 /** The /cli/artifacts/publish body: the payload plus the flags of this publish. */
@@ -546,6 +568,7 @@ export function publishRequestBody(
     ...(payload.kind ? { kind: payload.kind } : {}),
     ...(payload.content !== undefined ? { content: payload.content } : {}),
     ...(payload.files ? { files: payload.files } : {}),
+    ...(payload.data ? { data: payload.data } : {}),
     ...(extra.forceNew ? { force_new: true } : {}),
     ...(extra.access ? { access: extra.access } : {}),
     ...(extra.sessionRef ? { session_ref: extra.sessionRef } : {}),
@@ -591,12 +614,12 @@ export async function publishOnce(
   absPath: string,
   options: PublishOptions,
   extra: { access?: Record<string, unknown>; sessionRef?: string; withThumb: boolean; forceNew: boolean; exitOnError: boolean },
-): Promise<{ result: any; title: string; showsVideo: boolean }> {
+): Promise<{ result: any; title: string; showsVideo: boolean; skipped: NonNullable<PublishPayload["skipped"]> }> {
   const payload = buildPublishPayload(absPath, options.title);
   await uploadMedia(deps, payload);
   let thumbB64: string | undefined;
   if (extra.withThumb && options.thumb !== false && payload.entryHtmlPath) {
-    thumbB64 = captureThumb(payload.entryHtmlPath) ?? undefined;
+    thumbB64 = (payload.motion ? captureMotionThumb(payload.entryHtmlPath) : captureThumb(payload.entryHtmlPath)) ?? undefined;
   }
   const result = await apiPost(
     deps,
@@ -605,7 +628,7 @@ export async function publishOnce(
     { exitOnError: extra.exitOnError },
   );
   const page = payload.content ?? (payload.entryHtmlPath ? fs.readFileSync(payload.entryHtmlPath, "utf-8") : "");
-  return { result, title: payload.title, showsVideo: pageUsesPlayer(page) };
+  return { result, title: payload.title, showsVideo: pageUsesPlayer(page), skipped: payload.skipped ?? [] };
 }
 
 async function runPublish(deps: PublishDeps, target: string, options: PublishOptions): Promise<void> {
@@ -616,18 +639,41 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   }
   const access = accessFromOptions(options);
   const sessionRef = deps.detectCurrentSessionId() ?? undefined;
+  const isDir = fs.statSync(absPath).isDirectory();
+
+  if (options.render) {
+    if (!isDir) {
+      console.error(fmt.error("--render publishes a directory: put the composition in its own folder as index.html"));
+      process.exit(1);
+    }
+    try {
+      process.stderr.write(fmt.muted("rendering MP4 (hyperframes render)…\n"));
+      const manifest = renderMotion(absPath, walkBundleDir(absPath));
+      process.stderr.write(fmt.muted(`rendered ${manifest.mp4} (${formatBytes(manifest.bytes)})\n`));
+    } catch (err) {
+      console.error(fmt.error(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  } else if (isDir) {
+    const note = staleRenderNote(absPath, walkBundleDir(absPath));
+    if (note) process.stderr.write(fmt.muted(`note: ${note}\n`));
+  }
 
   let result: any;
   let title: string;
   let showsVideo = false;
   try {
-    ({ result, title, showsVideo } = await publishOnce(deps, absPath, options, {
+    let skipped: NonNullable<PublishPayload["skipped"]>;
+    ({ result, title, showsVideo, skipped } = await publishOnce(deps, absPath, options, {
       access,
       sessionRef,
       withThumb: true,
       forceNew: !!options.new,
       exitOnError: false,
     }));
+    for (const s of skipped) {
+      process.stderr.write(fmt.muted(`left out ${s.dir} (${s.files} file${s.files === 1 ? "" : "s"}, ${formatBytes(s.bytes)}): HyperFrames output, not part of the page\n`));
+    }
   } catch (err) {
     console.error(fmt.error(err instanceof Error ? err.message : String(err)));
     process.exit(1);
@@ -645,7 +691,6 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   console.log(fmt.muted(`\nwatching ${target} — Ctrl+C to stop`));
   console.log(fmt.muted(`live view: ${result.url}?live=1`));
 
-  const isDir = fs.statSync(absPath).isDirectory();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let publishing = false;
   let dirty = false;
@@ -705,7 +750,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
   program
     .command("publish")
     .description(commandGroup("publish").description)
-    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | video")
+    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video")
     .argument("[args...]", "subcommand arguments")
     .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
@@ -726,8 +771,10 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--task <ct-N>", "Attach the page to a task as evidence at its current station (default: the session's active task)")
     .option("--plan <pl-N>", "Attach the page to a plan")
     .option("--open", "Open the published URL in the browser")
+    .option("--render", "Render a HyperFrames composition directory to MP4 and offer it on the page (slow; only when an MP4 is wanted)")
     .option("--resolve <id>", "comments: mark one comment resolved")
     .option("--resolve-all", "comments: mark every open comment resolved")
+    .option("--refresh", "data: run the page's queries now and wait for the rows")
     .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
       const json = !!options.json;
       if (!target) {
@@ -767,6 +814,13 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
           return runComments(deps, sub, { resolveId: o.resolve, resolveAll: !!o.resolveAll, json });
         }
         return runSet(deps, sub, options, json);
+      }
+      if (target === "data" && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error("Usage: cast publish data <slug|path> [query-id] [--refresh] [--json]"));
+          process.exit(1);
+        }
+        return runPublishData(deps, args[0], args[1], { refresh: !!(options as { refresh?: boolean }).refresh, json });
       }
       if (target === "open" && !fs.existsSync(target)) {
         if (!args[0]) {

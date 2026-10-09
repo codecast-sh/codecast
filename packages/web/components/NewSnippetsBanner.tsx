@@ -9,12 +9,10 @@
 // to adjust later, and both paths link there.
 
 import { useMemo, useRef, useState } from "react";
-import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowRight, Check, Sparkles, X } from "lucide-react";
 import type { SnippetDescriptor } from "@codecast/shared/contracts";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useDevices } from "./DeviceBadge";
@@ -35,7 +33,6 @@ export function NewSnippetsBanner() {
   const teams = useInboxStore((s) => s.teams);
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
   const router = useRouter();
-  const setSnippet = useMutation(api.devices.setDeviceSnippet);
 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -71,7 +68,7 @@ export function NewSnippetsBanner() {
   const turnOn = async (s: SnippetDescriptor) => {
     setBusy((p) => new Set(p).add(s.slug));
     try {
-      await turnOnFeature(setSnippet, onlineDevices, s);
+      await turnOnFeature(onlineDevices, s);
       setEnabledNow((p) => new Set(p).add(s.slug));
       updateDismissed(snippetIntroKey(s.slug), Date.now());
     } catch (e) {

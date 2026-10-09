@@ -5,13 +5,14 @@
 // page, the task page's Line block, the /line rows and the project's Line tab
 // all read it, so a run is told the same way everywhere. Pure: no store, no
 // React.
-import { CARD_GATE_NODE_ID, isLineRun, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, LINE_END_NODES, isLineRun, passedUnansweredCard, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
+import { threadStateHeadline, threadStateResult } from "@codecast/shared/contracts";
 import { runNodeLine, runNodeRows, type RunNodeRow } from "../workflowRun";
 import { SHIPPED_LINE } from "./shippedLine.generated";
 
 // ── the shape a report reads ─────────────────────────────────────────────────
 
-export type ReportNode = { node_id: string; status: string; outcome?: string; label?: string; session_id?: string; session?: { _id: string; title?: string } | null; started_at?: number; completed_at?: number; result_preview?: string; activity?: string };
+export type ReportNode = { node_id: string; status: string; outcome?: string; label?: string; session_id?: string; session?: { _id: string; title?: string; state?: string; state_status?: string; result?: string; message_count?: number; killed?: boolean; handoff?: { status: string; note?: string } } | null; started_at?: number; completed_at?: number; result_preview?: string; activity?: string };
 
 /** A run row as the store holds it (workflow_runs.enrichRun). */
 export type ReportRun = {
@@ -48,20 +49,58 @@ export type LinePhaseKey = "understand" | "prove" | "build" | "check" | "decide"
 
 /** The line's stations in the six phases a person reads (LE16). Every station
  *  of line.cast sits in exactly one; a project's copy keeps the station ids. */
+/** Plain names for steps whose graph label is shop talk ("Red", "Card",
+ *  "Shared text"). Every surface (the map, a trace, a run report) names a
+ *  step by its plain word; the graph file's own label is the subtitle a
+ *  station's panel gives it, so a reader can still find it in the .cast file. */
+const PLAIN_NAMES: Record<string, string> = {
+  shared: "Prepare the shared text",
+  stamp: "Record the cause",
+  red: "Confirm the test fails",
+  green: "Recheck the test passes",
+  card_draft: "Gather the facts",
+  card_write: "Write the summary",
+  card: "Check the summary",
+  park_proposal: "Save the plan",
+  park_built: "Save the fix",
+  approve_carried: "Use an earlier approval",
+  revise_proposal: "Revise the plan",
+  revise_build: "Revise the fix",
+  eval_scope: "Pick the evals",
+  ask: "Ask you",
+};
+
+/** The name a step shows everywhere: its plain word, else its graph's own label. */
+export const stepLabel = (n: { id: string; label?: string | null }): string => PLAIN_NAMES[n.id] || n.label?.trim() || n.id;
+
+/** The graph file's own label when the step shows a different, plain word, else null. */
+export const fileStepLabel = (id: string, label?: string | null): string | null => {
+  const plain = PLAIN_NAMES[id];
+  const own = label?.trim();
+  return plain && own && own.toLowerCase() !== plain.toLowerCase() ? own : null;
+};
+
+/** A graph's edge words with its shop talk swapped for plain words
+ *  ("card refused" reads "report refused", "still red" "still failing"). */
+export const plainStepWords = (text: string): string => text
+  .replace(/^no miss shown$/i, "the test didn't fail first, so retry")
+  .replace(/^go already given$/i, "you already approved it")
+  .replace(/\bcard(s?)\b/gi, "report$1").replace(/\bstill red\b/gi, "still failing");
+
 export const LINE_PHASES: ReadonlyArray<{ key: LinePhaseKey; label: string; stations: readonly string[] }> = [
   { key: "understand", label: "Understand", stations: ["ground", "park", "plan", "plan_gate", "analyze"] },
-  { key: "prove", label: "Prove", stations: ["prove", "red", "dissolve"] },
-  { key: "build", label: "Build", stations: ["implement", "reopen"] },
+  { key: "prove", label: "Prove", stations: ["prove", "prove_line", "red", "dissolve"] },
+  { key: "build", label: "Build", stations: ["implement", "implement_line", "ask", "reopen"] },
   { key: "check", label: "Check", stations: ["verify", "green", "eval", "unscored", "review"] },
   { key: "decide", label: "Decide", stations: ["card_draft", "card_write", "card", "decide", "drop"] },
-  { key: "ship", label: "Ship", stations: ["ship", "merge", "watch"] },
+  { key: "ship", label: "Ship", stations: ["rebase", "ship", "merge", "watch"] },
 ];
 
 const PHASE_OF = new Map(LINE_PHASES.flatMap((p) => p.stations.map((s) => [s, p.key] as const)));
 export const phaseOfStation = (id: string): LinePhaseKey | null => PHASE_OF.get(id) ?? null;
 
-const GATES = new Set(["plan_gate", CARD_GATE_NODE_ID]);
-/** A station that asks a person (the plan gate, the card gate). */
+const GATES = new Set(["plan_gate", "ask", CARD_GATE_NODE_ID]);
+/** A station that asks a person (the plan gate, a builder's question, the card gate). */
 export const isGateNode = (id: string | null | undefined) => !!id && GATES.has(id);
 
 export const isLiveRun = (r: { status: string }) => r.status === "running" || r.status === "paused" || r.status === "pending";
@@ -80,23 +119,143 @@ const WORDS: Record<string, { done: string; failed?: string; live?: string }> = 
   plan: { done: "Wrote the plan", live: "Writing the plan" },
   analyze: { done: "Read the cause and its signals", live: "Reading the cause" },
   prove: { done: "Wrote a test that shows the problem", failed: "Could not write a test for the problem", live: "Writing a test for the problem" },
+  prove_line: { done: "Named the recorded runs that show the problem", failed: "Could not show the problem on recorded runs", live: "Finding the runs that show the problem" },
   red: { done: "The test failed before the change, as it should", failed: "The test did not show the problem" },
   dissolve: { done: "Closed: the problem did not reproduce" },
   implement: { done: "Built the change", failed: "Build stopped", live: "Building the change" },
+  implement_line: { done: "Built the change to the line", failed: "Build stopped", live: "Building the change to the line" },
   reopen: { done: "Sent back to build with the note" },
   verify: { done: "Checks passed", failed: "Checks failed", live: "Running the checks" },
   green: { done: "The test passes with the change", failed: "The test still fails" },
   eval: { done: "Evals passed", failed: "Evals failed", live: "Running the evals" },
   unscored: { done: "The evals could not score the change" },
   review: { done: "Review approved", failed: "Review stopped", live: "Reviewing the diff" },
-  card_draft: { done: "Assembled the card" },
-  card_write: { done: "Wrote the card", live: "Writing the card" },
+  card_draft: { done: "Gathered the facts for your decision" },
+  card_write: { done: "Wrote the summary you decide on", live: "Writing the summary you decide on" },
   card: { done: "Card ready", failed: "Card refused" },
   drop: { done: "Closed the cause" },
+  rebase: { done: "Put the change on the default branch", failed: "Could not rebase", live: "Rebasing onto the default branch" },
   ship: { done: "Landed the change", failed: "Not shipped", live: "Shipping" },
   merge: { done: "Merged", failed: "Merge refused" },
   watch: { done: "Started the watch" },
 };
+
+/** Words for an outcome a station reported, by station; a bare outcome
+ *  means the same at any station. A station's meaning comes from what it
+ *  reported, never from its id: on a line where every run passes Dissolve,
+ *  most runs pass it on rather than close. */
+const REPORTED: Record<string, string> = {
+  "dissolve:open": "Passed it on: the problem needs its own fix",
+  dissolved: "Closed: no fix needed",
+  "investigate:mechanism": "Named the cause",
+  "investigate:failed": "Could not find the cause",
+  "investigate:judge_defect": "The judge was wrong, not the agent",
+  "refine:refined": "Rebuilt the issue around the cause",
+  "refine:wrong_cause": "The cause did not fit the issue",
+  "prove:red": "Proved the problem: its check fails before the change",
+  "prove:not_reproduced": "Could not reproduce the problem",
+};
+
+/** What a station's session reported: its outcome, its own first sentence, and whether it asked a person. */
+function reportOf(row: RunNodeRow): { outcome: string | null; line: string | null; asked: boolean } | null {
+  const s = row.session as ReportNode["session"];
+  if (!s?.state) return null;
+  let outcome: string | null = null;
+  try {
+    const json = s.result ?? threadStateResult(s.state);
+    const value = json ? JSON.parse(json)?.outcome : null;
+    outcome = typeof value === "string" ? value : null;
+  } catch {
+    outcome = null;
+  }
+  return { outcome, line: threadStateHeadline(s.state) || null, asked: s.state_status === "blocked" };
+}
+
+/** The end a run takes when another task already owns its cause, and the step that found the owner. */
+const OWNED_END = "dissolved_at_stamp";
+export const OWNED_WORDS = "Another task already owns this cause; closed here";
+
+/** Whether `stationId` is the step that found another task owns the cause
+ *  (its own failure routes to OWNED_END), and the owner when the step or the
+ *  end printed its ref. */
+function ownedElsewhere(run: Pick<ReportRun, "node_statuses">, stationId: string): { ref: string | null } | null {
+  const nodes = run.node_statuses ?? [];
+  const end = nodes.find((n) => n.node_id === OWNED_END && n.status === "completed");
+  if (!end || `dissolved_at_${stationId}` !== OWNED_END) return null;
+  const own = nodes.find((n) => n.node_id === stationId);
+  if (own?.status !== "failed") return null;
+  const said = [own.result_preview, own.activity, end.result_preview, end.activity].filter(Boolean).join(" ");
+  return { ref: said.match(/\bct-\d+\b/)?.[0] ?? null };
+}
+
+/** A run that went on past a card nobody answered and still ran its ship
+ *  steps: nothing approved what they did. An approval carried from an
+ *  earlier proposal let the build start; it never answers the card. */
+export const shippedUnapproved = (run: Pick<ReportRun, "node_statuses">): boolean => passedUnansweredCard(run.node_statuses);
+
+/** What a run that went on past an unanswered card did, in one sentence. */
+export const UNAPPROVED_WORDS = "Not shipped: the run went on past a card nobody answered, so nothing was approved. The card has to be asked again.";
+
+/** The station's own words: a question it asked, else its outcome's words, else its first sentence. */
+function reportedWords(row: RunNodeRow, report: ReturnType<typeof reportOf>): string | null {
+  if (!report) return null;
+  if (report.asked) return report.line;
+  return (report.outcome && (REPORTED[`${row.id}:${report.outcome}`] ?? REPORTED[report.outcome])) || report.line;
+}
+
+/** What happened to a station's session when it did not report a result the
+ *  line routes on: it handed off blocked or needs_context, it never started
+ *  (killed before its first message), it ran out of time, or it was killed.
+ *  `step` is the station's own line; `stop` finishes "Stopped at <station>: ". */
+export type StationEnd = { kind: "handoff" | "never_started" | "timed_out" | "killed"; step: string; stop: (station: string) => string };
+
+const HANDOFF_WORDS: Record<string, { step: string; stop: string }> = {
+  needs_context: { step: "Handed off needs_context: stopped to ask for context", stop: "stopped to ask for context (a needs_context handoff)" },
+  blocked: { step: "Handed off blocked: stopped until a person unblocks it", stop: "stopped blocked (a blocked handoff)" },
+};
+const TIMED_OUT = /^hand \S+ killed after (\d+)\s*m(?:in)?(?: at (\S+))?/;
+
+export function stationEnd(row: Pick<RunNodeRow, "id" | "session" | "status">, run: Pick<ReportRun, "fail_reason">): StationEnd | null {
+  const s = row.session as ReportNode["session"];
+  const handoff = s?.handoff && HANDOFF_WORDS[s.handoff.status];
+  if (handoff) return { kind: "handoff", step: handoff.step, stop: (st) => `${st} ${handoff.stop}` };
+  const timeout = run.fail_reason?.trim().match(TIMED_OUT);
+  if (timeout && timeout[2] === row.id) return { kind: "timed_out", step: `Ran out of time after ${timeout[1]}m and was killed`, stop: (st) => `${st}'s session ran out of time` };
+  // The runner retires a station that finished: a kill speaks only for one the run stopped at.
+  if (row.status !== "failed") return null;
+  if (s?.killed && !s.message_count) return { kind: "never_started", step: "Never started: queued, then killed before it began", stop: (st) => `${st} never started (it was queued, then killed)` };
+  if (s?.killed && !s.state) return { kind: "killed", step: "Killed before it reported", stop: (st) => `${st}'s session was killed before it reported` };
+  return null;
+}
+
+/** Script stations whose output is read into one sentence, never shown raw.
+ *  Ship is not one: its last line is the project's own word on what landed. */
+const READ_SCRIPTS = new Set(["park", "red", "dissolve", "verify", "green", "eval", "unscored", "reopen", "drop", "rebase", "watch", "card_draft", "card"]);
+
+/** Plain words for what a script station's text said when it printed no JSON
+ *  result: runs from before the stations printed one, and the CLI's own
+ *  "nothing to run" when a project names no command. */
+const SAID: ReadonlyArray<[station: string, said: RegExp, words: string]> = [
+  ["verify", /no verify command configured|nothing to run/i, "No checks ran: the project names no check command"],
+  ["green", /a line cause with no rerunnable check/i, "No check to rerun: the problem shows on recorded runs only"],
+  ["eval", /no eval command/i, "No evals ran: the project names no eval command"],
+  ["eval", /no surface's sources differ/i, "No evals ran: the change touches no eval surface"],
+];
+
+/** A script station's result in one sentence: its JSON `why`, else what its
+ *  text said in plain words; undefined leaves the station's words for how it ended. */
+function scriptSentence(row: RunNodeRow): string | undefined {
+  const raw = runNodeLine(row)?.trim();
+  if (!raw) return undefined;
+  if (raw.startsWith("{")) {
+    const why = scriptLine(raw);
+    return why && why !== raw ? sentence(why) : undefined;
+  }
+  return SAID.find(([id, re]) => id === row.id && re.test(raw))?.[2];
+}
+
+/** Sentence case, unless it opens on a file or a name that keeps its own case ("repro.sh fails"). */
+const sentence = (text: string) => (/^[^\s]*[./_]/.test(text) ? text : text.charAt(0).toUpperCase() + text.slice(1));
 
 /** What each station does, for the Line tab's list of them; a run's path
  *  says what the station did (WORDS). */
@@ -104,23 +263,27 @@ const DOES: Record<string, string> = {
   ground: "Ties the cause to a goal and rates its risk",
   park: "Holds a cause that is not ready to build",
   plan: "Writes a plan for a large change",
-  plan_gate: "A person answers the plan",
+  plan_gate: "You read the plan before anything is built, then decide",
   analyze: "Reads the cause and its signals",
   prove: "Writes a test that shows the problem",
-  red: "Runs the test before the change, to see it fail",
+  prove_line: "Names the recorded runs where the line itself did what the cause describes",
+  red: "Runs the test before the change, to see it fail; for a change to the line, checks the named runs against the records",
   dissolve: "Closes the cause when the problem does not reproduce",
   implement: "Builds the change",
+  implement_line: "Builds a change to the line itself",
+  ask: "A person answers the builder's question, or drops the cause",
   reopen: "Sends the change back to build with the person's note",
   verify: "Runs the project's checks",
   green: "Runs the test with the change, to see it pass",
   eval: "Runs the evals before and after the change",
   unscored: "Stops when the evals cannot score the change",
   review: "Reviews the diff against the cause",
-  card_draft: "Gathers the card's facts",
-  card_write: "Writes the card in plain words",
-  card: "Checks the card is complete",
-  [CARD_GATE_NODE_ID]: "A person answers the card: ship, revise or drop",
+  card_draft: "Gathers the facts you decide on: the change, its proof and its cost",
+  card_write: "Writes that summary in plain words",
+  card: "Checks the summary is complete before it reaches you",
+  [CARD_GATE_NODE_ID]: "You read the finished change and its proof, then decide: ship it, revise it or drop it",
   drop: "Closes the cause without a change",
+  rebase: "Puts the branch on the default branch and checks it again",
   ship: "Lands the change the project's way",
   merge: "Merges the branch",
   watch: "Watches for the problem to come back",
@@ -128,9 +291,9 @@ const DOES: Record<string, string> = {
 export const stationWords = (id: string): string | null => DOES[id] ?? null;
 
 /** The stations every cause passes through on its way to ship. The rest are
- *  branches (park, plan, dissolve, reopen, unscored, drop) or routine steps
+ *  branches (park, plan, dissolve, ask, reopen, unscored, drop) or routine steps
  *  (the card's assembly), which the Line tab folds under their phase. */
-const MAIN_PATH = new Set(["ground", "analyze", "prove", "red", "implement", "verify", "green", "eval", "review", CARD_GATE_NODE_ID, "ship", "merge", "watch"]);
+const MAIN_PATH = new Set(["ground", "analyze", "prove", "red", "implement", "verify", "green", "eval", "review", CARD_GATE_NODE_ID, "rebase", "ship", "merge", "watch"]);
 export const isMainStation = (id: string) => MAIN_PATH.has(id);
 
 /** Steps that only assemble the card: a run that passed them says so in the
@@ -173,7 +336,7 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
     const at = row.completed_at ?? row.started_at;
     return {
       id: row.id,
-      label: row.label,
+      label: stepLabel(row),
       state: "noted",
       result: landed ? `Landed by hand${at ? ` ${shortDay(at)}` : ""}` : "Left to a person to land",
       note: "the line could not merge it",
@@ -181,6 +344,15 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
       at: row.completed_at ?? row.started_at,
     };
   }
+  // A cause another task already owns: the step that found the owner did
+  // its job, and the run closes here (AgentWatch's stamp, then its
+  // dissolved_at_stamp end). Said once, on the step, with the owner when its output names it.
+  // Ship steps a run took past an unanswered card did what nobody approved: noted, never "Merged".
+  if ((row.id === "ship" || row.id === "merge" || row.id === "watch") && row.status === "completed" && shippedUnapproved(run)) {
+    return { id: row.id, label: stepLabel(row), state: "noted", result: "Ran without an approval, so it is not a ship", note: "the card before it was never answered", at: row.completed_at ?? row.started_at };
+  }
+  const owned = ownedElsewhere(run, row.id);
+  if (owned) return { id: row.id, label: stepLabel(row), state: "done", result: OWNED_WORDS, ...(owned.ref ? { href: `/line/trace/${owned.ref}`, hrefTitle: `Trace ${owned.ref}, the task that owns it` } : {}), at: row.completed_at ?? row.started_at };
   const answer = gate ? gateAnswer(run, { node_id: row.id, outcome: row.outcome }, run.gate_node_id === row.id ? run.gate_response : undefined) : null;
   const closed = closedGate(run);
   // A run that has ended has no step under way: a step it left mid-way was cut
@@ -188,34 +360,60 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
   const cutOff = !isLiveRun(run) && (row.status === "running" || (row.current && row.status === "pending") || (row.id === run.current_node_id && interrupted(run)));
   // A gate the runner closed with the answer's key is answered, not failed;
   // one whose question was taken back asked as designed and reads neutral.
-  const state: StepState = gate && answer ? "done"
+  // A station that reported and was then failed only because the line had no
+  // edge for its report did its job: the run's outcome says where it stopped.
+  const report = gate || row.status === "running" ? null : reportOf(row);
+  const strandedReport = !!report && !report.asked && row.status === "failed" && new RegExp(`^no outgoing edge from ${row.id}\\b`).test(run.fail_reason ?? "");
+  const state: StepState = strandedReport ? "done"
+    : gate && answer ? "done"
     : gate && (closed || cutOff) && run.gate_node_id === row.id ? "noted"
     : cutOff || (row.id === "ship" && row.status === "failed" && closed) ? "noted"
     : row.current && run.status === "paused" ? "waiting"
     : row.status === "running" || row.current ? "live"
     : row.status === "failed" ? "failed" : "done";
   const words = WORDS[row.id];
-  const own = runNodeLine(row);
+  // A line's script station reads as one sentence, never its raw output.
+  const own = READ_SCRIPTS.has(row.id) && isLineRun(run.node_statuses) ? scriptSentence(row) : scriptLine(runNodeLine(row));
+  // What happened to the station when it reported nothing the line routes on.
+  const end = gate || row.status === "running" ? null : stationEnd(row, run);
   // The card's own decision names the gate it answered.
   const decision = gate && run.gate_node_id === row.id ? run.gate_decision_short_id : undefined;
   const result = gate
-    ? (answer ? (decision && opts.answeredBy ? `${opts.answeredBy} answered ${answer}` : `Answered ${answer}`) : state === "waiting" ? "Waiting for an answer" : closed && run.gate_node_id === row.id ? `Asked; the ${row.id === CARD_GATE_NODE_ID ? "card" : "question"} was ${closed}` : "Asked")
+    ? (answer ? (decision && opts.answeredBy ? `${opts.answeredBy} answered ${answer}` : `Answered ${answer}`) : state === "waiting" ? "Waiting for an answer" : closed && run.gate_node_id === row.id
+      // A card taken back while the run went on: nobody approved what followed.
+      ? row.id === CARD_GATE_NODE_ID && shippedUnapproved(run) ? `Card ${closed} with no answer; the run went on without an approval` : `Asked; the ${row.id === CARD_GATE_NODE_ID ? "card" : "question"} was ${closed}`
+      : "Asked")
     : state === "noted" && cutOff ? "Interrupted before it finished"
     // A ship that never ran because the card was taken back is no failure of the ship.
-    : row.id === "ship" && row.status === "failed" && closed ? `Skipped: the card was ${closed}`
+    : row.id === "ship" && row.status === "failed" && closed ? `Skipped: the decision was ${closed}`
     : row.id === "review" && task?.review_verdict && state !== "live"
       ? REVIEW_WORDS[task.review_verdict.verdict] ?? "Reviewed"
-      : own ?? (state === "failed" ? words?.failed ?? "Failed" : state === "live" ? words?.live ?? "Running" : state === "waiting" ? "Waiting" : words?.done ?? "Done");
+      : (report?.asked ? report.line : null) ?? end?.step ?? reportedWords(row, report) ?? own ?? (state === "failed" ? words?.failed ?? "Failed" : state === "live" ? words?.live ?? "Running" : state === "waiting" ? "Waiting" : words?.done ?? "Done");
   const sid = row.session?._id ?? row.session?.session_id ?? row.session_id;
   return {
     id: row.id,
-    label: row.label,
+    label: stepLabel(row),
     state,
     result,
     ...(sid ? { href: `/conversation/${row.session?._id ?? sid}`, hrefTitle: row.session?.title ? `Open the session: ${row.session.title}` : "Open the session that did this" }
       : decision ? { href: `/decisions/${decision}`, hrefTitle: "Open the decision" } : {}),
     at: row.completed_at ?? row.started_at,
   };
+}
+
+/** A station script's line. The line's checks report one JSON object for
+ *  routing (red's `{"red", "dir", "why"}`, dissolve's `{"dissolved"}`); a
+ *  reader gets its `why` in words, or the station's own words when it has
+ *  none, never the object. Any other output reads as it is. */
+export function scriptLine(line: string | undefined): string | undefined {
+  const text = line?.trim();
+  if (!text?.startsWith("{")) return line;
+  try {
+    const why = (JSON.parse(text.slice(0, text.lastIndexOf("}") + 1)) as { why?: unknown }).why;
+    return typeof why === "string" && why.trim() ? why.trim() : undefined;
+  } catch {
+    return line;
+  }
 }
 
 /** `steps` are what a reader reads; `routine` are steps that passed and only
@@ -284,7 +482,26 @@ export type RunOutcome = { tone: OutcomeTone; end: LineRunEnd | null; text: stri
 
 const nodeOf = (run: ReportRun, id: string) => run.node_statuses?.find((n) => n.node_id === id);
 const ran = (run: ReportRun, id: string) => nodeOf(run, id)?.status === "completed";
-const labelOf = (run: ReportRun, id?: string) => (id ? run.node_statuses?.find((n) => n.node_id === id)?.label ?? SHIPPED_LINE.nodes.find((n) => n.id === id)?.label ?? run.current_node_label ?? id : "the start");
+const labelOf = (run: ReportRun, id?: string) => (id ? stepLabel({ id, label: run.node_statuses?.find((n) => n.node_id === id)?.label ?? SHIPPED_LINE.nodes.find((n) => n.id === id)?.label ?? (id === run.current_node_id ? run.current_node_label : null) ?? id.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) }) : "the start");
+
+/** How a run ended, in any graph: the line's own end stations, else the
+ *  ends every graph shares (a completed watch shipped, a completed drop
+ *  dropped), so a run of another graph (AgentWatch) that merged and started
+ *  its watch reads as shipped, never by a gate it passed on the way. */
+const SHARED_ENDS: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped" };
+
+export function runEnd(run: Pick<ReportRun, "node_statuses">): { kind: LineRunEnd; at: number } | null {
+  if (shippedUnapproved(run)) return null;
+  const ends = isLineRun(run.node_statuses) ? LINE_END_NODES : SHARED_ENDS;
+  let best: { kind: LineRunEnd; at: number } | null = null;
+  for (const n of run.node_statuses ?? []) {
+    const kind = ends[n.node_id];
+    if (!kind || n.status !== "completed") continue;
+    const at = n.completed_at ?? n.started_at ?? 0;
+    if (!best || at >= best.at) best = { kind, at };
+  }
+  return best;
+}
 
 /**
  * What the run did and what is true now, in one sentence (LE16). A shipped
@@ -294,19 +511,21 @@ const labelOf = (run: ReportRun, id?: string) => (id ? run.node_statuses?.find((
  * cause's own line already says.
  */
 export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.now(), brief = false): RunOutcome {
-  const ended = lineRunOutcome(run.node_statuses as any);
+  const ended = runEnd(run);
   const end = ended?.kind ?? null;
   const at = labelOf(run, run.current_node_id);
   if (run.status === "pending") return { tone: "calm", end, text: "Queued to start." };
   if (run.status === "paused") {
     const gate = run.gate_node_id ?? run.current_node_id;
-    return { tone: "waiting", end, text: gate === CARD_GATE_NODE_ID ? "Waiting for an answer on the card." : gate === "plan_gate" ? "Waiting for an answer on the plan." : `Waiting for an answer at ${at}.` };
+    return { tone: "waiting", end, text: gate === CARD_GATE_NODE_ID ? "Waiting for your decision." : gate === "plan_gate" ? "Waiting for an answer on the plan." : gate === "ask" ? "Waiting for an answer to the builder's question." : `Waiting for an answer at ${at}.` };
   }
   // Ship answered and the runner has not moved on: approved, waiting on the ship step, not working.
   if (run.status === "running" && run.current_node_id === CARD_GATE_NODE_ID && run.gate_answer && /^ship$/i.test(choiceWords(run.gate_answer))) return { tone: "waiting", end, text: APPROVED_WORDS };
   if (run.status === "running") return { tone: "live", end, text: `Working: at ${at}.` };
   // A run whose question was taken back, or that was stopped by hand, finished as asked: grey, not red.
-  if (run.status === "failed") return { tone: closedGate(run) || interrupted(run) ? "closed" : "failed", end, text: stopWords(run, at) };
+  // A run that merged and started its watch shipped, whatever its runner did after.
+  if (shippedUnapproved(run)) return { tone: "failed", end, text: UNAPPROVED_WORDS };
+  if (run.status === "failed" && end !== "shipped") return { tone: closedGate(run) || interrupted(run) ? "closed" : "failed", end, text: stopWords(run, at) };
   if (end === "shipped") {
     const watch = task?.watch_until ?? null;
     // A merge the line could not do, on a cause that is done, landed by hand.
@@ -315,20 +534,33 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
     const shipped = brief ? (byHand ? "Shipped by hand" : "Shipped") : byHand ? `Shipped by hand ${shortDay(ended!.at)} after the line could not merge it` : `Shipped ${shortDay(ended!.at)}`;
     // LM3: a watch that reopens moves the cause to open; any other status
     // after a ship is a later run's or a person's, and this run still shipped.
-    if (task && (task.status === "open" || task.status === "backlog")) return { tone: "failed", end, text: brief ? `${shipped}, then reopened.` : `${shipped}, then reopened: its signal came back during the watch.` };
+    // A graph that keeps its cause open through the watch (AgentWatch) is still watching, not reopened.
+    if (task && (task.status === "open" || task.status === "backlog") && !(watch && watch > now)) return { tone: "failed", end, text: brief ? `${shipped}, then reopened.` : `${shipped}, then reopened: its signal came back during the watch.` };
     if (brief) return { tone: "shipped", end, text: `${shipped}.` };
     if (watch && watch > now) return { tone: "shipped", end, text: `${shipped}. ${WATCH_WORDS} until ${shortDay(watch)}.` };
     return { tone: "shipped", end, text: task?.resolved_at ? `${shipped}. The watch ended quiet.` : `${shipped}.` };
   }
-  if (end === "dropped") return { tone: "closed", end, text: nodeOf(run, CARD_GATE_NODE_ID) ? "Dropped at the card." : "Dropped at the plan." };
+  if (end === "dropped") return { tone: "closed", end, text: nodeOf(run, CARD_GATE_NODE_ID) ? "Dropped at your decision." : "Dropped at the plan." };
   if (end === "dissolved") return { tone: "closed", end, text: "Closed without a change: the problem did not reproduce." };
   if (end === "parked") return { tone: "calm", end, text: `Parked: the cause is not ready to build.${task?.readiness_note ? ` ${task.readiness_note.trim().replace(/\.?$/, ".")}` : ""}` };
   if (ran(run, "unscored")) return { tone: "failed", end, text: "Stopped: the evals could not score the change." };
   // A card taken back without an answer ends the run as asked, not as a failure.
   const closed = closedGate(run);
-  if (closed && run.gate_node_id === CARD_GATE_NODE_ID) return { tone: "closed", end, text: `Stopped: the card was ${closed}.` };
+  if (closed && run.gate_node_id === CARD_GATE_NODE_ID) return { tone: "closed", end, text: `Stopped: the decision was ${closed}.` };
   if (nodeOf(run, "ship")?.status === "failed") return { tone: "failed", end, text: "Not shipped: the ship step failed." };
   if (task?.review_verdict?.verdict === "reject" && ran(run, "review")) return { tone: "closed", end, text: "Review rejected the change." };
+  // Another graph's own end step (AgentWatch's failed_at_build,
+  // dissolved_at_prove, refine_rejected) says where and how the run ended.
+  const reached = (run.node_statuses ?? []).filter((n) => n.node_id !== "exit" && n.node_id !== "start" && n.status === "completed");
+  const id = run.current_node_id && run.current_node_id !== "exit" ? run.current_node_id : reached[reached.length - 1]?.node_id ?? "";
+  const escalatedAt = /^escalated_at_(\w+)$/.exec(id)?.[1];
+  if (escalatedAt) return { tone: "waiting", end, text: `Handed to a person at ${labelOf(run, escalatedAt)}.` };
+  const failedAt = /^failed_at_(\w+)$/.exec(id)?.[1];
+  if (failedAt) return { tone: "failed", end, text: `Stopped: ${labelOf(run, failedAt)} failed.` };
+  if (id === OWNED_END) return { tone: "closed", end, text: `${OWNED_WORDS}.` };
+  const closedAt = /^(?:dissolved|released)_at_(\w+)$/.exec(id)?.[1];
+  if (closedAt) return { tone: "closed", end, text: `Closed without a change at ${labelOf(run, closedAt)}.` };
+  if (id) return { tone: "calm", end, text: `Ended at ${labelOf(run, id)}.` };
   return { tone: "calm", end, text: "Finished." };
 }
 
@@ -351,17 +583,23 @@ export function stopWords(run: ReportRun, at = labelOf(run, run.current_node_id)
   if (/^stopped\b/i.test(why)) return `${why}.`;
   if ((m = why.match(/^no outgoing edge from (\S+)(?:.*?\boutcome (\w+))?/))) {
     const st = labelOf(run, m[1]);
-    // The engine's words name the missing edge; a reader needs what the station did.
-    // The station's own status first: the engine's outcome can read success for a step that judged itself failed.
-    const failed = nodeOf(run, m[1])?.status === "failed" || /^fail/.test(m[2] ?? "fail");
+    // The engine's words name the missing edge; a reader needs what the station
+    // did or what happened to it: a handoff, a start that never came, a kill.
+    const node = nodeOf(run, m[1]);
+    const end = node ? stationEnd({ id: m[1], status: node.status as RunNodeRow["status"], session: node.session as RunNodeRow["session"] }, run) : null;
+    if (end) return `Stopped at ${st}: ${end.stop(st)}${end.kind === "handoff" ? ", and the line had no route for that" : ""}.`;
+    // The run's end marks its last node failed, so the station's own outcome
+    // decides; a report with no outcome reads by the node.
+    const failed = m[2] ? /^fail/.test(m[2]) : node?.status === "failed";
     return failed
       ? `Stopped at ${st}: ${st} failed outright, and the line has no route for that yet.`
       : `Stopped at ${st}: ${st} finished, and the line has no route for that result yet.`;
   }
   const looped = loopedStation(run);
   if (looped) return `Stopped: ${labelOf(run, looped.node)} looped ${TIMES[looped.times] ?? `${looped.times} times`}.`;
-  if ((m = why.match(/^hand \S+ killed after \d+\s*m(?:in)?(?: at (\S+))?/))) return `Stopped: ${labelOf(run, m[1] ?? run.current_node_id)}'s session ran out of time.`;
-  if ((m = why.match(/^gate (dismissed|withdrawn)$/))) return run.gate_node_id === CARD_GATE_NODE_ID || run.current_node_id === CARD_GATE_NODE_ID ? `Stopped: the card was ${m[1]}.` : `Stopped: the question was ${m[1]}.`;
+  if ((m = why.match(TIMED_OUT))) return `Stopped: ${labelOf(run, m[2] ?? run.current_node_id)}'s session ran out of time.`;
+  if ((m = why.match(/^gate (dismissed|withdrawn)$/))) return run.gate_node_id === CARD_GATE_NODE_ID || run.current_node_id === CARD_GATE_NODE_ID ? `Stopped: the decision was ${m[1]}.` : `Stopped: the question was ${m[1]}.`;
+  if ((m = why.match(/^(\S+) is waiting on a person$/))) return `Stopped at ${labelOf(run, m[1])}: it asked a question and waits on a person's answer.`;
   if ((m = why.match(RUNNER_STOP))) return m[1] === "SIGINT" ? `Stopped by hand during ${labelOf(run, m[2] ?? run.current_node_id)}.` : `Stopped: the runner was shut down during ${labelOf(run, m[2] ?? run.current_node_id)}.`;
   return `Stopped at ${at}: ${why}.`;
 }
@@ -384,7 +622,7 @@ export function causeRunEntries(runs: ReadonlyArray<ReportRun>, newest = runs[0]
 
 export type LineVersion = { hash: string; first: number; last: number; runs: number; shipped: number; revised: number; dropped: number; stopped: number; reopened: number; costUsd: number | null; live: number; nodes: ReportRun["graph_nodes"] | null; change: string };
 
-const stationName = (id: string) => SHIPPED_LINE.nodes.find((n) => n.id === id)?.label ?? id;
+const stationName = (id: string) => stepLabel({ id, label: SHIPPED_LINE.nodes.find((n) => n.id === id)?.label });
 const names = (ids: string[]) => (ids.length > 2 ? `${ids.length} stations` : ids.map(stationName).join(" and "));
 
 /** What one version changed from the one before it, in words: "Prove
@@ -418,7 +656,7 @@ export function lineVersions(runs: ReadonlyArray<ReportRun>, reopenedAt: (taskId
     v.first = Math.min(v.first, r.created_at);
     v.last = Math.max(v.last, r.created_at);
     if (!v.nodes && r.graph_nodes?.length) v.nodes = r.graph_nodes;
-    const end = lineRunOutcome(r.node_statuses as any);
+    const end = runEnd(r);
     if (end?.kind === "shipped") {
       v.shipped++;
       if (r.task_id && reopenedAt(r.task_id).some((t) => t > end.at)) v.reopened++;
@@ -490,13 +728,20 @@ export function causeWhere(task: ReportTask, latest: ReportRun | null, reopened:
   if (live) return runOutcome(latest, task, now);
   if (task.status === "dropped") return { tone: "closed", end: "dropped", text: "Dropped." };
   if (task.status === "done" && task.watch_until && task.watch_until > now) {
-    const at = latest ? lineRunOutcome(latest.node_statuses as any) : null;
+    const at = latest ? runEnd(latest) : null;
     if (latest && at?.kind === "shipped") return runOutcome(latest, task, now);
     return { tone: "shipped", end: "shipped", text: `Shipped. ${WATCH_WORDS} until ${shortDay(task.watch_until)}.` };
+  }
+  // A run that shipped is told by its ship, whatever the task's status says: never "waiting" after a merge.
+  const shipped = latest ? runEnd(latest) : null;
+  if (latest && shipped?.kind === "shipped") {
+    return reopened ? { tone: "failed", end: "shipped", text: `Shipped ${shortDay(shipped.at)}, then reopened: its signal came back during the watch.` } : runOutcome(latest, task, now);
   }
   if ((task.status === "open" || task.status === "backlog") && reopened) return { tone: "failed", end: null, text: "Reopened: its signal came back during the watch." };
   if (latest) {
     const said = runOutcome(latest, task, now);
+    // A run that went on past its unanswered card built a change nobody approved: that, not the queue, is where the cause is.
+    if (shippedUnapproved(latest)) return said;
     if (task.status === "open" || task.status === "backlog") return said.end === "parked" ? said : { tone: "calm", end: null, text: "Waiting to be admitted." };
     return said;
   }
@@ -515,5 +760,5 @@ export function cardName(answer: string | null | undefined, card: { headline?: s
   const title = (card?.headline?.trim() || card?.change?.trim().split(/(?<=[.!?])\s/)[0] || "").replace(/[.!?]$/, "");
   if (answer) return title ? `${answer}: ${title}` : `Answered ${answer}`;
   if (waiting) return title ? `Waiting for an answer: ${title}` : "Waiting for an answer";
-  return title || "The card";
+  return title || "The decision";
 }
