@@ -1,63 +1,61 @@
-The tasks snippet puts agents inside a structured work tracking system. Agents create tasks for real work, bind their sessions to them, log progress as comments, and mark work done with a summary of what they verified. A human monitors all of it through the dashboard: status flows through the system, not through chat messages that scroll away.
+When an agent takes on work that will run for a while, it files it where you can see it. A **task** is one piece of work: a feature, a bug, a chore. A **plan** groups several tasks under one goal. Agents create them, claim them, post progress as they go, and close each one with a line on what they checked. You follow all of it on the Tasks and Plans pages instead of scrolling back through conversations.
 
-Installed via [the snippet system](/documentation/agent-snippets); it rides along with [memory](/documentation/memory) by default:
+![A plan with its goal, progress bar and four tasks](/documentation/tasks-and-plans/plan.webp "A plan an agent filed: the goal in its charter, one task done, one in progress with the session working on it, and two still open.")
 
-```bash
-cast task install
-```
+## Turn it on
 
-## The objects
+Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Tasks & Plans**. Repeat it on each computer you use.
 
-**Tasks** are work items (features, bugs, chores) with priorities, dependencies, and a status workflow: `backlog` → `open` → `in_progress` → `in_review` → `done`, with `dropped` for work that will not happen. A team can name its own statuses, but each one sits in one of these six. **Plans** group tasks under a goal and acceptance criteria for work with multiple distinct parts. **Docs** hold the prose: specs, investigations, handoffs. All three have short IDs (`ct-4102`, `pl-88`, `doc:…`) that render as live reference cards when written in prose anywhere in codecast.
+![The Tasks & Plans detail in Agent features](/documentation/tasks-and-plans/feature.webp "Click How it works on the card to see what it adds and a request to try.")
 
-![A plan's six tasks on the board](/documentation/shots/tasks.webp "A plan's tasks with their status, linked Linear issues, labels and owners, the plan's progress, and the activity on the open task.")
+## What agents file, and what they don't
 
-## The rules the snippet sets
+Agents use judgment here, not a rule that every request becomes a task:
 
-The snippet is mostly judgment, not commands. Its rules:
+- **A task** when the work will outlive the conversation, needs a handoff to someone else, or should be tracked so you can check on it.
+- **A plan** when the work has several distinct parts that could run in separate sessions.
+- **Nothing** for questions, quick lookups and small fixes they will finish right away.
 
-- **Create a task** when the work will change code or produce a deliverable and will run long enough for someone to check on it. Skip it for questions, quick lookups, and small changes that finish in minutes.
-- **Create a plan** only for work with multiple distinct parts. Single-task work gets a task.
-- **Bind before you build.** `cast task start ct-4102` claims the task and binds the session to it; `cast plan bind pl-88` attaches to a plan. Sizable work done unbound is invisible to the human tracking it. A task has one owning session: starting a task another session is still working on is refused with that session's id so the two can coordinate, and `cast task start --take` moves ownership.
-- **Check existing work first.** Search before creating: `cast task ls -q "auth"`, `cast plan ls -q "auth"`, `cast task ready` for unclaimed work. Claim rather than duplicate.
-- **Escalate explicitly.** `BLOCKED: <reason>`, `NEEDS_CONTEXT: <what>`, and `DONE_WITH_CONCERNS: <concern>` are recognized markers that flag the session for human attention.
+Before filing anything, an agent looks for an existing task or plan on the same topic and picks that up instead of making a duplicate.
 
-```figure
-OwnershipFigure
-One task, one owning session. A second start is refused with the owner's id until the two coordinate or the taker passes --take.
-```
+## Ask for it in plain words
 
-## The working loop
+- "Break the billing rewrite into a plan with tasks we can split across sessions."
+- "File a task for the flaky checkout test and start on it."
+- "Pick up the next ready task in the dark mode plan."
+- "What's left on the onboarding plan?"
+- "Mark the export task done, with what you verified."
 
-```bash
-cast task start ct-4102                          # claim + bind the session
-cast task comment ct-4102 "reproduced; fix in progress" -t progress
-cast task done ct-4102 -m "fix + regression test, verified e2e"
-```
+## What you see
 
-```figure
-TaskLifecycleFigure
-Starting a task moves it to in progress and binds the session; comments log the work; done closes it with what was verified.
-```
+### The task page
 
-Plan-bound work adds coordination duties: record directional decisions with `cast plan comment pl-88 "decision" -d -r "rationale"`, flag dependencies, and suggest splitting tasks that grew too large. Decisions logged this way become part of the plan's permanent timeline, visible to every future session that binds to it.
+Every task has its own page. At the top is its status, which moves through **Backlog**, **Open**, **In Progress**, **In Review** and **Done**, with **Dropped** for work that won't happen. You can change the status, priority and assignee yourself from the same row.
 
-## Context recovery
+![A finished task with its evidence, session, plan and activity](/documentation/tasks-and-plans/task.webp "A task an agent closed. Evidence holds what it verified, Sessions links the conversation that did the work, and Activity lists each status change and progress note.")
 
-Long sessions get compacted. The snippet tells agents to reground from the system rather than trust compacted memory:
+- **Evidence** is what the agent says it verified when it marked the task done. An agent is told to close only work it actually checked.
+- **Sessions** links every conversation that worked on the task, so you can open the one that did the work.
+- **Blocks** and **Blocked by** show what has to finish first. A task waiting on another doesn't show as ready until that one is done.
+- **Activity** is the running log: status changes and the agent's progress notes, newest at the bottom.
+- **Add comment** leaves a note on the task. If a session is working on it, the comment also reaches that session, so you can steer the work from the task page.
 
-```bash
-cast task context --current    # everything about the session's current task
-cast plan context --current    # the plan: goal, tasks, decisions, discoveries
-```
+### The plan page
 
-These print the full work item (description, comments, linked sessions), so a compacted agent recovers exactly the state it needs.
+A plan page shows the goal at the top under **Charter** (with optional success metrics and non goals), a progress bar across all its tasks, and four tabs: **Overview** lists the tasks and the plan's timeline, **Orchestration** shows which agents are working which tasks right now, **Board** lays the tasks out by status, and **Graph** draws what depends on what. Decisions an agent makes along the way land on the plan's timeline, so the reasons survive after the conversations end.
 
-```figure
-ContextRecoveryFigure
-Compaction keeps a summary and loses the specifics; the task record still holds them.
-```
+### The Tasks and Plans pages
+
+**Tasks** and **Plans** in the sidebar (or the command palette) list everything in your workspace. Work you file in a team shows to that team; work you file privately stays yours.
+
+### On your phone
+
+The iPhone app shows the same tasks and plans, so you can check progress and leave a comment away from your desk.
+
+## When an agent needs you
+
+If an agent gets stuck, it says so plainly instead of going quiet: blocked on something only you can provide, missing context, or finished but with a concern you should look at. The conversation is flagged as needing your attention in the inbox, and the reason sits on the task.
 
 ## Where this leads
 
-Tasks and plans are the substrate for the heavier machinery: [workflows](/documentation/workflows) bind execution graphs to them, and [orchestration](/documentation/orchestration) decomposes a plan into tasks and runs them in parallel across agents. [Triggers](/documentation/triggers) handle the time dimension: work that should happen after the session ends.
+Tasks and plans are what the rest of the tracking tools hang on. [Orchestration](/documentation/orchestration) runs a whole plan across many agents at once. [Workflows](/documentation/workflows) run a fixed sequence of steps against a task, with approval gates. [Triggers](/documentation/triggers) come back to a task later on a schedule.
