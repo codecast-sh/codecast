@@ -9,6 +9,7 @@ import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration } from "../../../../lib/workflowRun";
 import { WorkflowGraphView, type WFNode, type NodeStatus } from "../../../../components/WorkflowGraphView";
 import { ChangeCardView, answererNameOf } from "../../../../components/decisions/ChangeCardView";
+import { DecisionDiscussion } from "../../../../components/decisions/DecisionDiscussion";
 import { CauseRunList, ReportChip, ReportSection, RunOutcomeText, RunPathView, answerTone, useCauseRuns } from "../../../../components/line/RunReport";
 import { runPath, cardName, choiceWords, shortDay, type ReportRun, type ReportTask } from "../../../../lib/line/runReport";
 import { SHIPPED_LINE } from "../../../../lib/line/shippedLine.generated";
@@ -277,6 +278,7 @@ function RunDetailContent({ runId }: { runId: string }) {
               {/* Who answered is the path's Decide row and what shipped is the
                   outcome above, so an answered card carries no footer. */}
               <ChangeCardView card={card} density="inline" recommend={decision?.status !== "answered"} diffAnchor="run-card-diff" />
+              {run.gate_decision_id && <div className="mt-4"><DecisionDiscussion decisionId={run.gate_decision_id} /></div>}
             </ReportSection>
           )}
 

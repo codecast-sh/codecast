@@ -12,7 +12,7 @@ import { buildMod, findModDir, MANIFEST_FILE, TYPES_FILE, authoringTypes, type M
 import { scaffoldFiles } from "./mods/scaffold.js";
 import { MOD_NAME_RE } from "@codecast/shared/contracts/mods";
 import { webBaseUrl } from "./config/readLocalConfig.js";
-import { localHash, readApprovals, writeApproval } from "./mods/localRunner.js";
+import { localHash, readRevoked, setRevoked } from "./mods/localRunner.js";
 
 const cwd = () => process.env.CODECAST_CWD || process.cwd();
 
@@ -171,7 +171,7 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
       }
       if (build.manifest.fences?.length) console.log(`Show a fence by writing an example \`\`\`${build.manifest.fences[0].lang} block in your reply.`);
       console.log(`cast mod logs ${res.name} shows what it printed and threw.`);
-      if (build.local) console.log(`Its local half runs where the person approves this version: ask them to run  ! cast mod approve ${res.name}`);
+      if (build.local) console.log(`Its local half runs on each of your machines within 30s (cast mod local; cast mod revoke ${res.name} stops it on one)`);
     });
 
   mod
@@ -354,38 +354,12 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
 
   mod
     .command("approve <name>")
-    .description("Let this machine run a mod's local half, at its current version (a person, in a terminal)")
+    .description("Run a mod's local half on this machine again, after cast mod revoke")
     .action(async (name: string) => {
       const res = await apiPost(deps, "/cli/mods/local", {}, { read: true });
-      const m = (res.mods ?? []).find((x: any) => x.name === name);
-      if (!m) fail(`${name} has no local half (its manifest names one under "local")`);
-      const code: string = m.local_code;
-      const hash = localHash(code);
-      const uses = [
-        ...new Set([...code.matchAll(/from\s*["'](node:[a-z_/]+|bun:[a-z_]+|[a-z][\w-]*)["']/g)].map((x) => x[1])),
-      ].filter((x) => !x.startsWith("codecast-mod"));
-      const reaches = [
-        /Bun\.spawn|child_process|\.sh\(|\.cast\(/.test(code) && "runs processes",
-        /\bfetch\(/.test(code) && "makes network requests",
-        /node:fs|Bun\.file|Bun\.write/.test(code) && "reads or writes files",
-        /process\.env/.test(code) && "reads environment variables",
-      ].filter(Boolean);
-      console.log(`${m.title ?? name}: the local half ${hash} (${Math.round(code.length / 100) / 10} KB), rev ${m.rev}`);
-      if (m.manifest?.local?.description) console.log(`  ${m.manifest.local.description}`);
-      console.log(`  runs on this machine with your access. A quick scan of the bundle (not a review; read the code) finds: ${reaches.length ? reaches.join(", ") : "no process, network, file or env use"}`);
-      if (uses.length) console.log(`  imports: ${uses.join(", ")}`);
-      console.log(`  read it: cast mod pull ${name}  (after a publish), or the bundle in the mod's folder`);
-      const approved = readApprovals()[name];
-      if (approved?.hash === hash) return console.log(`Already approved here. It runs within 30s while the mod is on.`);
-      if (!process.stdin.isTTY) {
-        fail(`approving runs this code on this machine with your access, so a person approves it in a terminal. Ask them to run: ! cast mod approve ${name}`);
-      }
-      process.stdout.write(`Type ${name} to approve it here: `);
-      const answer = await new Promise<string>((resolve) => process.stdin.once("data", (d) => resolve(String(d).trim())));
-      process.stdin.pause();
-      if (answer !== name) fail("not approved");
-      writeApproval(name, hash);
-      console.log(`ok approved ${name} (${hash}) on this machine; the daemon starts it within 30s. cast mod revoke ${name} stops it.`);
+      if (!(res.mods ?? []).some((x: any) => x.name === name)) fail(`${name} has no local half (its manifest names one under "local")`);
+      setRevoked(name, false);
+      console.log(`ok ${name} runs on this machine again; the daemon starts it within 30s while the mod is on`);
     });
 
   mod
@@ -410,8 +384,8 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
     .command("revoke <name>")
     .description("Stop running a mod's local half on this machine")
     .action(async (name: string) => {
-      writeApproval(name, null);
-      console.log(`ok ${name} no longer runs here; the daemon stops it within 30s`);
+      setRevoked(name, true);
+      console.log(`ok ${name} no longer runs here; the daemon stops it within 30s. cast mod approve ${name} brings it back.`);
     });
 
   mod
@@ -419,12 +393,11 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
     .description("The local halves your mods have, and which this machine runs")
     .action(async () => {
       const res = await apiPost(deps, "/cli/mods/local", {}, { read: true });
-      const approvals = readApprovals();
+      const revoked = readRevoked();
       if (!res.mods?.length) return console.log(`None of your mods has a local half.`);
       for (const m of res.mods) {
-        const a = approvals[m.name];
         const hash = localHash(m.local_code);
-        const state = !m.enabled ? "off" : a?.hash === hash ? "runs here" : a ? "new version waits: cast mod approve" : "not approved here";
+        const state = !m.enabled ? "off" : revoked[m.name] ? "revoked here: cast mod approve" : "runs here";
         console.log(`${m.name.padEnd(24)} ${hash}  ${state}`);
       }
     });
