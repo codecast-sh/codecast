@@ -23,8 +23,7 @@ import {
   UNKNOWN_BLOCKER_STATUS,
   waitingOnLabel,
   waitMetLabel,
-  waitStateWord,
-  waitSubject,
+  waitRefLine,
   type Blocker,
   type GraphTask,
   type NotReadyReason,
@@ -211,8 +210,9 @@ export function taskGraphSections(t: GraphTaskRow, links: GraphLinks | null | un
   const inline = opts.inline ?? asIs;
   const waitId = opts.waitId ?? asIs;
   const task = (l: LinkRef) => taskRefLine(l, inline);
-  // The web's words: what the wait is on, then its state ("PR #42 to merge").
-  const wait = (w: TaskWait) => `${waitSubject(w, opts)} ${inline(waitStateWord(w, { now: opts.now }))}${waitId(` · id ${w.id}`)}`;
+  // The web's words, plus the state marker a task blocker carries, since this
+  // list is read as text ("PR #42 to merge [waiting]"); then the wait's id.
+  const wait = (w: TaskWait) => `${waitRefLine(w, { ...opts, inline })}${waitId(` · id ${w.id}`)}`;
   const waits = t.waits ?? [];
   // A server older than the graph sends no links; its raw ids are all it can say.
   const blockers: TitledTaskBlocker[] = links?.blocked_by ?? (t.blocked_by ?? []).map((ref) => ({ kind: "task", ref, status: UNKNOWN_BLOCKER_STATUS }));
