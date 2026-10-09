@@ -183,6 +183,12 @@ describe("cast task ready --claim and the execution hints (task-graph.md TG7-TG9
     expect(unclaimedLine({ skipped: [{}, {}], more: true })).toMatch(/^No task claimed, passed over 2\. More ready tasks exist/);
     expect(unclaimedLine({ skipped: [], stale_passed: 3 })).toBe("No ready tasks to claim. 3 untouched 30+ days passed over (claim with --stale).");
     expect(unclaimedLine({ skipped: [], others_passed: 2 })).toBe("No ready tasks to claim. 2 ready tasks are assigned to others or held by a decision (cast task ready lists them).");
+    // Both counts on both wordings: the path where candidates were left
+    // untried is exactly where an autopilot judges whether the queue is
+    // workable, so withholding whose the rest are there would be the worst
+    // place to withhold it.
+    expect(unclaimedLine({ skipped: [{}], more: true, stale_passed: 1, others_passed: 2 }))
+      .toBe("No task claimed, passed over 1. More ready tasks exist past those tried: narrow with --plan, --project or -q. 1 untouched 30+ days passed over (claim with --stale). 2 ready tasks are assigned to others or held by a decision (cast task ready lists them).");
   });
 
   test("a start records the pulse and binds the plan whatever the output mode", async () => {
@@ -235,6 +241,12 @@ describe("cast task ready --claim and the execution hints (task-graph.md TG7-TG9
     expect(readyCountLine(2, 1, 3)).toBe("2 ready, 1 more untouched 30+ days (--stale lists them)");
     expect(readyCountLine(4, 0, 4)).toBe("4 ready");
     expect(readyCountLine(290, 10, READY_LIST_LIMIT)).toBe("290+ ready, 10+ more untouched 30+ days (--stale lists them)");
+    // Every ready task folded away: the count IS the whole output (no rows
+    // above it), so it says where to go, and words the folded rows as ready
+    // rather than as "more" than a zero count.
+    expect(readyCountLine(0, 182, 182)).toBe("No ready task anyone has touched in 30 days. 182 ready tasks untouched 30+ days: cast task ready --stale lists them, --stale --claim takes one.");
+    expect(readyCountLine(0, 1, 1)).toBe("No ready task anyone has touched in 30 days. 1 ready task untouched 30+ days: cast task ready --stale lists them, --stale --claim takes one.");
+    expect(readyCountLine(0, 0, 0)).toBe("0 ready");
   });
 
   test("a task's own effort wins over the plan stylesheet's; a model alone keeps none", () => {
