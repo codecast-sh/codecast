@@ -28,7 +28,10 @@ const UI = "var(--pd-font-ui, ui-sans-serif, system-ui)";
 /** The marketing bands' cream above and below, which the section fades from. */
 const MARKETING_CREAM = "#fdf6e3";
 
-export function ForEveryone() {
+/** `first`: the section is the page's first screen (a non-developer door,
+ *  ?for=assistant), so it starts right under the nav with no rule from a
+ *  developer section above it. */
+export function ForEveryone({ first = false }: { first?: boolean } = {}) {
   const mail = useConnectAvailable().available === true;
   // Arriving from another page's nav link (/#everyone): the router lands at
   // the top, and the section mounts before the page above it has its height,
@@ -44,19 +47,20 @@ export function ForEveryone() {
   return (
     <section
       id={EVERYONE_ANCHOR}
-      className="scroll-mt-20 px-6 pt-20 pb-36"
+      className={`scroll-mt-20 px-6 ${first ? "pt-12 pb-24" : "pt-20 pb-36"}`}
       style={{
         // The family's paper, eased in from the cream band above and handed
         // back over a long fade below, so the page's turn to developers reads
         // as a change of room rather than a seam.
-        background: `linear-gradient(${MARKETING_CREAM}, var(--pd-bg, #f6f1e7) 64px, var(--pd-bg, #f6f1e7) calc(100% - 120px), ${MARKETING_CREAM})`,
+        // As the whole page (the assistant's door) it stays on the paper.
+        background: first ? "var(--pd-bg, #f6f1e7)" : `linear-gradient(${MARKETING_CREAM}, var(--pd-bg, #f6f1e7) 64px, var(--pd-bg, #f6f1e7) calc(100% - 120px), ${MARKETING_CREAM})`,
         color: "var(--pd-ink, #1f1a14)",
         fontFamily: UI,
       }}
     >
       {/* A rule and air between the developer buttons above and this
           section's own way in, so the two "Get started" never compete. */}
-      <div aria-hidden className="mx-auto mb-16 h-px max-w-5xl" style={{ background: "var(--pd-rule, #e6dccb)" }} />
+      {!first && <div aria-hidden className="mx-auto mb-16 h-px max-w-5xl" style={{ background: "var(--pd-rule, #e6dccb)" }} />}
       <div className="mx-auto grid max-w-5xl gap-12 md:grid-cols-[1.05fr_1fr] md:items-center">
         <div>
           {/* Who is talking, before the headline speaks as "I". */}
@@ -78,11 +82,13 @@ export function ForEveryone() {
                 <Link
                   href={welcomeAskPath(errand)}
                   onClick={() => track("assistant_path_clicked", { location: "landing_everyone_ask" })}
-                  className="group inline-flex items-baseline gap-2 text-[16px] leading-snug underline-offset-4 hover:underline"
+                  className="group grid grid-cols-[1fr_auto] items-start gap-2 text-[16px] leading-snug underline-offset-4 hover:underline"
                   style={{ fontFamily: READ, color: "var(--pd-ink, #1f1a14)", textDecorationColor: "var(--pd-rule-strong, #d3c6af)" }}
                 >
+                  {/* A fixed two-column grid: the arrow sits at the top right
+                      of every errand, one line or two, so the three line up. */}
                   <span>&ldquo;{errand}&rdquo;</span>
-                  <ArrowRight aria-hidden size={14} className="shrink-0 translate-y-[2px] transition-transform group-hover:translate-x-0.5" style={{ color: "var(--pd-accent, #c93a0e)" }} />
+                  <ArrowRight aria-hidden size={14} className="mt-[5px] shrink-0 transition-transform group-hover:translate-x-0.5" style={{ color: "var(--pd-accent, #c93a0e)" }} />
                 </Link>
               </li>
             ))}
@@ -97,6 +103,23 @@ export function ForEveryone() {
         <GetStarted location="landing_everyone_end" centered />
       </div>
     </section>
+  );
+}
+
+/** The foot of the assistant's door, where the page ends: pricing and
+ *  privacy, and a small way over to the developer page for someone who came
+ *  in the wrong door. Nothing about installing follows the promise that
+ *  nothing needs installing. */
+export function EveryoneFooter() {
+  const link = "underline-offset-4 hover:underline";
+  return (
+    <footer className="px-6 pb-12" style={{ background: "var(--pd-bg, #f6f1e7)", color: "var(--pd-ink-faint, #8f8676)", fontFamily: UI }}>
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 border-t pt-6 text-[13.5px]" style={{ borderColor: "var(--pd-rule, #e6dccb)" }}>
+        <Link href="/pricing?for=assistant" className={link}>Pricing</Link>
+        <Link href="/privacy" className={link}>Privacy</Link>
+        <Link href="/" className={`${link} ml-auto`}>Are you a developer? See Codecast for teams</Link>
+      </div>
+    </footer>
   );
 }
 
@@ -121,8 +144,8 @@ function GetStarted({ className, location, centered }: { className?: string; loc
  *  question is the step's ask (stepAsk) and the yes line is routineYesWords,
  *  so the promise and the product name the first approval the same way. */
 const PICTURE_ROUTINE = { name: "schedule_routine", input: { title: "Plan the week" } };
-const PICTURE_SUMMARY = "Every Monday at 9 AM I'll remind you to plan the week, with a short list to start from.";
-const PICTURE_YES = routineYesWords("Monday at 9:00 AM", true);
+const PICTURE_SUMMARY = "Every Monday at 9:00 AM I'll remind you to plan the week, with a short list to start from.";
+const PICTURE_YES = routineYesWords(true);
 
 /** A part of the still before and after its entrance: 8px down and clear,
  *  then in place over 240ms, ease-out. Delays stagger the parts by 120ms. */
@@ -176,7 +199,7 @@ function ConversationPicture() {
         <AssistantMark size={26} />
         <div className="min-w-0 flex-1">
           <p className="text-[16.5px] leading-[1.55]" style={{ fontFamily: READ }}>
-            Happy to. Here&apos;s the routine; say yes and it starts Monday.
+            Happy to. Say yes and it starts Monday.
           </p>
           <div className={`mt-4 rounded-[10px] border p-3.5 ${ENTER} delay-[240ms]`} style={{ borderColor: "var(--pd-rule, #e6dccb)", background: "var(--pd-bg, #f6f1e7)" }}>
             <p className="text-[13.5px] font-semibold">{`${stepAsk(PICTURE_ROUTINE)}?`}</p>

@@ -274,6 +274,7 @@ cast events ls --since 24h [-w]           # transitions: new and regressed error
 cast events groups --status open          # grouped facts with counts; events show eg-N for samples and the stack
 cast events resolve eg-N --in <release>   # once the fix ships (ignore eg-N for noise)
 cast replay show rp-N                     # what the person did, as text; replay repro rp-N writes a Playwright test
+cast replay snap rp-N@1:23                # the page at that moment: a PNG to Read, with its URL, visible text, console and network
 cast metrics ls                           # watched numbers; metrics query "<hogql>" --source <s> reads PostHog live
 cast connector readers <source>           # what the product lets you read; connector read <source> <reader> --arg k=v
 cast connector do <source> <action>       # runs only an action a person granted
@@ -292,6 +293,8 @@ A human tracks your work through a dashboard: report status through tasks and pl
 
 **Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with \`--parent\`, shallow and small, and never mirror a plan as a subtask tree. Check for existing work before creating (\`cast task ls -q "<topic>"\`, \`cast plan ls -q\`, \`cast task ready\`), and file under a project when one fits (\`cast project ls\`).
 
+**Record what work waits on.** Work waiting on a task, a PR to merge (\`#42:checks\`: green CI), a decision or time gets a blocker, not a comment: \`cast task dep ct-200 --blocked-by "#42"\` keeps it off the ready list. To park, block the task you hold, go \`dormant\` naming the blocker, end your turn: its clearing wakes you.
+
 **Bind before you build.** \`cast task start <id>\` (or \`cast plan bind <id>\`) claims the work and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with \`update\` and \`done\`; never \`task start\` your own subtask. A task has one owning session: starting one another session is still working on is refused until you settle with it who continues (\`--take\` once agreed).
 
 **Keep the bound item true.** When scope or approach shifts, rewrite the title and description, comment at milestones and changes of direction, move status the moment it changes, and mark done only what you verified. Progress comments (\`-t progress\`) reach nobody's inbox; \`-t blocker\`, \`-t review\` or an \`@handle\` reach followers. A choice only a human can make is a \`cast decide\`, never a comment. ${ASSIGNEE_MEANS} Another name on a task is never a reason to stop.
@@ -306,7 +309,7 @@ cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>
 cast task handoff <id> --status done --evidence "<what you verified>" [--guide -]
-cast plan create "Title" -g "goal"; cast task create "Step" --plan <plan_id>
+cast plan create "Title" -g "goal" --steps -  # "Step :: done means" per line; a blank line starts a wave needing the one before
 cast doc create "Title" -c - | show <id> | search "<title>"
 \`\`\`
 
@@ -325,7 +328,10 @@ If bound to a plan: suggest splitting a task that grew, flag dependencies you cr
 Filter on the server, not with grep: \`--assignee me\`, \`--label <name>\`, \`-p "<project>"\`, \`-q "<text>"\`, \`-s <status>\`, \`-a\` (closed too). Every read takes \`--json\`, and any text argument takes \`-\` for a heredoc body.
 
 \`\`\`bash
-cast task ready [-q "<topic>"]              # unclaimed work
+cast task ready [-q "<topic>"]              # unclaimed work, highest priority first; --claim starts the first one for you
+cast task dep <id> --blocked-by <refs>      # <id> waits on what it needs; --remove-blocked-by undoes one
+cast task supersede <old> --with <new>      # drops <old>; what waited on it now waits on <new>
+cast task relate <a> <b>                    # see-also link that never blocks (--remove)
 cast task ls -q "<topic>"                   # search active tasks (filters above)
 cast task show ct-1 ct-2 --json             # several ids; .sessions = linked sessions (short id + title)
 cast task context <id>                      # full context (--current for this session's task)
@@ -346,6 +352,8 @@ cast integrations ls|sources|import <provider> <ref>   # Linear teams/projects a
 cast plan ls -q "<topic>"                   # search active plans by title/goal
 cast plan show|status|context <plan_id>     # context --current for this session's plan
 cast plan create "Title" -g "goal" -b "body"   # or --body-file plan.md ('-' reads stdin)
+cast plan steps <plan_id> -                 # append steps (waves as in --steps) after the plan's last open wave
+cast plan template save <plan_id>           # keep its steps and order; cast plan create --template "<name>" reuses them
 cast plan bind|unbind|done|drop <plan_id>
 cast plan comment <plan_id> "note"          # progress; -d -r "why" records a decision
 cast doc create "Title" [-c content] [-t type]
@@ -533,7 +541,7 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 - \`blocked\`: a human must act first (answer, grant, decide). Files under **Needs Input** and claims their eyes, so declare it only when true.
 - \`done\`: delivered, nothing stalled; read at leisure.
-- \`dormant\`: a machine wakes you (a trigger you armed, a background task, another session's reply). Only when you can **name the wake** in the text; if you can't say what resumes you, you are \`blocked\`.
+- \`dormant\`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time). Only when you can **name the wake** in the text; if you can't say what resumes you, you are \`blocked\`.
 - \`working\` (the default): still moving.
 
 \`done\` and \`dormant\` cover only the turn that declares them, and a message from the human takes the pin down, so declare again at the end of each turn. Never park an ask in prose and go dormant: queue it with \`cast decide\`, then declare dormant.
@@ -644,6 +652,39 @@ cast publish set <target> --password p      # change gates or --title without re
 Gates, on publish or \`set\`: \`--password <p>\` (\`--password-stdin\` keeps it out of the process list, \`--no-password\` clears), \`--email-gate\` / \`--no-email-gate\`, \`--expires 7d|24h|30m|never\`, \`--edit-mode owner|link|team\`, \`--no-session\` / \`--session\` (the link back to this session), \`--no-comments\`.
 
 In link edit mode the output also carries an edit URL that grants editing to whoever holds it; \`cast publish links\` reprints both. Only the owner link can push the discussion into a session (the in-page "Send to session" / "Send all").
+
+### Dashboards
+
+A directory page can show live data. \`cast-data.json\` at its root names the queries; each runs as you, inside one workspace, and refreshes when someone views the page after its interval (at least 1m, default 15m). Publishing checks every query against the readers and your access and refuses with the reason.
+
+\`\`\`json
+{ "workspace": "team:<id>",
+  "queries": {
+    "spend": { "reader": "usage", "args": { "days": 30 }, "refresh": "1h", "title": "Spend" },
+    "done":  { "reader": "tasks", "args": { "view": "done_per_day", "days": 30 } } } }
+\`\`\`
+
+Without \`workspace\`, the publishing session's workspace is used; the publish output names it. Readers and their args:
+
+- \`tasks\` view status | project | assignee | done_per_day | created_per_day, days, project, board human | all
+- \`sessions\` days, group_by none | person | agent, subagents (team pages count only sessions the team can see)
+- \`usage\` tokens and USD spend per day: days, group_by none | person
+- \`prs\` opened and merged per day (team workspace): days, repository
+- \`signals\` days, group_by kind | source | none, source
+- \`events\` external events per day: days, group_by, kind, source
+- \`event_groups\` view series | top, bucket day | hour, days (up to 30), source, kind, status
+- \`metric\` watch mw-N: its recorded points
+- \`hogql\` source (a PostHog source), query: any HogQL, rows as PostHog returns them
+- \`connector\` source, reader, args: an app connector reader, called as you and audited
+
+In the page, \`<cast-stat query="spend" field="spend" agg="sum" format="usd" label="Spend, 30 days">\` shows one number (agg last | sum | avg | min | max | count; format number | usd | percent), and \`<cast-chart query="done" type="line" x="day" y="done" title="Done per day">\` draws a chart (type line | area | bar | table; series="<col>" splits it; height in px). Both carry an "Updated" time and a Query toggle showing what ran (the reader, its args and the workspace, re-runnable with \`cast publish data\`), follow the page theme, and update themselves. A rollback brings back the queries that version declared. Scripts read the same results with \`cast.data(id)\` and \`cast.subscribe(id, cb)\`.
+
+\`\`\`bash
+cast publish data <target> [id]             # each query's text, workspace, refresh time and rows
+cast publish data <target> --refresh        # run them now and wait: verify before sharing the link
+\`\`\`
+
+Team data on a page is readable by anyone with the link, so gate it unless it may be open.
 `;
 
 export const BROWSER_SNIPPET_END = "<!-- /codecast-browser -->";
@@ -1028,7 +1069,7 @@ cast mod logs <name>           # what it printed and threw while drawing
 cast mod publish -m "<note>"   # once it is right: a numbered version with its source
 \`\`\`
 
-Put the pane's link alone on its own line in your reply: it renders as the running pane and redraws on every push. Before saying something works, look at it or read its logs. Grant only what the mod reads and writes; a local half runs only after the person approves it in their own terminal (\`! cast mod approve <name>\`). When work produces something a person tracks and a kind for it exists, file it there: \`cast mod guide\` prints what running mods ask of agents, and \`cast obj kinds\` the objects they track.
+Put the pane's link alone on its own line in your reply: it renders as the running pane and redraws on every push. Before saying something works, look at it or read its logs. Grant only what the mod reads and writes; a local half runs on each of the person's machines within 30s of a push. When work produces something a person tracks and a kind for it exists, file it there: \`cast mod guide\` prints what running mods ask of agents, and \`cast obj kinds\` the objects they track.
 ${MODS_SNIPPET_END}
 `;
 
@@ -1090,6 +1131,8 @@ cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorro
 A withdraw arrives after the human has read the ask, so get it right before posting. To see how a card renders, mount the component on a fixture row or open an answered one. The context renders as markdown, \`cast-canvas\` blocks included, and most decisions read faster as a picture; keep prose for the reasoning a picture cannot carry. A bare question is useless: the queue shows nothing else unless they open the session.
 
 \`cast decide edit\` and \`cast decide cancel\` act on this session's open decision and keep its spot in the queue. An answered decision cannot be edited; act on the answer. Before ending a long turn and whenever you post, cancel open asks the work has moved past: an answer to a question that stopped mattering costs attention and earns nothing. Answers often land an hour later and disagree, and everything built on an advisory default is then work to unwind; if reversing would cost more than waiting, block.
+
+A decision is your human's to answer. When they tell you in this conversation to answer one ("approve sd-494", "go with option 2 on both"), \`cast decide answer sd-N <n> --for-human\` records it as their answer, carried by this session. Do it only on their explicit word or their explicit agreement to a choice you named, never on your own reading of what they would want, and never for a question you asked yourself.
 `;
 
 export const DECIDE_SECTION: SectionSpec = {

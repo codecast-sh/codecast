@@ -54,7 +54,9 @@ const MUTED = "#657b83";
  *  wordmark. The developer links (Docs, CLI, Changelog, stars, Download)
  *  stay on the developer bar. */
 const DOOR_LINKS = [
-  { href: EVERYONE_HREF, label: "For everyone" },
+  // The door's landing is the For everyone page itself, so the link reads as
+  // where the visitor already is.
+  { href: EVERYONE_HREF, label: "For everyone", active: "/" },
   { href: "/pricing?for=assistant", label: "Pricing", active: "/pricing" },
 ] as const;
 const DOOR = {
@@ -110,8 +112,9 @@ export function MarketingNav({
               <Link
                 key={link.href}
                 href={link.href}
+                aria-current={link.active === active ? "page" : undefined}
                 className="hidden sm:flex items-center px-2.5 py-1.5 text-[14px] font-medium transition-colors"
-                style={{ color: "active" in link && link.active === active ? DOOR.ink : DOOR.muted }}
+                style={{ color: link.active === active ? DOOR.ink : DOOR.muted }}
               >
                 {link.label}
               </Link>
@@ -119,7 +122,9 @@ export function MarketingNav({
             {!mounted ? (
               <span aria-hidden className="block h-9 w-[7.5rem] shrink-0" />
             ) : signedIn ? (
-              <Link href="/inbox" className="inline-flex h-9 items-center gap-1.5 rounded-[10px] px-4 text-[14px] font-semibold" style={{ background: DOOR.accent, color: DOOR.accentInk }}>
+              // A quiet link: the page's own Get started is the one filled
+              // button on this door.
+              <Link href="/inbox" className="inline-flex h-9 items-center gap-1.5 px-2.5 text-[14px] font-medium underline-offset-4 hover:underline" style={{ color: DOOR.ink }}>
                 Open app <ArrowRight className="w-4 h-4" />
               </Link>
             ) : (

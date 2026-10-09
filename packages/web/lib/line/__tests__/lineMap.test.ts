@@ -83,7 +83,7 @@ describe("buildLineMap: nodes from the definition", () => {
     for (const s of stations) expect(ids).toContain(s);
     const at = (id: string) => node(m, id).col;
     expect(at(SIGNALS_NODE)).toBeLessThan(at(CAUSES_NODE));
-    for (const [a, b] of [["ground", "analyze"], ["analyze", "prove"], ["prove", "red"], ["red", "implement"], ["implement", "verify"], ["review", "card_draft"], ["card", "decide"], ["decide", "ship"], ["ship", "merge"], ["merge", "watch"], ["watch", "end:held"]]) {
+    for (const [a, b] of [["ground", "analyze"], ["analyze", "prove"], ["prove", "red"], ["red", "implement"], ["implement", "verify"], ["review", "card_draft"], ["card", "decide"], ["decide", "rebase"], ["rebase", "ship"], ["ship", "watch"], ["watch", "end:held"]]) {
       expect(at(a)).toBeLessThan(at(b));
     }
     // The node list itself reads left to right.
@@ -261,13 +261,13 @@ describe("buildLineMap: marks in words", () => {
 describe("admission on the queue's node (LE6)", () => {
   test("not admitting leads Causes' marks, in the sentence the headline says", () => {
     const m = map({ admission: { role: { id: "r1", handle: "aq-line", paused: false }, on: false, slots: 2, busy: 0, hands: 0, handsCap: 6 } });
-    expect(node(m, CAUSES_NODE).marks[0]).toMatchObject({ level: "warn", words: "Admission is off for @aq-line, so nothing starts on its own", short: "Admission off" });
+    expect(node(m, CAUSES_NODE).marks[0]).toMatchObject({ level: "warn", words: "@aq-line has automatic starting off, so nothing starts on its own", short: "Starting off" });
   });
 
   test("under no project the queue says nothing starts it and how to move it, warning once the oldest is past the norm", () => {
     const m = map({ admission: NO_PROJECT_ADMISSION });
     const mark = node(m, CAUSES_NODE).marks[0];
-    expect(mark).toMatchObject({ words: "Nothing starts here on its own: these causes have no project. Move one into a project to run it", short: "No project" });
+    expect(mark).toMatchObject({ words: "Nothing starts here on its own: these causes belong to no project. Move one into a project to have its line work on it", short: "No project" });
     const oldest = Math.min(...node(m, CAUSES_NODE).now.map((it) => it.at));
     expect(mark.level).toBe(F.NOW - oldest > DAY ? "warn" : "info");
   });
