@@ -1147,7 +1147,7 @@ describe("automatic passes dismiss the workers they skip (ct-51132)", () => {
 
   test("the switch loop dismisses limit-parked workers it will not revive", async () => {
     const db = makeFakeDb({
-      devices: [device({ cc_auto_switch: false })], // auto-continue on by default
+      devices: [device({ cc_auto_switch: false, cc_auto_continue: true })],
       conversations: [worker("w1", "limit"), worker("w2", "limit")],
       daemon_commands: [],
     });
@@ -1167,6 +1167,18 @@ describe("automatic passes dismiss the workers they skip (ct-51132)", () => {
     expect(stillBlocked(db)).toEqual([]);
   });
 
+  test("a machine that never chose a recovery mode gets no error retry", async () => {
+    const db = makeFakeDb({
+      devices: [device({})],
+      conversations: [{ ...worker("c1", "connection"), parent_conversation_id: undefined }],
+      daemon_commands: [],
+      pending_messages: [],
+    });
+    const result = await (throttleContinueCheck as any)._handler(ctx(db), { user_id: userId });
+    expect(result).toEqual({ acted: "off" });
+    expect(db._tables.pending_messages).toEqual([]);
+  });
+
   test("with every automatic recovery off the workers stay for the human's opt-in", async () => {
     const db = makeFakeDb({
       devices: [device({ cc_auto_switch: false, cc_auto_continue: false })],
@@ -1174,7 +1186,7 @@ describe("automatic passes dismiss the workers they skip (ct-51132)", () => {
       daemon_commands: [],
     });
     const result = await (throttleContinueCheck as any)._handler(ctx(db), { user_id: userId });
-    expect(result).toEqual({ acted: "nothing_throttled", dismissed: 0 });
+    expect(result).toEqual({ acted: "off" });
     expect(stillBlocked(db)).toEqual(["w1"]);
   });
 });

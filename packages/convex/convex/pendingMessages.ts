@@ -14,7 +14,8 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter,
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
+import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./devices";
 import {
   messagesCommandCoverageTarget,
@@ -626,6 +627,13 @@ export const sendMessageToSession = mutation({
     // run outcomes call enqueuePendingMessage directly).
     if (args.origin && isHostedAgentType(conversation.agent_type)) {
       throw new Error("Only the server sends machine input to a hosted conversation");
+    }
+    // A daemon's crash revive is an automatic continue like the server's own,
+    // held to the recovery mode the person chose. Checked here so every daemon
+    // version obeys it.
+    if (isReviveClientId(args.client_id)) {
+      const { primary } = await listOnlineDevices(ctx, authUserId, Date.now());
+      if (!autoRecoveryEnabled(primary)) return null;
     }
 
     return await enqueuePendingMessage(ctx, conversation, authUserId, {

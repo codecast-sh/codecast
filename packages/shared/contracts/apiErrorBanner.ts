@@ -484,6 +484,18 @@ export function blockedContinueClientId(conversationId: string, at: number): str
   return `continue-blocked-${conversationId}-${Math.floor(at / 60_000)}`;
 }
 
+// The client_id of the daemon's revive of a session whose agent process died
+// mid-work (cli midWorkRevive.ts). Minute-bucketed like the one above: a pass
+// that runs twice cannot double-queue. The server reads it back to hold the
+// revive to the machine's recovery mode.
+export function reviveClientId(conversationId: string, at: number): string {
+  return `revive-${conversationId}-${Math.floor(at / 60_000)}`;
+}
+
+export function isReviveClientId(clientId: string | null | undefined): boolean {
+  return !!clientId && clientId.startsWith("revive-");
+}
+
 // A "continue" that account recovery sent on the person's behalf, read off its
 // client_id: the auto-switch loop's (auto-switch-continue-*), the daemon's
 // post-switch revive when no caller painted one (acct-switch-*), the

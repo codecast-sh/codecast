@@ -36,6 +36,7 @@ import {
   authRestartAttemptKey,
   AUTO_CONTINUE_WINDOW_MS,
   isAutoContinueEnabled,
+  autoRecoveryEnabled,
   isBlockedConversation,
   isRemoteAuthBlocked,
   isSubagentConversation,
@@ -141,12 +142,6 @@ const BLOCKED_FLAG_CLEAR = { pending_api_error: false, pending_api_error_kind: u
 // carrying them as "blocked" only keeps the incident count (and the header
 // pill) inflated with rows nobody will act on. The web banner paints the
 // same clear on the click and says so on the button; the CLI prints it.
-// Whether this machine runs an automatic recovery at all: account rotation
-// (auto-switch) or same-account resume at window reset (auto-continue, on by
-// default). Both live on the primary device row (see loadPrimaryForToggle).
-function autoRecoveryEnabled(primary: Doc<"devices"> | undefined): boolean {
-  return !!primary && recoveryModeOf(primary) !== "off";
-}
 
 type RecoveryDecisionKind = "switch" | "propose" | "continue" | "exhausted";
 type DecisionTarget = { name?: string; email?: string; usage?: CcUsage | null };
@@ -718,6 +713,8 @@ export const reviveAuthBlockedOnRemotes = mutation({
       .collect();
     const remoteIds = new Set(devices.filter((d) => d.is_remote === true).map((d) => d.device_id));
     if (remoteIds.size === 0) return { continued: 0 };
+    const { primary } = await listOnlineDevices(ctx, userId, Date.now());
+    if (!autoRecoveryEnabled(primary)) return { continued: 0 };
 
     const { blocked } = await listBlockedConversations(ctx, userId, false);
     const targets = blocked.filter((c) => isRemoteAuthBlocked(c, remoteIds));
@@ -1304,6 +1301,9 @@ export const throttleContinueCheck = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now();
     const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
+    // A retry is a "continue" typed into the person's session: it runs only
+    // under a recovery mode they chose, like every other automatic continue.
+    if (!autoRecoveryEnabled(primary)) return { acted: "off" };
     const state = primary?.cc_auto_switch_state ?? {};
     const attempts = state.attempts ?? [];
     const writeState = async (extra: Record<string, unknown>) => {

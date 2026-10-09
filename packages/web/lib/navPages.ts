@@ -62,7 +62,7 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Resources", path: "/resources", icon: "session", keywords: "cpu memory activity monitor load pressure processes offload cloud", secondary: true },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
   { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace", secondary: true },
-  { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth", secondary: true },
+  { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth recovery auto continue resume retry", secondary: true },
   { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private", secondary: true },
   { label: "Devices", path: "/settings/devices", icon: "cpu", keywords: "machines daemons keys cli hosts", secondary: true },
   { label: "Migrate Sessions", path: "/settings/migrate", icon: "cpu", keywords: "move bulk cloud host laptop transfer batch", secondary: true },

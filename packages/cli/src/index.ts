@@ -114,7 +114,7 @@ import {
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
-import type { RecoveryMode } from "@codecast/shared/contracts";
+import { recoveryModeOf, type RecoveryMode } from "@codecast/shared/contracts";
 import { agentDisplayName, normalizeSubagentCaps } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
@@ -4542,10 +4542,10 @@ async function runUsageCommand(options: { json?: boolean }): Promise<void> {
     if (status && typeof status.auto_switch === "boolean") {
       recovery = {
         auto_switch: status.auto_switch,
-        auto_continue: status.auto_continue !== false,
-        // Older servers answer without a mode; derive the same four-way answer
-        // from the flags so the CLI never reports a mode the server disagrees with.
-        mode: status.mode ?? (status.ask_first ? "ask" : status.auto_switch ? "auto" : status.auto_continue !== false ? "resume" : "off"),
+        auto_continue: status.auto_continue === true,
+        // Older servers answer without a mode; derive it from the flags the way
+        // the server does, so the CLI never reports a mode it disagrees with.
+        mode: status.mode ?? recoveryModeOf({ cc_auto_switch: status.auto_switch, cc_recovery_ask: status.ask_first, cc_auto_continue: status.auto_continue }),
       };
     }
   } catch {}

@@ -16794,6 +16794,21 @@ async function healSqueezedAgentWindows(): Promise<number> {
 const DEAD_PANE_ERROR = "SESSION_EXITED: no agent process in the pane";
 
 /**
+ * The pane pids `target` names: one pane for a `session:window.pane` target,
+ * every pane of the session for a bare session name. Plain `list-panes -t
+ * <session>` lists only the session's CURRENT window, so an agent in a pane of
+ * any other window looked unreachable and was resumed a second time beside the
+ * live one (a user's `littlebird:2.1` while they were looking at window 1).
+ */
+async function targetPanePids(target: string): Promise<number[]> {
+  const args = target.includes(":")
+    ? ["display-message", "-p", "-t", target, "#{pane_pid}"]
+    : ["list-panes", "-s", "-t", target, "-F", "#{pane_pid}"];
+  const { stdout } = await tmuxExec(args, { timeout: 3000, killSignal: "SIGKILL" });
+  return stdout.split("\n").map(s => parseInt(s.trim(), 10)).filter(Number.isInteger);
+}
+
+/**
  * Does this pane still hold an agent? The answer is a LivenessVerdict, so the
  * uncertain cases stay uncertain instead of being rounded down to death.
  *
@@ -16810,16 +16825,14 @@ const DEAD_PANE_ERROR = "SESSION_EXITED: no agent process in the pane";
  * have an unknown case; process liveness has no vocabulary to fall outside of.
  */
 async function panePresenceVerdict(target: string): Promise<LivenessVerdict> {
-  const bare = target.split(":")[0];
-  if (!bare || !hasTmux()) return "unverifiable";
+  if (!target || !hasTmux()) return "unverifiable";
   return verdictFromProbe(async () => {
-    const { stdout } = await tmuxExec(
-      ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
-      { timeout: 3000, killSignal: "SIGKILL" },
-    );
-    const panePid = parseInt(stdout.trim().split("\n")[0] ?? "", 10);
-    if (!Number.isInteger(panePid)) return "unverifiable";
-    return (await findAgentPidInTree(panePid)) === null ? "exited" : "live";
+    const panePids = await targetPanePids(target);
+    if (panePids.length === 0) return "unverifiable";
+    for (const panePid of panePids) {
+      if ((await findAgentPidInTree(panePid)) !== null) return "live";
+    }
+    return "exited";
   });
 }
 
@@ -16838,16 +16851,9 @@ async function panePresenceVerdict(target: string): Promise<LivenessVerdict> {
  * is the more expensive mistake: the orphan case is rare, a broken ps read is not.
  */
 async function paneRouteVerdict(target: string, pid: number): Promise<LivenessVerdict> {
-  const bare = target.split(":")[0];
-  if (!bare || !hasTmux() || !Number.isInteger(pid)) return "unverifiable";
+  if (!target || !hasTmux() || !Number.isInteger(pid)) return "unverifiable";
   return verdictFromProbe(async () => {
-    const { stdout } = await tmuxExec(
-      ["list-panes", "-t", bare, "-F", "#{pane_pid}"],
-      { timeout: 3000, killSignal: "SIGKILL" },
-    );
-    const panePids = new Set(
-      stdout.trim().split("\n").map(s => parseInt(s.trim(), 10)).filter(Number.isInteger),
-    );
+    const panePids = new Set(await targetPanePids(target));
     if (panePids.size === 0) return "unverifiable";
     let cur = pid;
     for (let hop = 0; hop < 12 && cur > 1; hop++) {
@@ -16969,6 +16975,8 @@ async function reapOrphanedAgent(sessionId: string, pid: number, pane: string, s
     release();
   }
 }
+
+export const paneVerdictsForTests = { paneRouteVerdict, panePresenceVerdict };
 
 export const orphanReaperForTests = {
   reapOrphanedAgent, io: orphanReaperIo, pendingAgentSwitches,
@@ -28665,7 +28673,10 @@ async function reviveMidWorkSession(
     return "deferred";
   }
   try {
-    await syncService.enqueueUserMessage(convId, REVIVE_MESSAGE, reviveClientId(convId, now));
+    if (!(await syncService.enqueueUserMessage(convId, REVIVE_MESSAGE, reviveClientId(convId, now)))) {
+      log(`Watchdog: not reviving ${tag}: recovery is off on this machine`);
+      return "declined";
+    }
   } catch (err) {
     log(`Watchdog: revive of ${tag} failed to queue (${err instanceof Error ? err.message : String(err)}); retrying next pass`);
     return "deferred";

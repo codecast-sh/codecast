@@ -3170,17 +3170,17 @@ export default defineSchema({
     // and revives them, retrying until unblocked or every account is spent.
     // Web-set (setAutoSwitchAccounts); the heartbeat never writes these.
     cc_auto_switch: v.optional(v.boolean()),
-    // Same-account resume once the limit window resets (no switch). Unset
-    // means ON — see isAutoContinueEnabled; false is the explicit opt-out.
+    // Same-account resume once the limit window resets (no switch). Only an
+    // explicit true turns it on; unset is off (recoveryModeOf).
     // Web-set (setAutoContinueAccounts). Shares cc_auto_switch_state.
     cc_auto_continue: v.optional(v.boolean()),
     // Ask before changing accounts. When on, a limit that would trigger an
     // account switch instead records a PROPOSAL (cc_auto_switch_state
     // .last_decision, kind "propose") and leaves the sessions parked for the
     // human to approve from the park card — same-account resume still runs on
-    // its own. This is the default recovery for a new machine; auto-switch is
-    // the opt-in that acts without asking. Never both: setRecoveryMode keeps
-    // cc_auto_switch and this mutually exclusive.
+    // its own. Opt-in like every recovery mode: a machine that never chose
+    // recovers nothing. Never both: setRecoveryMode keeps cc_auto_switch and
+    // this mutually exclusive.
     cc_recovery_ask: v.optional(v.boolean()),
     cc_auto_switch_state: v.optional(ccAutoSwitchStateValidator),
     // The in-flight browser sign-in round trip (web CTA → daemon `claude auth

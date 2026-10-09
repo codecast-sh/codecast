@@ -656,13 +656,21 @@ export function splitAuthParks<T extends { _id: string; updated_at?: number; pen
 export const AUTO_CONTINUE_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 /** Auto-continue — resume limit-parked sessions on the SAME account once its
- * window resets, no switch — is on unless the user turned it off. Default-on
- * because a session parked by a rate limit is almost always waiting for
- * exactly that reset; the toggle exists for the user who wants parked
- * sessions to stay parked. (Auto-switch stays opt-in: it rotates the
- * machine's login, which is a bigger decision.) */
+ * window resets, no switch — runs only when the user turned it on. Codecast
+ * types into a person's session only after they chose a recovery mode that
+ * does (recoveryModeOf). */
 export function isAutoContinueEnabled(device: { cc_auto_continue?: boolean | null }): boolean {
-  return device.cc_auto_continue !== false;
+  return device.cc_auto_continue === true;
+}
+
+/** Whether codecast may send a "continue" on the person's behalf at all: a
+ * limit resume, an account switch, an error retry, a crash revive. Any mode
+ * but "off" on the primary device row (see loadPrimaryForToggle); no primary
+ * online means no one chose, so nothing is sent. */
+export function autoRecoveryEnabled(
+  primary: { cc_auto_switch?: boolean | null; cc_recovery_ask?: boolean | null; cc_auto_continue?: boolean | null } | undefined | null,
+): boolean {
+  return !!primary && recoveryModeOf(primary) !== "off";
 }
 
 

@@ -39,14 +39,14 @@ A token also makes a switch possible when the saved login has expired. `cast acc
 
 ## How a parked session recovers
 
-The daemon classifies the banner text. A usage limit is kind `limit`. A rate limit from too many requests in a minute is kind `throttle` and takes a separate path. The conversation row gets `pending_api_error`, `pending_api_error_kind` and `pending_api_error_at`, and the write schedules the recovery check. What the check does depends on the machine's recovery mode, set on the Claude accounts page in Settings:
+The daemon classifies the banner text. A usage limit is kind `limit`. A rate limit from too many requests in a minute is kind `throttle` and takes a separate path. The conversation row gets `pending_api_error`, `pending_api_error_kind` and `pending_api_error_at`, and the write schedules the recovery check. What the check does depends on the machine's recovery mode, set at the top of each machine's section on the Claude accounts page in Settings ("When a session stops on its own"). The mode also covers API and connection error retries and the revive of an agent that crashed mid-turn:
 
-| Mode | Label in Settings | On a limit |
+| Mode | Label in Settings | What codecast does |
 |------|-------------------|-----------|
-| `ask` | Ask before switching | Recommends the saved account with the most room and waits for approval. Sessions still resume when the window resets. This is the default. |
-| `auto` | Switch automatically | Moves the machine to that account and continues the parked sessions. |
-| `resume` | Resume at reset only | Never changes accounts. Continues the sessions when the window resets. |
-| `off` | Do nothing | Sessions stay parked until a person continues them. |
+| `off` | Never continue for me | Nothing. Stopped sessions wait until a person continues them. This is the default. |
+| `resume` | Continue on this account | Continues sessions after a limit resets, an error or a crash. Never changes accounts. |
+| `ask` | Continue, and ask before switching accounts | The same, and on a limit recommends the saved account with the most room and waits for approval. |
+| `auto` | Continue, and switch accounts automatically | The same, and on a limit moves the machine to that account and continues without asking. |
 
 ```figure
 RecoveryFigure
