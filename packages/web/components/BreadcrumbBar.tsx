@@ -108,7 +108,7 @@ export function BreadcrumbBar() {
     shortId: spec.shortId,
     icon:
       spec.kind === "project" ? (
-        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${projectDotClass({ color: projectColor, title: projectTitle })}`} />
+        <span className={`w-2 h-2 rotate-45 rounded-[2px] flex-shrink-0 ${projectDotClass({ color: projectColor, title: projectTitle })}`} />
       ) : undefined,
   }));
 

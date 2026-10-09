@@ -8,6 +8,7 @@
 // the server's enrichment first whenever it is there. The pane header, the
 // queue card and the decision page all draw this one component.
 import Link from "next/link";
+import { OrgObjectLink } from "./company/OrgObjectLink";
 import { ArrowUpRight } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useTrackedStore } from "../../store/inboxStore";
@@ -68,9 +69,10 @@ export function ProposalAuthorPill({ author, onOpenSession, className, size = "s
     // away (org-roles-run-work.md R3); the card replaces the title tooltip.
     const roleShortId = view.href ? /\/(or-\d+)$/.exec(view.href)?.[1] : undefined;
     if (view.href && roleShortId) {
+      // Inside the Org screen the author opens its sheet; the conversation stays put (D5b).
       return (
         <RoleHoverCard role={{ short_id: roleShortId, name: view.name, handle: view.handle ?? "", avatar: view.avatar }}>
-          <Link href={view.href} className={cn(base, "hover:bg-sol-bg-highlight")} style={style} data-proposal-author="role">{inner}</Link>
+          <OrgObjectLink kind="role" objRef={roleShortId} className={cn(base, "hover:bg-sol-bg-highlight")} style={style} data-proposal-author="role">{inner}</OrgObjectLink>
         </RoleHoverCard>
       );
     }
