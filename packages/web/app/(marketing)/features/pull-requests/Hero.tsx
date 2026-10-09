@@ -44,13 +44,10 @@ export function Hero() {
           </h1>
           <p className="prx-rise mt-6 max-w-2xl text-[17px] sm:text-[19px] leading-[1.6]" style={{ ...at(0.16), color: SOL.base01 }}>
             Every pull request in codecast carries its checks, its review threads and the sessions that made it.
-            Bind one session as its shepherd and a red check, a request for changes or a conflict wakes that session
+            The session that opened it stays on as its shepherd, and a red check, a request for changes or a conflict wakes that session
             with a briefing. It fixes, pushes, answers each thread and resolves it. The review and the merge stay yours.
           </p>
           <div className="prx-rise mt-8 flex flex-wrap items-center gap-3" style={at(0.24)}>
-            <code className="rounded-lg px-4 py-2.5 font-mono text-[14px]" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
-              <span style={{ color: SOL.green }}>$</span> cast pr shepherd on
-            </code>
             <a href="#install" className="prx-chip rounded-lg border px-4 py-2.5 font-mono text-[13.5px] font-semibold" style={{ borderColor: SOL.cyan, color: SOL.cyan }}>
               Install codecast
             </a>
