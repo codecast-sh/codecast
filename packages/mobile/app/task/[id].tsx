@@ -19,7 +19,7 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono, uiFace } from "@/constants/fonts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
-import { directChildren, isActiveTask, subtaskProgressOf, waitTone, type WaitTone } from "@codecast/shared/tasks";
+import { blockedByLabel, directChildren, isActiveTask, isTerminalTaskStatus, isWaitKind, subtaskProgressOf, UNBLOCKED_WORD, waitTone, type WaitKind, type WaitTone } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
 import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
 import { useCoarseNow } from "@codecast/web/hooks/useCoarseNow";
@@ -297,23 +297,32 @@ export default function TaskDetailScreen() {
 
         {graph?.foundDuring && <TaskLinkRow icon="search" label="Found during" link={graph.foundDuring} />}
 
+        {/* Relations before the body, as on the web: "what is holding this?" is
+            a stuck task's first question, and a phone's description fold would
+            otherwise bury the answer. */}
+        {graph && graph.blockedBy.length > 0 && (
+          <RNView style={styles.section}>
+            <RNView style={styles.subtaskHeader}>
+              {/* On a closed task every line is history: nothing holds one, so
+                  the heading says so. The heading and the verdict word both
+                  come from shared/tasks/graph.ts (`blockedByLabel`,
+                  `UNBLOCKED_WORD`, TG12), so this screen, the web's row and
+                  `cast task show` cannot drift; the CONDITION stays each
+                  surface's own. */}
+              <RNText style={styles.sectionLabel}>{blockedByLabel(!isTerminalTaskStatus(task.status))}</RNText>
+              {graph.unblocked && (
+                <RNText style={[styles.blockerState, { color: Theme.green }]}>{UNBLOCKED_WORD}</RNText>
+              )}
+            </RNView>
+            {graph.blockedBy.map((b) => <BlockerRowView key={b.key} row={b} taskStatus={task.status} />)}
+          </RNView>
+        )}
+
         {task.description && (
           <RNView style={styles.section}>
             <CollapsibleBody fadeColor={Theme.bg} height={180}>
               <MarkdownContent text={task.description} baseStyle={styles.description} />
             </CollapsibleBody>
-          </RNView>
-        )}
-
-        {graph && graph.blockedBy.length > 0 && (
-          <RNView style={styles.section}>
-            <RNView style={styles.subtaskHeader}>
-              <RNText style={styles.sectionLabel}>Blocked by</RNText>
-              {graph.unblocked && (
-                <RNText style={[styles.blockerState, { color: Theme.green }]}>unblocked</RNText>
-              )}
-            </RNView>
-            {graph.blockedBy.map((b) => <BlockerRowView key={b.key} row={b} taskStatus={task.status} />)}
           </RNView>
         )}
 
@@ -487,7 +496,9 @@ function executionColor(status: string): { backgroundColor: string; borderColor:
 
 type IconName = React.ComponentProps<typeof FontAwesome>["name"];
 
-const WAIT_ICON: Record<Exclude<BlockerRow["kind"], "task">, IconName> = {
+/** Every wait kind this bundle knows; a kind newer than the bundle (an OTA
+ *  outlives the server's set) has no entry and falls back below. */
+const WAIT_ICON: Record<WaitKind, IconName> = {
   pr_merged: "code-fork",
   pr_checks_green: "check-circle-o",
   decision: "question-circle-o",
@@ -497,13 +508,18 @@ const WAIT_ICON: Record<Exclude<BlockerRow["kind"], "task">, IconName> = {
 const WAIT_TONE_COLOR = { waiting: "orange", met: "green", failed: "red", dim: "textDim" } as const satisfies Record<WaitTone, keyof typeof Theme>;
 
 /** One Blocked by entry, read-only: a task blocker opens its task (a ref this
- *  viewer cannot read stays plain); a wait shows its condition, its glyph in
- *  the tone the task page explains it with (`waitTone` untilClosed), and the
- *  shared word for its state, red when it fails and dim otherwise, as on the web. */
+ *  viewer cannot read stays plain); a wait names what it waits ON (a PR in
+ *  full, a decision, a moment), its glyph in the tone the task page explains
+ *  it with (`waitTone` untilClosed), and the shared word for its state beside
+ *  it, red when it fails and dim otherwise. Subject and predicate are split
+ *  the way the task page splits them between its pill and the word, so the
+ *  line reads "PR o/r#42 … to merge" and never says "merges" twice. */
 function BlockerRowView({ row, taskStatus }: { row: BlockerRow; taskStatus: string }) {
   const Theme = useTheme();
   const router = useRouter();
-  if (row.kind === "task") {
+  // By shape, not by `kind`: a wait's kind is whatever the server sent, so it
+  // is no discriminant (see BlockerRow).
+  if ("ref" in row) {
     const cfg = STATUS_CONFIG[row.status as TaskStatus];
     const state = cfg?.label ?? row.stateLabel;
     return (
@@ -523,7 +539,7 @@ function BlockerRowView({ row, taskStatus }: { row: BlockerRow; taskStatus: stri
   return (
     <RNView style={styles.subtaskRow}>
       {row.pr && <PrFeeder pr={row.pr} />}
-      <FontAwesome name={WAIT_ICON[row.kind] ?? "hourglass-o"} size={12} color={Theme[WAIT_TONE_COLOR[waitTone(row.state, taskStatus, { untilClosed: true })]]} />
+      <FontAwesome name={isWaitKind(row.kind) ? WAIT_ICON[row.kind] : "hourglass-o"} size={12} color={Theme[WAIT_TONE_COLOR[waitTone(row.state, taskStatus, { untilClosed: true })]]} />
       <RNText style={[styles.subtaskTitle, row.cleared && styles.subtaskTitleDone]} numberOfLines={1}>{row.label}</RNText>
       {row.word ? <RNText style={[styles.blockerState, { color: row.failing ? Theme.red : Theme.textDim }]} numberOfLines={1}>{row.word}</RNText> : null}
     </RNView>
