@@ -8,6 +8,7 @@ import {
   formatShortDate,
   parseDuration,
   relTimeShort,
+  relTimeUntil,
   wasEdited,
 } from "./index";
 
@@ -25,6 +26,24 @@ describe("relTimeShort / formatRelative", () => {
     expect(relTimeShort(now - 3 * DAY, now)).toBe("3d");
     expect(formatRelative(now - 30_000, now)).toBe("just now");
     expect(formatRelative(now - 3 * DAY, now)).toBe("3d ago");
+  });
+});
+
+describe("relTimeUntil", () => {
+  test("rounds up, so a span still to come is never named shorter than it is", () => {
+    // What a wait set from "2h" reads as a moment later: 2h, never 1h.
+    expect(relTimeUntil(now + 2 * HOUR, now)).toBe("2h");
+    expect(relTimeUntil(now + 2 * HOUR - 1000, now)).toBe("2h");
+    expect(relTimeUntil(now + 90 * MIN, now)).toBe("2h");
+    expect(relTimeUntil(now + 26 * HOUR, now)).toBe("2d");
+    expect(relTimeUntil(now + 61 * MIN, now)).toBe("2h");
+    // Each unit rolls up at its own limit rather than reading "60m" or "24h".
+    expect(relTimeUntil(now + 59 * MIN + 30_000, now)).toBe("1h");
+    expect(relTimeUntil(now + 23 * HOUR + 59 * MIN, now)).toBe("1d");
+    expect(relTimeUntil(now + 90_000, now)).toBe("2m");
+    // Inside the minute, and already past: nothing left to count.
+    expect(relTimeUntil(now + 30_000, now)).toBe("now");
+    expect(relTimeUntil(now - HOUR, now)).toBe("now");
   });
 });
 

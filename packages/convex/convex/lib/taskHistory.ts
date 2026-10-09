@@ -30,6 +30,54 @@ function stored(value: unknown): string {
   return value == null ? "" : String(value);
 }
 
+/** What a task write sets, for the fields both `tasks.update` and
+ *  `tasks.webUpdate` can write. A key present means the write sets that
+ *  field; `assignee`, `parent` and `found_during` are wrapped, so clearing one
+ *  is still a write of it. */
+export type TrackedWrite = {
+  status?: string;
+  priority?: string;
+  title?: string;
+  assignee?: { to?: string };
+  parent?: { to?: Id<"tasks"> };
+  found_during?: { to?: string };
+  review_verdict?: string;
+  labels?: string[];
+};
+
+/**
+ * The history rows a task write records for the fields both CLI and web
+ * updates share (TG11). One builder, because two hand-kept lists of what to
+ * feed `recordTaskChange` drift: each caller appends only the field it alone
+ * writes (`blocked_by` for the CLI's update, `execution_status` for the
+ * web's). A row whose value did not move is dropped by `recordTaskChange`,
+ * so a caller passes what it wrote, not what changed.
+ */
+export function trackedFieldChanges(
+  task: {
+    status?: string;
+    priority?: string;
+    title?: string;
+    assignee?: string;
+    parent_id?: Id<"tasks">;
+    found_during?: string;
+    review_verdict?: { verdict: string };
+    labels?: string[];
+  },
+  next: TrackedWrite,
+): TaskFieldChange[] {
+  const changes: TaskFieldChange[] = [];
+  if (next.status) changes.push(["status", task.status, next.status]);
+  if (next.priority) changes.push(["priority", task.priority, next.priority]);
+  if (next.title) changes.push(["title", task.title, next.title]);
+  if (next.assignee) changes.push(["assignee", task.assignee || "", next.assignee.to || ""]);
+  if (next.parent) changes.push(["parent", task.parent_id ?? "", next.parent.to ?? ""]);
+  if (next.found_during) changes.push(["found_during", task.found_during, next.found_during.to]);
+  if (next.review_verdict) changes.push(["review_verdict", task.review_verdict?.verdict ?? "", next.review_verdict]);
+  if (next.labels) changes.push(["labels", task.labels, next.labels]);
+  return changes;
+}
+
 /** One `task_history` row per change that really moved; a change whose old
  *  and new values store the same is skipped. */
 export async function recordTaskChange(

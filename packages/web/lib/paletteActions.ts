@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import { sessionIdentity } from "./sessionIdentity";
 import { cleanTitle } from "./conversationProcessor";
-import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight, Hourglass, Link2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight, Hourglass, ArrowUpFromLine, Link2 } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { canMoveSessionToMachine, sessionMoveVerbs } from "./sessionControl";
@@ -10,6 +10,7 @@ import { isForeignSession } from "./liveEntities";
 import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
 import { isTriggerEditable } from "./triggerEditable";
 import { isOrgObjectKind, objectHref, personRefOf } from "./entityLinks";
+import { RELATION_ACT } from "./relationActs";
 
 /** The entities a route or a collection names (paletteTarget). */
 export type PaletteEntityType = "session" | "task" | "doc" | "plan" | "project" | "trigger";
@@ -145,9 +146,19 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     row("labels", "Edit labels…", Tag, "l", "task.labels"),
     row("assign", "Assign to…", User, "a", "task.assign"),
     row("project", "Move to project…", Folder, "j"),
-    row("parent", "Set parent…", CornerDownRight, "t"),
-    row("blocker", "Add blocker…", Hourglass, "b"),
-    row("related", "Link related task…", Link2, "k"),
+    row("parent", RELATION_ACT.parent, CornerDownRight, "t"),
+    row("blocker", RELATION_ACT.blocker, Hourglass, "b"),
+    // The same edge from the other side (TG12), so making another task wait on
+    // this one never means opening that task — from a board row either. Worded
+    // as the act, not as the "Blocks" row's label, which is what tells the
+    // direction on the task page. `found_during` is left to the task page: it
+    // corrects a link the server guessed, not a routine move from a row.
+    //
+    // Its own glyph, not the blocker's hourglass: these two rows are the two
+    // DIRECTIONS of one edge, the thing readers invert, and an icon column
+    // that draws them identically says they are the same act.
+    row("blocks", RELATION_ACT.blocks, ArrowUpFromLine),
+    row("related", RELATION_ACT.related, Link2, "k"),
     ...(targets.some(t => t.parent_id) ? [row("remove_parent", "Remove parent", CornerDownRight)] : []),
     row("agent_run", "Start agent run…", Bot, "g"),
     ...(single ? [row("rename", "Rename task…", Pencil, "r")] : []),

@@ -31,6 +31,12 @@ import {
   Tag,
   UserCheck,
 } from "lucide-react";
+import { isQuietExternalEvent, type ExternalEventAccent } from "./externalEventRules";
+// The icon-free rules live in ./externalEventRules, which the phone reaches
+// (its PR screen reads accentVar and drops quiet kinds) and must not pull this
+// module's lucide icon table into the native bundle. Re-exported so a web
+// caller can keep reading them here.
+export { accentVar, accentSoft, isQuietExternalEvent, QUIET_EXTERNAL_EVENT_KINDS, type ExternalEventAccent } from "./externalEventRules";
 import { repoBlobHref } from "./repoView";
 import { opsHref } from "../components/ops/opsPaths";
 import { SOURCE_PROVIDERS, type SourceProvider } from "@codecast/shared/contracts/ingest";
@@ -41,18 +47,6 @@ export type ExternalEventSource = "github" | "linear" | "codecast" | "git" | Ing
 // timeline, named by the provider of the source that saw them.
 type IngestSourceProvider = SourceProvider;
 const INGEST_SOURCES: ReadonlySet<string> = new Set<string>(SOURCE_PROVIDERS);
-
-/** Accent names map to the app's solarized tokens (see accentVar). */
-export type ExternalEventAccent =
-  | "green"
-  | "red"
-  | "yellow"
-  | "blue"
-  | "violet"
-  | "cyan"
-  | "magenta"
-  | "orange"
-  | "muted";
 
 export type ExternalEventRef = {
   session_id?: string;
@@ -85,28 +79,6 @@ export type ExternalEventStyle = {
   /** Past-tense verb the row shows before the title ("pushed", "merged"). */
   verb: string;
 };
-
-const ACCENT_VARS: Record<ExternalEventAccent, string> = {
-  green: "var(--sol-green)",
-  red: "var(--sol-red)",
-  yellow: "var(--sol-yellow)",
-  blue: "var(--sol-blue)",
-  violet: "var(--sol-violet)",
-  cyan: "var(--sol-cyan)",
-  magenta: "var(--sol-magenta)",
-  orange: "var(--sol-orange)",
-  muted: "var(--sol-text-muted)",
-};
-
-/** The css color for an accent. Use this instead of writing a hex anywhere. */
-export function accentVar(accent: ExternalEventAccent | undefined): string {
-  return ACCENT_VARS[accent ?? "muted"];
-}
-
-/** A soft fill of the same accent, for chips and rails. */
-export function accentSoft(accent: ExternalEventAccent | undefined, percent = 14): string {
-  return `color-mix(in srgb, ${accentVar(accent)} ${percent}%, transparent)`;
-}
 
 export const DEFAULT_EXTERNAL_EVENT_STYLE: ExternalEventStyle = {
   icon: CircleDot,
@@ -331,16 +303,6 @@ export function externalEventRowToExternalEvent(row: ExternalEventRecord): Exter
 // merge-state flip. Two rules keep the feed and the transcript readable; the
 // PR page still shows every row, because there the detail is the point.
 
-/**
- * Kinds that carry no news for a reader. "Fell behind" is a state the
- * shepherd acts on by itself and the PR chip already shows; the row that
- * announces it is noise on every other surface.
- */
-export const QUIET_EXTERNAL_EVENT_KINDS: ReadonlySet<string> = new Set(["pr_behind"]);
-
-export function isQuietExternalEvent(row: { kind?: string }): boolean {
-  return QUIET_EXTERNAL_EVENT_KINDS.has(row.kind ?? "");
-}
 
 /** Events on one thread of work: a pull request, else a branch, else a repo. */
 export type ExternalEventGroup = {
