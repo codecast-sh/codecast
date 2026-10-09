@@ -20,7 +20,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, themedStyles, useTheme } from '@/constants/Theme';
 import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { EntityPill, isEntityId } from './EntityPill';
-import { parseEntityUrl, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/shared/entities';
+import { parseEntityUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
 // which silently missed most real-world insight forms — one parser, one truth.
@@ -151,7 +151,8 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
   const pattern = new RegExp(
     '(`[^`]+`|\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|\\[([^\\]]+)\\]\\(([^)]+)\\)'
     + `|(${URL_SOURCE})|@\\[([^\\]]+)\\]|@(\\w+)`
-    + `|\\b(${BARE_ID_SOURCE})\\b`
+    // Bounded as the shared scanner is, so "5-in-1" stays prose.
+    + `|${BARE_ID_BEFORE}(${BARE_ID_SOURCE})${BARE_ID_AFTER}`
     // A backslash escape (CommonMark): `\.` or `\*` is the character itself.
     // Last, so no group number above moves; matched by its leading backslash.
     + '|\\\\[!-/:-@\\[-`{-~])',
@@ -438,7 +439,10 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, k
     const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
     if (headerMatch) {
       const level = headerMatch[1].length;
-      const fontSize = [18, 16, 15, 14, 13, 13][level - 1];
+      // A heading never sets smaller than the text around it: a reply set at
+      // a reading size (hosted mode's 17px letter) keeps its headings at body
+      // size, as the web's hosted replies do.
+      const fontSize = Math.max([18, 16, 15, 14, 13, 13][level - 1], StyleSheet.flatten(baseStyle)?.fontSize ?? 0);
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
           {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, knownMentionHandles)}

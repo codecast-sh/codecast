@@ -8,14 +8,15 @@ import type { Lane } from "./lanePaths";
 
 export { isHostedUi, laneOf, type Lane } from "./lanePaths";
 
-/** The switch's words (settings and the command palette), the same on the
- *  web and the phone. On is hosted mode: the app for everyday work, with the
+/** The switch's words (settings, the command palette and /welcome), the same
+ *  on the web and the phone, with one name for the mode, "Everyday", as
+ *  Settings' Mode choice says it. On is hosted mode: the app for everyday work, with the
  *  Codecast assistant as the default and code, terminals and machines out of
  *  sight (lib/surfaces.ts decides which surfaces step back). */
 export const LANE_SWITCH = {
-  label: "Assistant mode",
+  label: "Everyday mode",
   description: "Codecast for everyday work: new conversations go to the Codecast assistant, and code, terminals and machines step out of sight. Turn it off to bring them back",
-  on: "Switch to assistant mode",
+  on: "Switch to Everyday mode",
   off: "Switch to developer mode",
   /** The web's two-way choice under Appearance. */
   modeLabel: "Mode",
@@ -23,6 +24,8 @@ export const LANE_SWITCH = {
   developer: "Developer",
   everydayHint: "Everyday work with the Codecast assistant. Developer adds code, terminals and the machines that run them.",
   developerHint: "Code, terminals and machines. Everyday hides them and starts new conversations with the Codecast assistant.",
+  /** /welcome's note to someone in developer mode: asking there switches. */
+  welcomeSwitches: "Asking here switches Codecast to Everyday mode. You can switch back in Settings.",
 } as const;
 
 /** Writes the preference through the store, so it shows at once and follows

@@ -462,3 +462,24 @@ describe("the simple lane's old addresses lead to routes", () => {
     expect(settingsSectionForPath(BILLING_RETURN.path)?.section).toBe("plan");
   });
 });
+
+describe("the Org screen's read views", () => {
+  // `goals` and `projects` are reserved segments of /org: a view, or an object under it.
+  const matches = (path: string, href: string) => new RegExp(`^${routeHref(path).replace(/:[^/]+/g, "[^/]+")}$`).test(href);
+  const routeOf = (href: string) => ROUTES.find((r) => r.component !== null && matches(r.path, href))?.path;
+
+  it("each address resolves in the manifest, App.tsx and RoutePane, to the screen", () => {
+    expect(routeOf("/org/goals")).toBe("org/:id");
+    expect(routeOf("/org/projects")).toBe("org/:id");
+    expect(routeOf("/org/goals/in-2")).toBe("org/:view/:id");
+    expect(routeOf("/org/projects/pj-k3x9")).toBe("org/:view/:id");
+    expect(appSrc).toContain('<Route path="org/:view/:id" element={<E name="OrgScope"><OrgScope /></E>} />');
+    expect(tabContentSrc).toContain('{ pattern: /^\\/org\\/([^/]+)\\/([^/]+)$/, paramNames: ["view", "id"], component: OrgScope }');
+  });
+
+  it("the page checks the view before the scope segment, so neither view is a scope page", () => {
+    const page = read("app/org/[id]/page.tsx");
+    expect(page).toContain("!isOrgViewSegment(id) && !namesOrgObject(id)");
+    expect(page).toContain("if (!isOrgViewSegment(params?.view) && id && isScopeSegment(id))");
+  });
+});

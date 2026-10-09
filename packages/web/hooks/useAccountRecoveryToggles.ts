@@ -21,24 +21,24 @@ export type RecoveryToggle = {
 // What each mode does, in the words the selector shows. One definition so the
 // header panel and the settings page describe the same behavior.
 export const RECOVERY_MODE_COPY: Record<RecoveryMode, { label: string; detail: string }> = {
-  ask: {
-    label: "Ask before switching",
-    detail:
-      "On a usage limit, recommend the saved account with the most headroom and wait for you to approve. Sessions still resume on their own once the window resets.",
-  },
-  auto: {
-    label: "Switch automatically",
-    detail:
-      "On a usage limit, move this machine to the saved account with the most headroom and continue the parked sessions without asking.",
+  off: {
+    label: "Never continue for me",
+    detail: "Codecast never types into your sessions. A session that stopped waits until you continue it.",
   },
   resume: {
-    label: "Resume at reset only",
+    label: "Continue on this account",
     detail:
-      "Never change accounts. Parked sessions continue on their own once this account's window resets.",
+      "Never change accounts. Codecast sends \"continue\" once a usage limit resets, after an API or connection error, and when the agent crashed mid-turn.",
   },
-  off: {
-    label: "Do nothing",
-    detail: "Parked sessions stay parked until you continue them yourself.",
+  ask: {
+    label: "Continue, and ask before switching accounts",
+    detail:
+      "Same as above. On a usage limit, also recommend the saved account with the most headroom and wait for you to approve.",
+  },
+  auto: {
+    label: "Continue, and switch accounts automatically",
+    detail:
+      "Same as above. On a usage limit, move this machine to the saved account with the most headroom and continue without asking.",
   },
 };
 
@@ -111,7 +111,6 @@ export function useAccountRecoveryToggles(device: {
       ),
     },
     autoContinue: {
-      // Unset means on (older query results and fresh device rows alike).
       on: pendingContinue ?? isAutoContinueEnabled({ cc_auto_continue: device.auto_continue }),
       pending: pendingContinue !== null,
       set: flip(setAutoContinue, setPendingContinue, (on) =>

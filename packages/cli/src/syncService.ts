@@ -643,15 +643,18 @@ export class SyncService {
   // what triggers the auto-resume that adopts the freshly swapped credential.
   // `human`: a person wrote it (a cloud agent's launch prompt), so it counts
   // like the composer's messages.
-  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<void> {
+  // Resolves to whether the server queued it: null means it declined (a crash
+  // revive under recovery mode "off").
+  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<boolean> {
     await this.throttle();
-    await this.mutate("pendingMessages:sendMessageToSession" as any, {
+    const queued = await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
       content,
       client_id: clientId,
       ...(opts.human ? { human: true } : {}),
       api_token: this.apiToken,
     });
+    return queued !== null;
   }
 
   // After this (primary) daemon pushes a CHANGED credential to the remote
