@@ -1,0 +1,297 @@
+"use client";
+// One frame for every sheet in the Org screen's panel (essence spec §5): the
+// bar with the crumb (where the object sits in the company, each step opening
+// that object) and the close, then the head in the same order on every kind:
+// the name, Talk to whoever answers for it, the menu; the facts line (owner ·
+// state · measure · date); what it serves. The kind's own sections follow as
+// children, built from SheetSection and SheetFolds so the sheets read as
+// siblings. History is the browser's: there is no Back here.
+import { Fragment, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { Ellipsis, MessageSquare, X } from "lucide-react";
+import { objectHref, type OrgObjectKind } from "@codecast/shared/entities";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { copyText } from "../../../lib/copyText";
+import { cn } from "../../../lib/utils";
+import { KeyCap } from "../../KeyboardShortcutsHelp";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../ui/tooltip";
+import { SectionHead } from "../../initiatives/InitiativeRecord";
+import { ORG_BAND, ORG_RULE } from "../orgFrame";
+import { isPlainClick } from "./orgOpenContext";
+import { useSheetHost } from "./sheetHost";
+import { FactsLine } from "../lines/FactsLine";
+import { hasFacts } from "../lines/lineFacts";
+import type { Seat } from "./objects";
+
+export type Named = { kind: OrgObjectKind; ref: string; title: string };
+export type SheetFacts = { owner?: ReactNode; state?: ReactNode; measure?: ReactNode; date?: ReactNode };
+export type SheetMenuItem = { label: string; onSelect: () => void; danger?: boolean };
+
+const RULE = "var(--cc-panel-rule, color-mix(in srgb, var(--sol-border) 45%, transparent))";
+const DIM = "var(--sol-text-dim)";
+/** The one side gutter of a sheet, bar and body alike: the crumb, the glyph
+ *  and the facts share one left edge, the close and the menu one right edge. */
+const SHEET_GUTTER = "px-[22px]";
+
+/** A name in the frame that opens its own sheet; a plain click stays in the screen. */
+export function ObjectLink({ n, className, children }: { n: Named; className?: string; children?: ReactNode }) {
+  const host = useSheetHost();
+  return (
+    <Link
+      href={objectHref(n.kind, n.ref)}
+      onClick={(e) => { if (!host || !isPlainClick(e)) return; e.preventDefault(); host.open(n.kind, n.ref); }}
+      className={cn("min-w-0 truncate no-underline hover:underline underline-offset-[3px]", className)}
+      data-sheet-link={n.ref}
+    >
+      {children ?? n.title}
+    </Link>
+  );
+}
+
+export function SheetFrame({ kind, idRef, idLabel, sub, onRenameSub, linkRef, glyph, title, onRename, crumbs, facts, serves, talk, ask, actions, menu = [], children, loading }: {
+  kind: OrgObjectKind;
+  /** The object's own short ref, shown beside its name. */
+  idRef?: string | null;
+  /** What the head shows beside the name when it says more than the id (a role's "@handle · or-7"). Defaults to idRef. */
+  idLabel?: string | null;
+  /** What the object is, beside its name, in place of the id (a role's title beside its name). */
+  sub?: string | null;
+  /** The sub is editable where the object's owner may rename it (a role's title). */
+  onRenameSub?: (sub: string) => void;
+  /** The ref its address takes, for Copy link, when it is not shown (a person's handle). Defaults to idRef. */
+  linkRef?: string | null;
+  glyph: ReactNode;
+  title: string;
+  /** The name is editable where the object's owner may rename it. */
+  onRename?: (title: string) => void;
+  /** Where it sits: the workspace, then each object above it. The workspace closes the sheets. */
+  crumbs: Named[];
+  facts?: SheetFacts;
+  serves?: Named[];
+  /** Who answers for it: Talk opens their conversation in the panel. */
+  talk?: Seat | null;
+  /** @deprecated Read as the Talk seat when `talk` is absent; a person's is not drawn. Removed in wave 2. */
+  ask?: { seat: Seat } | { person: { userId: string; name: string } } | null;
+  /** The kind's own buttons in the head, before Talk (a person's Call). */
+  actions?: ReactNode;
+  menu?: SheetMenuItem[];
+  children?: ReactNode;
+  /** The object has not arrived in the store yet. */
+  loading?: boolean;
+}) {
+  const host = useSheetHost();
+  // One Talk per sheet. A role's panel is its conversation already, so it has none.
+  const seat = talk ?? (ask && "seat" in ask ? ask.seat : null);
+  const talkTo = kind !== "role" && host ? seat : null;
+  const addressRef = linkRef ?? idRef;
+  const link = addressRef ? objectHref(kind, addressRef) : null;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-sheet={kind} data-sheet-ref={idRef ?? ""}>
+      {/* The screen's band and rule, so this rule meets the conversation head's across the seam. */}
+      <div className={cn("flex shrink-0 items-center gap-2 border-b text-[12px]", ORG_BAND, SHEET_GUTTER)} style={{ borderColor: ORG_RULE, color: "var(--sol-text-muted)" }} data-sheet-bar>
+        <nav className="flex min-w-0 items-center gap-[5px] overflow-hidden whitespace-nowrap" aria-label="Where it sits" data-sheet-crumb>
+          {crumbs.map((c, i) => (
+            <Fragment key={`${c.kind}:${c.ref}:${i}`}>
+              {i > 0 && <span aria-hidden style={{ color: DIM }}>›</span>}
+              {/* The first crumb is the screen itself: it closes the panel. Filling a narrow screen, it is the way back. */}
+              {i === 0 && !c.ref
+                ? <button type="button" onClick={host?.close} className="shrink-0 hover:text-[var(--sol-text)]" data-sheet-crumb-workspace>{host?.fills ? "← Org" : "Org"}</button>
+                : <ObjectLink n={c} className="hover:!text-[var(--sol-text)]" />}
+            </Fragment>
+          ))}
+        </nav>
+        {host && (
+          <span className="ml-auto inline-flex shrink-0 items-center" style={{ color: DIM }}>
+            <TooltipProvider delayDuration={400}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" onClick={host.close} className="inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-sol-bg-highlight/70" aria-label="Close" data-sheet-close>
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="flex items-center gap-1.5">Close <KeyCap size="xs">Esc</KeyCap></TooltipContent>
+            </Tooltip>
+            </TooltipProvider>
+          </span>
+        )}
+      </div>
+
+      <div className={cn("min-h-0 flex-1 overflow-y-auto pb-8 pt-[18px] [container-type:inline-size]", SHEET_GUTTER)} data-sheet-body>
+        {/* The row wraps when the title would get under 14rem: what follows it
+            drops to its own line, starting on the title's left edge, because the
+            row's 30px left padding holds the glyph (pulled back into it) and
+            every wrapped line starts after it. */}
+        <div className="flex flex-wrap items-start gap-x-2.5 gap-y-2 pl-[30px]" data-sheet-head>
+          {/* Centred on the title's first line box (22px at 1.2 leading), so a diamond, a face and an avatar all sit on its optical middle. */}
+          <span className="-ml-[30px] inline-flex h-[26px] w-5 shrink-0 items-center justify-center" aria-hidden>{glyph}</span>
+          <div className="min-w-0 grow basis-56">
+            <SheetTitle title={title} onRename={onRename} focus={!!host?.focusTitle} onSettled={host?.titleSettled} />
+          </div>
+          {sub ? <SheetSub sub={sub} onRename={onRenameSub} /> : (idLabel ?? idRef) && <span className="org-sheet-id mt-[6px] shrink-0 whitespace-nowrap font-mono text-[11px]" style={{ color: DIM }} data-sheet-id>{idLabel ?? idRef}</span>}
+          <span className="flex shrink-0 items-center gap-1.5" data-sheet-actions>
+            {actions}
+            {talkTo && (
+              <button type="button" onClick={() => host?.open({ kind: "session", id: talkTo.conversationId })} className="inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12px] transition-colors hover:bg-sol-bg-highlight/60" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-secondary)" }} title={`Open ${talkTo.name}'s conversation`} data-sheet-talk={talkTo.conversationId}>
+                <MessageSquare className="h-3 w-3" /> Talk
+              </button>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-md hover:bg-sol-bg-highlight/60" style={{ color: "var(--sol-text-muted)" }} aria-label="More" data-sheet-menu>
+                  <Ellipsis className="h-4 w-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[190px]">
+                {menu.filter((m) => !m.danger).map((m) => <DropdownMenuItem key={m.label} onSelect={m.onSelect}>{m.label}</DropdownMenuItem>)}
+                {link && <DropdownMenuItem onSelect={() => void copyText(`${window.location.origin}${link}`, "Link copied")} data-sheet-copy-link>Copy link</DropdownMenuItem>}
+                {menu.some((m) => m.danger) && <DropdownMenuSeparator />}
+                {menu.filter((m) => m.danger).map((m) => <DropdownMenuItem key={m.label} onSelect={m.onSelect} className="text-[var(--sol-red)] focus:text-[var(--sol-red)]">{m.label}</DropdownMenuItem>)}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        </div>
+
+        {hasFacts(facts) && <FactsLine facts={facts!} className="mt-[9px] text-[12px]" data-sheet-facts="" />}
+        {serves && serves.length > 0 && (
+          <div className="mt-2.5 flex min-w-0 items-baseline gap-2 text-[12px]" data-sheet-serves>
+            <span className="shrink-0" style={{ color: DIM }}>Serves</span>
+            <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-1" style={{ color: "var(--sol-text-secondary)" }}>
+              {serves.map((n) => <ObjectLink key={`${n.kind}:${n.ref}`} n={n} />)}
+            </span>
+          </div>
+        )}
+        {loading ? <p className="mt-6 text-[12.5px]" style={{ color: DIM }}>Loading…</p> : children}
+      </div>
+    </div>
+  );
+}
+
+/** The object's name: the serif heading, an input in place while renaming. A
+ *  sheet opened by New opens with it focused and selected. */
+function SheetTitle({ title, onRename, focus, onSettled }: { title: string; onRename?: (title: string) => void; focus: boolean; onSettled?: () => void }) {
+  const [editing, setEditing] = useState(focus && !!onRename);
+  const [draft, setDraft] = useState(title);
+  const input = useRef<HTMLInputElement>(null);
+  useWatchEffect(() => {
+    const el = input.current;
+    if (!editing || !el) return;
+    const take = () => { el.focus(); el.select(); };
+    take();
+    // The menu that opened this sheet (New ▸ Goal) may hold focus until it
+    // finishes closing; the name takes it back on the next frame.
+    const frame = requestAnimationFrame(() => { if (document.activeElement !== el) take(); });
+    return () => cancelAnimationFrame(frame);
+  }, [editing]);
+  useWatchEffect(() => { if (focus && onRename) { setDraft(title); setEditing(true); } }, [focus]);
+  const settle = () => { setEditing(false); if (focus) onSettled?.(); };
+  const commit = () => {
+    settle();
+    const next = draft.trim();
+    if (next && next !== title) onRename?.(next);
+  };
+  // The name shrinks with a narrow sheet and wraps between words; a word
+  // breaks only when it is wider than the sheet on its own.
+  const heading = "text-[clamp(18px,5cqi,22px)] leading-[1.2] tracking-[-0.01em] [overflow-wrap:break-word] [word-break:normal]";
+  if (editing) {
+    return (
+      <input
+        ref={input}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); }
+          if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(title); settle(); }
+        }}
+        aria-label="Name"
+        className={cn(heading, "w-full rounded-md bg-transparent px-1 -mx-1 outline-none ring-1 ring-[color-mix(in_srgb,var(--sol-cyan)_55%,transparent)]")}
+        style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}
+        data-sheet-title-input
+      />
+    );
+  }
+  return (
+    <h1
+      className={cn(heading, onRename && "cursor-text rounded-md -mx-1 px-1 hover:bg-sol-bg-highlight/40")}
+      style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)", fontWeight: 500 }}
+      onClick={onRename ? () => { setDraft(title); setEditing(true); } : undefined}
+      title={onRename ? "Rename" : undefined}
+      data-sheet-title
+    >
+      {title}
+    </h1>
+  );
+}
+
+/** What the object is, beside its name: quiet words, renamed in place by
+ *  whoever may rename it. */
+function SheetSub({ sub, onRename }: { sub: string; onRename?: (sub: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const cls = "mt-[5px] max-w-[45%] shrink-0 truncate text-[12.5px]";
+  if (draft !== null) {
+    const commit = () => { const next = draft.trim(); setDraft(null); if (next && next !== sub) onRename?.(next); };
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); }
+          if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(null); }
+        }}
+        aria-label="Title"
+        size={Math.max(8, draft.length + 1)}
+        className={cn(cls, "rounded-md bg-transparent px-1 -mx-1 outline-none ring-1 ring-[color-mix(in_srgb,var(--sol-cyan)_55%,transparent)]")}
+        style={{ color: "var(--sol-text-secondary)" }}
+        data-sheet-sub-input
+      />
+    );
+  }
+  return (
+    <span
+      className={cn(cls, "whitespace-nowrap", onRename && "cursor-text rounded-md -mx-1 px-1 hover:bg-sol-bg-highlight/40")}
+      style={{ color: "var(--sol-text-muted)" }}
+      onClick={onRename ? () => setDraft(sub) : undefined}
+      title={onRename ? `${sub} · rename` : sub}
+      data-sheet-sub
+    >
+      {sub}
+    </span>
+  );
+}
+
+/** One of a sheet's sections: the small heading, an optional action at its
+ *  right, then the body. Its heading is SectionHead, the one the goal
+ *  sheet's sections (RecordSection) draw too, so a heading sits at the same
+ *  height and rhythm on every kind. */
+export function SheetSection({ title, action, children, data }: { title: string; action?: ReactNode; children: ReactNode; data?: string }) {
+  return (
+    <section className="mt-5" data-sheet-section={data ?? title}>
+      <SectionHead label={title} action={action} />
+      {children}
+    </section>
+  );
+}
+
+/** The record and the activity, folded at the foot of a sheet. */
+export function SheetFolds({ children }: { children: ReactNode }) {
+  return <div className="mt-5 border-b" style={{ borderColor: RULE }} data-sheet-folds>{children}</div>;
+}
+
+export function SheetFold({ title, hint, children, defaultOpen = false }: { title: string; hint?: ReactNode; children: ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t" style={{ borderColor: RULE }} data-sheet-fold={title} data-open={open ? "" : undefined}>
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center gap-2 px-1 py-2.5 text-left text-[12.5px] hover:text-[var(--sol-text)]" style={{ color: "var(--sol-text-muted)" }}>
+        <span aria-hidden className={cn("inline-block w-3 text-[10px] transition-transform", open && "rotate-90")}>▸</span>
+        <span className="shrink-0 whitespace-nowrap">{title}</span>
+        {hint && <span className="ml-auto min-w-0 truncate text-[11.5px]" style={{ color: DIM }}>{hint}</span>}
+      </button>
+      {open && <div className="pb-3">{children}</div>}
+    </div>
+  );
+}

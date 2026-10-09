@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { routeTmuxArgs, sessionSocketName, tmuxSocketDir } from "./tmuxRoute.js";
 import {
   clientAcceptsBracketedPaste,
   deliverTextIntoPane,
@@ -67,6 +70,25 @@ describe("tmuxLiteralArg", () => {
 });
 
 describe("pasteTextIntoPane", () => {
+  // load-buffer and delete-buffer name no target; they must reach the server
+  // paste-buffer reads, or a session on its own server never gets a paste.
+  test("every buffer verb reaches the target session's own server", async () => {
+    const env = { TMUX_TMPDIR: mkdtempSync(path.join(os.tmpdir(), "tmux-paste-")), CODECAST_TMUX_PER_SESSION: "1" };
+    try {
+      mkdirSync(tmuxSocketDir(env), { recursive: true });
+      writeFileSync(path.join(tmuxSocketDir(env), sessionSocketName("cc-resume-abc")), "");
+      const routed: string[][] = [];
+      await pasteTextIntoPane(async (args) => { routed.push(...routeTmuxArgs(args, env)); }, "cc-resume-abc:0.0", "hello", true);
+      expect(routed.map((a) => a.slice(0, 3))).toEqual([
+        ["-L", sessionSocketName("cc-resume-abc"), "load-buffer"],
+        ["-L", sessionSocketName("cc-resume-abc"), "paste-buffer"],
+        ["-L", sessionSocketName("cc-resume-abc"), "delete-buffer"],
+      ]);
+    } finally {
+      rmSync(env.TMUX_TMPDIR, { recursive: true, force: true });
+    }
+  });
+
   test("uses a bracketed tmux buffer for verified clients", async () => {
     const calls: string[][] = [];
     let loadedPayload = "";

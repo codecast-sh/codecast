@@ -20,6 +20,7 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { peopleOf } from "@codecast/shared/team/memberKind";
+import { objectHref, personRefOf } from "../lib/entityLinks";
 
 interface TeamAvatarBarProps {
   teamId?: Id<"teams">;
@@ -70,7 +71,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // a mute that moves no face hands back the same row and this bar sleeps.
   const row = useFaceRow();
   const floating = useFacesFloating();
-  const ctxMenu = useContextMenu<{ id: string; username?: string | null; displayName: string }>();
+  const ctxMenu = useContextMenu<{ id: string; profileHref: string; displayName: string }>();
 
   // The header's slice of the row: me and the linked faces first (the model
   // puts them at the head), then the rest by presence, up to the cap.
@@ -137,7 +138,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         const face = seat && row.entries.find((f) => f.id === seat.dataset.faceId);
         if (!face) return;
         const member = useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === face.id);
-        ctxMenu.open(e, { id: face.id, username: member?.github_username, displayName: face.name });
+        ctxMenu.open(e, { id: face.id, profileHref: objectHref("person", personRefOf({ _id: face.id, github_username: member?.github_username })), displayName: face.name });
       }}
     >
       <TeamMembersPump teamId={effectiveTeamId} />
@@ -146,7 +147,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         density="bar"
         viewerId={viewerId}
         callsEnabled={callsEnabled}
-        onOpenProfile={(m) => router.push(`/team/${m.github_username || m._id}`)}
+        onOpenProfile={(m) => router.push(objectHref("person", personRefOf(m)))}
       >
         {/* EXPAND rides the call's own card, beside the mic and End: it
             acts on the call, so it sits in the call. Pop out (below, at the
@@ -221,7 +222,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         {(m) => (
           <>
             <CtxHeader title={m.displayName} />
-            <CtxItem icon={UserRound} onSelect={() => router.push(`/team/${m.username || m.id}`)}>
+            <CtxItem icon={UserRound} onSelect={() => router.push(m.profileHref)}>
               Open profile
             </CtxItem>
             <CtxItem icon={Filter} onSelect={() => handleMemberClick(m.id)}>
@@ -230,7 +231,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             <CtxItem
               icon={Link2}
               onSelect={() => {
-                copyToClipboard(`${shareOrigin()}/team/${m.username || m.id}`);
+                copyToClipboard(`${shareOrigin()}${m.profileHref}`);
                 toast.success("Profile link copied");
               }}
             >
