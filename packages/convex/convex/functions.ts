@@ -22,6 +22,7 @@ import { makeChangeTrackedDb } from "./changeLog";
 import { makePrincipalViewTrackedDb } from "./principalViewRevisions";
 import { makeSyncAckCollector, type SyncAckPosition } from "./syncLog";
 import { attachSyncOutbox } from "./syncOutboxWriter";
+import { makeLifecycleEventDb } from "./lifecycleEvents";
 
 const SYNC_ACK = Symbol.for("codecast.syncAckCollector");
 
@@ -31,7 +32,10 @@ function withChangeLog(ctx: any): any {
   // writes flow through the change-feed wrapper but are intentionally untracked.
   const collector = makeSyncAckCollector();
   attachSyncOutbox(ctx, collector);
-  const wrapped: any = { ...ctx, db: makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector)) };
+  // The lifecycle trail (lifecycleEvents.ts) is outermost: it sees each write
+  // as the mutation asked for it, and records through the raw db.
+  const tracked = makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector));
+  const wrapped: any = { ...ctx, db: makeLifecycleEventDb(tracked, ctx.db) };
   wrapped[SYNC_ACK] = collector;
   return wrapped;
 }

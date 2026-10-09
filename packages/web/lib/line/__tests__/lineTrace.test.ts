@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { SHIPPED_LINE } from "../shippedLine.generated";
 import { buildLineMap } from "../lineMap";
 import { buildLineTrace, decisionAnswer, replacedWords, resolveTraceRef, traceBlocks, tracePathChips, tracePathSummary, type TraceRows } from "../lineTrace";
-import { isRoutineStation } from "../runReport";
 const HOUR_MS = 3_600_000;
 import * as F from "./lineFixtures";
 
@@ -66,9 +65,9 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
 
   test("the group: siblings and how this one attached", () => {
     const g = t.steps[1];
-    expect(g.title).toBe("3 signals share this cause");
-    expect(g.detail).toBe("It opened this cause. From agentwatch and chat");
-    expect(g.artifacts.map((a) => a.ref)).toEqual(["sg-a2", "sg-a3"]);
+    expect(g.title).toBe("3 reports of this cause");
+    expect(g.detail).toBe("It was the first report of this cause. From agentwatch and chat");
+    expect(g.artifacts.map((a) => a.ref)).toEqual(["sg-a3", "sg-a2"]);
   });
 
   test("the cause and its ground", () => {
@@ -94,12 +93,13 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
     expect(cards.map((c) => c.title)).toEqual(["Revise: Replies answer the question asked", "Ship: Replies answer the question asked"]);
     expect(cards[1].detail).toMatch(/^Recommends ship: every miss passes, guards hold\. Ashot Petrosian answered Ship /);
     expect(cards[0].detail).toMatch(/Answered Revise/);
-    expect(cards[1]).toMatchObject({ durationMs: F.HOUR, links: [{ label: "Open the card", href: "/decisions/sd-2" }] });
+    expect(cards[1]).toMatchObject({ durationMs: F.HOUR, links: [{ label: "Open the decision", href: "/decisions/sd-2" }] });
   });
 
   test("ship, watch and the outcome", () => {
     const by = (stage: string) => t.steps.find((s) => s.stage === stage)!;
-    expect(by("ship")).toMatchObject({ title: "Shipped", detail: "Merged", nodeId: "merge" });
+    // The run merged at a station today's line no longer has: the step points at Ship on the map.
+    expect(by("ship")).toMatchObject({ title: "Shipped", detail: "Merged", nodeId: "ship" });
     expect(by("watch")).toMatchObject({ title: "The watch ended quiet", status: "done" });
     expect(by("outcome")).toMatchObject({ title: "Held: the fix stayed fixed through its watch", nodeId: "end:held" });
     expect(t.where.text).toMatch(/The watch ended quiet\.$/);
@@ -110,7 +110,8 @@ describe("buildLineTrace: a cause that shipped after a revise and held", () => {
     expect(p.slice(0, 5)).toEqual(["expectations", "source:agentwatch", "signals", "causes", "ground"]);
     expect(p.filter((x) => x === "implement")).toHaveLength(2);
     expect(p.filter((x) => x === "decide")).toHaveLength(2);
-    expect(p.slice(-4)).toEqual(["ship", "merge", "watch", "end:held"]);
+    // The run's merge station is gone from today's line, so the path skips it.
+    expect(p.slice(-4)).toEqual(["decide", "ship", "watch", "end:held"]);
   });
 
   test("every path node is a node on the map", () => {
@@ -137,7 +138,7 @@ describe("buildLineTrace: other ends", () => {
     const t = trace("ct-105");
     expect(t.steps.find((s) => s.stage === "ground")).toMatchObject({ status: "waiting", detail: "Waiting to be admitted: the line grounds a cause when a run starts on it" });
     expect(t.steps.find((s) => s.stage === "cause")!.detail).toBe("Not rated yet");
-    expect(t.steps[1].detail).toBe("A person filed it here");
+    expect(t.steps[1].detail).toBe("It was moved here from another cause");
     expect(t.steps[0].detail).toBe("chat filed a UX problem");
     expect(t.pathNodeIds).toEqual(["source:chat", "signals", "causes"]);
     expect(t.outcome).toBe("open");
@@ -233,7 +234,7 @@ describe("AgentWatch findings as a person traces them (LX4)", () => {
     const dup = { ...a1, _id: "sig_dup", task_id: "task_b" };
     const others = F.rows.signals.filter((s) => s.task_id !== "task_a");
     const g = trace("ct-101", { signals: [a1, ...others, dup] }).steps[1];
-    expect(g.title).toBe("Seen before: filed to 1 other cause too");
+    expect(g.title).toBe("Seen before: also filed to 1 other cause");
     // It never reads as opening this cause right before naming the others it opened.
     expect(g.detail).toBe("The same AgentWatch finding also opened:");
     expect(g.links[0]).toMatchObject({ ref: "ct-102" });
@@ -242,7 +243,7 @@ describe("AgentWatch findings as a person traces them (LX4)", () => {
   test("a lone signal nothing else saw is the only one so far", () => {
     const a1 = F.rows.signals.find((s) => s._id === "sig_a1")!;
     const g = trace("ct-101", { signals: [a1, ...F.rows.signals.filter((s) => s.task_id !== "task_a")] }).steps[1];
-    expect(g.title).toBe("Only this signal so far");
+    expect(g.title).toBe("The only report so far");
   });
 });
 
@@ -251,7 +252,7 @@ describe("where it is now: one value", () => {
     const open = { ...F.decisionsA[1], _id: "dec_open", short_id: "sd-9", status: "pending", resolved_at: undefined, answer_index: undefined, answered_by: null };
     const later = { ...F.runA, _id: "run_a2", status: "running" as const, current_node_id: "eval", gate_decision_short_id: undefined, gate_answer: undefined, created_at: F.NOW - HOUR_MS, updated_at: F.NOW, node_statuses: [F.n("ground", F.NOW - HOUR_MS, 3), F.n("eval", F.NOW - HOUR_MS + 5 * F.MIN, 0, "running")] };
     const t = trace("ct-101", { runs: [...F.rows.runs, later], decisions: [F.decisionsA[0], open] });
-    expect(t.where.text).toBe("Run 2 is at Eval. Card sd-9 from run 1 is still open; answering Ship ships run 1's change.");
+    expect(t.where.text).toBe("Run 2 is at Eval. Decision sd-9 from run 1 is still open; answering Ship ships run 1's change.");
     expect(t.hereNodeId).toBe("eval");
     expect(t.steps.at(-1)?.detail).toBe(t.where.text);
     expect(t.runs.map((r) => r.end)).toEqual(["shipped", "working"]);
@@ -261,7 +262,8 @@ describe("where it is now: one value", () => {
     const withdrawn = { ...F.decisionsA[1], status: "withdrawn", answer_index: undefined, answered_by: null };
     const step = trace("ct-101", { decisions: [F.decisionsA[0], withdrawn] }).steps.find((s) => s.id === "card:dec_a2")!;
     expect(step.status).toBe("noted");
-    expect(step.detail).toEndWith("The card was withdrawn before anyone answered it.");
+    // Its run shipped anyway (the fixture's run completed its watch), and the card says so.
+    expect(step.detail).toEndWith("Card withdrawn; shipped on the earlier approval.");
   });
 });
 
@@ -285,15 +287,14 @@ describe("the path strip and its summary", () => {
     const t = trace("sg-a1");
     const chips = tracePathChips(t);
     const firsts = t.pathNodeIds.filter((id, i) => t.pathNodeIds.indexOf(id) === i);
-    // The card's routine steps read as one chip, Card, at the first of them.
-    const shown = firsts.filter((id) => !isRoutineStation(id) || id === firsts.find(isRoutineStation));
-    expect(chips.map((c) => c.nodeId)).toEqual([...shown.filter((id) => !id.startsWith("end:")), ...shown.filter((id) => id.startsWith("end:"))]);
+    // Every station is its own chip, the card's assembly steps too.
+    expect(chips.map((c) => c.nodeId)).toEqual([...firsts.filter((id) => !id.startsWith("end:")), ...firsts.filter((id) => id.startsWith("end:"))]);
     expect(chips[0]).toMatchObject({ label: "Expectations" });
     expect(chips.find((c) => c.nodeId === "source:agentwatch")?.label).toBe("agentwatch");
     expect(chips.find((c) => c.nodeId === "causes")?.label).toBe("Causes");
-    expect(chips.reduce((n, c) => n + c.times, 0)).toBe(t.pathNodeIds.filter((id, i) => !isRoutineStation(id) || !isRoutineStation(t.pathNodeIds[i - 1] ?? "")).length);
+    expect(chips.reduce((n, c) => n + c.times, 0)).toBe(t.pathNodeIds.length);
     // A chip's status is its newest step's, as the story's dot shows it.
-    for (const c of chips.filter((c) => !isRoutineStation(c.nodeId))) {
+    for (const c of chips) {
       const step = [...t.steps].reverse().find((s) => s.nodeId === c.nodeId);
       if (step) expect(c.status).toBe(step.status);
     }
@@ -308,9 +309,9 @@ describe("the path strip and its summary", () => {
     expect(ended.find((c) => c.nodeId === "end:stopped")?.status).toBe("failed");
   });
 
-  test("the card's routine steps are one chip, Card, counted once a run", () => {
-    const chips = tracePathChips({ pathNodeIds: ["causes", "eval", "card_draft", "card_write", "card", "decide", "causes", "eval", "card_draft", "card_write", "card", "decide"], pathLabels: { causes: "Causes", eval: "Eval", card_draft: "Card words", card_write: "Card", card: "Card", decide: "Decide" }, steps: [] });
-    expect(chips.map((c) => `${c.label}x${c.times}`)).toEqual(["Causesx2", "Evalx2", "Cardx2", "Decidex2"]);
+  test("the card's steps are chips of their own, named as the graph file names them", () => {
+    const chips = tracePathChips({ pathNodeIds: ["causes", "eval", "card_draft", "card_write", "card", "decide", "causes", "eval", "card_draft", "card_write", "card", "decide"], pathLabels: { causes: "Causes", eval: "Eval", card_draft: "Card draft", card_write: "Card words", card: "Card", decide: "Decide" }, steps: [] });
+    expect(chips.map((c) => `${c.label}x${c.times}`)).toEqual(["Causesx2", "Evalx2", "Card draftx2", "Card wordsx2", "Cardx2", "Decidex2"]);
   });
 
   test("a chip counts the runs that reached it, and a replaced run's step takes its own tone (LX4)", () => {
@@ -359,11 +360,11 @@ describe("a run replaced by a newer run (LX4)", () => {
   test("its end is replaced, never stopped, with the run that replaced it and what started that run", () => {
     expect(t.runs.map((r) => r.end)).toEqual(["replaced", "stopped", "waiting"]);
     expect(t.runs[0]).toMatchObject({ by: 2, why: "Run 2 started when a new AgentWatch signal joined the cause" });
-    expect(replacedWords(t.runs[0])).toBe("Reached a card; replaced by run 2 before anyone answered.");
+    expect(replacedWords(t.runs[0])).toBe("Reached your decision; replaced by run 2 before anyone answered.");
   });
 
   test("the summary leaves it out of the stops and says it was replaced", () => {
-    expect(tracePathSummary(t)).toMatch(/ 3 runs: 1 stopped, 1 reached a card and was replaced by a newer run, 1 waiting on you$/);
+    expect(tracePathSummary(t)).toMatch(/ 3 runs: 1 stopped, 1 reached your decision and was replaced by a newer run, 1 waiting on you$/);
   });
 
   test("its card says the same, and the path goes back to the queue, not to Stopped", () => {

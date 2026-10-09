@@ -1,0 +1,29 @@
+/* The company pane's sheet (cohesive build spec D3): it slides in from the
+   pane's right edge, and its sections rise a beat after it. */
+@keyframes org-sheet-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes org-sheet-rise {
+  from { transform: translateY(4px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+.org-sheet { animation: org-sheet-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.org-sheet-body > * { animation: org-sheet-rise 320ms ease both; }
+.org-sheet-body > *:nth-child(2) { animation-delay: 40ms; }
+.org-sheet-body > *:nth-child(3) { animation-delay: 80ms; }
+.org-sheet-body > *:nth-child(n + 4) { animation-delay: 120ms; }
+@media (prefers-reduced-motion: reduce) {
+  .org-sheet, .org-sheet-body > * { animation: none; }
+}
+
+/* The Org screen's threads are for talking to a seat, not for driving its
+   session: the composer's permission mode, a lone dot here, is left out. */
+[data-org-conversation] [data-composer-mode],
+[data-org-conversation-held] [data-composer-mode] { display: none; }
+
+/* A phone-width sheet: the id chip goes, since the crumb and the tab already
+ * name the object, so the title keeps the head row. Measures the sheet body. */
+@container (max-width: 459px) {
+  .org-sheet-id { display: none; }
+}

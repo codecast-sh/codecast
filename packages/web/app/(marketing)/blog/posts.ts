@@ -30,6 +30,16 @@ export const POSTS: BlogPost[] = [
     cover: { src: "/blog/codecast-in-the-cloud/cover.png", alt: "What moves between a laptop and a cloud host: spawn, home mirror, logins, live sync, migrate, browser sync" },
   },
   {
+    slug: "the-tree-at-the-end-of-every-turn",
+    title: "The tree at the end of every turn",
+    dek: "A transcript shows the edits an agent made with its editing tools. It never sees what a shell command, a formatter or a person changed. Codecast now records the whole working tree at the end of every turn, as git commits you can diff and rewind to.",
+    author: "the codecast team",
+    date: "2026-10-07",
+    dateLabel: "October 7, 2026",
+    readingMinutes: 6,
+    cover: { src: "/blog/the-tree-at-the-end-of-every-turn/cover.png", alt: "cast diff --turns listing a session's 64 turn snapshots" },
+  },
+  {
     slug: "field-manual",
     cover: { src: "/blog/field-manual/inbox-hero.webp", alt: "The codecast inbox beside an open conversation" },
     title: "The codecast field manual: running a company of agents",
