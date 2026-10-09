@@ -89,9 +89,9 @@ describe("TraceStory", () => {
 
     // The siblings each open their own trace.
     const siblings = qa(step(host, "group"), "[data-trace-sibling]");
-    expect(siblings.map((s) => s.dataset.traceSibling)).toEqual(["sg-a2", "sg-a3"]);
-    expect(siblings[0].querySelector("a")?.getAttribute("href")).toBe("/line/trace/sg-a2");
-    expect(text(step(host, "group"))).toContain("It opened this cause");
+    expect(siblings.map((s) => s.dataset.traceSibling)).toEqual(["sg-a3", "sg-a2"]);
+    expect(siblings[0].querySelector("a")?.getAttribute("href")).toBe("/line/trace/sg-a3");
+    expect(text(step(host, "group"))).toContain("It was the first report of this cause");
 
     // Two rounds through build: the earlier one folds into one row, and implement says it is its second visit.
     const run = q(host, "[data-trace-run]")!;
@@ -120,8 +120,9 @@ describe("TraceStory", () => {
     const { host, done } = await story("ct-102");
     expect(q(host, "[data-trace-story]")?.dataset.traceOutcome).toBe("dissolved");
     expect(q(host, '[data-trace-station="dissolve"]')?.textContent).toContain("Closed: the problem did not reproduce");
-    // Ship and Watch are titled by why they did not happen, never their stage name again.
-    for (const [stage, title, words] of [["card", "Card", "No card: the problem did not reproduce"], ["ship", "Not shipped", "The problem did not reproduce."], ["watch", "Nothing shipped to watch", ""]]) {
+    // Card and Ship are titled by why they did not happen, never their stage name again; nothing landed, so no watch is described.
+    expect(q(host, '[data-trace-step="watch"]')).toBeNull();
+    for (const [stage, title, words] of [["card", "Card", "No card: the problem did not reproduce"], ["ship", "Not shipped", "The problem did not reproduce."]]) {
       expect(step(host, stage).dataset.traceStatus).toBe("skipped");
       expect(text(step(host, stage).querySelector("[data-trace-title]"))).toBe(title);
       expect(text(step(host, stage).querySelector("[data-trace-detail]"))).toBe(words);
@@ -168,8 +169,7 @@ describe("TraceStory", () => {
     expect(text(step(host, "card").querySelector("[data-trace-detail]"))).toBe("Waiting for a card: it is written once the change passes review");
     expect(step(host, "ship").dataset.traceStatus).toBe("waiting");
     expect(text(step(host, "ship").querySelector("[data-trace-title]"))).toBe("Not shipped yet");
-    expect(text(step(host, "watch").querySelector("[data-trace-title]"))).toBe("Waiting for the change to land");
-    expect(text(step(host, "watch").querySelector("[data-trace-detail]"))).toBe("Once it ships, the line watches for the problem to come back.");
+    expect(q(host, '[data-trace-step="watch"]')).toBeNull();
     await done();
   });
 

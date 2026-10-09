@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { ORG_FIXTURE } from "../org/orgFixture";
 import { HEAD_OF_PEOPLE_HANDLE } from "../org/orgStaffingTypes";
+import { objectHref } from "../../lib/entityLinks";
 import {
   CHARTER_PRIORITIES,
   PRIORITY_META,
@@ -14,7 +15,6 @@ import {
   ownerCandidates,
   ownerRoleOf,
   parseTokens,
-  roleHref,
 } from "./charterMeta";
 
 describe("charter priority palette", () => {
@@ -83,8 +83,7 @@ describe("roles from the org tree", () => {
     expect(ownerRoleOf(ORG_FIXTURE.roles, role._id)?.handle).toBe(role.handle);
     expect(ownerRoleOf(ORG_FIXTURE.roles, "nope")).toBeNull();
     expect(ownerRoleOf(null, role._id)).toBeNull();
-    expect(roleHref(role)).toBe(`/org/${role.short_id}`);
-    expect(roleHref(role)).toMatch(/^\/org\/or-/);
+    expect(objectHref("role", role.short_id)).toMatch(/^\/org\/or-/);
   });
 
   it("a retired owner is no owner: the chip falls to 'No owner' instead of linking to a seat that no longer exists", () => {

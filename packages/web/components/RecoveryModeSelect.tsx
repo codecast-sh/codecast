@@ -1,6 +1,7 @@
 "use client";
 
-// How this machine recovers when a session parks on a usage limit — one
+// How this machine recovers a session that stopped on its own (a usage limit,
+// an API error, a crash) — one
 // mutually exclusive choice, rendered identically in the header panel and the
 // Claude Accounts settings page. A radio group rather than two switches
 // because the modes exclude each other: "ask before switching" and "switch
@@ -13,7 +14,8 @@ import { describeDecision, formatAgo, type RecoveryDecision } from "@codecast/sh
 import type { RecoveryMode } from "@codecast/convex/convex/ccAccountsShared";
 import { RECOVERY_MODE_COPY, type RecoveryModeControl } from "../hooks/useAccountRecoveryToggles";
 
-const ORDER: RecoveryMode[] = ["ask", "auto", "resume", "off"];
+// From least to most done on the person's behalf.
+const ORDER: RecoveryMode[] = ["off", "resume", "ask", "auto"];
 
 export function RecoveryModeSelect({
   control,
@@ -23,7 +25,7 @@ export function RecoveryModeSelect({
   compact?: boolean;
 }) {
   return (
-    <div role="radiogroup" aria-label="Recovery on usage limits" className={compact ? "space-y-0.5" : "space-y-1"}>
+    <div role="radiogroup" aria-label="When a session stops on its own" className={compact ? "space-y-0.5" : "space-y-1"}>
       {ORDER.map((mode) => {
         const copy = RECOVERY_MODE_COPY[mode];
         const selected = control.mode === mode;

@@ -16,6 +16,22 @@ const row = (id: string, status: string, updated_at: number) => ({
 });
 
 describe("useWorkspaceCollection wake signature", () => {
+  it("retains signatures for two workspaces without rescanning on each switch", () => {
+    let reads = 0;
+    const coll = {
+      get a() { reads++; return row("a", "open", 1); },
+      get b() { reads++; return { ...row("b", "open", 1), workspace: "team:t2" }; },
+    };
+    const first = membershipSig(coll, KEY, defaultFieldSig, "tasks");
+    const second = membershipSig(coll, "team:t2", defaultFieldSig, "tasks");
+    expect(first).not.toBe(second);
+    for (let i = 0; i < 10; i++) {
+      expect(membershipSig(coll, KEY, defaultFieldSig, "tasks")).toBe(first);
+      expect(membershipSig(coll, "team:t2", defaultFieldSig, "tasks")).toBe(second);
+    }
+    expect(reads).toBe(4);
+  });
+
   it("changes when a row is edited in place (mark done bumps updated_at)", () => {
     const before = { a: row("a", "open", 100), b: row("b", "open", 100) };
     const after = { a: row("a", "done", 200), b: row("b", "open", 100) };
@@ -55,6 +71,12 @@ describe("useWorkspaceCollection wake signature", () => {
 // rule on the client, from the collection's registry entry, so every list
 // reader inherits it and an archived doc never comes back into a list.
 describe("rows the list channels would not deliver", () => {
+  it("does not scan cached rows before the viewer is known", async () => {
+    const { workspaceRows } = await import("../useWorkspaceCollection");
+    const coll = { get a() { throw new Error("unresolved viewer must not scan"); } };
+    expect(workspaceRows("tasks", coll, null)).toEqual([]);
+  });
+
   it("preserves workspace isolation, own keys, canonical ids and order", async () => {
     const { workspaceRows } = await import("../useWorkspaceCollection");
     const a = row("a", "open", 1);

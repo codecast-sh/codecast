@@ -316,9 +316,7 @@ export function Clearing() {
           </div>
         </div>
         <div className="min-w-0 flex flex-col items-center">
-          <PhoneFrame className="w-[268px]" screenClassName="">
-            <PhoneDecisionScreen />
-          </PhoneFrame>
+          <PhoneQueue />
           <Note className="mt-5 text-center max-w-xs">The phone app walks the same queue one decision at a time, and moves to the next one when you answer, skip or dismiss.</Note>
         </div>
       </div>
@@ -327,6 +325,15 @@ export function Clearing() {
 }
 
 import { PhoneDecision as PhoneDecisionScreen } from "./mocks";
+
+/** The phone app walking the queue, one decision at a time. */
+export function PhoneQueue() {
+  return (
+    <PhoneFrame className="w-[268px]" screenClassName="">
+      <PhoneDecisionScreen />
+    </PhoneFrame>
+  );
+}
 
 /* ── 6. Stacks ────────────────────────────────────────────────────────────── */
 
