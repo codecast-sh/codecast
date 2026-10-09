@@ -3,14 +3,13 @@ import { useState } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
-import { GUIDES, GUIDE_CATEGORIES, guideHref } from "./guides/guides";
+import { GUIDES, GUIDE_CATEGORIES } from "./guides/guides";
 import { GuideCard } from "./guides/GuideCard";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { SITE_LINKS } from "@/lib/siteLinks";
 import { AppBadge, AndroidSoonBadge } from "@/components/marketing/AppBadges";
 import { PhoneFrame } from "../productMocks";
-import { BROWSER_EXTENSION_SETUP_COMMAND } from "@codecast/shared/contracts";
 
 const SOL = {
   base03: "#002b36",
@@ -175,7 +174,7 @@ const TOC: { id: string; label: string; group?: string; children: { id: string; 
   { id: "getting-started", label: "Getting Started", group: "Using codecast", children: [
     { id: "open-app", label: "Open codecast" },
     { id: "installation", label: "Connect your computer" },
-    { id: "chrome-extension", label: "Chrome Extension" },
+    { id: "chrome-extension", label: "Chrome & Mac apps" },
   ]},
   { id: "desktop-app", label: "The App", children: [
     { id: "inbox", label: "Inbox" },
@@ -200,8 +199,8 @@ const TOC: { id: string; label: string; group?: string; children: { id: string; 
     { id: "supported-tools", label: "Supported Tools" },
     { id: "github-integration", label: "GitHub" },
   ]},
-  { id: "guides", label: "Deep Dive Guides", group: "Agents & the CLI", children: [] },
-  { id: "agent-memory", label: "Agent Memory", children: [
+  { id: "guides", label: "Guides", children: [] },
+  { id: "agent-memory", label: "Agent Memory", group: "Agents & the CLI", children: [
     { id: "memory-setup", label: "Setup" },
     { id: "memory-commands", label: "Commands" },
     { id: "memory-how-it-works", label: "How It Works" },
@@ -410,16 +409,16 @@ export default function DocsPage() {
             </p>
           </Step>
 
-          <Step n={3} id="chrome-extension" title="Let agents use your Chrome (optional)">
+          <Step n={3} id="chrome-extension" title="Let agents use your Chrome and Mac apps (optional)">
             <p style={{ color: SOL.base00 }}>
-              For agents to work in your Chrome with your existing logins,{" "}
-              <a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" style={{ color: SOL.cyan }}>install Codecast from the Chrome Web Store</a>.
-              Then run this in a terminal on the same computer and click Pair in the extension:
+              Open <strong>Agent features</strong> from your account menu and switch on <strong>Browser</strong> or <strong>Computer</strong> under
+              Hands on the machine. The card walks you through the rest: <strong>Install extension</strong> and <strong>Pair</strong> for
+              Chrome, <strong>Open System Settings</strong> for the two Mac permissions. Do it once on each computer.
             </p>
-            <Code>{`$ ${BROWSER_EXTENSION_SETUP_COMMAND}\n$ cast browser extension status`}</Code>
             <p className="text-sm" style={{ color: SOL.base01 }}>
-              Set this up once on each computer, in the Chrome profile you want agents to use. Chrome updates the extension automatically.{" "}
-              <Link href="/documentation/browser" className="underline underline-offset-2" style={{ color: SOL.cyan }}>Browser setup and troubleshooting</Link>.
+              <Link href="/documentation/browser" className="underline underline-offset-2" style={{ color: SOL.cyan }}>Let agents use your Chrome</Link>
+              {" · "}
+              <Link href="/documentation/computer" className="underline underline-offset-2" style={{ color: SOL.cyan }}>Computer use</Link>
             </p>
           </Step>
 
@@ -733,24 +732,11 @@ $ cast sharing share ~/src/app --team acme-eng --dry-run`}</Code>
             and you can set up triggers that fire on repository events.
           </p>
 
-          {/* For agents and the terminal */}
-          <div id="cli" className="mt-24 mb-2 rounded-xl px-6 py-7" style={{ backgroundColor: SOL.base03, scrollMarginTop: "6rem" }}>
-            <div className="font-mono text-2xl font-bold mb-2" style={{ color: SOL.base3 }}>Agents &amp; the CLI</div>
-            <p className="text-sm leading-relaxed" style={{ color: SOL.base1 }}>
-              Everything in the app is also a <code className="font-mono" style={{ color: SOL.green }}>cast</code> command, and
-              that is how your agents use codecast: they search past sessions, file tasks, post to plans and set
-              triggers from their own terminal. The rest of this page is that reference.
-            </p>
-          </div>
-
-          {/* Deep dive guides */}
-          <Heading id="guides" level={2}>Deep Dive Guides</Heading>
+          {/* Guides */}
+          <Heading id="guides" level={2}>Guides</Heading>
           <p className="mb-5" style={{ color: SOL.base00 }}>
-            The sections below are the reference. These guides go deeper: how each agent
-            capability works mechanically -- what <InlineCode>cast install</InlineCode> writes
-            where, what happens at runtime, and the patterns each one enables. Start
-            with <a href={guideHref("agent-snippets")} className="underline" style={{ color: SOL.blue }}>how agent snippets work</a>;
-            everything else builds on it.
+            One feature at a time: what it does for you, how to turn it on, what to ask your agents, and what you will
+            see when they use it.
           </p>
           {GUIDE_CATEGORIES.map((cat) => {
             const inCat = GUIDES.filter((g) => g.category === cat);
@@ -766,6 +752,16 @@ $ cast sharing share ~/src/app --team acme-eng --dry-run`}</Code>
               </div>
             );
           })}
+
+          {/* For agents and the terminal */}
+          <div id="cli" className="mt-24 mb-2 rounded-xl px-6 py-7" style={{ backgroundColor: SOL.base03, scrollMarginTop: "6rem" }}>
+            <div className="font-mono text-2xl font-bold mb-2" style={{ color: SOL.base3 }}>Agents &amp; the CLI</div>
+            <p className="text-sm leading-relaxed" style={{ color: SOL.base1 }}>
+              Everything in the app is also a <code className="font-mono" style={{ color: SOL.green }}>cast</code> command, and
+              that is how your agents use codecast: they search past sessions, file tasks, post to plans and set
+              triggers from their own terminal. The rest of this page is that reference.
+            </p>
+          </div>
 
           {/* Agent Memory */}
           <Heading id="agent-memory" level={2}>Agent Memory</Heading>

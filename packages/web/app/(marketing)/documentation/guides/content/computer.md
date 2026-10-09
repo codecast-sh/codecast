@@ -1,139 +1,78 @@
-Some work is not in a web page. It is in Slack, Mail, System Settings, an installer, or a native dialog that a browser window shows and the page cannot reach: the address field, a file picker, a permission sheet. `cast computer` lets an agent work there. It reads one visible window of a macOS app as a compact indexed tree of text, acts on one element by its name or its index, and reports what the action changed.
+Some work isn't in a web page at all. It is in Preview, Slack, Mail, System Settings, an installer, a file picker, or the desktop build of the app you are making. With Computer use on, your agents work in those apps the way you would: they read the window, find the button by its name, click, type, and tell you what happened.
 
-The design avoids two failures. The first is an agent that clicks the wrong thing because the window changed under it. The second is an agent that reports success for input the app never took. Indexes that fail when stale answer the first. A verification verdict that is separate from the exit code answers the second.
+They do it in the background. The agent works in a window behind the one you are using, an orange pointer shows you where it acts, and your own pointer and keyboard stay yours. You can keep writing an email while an agent fills in a form in another app.
 
-For anything inside a web page, [`cast browser`](/documentation/browser) remains the tool. The computer snippet ([how snippets work](/documentation/agent-snippets)) teaches agents the rules below.
+![A conversation where the agent used Calculator and read System Settings](/documentation/computer/conversation.webp "Asked to work out a sum in Calculator and check Bluetooth and the sound output in System Settings. Each step sits above the reply with a picture of the window the agent read, and it changed nothing it wasn't asked to.")
 
-```bash
-cast computer setup                               # the human grants both permissions, once
-cast computer permissions                         # read both grants; nothing appears on screen
-cast computer list-apps                           # bundle ids and pids of what is running
-cast computer list-windows --app com.apple.TextEdit
-cast computer get-app-state --app com.apple.TextEdit          # one window as an indexed tree, plus a screenshot
-cast computer click --app com.apple.TextEdit --element-index 42
-cast computer set-value --app com.apple.TextEdit --element-index 12 --value "hello"
-cast computer help click                          # one verb's flags, from the binary about to run
-```
+## Turn it on
 
-`--app` takes a bundle id, an app name, or `pid:1234`. The bundle id is the safe choice, because names collide. When an app has several windows, pass `--window-id` or `--window-index` from `list-windows` and keep passing the same one. Every verb takes `--json`.
+Computer use runs on a Mac with codecast connected ([Getting started](/documentation#getting-started) covers connecting a computer).
 
-## Read, act, read
+1. Open **Agent features** from your account menu and pick the Mac your agents run on.
+2. Switch on **Computer**, under *Hands on the machine*.
+3. The card asks for two macOS permissions. Click **Open System Settings** and turn on **codecast computer** under **Accessibility**, then under **Screen Recording**.
+4. The card turns green and reads *Accessibility and Screen Recording granted*.
 
-`get-app-state` returns the tree, and `find` returns only the elements that match some text. The agent acts on one element by name (`--element "Save"`, where several matches are listed and never guessed) or by the index the tree gave it. Every action prints what it changed in the tree, with the indexes to use next, so no separate state call is needed between two steps. "No change" means the app ignored the action.
+![The Computer feature's detail: what you'll see, when agents use it, and a request to try](/documentation/computer/computer-feature.webp "The Computer detail in Agent features. The switch at the top right turns it on for the selected Mac.")
 
-Indexes are sparse. The tree drops noise, so the numbers have gaps, and an agent must never count its way to an index or infer one from `elementCount`.
+Accessibility lets the agent read a window and click, type and scroll in it. Screen Recording lets it take a picture of the window it is reading. Without Screen Recording it can still work, it just can't show you or itself what the window looks like.
 
-An index is good only for the tree it came from. Navigation, scrolling, a focus change, a delay, or another agent in the same window all make it stale. A stale index fails as `element_not_found`. It does not click whatever now sits at that number. The failure is cheap and the recovery is always a fresh snapshot.
+The permissions go to a small codecast helper app, not to your terminal, so granting them doesn't hand the same access to everything else you run there. You grant them once; they survive codecast updates. If an agent needs the permissions before you've granted them, the same steps appear as a card under its step in the conversation, with a **Tell the agent to continue** button once they're on.
 
-```figure
-ReadActFigure
-Read the tree once, act, and read the change the action printed. An index from an older tree fails rather than landing on something else.
-```
+## Ask for it in plain words
 
-## Exit code and verdict
+Name the app and say what you want:
 
-Exit 0 means the helper delivered the action. It does not mean the app took it. Most macOS input paths cannot be asserted, so each action carries its own verdict in `action.verification`.
+- "Sign the lease in Preview with my saved signature. Don't save or send it."
+- "Pick the export folder in the save dialog."
+- "Check that the desktop build shows the new settings pane, and send me a screenshot."
+- "Is Bluetooth on, and which microphone is selected?"
+- "Open the exported PDF in Preview and tell me how many pages it has."
 
-| Verdict | Meaning |
-|---------|---------|
-| `verified` | The helper read the change back, through the value, the selection, or the focused text |
-| `unverified`: `synthetic_input` | Keyboard or mouse events were sent to the window in front. Nothing can assert them |
-| `unverified`: `background_input` | Keys were posted to a background app's own event queue. Nothing can assert them |
-| `unverified`: `clipboard_paste` | The text went through the clipboard |
-| `unverified`: `accessibility_action_unasserted` | An accessibility action ran and no readback exists for it |
-| `unverified`: `value_mismatch`, `window_changed`, `readback_unsupported`, `provider_unavailable` | The readback disagreed, the window changed, or no readback was possible |
+For anything inside a web page, the agent uses your Chrome instead ([Browser](/documentation/browser)). Computer use covers what a web page can't reach: the address bar, a file picker, a permission prompt, or an app that isn't a website.
 
-Human output opens with `completed` only for a verified action and `attempted` for every other one. An attempted action also prints the exact `get-app-state` command that settles the question, with the window selector filled in.
+## What you see on your Mac
 
 ```figure
-VerdictFigure
-Every one of these exits 0. Only an action whose change the helper read back opens with completed.
+TwoCursorsFigure
+Your pointer stays in the window you are using. The agent's orange pointer works in the window behind it.
 ```
 
-## Verbs that leave the screen alone
+- **The orange pointer.** Whenever the agent clicks or types somewhere, an orange pointer glides there and pulses on the press. It never takes your focus; it is there so you can see what the agent is doing.
+- **Windows stay where they are.** The agent doesn't bring apps to the front. Typing and most clicks reach a window in the background.
+- **It asks before taking your screen.** A few controls only respond to a real mouse click on a window in front. The agent first looks for another way (a keyboard shortcut, a menu item), and if there is none, it asks you before bringing the window forward.
 
-No verb raises a window. Two flags move the human's screen and nothing else does: `--restore-window` brings the target window forward, and `permissions --open-settings` brings System Settings forward.
+## What you see in codecast
 
-| Verb | Path | Needs the window in front |
-|------|------|---------------------------|
-| `set-value` | Accessibility write. The helper reads the value back: `verified`, or `value_mismatch` | No |
-| `perform-secondary-action` | One of the actions the element advertises in the tree | No |
-| `click` on an element that advertises a press | Accessibility press | No |
-| `type-text`, `press-key`, `hotkey` | Key events: the input stream when the window is in front (`synthetic_input`), the app's own event queue when it is not (`background_input`) | No |
-| `paste-text` | The clipboard, reported as `clipboard_paste` | No |
-| `click --mouse`, `drag`, a click on a control with no press | A real mouse event, reported as `synthetic_input` | Yes |
+Each step the agent takes lands in the conversation above its reply, with a thumbnail of the window it read. Click a thumbnail to see it full size. The reply tells you what the agent did and what changed.
 
-The helper prefers an accessibility path even for the keyboard verbs. `paste-text` first tries to replace the selection in the focused element, and a select all `hotkey` first tries the element's own select all action; both need no focus and can be verified. Only when that path is absent does the helper send synthetic input.
+The agent also knows the difference between *it worked* and *I pressed the button*. When it can read the result back (a field now holds the text, a checkbox is now ticked) it says so. When an app gives no way to confirm, it looks at the window again before claiming success, and tells you if the app ignored it.
 
-Keys reach a window that is not in front. The helper makes the target the app's main window without activating the app, then posts the keys to that app's own event queue, so the human's front app keeps the keyboard. A mouse press is different: macOS drops a press on a background window. A real mouse event therefore needs the target window in front, and otherwise fails with `window_not_focused` and delivers nothing to the wrong app. The agent then looks for a route with no mouse (`set-value`, a Secondary Action, a keyboard shortcut), or asks once with `--restore-window`. While an action lands on a point, an orange agent pointer glides there and pulses on the press, without taking focus, so the human can see what the agent is doing.
+## What it will and won't do
 
 ```figure
-FocusFigure
-Keys reach the window behind through its app's own queue. A mouse press there is refused, never sent to the app in front.
+ReadVsMarkFigure
+Reading and checking are the agent's to do. Anything that leaves a mark waits until you ask for it.
 ```
 
-Modifiers are one flag, never two commands. `click --modifiers CmdOrCtrl+Shift` holds them for that click alone. An agent that is interrupted between a key down and a key up would leave a key held for the human, so the CLI offers no such pair. `press-key` takes exactly one key and `hotkey` takes a modifier and one key. `paste-text` restores the human's clipboard afterwards and refuses text above 16 MiB.
+- **Reading is free; leaving a mark is yours.** Agents read windows, find things and report back on their own. Sending a message, submitting a form, buying something, deleting data or changing a setting happens only when you asked for that.
+- **Sensitive apps stay narrow.** In an app holding private content, the agent reads only what you asked it to read.
 
-## Two grants, one helper
-
-macOS attaches a permission to the program that asks for it. A grant to the terminal would reach everything the human and every agent run there. The grants therefore go to a small signed helper app, bundle id `sh.codecast.computer`, at the fixed path `~/.codecast/computer/codecast computer.app`. macOS keys a grant to the path and the signature together, so the path holds no version and the grant survives every release. Updates replace the bundle's contents in place.
-
-Accessibility lets the helper read a window and act inside it; every verb needs it. Screen Recording lets it capture the window it read. Without Screen Recording the tree still works and only the image fails.
-
-`cast computer permissions` reads both grants and shows nothing on screen, so an agent can run it at any time. On a machine where the human has granted both, it prints:
-
-```
-$ cast computer permissions
-Computer permissions checked.
-  Helper app: ~/.codecast/computer/codecast computer.app
-  Permissions: accessibility=granted, screenshots=granted
+```figure
+GuardrailsFigure
+Two refusals that hold no matter what the agent is asked: password managers are off limits, and secret fields are hidden before the agent sees them.
 ```
 
-`cast computer setup` is the human's command. It puts the helper in place, reads both grants, explains each missing one, asks before it opens anything, opens only the pane that is missing, and waits up to 5 minutes for the grant to land. Without a terminal and without `--yes` it opens nothing. Retries by the agent grant nothing; `permissions --reset` clears a stale deny.
+- **Password managers are refused.** 1Password, Bitwarden, Dashlane, LastPass, NordPass and Proton Pass can't be read or driven at all. The helper refuses them itself, so no agent can talk its way around it.
+- **Secret fields never show.** A password, passcode or one-time code field appears to the agent as `[redacted]`. The real value never reaches the agent or your conversation.
 
-## Secrets and sensitive apps
+## When something is off
 
-Secrets go in on stdin: `--text-stdin` for `type-text` and `paste-text`, `--value-stdin` for `set-value`. Arguments stay in shell history and in every other user's `ps` output. Passing both the plain flag and the stdin flag is an error, and so is asking for stdin from a terminal.
+| What you notice | What to do |
+|-----------------|------------|
+| The card asks for permissions you already granted | Click **Open System Settings**, switch **codecast computer** off and on again in that list, then come back |
+| The agent says it can't take pictures of windows | Turn on **Screen Recording** for **codecast computer**. Everything else keeps working meanwhile |
+| The agent asks to bring a window forward | Say yes if you can spare the screen for a moment, or tell it to find another way |
+| The agent can't find a window | Open the app, or the document, and ask again |
 
-```bash
-printf '%s' "$TOKEN" | cast computer set-value --app <app> --element-index 42 --value-stdin
-```
-
-Password managers are refused with `app_blocked`: 1Password, Bitwarden, Dashlane, LastPass, NordPass and Proton Pass. The list lives in the helper and not in the CLI, so a client that forgets the check still cannot read a vault. The match ignores case and covers both a bundle id and a `pid:` selector.
-
-A field that reads as a password, a passcode or a one time code renders as `[redacted]`. The helper replaces the value before the tree text exists, so the real string never leaves it.
-
-## Coordinates
-
-Coordinates are measured inside the window, in points. A screenshot on a retina display has more pixels than the window has points. Divide before a click: `x = screenshot pixel x / screenshot.scale`, with the scale from that same capture. The snapshot header prints the division. An element index is the better choice whenever the tree offers one.
-
-## Error codes
-
-Every failure carries a code and its recovery. `--json` returns them as `code` and `recovery`; human output prints the recovery under the message. The recovery text lives in one table in the CLI, so an error and its advice cannot drift apart. The rule behind every entry: never retry the same command unchanged.
-
-| Code | Recovery |
-|------|----------|
-| `app_not_found` | Run `list-apps` and use the exact bundle id. A website is not an app: target the browser that holds it |
-| `app_blocked` | A password manager. Stop, and ask the human |
-| `window_not_found` | Run `list-windows` and target a listed window. `cast computer` never launches a closed app |
-| `window_not_focused` | Retry once with `--restore-window`, or use `set-value` or `perform-secondary-action` |
-| `window_stale` | The window went away. Run `list-windows`, then `get-app-state` |
-| `element_not_found` | The index is stale. Take a fresh snapshot and use its numbers |
-| `element_not_clickable` | The element has no frame. Use a parent or child that has one, or a coordinate |
-| `action_not_supported` | Read the element's `Secondary Actions` in a fresh tree and use one of those names |
-| `value_not_settable` | Choose a settable element, or focus it and type |
-| `invalid_argument` | Fix the flags as the message says |
-| `permission_denied` | Read `permissions`. If a grant is missing, ask the human to run `setup`. A helper from another launch clears on a rerun |
-| `screenshot_failed` | The tree is intact. Rerun with `--no-screenshot`. If the message names Screen Recording, the human runs `setup` |
-| `action_timeout` | Snapshot first to see what changed, then try a smaller action |
-| `unsupported_capability` | Run `capabilities` and choose a supported action |
-| `provider_incompatible` | The CLI and the helper come from different releases. Update codecast |
-| `accessibility_error` | The helper is missing or died. Run `capabilities`; if the message names the helper app, run `cast doctor` |
-
-A code the CLI does not know, from a helper of another release, maps to `accessibility_error`.
-
-## Actions that leave a mark
-
-Reading is the agent's to do. The snippet forbids the rest unless the human asked for that action: do not push, submit a form, send a message, buy anything, delete data, or change account settings. When an app holds sensitive content, the agent reads only what it was asked to read.
-
-`cast computer` shipped on 2026-09-07, with the helper, the block list, and `setup` in the same release.
+Computer use is built for macOS. On a Linux machine running a desktop, the same feature drives apps through Linux's accessibility layer.

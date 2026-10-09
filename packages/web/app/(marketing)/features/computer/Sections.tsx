@@ -170,32 +170,8 @@ export function StepWords() {
 export function Guardrails() {
   return (
     <div className="grid-cols-1 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {/* Blocked apps */}
-      <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
-        <div className="font-mono text-[12px]" style={{ color: SOL.red }}>app_blocked</div>
-        <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Password managers are refused</h3>
-        <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
-          The helper itself refuses these, under any name you pass. The CLI is not the line of defence, so no flag turns it off.
-        </p>
-        <div className="mt-4 flex flex-wrap gap-1.5">
-          {BLOCKED_APPS.map((a) => (
-            <span key={a} className="font-mono text-[12px] px-2 py-1 rounded-md line-through decoration-[1.5px]" style={{ backgroundColor: "rgba(220,50,47,0.12)", color: "#f08c8a", textDecorationColor: SOL.red }}>{a}</span>
-          ))}
-        </div>
-      </div>
-
-      {/* Redaction */}
-      <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
-        <div className="font-mono text-[12px]" style={{ color: SOL.cyan }}>[redacted]</div>
-        <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secret fields never print</h3>
-        <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
-          A password, passcode or one-time code field shows as <span className="font-mono" style={{ color: SOL.base2 }}>[redacted]</span> in every tree, so its value never reaches the agent&apos;s context or your transcript.
-        </p>
-        <div className="mt-4 rounded-lg px-3 py-2.5 font-mono text-[12px] leading-[1.7]" style={{ backgroundColor: SOL.base03 }}>
-          <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>14</span> text field Email, Value: sam@example.com</div>
-          <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>15</span> secure text field Password, Value: <span style={{ color: SOL.cyan }}>[redacted]</span></div>
-        </div>
-      </div>
+      <BlockedAppsCard />
+      <RedactedCard />
 
       {/* stdin */}
       <div className="md:col-span-2 lg:col-span-1 rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
@@ -218,16 +194,58 @@ export function Guardrails() {
             Every agent with codecast installed carries the same standing instruction: do not push, submit a form, send a message, buy anything, delete data or change account settings unless you asked for that action. In an app holding sensitive content, read only what you were asked to read.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-px rounded-xl overflow-hidden font-mono text-[12.5px]" style={{ backgroundColor: "rgba(147,161,161,0.18)" }}>
-          <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>agent does</div>
-          <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>waits for you to ask</div>
-          {[["read a window", "send a message"], ["find a button", "submit a form"], ["write a draft", "buy anything"], ["take a screenshot", "delete data"], ["report what it saw", "change settings"]].map(([a, b]) => (
-            <div key={a} className="contents">
-              <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: SOL.green }}>✓ {a}</div>
-              <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: "#f08c8a" }}>✕ {b}</div>
-            </div>
-          ))}
+        <ReadVsMark />
+      </div>
+    </div>
+  );
+}
+
+/** What an agent does on its own, against what waits for the person to ask. */
+export function ReadVsMark() {
+  return (
+    <div className="grid grid-cols-2 gap-px rounded-xl overflow-hidden font-mono text-[12.5px]" style={{ backgroundColor: "rgba(147,161,161,0.18)" }}>
+      <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>agent does</div>
+      <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>waits for you to ask</div>
+      {[["read a window", "send a message"], ["find a button", "submit a form"], ["write a draft", "buy anything"], ["take a screenshot", "delete data"], ["report what it saw", "change settings"]].map(([a, b]) => (
+        <div key={a} className="contents">
+          <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: SOL.green }}>✓ {a}</div>
+          <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: "#f08c8a" }}>✕ {b}</div>
         </div>
+      ))}
+    </div>
+  );
+}
+
+/** The helper's refusal of password managers, by name. */
+export function BlockedAppsCard() {
+  return (
+    <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
+      <div className="font-mono text-[12px]" style={{ color: SOL.red }}>app_blocked</div>
+      <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Password managers are refused</h3>
+      <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
+        The helper itself refuses these, under any name you pass. The CLI is not the line of defence, so no flag turns it off.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        {BLOCKED_APPS.map((a) => (
+          <span key={a} className="font-mono text-[12px] px-2 py-1 rounded-md line-through decoration-[1.5px]" style={{ backgroundColor: "rgba(220,50,47,0.12)", color: "#f08c8a", textDecorationColor: SOL.red }}>{a}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A secret field as it reads in a tree. */
+export function RedactedCard() {
+  return (
+    <div className="rounded-2xl p-6" style={{ backgroundColor: SOL.base02, border: "1px solid #0b4a5a" }}>
+      <div className="font-mono text-[12px]" style={{ color: SOL.cyan }}>[redacted]</div>
+      <h3 className="mt-2 font-mono font-bold text-[19px]" style={{ color: SOL.base2 }}>Secret fields never print</h3>
+      <p className="mt-2 text-[15px] leading-relaxed" style={{ color: SOL.base1 }}>
+        A password, passcode or one-time code field shows as <span className="font-mono" style={{ color: SOL.base2 }}>[redacted]</span> in every tree, so its value never reaches the agent&apos;s context or your transcript.
+      </p>
+      <div className="mt-4 rounded-lg px-3 py-2.5 font-mono text-[12px] leading-[1.7]" style={{ backgroundColor: SOL.base03 }}>
+        <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>14</span> text field Email, Value: sam@example.com</div>
+        <div style={{ color: SOL.base0 }}><span style={{ color: SOL.yellow }}>15</span> secure text field Password, Value: <span style={{ color: SOL.cyan }}>[redacted]</span></div>
       </div>
     </div>
   );
