@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
-import { MACHINE_SETTINGS, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, isMachineSetting, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
+import { settingsAfterSnippet, stableModeOf, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -1707,38 +1707,39 @@ export const setDeviceSnippet = mutation({
   },
   handler: async (ctx, args) => {
     const { userId, device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
-
-    const isStable = args.snippet === "stable";
-    // Machine settings ride the same command (the daemon handles them in
-    // apply_snippet): codecast's hooks, automatic update, the session trailer.
-    const settingKey = isMachineSetting(args.snippet) ? MACHINE_SETTINGS[args.snippet] : null;
-    const mode = args.mode ?? (args.enabled ? "solo" : "off");
-
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "apply_snippet" as const,
-      args: JSON.stringify(
-        isStable
-          ? { snippet: "stable", enabled: mode !== "off", mode, global: args.global === true }
-          : { snippet: args.snippet, enabled: args.enabled },
-      ),
-      created_at: Date.now(),
-      target_device_id: args.device_id,
-    });
-
-    // Optimistic mirror: keep the daemon as source of truth, but show the change
-    // immediately rather than waiting a heartbeat cycle.
-    const prev = (device as any).settings ?? {};
-    const next = isStable
-      ? { ...prev, stable_mode: mode, stable_global: args.global === true }
-      : settingKey
-        ? { ...prev, [settingKey]: args.enabled }
-        : { ...prev, snippets: { ...(prev.snippets ?? {}), [args.snippet]: args.enabled } };
-    await ctx.db.patch(device._id, { settings: next });
-
-    return { command_id: commandId };
+    return applyDeviceSnippet(ctx, userId, device, args);
   },
 });
+
+/** The store's setDeviceSnippet side effect (convex/dispatch.ts). */
+export async function performSetDeviceSnippet(ctx: any, userId: Id<"users">, deviceId: string, change: DeviceSnippetChange) {
+  const device = await ownDevice(ctx, userId, deviceId);
+  if (!device) throw new Error("Unknown device");
+  return applyDeviceSnippet(ctx, userId, device, change);
+}
+
+async function applyDeviceSnippet(ctx: any, userId: Id<"users">, device: any, change: DeviceSnippetChange) {
+  // Machine settings ride the same command (the daemon handles them in
+  // apply_snippet): codecast's hooks, automatic update, the session trailer.
+  const mode = stableModeOf(change);
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "apply_snippet" as const,
+    args: JSON.stringify(
+      change.snippet === "stable"
+        ? { snippet: "stable", enabled: mode !== "off", mode, global: change.global === true }
+        : { snippet: change.snippet, enabled: change.enabled },
+    ),
+    created_at: Date.now(),
+    target_device_id: device.device_id,
+  });
+
+  // Optimistic mirror: keep the daemon as source of truth, but show the change
+  // immediately rather than waiting a heartbeat cycle.
+  await ctx.db.patch(device._id, { settings: settingsAfterSnippet(device.settings, change) });
+
+  return { command_id: commandId };
+}
 
 /**
  * Web set/removed a managed provider API key for a device (pl-207). For "set" the
@@ -1766,34 +1767,31 @@ export const enqueueProviderKeyCommand = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    const device = await ctx.db
-      .query("devices")
-      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
-      .first();
-    if (!device) throw new Error("Unknown device");
     if (args.op === "set" && !args.payload) throw new Error("set requires an encrypted payload");
-
-    const commandArgs = args.op === "set"
-      ? { op: "set", payload: args.payload }
-      : { op: "remove", provider: args.provider };
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "set_provider_key" as const,
-      args: JSON.stringify(commandArgs),
-      created_at: Date.now(),
-      target_device_id: args.device_id,
-    });
-
-    // Optimistic mirror of the id list (never the key) — reconciled by heartbeat.
-    const prev: string[] = (device as any).managed_provider_ids ?? [];
-    const next = args.op === "set"
-      ? Array.from(new Set([...prev, args.provider])).sort()
-      : prev.filter((p) => p !== args.provider);
-    await ctx.db.patch(device._id, { managed_provider_ids: next });
-
-    return { command_id: commandId };
+    const change: ProviderKeyCommand = args.op === "set" ? { op: "set", payload: args.payload! } : { op: "remove", provider: args.provider };
+    return performSetProviderKey(ctx, userId, args.device_id, change);
   },
 });
+
+/** A provider key set or removed on one device: the set_provider_key command,
+ *  and the device row's id list mirrored at once (never the key), reconciled
+ *  by the heartbeat. The store's setProviderKey side effect runs it too. */
+export async function performSetProviderKey(ctx: any, userId: Id<"users">, deviceId: string, change: ProviderKeyCommand) {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  if (!device) throw new Error("Unknown device");
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "set_provider_key" as const,
+    args: JSON.stringify(change),
+    created_at: Date.now(),
+    target_device_id: deviceId,
+  });
+  await ctx.db.patch(device._id, { managed_provider_ids: managedIdsAfter(device.managed_provider_ids, change) });
+  return { command_id: commandId };
+}
 
 /**
  * The web's Connect dialog for a sign-in based cloud agent provider (Codex
@@ -1854,8 +1852,50 @@ export const enqueueCloudAgentActionCommand = mutation({
   },
 });
 
-/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in, a cloud agent action. */
-const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action"]);
+/**
+ * The setup steps for `cast browser`'s Chrome extension and `cast computer`'s
+ * macOS grants: ask a machine where setup stands ("check"), or open the next
+ * step on its screen ("start"). Two callers name the machine two ways: the card
+ * under a failed command names the session (its runner's device), the Agent
+ * features page names one of the viewer's devices. The daemon answers an
+ * AgentToolSetupStatus (watchedCommandOutcome's `setup`).
+ */
+export const enqueueAgentToolSetupCommand = mutation({
+  args: {
+    conversation_id: v.optional(v.id("conversations")),
+    device_id: v.optional(v.string()),
+    tool: v.union(v.literal("browser"), v.literal("computer")),
+    op: v.union(v.literal("check"), v.literal("start")),
+  },
+  handler: async (ctx, args) => {
+    if (!args.conversation_id === !args.device_id) throw new Error("Name a conversation or a device, not both");
+    let queueOwner: Id<"users">;
+    let target: string;
+    if (args.conversation_id) {
+      const userId = await getAuthUserId(ctx);
+      if (!userId) throw new Error("Authentication required");
+      const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
+      if (!conv.owner_device_id) throw new Error("No machine hosts this session yet");
+      queueOwner = conv.user_id;
+      target = conv.owner_device_id;
+    } else {
+      const { userId } = await requireOwnDevice(ctx, undefined, args.device_id!);
+      queueOwner = userId;
+      target = args.device_id!;
+    }
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: queueOwner,
+      command: "agent_tool_setup" as const,
+      args: JSON.stringify({ ...(args.conversation_id ? { conversation_id: args.conversation_id } : {}), tool: args.tool, op: args.op }),
+      created_at: Date.now(),
+      target_device_id: target,
+    });
+    return { command_id: commandId };
+  },
+});
+
+/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in or action, an agent tool's setup. */
+const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action", "agent_tool_setup"]);
 
 /**
  * How a watched command went, for the page that sent it: still waiting, or
@@ -1878,8 +1918,9 @@ export const watchedCommandOutcome = query({
     try { result = JSON.parse(row.result ?? "{}") ?? {}; } catch {}
     const text = (k: string) => (typeof result[k] === "string" && result[k] ? { [k]: result[k] as string } : {});
     const login = row.command === "cloud_agent_login" && isCloudAgentLoginState(result.state) ? { login: result.state } : {};
-    return { state: "done" as const, ...text("account"), ...text("plan"), ...text("detail"), ...text("url"), ...login } as {
-      state: "done"; account?: string; plan?: string; detail?: string; url?: string; login?: CloudAgentLoginStateName;
+    const setup = row.command === "agent_tool_setup" && isAgentSetupTool(result.tool) ? { setup: result as unknown as AgentToolSetupStatus } : {};
+    return { state: "done" as const, ...text("account"), ...text("plan"), ...text("detail"), ...text("url"), ...login, ...setup } as {
+      state: "done"; account?: string; plan?: string; detail?: string; url?: string; login?: CloudAgentLoginStateName; setup?: AgentToolSetupStatus;
     };
   },
 });

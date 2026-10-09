@@ -127,7 +127,35 @@ export interface SyncSpec {
   never: string[];
 }
 
+/**
+ * [ship]: how `cast ship checkout` lands everything uncommitted in a shared
+ * checkout (land/shipCheckout.ts).
+ */
+export interface ShipSpec {
+  /** "pr" opens a pull request from a branch (the default); "direct" pushes to the default branch. */
+  mode: "pr" | "direct";
+  /** Command run in the checkout after levelling and before anything leaves; empty to skip. */
+  check: string;
+  /** Run the test files the shipped commits change. */
+  tests: boolean;
+  /** Let the daemon keep this checkout level with its upstream (land/level.ts). */
+  level: boolean;
+  /** Deploy steps, each run when the shipped commits touch one of its paths. */
+  deploy: ShipDeployStep[];
+}
+
+export interface ShipDeployStep {
+  name: string;
+  /** Globs over repo paths; the step runs when any shipped path matches. Empty means always. */
+  when: string[];
+  run: string;
+  /** "before_push" runs ahead of the push (a backend the pushed client will call); "after_push" after it. */
+  stage: "before_push" | "after_push";
+}
+
 export interface WorkspaceManifest {
+  /** [ship]: how the checkout's uncommitted work lands. */
+  ship?: ShipSpec;
   /** [host]: what a cloud host needs installed and running for this repo. */
   host?: HostSpec;
   /** [sync]: what travels between a laptop and a cloud host beyond the defaults. */
