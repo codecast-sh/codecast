@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test, mock } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
 
 // The read-mode body has three empty-content states that must not be confused:
 // still-loading (detail not synced → loader), genuinely empty (the "Empty
@@ -68,16 +69,22 @@ mockInboxStore(() => ({ reviewComments: {} }));
 
 const { DocumentDetailLayout } = await import("../DocumentDetailLayout");
 
+// The drafting layer binds its Lab action on every render, as the app's
+// provider allows. Never connects: static rendering fires no effects.
+const client = new ConvexReactClient("https://example.convex.cloud");
+
 function render(props: Partial<Parameters<typeof DocumentDetailLayout>[0]>) {
   return renderToStaticMarkup(
-    <DocumentDetailLayout
-      docId="doc1"
-      title="My Doc"
-      markdownContent=""
-      onTitleChange={() => {}}
-      backHref="/docs"
-      {...props}
-    />,
+    <ConvexProvider client={client}>
+      <DocumentDetailLayout
+        docId="doc1"
+        title="My Doc"
+        markdownContent=""
+        onTitleChange={() => {}}
+        backHref="/docs"
+        {...props}
+      />
+    </ConvexProvider>,
   );
 }
 
