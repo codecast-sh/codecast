@@ -20,6 +20,14 @@ const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/;
 /** The variable a job's process finds its own label in, so it can unload itself on the way out. */
 export const LAUNCHD_LABEL_ENV = "CAST_LAUNCHD_LABEL";
 
+/**
+ * The label a command carries when the wrapper ran it inline instead of as a
+ * job (launchd declined it). It means "already past the interactive wrapper",
+ * so a script gated on the label does not wrap itself again; it names no job,
+ * so nothing tries to unload it.
+ */
+export const INLINE_LAUNCHD_LABEL = "inline";
+
 const xmlText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** An on-demand launchd job: started now, never at login, never restarted by launchd. */
@@ -105,5 +113,5 @@ export function stopLaunchdJob(label: string): void {
  */
 export function unloadOwnLaunchdJob(): void {
   const label = process.env[LAUNCHD_LABEL_ENV];
-  if (label) stopLaunchdJob(label);
+  if (label && label !== INLINE_LAUNCHD_LABEL) stopLaunchdJob(label);
 }

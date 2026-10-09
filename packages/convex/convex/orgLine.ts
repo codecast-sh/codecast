@@ -67,6 +67,11 @@ export async function rankedCandidates(ctx: Ctx, role: any): Promise<RankedCandi
     if (seen.has(String(task._id))) continue;
     seen.add(String(task._id));
     if (task.status !== "open" || task.workflow_run_id) continue;
+    // TG9: an ephemeral task is ready only for the session that filed it, so
+    // operational bookkeeping is never a role's work, whoever it names. A
+    // scoped role's pool drops it in resolveScope; this is the same rule for a
+    // whole workspace role, so both kinds read one such task the same way.
+    if (task.ephemeral) continue;
     const assigned = assignees.has(task.assignee);
     if (!assigned && !(isReadyCause(task) && !task.assignee)) continue;
     if (!(await lineOwns(ctx, role, task, roles))) continue;

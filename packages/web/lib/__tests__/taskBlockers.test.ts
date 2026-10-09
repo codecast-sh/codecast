@@ -115,15 +115,32 @@ describe("blockedMark", () => {
 describe("blockerStatusSig", () => {
   test("names what the store says of each task blocker, and nothing for a closed task", () => {
     const task = { status: "open", blocked_by: ["ct-1", "ct-2", "ct-60", "ct-61"], graph_status: [{ ref: "ct-60", status: null }] };
-    expect(blockerStatusSig(task, store)).toBe("open,done,-,?");
+    expect(blockerStatusSig(task, store)).toEndWith("open,done,-,?");
     expect(blockerStatusSig({ ...task, status: "done" }, store)).toBe("");
-    expect(blockerStatusSig({ status: "open" }, store)).toBe("");
+  });
+  test("a row's own graph fields are in it, so a wait added or removed moves it", () => {
+    const bare: BoardTask = { status: "open" };
+    const before = blockerStatusSig(bare, store);
+    expect(before).not.toBe("");
+    expect(blockerStatusSig({ ...bare, waits: [wait("waiting")] }, store)).not.toBe(before);
+    expect(blockerStatusSig({ ...bare, blocked_by: ["ct-1"] }, store)).not.toBe(before);
+  });
+  test("both the signature and the mark read the row's live copy, not the prop row", () => {
+    // The board's row is the snapshot its collection handed back; a graph draft
+    // leaves updated_at to the echo, so removing the only wait in the page's
+    // peek has to move the signature and clear the mark at once.
+    const held = row("r1", "ct-10", "open", { waits: [wait("waiting")] }) as BoardTask;
+    const cleared = { ...held, waits: [] };
+    expect(blockerStatusSig(held, { ...store, r1: cleared })).not.toBe(blockerStatusSig(held, { ...store, r1: held }));
+    expect(storeBlockedMark(held, { ...store, r1: held })?.count).toBe(1);
+    expect(storeBlockedMark(held, { ...store, r1: cleared })).toBeNull();
+    expect(storeBlockedMark(held, { ...store, r1: { ...held, status: "done" } })).toBeNull();
   });
   test("a blocker's rename changes it, so the tooltip's title follows", () => {
     const task = { status: "open", blocked_by: ["ct-1"] };
     const titled = { ...store, a: row("a", "ct-1", "open", { title: "Old" }) };
-    expect(blockerStatusSig(task, titled)).toBe("open|Old");
-    expect(blockerStatusSig(task, { ...titled, a: { ...titled.a, title: "New" } })).toBe("open|New");
+    expect(blockerStatusSig(task, titled)).toEndWith("open|Old");
+    expect(blockerStatusSig(task, { ...titled, a: { ...titled.a, title: "New" } })).toEndWith("open|New");
   });
 });
 
@@ -146,6 +163,25 @@ describe("readySig", () => {
     expect(readySig(rows, { ...store, d: { ...store.d, status: "open" } })).toBe(before);
     expect(readySig(rows, { ...store, z: row("z", "ct-9", "open") })).toBe(before);
   });
+  test("a graph write on a row the board holds moves it, read from the store's live copy", () => {
+    // The board's array is the snapshot useWorkspaceCollection last handed
+    // back; a graph draft leaves updated_at to the echo, so the signature has
+    // to read the row's own fields out of the store (store/taskGraphDraft).
+    const live = { r1: row("r1", "ct-10", "open"), r2: row("r2", "ct-11", "open") };
+    const board = [live.r1, live.r2] as BoardTask[];
+    const base = readySig(board, { ...store, ...live });
+    const after = (patch: Record<string, unknown>) => readySig(board, { ...store, ...live, r1: { ...live.r1, ...patch } });
+    expect(after({ blocked_by: ["ct-1"] })).not.toBe(base);
+    expect(after({ waits: [wait("waiting")] })).not.toBe(base);
+    expect(after({ parent_id: "c" })).not.toBe(base);
+    expect(after({ superseded_by: "ct-12" })).not.toBe(base);
+    expect(after({ triage_status: "held" })).not.toBe(base);
+    expect(after({ ephemeral: true })).not.toBe(base);
+    expect(after({ status: "in_progress" })).not.toBe(base);
+    // A field readiness does not read still costs nothing.
+    expect(after({ title: "Renamed" })).toBe(base);
+  });
+
   test("every ref isReadyInStore reads is in it: the board's verdict never changes while it holds", () => {
     const variants = [store, { ...store, a: { ...store.a, status: "done" } }, { ...store, c: { ...store.c, status: "open" } }];
     for (const v of variants) {
