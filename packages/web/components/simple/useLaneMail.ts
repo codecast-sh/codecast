@@ -9,7 +9,7 @@ import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { WhiskConnectionView, WhiskReturnPath } from "@codecast/convex/convex/whisk";
 import { useSettingsData } from "../../hooks/useSyncSettings";
-import { useConnectGesture } from "../../lib/integrations";
+import { useConnectGesture } from "../../lib/connectGesture";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { GATE_DEADLINE_MS, useConnectAvailable } from "./assistantPromise";
 import type { MailAbilities } from "./lane";
@@ -65,7 +65,7 @@ export function useLaneMailAbilities() {
 }
 
 /** The connect and disconnect gestures, on the shared connect machinery
- *  (lib/integrations.ts useConnectGesture). `returnTo` is the lane page the
+ *  (lib/connectGesture.ts useConnectGesture). `returnTo` is the lane page the
  *  connect comes back to (convex/whisk.ts WHISK_RETURN_PATHS). The connect
  *  opens in place on the web, in the system browser from the desktop app. */
 function useWhiskActions(returnTo: WhiskReturnPath) {

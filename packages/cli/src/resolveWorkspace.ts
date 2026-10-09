@@ -19,10 +19,19 @@
 // notices a team switch) and shared by every subcommand.
 
 import { workspaceFeatureEnabled, type TeamFeatureKey, type TeamFeatures } from "@codecast/shared/contracts";
+import { shq } from "./remote/session-move.js";
 
 export type Workspace =
+  // `userId` is WHOSE personal workspace, present only when a stored key named
+  // a person (`parseWorkspaceKey`). Absent means the caller's own, which is
+  // what every resolver here produces and what the wire word "personal" means
+  // to the server (data.ts resolves it to the caller's user id). The two are
+  // not interchangeable: a row filed in a teammate's personal workspace can be
+  // readable here — a task's assignee is an access grant (convex
+  // lib/accessKeys `authorizedFor`) — and naming it "personal" would send the
+  // reader to their own workspace instead.
   | { kind: "team"; teamId: string; name?: string }
-  | { kind: "personal" };
+  | { kind: "personal"; userId?: string };
 
 export type WorkspaceRoster = {
   teams: Array<{ _id: string; name: string; role?: string; features?: TeamFeatures }>;
@@ -171,14 +180,212 @@ export function workspaceArgs(ws: Workspace): { team_id?: string } {
  *  projects): a named team, or the personal workspace said outright, so a
  *  shell whose active team is a team can still list and file personal work.
  *  Nothing is sent when the person named no workspace: the route's own
- *  default (the directory rule, the session's team) stays in force. */
+ *  default (the directory rule, the session's team) stays in force.
+ *
+ *  A personal workspace goes on the wire as the bare word `personal`, which
+ *  the server resolves to the CALLER's own user (data.ts). So WHOSE personal
+ *  workspace a stored key named (`parseWorkspaceKey`'s `userId`) is dropped
+ *  here, and the step is lossless only for a key that is the caller's: a row
+ *  key goes through `rowWorkspaceScope`, which refuses to name someone
+ *  else's. */
 export function workspaceScope(ws: Workspace): { workspace: "team"; team_id: string } | { workspace: "personal" } {
   return ws.kind === "team" ? { workspace: "team", team_id: ws.teamId } : { workspace: "personal" };
+}
+
+/** Whether a key names a workspace the CLI has a word for from `caller`'s
+ *  seat: every team, and the personal workspace only when it is the caller's
+ *  own, since `personal` on the wire and `personal` in output both mean the
+ *  caller's. The ONE place that rule is decided, so a future key variant is
+ *  judged once: `rowWorkspaceScope` turns the verdict into a scope and
+ *  `namedWorkspace` into a name, and the two cannot disagree. A key with no
+ *  user, and a caller the roster does not name, both read as the caller's —
+ *  there is nothing to tell them apart by. */
+export function namesCallersOwn(ws: Workspace, caller: string | undefined): boolean {
+  return ws.kind !== "personal" || !ws.userId || ws.userId === caller;
+}
+
+/** A ROW's stored access key as the workspace a call names: `parseWorkspaceKey`
+ *  then this. A personal key naming anyone but `caller` is named by nothing
+ *  (`namesCallersOwn`) — `personal` on the wire is the caller's own workspace,
+ *  which answers nothing about this row — so it sends `{}` and leaves the
+ *  route's own default in force rather than claim a workspace. Such a row is
+ *  readable here all the same, since a task's assignee is an access grant
+ *  (convex lib/accessKeys): this is a naming limit, not an access verdict.
+ *  `caller` is the roster's `userId`. */
+export function rowWorkspaceScope(ws: Workspace | null, caller?: string): { workspace: "team"; team_id: string } | { workspace: "personal" } | {} {
+  if (!ws) return {};
+  if (!namesCallersOwn(ws, caller)) return {};
+  return workspaceScope(ws);
 }
 
 /** How to name the resolved workspace in output. */
 export function workspaceLabel(ws: Workspace): string {
   return ws.kind === "team" ? (ws.name || ws.teamId) : "personal";
+}
+
+/** A row's stored access key (`team:<id>`, `user:<id>`) as a workspace — the
+ *  ONE place the CLI reads one, so a new key variant is understood everywhere
+ *  or nowhere. A `user:` key keeps the person it names: "personal" alone means
+ *  the CALLER's own everywhere downstream, and the two are the same workspace
+ *  only when the key is the caller's. `null` for a key it cannot read (a row
+ *  from an older server, a future `restricted:`): an unknown key names
+ *  nothing, the way it grants nothing. */
+export function parseWorkspaceKey(key: string | null | undefined): Workspace | null {
+  if (key?.startsWith("team:")) return { kind: "team", teamId: key.slice(5) };
+  if (key?.startsWith("user:")) return { kind: "personal", userId: key.slice(5) };
+  return null;
+}
+
+/** The same workspace as the roster can NAME it, for output that says where a
+ *  row lives and for a printed `--team` (teamFlagFor): a bare Convex id reads
+ *  as an unreadable blob in a command a person pastes. A team the roster does
+ *  not hold keeps its id, the only name there is.
+ *
+ *  A personal key the roster says belongs to someone ELSE is named by nothing
+ *  (`namesCallersOwn`, the one place that verdict is reached): the only word
+ *  the CLI has for a personal workspace is `personal`, which every read
+ *  resolves to the caller's own, so `--team personal` would send the reader
+ *  somewhere that answers nothing about this row. `teamFlagFor` then prints no
+ *  flag and `filedElsewhereLine` makes no claim, which is what an unnameable
+ *  workspace already means here. */
+export function namedWorkspace(roster: WorkspaceRoster, ws: Workspace | null): Workspace | null {
+  if (ws?.kind === "personal") return namesCallersOwn(ws, roster.userId) ? ws : null;
+  if (ws?.kind !== "team") return ws;
+  const hit = roster.teams.find((t) => t._id === ws.teamId);
+  return hit ? { ...ws, name: hit.name } : ws;
+}
+
+/** The same key with the team's name from the roster, for output that says
+ *  where a row lives. */
+export function workspaceFromKey(roster: WorkspaceRoster, key: string | null | undefined): Workspace | null {
+  return namedWorkspace(roster, parseWorkspaceKey(key));
+}
+
+/** A printed flag's value as one shell word: a bare word stands as it is,
+ *  anything else is quoted the one way the CLI quotes a shell argument
+ *  (`shq`). Every printed command words its values here — a `--team`'s, a
+ *  `-p`'s and a `--project`'s alike (taskGraphCommands' unfiled-steps advice)
+ *  — so a team or a project whose name holds a space is one word in the line
+ *  an agent pastes, and an id nobody needs quoted carries no quotes. */
+export function flagArg(value: string): string {
+  return /^[A-Za-z0-9._-]+$/.test(value) ? value : shq(value);
+}
+
+/** The ` -p <project>` that narrows a read to one project, worded as one shell
+ *  word. Empty for no project, where the unnarrowed read is the honest one. */
+export function projectFlagFor(title: string | null | undefined): string {
+  return title ? ` -p ${flagArg(title)}` : "";
+}
+
+/**
+ * The flags a read was narrowed by, worded for a command printed back to the
+ * reader, so the next command answers about the rows this one looked at. Every
+ * printed read keeps them for the reason `teamFlagFor` keeps its own: the line
+ * runs later, in a shell whose directory mapping this process cannot see, and a
+ * bare `cast task ls` on a checkout mapped to another workspace answers about
+ * work the reader never asked about — which is the case the whole workspace
+ * section exists for.
+ *
+ * The values are the caller's own words, not a resolved id: they are what this
+ * read was given and demonstrably accepted, so they resolve the same way again,
+ * and `flagArg` makes each one shell word.
+ */
+export function readScopeFlags(opts: { team?: string; project?: string; plan?: string; query?: string }): string {
+  return [
+    opts.team ? ` --team ${flagArg(opts.team)}` : "",
+    projectFlagFor(opts.project),
+    opts.plan ? ` --plan ${flagArg(opts.plan)}` : "",
+    opts.query ? ` -q ${flagArg(opts.query)}` : "",
+  ].join("");
+}
+
+/** The ` --team …` that names one workspace, however a command prints it: the
+ *  team's name when the roster holds it, else its id, and the positive word for
+ *  personal. Empty for a workspace this CLI cannot name, where no flag beats a
+ *  wrong one. Every printed `--team` is worded here, a write's and a read's
+ *  alike, and every one of them keeps the flag: the line runs later in a shell
+ *  whose directory mapping this process cannot see, so nothing printed may
+ *  claim what this directory reads. */
+export function teamFlagFor(ws: Workspace | null): string {
+  if (!ws) return "";
+  return ws.kind === "personal" ? " --team personal" : ` --team ${flagArg(ws.name || ws.teamId)}`;
+}
+
+/**
+ * Why a read answered nothing about `ref`: it is filed in a workspace that
+ * read did not cover. An empty list names no scope, so "no ready tasks" and
+ * "no tasks found" read as "there is no work" when the truth is "not where
+ * this looked".
+ *
+ * `found` is what the same read, scoped to `filed`, returned — so this says
+ * only what has been shown: an empty list has causes besides the workspace (a
+ * project filter, a checkout whose path no row carries), and the workspace an
+ * unscoped read lands in is the server's to resolve. Null when that read found
+ * nothing either, which is when the empty answer is the honest one.
+ */
+export function filedElsewhereLine(ref: string, filed: Workspace | null, found: number, command: string): string | null {
+  if (!filed || found <= 0) return null;
+  return `${ref} is filed in the ${workspaceLabel(filed)} workspace, where ${found === 1 ? "1 task answers" : `${found} tasks answer`}: ${command}${teamFlagFor(filed)}`;
+}
+
+/**
+ * The other reason a `--plan` read answers nothing, once the workspace has
+ * been ruled out: this DIRECTORY. Every `cast task ls`/`ready` sends its
+ * `project_path`, and the server narrows the scoped query by it
+ * (`wrapProjectQuery`), so a plan whose steps were filed from another checkout
+ * — or from a worktree, which has a path of its own — is invisible here in
+ * every workspace, and `cast plan status` then disagrees with `cast task
+ * ready` with nothing naming the cause.
+ *
+ * `found` is what the same read returned with the path filter lifted, so this
+ * claim is proved the way `filedElsewhereLine` proves its own rather than
+ * inferred from the plan's own tally: a read narrowed by something else (a
+ * project filter, which the server answers without the path wrapper at all)
+ * finds nothing either way and says nothing. Null then.
+ *
+ * `command` is a COMMAND to print, the fallback that at least reads the plan
+ * itself from any directory and names its tasks (`cast plan wave <id>`): a
+ * fallback that answers only counts leaves the agent where it started, the
+ * same objection `opts.reach` answers below. `opts.reach` is a read
+ * that DOES answer these tasks from here, with how many of them it returned
+ * when it was run: a project filter is the one narrowing the server answers
+ * without the path wrapper, so when the out-of-reach tasks name a project that
+ * read is named first — a line proving tasks exist and then naming only a
+ * command that cannot return them leaves the agent where it started.
+ * `opts.checkouts` is the directory each of those tasks was filed from, in row
+ * order (null for a row carrying none), named when no read from here reaches
+ * them. Only a directory that covers EVERY row is claimed of all of them: a
+ * plan's steps are routinely filed from several checkouts and worktrees, and an
+ * agent sent to the wrong one would still not find the work.
+ */
+export function outOfReachLine(
+  ref: string,
+  found: number,
+  command: string,
+  opts: { reach?: { command: string; found: number } | null; checkouts?: ReadonlyArray<string | null | undefined> } = {},
+): string | null {
+  if (found <= 0) return null;
+  const them = found === 1 ? "it" : "them";
+  const reach = opts.reach;
+  const paths = opts.checkouts ?? [];
+  const dirs = [...new Set(paths.filter((p): p is string => !!p))];
+  const covers = dirs.length === 1 && paths.length === found && paths.every(Boolean);
+  const where = !dirs.length ? ""
+    : covers ? `, which ${found === 1 ? "was" : "were"} filed from ${dirs[0]}`
+    : dirs.length === 1 ? `, one of which was filed from ${dirs[0]}`
+    : `, which were filed from ${dirs.length} other directories, one of them ${dirs[0]}`;
+  const advice = reach
+    ? `${reach.command} reaches ${reach.found >= found ? them : `${reach.found} of ${them}`}; ${command} reads the plan itself.`
+    : `No list from this directory reaches ${them}${where}; ${command} reads the plan itself.`;
+  return `${ref} has ${found === 1 ? "1 task" : `${found} tasks`} this read did not reach: a --plan read is narrowed by this directory as well as by the workspace. ${advice}`;
+}
+
+/** The inverse of `workspaceScope`: what a route's workspace argument (or a
+ *  create's `base`) names, as a workspace. Null when it names neither, which
+ *  leaves the route's own default in force. */
+export function workspaceOfScope(scope: { workspace?: string; team_id?: string } | null | undefined): Workspace | null {
+  if (scope?.workspace === "team" && scope.team_id) return { kind: "team", teamId: String(scope.team_id) };
+  return scope?.workspace === "personal" ? { kind: "personal" } : null;
 }
 
 /**

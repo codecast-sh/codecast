@@ -15,14 +15,14 @@ describe("listed readiness", () => {
 
   test("a row still held lists what holds it, waits included", () => {
     const row = { status: "open", blocked_by: ["ct-1"], open_blockers: [ct1, pr42], ready: false };
-    expect(listedBlockers(row)).toEqual(["ct-1", "PR #42 merges"]);
+    expect(listedBlockers(row)).toEqual(["ct-1", "PR #42 to merge"]);
     expect(listedReady(row)).toBe(false);
   });
 
   test("a PR in another repository than the checkout's is named in full", () => {
     const row = { status: "open", open_blockers: [pr42, { ...pr42, repository: "o/other", pr_number: 6 }], ready: false };
-    expect(listedBlockers(row, prWords("o/r"))).toEqual(["PR #42 merges", "PR o/other#6 merges"]);
-    expect(listedBlockers(row, prWords(null))).toEqual(["PR o/r#42 merges", "PR o/other#6 merges"]);
+    expect(listedBlockers(row, prWords("o/r"))).toEqual(["PR #42 to merge", "PR o/other#6 to merge"]);
+    expect(listedBlockers(row, prWords(null))).toEqual(["PR o/r#42 to merge", "PR o/other#6 to merge"]);
   });
 
   // The server sends the wait, not words: Convex runs in UTC and would print
@@ -31,6 +31,17 @@ describe("listed readiness", () => {
     const at = Date.UTC(2030, 0, 15, 17, 0);
     const wait: Blocker = { kind: "time", at, id: "w2", state: "waiting", created_at: 1 };
     expect(listedBlockers({ open_blockers: [wait] })).toEqual([`until ${formatWaitTime(at)}`]);
+  });
+
+  // `cast task start` prints these words and then tells the session how to
+  // park on the same list, so a red checks wait has to read red here: TG2 keeps
+  // it waiting forever and only a new push turns it green (openBlockersWithChecks).
+  test("a checks wait reads by its own PR's checks", () => {
+    const green: Blocker = { kind: "pr_checks_green", repository: "o/r", pr_number: 42, id: "w3", state: "waiting", created_at: 1 };
+    const other: Blocker = { ...green, id: "w4", pr_number: 7 };
+    expect(listedBlockers({ open_blockers: [green] }, prWords("o/r"))).toEqual(["PR #42 checks to go green"]);
+    expect(listedBlockers({ open_blockers: [{ ...green, checks: "failure" }, { ...other, checks: "pending" }] }, prWords("o/r")))
+      .toEqual(["PR #42 checks failing", "PR #7 checks running"]);
   });
 
   test("backlog with no blockers is not ready", () => {

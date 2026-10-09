@@ -66,7 +66,13 @@ export const kindValidator = v.union(v.literal("single"), v.literal("multi"), v.
 type DecisionKind = "single" | "multi" | "rank" | "form";
 type DecisionRow = Doc<"session_decisions">;
 // Resolve paths run in mutations, so the scheduler is there to wake a hosted
-// conversation (wakeHostedConversation); reads pass a bare { db }.
+// conversation (wakeHostedConversation) and to settle the task waits on the
+// row (task-graph.md TG2); reads pass a bare { db }. A settle that needs only
+// the scheduler is handed `{ scheduler: ctx.scheduler }`, so the narrowing
+// scheduleDecisionSettle declares stays live. reopenTaskWaits takes the real
+// mutation ctx, which this structural type cannot satisfy, so it casts; typing
+// that chain honestly means typing every module that reaches it (dispatch,
+// workflow_runs, org, orgInit).
 type Ctx = { db: any; scheduler?: any };
 
 // Resolved rows stay in the subscription window briefly so an answer made on
@@ -714,7 +720,7 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
-  await scheduleDecisionSettle(ctx as any, row, by);
+  await scheduleDecisionSettle({ scheduler: ctx.scheduler }, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this
   // question is woken here to read the declined row and move on. An answer
   // wakes through its delivered message (deliverAnswer).
@@ -771,7 +777,7 @@ export async function settleClientResolution(
   if (row.status !== "pending") {
     if (patch.status === "answered" && advisoryAnswerOpen(row)) {
       await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
-      await scheduleDecisionSettle(ctx as any, row, { user_id: userId });
+      await scheduleDecisionSettle({ scheduler: ctx.scheduler }, row, { user_id: userId });
     }
     return;
   }
