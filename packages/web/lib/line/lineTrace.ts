@@ -7,19 +7,32 @@
 // repeated where the cause looped, so the map can draw the path. Pure: no
 // store, no React. Station words come from runReport, so a run reads the same
 // here as on its own page.
-import { CARD_GATE_NODE_ID, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { LINE_PROFILE_DEFAULTS } from "@codecast/shared/contracts/lineProfile";
 import { ageShort, quietWatchEnd, type LineCauseTask } from "../lineFlow";
 import {
-  CAUSES_NODE, END_LABEL, EXPECTATIONS_NODE, SIGNALS_NODE, endNodeId, rawAnswer, runVisits, sourceNodeId,
+  CAUSES_NODE, END_LABEL, EXPECTATIONS_NODE, SIGNALS_NODE, endNodeId, graphRunEnd, rawAnswer, runVisits, sourceNodeId,
   type LineGraph, type MapDecision, type MapEnd, type MapRun, type MapSignal,
 } from "./lineMap";
-import { cardName, causeWhere, choiceWords, closedGate, isLiveRun, isRoutineStation, loopedStation, runOutcome, runPath, shortDay, type ReportRun, type ReportStep, type ReportTask, type RunOutcome, type StepState } from "./runReport";
+import { LANDING_STATIONS, UNAPPROVED_WORDS, WATCH_WORDS, cardName, causeWhere, shippedUnapproved, choiceWords, stepLabel, closedGate, isLiveRun, isRoutineStation, loopedStation, runEnd, runOutcome, runPath, shortDay, type ReportRun, type ReportStep, type ReportTask, type RunOutcome, type StepState } from "./runReport";
 import { SHIPPED_LINE } from "./shippedLine.generated";
 import { lineTraceHref } from "./lineMapUrl";
 
-export type TraceTask = LineCauseTask & { review_verdict?: { verdict: string } | null };
+/** The landing row's note when a watch started after the change landed (runReport landingStep). */
+const WATCH_NOTE = `${WATCH_WORDS[0].toLowerCase()}${WATCH_WORDS.slice(1)}`;
+
+export type TraceTask = LineCauseTask & { review_verdict?: { verdict: string } | null; comments?: Array<{ text?: string; content?: string }> | null };
+
+/** The cause a signal was moved here from, read from the note the move
+ *  leaves on the cause it reached ("Took 1 signal (fp) from ct-57459."). */
+export function movedFrom(cause: Pick<TraceTask, "comments">, fingerprint: string | null | undefined): string | null {
+  for (const c of cause.comments ?? []) {
+    const m = (c.text ?? c.content ?? "").match(/^Took \d+ signals? \((.+?)\) from (ct-\d+)\b/);
+    if (m && (!fingerprint || m[1] === fingerprint)) return m[2];
+  }
+  return null;
+}
 export type TraceRows = { signals: MapSignal[]; tasks: TraceTask[]; runs: MapRun[]; decisions: MapDecision[] };
 
 // ── resolving a ref ──────────────────────────────────────────────────────────
@@ -72,7 +85,7 @@ export type TraceLink = {
 };
 /** What a step produced: the session that did it, a decision, where a finding
  *  was seen, the expectation it breaks, a sibling signal. `ref` is a trace ref. */
-export type TraceArtifact = { kind: "session" | "decision" | "evidence" | "expectation" | "signal"; label: string; href?: string; ref?: string };
+export type TraceArtifact = { kind: "session" | "decision" | "evidence" | "expectation" | "signal"; label: string; href?: string; ref?: string; /** Reports this row stands for, when several said the same thing. */ count?: number };
 
 export type TraceStep = {
   id: string;
@@ -105,7 +118,8 @@ export type TraceOutcome = "held" | "reopened" | "dissolved" | "dropped" | "park
  *  a stop: the line threw a good change away, and the story says so. */
 /** approved: a person answered Ship on its card and the run has not started
  *  its ship step yet; it waits on the line, not on a person, and is not working. */
-export type TraceRunEnd = "working" | "approved" | "waiting" | "shipped" | "closed" | "parked" | "stopped" | "replaced";
+/** `unapproved`: the run built a change and went on past a card nobody answered, so it never shipped. */
+export type TraceRunEnd = "working" | "approved" | "waiting" | "shipped" | "closed" | "parked" | "stopped" | "replaced" | "unapproved";
 export type TraceRun = {
   runId: string; round: number; end: TraceRunEnd; at: string | null;
   /** For a replaced run: the run that replaced it, and what started that run when the line knows ("a new AgentWatch signal joined the cause"). */
@@ -137,6 +151,8 @@ export type LineTrace = {
   stalledRun: { runId: string; round: number; resumable: boolean } | null;
   /** Every run on the cause, oldest first, by how it ended. */
   runs: TraceRun[];
+  /** A doubt the record raised about the cause (causeDoubt), for the header's caution chip. */
+  doubt: CauseDoubt | null;
 };
 
 export type TraceOpts = {
@@ -154,7 +170,7 @@ export type TraceOpts = {
 
 /** Finders by the names their products use. */
 const FINDER_NAMES: Record<string, string> = { agentwatch: "AgentWatch", posthog: "PostHog", sentry: "Sentry", evals: "Evals" };
-export const finderName = (source: string | null | undefined) => (source ? FINDER_NAMES[source.toLowerCase()] ?? `${source[0].toUpperCase()}${source.slice(1)}` : "A finder");
+export const finderName = (source: string | null | undefined) => (source ? FINDER_NAMES[source.toLowerCase()] ?? `${source[0].toUpperCase()}${source.slice(1)}` : "A source");
 
 /** A task's status as a reader says it. */
 const TASK_STATE: Record<string, string> = { backlog: "open", open: "open", in_progress: "in progress", in_review: "in review", done: "done", dropped: "dropped" };
@@ -165,10 +181,10 @@ const sentence = (s: string) => (s && !/[.!?:]$/.test(s) ? `${s}.` : s);
 
 /** How a signal joined its cause (signals.attach), as a sentence. */
 const ATTACH_WORDS: Record<string, string> = {
-  fingerprint: "It joined by its fingerprint",
-  judge: "The judge read it as the same problem and joined it",
-  new: "It opened this cause",
-  person: "A person filed it here",
+  fingerprint: "It matched a cause already open, so it joined it",
+  judge: "A reviewer read it as the same problem and joined it",
+  new: "It was the first report of this cause",
+  person: "It was moved here from another cause",
 };
 
 /** A signal's kind (shared SIGNAL_KINDS) as words in a sentence. */
@@ -186,7 +202,10 @@ const firstLine = (s: string | null | undefined): string | null => {
  *  the finder's markdown opens with that expectation's own sentence
  *  ("**<line>** (severity 7/10, <id>)"), which the title and the Breaks chip
  *  already say, so the words are the first line after it (LX4). */
-const finderWords = (md: string | null | undefined, breaks: string | null): string | null => {
+const finderWords = (md: string | null | undefined, breaks: string | null): string | null => readableFinding(finderLine(md, breaks));
+/** A finder's tally tail in words: "(severity 9/10, party_confidence)" reads "(severity 9 of 10)"; the judge's field name is its own. */
+const readableFinding = (s: string | null) => s?.replace(/\s*\(severity (\d+)\s*\/\s*10(?:,\s*[\w.:-]+)?\)/i, " (severity $1 of 10)") ?? null;
+const finderLine = (md: string | null | undefined, breaks: string | null): string | null => {
   if (!md || !breaks) return firstLine(md);
   const lines = md.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
   const own = lines.filter((l) => !(l.startsWith("**") && l.includes(breaks)));
@@ -202,13 +221,35 @@ export function decisionAnswer(d: MapDecision): string | null {
   return raw ? choiceWords(raw) : null;
 }
 
+/** A doubt the record raised about the cause that a reviewer must see: the
+ *  grounding or review read the signal as not matching the cause, or
+ *  grounding said a person must confirm it before it is built. `words` is
+ *  the chip, `why` the note that raised it. Null when nothing doubts it. */
+export type CauseDoubt = { words: string; why: string };
+const MISMATCH = /\b(?:may|might|does(?:n't| not)|did(?:n't| not)) (?:not )?match\b|\btitle (?:claims|should be corrected|is wrong)|\bconfirm whether\b|\bcause (?:should be )?split\b|\bnot the same (?:problem|cause)\b|\bunrelated to the (?:signal|cause)\b/i;
+export function causeDoubt(cause: { readiness?: string | null; readiness_note?: string | null; review_verdict?: { verdict?: string; note?: string } | null }): CauseDoubt | null {
+  const ground = cause.readiness_note?.trim() ?? "";
+  const review = cause.review_verdict?.note?.trim() ?? "";
+  const said = [ground, review].find((t) => MISMATCH.test(t));
+  if (said) return { words: "The signal may not match this cause", why: said };
+  if (cause.readiness === "needs_context") return { words: "Grounding asked a person to confirm this cause", why: ground || "Grounding marked the cause as needing more context." };
+  return null;
+}
+
 export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceRows, opts: TraceOpts): LineTrace {
   const { cause, via, focusId } = "cause" in resolved && "via" in resolved ? resolved : { cause: resolved, via: "cause" as const, focusId: resolved._id };
   const { now } = opts;
-  const graph = opts.graph?.nodes?.length ? opts.graph : SHIPPED_LINE;
-  const labelOf = (id: string) => graph.nodes.find((n) => n.id === id)?.label ?? SHIPPED_LINE.nodes.find((n) => n.id === id)?.label ?? id;
+  const graph: LineGraph = opts.graph?.nodes?.length ? opts.graph : SHIPPED_LINE;
+  const labelOf = (id: string) => stepLabel({ id, label: graph.nodes.find((n) => n.id === id)?.label ?? SHIPPED_LINE.nodes.find((n) => n.id === id)?.label });
   const steps: TraceStep[] = [];
   const path: string[] = [];
+  // How a run ended, one reading for every part of the story (the summary,
+  // the header, Ship, Outcome): a foreign graph by its own terminal steps
+  // (lineMap graphRunEnd), else the ends every graph shares (runReport runEnd).
+  const endOf = (run: MapRun): { kind: LineRunEnd; at: number } | null => {
+    const own = graph.ends ? graphRunEnd(run, graph) : null;
+    return own && own.kind !== "stopped" ? { kind: own.kind, at: own.at } : runEnd(run as ReportRun);
+  };
 
   const signals = rows.signals.filter((s) => s.task_id === cause._id).sort((a, b) => a.created_at - b.created_at);
   const runs = rows.runs.filter((r) => r.task_id === cause._id).sort((a, b) => a.created_at - b.created_at);
@@ -239,7 +280,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       nodeId: sourceNodeId(focus.source),
     });
   } else {
-    steps.push({ id: "finding:none", stage: "finding", title: "No signal on record", at: null, durationMs: null, status: "skipped", detail: "The cause was filed directly, not from a finder", links: [], artifacts: [], nodeId: null });
+    steps.push({ id: "finding:none", stage: "finding", title: "No signal on record", at: null, durationMs: null, status: "skipped", detail: "The problem was filed directly, not reported by a source", links: [], artifacts: [], nodeId: null });
   }
 
   // ── group ──
@@ -253,26 +294,28 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       : [];
     const elsewhereRefs = elsewhere.filter((t): t is NonNullable<typeof t> => !!t);
     const sources = [...new Set(signals.map((s) => s.source))];
-    const fingerprints = cause.cause?.fingerprints ?? [];
     // A finding that also opened other causes says so, and those causes read
     // by where they live, so near-identical titles are told apart (LX4).
-    const how = elsewhere.length && focus.attach === "new" ? null : ATTACH_WORDS[focus.attach ?? ""];
+    // A signal moved by hand names the cause it came from, and links its trace.
+    const fromRef = focus.attach === "person" ? movedFrom(cause, focus.fingerprint) : null;
+    const fromTask = fromRef ? rows.tasks.find((t) => t.short_id === fromRef) ?? null : null;
+    const how = fromRef ? `It was moved here by hand from ${fromRef}, the cause it was first filed to`
+      : elsewhere.length && focus.attach === "new" ? null : ATTACH_WORDS[focus.attach ?? ""];
     steps.push({
       id: "group", stage: "group",
       // The headline never contradicts the detail: a finding filed to other
       // causes is "seen before", not "only this signal" (LX4).
       title: siblings.length
-        ? `${plural(signals.length, "signal")} share this cause`
-        : elsewhere.length ? `Seen before: filed to ${plural(elsewhere.length, "other cause")} too` : "Only this signal so far",
+        ? `${plural(signals.length, "report")} of this cause`
+        : elsewhere.length ? `Seen before: also filed to ${plural(elsewhere.length, "other cause")}` : "The only report so far",
       at: siblings.length ? siblings[siblings.length - 1].created_at : focus.created_at, durationMs: null, status: "done",
       detail: [
         how,
         sources.length > 1 ? `From ${sources.slice(0, -1).join(", ")} and ${sources[sources.length - 1]}` : null,
-        fingerprints.length > 1 ? `${fingerprints.length} fingerprints point here` : null,
         elsewhere.length ? `The same ${finderName(focus.source)} finding also opened:` : null,
       ].filter(Boolean).join(". "),
-      // The other causes by what they are and where they live, each opening its own trace.
-      links: elsewhereRefs.map((t) => {
+      // The cause it was moved from, then the other causes by what they are and where they live, each opening its own trace.
+      links: [...(fromRef && !elsewhereRefs.some((t) => t.short_id === fromRef) ? [{ label: fromTask?.title || `Cause ${fromRef}`, href: lineTraceHref(fromRef), ref: fromRef, note: "where it was first filed" }] : []), ...elsewhereRefs.map((t) => {
         const project = (t as { project_id?: string | null }).project_id;
         const projectName = project ? opts.projectName?.(project) ?? null : null;
         const taskState = TASK_STATE[t.status] ?? t.status.replace(/_/g, " ");
@@ -281,8 +324,9 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
           label: t.title || t.short_id || "Another cause", href: t.short_id ? lineTraceHref(t.short_id) : taskHref(t), ...(t.short_id ? { ref: t.short_id } : {}), ...(note ? { note } : {}),
           ...(projectName ? { project: projectName } : {}), state: taskState, earlier: (t.created_at ?? 0) < (cause.created_at ?? 0),
         };
-      }),
-      artifacts: siblings.map((s) => ({ kind: "signal" as const, label: s.title, ref: s.short_id || s._id, ...(s.evidence_url ? { href: s.evidence_url } : {}) })),
+      })],
+      // Reports that say the same thing are one row with a count, newest first.
+      artifacts: groupReports(siblings),
       nodeId: SIGNALS_NODE,
     });
   }
@@ -306,13 +350,13 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
   const grounded = !!cause.goal_ref || !!cause.readiness;
   const groundStep = groundVisit && runPath(groundVisit.r as ReportRun, graph, cause).flatMap((p) => p.steps).find((s) => s.id === "ground");
   steps.push({
-    id: "ground", stage: "ground", title: "Ground",
+    id: "ground", stage: "ground", title: "Checked against the project's goals",
     at: groundVisit?.n.started_at ?? null,
     durationMs: groundVisit?.n.started_at != null && groundVisit.n.completed_at != null ? groundVisit.n.completed_at - groundVisit.n.started_at : null,
     status: grounded ? "done" : groundStep ? STATUS_OF[groundStep.state] : "waiting",
     detail: grounded
       ? [cause.goal_ref ? (cause.goal_ref === "none" ? "Serves no goal yet" : `Serves ${opts.goalName?.(cause.goal_ref) || cause.goal_ref}`) : null, cause.readiness_note?.trim()].filter(Boolean).join(". ")
-      : groundStep ? groundStep.result : "Waiting to be admitted: the line grounds a cause when a run starts on it",
+      : groundStep ? groundStep.result : "Waiting to be admitted: the line checks a cause against the goals when a run starts on it",
     links: [], artifacts: sessionArtifacts(groundStep), nodeId: graph.nodes.some((n) => n.id === "ground") ? "ground" : null,
   });
 
@@ -328,8 +372,29 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     const looped = loopedStation(run as ReportRun);
     const loopRows = looped ? visits.filter((v) => v.node === looped.node).length : 0;
     for (const [j, v] of visits.entries()) {
-      path.push(v.node);
+      // The path is drawn on today's map: a station the line has since lost
+      // (an old run's merge) keeps its story step but no place on the path.
+      // A foreign graph's terminal step is its end on the map, which the run's tail draws.
+      const onMap = graph.nodes.some((n) => n.id === v.node) && !graph.ends?.[v.node];
+      if (onMap) path.push(v.node);
       if (v.node === "ground") continue;
+      // Ship, merge and watch are one row that says whether the change
+      // landed (runReport landingStep), said where the last of them ran.
+      if (LANDING_STATIONS.has(v.node)) {
+        const landing = visits.filter((x) => LANDING_STATIONS.has(x.node));
+        if (v !== landing[landing.length - 1]) continue;
+        const l = report.get("ship");
+        if (!l) continue;
+        const first = landing[0];
+        const shown = [...landing].reverse().find((x) => graph.nodes.some((n) => n.id === x.node) && !graph.ends?.[x.node]);
+        steps.push({
+          id: `${run._id}:landing`, stage: "station", title: l.label, at: first.startedAt ?? first.at ?? null,
+          durationMs: first.startedAt != null && v.completedAt != null ? v.completedAt - first.startedAt : null,
+          status: STATUS_OF[l.state], detail: [l.result, l.note].filter(Boolean).join(": "),
+          links: [], artifacts: sessionArtifacts(l), nodeId: shown?.node ?? null, runId: run._id, round,
+        });
+        continue;
+      }
       const s = report.get(v.node);
       // The newest visit of a station is the one the run row keeps.
       const newest = !v.inferred && s;
@@ -340,15 +405,15 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
         status: newest ? STATUS_OF[newest.state] : STATUS_OF[v.state],
         detail: newest ? [newest.result, newest.note].filter(Boolean).join(": ") : "An earlier round: the line keeps the details of a station's newest visit only",
         links: [], artifacts: newest ? sessionArtifacts(s) : [],
-        nodeId: v.node, runId: run._id, round, ...(v.inferred ? { inferred: true } : {}),
+        nodeId: onMap ? v.node : null, runId: run._id, round, ...(v.inferred ? { inferred: true } : {}),
         ...(newest && looped?.node === v.node && looped.times > loopRows ? { visits: looped.times } : {}),
       });
     }
-    const end = lineRunOutcome(run.node_statuses);
+    const end = endOf(run);
     if (end?.kind === "shipped") lastShip = { run, at: end.at };
     const replaced = !isLiveRun(run) && !end ? replacedBy(run, round, runs, decisions, signals) : null;
     const runEnd: TraceRunEnd = isLiveRun(run) ? (run.status === "paused" ? "waiting" : run === latest && approved ? "approved" : "working")
-      : end?.kind === "shipped" ? "shipped" : end?.kind === "dissolved" || end?.kind === "dropped" ? "closed" : end?.kind === "parked" ? "parked" : replaced ? "replaced" : "stopped";
+      : end?.kind === "shipped" ? "shipped" : end?.kind === "dissolved" || end?.kind === "dropped" ? "closed" : end?.kind === "parked" ? "parked" : replaced ? "replaced" : shippedUnapproved(run as ReportRun) ? "unapproved" : "stopped";
     const stopAt = runEnd === "stopped" ? stoppedAt(run) : null;
     runEnds.push({ runId: run._id, round, end: runEnd, at: stopAt ? labelOf(stopAt) : null, ...(replaced ? { by: replaced.by, why: replaced.why } : {}) });
     const reopenedAfter = end?.kind === "shipped" && signals.some((s) => s.reopened && s.created_at > end.at);
@@ -372,12 +437,12 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       // A card taken back or dismissed ended without an answer: finished, neutral.
       status: waiting ? "current" : d.status === "answered" ? "done" : "noted",
       detail: [recommend, answer ? `${who ?? "Answered"}${who ? " answered" : ""} ${answer}${d.resolved_at ? ` ${shortDay(d.resolved_at)}` : ""}` : waiting ? "Waiting for an answer" : unansweredWords(d, runs, roundOf(d.workflow_run_id), runEnds)].filter((x): x is string => !!x).map(sentence).join(" "),
-      links: d.short_id ? [{ label: "Open the card", href: `/decisions/${d.short_id}` }] : [],
+      links: d.short_id ? [{ label: "Open the decision", href: `/decisions/${d.short_id}` }] : [],
       artifacts: [], nodeId: CARD_GATE_NODE_ID, ...(d.workflow_run_id ? { runId: d.workflow_run_id } : {}),
       ...(d.card?.headline?.trim() || d.card?.change?.trim() ? { headline: cardName(null, d.card, false) } : {}),
     });
   }
-  const finalEnd = latest ? lineRunOutcome(latest.node_statuses)?.kind ?? null : null;
+  const finalEnd = latest ? endOf(latest)?.kind ?? null : null;
   if (cards.length === 0) {
     // A run that reached the card while the store holds no decision row still says what was answered.
     const answered = [...runs].reverse().find((r) => r.gate_node_id === CARD_GATE_NODE_ID && (r.gate_answer || r.status === "paused"));
@@ -386,7 +451,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       steps.push({
         id: `card:${answered._id}`, stage: "card", title: cardName(answered.gate_answer ? choiceWords(answered.gate_answer) : null, null, waiting), at: null, durationMs: null,
         status: waiting ? "current" : "done", detail: waiting ? "Waiting for an answer." : "",
-        links: answered.gate_decision_short_id ? [{ label: "Open the card", href: `/decisions/${answered.gate_decision_short_id}` }] : [],
+        links: answered.gate_decision_short_id ? [{ label: "Open the decision", href: `/decisions/${answered.gate_decision_short_id}` }] : [],
         artifacts: [], nodeId: CARD_GATE_NODE_ID, runId: answered._id,
       });
     } else {
@@ -398,27 +463,30 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
   const ship = lastShip as { run: MapRun; at: number } | null;
   if (ship) {
     const report = runPath(ship.run as ReportRun, graph, cause).flatMap((p) => p.steps);
-    // What landed where: the merge when the line merged (or left it to a
-    // person), else the project's own ship command's line.
-    const landed = report.find((s) => s.id === "merge") ?? report.find((s) => s.id === "ship");
+    // Whether and how it landed: the run's one landing row (runReport landingStep).
+    const landed = report.find((s) => s.id === "ship");
     const visit = (ship.run.node_statuses ?? []).find((n) => n.node_id === (landed?.id ?? "ship"));
     steps.push({
       id: "ship", stage: "ship", title: runOutcome(ship.run as ReportRun, cause, now, true).text.replace(/\.$/, ""),
       at: visit?.completed_at ?? ship.at, durationMs: visit?.started_at != null && visit.completed_at != null ? visit.completed_at - visit.started_at : null,
-      status: "done", detail: landed ? [landed.result, landed.note].filter(Boolean).join(": ") : "",
-      links: landed?.href ? [{ label: landed.hrefTitle ?? "Open", href: landed.href }] : [], artifacts: [], nodeId: landed?.id ?? "ship",
+      // The watch is its own step below, so the landing row's watch note is not said twice.
+      status: "done", detail: landed ? [landed.result, landed.note === WATCH_NOTE ? null : landed.note].filter(Boolean).join(": ") : "",
+      links: landed?.href ? [{ label: landed.hrefTitle ?? "Open", href: landed.href }] : [], artifacts: [], nodeId: landed && graph.nodes.some((n) => n.id === landed.id) ? landed.id : "ship",
     });
   } else {
     // Titled by what it waits on: the kicker already says Ship.
     const closed = closedBefore(finalEnd);
     const cardWaits = cards.some((d) => d.status === "pending");
-    steps.push(closed ? pending("ship", "Not shipped", "skipped", sentence(`${endWords(finalEnd!)[0].toUpperCase()}${endWords(finalEnd!).slice(1)}`), "ship")
+    // The last run went on past a card nobody answered: built, never approved, so it did not land.
+    const unapproved = !!latest && !isLiveRun(latest) && shippedUnapproved(latest as ReportRun);
+    steps.push(unapproved ? pending("ship", "Not landed", "noted", UNAPPROVED_WORDS, "ship")
+      : closed ? pending("ship", "Not shipped", "skipped", sentence(`${endWords(finalEnd!)[0].toUpperCase()}${endWords(finalEnd!).slice(1)}`), "ship")
       // A stall is said once, in the header (where); the step keeps a short title.
       : approved ? (shipStall(latest!, approved, now)
         ? pending("ship", "Waiting for a runner since you answered Ship", "waiting", "", "ship")
         : pending("ship", "Waiting for the ship step to start", "waiting", `${approvedWords(approved, now)}; run ${runs.length} has not started the ship step.`, "ship"))
-      : cardWaits ? pending("ship", "Waiting for the card's answer", "waiting", "The change ships when a person answers Ship on its card.", "ship")
-      : pending("ship", "Not shipped yet", "waiting", "A change ships after its card is answered Ship.", "ship"));
+      : cardWaits ? pending("ship", "Waiting for your decision", "waiting", "The change ships when a person decides Ship.", "ship")
+      : pending("ship", "Not shipped yet", "waiting", "A change ships once a person decides Ship.", "ship"));
   }
 
   // ── watch ──
@@ -439,11 +507,8 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       detail: after.length ? `${plural(after.length, "signal")} since the ship` : status === "current" ? "No signal since the ship" : "No signal came back",
       links: [], artifacts: reopenedBy.map((s) => ({ kind: "signal" as const, label: s.title, ref: s.short_id || s._id })), nodeId: watchNode,
     });
-  } else {
-    steps.push(closedBefore(finalEnd)
-      ? pending("watch", "Nothing shipped to watch", "skipped", "", watchNode)
-      : pending("watch", "Waiting for the change to land", "waiting", "Once it ships, the line watches for the problem to come back.", watchNode));
   }
+  // Nothing landed: the Ship step says so and why, and there is no watch to describe.
 
   // ── outcome ──
   const reopened = reopenedBy.length > 0 && (cause.status === "open" || cause.status === "backlog");
@@ -469,7 +534,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
   } else if (latest && isLiveRun(latest)) {
     hereNodeId = (latest.status === "paused" ? latest.gate_node_id : null) ?? latest.current_node_id ?? null;
     if (openCard && openRound && openRound !== runs.length && hereNodeId) {
-      const card = openCard.short_id ? `Card ${openCard.short_id}` : "A card";
+      const card = openCard.short_id ? `Decision ${openCard.short_id}` : "A decision";
       const at = latest.status === "pending" ? "is queued to start" : `is at ${labelOf(hereNodeId)}`;
       where = { tone: "waiting", end: null, text: `Run ${runs.length} ${at}. ${card} from run ${openRound} is still open; answering Ship ships run ${openRound}'s change.` };
     } else if (latest.status === "running" && runs.length > 1 && hereNodeId) {
@@ -496,7 +561,9 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     stopped: { title: "The last run stopped before a change landed", status: "failed", end: "stopped" },
     open: { title: "No outcome yet", status: "waiting", end: null },
   };
-  const o = OUTCOME[outcome];
+  // Shipped and still in its watch: the outcome is known when the watch ends.
+  const watching = outcome === "open" && !!ship && !reopenedBy.length && (cause.watch_until ?? 0) > now;
+  const o = watching ? { ...OUTCOME.open, title: "Shipped, being watched" } : OUTCOME[outcome];
   if (o.end && path[path.length - 1] !== endNodeId(o.end)) path.push(endNodeId(o.end));
   steps.push({
     id: "outcome", stage: "outcome", title: o.title,
@@ -504,7 +571,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
     durationMs: cause.cause?.first_seen && (outcome === "held" || outcome === "dissolved" || outcome === "dropped") ? ((outcome === "held" ? held : null) ?? cause.closed_at ?? now) - cause.cause.first_seen : null,
     // An approved change has not shipped yet: the outcome says when it will be
     // known, not the header's wait again.
-    status: o.status, detail: outcome === "open" && approved ? `Known about ${plural(opts.watchDays ?? LINE_PROFILE_DEFAULTS.watch_days, "day")} after it ships` : where.text, links: [], artifacts: [], nodeId: o.end ? endNodeId(o.end) : null,
+    status: o.status, detail: watching ? `Known when the watch ends ${shortDay(cause.watch_until!)}: held if the problem stays away, reopened if it comes back` : outcome === "open" && approved ? `Known about ${plural(opts.watchDays ?? LINE_PROFILE_DEFAULTS.watch_days, "day")} after it ships` : where.text, links: [], artifacts: [], nodeId: o.end ? endNodeId(o.end) : null,
   });
 
   const pathLabels: Record<string, string> = {};
@@ -514,7 +581,7 @@ export function buildLineTrace(resolved: ResolvedTrace | TraceTask, rows: TraceR
       : id.startsWith("end:") ? END_LABEL[id.slice(4) as MapEnd] ?? id
       : labelOf(id);
   }
-  return { cause, via, focusId, focusSignalId: focus?._id ?? null, steps, pathNodeIds: path, pathLabels, outcome, where, hereNodeId, whereRun, stalledRun, runs: runEnds };
+  return { cause, via, focusId, focusSignalId: focus?._id ?? null, steps, pathNodeIds: path, pathLabels, outcome, where, hereNodeId, whereRun, stalledRun, runs: runEnds, doubt: causeDoubt(cause as Parameters<typeof causeDoubt>[0]) };
 }
 
 /** A live run's Ship answer, when its ship step has not started: when it
@@ -558,14 +625,17 @@ function stoppedAt(run: MapRun): string | null {
  *  closed it, and the run that replaced it when one did (the run's own end,
  *  so the card and its run say the same thing). */
 function unansweredWords(d: MapDecision, runs: MapRun[], round: number, ends: TraceRun[]): string {
-  if (d.status === "dismissed") return "A person dismissed the card without answering";
-  if (d.status !== "withdrawn") return `The card was ${d.status}`;
+  if (d.status === "dismissed") return "A person dismissed the decision without answering";
+  if (d.status !== "withdrawn") return `The decision was ${d.status}`;
   const end = ends.find((e) => e.round === round);
-  if (end?.end === "replaced") return `The card was withdrawn before anyone answered it: run ${end.by} started and replaced it${end.why ? `. ${sentence(end.why)}` : ""}`;
+  // Its run shipped on an answer an earlier card of the run was given.
+  if (end?.end === "shipped") return "Card withdrawn; shipped on the earlier approval";
+  if (runs[round - 1] && shippedUnapproved(runs[round - 1] as ReportRun)) return "Withdrawn with no answer while its run went on, so nothing was approved: the change is built, not shipped, and the card has to be asked again";
+  if (end?.end === "replaced") return `The decision was withdrawn before anyone answered it: run ${end.by} started and replaced it${end.why ? `. ${sentence(end.why)}` : ""}`;
   const next = d.resolved_at != null ? nextRunAfter(runs, round, d.resolved_at) : -1;
   return next >= 0
-    ? `The card was withdrawn before anyone answered it: run ${next + 1} started over right after`
-    : "The card was withdrawn before anyone answered it";
+    ? `The decision was withdrawn before anyone answered it: run ${next + 1} started over right after`
+    : "The decision was withdrawn before anyone answered it";
 }
 
 /** The index of the run that started within minutes of `at`, after run `round`, else -1. */
@@ -589,7 +659,7 @@ function replacedBy(run: MapRun, round: number, runs: MapRun[], decisions: MapDe
 }
 
 /** "Reached a card; replaced by run 5 before anyone answered": a replaced run's headline. */
-export const replacedWords = (r: Pick<TraceRun, "by">) => `Reached a card; replaced by run ${r.by} before anyone answered.`;
+export const replacedWords = (r: Pick<TraceRun, "by">) => `Reached your decision; replaced by run ${r.by} before anyone answered.`;
 
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
 
@@ -609,8 +679,6 @@ export type TracePathChip = {
   stops: number;
 };
 
-const ROUTINE_CHIP = "routine:card";
-
 /** How an end reads on the strip: stopped or reopened is the line stopping it. */
 const END_STATUS: Record<MapEnd, TraceStatus> = { held: "done", reopened: "failed", stopped: "failed", dissolved: "skipped", dropped: "skipped" };
 
@@ -620,9 +688,8 @@ const END_STATUS: Record<MapEnd, TraceStatus> = { held: "done", reopened: "faile
  *  its newest step there, the same status the story's dot for that step
  *  shows, so a chip reads as the outcome of its last visit. */
 export function tracePathChips(trace: Pick<LineTrace, "pathNodeIds" | "pathLabels" | "steps"> & Partial<Pick<LineTrace, "runs" | "hereNodeId">>): TracePathChip[] {
-  // The steps that only assemble the card read as one chip, Card, as the
-  // story folds them into "routine steps assembling the card".
-  const key = (id: string) => (isRoutineStation(id) ? ROUTINE_CHIP : id);
+  // Every chip is one station, named as its graph file names it.
+  const key = (id: string) => id;
   const endOf = new Map((trace.runs ?? []).map((r) => [r.runId, r.end]));
   const status = new Map<string, TraceStatus>();
   const tone = new Map<string, TraceTone>();
@@ -643,10 +710,10 @@ export function tracePathChips(trace: Pick<LineTrace, "pathNodeIds" | "pathLabel
     if (id === stopped && i !== path.length - 1) return;
     const k = key(id);
     const chip = byNode.get(k);
-    if (chip) { if (k !== ROUTINE_CHIP || !isRoutineStation(path[i - 1] ?? "")) chip.times++; return; }
+    if (chip) { chip.times++; return; }
     const end = id.startsWith("end:") ? END_STATUS[id.slice(4) as MapEnd] : undefined;
     const st = status.get(k) ?? end ?? "done";
-    const label = k === ROUTINE_CHIP ? "Card" : trace.pathLabels[id] ?? id;
+    const label = trace.pathLabels[id] ?? id;
     // The chip the cause is at now reads as under way, whatever its last step said.
     const here = id === trace.hereNodeId;
     const stops = id.startsWith("end:") ? 0 : (trace.runs ?? []).filter((r) => r.end === "stopped" && r.at === label).length;
@@ -659,8 +726,8 @@ export function tracePathChips(trace: Pick<LineTrace, "pathNodeIds" | "pathLabel
 /** How the runs ended, in the order a reader weighs them; a replaced run is
  *  told apart from a stop, since its change passed and was thrown away. */
 const RUN_END_WORDS: Array<[TraceRunEnd, string, string]> = [
-  ["shipped", "shipped", "shipped"], ["stopped", "stopped", "stopped"],
-  ["replaced", "reached a card and was replaced by a newer run", "reached a card and were replaced by a newer run"],
+  ["shipped", "shipped", "shipped"], ["unapproved", "built but never approved", "built but never approved"], ["stopped", "stopped", "stopped"],
+  ["replaced", "reached your decision and was replaced by a newer run", "reached your decision and were replaced by a newer run"],
   ["closed", "closed without a change", "closed without a change"], ["parked", "parked", "parked"],
   ["waiting", "waiting on you", "waiting on you"], ["approved", "approved, waiting to ship", "approved, waiting to ship"], ["working", "working", "working"],
 ];
@@ -715,6 +782,8 @@ function sessionArtifacts(s: ReportStep | undefined | null | false): TraceArtifa
   if (!s || !s.href) return [];
   if (s.href.startsWith("/conversation/")) return [{ kind: "session", label: s.hrefTitle ?? "Open the session", href: s.href }];
   if (s.href.startsWith("/decisions/")) return [{ kind: "decision", label: s.hrefTitle ?? "Open the decision", href: s.href }];
+  // Another cause the step pointed at (the task that already owns this one).
+  if (s.href.startsWith("/line/trace/")) return [{ kind: "evidence", label: s.hrefTitle ?? "Trace it", href: s.href }];
   return [];
 }
 
@@ -797,4 +866,18 @@ export function traceBlocks(trace: Pick<LineTrace, "steps"> & Partial<Pick<LineT
     }
   }
   return out;
+}
+
+/** A report's title without the judge's "Not met:" lead and a trailing machine number, for grouping. */
+const reportKey = (t: string) => t.replace(/^not met:\s*/i, "").replace(/\s+\d{10,13}\s*$/, "").trim().toLowerCase();
+
+/** Sibling reports as rows: reports that say the same thing fold into one
+ *  with a count (the newest's ref), busiest first, then newest. */
+export function groupReports(signals: ReadonlyArray<MapSignal>): TraceArtifact[] {
+  const groups = new Map<string, MapSignal[]>();
+  for (const s of signals) groups.set(reportKey(s.title), [...(groups.get(reportKey(s.title)) ?? []), s]);
+  return [...groups.values()]
+    .map((g) => [...g].sort((a, b) => b.created_at - a.created_at))
+    .sort((a, b) => b.length - a.length || b[0].created_at - a[0].created_at)
+    .map((g) => ({ kind: "signal" as const, label: g[0].title.replace(/^not met:\s*/i, ""), ref: g[0].short_id || g[0]._id, ...(g.length > 1 ? { count: g.length } : {}), ...(g[0].evidence_url ? { href: g[0].evidence_url } : {}) }));
 }
