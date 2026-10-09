@@ -19,6 +19,7 @@ import { channelDisplayName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { deliverChatToFace } from "../lib/chat/faceChat";
 // Arriving chat messages → in-app toasts.
 //
 // Mounted once, app-wide, beside the other background sync effects — the point
@@ -227,16 +228,49 @@ export function useChatToasts(): void {
       // The tier still decides the card's dwell and accent; the sound is one
       // sound so nobody learns to ignore the "ordinary" one.
       soundChatMessage(messageId);
-      toast.custom(
-        () => <ChatToast data={data} onOpen={open} onMuteChannel={mute} onSnooze={snooze} />,
-        {
-          // A loud card keeps its own slot (it is about you, and a second mention
-          // must not silently replace the first). Quiet cards from one channel
-          // collapse onto one id, which is what makes a busy room one card.
-          id: toastIdFor(data),
-          duration: tier === "loud" ? LOUD_DURATION_MS : QUIET_DURATION_MS,
-        },
-      );
+      const showToast = () =>
+        toast.custom(
+          (id) => (
+            <ChatToast
+              data={data}
+              onOpen={open}
+              onMuteChannel={mute}
+              onSnooze={snooze}
+              onDismiss={() => toast.dismiss(id)}
+            />
+          ),
+          {
+            // A loud card keeps its own slot (it is about you, and a second mention
+            // must not silently replace the first). Quiet cards from one channel
+            // collapse onto one id, which is what makes a busy room one card.
+            id: toastIdFor(data),
+            duration: tier === "loud" ? LOUD_DURATION_MS : QUIET_DURATION_MS,
+          },
+        );
+      // A teammate's line drops from their face in the header instead of
+      // landing as a card over the work (lib/chat/faceChat). Agents, Slack
+      // authors and huddle digests have no face there, and neither does
+      // anyone while the header is hidden: those still toast.
+      const onFace =
+        !isCall &&
+        !isAgent &&
+        !slackAuthor &&
+        deliverChatToFace(
+          String(last.user_id),
+          {
+            messageId,
+            channelId,
+            channelName: data.channelName,
+            isDm,
+            threadRootId: threadRootId ?? undefined,
+            preview: data.preview,
+            at: last.created_at ?? Date.now(),
+            loud: tier === "loud",
+            count: data.collapsedCount ?? 1,
+          },
+          showToast,
+        );
+      if (!onFace) showToast();
     }
   }, [s, viewerId, railLive, open, mute, snooze]);
 }

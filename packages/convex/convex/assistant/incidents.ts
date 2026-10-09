@@ -167,42 +167,76 @@ export function sentryTarget(dsn: string | undefined): { url: string; key: strin
   }
 }
 
-/** Tells the operator a provider stopped serving the assistant: always in
- *  the deployment's error log, and as a Sentry event when the deployment
- *  has SENTRY_DSN. */
+/** One alert to the operator: always the deployment's error log, and a
+ *  Sentry event when the deployment has SENTRY_DSN. Never throws. */
+export async function reportToOperator(alert: {
+  message: string;
+  detail?: string;
+  logger: string;
+  tags: Record<string, string>;
+  extra?: Record<string, unknown>;
+  fingerprint: string[];
+}): Promise<void> {
+  console.error(`[${alert.logger}] ${alert.message}${alert.detail ? `: ${alert.detail}` : ""}`);
+  const target = sentryTarget(process.env.SENTRY_DSN);
+  if (!target) return;
+  const eventId = crypto.randomUUID().replace(/-/g, "");
+  const event = {
+    event_id: eventId,
+    timestamp: Date.now() / 1000,
+    level: "fatal",
+    platform: "javascript",
+    logger: alert.logger,
+    message: { formatted: alert.message },
+    tags: alert.tags,
+    extra: alert.extra ?? {},
+    fingerprint: alert.fingerprint,
+  };
+  const body = [JSON.stringify({ event_id: eventId, sent_at: new Date().toISOString() }), JSON.stringify({ type: "event" }), JSON.stringify(event)].join("\n");
+  try {
+    const response = await fetch(target.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-sentry-envelope",
+        "X-Sentry-Auth": `Sentry sentry_version=7, sentry_client=codecast-convex/1, sentry_key=${target.key}`,
+      },
+      body,
+    });
+    if (!response.ok) console.error(`[${alert.logger}] Sentry answered ${response.status}`);
+  } catch (error) {
+    console.error(`[${alert.logger}] Sentry unreachable`, error);
+  }
+}
+
+/** Tells the operator a provider stopped serving the assistant. */
 export const alertOperator = internalAction({
   args: { provider: v.string(), fault: v.string(), model: v.string(), error: v.string() },
   handler: async (_ctx, args): Promise<null> => {
-    const message = `Hosted assistant: ${args.provider} cannot serve turns (${args.fault}) on ${args.model}`;
-    console.error(`[assistant incident] ${message}: ${args.error}`);
-    const target = sentryTarget(process.env.SENTRY_DSN);
-    if (!target) return null;
-    const eventId = crypto.randomUUID().replace(/-/g, "");
-    const event = {
-      event_id: eventId,
-      timestamp: Date.now() / 1000,
-      level: "fatal",
-      platform: "javascript",
+    await reportToOperator({
+      message: `Hosted assistant: ${args.provider} cannot serve turns (${args.fault}) on ${args.model}`,
+      detail: args.error,
       logger: "assistant.incidents",
-      message: { formatted: message },
       tags: { surface: "hosted-assistant", provider: args.provider, fault: args.fault, model: args.model },
       extra: { error: args.error },
       fingerprint: ["hosted-assistant-provider", args.provider, args.fault],
-    };
-    const body = [JSON.stringify({ event_id: eventId, sent_at: new Date().toISOString() }), JSON.stringify({ type: "event" }), JSON.stringify(event)].join("\n");
-    try {
-      const response = await fetch(target.url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-sentry-envelope",
-          "X-Sentry-Auth": `Sentry sentry_version=7, sentry_client=codecast-convex/1, sentry_key=${target.key}`,
-        },
-        body,
-      });
-      if (!response.ok) console.error(`[assistant incident] Sentry answered ${response.status}`);
-    } catch (error) {
-      console.error("[assistant incident] Sentry unreachable", error);
-    }
+    });
+    return null;
+  },
+});
+
+/** Tells the operator the Free plan reached its daily ceiling
+ *  (assistant/freeGate.ts): new Free turns pause until the next UTC day. */
+export const alertFreeCeiling = internalAction({
+  args: { day: v.string(), spent_usd: v.number(), ceiling_usd: v.number(), turns: v.number() },
+  handler: async (_ctx, args): Promise<null> => {
+    await reportToOperator({
+      message: `Hosted assistant: Free turns spent $${args.spent_usd.toFixed(2)} on ${args.day} (ceiling $${args.ceiling_usd}); new Free turns are paused until tomorrow UTC`,
+      detail: `${args.turns} Free turns today. Raise HOSTED_FREE_DAILY_USD to resume them now.`,
+      logger: "assistant.free",
+      tags: { surface: "hosted-assistant", gate: "free-daily-ceiling" },
+      extra: { ...args },
+      fingerprint: ["hosted-assistant-free-ceiling", args.day],
+    });
     return null;
   },
 });

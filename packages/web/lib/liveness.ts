@@ -19,6 +19,7 @@ export function liveFactsOf(s: {
   last_heartbeat?: number | null;
   daemon_alive_until?: number | null;
   producing_until?: number | null;
+  child_asking_until?: number | null;
   last_role_is_user?: boolean | null;
   auq_open?: boolean | null;
   awaiting_input?: boolean | null;
@@ -41,6 +42,7 @@ export function liveFactsOf(s: {
     last_heartbeat: s.last_heartbeat ?? null,
     daemon_alive_until: s.daemon_alive_until ?? null,
     producing_until: s.producing_until ?? null,
+    child_asking_until: s.child_asking_until ?? null,
     last_role_is_user: s.last_role_is_user ?? null,
     auq_open: s.auq_open ?? null,
     awaiting_input: s.awaiting_input ?? null,
