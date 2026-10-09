@@ -47,6 +47,7 @@ import { enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSe
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
+import { performReparentSessionToDevice } from "./devices";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
@@ -1798,6 +1799,28 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
   return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
 }
 
+// move — run a role on the caller's machine. The caller becomes its host (the
+// person whose daemon runs and bills it, on the role and its anchor alike, since
+// the role claims sessions by its host), the standing session is pulled onto
+// the caller's device the way `cast pull` does it, and `dir` repoints the
+// folder its hands start in.
+export async function performMoveRole(ctx: any, userId: Id<"users">, args: { role_id: string; device_id?: string; dir?: string }): Promise<any> {
+  const role = await requireRole(ctx, userId, args.role_id, "admin");
+  const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+  if (!anchor) throw new Error("This role has no standing session yet (cast role provision seats one)");
+  const dir = args.dir?.trim();
+  if (dir !== undefined && !dir.startsWith("/")) throw new Error("--dir must be an absolute path on your machine");
+  const now = Date.now();
+  await ctx.db.patch(role._id, { host_user_id: userId, updated_at: now });
+  await ctx.db.patch(anchor._id, { host_user_id: userId, ...(dir ? { project_path: dir } : {}), updated_at: now });
+  const moved = args.device_id && anchor.conversation_id
+    ? await performReparentSessionToDevice(ctx, userId, { session_id: String(anchor.conversation_id), device_id: args.device_id })
+    : null;
+  const updated = await ctx.db.get(role._id);
+  await noteRoleChange(ctx, userId, "role_edit", role, updated);
+  return { role_id: role._id, handle: role.handle, host_moved: String(role.host_user_id) !== String(userId), dir: dir ?? anchor.project_path ?? null, session: moved ? { device_id: moved.device_id, label: moved.label, cross_user: moved.cross_user } : null };
+}
+
 // The switch (org-staffing.md S23.1): Starts work on its own. Human only,
 // logged on the charter as a doc entry. `on` is the switch; `trust` is the
 // stage word one release of clients still sends, read through the same
@@ -2145,6 +2168,10 @@ export const resume = mutation({
 export const restart = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string() },
   handler: async (ctx, { api_token, ...args }) => performRestartRole(ctx, await requireCaller(ctx, api_token), args),
+});
+export const move = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string(), device_id: v.optional(v.string()), dir: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => performMoveRole(ctx, await requireCaller(ctx, api_token), args),
 });
 export const setTrust = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.optional(v.boolean()), trust: v.optional(v.string()), from_session: v.optional(v.string()) },

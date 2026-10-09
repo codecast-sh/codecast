@@ -236,3 +236,74 @@
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
 }
+
+/* The undo receipt (UNDO_RECEIPT_CLASS in store/undoStack.ts): what the person
+   just did, in one quiet line hugging the corner, with Undo as a word rather
+   than a button. It confirms a change they chose and keeps the way back in
+   reach without asking to be read: no card weight, no bold, no second line
+   (the note lives in the history card), no close control (it times out, and
+   a swipe still clears it). The class is doubled to outrank the snackbar
+   rules above, which match on :has(). */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt {
+  width: fit-content;
+  max-width: var(--width);
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 11px;
+  min-height: 30px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 92%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px -8px rgba(0, 0, 0, 0.22);
+}
+.dark .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt {
+  box-shadow: 0 6px 16px -8px rgba(0, 0, 0, 0.6);
+}
+/* A receipt with no action (a redo, a conflict) has no button to sit beside. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt:not(:has([data-action])) {
+  padding-right: 11px;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt [data-content] {
+  flex: 0 1 auto;
+  padding-right: 0;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt [data-title] {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  color: var(--sol-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt [data-description],
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt [data-close-button] {
+  display: none;
+}
+/* Undo (and the History side door) as a word in the accent, tinted on hover. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt [data-action][data-button] {
+  height: 22px;
+  margin: 0;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sol-cyan);
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt [data-action][data-button]:hover {
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-quiet-action [data-action][data-button] {
+  color: var(--sol-text-dim);
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-quiet-action [data-action][data-button]:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+}
