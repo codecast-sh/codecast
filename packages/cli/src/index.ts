@@ -110,10 +110,13 @@ import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
 import {
+  filedElsewhereLine,
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
   resolveWorkspaceForWrite,
+  scopeFlagFor,
   workspaceArgs,
+  workspaceFromKey,
   workspaceScope,
   workspaceLabel,
   workspaceHasFeature,
@@ -15898,6 +15901,16 @@ async function readWorkspace(explicitTeam?: string): Promise<Workspace> {
   return resolveWorkspaceForRead(await workspaceRoster(), explicitTeam);
 }
 
+/** What a `--plan` read that came back empty should add: the plan is filed in
+ *  a workspace this read did not look in (`filedElsewhereLine`). A plan is
+ *  read by short id in any workspace its reader can see, so the lookup
+ *  answers even when the list did not; null when it cannot. */
+async function planScopeNote(planId: string, explicitTeam?: string): Promise<string | null> {
+  const plan = await tryCliPost("/cli/plans/get", { short_id: planId });
+  if (!plan) return null;
+  return filedElsewhereLine(planId, workspaceFromKey(await workspaceRoster(), plan.workspace), await readWorkspace(explicitTeam));
+}
+
 /** Team features (chat, calls) are opt-in per team. A command for an off
  *  feature stops here with the same words the server would use, instead of
  *  answering with an empty list that reads as "nothing happened yet". */
@@ -16512,6 +16525,9 @@ work
     }
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No tasks found."));
+      // An empty list names no scope, so say when the plan is read elsewhere.
+      const elsewhere = options.plan ? await planScopeNote(options.plan, options.team) : null;
+      if (elsewhere) console.log(fmt.muted(elsewhere));
       return;
     }
     // Nest subtasks under their parents (shared with the web list so the two
@@ -17189,6 +17205,9 @@ work
     if (!Array.isArray(tasks) || tasks.length === 0) {
       // An empty frontier is a finished plan or a held one: say where to tell.
       console.log(fmt.muted(`No ready tasks. ${options.plan ? `cast plan status ${options.plan} shows what holds the rest.` : "cast task ls shows blocked work."}`));
+      // …or a plan this directory does not read at all, which is not "no work".
+      const elsewhere = options.plan ? await planScopeNote(options.plan, options.team) : null;
+      if (elsewhere) console.log(fmt.muted(elsewhere));
       return;
     }
     const { shown, folded } = foldStaleTasks(tasks, !!options.stale);
@@ -18406,10 +18425,17 @@ plan
     const createdTasks: Array<{ short_id: string; title: string }> = [];
     say(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
 
+    // Where the plan actually landed: this create names no workspace, so the
+    // server decided (the session's team, else the directory rule). The steps
+    // are filed there explicitly rather than re-derived, and the next step
+    // printed below carries the scope a read of it needs (scopeFlagFor).
+    let readScope = "";
     if (steps) {
       const deps = taskGraphDeps();
+      const filed = await tryCliPost("/cli/plans/get", { short_id: result.short_id });
+      readScope = scopeFlagFor(workspaceFromKey(await workspaceRoster(), filed?.workspace), await readWorkspace());
       try {
-        const base = planStepBase(deps, { human: options.human, sessionId, plan: { project_id: body.project_id } });
+        const base = planStepBase(deps, { human: options.human, sessionId, plan: { ...filed, ...(body.project_id ? { project_id: body.project_id } : {}) } });
         createdTasks.push(...(await createPlanSteps(deps, result.short_id, steps, { base, say })));
       } catch (err) {
         console.error((err as Error).message);
@@ -18419,7 +18445,7 @@ plan
     }
     // The way forward closes the output, after any steps.
     if (sessionId && !options.fromSession) say(fmt.muted(`  Run ${c.cyan}cast plan bind ${result.short_id}${c.reset} to bind this session to the plan`));
-    if (steps) say(fmt.muted(`  ${c.cyan}cast task ready --plan ${result.short_id} --claim${c.reset} takes the first ready step`));
+    if (steps) say(fmt.muted(`  ${c.cyan}cast task ready --plan ${result.short_id}${readScope} --claim${c.reset} takes the first ready step`));
     if (options.json) printJson({ short_id: result.short_id, title, tasks: createdTasks });
   });
 

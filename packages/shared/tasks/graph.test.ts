@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   blockersHoldingBack,
   waitTone,
+  waitRefLine,
   waitStateWord,
   waitWordFails,
   isWaitId,
@@ -651,6 +652,15 @@ describe("waitStateWord", () => {
     expect(waitStateWord(checks, { checks: "failure", closed: true })).toBe("");
     expect(waitStateWord({ ...checks, state: "met" }, { checks: "failure" })).toBe("checks green");
   });
+  test("a text list's wait line ends in its state, the way a task blocker ends in its status", () => {
+    expect(waitRefLine(checks)).toBe("PR #4 checks to go green [waiting]");
+    expect(waitRefLine({ ...checks, state: "met", note: "checks green" })).toBe("PR #4 checks green [met]");
+    expect(waitRefLine({ ...checks, state: "failed", note: "closed before its checks went green" })).toBe("PR #4 closed before its checks went green [failed]");
+    // A wait on a closed task has no word; the marker still says where it stands.
+    expect(waitRefLine(checks, { closed: true })).toBe("PR #4 [waiting]");
+    expect(waitRefLine(checks, { inline: (w) => w.toUpperCase() })).toBe("PR #4 CHECKS TO GO GREEN [waiting]");
+  });
+
   test("the word reads red only for a failed wait or failing checks, on an open task", () => {
     expect(waitWordFails(checks)).toBe(false);
     expect(waitWordFails(checks, { checks: "failure" })).toBe(true);
