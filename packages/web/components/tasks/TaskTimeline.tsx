@@ -11,9 +11,9 @@
  * which is what "who did what, when" needs.
  */
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowRight, History, Link2, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
-import { WAIT_STATE_STYLE } from "./TaskBlockedMark";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { ArrowRight, History, Link2, ListPlus, MessageSquare, Pencil, Terminal, Unlink2, UserRound } from "lucide-react";
+import { WAIT_STATE_STYLE } from "../../lib/taskWaitStyle";
+import { useLocalWaitTimes } from "../../hooks/useLocalWaitTimes";
 import { ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { SessionTag } from "../identity/SessionTag";
@@ -25,7 +25,7 @@ import { RailBare, RailDay, RailRow, StatusWord } from "../timeline/Rail";
 import { TaskCommentItem, UserBadge, type TaskCommentRow } from "./TaskCommentStream";
 import type { TaskLinkedSession } from "./TaskSessionList";
 import { EntityIdPill } from "../EntityIdPill";
-import { findStoredWaitTime, formatWaitTime, graphChange, type GraphChange, type GraphTone } from "@codecast/shared/tasks";
+import { graphChange, hasStoredWaitTime, type GraphChange, type GraphTone } from "@codecast/shared/tasks";
 
 type Person = { name: string; image?: string; github_username?: string };
 
@@ -86,19 +86,31 @@ const GRAPH_STYLE: Record<GraphTone, { icon: typeof Pencil; color: string }> = {
   met: waitStyle(WAIT_STATE_STYLE.met),
   failed: waitStyle(WAIT_STATE_STYLE.failed),
   link: { icon: Link2, color: "text-sol-cyan" },
+  // An edge someone deleted: a broken link, dim. Never met's green check,
+  // which would read as "the blocker finished" (graphHistory.ts GraphTone).
+  withdrawn: { icon: Unlink2, color: "text-sol-text-dim" },
 };
 
-/** A graph change's text, its stored UTC time (TG11) shown in the viewer's
- *  zone, as the Blocked by row shows it, the stored words on hover. */
+/** A graph change's text, its stored UTC times (TG11) shown in the viewer's
+ *  zone, as the Blocked by row shows them, the stored words on hover. One
+ *  rewriter for every reader of stored text (`cast task show` too).
+ *
+ *  Asked of the text before anything subscribes to a clock: this renders once
+ *  per clause of every history row, and almost no clause names a stored
+ *  moment ("on PR #42", "on ct-12", a note), so subscribing them all would
+ *  re-render the whole timeline every minute to recompute identical strings
+ *  (the contract `useLocalWaitTimes` states, and what the comment stream
+ *  does). The rewrite lives in its own component so only the clauses that
+ *  name a moment follow the clock. */
 function GraphText({ text }: { text: string }) {
-  const now = useCoarseNow(60_000);
-  const t = findStoredWaitTime(text);
-  if (!t) return <span className="text-sol-text min-w-0">{text}</span>;
-  return (
-    <span className="text-sol-text min-w-0" title={text}>
-      {text.slice(0, t.start)}{formatWaitTime(t.at, { now })}{text.slice(t.end)}
-    </span>
-  );
+  return hasStoredWaitTime(text)
+    ? <LocalGraphText text={text} />
+    : <span className="text-sol-text min-w-0">{text}</span>;
+}
+
+function LocalGraphText({ text }: { text: string }) {
+  const local = useLocalWaitTimes(text);
+  return <span className="text-sol-text min-w-0" title={local.title}>{local.text}</span>;
 }
 
 /** A linked session named inline, opening it on click. */
