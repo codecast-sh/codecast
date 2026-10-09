@@ -289,13 +289,13 @@ export const WORK_SNIPPET = `
 
 A human tracks your work through a dashboard: report status through tasks and plans, not chat. Your harness's todo list is for steps inside this session; anything that should outlive the session or show on the board is a task.
 
-**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default; add \`--human\` only when the human must see and manage it themselves (a decision only they can make, a manual step, follow-up that outlives you). \`--from-meeting\` is only for tasks people decided in a meeting or conversation, never your own work; \`--from-call cl-42\` also links the task to that call, so it shows on the call's page.
+**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default: \`--human\` only when the human must see and manage it themselves (a decision only they can make, a manual step, follow-up that outlives you), \`--ephemeral\` for bookkeeping of your own (a checklist, a probe) the board should never carry. \`--from-meeting\` is only for tasks people decided in a meeting or conversation, never your own work; \`--from-call cl-42\` also links the task to that call, so it shows on the call's page.
 
 **Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with \`--parent\`, shallow and small, and never mirror a plan as a subtask tree. Check for existing work before creating (\`cast task ls -q "<topic>"\`, \`cast plan ls -q\`, \`cast task ready\`), and file under a project when one fits (\`cast project ls\`).
 
 **Record what work waits on.** Work waiting on a task, a PR to merge (\`#42:checks\`: green CI), a decision or time gets a blocker, not a comment: \`cast task dep ct-200 --blocked-by "#42"\` keeps it off the ready list. To park, block the task you hold, go \`dormant\` naming the blocker, end your turn: its clearing wakes you.
 
-**Bind before you build.** \`cast task start <id>\` (or \`cast plan bind <id>\`) claims the work and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with \`update\` and \`done\`; never \`task start\` your own subtask. A task has one owning session: starting one another session is still working on is refused until you settle with it who continues (\`--take\` once agreed).
+**Bind before you build.** \`cast task start <id>\` (or \`cast plan bind <id>\`) claims the work and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with \`update\` and \`done\`; never \`task start\` your own subtask.
 
 **Keep the bound item true.** When scope or approach shifts, rewrite the title and description, comment at milestones and changes of direction, move status the moment it changes, and mark done only what you verified. Progress comments (\`-t progress\`) reach nobody's inbox; \`-t blocker\`, \`-t review\` or an \`@handle\` reach followers. A choice only a human can make is a \`cast decide\`, never a comment. ${ASSIGNEE_MEANS} Another name on a task is never a reason to stop.
 
@@ -321,6 +321,8 @@ ${WORK_SNIPPET_END}
 export const WORK_REFERENCE = `
 **Nesting.** File steps you will actually do with \`--parent <task_id>\` (in bulk: \`cast task create --parent <task_id> -\`, one title per line on stdin). Depth is capped at two below the top. Open subtasks of an active parent are hidden from \`cast task ready\`. \`cast task done\` refuses a parent with open subtasks unless you pass \`--cascade\` (close them too) or \`--only-parent\` (leave them open).
 
+**One owner.** A task has one owning session: \`cast task start\` on one another session is still working is refused until you settle with it who continues (\`--take\` once agreed).
+
 **Projects.** Projects group an effort's tasks, plans and docs, and are how the human triages the board. Every \`--project\` flag takes an ID, a short ID or a title substring, so plain words work. Don't invent a project for one task.
 
 If bound to a plan: suggest splitting a task that grew, flag dependencies you create, and ask when acceptance criteria are ambiguous.
@@ -337,7 +339,11 @@ cast task show ct-1 ct-2 --json             # several ids; .sessions = linked se
 cast task context <id>                      # full context (--current for this session's task)
 cast task start|done|comment <id>           # lifecycle
 cast task start <id> --spawn                # claim it AND hand it to a fresh agent session
-cast task create "Title" -t task -p high    # also --human, --plan <plan_id>, --parent <task_id>, --project "<name>", --from-meeting
+cast task create "Title" -t task -p high    # also --human, --plan <plan_id>, --parent <task_id>, --project "<name>", --from-meeting, --effort <level>
+cast task create "Title" --ephemeral        # your own bookkeeping (a checklist, a probe): off the board, the feed and notifications, and only yours from cast task ready
+cast task keep <id>                         # the opposite: an ephemeral task that turned out to matter goes back on the board
+cast task create "Title" --found-during ct-7  # the task this was found while working on; 'none' files it unlinked (default: the task this session holds)
+cast task create "Title" --from-call cl-42  # pulled from that call: implies --from-meeting, and the task shows on the call's page
 cast task create --parent <task_id> - <<'EOF'   # bulk subtasks, one per line
 First step
 Second step

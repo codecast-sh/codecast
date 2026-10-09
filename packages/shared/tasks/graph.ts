@@ -9,8 +9,8 @@
  */
 
 import { normalizeRepository, parsePrRef } from "../contracts/prRefs";
-import { isKnownTimeZone, MONTHS, parseDuration, relTimeShort, wallClock, wallTimeIn, WEEKDAYS } from "../time";
-import { isTerminalTaskStatus } from "./statuses";
+import { isKnownTimeZone, localTimeZone, MONTHS, parseDuration, relTimeShort, relTimeUntil, wallClock, wallTimeIn, WEEKDAYS } from "../time";
+import { isTaskBeingWorked, isTerminalTaskStatus } from "./statuses";
 
 // ---------------------------------------------------------------------------
 // Waits (TG2): blockers on something that is not a task
@@ -118,6 +118,12 @@ export type GraphRefStatus = { ref: string; short_id?: string; status: string | 
 /** The status of a blocker the caller did not look up. Not terminal, so it blocks. */
 export const UNKNOWN_BLOCKER_STATUS = "unknown";
 
+/** How many `blocks` and how many `related` tasks one task's graph lists:
+ *  the task page, `cast task show` and the server's link reader all stop
+ *  here, so every surface names the same tasks. Blockers are read whole —
+ *  readiness needs every one. */
+export const GRAPH_LINK_CAP = 50;
+
 /**
  * A `StatusOf` over the tasks the caller holds, keyed by short id and `_id`.
  * A ref it does not hold is unknown (and blocks) unless it is in `searched`,
@@ -144,17 +150,17 @@ export function parentStatusLookup(statusOf: StatusOf): (parentId: string) => st
 }
 
 /**
- * The `blocked_by` refs of `tasks` that name none of them, split by how the
- * caller finds them: `shortIds` through the short id index, `ids` (a plan's
- * older rows name blockers by `_id`) by `_id`. Only the refs a caller really
- * looked up go into `statusLookup`'s `searched`; an `_id` searched for as a
- * short id finds nothing and would read as missing, releasing an open blocker.
+ * The `blocked_by` refs of `tasks` that name none of them: what a caller
+ * holding a page has to look up in the database. A ref may be a short id or an
+ * `_id` (a plan's older rows name blockers that way), and the caller resolves
+ * either, so they come back as one list. Every ref here, and only these, go
+ * into `statusLookup`'s `searched`: a ref left unsearched stays unknown and
+ * keeps blocking, where one searched and gone reads as missing and clears.
  */
-export function blockerRefs(tasks: Iterable<RefTask & { blocked_by?: readonly string[] | null }>): { shortIds: string[]; ids: string[] } {
+export function blockerRefs(tasks: Iterable<RefTask & { blocked_by?: readonly string[] | null }>): string[] {
   const list = [...tasks];
   const held = statusLookup(list);
-  const refs = [...new Set(list.flatMap((t) => t.blocked_by ?? []))].filter((ref) => held(ref) === undefined);
-  return { shortIds: refs.filter((r) => TASK_REF.test(r)), ids: refs.filter((r) => !TASK_REF.test(r)) };
+  return [...new Set(list.flatMap((t) => t.blocked_by ?? []))].filter((ref) => held(ref) === undefined);
 }
 
 /** `status` is `UNKNOWN_BLOCKER_STATUS` when the caller did not look it up. */
@@ -300,7 +306,7 @@ export function readinessOf(task: GraphTask, opts: ReadinessOptions): Readiness 
   if (task.parent_id && !opts.includeSubtasks) {
     const ps = opts.parentStatusOf(String(task.parent_id));
     if (ps === undefined) return { ready: false, reason: "parent_unknown" };
-    if (ps === "in_progress" || ps === "in_review") return { ready: false, reason: "parent_active" };
+    if (isTaskBeingWorked(ps)) return { ready: false, reason: "parent_active" };
   }
   const blockers = blockersHoldingBack(task, opts.statusOf);
   return blockers.length ? { ready: false, reason: "blocked", blockers } : { ready: true };
@@ -313,7 +319,7 @@ export function isReady(task: GraphTask, opts: ReadinessOptions): boolean {
 /** Whether what holds a task in `status` still gates its pickup: true until
  *  someone works it or it closes. */
 export function blockerGatesPickup(status: string | null | undefined): boolean {
-  return !isTerminalTaskStatus(status) && status !== "in_progress" && status !== "in_review";
+  return !isTerminalTaskStatus(status) && !isTaskBeingWorked(status);
 }
 
 export type WaitTone = WaitState | "dim";
@@ -390,16 +396,47 @@ export function formatWaitTime(at: number, opts: WaitLabelOptions = {}): string 
   return `${w.year === n.year ? date : `${date}, ${w.year}`} ${time}`;
 }
 
+/**
+ * The words for output read by an AGENT rather than a person: `cast task
+ * context`, the compaction block, `cast plan context`, `cast plan export`
+ * (TG11). They must name a moment exactly as the stored history, the
+ * "Unblocked" comment, the wake message and a claim's skip reason do, and
+ * those are written on the server, whose clock is UTC. `absolute` alone takes
+ * the runtime's zone, so a CLI off UTC would spell one instant two ways on one
+ * screen — and in a spelling (`GMT+5:30`) `STORED_TIME` below cannot read back.
+ * This is the client twin of convex/taskWaits.ts's `STORED`; spread the
+ * checkout's `prWords` over it for PR refs.
+ */
+export const AGENT_WAIT_WORDS = { absolute: true, timeZone: "UTC" } as const satisfies WaitLabelOptions;
+
 const STORED_TIME = new RegExp(`\\b(${MONTHS.join("|")}) (\\d{1,2}), (\\d{4}) (\\d{2}):(\\d{2}) UTC\\b`);
 
 /** The first `absolute` time in stored text ("Oct 11, 2026 09:26 UTC", the
  *  server's zone), so a reader can show it in its own zone. Null when the text
- *  names none, or names one in another zone. */
-export function findStoredWaitTime(text: string): { at: number; start: number; end: number } | null {
+ *  names none, or names one in another zone. `localWaitTimes` below is the one
+ *  reader: every surface wants the whole line rewritten, not one offset. */
+function findStoredWaitTime(text: string): { at: number; start: number; end: number } | null {
   const m = STORED_TIME.exec(text);
   if (!m) return null;
   const at = Date.UTC(Number(m[3]), MONTHS.indexOf(m[1]!), Number(m[2]), Number(m[4]), Number(m[5]));
   return { at, start: m.index, end: m.index + m[0].length };
+}
+
+/**
+ * Stored text (a history line, a comment, a wake message) with every absolute
+ * wait time in it re-rendered for the reader's clock: the server writes UTC so
+ * the moment survives any zone (TG11), and a reader that also shows live waits
+ * would otherwise carry two spellings of one moment on one screen. Text naming
+ * no stored time comes back unchanged.
+ */
+export function localWaitTimes(text: string, opts: WaitLabelOptions = {}): string {
+  let out = "";
+  let rest = text;
+  for (let t = findStoredWaitTime(rest); t; t = findStoredWaitTime(rest)) {
+    out += rest.slice(0, t.start) + formatWaitTime(t.at, opts);
+    rest = rest.slice(t.end);
+  }
+  return out + rest;
 }
 
 /** The condition a wait is waiting for: "PR #42 merges", "checks green on
@@ -487,10 +524,24 @@ export function waitFailedCause(w: TaskWait, opts: WaitLabelOptions = {}): strin
   return `${waitSubject(w, opts)} ${w.note || waitFailedWord(w.kind)}`;
 }
 
-/** What a wait is on, as its pill reads: "PR #42", "sd-4", "Thu 09:00".
- *  `waitStateWord` follows it on every surface. */
-export function waitSubject(w: WaitTarget, opts: WaitLabelOptions = {}): string {
+/** What a wait is on, bare: "PR #42", "sd-4", "Thu 09:00". The piece
+ *  `waitRefLine` and `waitFailedCause` build their lines on; a page renders
+ *  the same words itself, inside its pill. */
+function waitSubject(w: WaitTarget, opts: WaitLabelOptions = {}): string {
   return w.kind === "decision" ? w.decision : w.kind === "time" ? formatWaitTime(w.at, opts) : `PR ${prRef(w, opts)}`;
+}
+
+/**
+ * What a wait that still holds is waiting FOR, in words no met wait could also
+ * read as (TG12): "PR #42 to merge", "PR #42 checks to go green", "sd-412 to
+ * be answered", "until Thu 09:00". `waitLabel`'s present tense ("checks green
+ * on #42", "sd-412 answered") is the same string `waitMetLabel` returns for
+ * those kinds, which only reads right where the state is printed separately (a
+ * node title, a bracketed `waitRefLine`); a bare "blocked by" list has no room
+ * for one, so it takes these words instead.
+ */
+function waitHoldingLabel(w: WaitTarget, opts: WaitLabelOptions = {}): string {
+  return w.kind === "time" ? waitClause(w, opts) : `${waitSubject(w, opts)} ${WAIT_PENDING_WORD[w.kind]}`;
 }
 
 /**
@@ -536,15 +587,19 @@ export function blockerStateLabel(b: { missing?: boolean; status?: string }): st
   return !b.status || b.status === UNKNOWN_BLOCKER_STATUS ? BLOCKER_UNKNOWN_WORDS : undefined;
 }
 
-/** One line for any blocker: "ct-12", "ct-12 (not found)", "ct-12 (status
- *  unknown)", or the wait's condition, with "failed" when a wait can no
- *  longer be met. */
+/** One line for any blocker, with no room for a state marker beside it, so
+ *  the words carry the state themselves: "ct-12", "ct-12 (not found)", "ct-12
+ *  (status unknown)", "PR #42 to merge", "sd-412 to be answered", "PR #7 to
+ *  merge (failed: closed without merging)". Every text "blocked by" list is
+ *  this function, and it is read cold, so a wait that still holds never takes
+ *  `waitLabel`'s present tense, which for two kinds is the met wording
+ *  verbatim. A met wait reads as met, for the surfaces that list history. */
 export function blockerLabel(b: Blocker, opts: WaitLabelOptions = {}): string {
   if (b.kind === "task") {
     const state = blockerStateLabel(b);
     return state ? `${b.ref} (${state})` : b.ref;
   }
-  return `${waitLabel(b, opts)}${failedSuffix(b)}`;
+  return `${b.state === "met" ? waitMetLabel(b, opts) : waitHoldingLabel(b, opts)}${failedSuffix(b)}`;
 }
 
 /** One linked task: "ct-12 Design schema [done]" ("ct-12 [open]" when the
@@ -565,8 +620,27 @@ export function taskBlockerLine(b: TitledTaskBlocker, inline?: (s: string) => st
   return taskRefLine({ ...b, short_id: b.ref }, inline);
 }
 
+/**
+ * One wait as a text "Blocked by" list prints it: what it waits on, its state
+ * word, and its state in the same brackets `taskRefLine` puts a task's status
+ * in. A mixed list is read cold, where a met wait's word differs from a
+ * waiting one's only by tense ("checks green" vs "checks to go green"), so
+ * every entry carries the marker that says whether it still holds: "PR #42 to
+ * merge [waiting]", "PR #42 checks green [met]", "PR #7 closed without
+ * merging [failed]". A page with a pill per wait shows the state in its tone
+ * instead (`waitTone`, `waitWordFails`). `inline` cleans the word for a
+ * reader that feeds the line to an agent.
+ */
+export function waitRefLine(w: TaskWait, opts: WaitLabelOptions & { closed?: boolean; checks?: string | null; inline?: (s: string) => string } = {}): string {
+  const inline = opts.inline ?? ((s: string) => s);
+  const word = inline(waitStateWord(w, opts));
+  return `${waitSubject(w, opts)}${word ? ` ${word}` : ""} [${w.state}]`;
+}
+
 /** Why a task is not ready, in words an agent can act on: "blocked by ct-12,
- *  PR #42 merges", "its parent is being worked". `task` is the row judged. */
+ *  PR #42 to merge", "its parent is being worked" — a holding wait reads as
+ *  what it waits FOR (`blockerLabel`), never in the present tense a met one
+ *  shares. `task` is the row judged. */
 export function notReadyLabel(task: GraphTask, r: Extract<Readiness, { ready: false }>, opts: WaitLabelOptions = {}): string {
   switch (r.reason) {
     case "status": return `already ${task.status}`;
@@ -584,8 +658,13 @@ function failedSuffix(w: Pick<TaskWait, "state" | "note">): string {
   return w.state === "failed" ? ` (failed${w.note ? `: ${w.note}` : ""})` : "";
 }
 
-/** The word for a wait still waiting, after its pill: "to merge". */
-export const WAIT_PENDING_WORD: Record<WaitKind, string> = {
+/** How `waitStateWord` names a time wait whose moment went by unsettled. */
+const OVERDUE_BY = "overdue by";
+
+/** `waitStateWord`'s word for a wait that is still waiting: "to merge", and
+ *  the words `blockerLabel` renders a holding wait with. A time wait has none;
+ *  its word is a countdown, and `waitHoldingLabel` keeps its "until". */
+const WAIT_PENDING_WORD: Record<WaitKind, string> = {
   pr_merged: "to merge",
   pr_checks_green: "checks to go green",
   decision: "to be answered",
@@ -627,7 +706,10 @@ export function waitFailedWord(kind: WaitKind, outcome?: string): string {
 
 /** The word after a wait's pill, on every surface: a settled wait's note or
  *  its state's word, a pending one's ("to merge"), a time wait's countdown
- *  ("in 2h", "any moment"). Empty for one still waiting on a `closed` task,
+ *  ("in 2h", "any moment", "overdue by 3d"). A past moment is named as overdue
+ *  rather than imminent: the pill beside it already shows that moment, so
+ *  "any moment" there would read as normal when the settle job is in fact
+ *  lost. Empty for one still waiting on a `closed` task,
  *  which waits for nothing. `checks`, the PR's `checks_state` when the caller
  *  holds it, says why a checks wait is still waiting: red checks keep it
  *  waiting (TG2). */
@@ -638,8 +720,21 @@ export function waitStateWord(w: TaskWait, opts: { now?: number; closed?: boolea
   if (w.kind === "pr_checks_green" && opts.checks === "failure") return "checks failing";
   if (w.kind === "pr_checks_green" && opts.checks === "pending") return "checks running";
   if (w.kind !== "time") return WAIT_PENDING_WORD[w.kind];
-  const left = relTimeShort(opts.now ?? Date.now(), w.at);
-  return left === "now" ? "any moment" : `in ${left}`;
+  const now = opts.now ?? Date.now();
+  const left = relTimeUntil(w.at, now);
+  if (left !== "now") return `in ${left}`;
+  const late = relTimeShort(w.at, now);
+  return late === "now" ? "any moment" : `${OVERDUE_BY} ${late}`;
+}
+
+/** The PR whose `checks_state` a surface must read to word this wait, or null
+ *  when it needs none: only a checks wait still waiting, with a resolved
+ *  repository, on a task that has not closed, can say "checks failing" or
+ *  "checks running" (TG2). One rule, so the task page, the phone and any
+ *  later surface fetch for the same waits. */
+export function checksWaitPr(w: TaskWait, opts: { closed?: boolean } = {}): PrWaitTarget | null {
+  if (opts.closed || w.kind !== "pr_checks_green" || w.state !== "waiting" || !w.repository) return null;
+  return { kind: w.kind, repository: w.repository, pr_number: w.pr_number };
 }
 
 /** Whether `waitStateWord` reads red on a page: the wait failed, or its PR's
@@ -735,7 +830,7 @@ export function parseBlockerRef(raw: string, opts: ParseBlockerOptions | number 
 
   const at = parseWaitTime(text, now, timeZone);
   if (at !== null) {
-    if (at <= now && !allowPast) return { ok: false, error: `"${text}" is in the past` };
+    if (at <= now && !allowPast) return { ok: false, error: pastTimeError(text, at, now, timeZone) };
     return { ok: true, kind: "time", at };
   }
 
@@ -766,6 +861,40 @@ function parseWaitTime(text: string, now: number, timeZone: string | undefined):
     return wall - (m[9] === "-" ? -1 : 1) * (oh * 60 + om) * 60_000;
   }
   return wallTimeIn(wall, timeZone);
+}
+
+/** A zone's offset at one moment, spelled the way a blocker ref takes it
+ *  ("+05:30"), so the refusal below can hand back the text that pins it. */
+function zoneOffsetAt(at: number, timeZone: string): string {
+  const w = wallClock(at, timeZone);
+  const mins = Math.round((Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second) - (at - (at % 1000))) / 60_000);
+  const abs = Math.abs(mins);
+  return `${mins < 0 ? "-" : "+"}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Why a time was refused for being past. A moment that lost to the clock is
+ * either the wrong date or the right one read in a zone the writer did not
+ * mean, and "is in the past" alone tells an agent neither, so it retries the
+ * same literal or guesses an offset. The line names what the text was read
+ * as, the zone it was read in, the clock it lost to, and — for a wall time
+ * that carried no zone, in a zone that is not UTC — the two spellings that
+ * pin it. A bare date takes no zone (`2026-10-08Z` parses as nothing), and a
+ * text already carrying one is unambiguous, so both are only told how to
+ * name a later moment.
+ */
+function pastTimeError(text: string, at: number, now: number, timeZone: string | undefined): string {
+  const tz = timeZone && isKnownTimeZone(timeZone) ? timeZone : localTimeZone();
+  const words = { now, timeZone: tz, withDay: true };
+  const m = ISO_TIME.exec(text);
+  const offset = zoneOffsetAt(at, tz);
+  // Group 4 is the hour: present only when the text named a time at all.
+  // Groups 8 and 9 are the zone it named, if any.
+  const wall = m?.[4] !== undefined && !m[8] && !m[9];
+  const fix = wall && offset !== "+00:00"
+    ? `give it a zone (${text}Z, ${text}${offset}) or a duration (2h)`
+    : "name a later moment, or a duration (2h)";
+  return `"${text}" is ${formatWaitTime(at, words)} in ${tz}, already past (now ${formatWaitTime(now, words)}); ${fix}`;
 }
 
 // ---------------------------------------------------------------------------

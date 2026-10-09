@@ -22,6 +22,11 @@ const MAX_RETIRE_ATTEMPTS = 12;
 const GITHUB_API_BASE = "https://api.github.com";
 
 type Ctx = { db: any; scheduler?: any };
+/** A ctx that can schedule. `patchPullRequest` takes one, because a PR move
+ *  schedules the settle of the waits on it (TG2) and a wait that cannot settle
+ *  is a trap: a caller with no scheduler would drop that job in silence. Every
+ *  caller is a mutation, so the type costs nothing and names the requirement. */
+type WriteCtx = { db: any; scheduler: any };
 type PR = Doc<"pull_requests">;
 
 // ── Folding PR state ──
@@ -58,7 +63,7 @@ export async function firePrTrigger(
  * a real transition from a repeat.
  */
 export async function patchPullRequest(
-  ctx: Ctx,
+  ctx: WriteCtx,
   prId: Id<"pull_requests">,
   updates: Record<string, any>,
 ): Promise<{ pr: PR; previousState: string | undefined; stateChanged: boolean } | null> {
@@ -93,7 +98,7 @@ export async function patchPullRequest(
   // Tasks waiting on this PR settle in a transaction of their own, from every
   // path that moves it (webhook, refresh, reconcile): task-graph.md TG2.
   if (after.waiting_task_ids?.length && (after.state !== before.state || after.checks_state !== before.checks_state)) {
-    await ctx.scheduler?.runAfter(0, internal.taskWaits.settlePr, { pr_id: prId });
+    await ctx.scheduler.runAfter(0, internal.taskWaits.settlePr, { pr_id: prId });
   }
 
   return { pr: after, previousState, stateChanged: state !== previousState };
