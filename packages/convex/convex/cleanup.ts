@@ -1,6 +1,8 @@
 import { refuseSeatKill } from "./lib/seatKill";
+import { noteWriteCause } from "./lifecycleEvents";
 import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./agentTasks";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
@@ -205,10 +207,12 @@ export function shouldReapEmpty(
 // Enqueue a broadcast kill_session for the conversation's agent, deduped against
 // a still-pending kill so repeated sweeps/dismissals don't pile up commands.
 // Returns true if a command was inserted (false = one is already queued).
+// `cause` names who asked (KillCause); the daemon logs it with the teardown.
 export async function enqueueKillSessionCommand(
   ctx: { db: any },
   conv: { _id: any; user_id: any; session_id?: string },
   now: number = Date.now(),
+  cause?: string,
 ): Promise<boolean> {
   const pending = await ctx.db
     .query("daemon_commands")
@@ -226,7 +230,7 @@ export async function enqueueKillSessionCommand(
     command: "kill_session" as const,
     // session_id rides along (mirrors conversations.killSession) so the daemon
     // can still tear the backend down when its conversation mapping is gone.
-    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id }),
+    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, ...(cause ? { cause } : {}) }),
     created_at: now,
   });
   return true;
@@ -245,7 +249,7 @@ export async function reapEmptyConversation(
   const hasLiveAgent = sessions.some((m: any) => (m.last_heartbeat ?? 0) > now - LIVE_HEARTBEAT_MS);
 
   if (hasLiveAgent) {
-    await enqueueKillSessionCommand(ctx, conv, now);
+    await enqueueKillSessionCommand(ctx, conv, now, "gc_empty");
     return "kill_enqueued";
   }
 
@@ -301,7 +305,7 @@ export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  opts?: { cascade?: boolean; forceKill?: boolean },
+  opts?: { cascade?: boolean; forceKill?: boolean; cause?: string },
 ): Promise<{
   action: "reap" | "kill" | "none";
   canceledSchedules: number;
@@ -332,7 +336,7 @@ export async function applyHideTransition(
     // be in the client's outbox (an image uploading, send-and-stash, a kill
     // from another window), and deleting the row under it loses that message
     // and strands the client's copy of the session (2026-10-01).
-    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), `${opts?.cause ?? "hide"}:reap`);
     await subagentEnded(ctx, doc, "killed");
   } else if (action === "kill") {
     // false = an unexecuted kill_session for this conversation is ALREADY on the
@@ -340,7 +344,7 @@ export async function applyHideTransition(
     // holds either way, so callers report which it was instead of piling on a
     // duplicate command. A kill the daemon already executed leaves no pending
     // row, so the re-kill that matters — the resurrection case — always inserts.
-    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc);
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), opts?.cause ?? "hide");
     // A persistent anchor never auto-completes on a dismiss/kill — it goes
     // dormant, not retired (only decommissionAnchor clears `persistent`).
     // inbox_killed_at records when the session was FIRST killed: a forced
@@ -387,7 +391,7 @@ export async function applyHideTransition(
   // per-child transition call opts out to stay single-level.
   let cascaded = 0;
   if (opts?.cascade !== false && (patch.inbox_dismissed_at || patch.inbox_stashed_at)) {
-    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill });
+    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill, cause: opts?.cause });
   }
   return { action, canceledSchedules, canceledMessages, cascaded, teardownEnqueued };
 }
@@ -419,7 +423,7 @@ export async function cascadeHideToNestedChildren(
   ctx: { db: any },
   lead: any,
   patch: { inbox_dismissed_at?: number; inbox_stashed_at?: number },
-  opts?: { forceKill?: boolean },
+  opts?: { forceKill?: boolean; cause?: string },
 ): Promise<number> {
   const field = patch.inbox_dismissed_at ? ("inbox_dismissed_at" as const) : ("inbox_stashed_at" as const);
   const stamp = patch[field];
@@ -436,21 +440,69 @@ export async function cascadeHideToNestedChildren(
       .take(200),
   ]);
   const seen = new Set<string>();
-  let cascaded = 0;
+  const childIds: string[] = [];
   for (const child of [...taskSubs, ...spawned]) {
     const idStr = child._id.toString();
     if (idStr === leadId || seen.has(idStr)) continue;
     seen.add(idStr);
     if (nestParentIdOf(child) !== leadId) continue;
+    if (child[field] && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    childIds.push(idStr);
+  }
+  await hideNestedChildren(ctx, lead._id, field, stamp, childIds, opts);
+  return childIds.length;
+}
+
+// Each child's teardown costs tens of reads, so a lead with 175 subagents
+// passed Convex's 4096-read cap inside the gesture's own transaction and the
+// lead could not be hidden at all (2026-10-08). The first batch goes now; the
+// rest follow in scheduled batches, which stop if the lead was un-hidden since.
+const CASCADE_BATCH = 20;
+
+async function hideNestedChildren(
+  ctx: { db: any; scheduler?: any },
+  leadId: any,
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+  stamp: number,
+  childIds: string[],
+  opts?: { forceKill?: boolean; cause?: string },
+): Promise<void> {
+  const now = ctx.scheduler ? childIds.slice(0, CASCADE_BATCH) : childIds;
+  for (const id of now) {
+    // A copy: applyHideTransition classifies on the PRE-patch row.
+    const found = await ctx.db.get(id);
+    if (!found) continue;
+    const child = { ...found };
     const alreadyHidden = !!child[field];
-    if (alreadyHidden && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    if (alreadyHidden && !opts?.forceKill) continue;
     const childPatch = { [field]: alreadyHidden ? child[field] : stamp };
     if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
-    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill });
-    cascaded++;
+    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, cause: `cascade<-${opts?.cause ?? "hide"}` });
   }
-  return cascaded;
+  const rest = childIds.slice(now.length);
+  if (rest.length) {
+    await ctx.scheduler.runAfter(0, internal.cleanup.continueCascadeHide, {
+      lead_id: leadId, field, stamp, child_ids: rest, force_kill: opts?.forceKill, cause: opts?.cause,
+    });
+  }
 }
+
+export const continueCascadeHide = internalMutation({
+  args: {
+    lead_id: v.id("conversations"),
+    field: v.union(v.literal("inbox_dismissed_at"), v.literal("inbox_stashed_at")),
+    stamp: v.number(),
+    child_ids: v.array(v.string()),
+    force_kill: v.optional(v.boolean()),
+    cause: v.optional(v.string()),
+  },
+  handler: async (ctx, { lead_id, field, stamp, child_ids, force_kill, cause }) => {
+    const lead = await ctx.db.get(lead_id);
+    if (!lead || !(lead as any)[field]) return;
+    if (cause) noteWriteCause(ctx, cause);
+    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill, cause });
+  },
+});
 
 export const gcEmptyConversations = internalMutation({
   args: {
@@ -459,6 +511,7 @@ export const gcEmptyConversations = internalMutation({
     scan_limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    noteWriteCause(ctx, "cron:gcEmptyConversations");
     const now = Date.now();
     const until = Math.min(args.until ?? now - EMPTY_CONVERSATION_GRACE_MS, now - EMPTY_CONVERSATION_GRACE_MS);
     const since = args.since ?? until - EMPTY_GC_BAND_MS;

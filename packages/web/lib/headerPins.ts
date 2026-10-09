@@ -54,6 +54,15 @@ export function anchorIdentityWords(a: AnchorRow | null | undefined): { name: st
   return { name: agentName(a), subtitle: a?.scope_type === "team" ? `${a.team_name ?? "Team"}'s agent` : "Your agent" };
 }
 
+/** What the header shows when nothing is pinned, and what the panel opens on
+ *  when no pin resolves (an emptied list still reaches the assistant). */
+export function defaultPinOf(anchors: AnchorRow[], activeTeamId: string | null | undefined): ResolvedPin | null {
+  const def = globalAssistantOf(anchors) ?? rootAgentOf(anchors, activeTeamId);
+  if (!def) return null;
+  const words = anchorIdentityWords(def);
+  return { key: `anchor:${def._id}`, pin: null, anchor: def, conversationId: def.conversation_id ? String(def.conversation_id) : null, ...words, isDefault: true };
+}
+
 export function resolveHeaderPins(
   pins: HeaderPin[] | null,
   anchors: AnchorRow[],
@@ -61,10 +70,8 @@ export function resolveHeaderPins(
   activeTeamId: string | null | undefined,
 ): ResolvedPin[] {
   if (pins === null) {
-    const def = globalAssistantOf(anchors) ?? rootAgentOf(anchors, activeTeamId);
-    if (!def) return [];
-    const words = anchorIdentityWords(def);
-    return [{ key: `anchor:${def._id}`, pin: null, anchor: def, conversationId: def.conversation_id ? String(def.conversation_id) : null, ...words, isDefault: true }];
+    const def = defaultPinOf(anchors, activeTeamId);
+    return def ? [def] : [];
   }
   const out: ResolvedPin[] = [];
   for (const pin of pins) {
@@ -97,7 +104,6 @@ export function toggleHeaderPin(kind: HeaderPin["kind"], id: string): void {
 /** The default as a pin list, so a first pin keeps what the header showed. */
 export function defaultPinsOf(state: any): HeaderPin[] {
   const anchors: AnchorRow[] = Object.values(state.anchors ?? {}).filter((a: any) => a.status !== "decommissioned") as AnchorRow[];
-  const activeTeamId = (state.clientState?.ui?.active_team_id as string | undefined) ?? null;
-  const def = globalAssistantOf(anchors) ?? rootAgentOf(anchors, activeTeamId);
-  return def?.role ? [{ kind: "role", id: String(def.role._id) }] : [];
+  const def = defaultPinOf(anchors, (state.clientState?.ui?.active_team_id as string | undefined) ?? null);
+  return def?.anchor?.role ? [{ kind: "role", id: String(def.anchor.role._id) }] : [];
 }

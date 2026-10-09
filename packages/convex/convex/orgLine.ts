@@ -1,20 +1,22 @@
 import { v } from "convex/values";
-import { LINE_SWEEP_ON } from "./lib/lineSweep";
 import { internalMutation, query } from "./functions";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
-import { TASK_PRIORITIES } from "@codecast/shared/tasks";
+import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
+import { isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
+import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
-import { capsFor, cardsCapOf, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
+import { capsFor, cardsCapOf, countersFor } from "./lib/orgCaps";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
 import { createRunCore, LIVE_RUN_STATUSES, queueRunOnDaemon } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
+import { seatPlace } from "./lib/seatPlace";
 import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
-import { NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
+import { LINE_GOAL, NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { priority as linePriority, type Severity } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -30,7 +32,6 @@ type Ctx = { db: any };
 // How many runs one sweep may start in total, so a large backlog is drained
 // two minutes at a time instead of in one long mutation.
 export const MAX_STARTS_PER_SWEEP = 10;
-export { LINE_SWEEP_ON };
 
 
 export const LINE_STARTED_PREFIX = "the line started: run ";
@@ -38,7 +39,7 @@ export const LINE_STARTED_PREFIX = "the line started: run ";
 const agentAssignee = (role: { handle: string }) => `agent:${role.handle}`;
 
 // L9 and LE6: what a role's line may start. Two kinds, both open, with no
-// run yet, no blocker that is still open, and work the role owns by the one
+// run yet, no blocker or wait still open, and work the role owns by the one
 // ownership rule (org-staffing.md S26), so a wider role never starts what a
 // narrower one owns:
 //   - a task assigned to the role (its agent or the role itself);
@@ -60,7 +61,7 @@ export async function rankedCandidates(ctx: Ctx, role: any): Promise<RankedCandi
   const pool = await linePool(ctx, role, assignees);
   const roles = await allRolesInBoundary(ctx, role);
   const goals = new Map<string, GoalPriority | "unranked" | null>();
-  const out: RankedCandidate[] = [];
+  const owned: any[] = [];
   const seen = new Set<string>();
   for (const task of pool) {
     if (seen.has(String(task._id))) continue;
@@ -69,7 +70,13 @@ export async function rankedCandidates(ctx: Ctx, role: any): Promise<RankedCandi
     const assigned = assignees.has(task.assignee);
     if (!assigned && !(isReadyCause(task) && !task.assignee)) continue;
     if (!(await lineOwns(ctx, role, task, roles))) continue;
-    if (await isBlocked(ctx, task)) continue;
+    owned.push(task);
+  }
+  // Blockers and waits by the one rule (task-graph.md TG1).
+  const lookupsFor = await readinessLookups(ctx, owned);
+  const out: RankedCandidate[] = [];
+  for (const task of owned) {
+    if (!isUnblocked(task, lookupsFor(task).statusOf)) continue;
     out.push({ task, priority: linePriority(await goalPriorityOf(ctx, task, goals), severityOf(task), task.cause?.signal_count ?? 1) });
   }
   const age = (t: any) => t.created_at ?? t._creationTime ?? 0;
@@ -100,12 +107,14 @@ function severityOf(task: any): Severity {
   return SEVERITIES.has(task.priority) ? task.priority : "none";
 }
 
-// goal_ref is a metric ref `in-N:key`, a project's short id, or "none"
+// goal_ref is a metric ref `in-N:key`, a project's short id, "line" or "none"
 // (goalsBrief.ts). The goal's priority is read from its row in the task's own
-// workspace; a ref that names nothing readable there counts as unranked.
+// workspace; the line's own goal has no row and no priority, and a ref that
+// names nothing readable there counts as unranked.
 async function goalPriorityOf(ctx: Ctx, task: any, cache: Map<string, GoalPriority | "unranked" | null>): Promise<GoalPriority | "unranked" | null> {
   const ref = task.goal_ref?.trim();
   if (!ref || ref === NO_GOAL) return null;
+  if (ref === LINE_GOAL) return "unranked";
   const key = `${task.workspace}|${ref}`;
   if (cache.has(key)) return cache.get(key)!;
   const shortId = ref.split(":")[0];
@@ -129,18 +138,10 @@ async function linePool(ctx: Ctx, role: any, assignees: Set<string>): Promise<an
   return rows.filter((t) => t.workspace === key);
 }
 
-// blocked_by holds task short ids (tasks.ts ready): a blocker counts as open
-// until it is done or dropped. An unknown id blocks nothing.
-async function isBlocked(ctx: Ctx, task: any): Promise<boolean> {
-  for (const shortId of task.blocked_by ?? []) {
-    const blocker = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-    if (blocker && blocker.status !== "done" && blocker.status !== "dropped") return true;
-  }
-  return false;
-}
-
+// Whether the role's line may start a run now: active, its line's start switch
+// on (learning-loop.md LL5), and hands left today.
 export function roleMayStartHands(role: any, now: number): boolean {
-  if (role.status !== "active" || !roleStartsOnItsOwn(role)) return false;
+  if (role.status !== "active" || !lineStartsOn(role)) return false;
   // A role retiring behind a knowledge handoff (org-staffing.md S32) starts
   // nothing new: its area already belongs to the heirs.
   if (role.handing_over?.retire) return false;
@@ -163,6 +164,7 @@ export async function openLineCards(ctx: Ctx, role: any): Promise<number> {
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
   const standing = anchor?.conversation_id ?? null;
   if (!standing) return 0;
+  const runner = seatPlace(role, await ctx.db.get(standing)).runner_user_id;
   const held = new Set<string>();
   for (const status of IN_FLIGHT) {
     const runs: any[] = await ctx.db
@@ -173,7 +175,7 @@ export async function openLineCards(ctx: Ctx, role: any): Promise<number> {
   }
   const pending: any[] = await ctx.db
     .query("session_decisions")
-    .withIndex("by_user_status", (q: any) => q.eq("user_id", role.host_user_id).eq("status", "pending"))
+    .withIndex("by_user_status", (q: any) => q.eq("user_id", runner).eq("status", "pending"))
     .collect();
   for (const d of pending) {
     if (!d.blocking || !d.workflow_run_id || d.gate_node_id !== LINE_CARD_GATE_NODE || held.has(String(d.workflow_run_id))) continue;
@@ -218,7 +220,7 @@ export async function personCardLoad(ctx: Ctx, person: string): Promise<CardLoad
   const roles = await rolesAnsweredBy(ctx, person);
   let open = 0;
   for (const r of roles) open += await openLineCards(ctx, r);
-  const live = roles.filter((r) => r.status === "active" && roleStartsOnItsOwn(r));
+  const live = roles.filter((r) => r.status === "active" && lineStartsOn(r));
   const cap = live.length ? Math.min(...live.map(cardsCapOf)) : cardsCapOf({});
   return { person, open, cap };
 }
@@ -245,21 +247,23 @@ export function admissionWaitWords(wait: AdmissionWait, openCards: number): stri
 }
 
 // L9: one run for one task, through the same core createFromCli uses, with
-// the role as the caller: the run belongs to the host user, its spawner is
-// the role's standing session (so hands spawn under the role, L1), its cwd
-// is the anchor's project path, and its workflow is the host's row with the
-// line's slug. When the host has no such row (the slug names a shipped
+// the role as the caller: the run belongs to whoever runs the role's
+// standing session, its spawner is that session (so hands spawn under the
+// role, L1), its cwd is that session's folder (seatPlace), and its workflow
+// is that person's row with the line's slug. When they have no such row (the slug names a shipped
 // template that was never pushed) the run carries `workflow_name` = the
 // slug and no `workflow_id`; `cast workflow run-daemon` resolves the shipped
 // template by that name (workflow/daemonGraph.ts).
 export async function startLineRun(ctx: Ctx, role: any, task: any, now = Date.now()): Promise<Id<"workflow_runs">> {
-  const hostId: Id<"users"> = role.host_user_id;
+  const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+  const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+  const place = seatPlace(role, standing);
+  const hostId: Id<"users"> = place.runner_user_id;
   const slug = lineSlugOf(role);
   const workflow = await ctx.db
     .query("workflows")
     .withIndex("by_user_slug", (q: any) => q.eq("user_id", hostId).eq("slug", slug))
     .first();
-  const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
 
   // L8 is createRunCore's: the run's ACCESS key comes from the task's own
   // workspace, so a task private to its owner inside a team keeps a private
@@ -270,7 +274,7 @@ export async function startLineRun(ctx: Ctx, role: any, task: any, now = Date.no
     workflow_id: workflow?._id,
     task,
     goal_override: task.title,
-    project_path: anchor?.project_path ?? undefined,
+    project_path: place.project_path,
     spawner_conversation_id: anchor?.conversation_id ?? undefined,
     fallback_team_id: role.team_id ?? undefined,
     now,
@@ -297,8 +301,9 @@ export type SweepResult = {
   skipped_cards: string[];
 };
 
-// L9 and LE6: every two minutes. Paused roles and roles whose switch is off
-// never start anything. A role admits its candidates highest priority first
+// L9 and LE6: every two minutes. Paused roles and roles whose line's start
+// switch is off (learning-loop.md LL5: caps.line_on, under the role's own
+// switch) never start anything, and every line starts off. A role admits its candidates highest priority first
 // while the open cards of the person who answers them (LP6, across all their
 // lines) are under that person's cap and the role's hands under
 // caps.hands_per_day; a role at either cap is reported and waits for a card
@@ -309,7 +314,7 @@ export async function sweepCore(ctx: Ctx, now = Date.now()): Promise<SweepResult
   // One load per person, shared by every role they answer for in this pass.
   const loads = new Map<string, CardLoad>();
   for (const seed of roles) {
-    if (seed.status !== "active" || !roleStartsOnItsOwn(seed)) continue;
+    if (seed.status !== "active" || !lineStartsOn(seed)) continue;
     let role = seed;
     const candidates = await lineCandidates(ctx, role);
     if (!candidates.length) continue;
@@ -339,7 +344,7 @@ export const sweep = internalMutation({
 });
 
 export type LineQueueItem = { task_id: string; short_id: string | null; title: string; cause: boolean; priority: number; waiting: string | null };
-export type LineQueue = { role_id: string; sweep_on: boolean; open_cards: number; cards_cap: number; hands: number; hands_cap: number; waiting: string | null; items: LineQueueItem[] };
+export type LineQueue = { role_id: string; open_cards: number; cards_cap: number; hands: number; hands_cap: number; waiting: string | null; items: LineQueueItem[] };
 
 // LE6: the line page's queue for one role: its candidates in admission order,
 // each with why it waits (null: it starts at the next sweep). `waiting` on the
@@ -363,7 +368,6 @@ export async function lineQueueFor(ctx: Ctx, role: any, now = Date.now()): Promi
   };
   return {
     role_id: String(role._id),
-    sweep_on: LINE_SWEEP_ON,
     open_cards: cards,
     cards_cap: cardsCap,
     hands,

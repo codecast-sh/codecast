@@ -17,12 +17,13 @@ import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
-import { REPLAY_CHUNK_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
+import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./replays";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
 import { handleFaceRequest } from "./callFace";
 import { sentryWebhook, setEventGroupStatus } from "./sources/sentry";
 import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
+import { claimFrontier } from "./taskFrontier";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,
@@ -1605,15 +1606,16 @@ cliRoute("/cli/decide/answer", (ctx, body) =>
     // A person at a plain shell has no session (decisions-as-documents.md
     // D2): the CLI sends null, and the validator takes undefined only.
     session_id: body.session_id ?? undefined,
+    for_human: body.for_human ?? undefined,
     answer_index: body.answer_index,
     answer_json: body.answer_json,
     answer_text: body.answer_text,
   }),
 );
-// The verb is gone (org-staffing.md S28). The route stays so a CLI that still
-// sends `cast decide escalate` reads why, instead of a 404.
+// The verb is renamed (org-staffing.md S28). The route stays so a CLI that
+// still sends `cast decide escalate` reads what replaced it, instead of a 404.
 cliRoute("/cli/decide/escalate", async () => ({
-  error: "cast decide escalate is gone: a role no longer passes a decision up the ladder. Recommend an option (cast decide recommend), or raise what you cannot settle in your own thread: pin it (cast state --status blocked) or post your own cast decide.",
+  error: "cast decide escalate is now cast decide pass <sd-N> --note -: it hands the same card up to the people with your note on it. To favour an option, cast decide recommend <sd-N> <n> --note - hands it up the same way.",
 }));
 cliRoute("/cli/decide/show", (ctx, body) =>
   ctx.runMutation(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
@@ -4096,9 +4098,6 @@ cliRoute("/cli/org/tree", async (ctx, body) => {
 });
 // Where the calling session sits (`cast org where`, the session-start org context).
 cliRoute("/cli/org/where", async (ctx, body) => ctx.runQuery((api as any).orgWhere.where, body));
-// The project's promoted corrections and decisions (shared/contracts/projectMemory),
-// injected at session start and read by `cast memory list`.
-cliRoute("/cli/memory", async (ctx, body) => ctx.runQuery((api as any).projectMemory.list, body));
 cliRoute("/cli/org/sessions-under", async (ctx, body) => {
   return await ctx.runQuery(api.org.sessionsUnder, body);
 });
@@ -4131,6 +4130,8 @@ cliRoute("/cli/role/pause", async (ctx, body) => ctx.runMutation(api.orgRoles.pa
 cliRoute("/cli/role/resume", async (ctx, body) => ctx.runMutation(api.orgRoles.resume, body));
 cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.retire, body));
 cliRoute("/cli/role/restart", async (ctx, body) => ctx.runMutation(api.orgRoles.restart, body));
+// device_id is the destination, as for /cli/sessions/reparent.
+cliRoute("/cli/role/move", async (ctx, body) => ctx.runMutation(api.orgRoles.move, body), { forwardDeviceId: true });
 // The switch (org-staffing.md S23.1) and the limits. /trust and /caps stay one
 // release for older CLIs; both pairs run the same mutation.
 cliRoute("/cli/role/autonomy", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
@@ -4238,6 +4239,21 @@ cliRoute("/cli/session/unread", async (ctx, body) => {
 // Team chat. Every one of these authorizes the caller inside the function — this
 // route only forwards the request body, so the mutation's own argument list is
 // what keeps identity and scope out of the caller's hands.
+//
+// The CLI prints messages by a short id prefix, so each message-id field is
+// resolved to the full id first (chat.resolveMessageRef); the function still
+// checks access itself.
+async function withChatMessageIds(ctx: any, body: any, ...fields: string[]) {
+  for (const field of fields) {
+    if (typeof body?.[field] !== "string") continue;
+    const { id, error } = await ctx.runQuery(internal.chat.resolveMessageRef, {
+      api_token: body.api_token, ref: body[field],
+    });
+    if (!id) throw new ConvexError({ code: "NOT_FOUND", message: error });
+    body[field] = id;
+  }
+  return body;
+}
 cliRoute("/cli/chat/channels", async (ctx, body) => {
   return await ctx.runQuery(api.chat.listChannels, body);
 });
@@ -4248,36 +4264,36 @@ cliRoute("/cli/chat/read", async (ctx, body) => {
   return await ctx.runQuery(api.chat.listMessages, body);
 });
 cliRoute("/cli/chat/thread", async (ctx, body) => {
-  return await ctx.runQuery(api.chat.getThread, body);
+  return await ctx.runQuery(api.chat.getThread, await withChatMessageIds(ctx, body, "root_id"));
 });
 cliRoute("/cli/chat/message", async (ctx, body) => {
-  return await ctx.runQuery(api.chat.getMessage, body);
+  return await ctx.runQuery(api.chat.getMessage, await withChatMessageIds(ctx, body, "message_id"));
 });
 cliRoute("/cli/chat/search", async (ctx, body) => {
   return await ctx.runQuery(api.chat.searchMessages, body);
 });
 cliRoute("/cli/chat/send", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.sendMessage, body);
+  return await ctx.runMutation(api.chat.sendMessage, await withChatMessageIds(ctx, body, "thread_root_id"));
 });
 cliRoute("/cli/chat/mark-read", async (ctx, body) => {
   return await ctx.runMutation(api.chat.markRead, body);
 });
 // What the anchor runs to fill the placeholder already showing in the thread.
 cliRoute("/cli/chat/reply", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.replyAsAnchor, body);
+  return await ctx.runMutation(api.chat.replyAsAnchor, await withChatMessageIds(ctx, body, "message_id"));
 });
 // Stop the anchor answering plain replies in one thread, or hand it a thread it
 // has not spoken in. body: { api_token, root_id, follow }.
 cliRoute("/cli/chat/anchor-follow", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.setAnchorFollow, body);
+  return await ctx.runMutation(api.chat.setAnchorFollow, await withChatMessageIds(ctx, body, "root_id"));
 });
 cliRoute("/cli/chat/react", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.toggleReaction, body);
+  return await ctx.runMutation(api.chat.toggleReaction, await withChatMessageIds(ctx, body, "message_id"));
 });
 // Stop one in-flight anchor turn now, instead of waiting out the deadline.
 // body: { api_token, message_id } — the thinking placeholder's id.
 cliRoute("/cli/chat/stop", async (ctx, body) => {
-  return await ctx.runMutation(api.chat.stopAnchorReply, body);
+  return await ctx.runMutation(api.chat.stopAnchorReply, await withChatMessageIds(ctx, body, "message_id"));
 });
 // Archive (or restore) a channel. body: { api_token, channel_id, archived }.
 cliRoute("/cli/chat/archive", async (ctx, body) => {
@@ -4344,6 +4360,16 @@ cliRoute("/cli/signal/ls", async (ctx, body) => {
 });
 cliRoute("/cli/signal/show", async (ctx, body) => {
   return await ctx.runQuery(api.signals.showForCli, body);
+});
+cliRoute("/cli/signal/move", async (ctx, body) => {
+  return await ctx.runMutation(api.signals.moveForCli, body);
+});
+// A product's issues merged or split (learning-loop.md LL3): codecast follows.
+cliRoute("/cli/signal/merge", async (ctx, body) => {
+  return await ctx.runMutation(api.signals.mergeForCli, body);
+});
+cliRoute("/cli/signal/split", async (ctx, body) => {
+  return await ctx.runMutation(api.signals.splitForCli, body);
 });
 // A repo's resolved line profile onto its projects (line-profile.md LP3).
 // device_id is the publisher's machine, where an edit of the file is routed.
@@ -4414,14 +4440,37 @@ cliRoute("/cli/work/update", async (ctx, body) => {
 cliRoute("/cli/work/comment", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.addComment, body);
 });
+// `cast task ready --claim`: start the first ready task for the caller (TG7).
+cliRoute("/cli/work/claim", async (ctx, body) => {
+  return await claimFrontier(ctx, body);
+});
 cliRoute("/cli/work/dep", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.addDep, body);
 });
 cliRoute("/cli/work/undep", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.removeDep, body);
 });
+cliRoute("/cli/work/wait", async (ctx, body) => {
+  return await ctx.runMutation(api.taskWaits.addWait, body);
+});
+cliRoute("/cli/work/unwait", async (ctx, body) => {
+  return await ctx.runMutation(api.taskWaits.removeWait, body);
+});
+// Links that do not block (TG5): supersede moves the old task's dependents.
+cliRoute("/cli/work/supersede", async (ctx, body) => {
+  return await ctx.runMutation(api.taskLinks.supersede, body);
+});
+cliRoute("/cli/work/relate", async (ctx, body) => {
+  return await ctx.runMutation(api.taskLinks.relate, body);
+});
+cliRoute("/cli/work/unrelate", async (ctx, body) => {
+  return await ctx.runMutation(api.taskLinks.unrelate, body);
+});
 cliRoute("/cli/work/context", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.context, body);
+});
+cliRoute("/cli/work/resume", async (ctx, body) => {
+  return await ctx.runQuery(api.taskResume.context, body);
 });
 cliRoute("/cli/work/promote", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.promote, body);
@@ -4493,14 +4542,6 @@ cliRoute("/cli/integrations/remove-source", async (ctx, body) => {
 });
 cliRoute("/cli/integrations/sync", async (ctx, body) => {
   return await ctx.runAction(api.issueSync.cliSyncNow, body);
-});
-
-cliRoute("/cli/work/mine", async (ctx, body) => {
-  return await ctx.runAction(internal.taskMining.backfillDocsFromMessages, { user_id: body.user_id });
-});
-
-cliRoute("/cli/work/mine-all", async (_ctx, _body) => {
-  return await _ctx.runAction(internal.taskMining.backfillAllTeams, {});
 });
 
 // Plans
@@ -4585,6 +4626,16 @@ cliRoute("/cli/plans/share", async (ctx, body) => {
 });
 cliRoute("/cli/plans/unshare", async (ctx, body) => {
   return await ctx.runMutation(api.plans.unsharePlan, body);
+});
+// `cast plan template save|ls`, and `cast plan create --template <saved name>` (TG6).
+cliRoute("/cli/plans/template-save", async (ctx, body) => {
+  return await ctx.runMutation(api.planTemplates.save, body);
+});
+cliRoute("/cli/plans/templates", async (ctx, body) => {
+  return await ctx.runQuery(api.planTemplates.list, body);
+});
+cliRoute("/cli/plans/template-remove", async (ctx, body) => {
+  return await ctx.runMutation(api.planTemplates.remove, body);
 });
 cliRoute("/cli/orchestration/emit", async (ctx, body) => {
   return await ctx.runMutation(api.orchestrationEvents.emit, body);
@@ -4686,6 +4737,8 @@ cliRoute("/cli/objects/kinds", async (ctx, body) => ctx.runQuery((api as any).mo
 
 // Mods' local halves (convex/modLocal.ts): the daemon's side of the bridge
 cliRoute("/cli/mods/local", async (ctx, body) => ctx.runQuery((api as any).modLocal.cliLocalMods, body));
+cliRoute("/cli/mods/local-report", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliReportLocal, body));
+cliRoute("/cli/mods/local-device", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliSetLocalDevice, body));
 cliRoute("/cli/mods/publish-state", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliPublish, body));
 cliRoute("/cli/mods/claim-calls", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliClaimCalls, body));
 cliRoute("/cli/mods/finish-call", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliFinishCall, body));
@@ -4961,6 +5014,8 @@ import {
   corsPreflight as artifactCors,
   mediaSign as artifactMediaSign,
   playerJs as artifactPlayerJs,
+  dataJs as artifactDataJs,
+  motionJs as artifactMotionJs,
 } from "./artifactsHttp";
 
 const artifactPost = (path: string, handler: typeof artifactPublish) => {
@@ -4981,6 +5036,13 @@ artifactPost("/cli/artifacts/view", artifactView);
 // script every page using <cast-player> loads (see lib/castPlayer.ts).
 artifactPost("/cli/media/sign", artifactMediaSign);
 http.route({ path: "/cli/player.js", method: "GET", handler: artifactPlayerJs });
+// Live data on published pages: the runtime pages with <cast-chart>/<cast-stat>
+// load (lib/castData.ts), and the owner's view behind `cast publish data`.
+// The data itself is served under the page (/cli/a/<slug>/_data), past its gates.
+http.route({ path: "/cli/data.js", method: "GET", handler: artifactDataJs });
+cliRoute("/cli/artifacts/data", async (ctx, body) => ctx.runAction(api.pageData.forCli, body));
+// The motion player HyperFrames composition pages load (see lib/castMotion.ts).
+http.route({ path: "/cli/motion.js", method: "GET", handler: artifactMotionJs });
 
 // Vault remote mirror — the daemon's push channel (packages/cli/src/vault/
 // vaultMirror.ts). Mirroring is opt-in per vault; a vault nobody turned on
@@ -5150,6 +5212,8 @@ http.route({ path: REPLAY_CHUNK_PATH, method: "OPTIONS", handler: replayChunkPre
 // The player page (replay.codecast.sh) trades its capability for the DOM capture's signed URLs.
 http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "GET", handler: replayPlayerManifest });
 http.route({ path: REPLAY_PLAYER_MANIFEST_PATH, method: "OPTIONS", handler: replayPlayerManifestPreflight });
+// The player worker asks before each frame request starts a browser: the capability opens and its budget has room.
+http.route({ path: REPLAY_FRAME_ADMIT_PATH, method: "POST", handler: replayFrameAdmit });
 
 // One-click unsubscribe for the notification digest (emails/digest.ts). Lives
 // under /cli/ because Caddy forwards only that prefix to HTTP actions. GET
