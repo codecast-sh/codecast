@@ -5,7 +5,7 @@ import { InstallTabs } from "@/components/install-tabs";
 import { SOL } from "../../blog/blogChrome";
 import { featureHref, featureDeepDives } from "../catalog";
 import { CLOUD_CSS } from "./motion";
-import { BLUE, C, Out, P$, Section, Term, delay } from "./kit";
+import { BLUE, C, Caption, Note, Section, Shot, delay } from "./kit";
 import { HeroDiptych } from "./Hero";
 import { SpawnSection } from "./Spawn";
 import { ManifestSection } from "./Manifest";
@@ -44,6 +44,7 @@ const REFERENCE: { group: string; rows: [string, string][] }[] = [
       ["cast hosts add <instance-id> --provision", "Register one you already run"],
       ["cast hosts wake | sleep [id]", "Boot it, or stop it costing money"],
       ["cast hosts setup | image [id]", "Apply [host]; save a ready host"],
+      ["cast hosts tools [id]", "Check and install the CLIs and runtimes the host needs"],
       ["cast hosts sync --dry-run", "What the config mirror would send"],
       ["cast hosts vnc [id]", "The whole screen, in codecast"],
     ],
@@ -59,27 +60,49 @@ const REFERENCE: { group: string; rows: [string, string][] }[] = [
 ];
 
 const LIMITS: { q: string; a: React.ReactNode }[] = [
-  { q: "Where can a host run?", a: <>On AWS. <C>cast hosts create</C> launches Ubuntu 24.04 or macOS EC2 instances, and <C>cast hosts add</C> registers one you already run. You need AWS credentials and an SSH key on the laptop; Settings, Machines, Add a cloud machine builds the command for you.</> },
+  { q: "Where can a host run?", a: <>On AWS: Ubuntu 24.04 or macOS EC2 instances, new or ones you already run. Settings, Devices, Add a cloud machine builds the setup command (<C>cast hosts create</C> or <C>cast hosts add</C>), and running it needs AWS credentials and an SSH key on the laptop.</> },
   { q: "What does it cost?", a: <>Whatever AWS charges you; the host is yours. Linux hosts stop themselves when idle and then cost only their disk. A Mac sits on a dedicated host with a 24 hour minimum, billed while stopped.</> },
   { q: "Which sessions can migrate?", a: <>Claude Code sessions with a transcript. Other agents, subagents (they move with their parent), ended or killed sessions are skipped with the reason. Moving straight from one cloud host to another is not supported.</> },
   { q: "Does my laptop need to be on?", a: <>For starting and moving work, yes: preparation and transfers run from a laptop daemon over SSH, and the machine holding a session&apos;s files must be online to move it. A running session keeps going with the lid closed. Waking a host for a trigger with every laptop closed needs the backend operator to allowlist it.</> },
   { q: "Can the host open pull requests?", a: <>It pushes with a one-hour GitHub App token scoped to one repo and contents write, so fetch and push work. Calls that need more, like opening a PR, answer 403 unless you log in with <C>gh auth login</C> on the host or grant the device key.</> },
-  { q: "What if a mid-turn session never finishes?", a: <>After <C>--wait</C> minutes (10 by default) the turn is interrupted and the row says so. A session stopped at a permission prompt moves at once, and the prompt asks again on the destination. A runner that dies leaves a fence the server lifts after 30 minutes.</> },
+  { q: "What if a mid-turn session never finishes?", a: <>After the wait you chose under Sessions mid-turn in Migration (<C>--wait</C> from the CLI, 10 minutes by default), the turn is interrupted and the row says so. A session stopped at a permission prompt moves at once, and the prompt asks again on the destination. A runner that dies leaves a fence the server lifts after 30 minutes.</> },
 ];
 
 const RELATED = ["agents", "browser", "triggers", "computer"];
 
-/** `cast remote hosts`: the machines this laptop can send work to. */
-function HostsCard() {
+/** The new-session composer with a cloud host picked: the switches and the machine pill. */
+function ComposerShot() {
   return (
     <div className="cl-anim cl-rise min-w-0 hidden sm:block" style={delay(0.3)}>
-      <Term machine="laptop" label="your laptop">
-        <P$>cast remote hosts</P$>
-        <Out>this device: macOS - MacBook-Pro  <span style={{ color: SOL.base1 }}>(76e7d3d6)</span></Out>
-        <Out>{"  "}<span style={{ color: SOL.base02 }}>i-0843c56a91e15ff</span>  ubuntu@203.0.113.24  aws <span style={{ color: SOL.green }}>running</span></Out>
-        <Out>{"  "}<span style={{ color: SOL.base02 }}>i-021a2d254c07d3e</span>  ec2-user@203.0.113.80  aws <span style={{ color: SOL.base1 }}>stopped</span></Out>
-      </Term>
-      <p className="mt-3 font-mono text-[12px] leading-5" style={{ color: SOL.base1 }}>Linux or Mac, on your own AWS account. A stopped host wakes when work is sent to it.</p>
+      <Shot src="/features/cloud/composer-cloud.webp" alt="The new-session composer: isolated worktree and run in the cloud switched on, start from my checkout, and the machine pill reading Cloud Linux" width={1252} height={252} />
+      <p className="mt-3 font-mono text-[12px] leading-5" style={{ color: SOL.base1 }}>Starting a session: switch on run in the cloud, pick what it starts from, and the machine pill names the host it will run on.</p>
+    </div>
+  );
+}
+
+/** Settings, Devices: a host's card, and the dialog that adds one. */
+function HostsSection() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] gap-8 items-start">
+      <div className="min-w-0">
+        <Shot src="/features/cloud/devices-host.webp" alt="A cloud host's card in Settings, Devices: Awake, t3.medium in us-west-2 at $0.042 an hour, rows for Your setup, Logins, Tools and Host setup, and the Sleep, Apply setup now and Save image buttons" width={1412} height={756} />
+        <Caption dark>A Linux host, awake. Yellow rows say what is off and how to fix it: here, logins held back because their tokens expired on the laptop, and tools a hook needs that cannot run on Linux.</Caption>
+        <div className="mt-8 space-y-5">
+          <Note dark>
+            <b style={{ color: SOL.base2 }}>Wake and Sleep</b> boot the host or stop it costing compute. <b style={{ color: SOL.base2 }}>Apply setup now</b> installs the packages and services your repo declares, and <b style={{ color: SOL.base2 }}>Save image</b> snapshots the machine so the next one starts ready. Your laptop carries each one out, so it needs to be online.
+          </Note>
+          <Note dark>
+            A host also shows up wherever you pick a machine: the machine pill in a new session, the machine menu in a session&apos;s header, and Migration in the same settings group.
+          </Note>
+        </div>
+      </div>
+      <div className="min-w-0">
+        <Shot src="/features/cloud/add-cloud-machine.webp" alt="The Add a cloud machine dialog: Linux or Mac, Connect existing or Create new, the instance, region and SSH key fields, and the setup command it builds with a Copy setup command button" width={1168} height={1330} />
+        <Caption dark>Add a cloud machine, at the foot of the Machines list.</Caption>
+        <Note dark className="mt-5">
+          Choose Linux or Mac, then connect an EC2 instance you already run or create a new one. The dialog builds the setup command and <b style={{ color: SOL.base2 }}>Copy setup command</b> puts it on your clipboard. You run it once in a terminal on your laptop, because setup uses your AWS sign-in and SSH key; that one step has no button today.
+        </Note>
+      </div>
     </div>
   );
 }
@@ -95,16 +118,16 @@ function Hero() {
         </div>
         <div>
           <p className="cl-anim cl-rise text-[18px] sm:text-[19px] leading-8 max-w-2xl" style={delay(0.1, { color: SOL.base01 })}>
-            <C>--cloud</C> sends a session to your host from the checkout you are in, uncommitted work included. It arrives with your agent config, logins and CLIs. Its edits mirror back to your laptop as they happen, and whole batches of sessions move between the two without losing a message.
+            Switch on run in the cloud when you start a session, and it runs on your own host from the checkout you are in, uncommitted work included. It arrives with your agent config, logins and CLIs. Its edits mirror back to your laptop as they happen, and whole batches of sessions move between the two without losing a message.
           </p>
           <div className="cl-anim cl-rise mt-8 flex flex-wrap items-center gap-3" style={delay(0.2)}>
-            <code className="font-mono text-[14px] px-4 py-2.5 rounded-lg" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
-              <span style={{ color: SOL.green }}>$</span> cast spawn --cloud &quot;port the v1 routes&quot;
-            </code>
+            <a href="#hosts" className="font-mono text-[14px] px-4 py-2.5 rounded-lg" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
+              Add a host
+            </a>
             <Link href="/documentation/remote-and-cloud-sessions" className="font-mono text-[14px] px-2 py-2.5 underline underline-offset-4" style={{ color: BLUE }}>Read the guide</Link>
           </div>
         </div>
-        <HostsCard />
+        <ComposerShot />
       </div>
       <HeroDiptych />
     </section>
@@ -119,6 +142,16 @@ export default function CloudPage() {
     <main className="cl-root" data-static={still ? "" : undefined} style={{ backgroundColor: SOL.base3 }}>
       <style>{CLOUD_CSS}</style>
       <Hero />
+
+      <Section
+        id="hosts"
+        tone="night"
+        route="host"
+        title="Your hosts sit in Settings, under Devices"
+        lede={<>Each cloud host has a card in the Machines list there: whether it is awake, what it costs, and whether it carries your setup, logins and tools, with the buttons that fix what is off.</>}
+      >
+        <HostsSection />
+      </Section>
 
       <Section
         id="spawn"
@@ -153,7 +186,7 @@ export default function CloudPage() {
         tone="sand"
         route="both"
         title="Move twenty sessions before you close the lid"
-        lede={<><C>cast migrate</C> moves sessions between laptop and host as one batch. A session in the middle of a turn finishes it first, and messages sent while it moves are held and delivered on the other side.</>}
+        lede={<>Settings, Migration moves sessions between laptop and host as one batch: pick a destination, tick the sessions, press Move. A session in the middle of a turn finishes it first, and messages sent while it moves are held and delivered on the other side.</>}
       >
         <MigrateSection />
       </Section>
@@ -186,7 +219,7 @@ export default function CloudPage() {
         <SleepSection />
       </Section>
 
-      <Section id="reference" tone="sand" route="both" title="Command reference" lede={<>Every command here is in the CLI today. <C>cast &lt;command&gt; --help</C> has the full flags.</>}>
+      <Section id="reference" tone="sand" route="both" title="For scripts and agents" lede={<>Everything above also has a command, which is what agents run and what you script. Registering a host is only a command today, built for you by Add a cloud machine. <C>cast &lt;command&gt; --help</C> has the full flags.</>}>
         <div className="rounded-xl border overflow-hidden" style={{ borderColor: "#e3dcc6", backgroundColor: SOL.base3 }}>
           {REFERENCE.map((g, gi) => (
             <div key={g.group}>
@@ -235,14 +268,13 @@ export default function CloudPage() {
             Install on the laptop. Add a host when you want one.
           </h2>
           <p className="mt-4 text-[17px] leading-8" style={{ color: SOL.base1 }}>
-            Codecast runs on your laptop first. When you are ready for a host, Settings, Machines, Add a cloud machine builds the one command that sets it up.
+            Codecast runs on your laptop first. When you are ready for a host, open Settings, Devices, Add a cloud machine: it builds the one command that sets the host up, and you run it on your laptop.
           </p>
           <div className="mt-8 font-mono text-[12px] mb-2" style={{ color: SOL.base01 }}>1 · on your laptop</div>
           <InstallTabs location="feature-cloud" />
-          <div className="mt-8 font-mono text-[12px] mb-2" style={{ color: SOL.base01 }}>2 · when you want a host (an EC2 instance you run, or <span style={{ color: SOL.base1 }}>cast hosts create linux</span> for a new one)</div>
+          <div className="mt-8 font-mono text-[12px] mb-2" style={{ color: SOL.base01 }}>2 · when you want a host, the command Add a cloud machine builds looks like this</div>
           <pre className="rounded-xl border px-4 py-3 font-mono text-[13px] whitespace-pre-wrap [overflow-wrap:anywhere]" style={{ borderColor: "#0b4a5a", backgroundColor: "#01232c", color: SOL.base2 }}>
-            <span style={{ color: SOL.green }}>$</span> cast hosts add i-0123456789abcdef0 {"\\"}{"\n"}{"    "}--key ~/.ssh/dev.pem --provision{"\n"}
-            <span style={{ color: SOL.green }}>$</span> cast spawn --cloud &quot;your first task&quot;
+            <span style={{ color: SOL.green }}>$</span> cast hosts add i-0123456789abcdef0 --provision {"\\"}{"\n"}{"    "}--region us-west-2 --key ~/.ssh/dev.pem
           </pre>
         </div>
       </section>

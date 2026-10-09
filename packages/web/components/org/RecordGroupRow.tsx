@@ -4,14 +4,15 @@
 // answers; open, the records behind it as numbered sentences, twenty at a
 // time. One answer per group: the rows carry no controls, and the number a
 // row shows is the one a person writes back with ("leave out #3").
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { OrgChangeStatus, OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { cn } from "../../lib/utils";
 import { useOrgHover } from "./proposalContexts";
 import type { RecordGroupCard, RecordRow } from "./proposalSubjects";
-import { AnswerControls, AT, Clamp, FailNote, LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerWord, LedgerYou, Sentence, SLOT, StateWord, useAnswerField, useFocusScroll, type LedgerLayout, type SubjectAnswer } from "./ProposalSubjectCard";
+import { AnswerControls, AT, Clamp, Evidence, FailNote, LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerWord, LedgerYou, RecordPill, recordRef, Sentence, StatusTo, SLOT, StateWord, useAnswerField, useFocusScroll, type LedgerLayout, type SubjectAnswer } from "./ProposalSubjectCard";
 import { StagedBand, stagedWash } from "./StagedBand";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export const RECORD_PAGE = 20;
 
@@ -65,7 +66,7 @@ export function RecordGroupRow({ card, answer, onAnswer, open, onOpen, lone, foc
   useFocusScroll(rootRef, focusAt >= 0);
   const [shown, setShown] = useState(RECORD_PAGE);
   // The focused record is paged in and the group opened once, when the focus lands.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (focusAt < 0) return;
     setShown((s) => Math.max(s, Math.ceil((focusAt + 1) / RECORD_PAGE) * RECORD_PAGE));
     onOpen(true);
@@ -173,6 +174,9 @@ const ROW_WORDS: Partial<Record<OrgChangeStatus, [string, string]>> = {
 function RecordLine({ row, groupStatus, focused, onHover }: { row: RecordRow; groupStatus: RecordGroupCard["status"]; focused: boolean; onHover: ((id: string | null) => void) | null }) {
   const differs = row.status !== "proposed" && row.status !== groupStatus;
   const word = differs ? ROW_WORDS[row.status] : undefined;
+  const pill = recordRef(row.change.change);
+  const ch = row.change.change;
+  const to = "status" in ch && typeof ch.status === "string" ? ch.status : null;
   return (
     <li
       className="m-0 flex gap-2 py-[3px]"
@@ -182,13 +186,27 @@ function RecordLine({ row, groupStatus, focused, onHover }: { row: RecordRow; gr
       onMouseEnter={onHover ? () => onHover(row.change._id) : undefined}
       onMouseLeave={onHover ? () => onHover(null) : undefined}
     >
-      <span className={cn("w-9 shrink-0 font-mono text-[11px] leading-[20px]", QUIET)} data-record-seq>#{row.seq}</span>
+      <span className={cn("w-9 shrink-0 font-mono text-[11px]", pill && to ? "leading-[26px]" : "leading-[20px]", QUIET)} data-record-seq>#{row.seq}</span>
       <div className="min-w-0 flex-1">
-        <p className={cn("m-0 text-[12.5px] leading-[20px] [overflow-wrap:anywhere] [text-wrap:pretty]", row.closed ? "text-[color:var(--sol-text-dim)]" : row.status === "skipped" ? QUIET : "text-[color:var(--sol-text)]")}>
-          <Sentence text={row.sentence} span={row.subjectSpan} name="font-medium" />
-          {word && <span className={cn("ml-1.5 text-[11px]", word[1])} data-record-word={row.status}>{word[0]}</span>}
-        </p>
-        {row.reason && <Clamp className={cn("text-[12.5px] leading-[20px]", QUIET)}>{row.reason}</Clamp>}
+        {/* A record that exists reads as its pill, its own status circle saying where it stands, then what it becomes. */}
+        {pill && to && row.subjectSpan ? (
+          <p className={cn("m-0 flex min-h-[26px] min-w-0 items-center gap-x-2 text-[12.5px] leading-[22px]", row.status === "skipped" && "opacity-60")}>
+            <span className="min-w-0 shrink"><RecordPill {...pill} title={row.sentence.slice(...row.subjectSpan)} /></span>
+            <span aria-hidden className={cn("shrink-0", MUTED)}>→</span>
+            <span className="sr-only">becomes</span>
+            <StatusTo record={pill.type} status={to} className="shrink-0" />
+            {word && <span className={cn("shrink-0 text-[11px]", word[1])} data-record-word={row.status}>{word[0]}</span>}
+          </p>
+        ) : (
+          <p className={cn("m-0 text-[12.5px] leading-[20px] [overflow-wrap:anywhere] [text-wrap:pretty]", row.closed ? "text-[color:var(--sol-text-dim)]" : row.status === "skipped" ? QUIET : "text-[color:var(--sol-text)]")}>
+            <Sentence text={row.sentence} span={row.subjectSpan} name="font-medium" />
+            {word && <span className={cn("ml-1.5 text-[11px]", word[1])} data-record-word={row.status}>{word[0]}</span>}
+          </p>
+        )}
+        {row.reason && <Clamp mentions className={cn("text-[12.5px] leading-[20px]", QUIET)}>{row.reason}</Clamp>}
+        {row.evidence.length > 0 && (
+          <div className={cn("text-[11px] leading-[18px]", QUIET)} data-record-evidence={row.evidence.length}><Evidence sources={row.evidence} /></div>
+        )}
         {row.failed !== undefined && <FailNote note={row.failed} className="mt-0.5" />}
       </div>
     </li>

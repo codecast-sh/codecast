@@ -15,6 +15,12 @@ export interface LineFinder {
   kind: SignalKind[] | "any";
   fingerprint: string;
   runs?: string;
+  /**
+   * The explicit step that turns this finder's signals into work: a signal no
+   * open cause holds opens a new cause only when its finder says so (LE4).
+   * Absent or false, its signals stay signals until a cause holds their key.
+   */
+  opens_causes?: boolean;
   /** The project its signals go to, when not the profile's. */
   project?: string;
 }

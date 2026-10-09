@@ -309,6 +309,8 @@ export const ingestTables = {
     imported_at: v.optional(v.number()),
     /** VENDOR_CONVERTER_VERSION the imported copy was converted with; absent means 1. */
     converter_version: v.optional(v.number()),
+    /** A refresh of an older copy failed: the vendor is not asked again before this (VENDOR_REFRESH_RETRY). */
+    vendor_refresh_after: v.optional(v.number()),
     /** R2 keys of the DOM capture (raw rrweb events, masked), in order: what the player plays. Absent or empty: no capture. */
     dom_chunk_keys: v.optional(v.array(v.string())),
     /** The capture's gzipped size in bytes. */

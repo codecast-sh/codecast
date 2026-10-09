@@ -187,6 +187,13 @@ declare module "codecast-mod" {
     readonly key?: string;
   }
 
+  export type ThemePalette = Partial<Record<
+    | "bg" | "bg-alt" | "card" | "border" | "text" | "text-muted" | "text-dim" | "link"
+    | "red" | "orange" | "amber" | "yellow" | "green" | "cyan" | "blue" | "violet" | "magenta"
+    | "font-ui" | "font-mono",
+    string
+  >>;
+
   export type Manifest = {
     name: string; title?: string; description?: string; version?: string; icon?: string; main?: string;
     permissions?: { read?: Collection[] | "*"; write?: ("tasks" | "sessions" | "docs" | "clipboard" | "objects")[] | "*"; fetch?: string[] | "*" };
@@ -196,7 +203,13 @@ declare module "codecast-mod" {
     sidebar?: { id: string; title: string }[];
     /** What agents should know to use this mod well: its objects, its fences, when to reach for them. `cast mod guide` prints it to every agent that asks. */
     agents?: string;
-    /** The local half: a module the daemon runs on machines where you approved it (cast mod approve). */
+    /**
+     * Color themes the person can pick in Settings > Appearance. Data, not CSS: a hex
+     * value per token for light and/or dark; a token left out keeps codecast's own.
+     * Accents also recolor every Tailwind scale of their hue, and bg/text the grays.
+     */
+    themes?: { id: string; title: string; light?: ThemePalette; dark?: ThemePalette }[];
+    /** The local half: a module the daemon runs on each of your machines (cast mod revoke stops it on one). */
     local?: { main: string; description?: string };
     /**
      * New kinds of first-class objects. Each gets `<prefix>-<n>` short ids that render as live pills
@@ -280,13 +293,14 @@ declare module "codecast-mod" {
   export const Avatar: (p: { name?: string; src?: string; size?: number }) => Element;
   export const Sparkline: (p: { values: number[]; tone?: Tone; height?: number; width?: number }) => Element;
 
-  export const Fragment: string;
+  /** What `<>...</>` compiles to: its children, with no element of its own. */
+  export const Fragment: (p: Children) => Element;
   export function h(type: any, props: any, ...children: any[]): any;
 }
 
 // The local half: `import { type LocalRegister } from "codecast-mod/local"`.
 // It runs in the codecast daemon on your machine with that machine's access
-// (node:fs, processes, network), at a version you approved there.
+// (node:fs, processes, network), on each of your machines where it is on.
 declare module "codecast-mod/local" {
   export type RunResult = { code: number; stdout: string; stderr: string };
   export interface LocalApi {

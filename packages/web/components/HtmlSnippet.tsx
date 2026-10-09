@@ -1,11 +1,8 @@
-import { useRef, useState, useMemo, useCallback, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useRef, useState, useMemo, type ReactNode } from "react";
 import { sanitizeCanvasHtml } from "../lib/canvasSanitize";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { toast } from "sonner";
-import { copyToClipboard } from "../lib/utils";
-import { Copy, Check, Maximize2, X, Code2, Eye, ChevronDown, ChevronUp } from "lucide-react";
 import { CodeBlock } from "./CodeBlock";
+import { BlockFrame } from "./BlockFrame";
 import { hasCharts, hydrateCharts } from "../lib/castChart";
 import { hydrateWidgets, WIDGET_BASE_CSS } from "../lib/castWidgets";
 import { canvasHrefToRoute } from "../lib/canvasLinks";
@@ -44,11 +41,6 @@ const SHADOW_BASE =
   ".cast-chart figure{margin:0}" +
   ".cast-chart figure>div{margin-bottom:14px!important;color:var(--sol-text-secondary)}" +
   WIDGET_BASE_CSS;
-
-// Inline canvases taller than this collapse behind a gradient with an expand
-// control. A fixed pixel cap (not vh) keeps measured row heights stable in the
-// virtualized message list.
-const COLLAPSE_PX = 620;
 
 // Canvas metadata parsed from the sanitized markup: the header title (explicit
 // data-canvas-title, else the first heading) and the wide hint
@@ -188,131 +180,18 @@ export function HtmlSnippet({ code }: { code: string }) {
   const debounced = useDebounced(code, 150);
   const clean = useMemo(() => sanitizeCanvasHtml(debounced), [debounced]);
   const { title, wide } = useMemo(() => extractMeta(clean), [clean]);
-  const [fullscreen, setFullscreen] = useState(false);
-  const [showSource, setShowSource] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const clipRef = useRef<HTMLDivElement>(null);
-
-  // Watch the canvas host's natural height (content can grow after mount — charts
-  // hydrate async, tabs re-show panels) to decide whether the collapse control is
-  // needed. The observer targets the host INSIDE the clipped container, because
-  // the container's own box is capped and would never report growth.
-  useWatchEffect(() => {
-    const host = clipRef.current?.firstElementChild;
-    if (!host || showSource) return;
-    const ro = new ResizeObserver(() => {
-      setOverflowing(((host as HTMLElement).offsetHeight ?? 0) > COLLAPSE_PX);
-    });
-    ro.observe(host);
-    return () => ro.disconnect();
-  }, [showSource, clean]);
-
-  const handleCopy = useCallback(async () => {
-    try {
-      await copyToClipboard(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      toast.error("Failed to copy");
-    }
-  }, [code]);
-
-  // Esc closes fullscreen.
-  useWatchEffect(() => {
-    if (!fullscreen) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setFullscreen(false);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [fullscreen]);
-
   if (!code.trim()) return null;
-
-  const collapsed = overflowing && !expanded;
-  const headerBtn =
-    "p-1 rounded text-sol-text-dim/70 hover:text-sol-text-secondary hover:bg-sol-bg-highlight/50 transition-colors";
-
   return (
-    <div className="my-3 overflow-hidden rounded border border-sol-border/40 bg-sol-bg-alt">
-      <div className="flex items-center justify-between gap-2 border-b border-sol-border/40 px-3 py-1.5">
-        {title && (
-          <span className="truncate text-xs font-medium text-sol-text-muted" title={title}>
-            {title}
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-0.5">
-          <button
-            onClick={() => setShowSource((v) => !v)}
-            className={headerBtn}
-            title={showSource ? "Show rendered" : "Show source"}
-          >
-            {showSource ? <Eye size={14} /> : <Code2 size={14} />}
-          </button>
-          <button onClick={handleCopy} className={headerBtn} title="Copy HTML">
-            {copied ? <Check size={14} className="text-sol-cyan" /> : <Copy size={14} />}
-          </button>
-          <button onClick={() => setFullscreen(true)} className={headerBtn} title="Fullscreen">
-            <Maximize2 size={14} />
-          </button>
-        </div>
-      </div>
-
-      {showSource ? (
-        <div className="px-1">
-          <CodeBlock code={code} language="html" />
-        </div>
-      ) : (
-        <>
-          <div
-            ref={clipRef}
-            className="relative overflow-hidden"
-            style={collapsed ? { maxHeight: COLLAPSE_PX } : undefined}
-          >
-            <ShadowCanvas html={clean} className="px-5 py-4" />
-            {collapsed && (
-              <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 h-16"
-                style={{ background: "linear-gradient(to bottom, transparent, var(--sol-bg-alt))" }}
-              />
-            )}
-          </div>
-          {overflowing && (
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="flex w-full items-center justify-center gap-1 border-t border-sol-border/40 py-1 text-[11px] text-sol-text-dim hover:bg-sol-bg-highlight/40 hover:text-sol-text-secondary transition-colors"
-            >
-              {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-              {expanded ? "Collapse" : "Show all"}
-            </button>
-          )}
-        </>
-      )}
-
-      {fullscreen &&
-        createPortal(
-          <div className="canvas-scroll fixed inset-0 z-[100] overflow-auto bg-sol-bg/95 backdrop-blur-xl">
-            {title && (
-              <div className="absolute left-4 top-4 z-10 max-w-[55%] truncate rounded-lg border border-sol-border/40 bg-sol-bg-alt/80 px-3 py-1.5 text-xs font-medium text-sol-text-muted backdrop-blur">
-                {title}
-              </div>
-            )}
-            <div className="absolute right-4 top-4 z-10 flex items-center gap-0.5 rounded-lg border border-sol-border/40 bg-sol-bg-alt/80 px-1 py-0.5 backdrop-blur">
-              <button onClick={handleCopy} className={headerBtn} title="Copy HTML">
-                {copied ? <Check size={16} className="text-sol-cyan" /> : <Copy size={16} />}
-              </button>
-              <button onClick={() => setFullscreen(false)} className={headerBtn} title="Close (Esc)">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="flex min-h-full items-center justify-center p-8">
-              <ShadowCanvas html={clean} className={`w-full ${wide ? "max-w-none" : "max-w-5xl"}`} />
-            </div>
-          </div>,
-          document.body,
-        )}
-    </div>
+    <BlockFrame
+      title={title}
+      source={<CodeBlock code={code} language="html" />}
+      copyText={code}
+      copyLabel="Copy HTML"
+      wide={wide}
+      measureKey={clean}
+      fullscreen={() => <ShadowCanvas html={clean} className="w-full" />}
+    >
+      <ShadowCanvas html={clean} className="px-5 py-4" />
+    </BlockFrame>
   );
 }
