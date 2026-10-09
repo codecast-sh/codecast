@@ -15,6 +15,15 @@ export function imagePlaceholderToken(n: number): string {
 }
 
 /**
+ * Split text around its tokens: even indexes are prose, odd indexes are
+ * tokens. A markdown serializer escapes the prose and writes the tokens
+ * verbatim, since `\[Image 1\]` no longer points at anything.
+ */
+export function splitOnImagePlaceholders(text: string): string[] {
+  return text.split(/(\[Image \d+\])/);
+}
+
+/**
  * Insert the token for the nth attachment at `caret`, padding with single
  * spaces only where the surrounding text doesn't already supply them.
  * Returns the new text and where the caret should land after it.
