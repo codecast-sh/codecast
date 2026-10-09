@@ -6,12 +6,12 @@ const row = (id: string, slot: SlotRow["slot"], at: number, parent: string | nul
   ({ id, slot, at, parent, device, caps: c });
 
 describe("normalizeSubagentCaps", () => {
-  test("defaults are 10 per session and 24 per machine", () => {
-    expect(normalizeSubagentCaps()).toEqual({ per_session: 10, per_machine: 24 });
+  test("defaults are no cap: 0 per session and 0 per machine", () => {
+    expect(normalizeSubagentCaps()).toEqual({ per_session: 0, per_machine: 0 });
   });
   test("takes positive whole numbers, from strings too, and drops the rest", () => {
-    expect(normalizeSubagentCaps({ per_session: "6", per_machine: 0 })).toEqual({ per_session: 6, per_machine: 24 });
-    expect(normalizeSubagentCaps({ per_session: 2.5, per_machine: -1 })).toEqual({ per_session: 10, per_machine: 24 });
+    expect(normalizeSubagentCaps({ per_session: "6", per_machine: 0 })).toEqual({ per_session: 6, per_machine: 0 });
+    expect(normalizeSubagentCaps({ per_session: 2.5, per_machine: -1 })).toEqual({ per_session: 0, per_machine: 0 });
   });
 });
 

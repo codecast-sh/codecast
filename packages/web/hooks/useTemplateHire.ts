@@ -8,7 +8,8 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
 
 /** Dev builds only: a fixture set from the console stands in for the server
- *  (`window.__orgTemplateFixture = { catalog?: [...], instance?: {...} }`), so the
+ *  (`window.__orgTemplateFixture = { catalog?: [...], instance?: { role_id, ... } }`,
+ *  the instance shown on the role whose id it names), so the
  *  gallery and the host step can be looked at with data the deployment does not
  *  hold. Read at render; set it before opening the dialog or the role page. */
 function fixture(): { catalog?: any[]; instance?: any } | null {
@@ -30,7 +31,9 @@ export function useTemplateCatalog(teamId: string | undefined) {
 export function useTemplateInstance(roleId: string | undefined) {
   const { data, error } = useQueryNoThrow(api.orgTemplates.instanceForRole, roleId ? { role_id: roleId as Id<"org_roles"> } : "skip");
   const fx = fixture();
-  if (fx && "instance" in fx) return { instance: fx.instance as any, ready: true, error: undefined };
+  // A fixture instance stands in only for the role it names (`role_id`): one
+  // left in localStorage would otherwise dress every role as a template hire.
+  if (fx && "instance" in fx && fx.instance?.role_id === roleId) return { instance: fx.instance as any, ready: true, error: undefined };
   return { instance: data as any, ready: data !== undefined, error };
 }
 

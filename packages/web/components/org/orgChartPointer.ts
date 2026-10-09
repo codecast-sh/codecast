@@ -1,26 +1,19 @@
-// The pointer a thread carries toward the org screen (docs/architecture/
-// org-staffing.md S36, S41): which proposal, what is in focus, which lens.
-// Pure. What the agent writes to move the map beside its conversation is
-// message text it already writes: `op-N` on its own line, or a link to the
-// org page. orgScreenModel.orgScreenPath builds the address itself.
+// The pointer a thread carries toward the Org screen (docs/architecture/
+// org-staffing.md S36): which proposal, and which change is in focus. Pure.
+// What the agent writes to point at a proposal is message text it already
+// writes: `op-N` on its own line, or a link to the org page.
 import { parseAboutChange } from "@codecast/shared/contracts/orgProposal";
 
-/** The map's filters (org-staffing.md S40): everything, the goals alone, or the reporting chart. */
-export type ChartLens = "everything" | "people" | "goals";
-/** What the map shows: a proposal's ghosts, one thing in focus, a lens, and
- *  whether the proposal is overlaid ("As proposed"; absent means it is). */
-export type ChartPointer = { proposal?: string; focus?: string; lens?: ChartLens; proposed?: boolean };
+/** A proposal, and the change in focus. */
+export type ChartPointer = { proposal?: string; focus?: string };
 
-const lensOf = (v: string | null | undefined): ChartLens | undefined => (v === "goals" || v === "people" || v === "everything" ? v : undefined);
 const proposalOf = (v: string | null | undefined): string | undefined => (v && /^op-\d+$/i.test(v.trim()) ? v.trim().toLowerCase() : undefined);
 
 /** The pointer an address carries. */
 export function chartPointerOfParams(q: URLSearchParams): ChartPointer {
   const proposal = proposalOf(q.get("proposal"));
   const focus = q.get("focus")?.trim() || undefined;
-  const lens = lensOf(q.get("lens"));
-  const proposed = q.get("proposed") === "0" ? false : undefined;
-  return { ...(proposal ? { proposal } : {}), ...(focus ? { focus } : {}), ...(lens ? { lens } : {}), ...(proposed === false ? { proposed } : {}) };
+  return { ...(proposal ? { proposal } : {}), ...(focus ? { focus } : {}) };
 }
 
 const LINK_RE = /\/org\?([^\s)\]>"'`]+)/g;
@@ -55,7 +48,7 @@ export function newestChartPointer(messages: readonly { _id: string; content?: s
   for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) {
     const m = messages![i];
     const pointer = chartPointerOfText(m.content);
-    if (pointer) return { ...pointer, key: `${m._id}|${pointer.proposal ?? ""}|${pointer.focus ?? ""}|${pointer.lens ?? ""}` };
+    if (pointer) return { ...pointer, key: `${m._id}|${pointer.proposal ?? ""}|${pointer.focus ?? ""}` };
   }
   return null;
 }

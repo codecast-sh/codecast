@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MapNode } from "../../../../lib/line/lineMap";
 import { openTarget } from "../LineMapView";
-import { groupingWords } from "../../settings/LineFinders";
+import { groupingWords } from "../../../../lib/line/lineSources";
 import { MORE_SOURCES, foldSources } from "../LineMap";
 import { groundWords } from "../../trace/TraceStory";
 
@@ -23,8 +23,8 @@ describe("openTarget", () => {
 });
 
 describe("groupingWords", () => {
-  test("a key pattern reads in plain words", () => expect(groupingWords("union:<key>")).toBe("groups signals that share a Union key"));
-  test("anything else reads as its pattern", () => expect(groupingWords("sentry-issue")).toBe("groups signals by sentry-issue"));
+  test("a key pattern reads in plain words", () => expect(groupingWords("union:<key>")).toBe("counts reports with the same Union key as one cause"));
+  test("anything else reads as its pattern", () => expect(groupingWords("sentry-issue")).toBe("counts reports with the same sentry-issue as one cause"));
 });
 
 describe("foldSources (LX2)", () => {
@@ -34,13 +34,12 @@ describe("foldSources (LX2)", () => {
     const signals = { ...src("signals", 0), id: "signals", kind: "signals" } as MapNode;
     return { nodes: [...sources, signals], edges: sources.map((s) => ({ id: `${s.id}->signals`, from: s.id, to: "signals", kind: "flow" as const, count: s.through, items: [] })), window: { from: 0, to: 1, label: "7d" } };
   };
-  test("six sources draw as they are", () => expect(foldSources(map(6)).nodes.length).toBe(7));
-  test("past that, the most filed five stay and the rest fold into one pill with their count and edges", () => {
-    const m = foldSources(map(8));
-    const ids = m.nodes.map((n) => n.id);
-    expect(ids).toEqual(["source:s0", "source:s1", "source:s2", "source:s3", "source:s4", MORE_SOURCES, "signals"]);
-    expect(m.nodes.find((n) => n.id === MORE_SOURCES)).toMatchObject({ label: "+3 more sources", through: 5 + 4 + 3 });
-    expect(m.edges.find((e) => e.from === MORE_SOURCES)).toMatchObject({ to: "signals", count: 12 });
+  test("two sources draw as they are", () => expect(foldSources(map(2)).nodes.length).toBe(3));
+  test("past that, every source folds into one stacked chip with their count and edges, in the first one's place", () => {
+    const m = foldSources(map(6));
+    expect(m.nodes.map((n) => n.id)).toEqual([MORE_SOURCES, "signals"]);
+    expect(m.nodes.find((n) => n.id === MORE_SOURCES)).toMatchObject({ label: "6 sources", through: 10 + 9 + 8 + 7 + 6 + 5 });
+    expect(m.edges.find((e) => e.from === MORE_SOURCES)).toMatchObject({ to: "signals", count: 45 });
   });
   test("a source in trouble or pinned (open, traced) is never folded", () => {
     const m = foldSources(map(7, [src("source:quiet", 0, [{ level: "warn", words: "silent 3d" }])]), new Set(["source:s6"]));
