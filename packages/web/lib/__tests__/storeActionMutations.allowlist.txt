@@ -5,7 +5,6 @@
 #
 # Prune it (drops gone entries, lowers numbers that came down, adds nothing):
 #   cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/storeActionMutations.guard.test.ts
-app/admin/daemon-logs/page.tsx 1
 app/artifacts/auth/page.tsx 1
 app/calls/page.tsx 1
 app/conversation/[id]/ConversationPageClient.tsx 1
@@ -13,7 +12,6 @@ app/join/[code]/page.tsx 1
 app/pr/[owner]/[repo]/[number]/page.tsx 1
 app/sessions/page.tsx 1
 app/settings/accounts/page.tsx 2
-app/settings/daemon/page.tsx 1
 app/settings/devices/page.tsx 1
 app/settings/migrate/page.tsx 2
 app/settings/profile/page.tsx 2
@@ -24,9 +22,7 @@ app/triggers/[id]/page.tsx 1
 app/workflows/page.tsx 3
 components/CollabComposer.tsx 1
 components/ConversationView.tsx 2
-components/DesktopProvider.tsx 1
 components/GlobalSessionPanel.tsx 1
-components/NewSnippetsBanner.tsx 1
 components/PlanDetailPanel.tsx 1
 components/TriggerContextPanel.tsx 1
 components/WatchButton.tsx 1
@@ -37,7 +33,6 @@ components/chat/SlackPeopleDialog.tsx 1
 components/decisions/DecisionDocument.tsx 1
 components/pr/PRActions.tsx 1
 components/settings/OtherAddresses.tsx 2
-components/settings/useDeviceSettingsPanel.ts 1
 components/team/InvitePanel.tsx 2
 hooks/useBulkMoveSessions.ts 1
 hooks/useCallSync.ts 1
@@ -54,5 +49,3 @@ lib/calls/walkie.ts 4
 lib/calls/walkieMessage.ts 2
 lib/integrations.ts 1
 lib/team/saveTeamSetup.ts 1
-lib/terminal/endpoint.ts 1
-lib/useProviderKeyCommand.ts 2

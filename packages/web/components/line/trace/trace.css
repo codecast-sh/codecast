@@ -5,11 +5,11 @@
 .ltrace-body { container-type: inline-size; }
 .ltrace-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem; }
 .ltrace-map-col { order: -1; min-width: 0; }
-.ltrace-map { height: 380px; }
+.ltrace-map { max-height: 420px; }
 @container (min-width: 1080px) {
   .ltrace-grid[data-full-map="true"] { grid-template-columns: minmax(26rem, 40rem) minmax(0, 1fr); gap: 2rem; max-width: 100rem; }
   .ltrace-map-col { order: 0; }
-  .ltrace-map { position: sticky; top: 1.5rem; height: min(640px, calc(100vh - 9rem)); }
+  .ltrace-map { position: sticky; top: 1.5rem; max-height: min(640px, calc(100vh - 9rem)); }
 }
 /* The whole map at full size, behind "Full size" (TraceMap). */
 .ltrace-map-box { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -60,3 +60,10 @@
   transition: color 120ms ease, border-color 120ms ease;
 }
 .ltrace-action:hover { color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-blue) 45%, var(--sol-border)); }
+/* A source's own words, rendered as it wrote them. */
+.trace-words { padding: 8px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); background: color-mix(in srgb, var(--sol-text) 3%, transparent); overflow-wrap: anywhere; }
+.trace-words :is(p, li, td, th, blockquote) { font-size: 12.5px; line-height: 1.55; }
+.trace-words :is(h1, h2, h3, h4) { font-size: 13px; font-weight: 600; margin: 8px 0 3px; }
+
+/* The trace's map is as tall as its line, never a fixed box with empty canvas under it. */
+.ltrace-map .lmap-frame.lmap-fit { max-height: none; }
