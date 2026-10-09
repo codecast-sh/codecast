@@ -10,8 +10,11 @@ import { requireUserOrToken } from "./auth";
 import { rowByRef } from "./rowByRef";
 import { normalizeSourceName } from "@codecast/shared/contracts/ingest";
 
-export async function scopeOf(ctx: any, args: ScopeArgs) {
-  const userId = await requireUserOrToken(ctx, args.api_token);
+// `user_id` is the server acting as a person (a published page's queries run
+// as their publisher): only internal functions take it, so a caller can never
+// name one. Every public door resolves the caller from its session or token.
+export async function scopeOf(ctx: any, args: ScopeArgs & { user_id?: Id<"users"> }) {
+  const userId = args.user_id ?? (await requireUserOrToken(ctx, args.api_token));
   const { db } = await createWorkContext(ctx, {
     userId,
     workspace: args.workspace,
