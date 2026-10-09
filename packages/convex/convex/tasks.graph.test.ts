@@ -4,7 +4,7 @@
 // label change writes task_history through one helper (TG11).
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { addDep, create, getReadyTasks, list, removeDep, update, webList } from "./tasks";
+import { addDep, create, list, removeDep, update, webList } from "./tasks";
 import { get as getPlan, webGet as webGetPlan } from "./plans";
 import { readinessLookups, stampGraphStatus } from "./lib/taskGraph";
 import { isUnblocked } from "@codecast/shared/tasks";
@@ -142,18 +142,6 @@ describe("ready (TG1)", () => {
     ]);
   });
 
-  test("getReadyTasks applies the same rule", async () => {
-    const { ctx } = await makeCtx([
-      task("ct-1", { status: "done" }),
-      task("ct-2", { blocked_by: ["ct-1"] }),
-      task("ct-3", { blocked_by: ["ct-2"] }),
-      task("ct-4", { triage_status: "suggested" }),
-      task("ct-5", { status: "in_review" }),
-      task("ct-6", { parent_id: "task_ct-5" }),
-    ]);
-    expect(ids(await call(getReadyTasks, ctx, {}))).toEqual(["ct-2"]);
-  });
-
   // A page can mix workspaces (the web's team view holds a viewer's private
   // rows routed to the team): an edge into another workspace stays unknown
   // even when the page holds the row, so every viewer judges it alike.
@@ -170,6 +158,27 @@ describe("ready (TG1)", () => {
     expect(page[2].graph_status).toEqual([{ ref: "ct-1", short_id: "ct-1", status: "done" }]);
     const lookupsFor = await readinessLookups(ctx, page);
     expect([isUnblocked(page[1], lookupsFor(page[1]).statusOf), isUnblocked(page[2], lookupsFor(page[2]).statusOf)]).toEqual([false, true]);
+  });
+
+  // A start that is told what still holds the task (TG1) must answer for the
+  // edges the SAME write stored: `task` is the row as read before the patch,
+  // so reading it alone omits a blocker this call just added.
+  test("a start that also adds a blocker reports the blocker it wrote", async () => {
+    const { ctx } = await makeCtx([
+      task("ct-1"),
+      task("ct-2"),
+    ]);
+    const result = await call(update, ctx, { short_id: "ct-2", status: "in_progress", blocked_by: ["ct-1"] });
+    expect(result.open_blockers).toEqual([{ kind: "task", ref: "ct-1", status: "open" }]);
+  });
+
+  test("a start of a task whose only blocker finished reports none", async () => {
+    const { ctx } = await makeCtx([
+      task("ct-1", { status: "done", blocks: ["ct-2"] }),
+      task("ct-2", { blocked_by: ["ct-1"] }),
+    ]);
+    const result = await call(update, ctx, { short_id: "ct-2", status: "in_progress" });
+    expect(result.open_blockers).toEqual([]);
   });
 
   test("webList ready reads the finished blocker its status filter dropped", async () => {

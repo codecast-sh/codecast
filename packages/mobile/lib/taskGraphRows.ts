@@ -16,8 +16,8 @@ import {
   type WaitKind,
   type WaitState,
 } from '@codecast/shared/tasks';
-import { findEntityInStore, lookup } from '@codecast/web/lib/liveEntities';
-import { storeStatusOf, type BoardTask } from '@codecast/web/lib/taskBlockers';
+import { findEntityInStore } from '@codecast/web/lib/liveEntities';
+import { storeStatusOf, storeTitleOf, type BoardTask } from '@codecast/web/lib/taskBlockers';
 
 type TaskRows = Record<string, any> | null | undefined;
 
@@ -50,7 +50,10 @@ export function taskGraphView(task: BoardTask & { found_during?: string | null }
   const statusOf = storeStatusOf(tasks, task);
   const checksOf = (pr: PrKey): string | undefined =>
     (findEntityInStore({ pullRequests }, 'pr', `${pr.repository}#${pr.number}`) as { checks_state?: string } | undefined)?.checks_state;
-  const titleOf = (ref: string): string | undefined => lookup(tasks, ref)?.title;
+  // A title comes from the same answer as the status (storeTitleOf), so a row
+  // the workspace rule refuses (storeStatusOf, graphOutside) is nameless here
+  // too and a line never mixes a real title with "status unknown".
+  const titleOf = storeTitleOf(statusOf);
   const link = (ref: string | null | undefined): LinkedTask | null => (ref ? { ref, title: titleOf(ref) } : null);
   return {
     blockedBy: blockerRows(task, statusOf, titleOf, checksOf, now),

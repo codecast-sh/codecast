@@ -8,6 +8,7 @@
 import { escapeForeignControlChars, fenceForeignText, fenceNonce, inlineForeignText, FOREIGN_TEXT_TRUNCATION_MARKER } from "../contracts/fence";
 import { formatRelative } from "../time";
 import { blockerLabel, blockerWaitingLabel, failedWaitAdvice, isFailedWait, taskBlockerLine, taskRefLine, type Blocker, type WaitLabelOptions } from "./graph";
+import { isTaskBeingWorked } from "./statuses";
 
 /** The SessionStart sources that lose the conversation the task lived in. */
 const TASK_RESUME_SOURCES = ["compact", "resume"] as const;
@@ -88,16 +89,19 @@ const holds = (c: TaskResumeContext) => !!c.held || (c.held === undefined && !c.
 
 /** Work on the task has started: a session may take a blocked task and get
  *  far with it, so its blockers no longer order it to stop. */
-const underway = (c: TaskResumeContext) => c.task.status === "in_progress" || c.task.status === "in_review";
+const underway = (c: TaskResumeContext) => isTaskBeingWorked(c.task.status);
 
 /** What a session holding a blocked task does with it, from what holds it
  *  (after compaction, and after `cast task start`). A failed wait never
  *  clears, and an open task blocker nobody works may not either, so parking
- *  on either could wait forever. `underway` makes parking the session's call. */
-export function parkingLine(blockers: readonly Blocker[], id: string, opts: { underway?: boolean } = {}): string {
+ *  on either could wait forever. `underway` makes parking the session's call.
+ *  The rest of `opts` names the blockers the way the surrounding output does
+ *  (`checkoutWords`): the agent is told to copy the `cast state` line
+ *  verbatim, so a bare "#42" in it would read as this checkout's PR. */
+export function parkingLine(blockers: readonly Blocker[], id: string, opts: WaitLabelOptions & { underway?: boolean } = {}): string {
   const failed = blockers.filter(isFailedWait);
   if (failed.length) return `A failed wait will never clear: ${failedWaitAdvice(id, failed)}`;
-  const what = blockers[0] ? `${blockerWaitingLabel(blockers[0])}${blockers.length > 1 ? ` and ${blockers.length - 1} more` : ""}` : "Waiting on its blockers";
+  const what = blockers[0] ? `${blockerWaitingLabel(blockers[0], opts)}${blockers.length > 1 ? ` and ${blockers.length - 1} more` : ""}` : "Waiting on its blockers";
   const until = opts.underway ? "If the work cannot go on until it clears," : "Until it clears,";
   const park = `${until} run cast state --status dormant "${what}" and end your turn; this session is woken when the last blocker clears.`;
   const idle = blockers.flatMap((b) => (b.kind === "task" && "status" in b && b.status === "open" ? [b.ref] : []));
@@ -140,7 +144,7 @@ export function formatTaskResume(c: TaskResumeContext, opts: WaitLabelOptions & 
     lines.push("Blocked by:");
     for (const b of c.blockers.slice(0, MAX_BLOCKERS)) lines.push(`- ${blockerLine(b, { ...opts, now })}`);
     if (c.blockers.length > MAX_BLOCKERS) lines.push(`- and ${c.blockers.length - MAX_BLOCKERS} more`);
-    if (holds(c)) lines.push(parkingLine(c.blockers, t.short_id, { underway: underway(c) }));
+    if (holds(c)) lines.push(parkingLine(c.blockers, t.short_id, { ...opts, now, underway: underway(c) }));
   }
   if (c.subtasks?.items.length) {
     lines.push("Open subtasks:");

@@ -145,7 +145,7 @@ describe("renderFencedPlanTasks", () => {
       { short_id: "ct-7", title: "After outside", status: "open", blocked_by: ["ct-90"] },
     ], { ...plan, graph_outside: { tasks: [{ short_id: "ct-90", status: "open" }], searched: ["ct-90"] } })!;
     expect(block).toContain("Ready:\n- ct-5: After K1\n");
-    expect(block).toContain("- ct-6: After a PR (blocked by: PR acme/api#42 merges)");
+    expect(block).toContain("- ct-6: After a PR (blocked by: PR acme/api#42 to merge)");
     expect(block).toContain("- ct-7: After outside (blocked by: ct-90)");
     expect(block).not.toContain("ct-4)");
   });

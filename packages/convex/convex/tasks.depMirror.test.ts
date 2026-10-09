@@ -60,6 +60,31 @@ describe("create dependency mirror", () => {
     });
     expect(byShortId(tables, "ct-12").blocks).toEqual([short_id]);
   });
+
+  // The caller echoes each edge it asked for (depAddedLine), so an agent does
+  // not spend a `cast task show` finding out whether --blocked-by landed, and
+  // learns when a blocker is already finished and so holds nothing.
+  test("create reports each blocker it landed, with the status that says whether it holds", async () => {
+    const { ctx } = await makeCtx([bare("ct-12"), bare("ct-13", { status: "done" })]);
+    const result = await (create as any)._handler(ctx, {
+      api_token: TOKEN,
+      title: "New task",
+      blocked_by: ["ct-012", "ct-13", "ct-99"],
+    });
+    expect(result.blockers).toEqual([
+      // A ref is reported canonically, as the row stores it.
+      { ref: "ct-12", status: "open" },
+      { ref: "ct-13", status: "done" },
+      // Nothing readable under that ref: the write stands, the status is unknown.
+      { ref: "ct-99" },
+    ]);
+  });
+
+  test("no --blocked-by, nothing to report", async () => {
+    const { ctx } = await makeCtx([]);
+    const result = await (create as any)._handler(ctx, { api_token: TOKEN, title: "New task" });
+    expect(result.blockers).toBeUndefined();
+  });
 });
 
 describe("update dependency mirror", () => {
