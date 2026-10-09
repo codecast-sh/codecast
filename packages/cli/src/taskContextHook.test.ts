@@ -132,6 +132,23 @@ describe("taskContextFor", () => {
     expect(await taskContextFor({ sessionId: "s-4", source: "resume" }, async () => null)).toBeNull();
   }));
 
+  test("a time wait is named absolute, in the block and in the cast state line it tells the agent to copy", () => withDir(async () => {
+    writePulse("s-7", { task: "ct-7", started: true });
+    const at = Date.UTC(2026, 9, 9, 3, 23);
+    const read = async (): Promise<TaskResumeContext> => ({
+      ...context,
+      task: { ...context.task, short_id: "ct-7", status: "open" },
+      blockers: [{ id: "w1k2l3m4n5", kind: "time", at, state: "waiting", created_at: at - 3_600_000, created_by: "u1" }],
+    });
+    const block = (await taskContextFor({ session_id: "s-7", source: "compact" }, read, at - 3_600_000))!;
+    // The date, the year and the zone, the way cast task context and the
+    // stored history name the moment — never a bare local-clock "03:23".
+    const absolute = /\w{3} \d{1,2}, 2026 \d{2}:\d{2} \S+/;
+    expect(block).toMatch(new RegExp(`- until ${absolute.source}`));
+    expect(block).toMatch(new RegExp(`cast state --status dormant "Waiting until ${absolute.source}"`));
+    expect(block).not.toMatch(/until \d{2}:\d{2}["\n]/);
+  }));
+
   test("a read that fails still names the pulse's task; without one it stays silent", () => withDir(async () => {
     writePulse("s-6", { task: "ct-6", plan: "pl-2" });
     const fail = async (): Promise<TaskResumeContext | null> => { throw new Error("no answer in 4000ms"); };

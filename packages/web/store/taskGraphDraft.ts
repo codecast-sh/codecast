@@ -11,7 +11,10 @@ import { sameWaitTarget, waitIsReplaceable, type TaskWait, type WaitTarget } fro
 
 type Rows = Record<string, any>;
 
-/** Every copy of the one task `shortId` names: a LOOKUP, never a list. */
+/** Every copy of the one task `shortId` names: the collection can hold the
+ *  same row under its optimistic stub key and its real `_id` at once, so a
+ *  `lookup` by one ref would miss the other. Scoped to one id, so this is not
+ *  the collection enumeration `useWorkspaceCollection` owns. */
 function copiesOf(tasks: Rows, shortId: string): any[] {
   return Object.values(tasks).filter((t) => t?.short_id === shortId);
 }
@@ -60,9 +63,13 @@ export function setRelatedEdge(tasks: Rows, a: string, b: string, on: boolean): 
  *  carries an empty repository, which the server resolves from the task. */
 export type TaskWaitInput = { id: string; target: WaitTarget };
 
-/** Whether wait `w` is on `target`, as addWaitCore compares them. A bare
- *  `#42` matches only another unresolved `#42`: which repository it names is
- *  the server's to say. */
+/** Whether wait `w` is on `target`, deliberately stricter than the server's
+ *  `sameWaitTarget` (which addWaitCore uses alone, and under which an empty
+ *  repository matches that number in any repository): a bare `#42` matches
+ *  only another unresolved `#42`, because which repository it names is the
+ *  server's to say. Being stricter only ever paints a wait the server may
+ *  refuse, and addWaitCore refuses a wait carrying a client id that lands on
+ *  an existing one, so the draft rolls back instead of holding a copy. */
 export function waitIsOn(w: TaskWait, target: WaitTarget): boolean {
   const bare = (t: WaitTarget) => "repository" in t && !t.repository;
   return bare(w) === bare(target) && sameWaitTarget(w, target);

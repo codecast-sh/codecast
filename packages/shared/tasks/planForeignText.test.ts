@@ -145,9 +145,50 @@ describe("renderFencedPlanTasks", () => {
       { short_id: "ct-7", title: "After outside", status: "open", blocked_by: ["ct-90"] },
     ], { ...plan, graph_outside: { tasks: [{ short_id: "ct-90", status: "open" }], searched: ["ct-90"] } })!;
     expect(block).toContain("Ready:\n- ct-5: After K1\n");
-    expect(block).toContain("- ct-6: After a PR (blocked by: PR acme/api#42 merges)");
+    expect(block).toContain("- ct-6: After a PR (blocked by: PR acme/api#42 to merge)");
     expect(block).toContain("- ct-7: After outside (blocked by: ct-90)");
     expect(block).not.toContain("ct-4)");
+  });
+
+  // `cast plan show` and `context` report to whoever ran them, so they name
+  // the asking session and an ephemeral step of theirs reads as ready, the way
+  // `cast task ready --plan` hands it out (TG9, the finding this test holds).
+  test("an ephemeral step is ready for the session that filed it, and its owner's bookkeeping for anyone else", () => {
+    const steps = [
+      { short_id: "ct-1", title: "Probe prod", status: "open", ephemeral: true, user_id: "u1", created_from_conversation: "conv1" },
+      { short_id: "ct-2", title: "Another session's checklist", status: "open", ephemeral: true, user_id: "u1", created_from_conversation: "conv2" },
+    ];
+    const mine = renderFencedPlanTasks(steps, plan, { viewer: { viewer: "u1", viewerSession: "conv1" } })!;
+    expect(mine).toContain("Ready:\n- ct-1: Probe prod\n");
+    expect(mine).toContain("- ct-2: Another session's checklist (bookkeeping of the session that filed it)");
+    // No viewer (a list a spawned session is handed): both are someone's own.
+    const nobody = renderFencedPlanTasks(steps, plan)!;
+    expect(nobody).not.toContain("Ready:");
+    expect(nobody).toContain("- ct-1: Probe prod (bookkeeping of the session that filed it)");
+  });
+
+  test("every status category gets its own heading, so no row is statusless", () => {
+    const block = renderFencedPlanTasks([
+      { short_id: "ct-1", title: "Shared graph core", status: "in_review" },
+      { short_id: "ct-2", title: "Someday", status: "backlog" },
+      { short_id: "ct-3", title: "Not doing this", status: "dropped" },
+    ], plan)!;
+    // Before: all three sat under a bare "Other" with nothing on the line,
+    // indistinguishable from each other and from a task nobody triaged.
+    expect(block).toContain("In review:\n- ct-1: Shared graph core");
+    expect(block).toContain("Backlog:\n- ct-2: Someday");
+    expect(block).toContain("Dropped:\n- ct-3: Not doing this");
+    expect(block).not.toContain("Other:");
+    expect(block).toContain("Tasks (0/3 done)");
+  });
+
+  test("a status outside the six categories carries it on the line", () => {
+    const block = renderFencedPlanTasks([
+      { short_id: "ct-1", title: "From a newer schema", status: "pending_approval" },
+      { short_id: "ct-2", title: "Arrived without one" },
+    ], plan)!;
+    expect(block).toContain("Other:\n- ct-1: From a newer schema [pending_approval]");
+    expect(block).toContain("- ct-2: Arrived without one [no status]");
   });
 
   test("descriptions are opt-in, one folded line, and only for unfinished work", () => {

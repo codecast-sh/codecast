@@ -205,6 +205,15 @@ describe("one rule for actions in the palette and the shortcuts sheet", () => {
       expect(actionShownIn(DEVELOPER_MODE, action)).toBe(true);
     }
   });
+  // The graph's keys go with its rows: a `b` that writes a blocker hosted mode
+  // then draws nowhere would hold a to-do back silently. The parent is stated
+  // by the task page's breadcrumb in every mode, so its key stays.
+  test("the graph's keys follow its rows; the parent's stays", () => {
+    expect(actionShownIn(hosted, "task.blocker")).toBe(false);
+    expect(actionShownIn(hosted, "task.related")).toBe(false);
+    expect(actionShownIn(hosted, "task.parent")).toBe(true);
+    for (const action of ["task.blocker", "task.related", "task.parent"]) expect(actionShownIn(DEVELOPER_MODE, action)).toBe(true);
+  });
   test("everyday actions stay, named in hosted words", () => {
     for (const action of ["session.next", "session.pin", "palette.toggle", "inbox.toggleFlatView"]) expect(actionShownIn(hosted, action)).toBe(true);
     expect(actionLabel("session.next", "Next session", true)).toBe("Next conversation");

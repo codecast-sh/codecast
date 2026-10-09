@@ -19,6 +19,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import {
+  accessStampFor,
   canAccessPullRequest,
   canAccessTask,
   isSameWorkspace,
@@ -46,11 +47,13 @@ import {
   failedWaitAdvice,
   isWaitId,
   newWaitId,
+  noWaitOnLine,
   parseBlockerRef,
   prRef,
   isPrWaitTarget,
   prWords,
   sameWaitTarget,
+  STORED_WAIT_WORDS,
   waitClause,
   waitFailedCause,
   waitFailedWord,
@@ -59,7 +62,9 @@ import {
   waitLine,
   waitMetCause,
   waitMetNote,
+  waitTimeRef,
   type PrWaitTarget,
+  type TimeWaitTarget,
   type StatusOf,
   type TaskWait,
   type WaitLabelOptions,
@@ -74,15 +79,28 @@ type PR = Doc<"pull_requests">;
 /** Who signs what codecast writes on a task on its own: the waits' and the
  *  graph's comments and notices. */
 export const SENDER = "codecast";
-/** Stored text about a wait is read later, in other zones (TG11). */
-const STORED = { absolute: true } as const;
+/** Stored text about a wait is read later, in other zones (TG11). The words
+ *  are the shared ones, so this and the claim's skip reason (taskFrontier)
+ *  cannot drift from the client twin agents read them beside. */
+const STORED = STORED_WAIT_WORDS;
+
+/** The repositories of a task's work, read at most once however many callers
+ *  in one mutation ask for them: taskRepositories walks the directory mappings
+ *  and up to twenty of the task's sessions, and one addWait asks twice (a bare
+ *  `#42` resolving its repository, then the words its history is stored in). */
+type TaskRepos = () => Promise<string[]>;
+
+function taskReposOnce(ctx: Ctx, task: Task): TaskRepos {
+  let read: Promise<string[]> | undefined;
+  return () => (read ??= taskRepositories(ctx, task));
+}
 
 /** STORED for `task`'s own text. It is also read away from any checkout, so a
  *  PR outside the task's one repository (taskRepositories) is named in full. */
-async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? []): Promise<WaitLabelOptions> {
+async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? [], repos = taskReposOnce(ctx, task)): Promise<WaitLabelOptions> {
   if (!waits.some(isPrWaitTarget)) return STORED;
-  const repos = await taskRepositories(ctx, task);
-  return { ...STORED, ...prWords(repos.length === 1 ? repos[0] : null) };
+  const named = await repos();
+  return { ...STORED, ...prWords(named.length === 1 ? named[0] : null) };
 }
 
 // ---------------------------------------------------------------------------
@@ -97,19 +115,31 @@ async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits 
  * written and the words its waits are stored in (storedWords), for the
  * caller's own text about them.
  */
-export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: TaskChangeBy, now = Date.now()): Promise<{ task: Task; words: WaitLabelOptions }> {
+export async function writeWaits(
+  ctx: Ctx,
+  task: Task,
+  next: TaskWait[],
+  by: TaskChangeBy,
+  now = Date.now(),
+  repos = taskReposOnce(ctx, task),
+): Promise<{ task: Task; words: WaitLabelOptions }> {
   const prev = task.waits ?? [];
   const waiting_since = next.some((w) => w.state === "waiting") ? (task.waiting_since ?? now) : undefined;
   await patchTask(ctx, task, { waits: next, waiting_since, updated_at: now });
 
   const before = new Map(prev.map((w) => [w.id, w]));
   const kept = new Set(next.map((w) => w.id));
-  const words = await storedWords(ctx, task, [...prev, ...next]);
-  // Both sides of a line are rendered in today's words, so a wait left as it
-  // was renders the same twice and recordTaskChange writes nothing for it.
+  const gone = prev.filter((w) => !kept.has(w.id));
+  const moved = next.filter((w) => before.get(w.id) !== w);
+  // The words are what a wait's history line is stored in, so they are read
+  // only when a line can move; a write that left every wait as it was reads
+  // the task's repositories for nothing. Both sides of a line are rendered in
+  // today's words, so a wait rebuilt unchanged renders the same twice and
+  // recordTaskChange writes nothing for it.
+  const words = gone.length || moved.length ? await storedWords(ctx, task, [...prev, ...next], repos) : STORED;
   const changes: TaskFieldChange[] = [
-    ...prev.filter((w) => !kept.has(w.id)).map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
-    ...next.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
+    ...gone.map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
+    ...moved.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
   ];
   await recordTaskChange(ctx, task._id, by, changes, now);
 
@@ -124,8 +154,10 @@ export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: Tas
   return { task: { ...task, waits: next, waiting_since, updated_at: now }, words };
 }
 
-/** Add `taskId` to a wait target's back reference. */
-async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
+/** Add `taskId` to a wait target's back reference. Exported for the one-off
+ *  that links the PR waits set before PR rows carried one
+ *  (migrations.linkPrWaits); every live write of it is writeWaits's. */
+export async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
   const linked = target.waiting_task_ids ?? [];
   if (linked.some((id) => String(id) === String(taskId))) return false;
   await ctx.db.patch(target._id, { waiting_task_ids: [...linked, taskId] });
@@ -148,9 +180,23 @@ async function answeredNote(ctx: Ctx, row: Doc<"session_decisions">, verdict: Ve
   const ws = workspaceForResource(task);
   const conv = label && ws.type === "team" ? await ctx.db.get(row.conversation_id) : null;
   const shared = !!label && (ws.type === "personal"
-    ? await userMayRead(ctx, ws.userId, row)
+    ? await taskReadersMayRead(ctx, task, ws.userId, row)
     : !!conv && workspacesMatch(workspaceForConversation(conv), ws));
   return waitMetNote("decision", { atOnce, ...(shared ? { answer: unmention(inlineForeignText(label).slice(0, 120)) } : {}) });
+}
+
+/** Whether EVERY reader a personally-keyed task admits can read the decision,
+ *  not just its owner: a task routed to a team keeps a personal access key and
+ *  can still be assigned to another member (assigneeScopeOf), and an assignee
+ *  is an explicit read grant (accessStampFor), so the answer text in the note
+ *  would reach someone the decision does not. The team branch needs no such
+ *  walk — a team task's assignee is a member of the team the note is already
+ *  judged against. */
+async function taskReadersMayRead(ctx: Ctx, task: Task, owner: Id<"users">, row: Doc<"session_decisions">): Promise<boolean> {
+  const stamp = await accessStampFor(ctx, "tasks", task);
+  const readers = new Set<string>([String(owner), ...(stamp?.access_grants ?? [])]);
+  for (const id of readers) if (!(await userMayRead(ctx, id as Id<"users">, row))) return false;
+  return true;
 }
 
 /** An answer quoted in a system note addresses nobody: "@bob" there would
@@ -200,7 +246,7 @@ function targetFromInput(raw: any): UnresolvedTarget {
 }
 
 /** The target `input` names, with a bare `#42` given its repository. */
-async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: AddWaitInput, now: number): Promise<WaitTarget> {
+async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: AddWaitInput, now: number, repos: TaskRepos): Promise<WaitTarget> {
   let target: UnresolvedTarget;
   if (input.target) target = targetFromInput(input.target);
   else {
@@ -215,7 +261,7 @@ async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: A
   if (target.kind === "decision" || target.kind === "time") return target;
   const repository = target.repository
     ? normalizeRepository(target.repository)
-    : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository));
+    : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository), repos);
   return { kind: target.kind, repository, pr_number: target.pr_number };
 }
 
@@ -250,8 +296,8 @@ async function taskRepositories(ctx: Ctx, task: Task): Promise<string[]> {
  * sees PR #42; still several, or none, the caller's checkout settles it when
  * it is one of them, else it fails with the candidates.
  */
-async function repositoryForBarePr(ctx: Ctx, userId: Id<"users">, task: Task, n: number, fallback?: string): Promise<string> {
-  const fromProject = await taskRepositories(ctx, task);
+async function repositoryForBarePr(ctx: Ctx, userId: Id<"users">, task: Task, n: number, fallback: string | undefined, repos: TaskRepos): Promise<string> {
+  const fromProject = await repos();
   const candidates = fromProject.length ? fromProject : fallback ? [normalizeRepository(fallback)] : [];
   if (!candidates.length) throw new Error(`#${n}: ${task.short_id} names no repository to find it in. Write owner/repo#${n}.`);
   if (candidates.length === 1) return candidates[0];
@@ -335,7 +381,8 @@ export async function addWaitCore(
 ): Promise<AddWaitResult> {
   const now = Date.now();
   const task = await writableTask(ctx, userId, shortId);
-  const target = await resolveTarget(ctx, userId, task, input, now);
+  const repos = taskReposOnce(ctx, task);
+  const target = await resolveTarget(ctx, userId, task, input, now, repos);
   const waits = task.waits ?? [];
   const id = str(input.id);
   const own = id ? waits.find((w) => w.id === id) : undefined;
@@ -361,9 +408,9 @@ export async function addWaitCore(
   const { created_by: _createdBy, ...changeBy } = by;
   const replaced = waits.filter((w) => waitIsReplaceable(w) && sameWaitTarget(w, target));
   const wasUnblocked = replaced.length && check.met ? await isTaskUnblocked(ctx, task) : true;
-  const { task: after, words } = await writeWaits(ctx, task, [...waits.filter((w) => !replaced.includes(w)), wait], changeBy, now);
+  const { task: after, words } = await writeWaits(ctx, task, [...waits.filter((w) => !replaced.includes(w)), wait], changeBy, now, repos);
   if (!wasUnblocked && !isTerminalTaskStatus(after.status) && (await isTaskUnblocked(ctx, after))) {
-    await onUnblocked(ctx, after, waitMetCause(wait, words), unblockBy(changeBy, `met:${wait.id}`));
+    await onUnblocked(ctx, after, waitMetCause(wait, { ...words, fullRef: true }), unblockBy(changeBy, `met:${wait.id}`));
   }
   if (wait.kind === "time" && !check.met) {
     await ctx.scheduler.runAt(wait.at, internal.taskWaits.settleTimeWait, { task_id: task._id, wait_id: wait.id, at: wait.at });
@@ -392,25 +439,46 @@ export async function removeWaitCore(
     // A met time wait stays as history, so its time may be past.
     const p = parseBlockerRef(ref, { timeZone: str(which.time_zone), allowPast: true });
     if (!p.ok) throw new Error(p.error);
+    // Refused where it is parsed, symmetric to resolveTarget on the way in: a
+    // task ref matches no wait, and the refusal below would then point at a
+    // list of waits that could never hold it.
+    if (p.kind === "task") throw new Error(`${p.ref} is a task: remove it as a dependency (blocked_by), not a wait`);
     byTime = p.kind === "time";
     // A bare `#42` has no repository, which sameWaitTarget matches in any.
     const { ok: _ok, ...target } = p;
-    match = (w) => target.kind !== "task" && sameWaitTarget(w, target as WaitTarget);
+    match = (w) => sameWaitTarget(w, target as WaitTarget);
   } else throw new Error("Name the wait to remove: its id or what it waits on");
   const removed = waits.filter(match);
   // By id is the web's dispatch, whose retry finds its wait already gone.
   if (!removed.length && str(which.wait_id)) return { removed };
   if (!removed.length) {
     // A relative time ("2h") names a new moment each time it is read, so a
-    // time wait is removed by its id or the absolute time it names.
-    const times = byTime ? waits.filter((w) => w.kind === "time").map((w) => `${w.id} (${waitLabel(w, STORED)})`) : [];
-    const hint = times.length ? `. Remove a time wait by its id: ${times.join(", ")}` : "";
-    throw new Error(`${task.short_id} has no wait on ${ref ?? which.wait_id}${hint}`);
+    // time wait is removed by its id or the moment it names. The moment is
+    // offered as the ref the flag takes, pinned to UTC: a bare time is read as
+    // wall time in the caller's zone, so an agent shown the stored absolute
+    // ("Oct 9, 2026 05:02 UTC") and writing it back bare is the usual way to
+    // land here off UTC, and a hint spelling that same clock time again would
+    // name what was just refused (TG11).
+    const times = byTime
+      ? waits
+        .filter((w): w is TaskWait & TimeWaitTarget => w.kind === "time")
+        .map((w) => `${w.id} (${waitLabel(w, STORED)}; as a ref ${waitTimeRef(w.at)})`)
+      : [];
+    // The sentence is shared with the CLI's own version of this refusal
+    // (noWaitRemovedLine): both exit non-zero, so both say where to look
+    // (TG12). Only the time-wait tail is this path's own.
+    throw new Error(noWaitOnLine(
+      task.short_id,
+      `on ${ref ?? which.wait_id}`,
+      times.length ? `. Remove a time wait by its id, or by the moment in UTC: ${times.join(", ")}` : undefined,
+    ));
   }
   const wasUnblocked = await isTaskUnblocked(ctx, task);
   const { task: after, words } = await writeWaits(ctx, task, waits.filter((w) => !match(w)), by);
   if (!wasUnblocked && !isTerminalTaskStatus(after.status) && (await isTaskUnblocked(ctx, after))) {
-    const what = removed.map((w) => `the wait ${waitClause(w, words)}`).join(", ");
+    // The full ref, as the met and failed causes use: the comment is frozen
+    // text, so a bare `#42` in it could never resolve to a live pill.
+    const what = removed.map((w) => `the wait ${waitClause(w, { ...words, fullRef: true })}`).join(", ");
     await onUnblocked(ctx, after, `${await writerName(ctx, by)} removed ${what}`, unblockBy(by, `removed:${removed.map((w) => w.id).join(",")}`));
   }
   return { removed };
@@ -426,7 +494,7 @@ async function writerName(ctx: Ctx, by: TaskChangeBy): Promise<string> {
 
 /** Who a CLI call writes as: an agent when it names its session, else a
  *  person at the terminal (subscribeUser's rule). */
-export async function cliWriter(ctx: Ctx, userId: Id<"users">, conversationId: string | undefined) {
+async function cliWriter(ctx: Ctx, userId: Id<"users">, conversationId: string | undefined) {
   const conv = conversationId ? await resolveSessionConversation(ctx, userId, conversationId) : null;
   return conv
     ? { user_id: userId, actor_type: "agent" as const, conversation_id: conv._id, created_by: conv.short_id ?? String(conv._id) }
@@ -530,10 +598,17 @@ async function settleWaits(ctx: Ctx, task: Task, settle: (w: TaskWait) => Settle
   if (!settled.length) return task;
   const { task: after, words } = await writeWaits(ctx, task, next, bySystem, now);
   if (isTerminalTaskStatus(after.status)) return after;
+  // One event can fail several of a task's waits at once (a PR that closes
+  // without merging fails both a merge wait and a checks wait on it), and the
+  // task needs one new plan, not one per wait: the failed side is told in a
+  // single comment and a single wake, as the met side is.
   const failed = settled.filter((w) => w.state === "failed");
-  for (const w of failed) await onWaitFailed(ctx, after, w, words, by.conversationId);
+  if (failed.length) await onWaitFailed(ctx, after, failed, words, now, by);
   if (!failed.length && (await isTaskUnblocked(ctx, after))) {
-    await onUnblocked(ctx, after, settled.map((w) => waitMetCause(w, words)).join(", "), { ...by, key: `met:${settled.map((w) => w.id).join(",")}@${now}` });
+    // The full ref, as onWaitFailed's comment uses, so the met PR renders as a
+    // live pill in the task's comment stream too.
+    const met = settled.map((w) => waitMetCause(w, { ...words, fullRef: true })).join(", ");
+    await onUnblocked(ctx, after, met, { ...by, key: `met:${settled.map((w) => w.id).join(",")}@${now}` });
   }
   return after;
 }
@@ -554,17 +629,21 @@ function prSettle(pr: PR, w: PrWait): Settle | undefined {
   return pr.state === "open" ? undefined : { state: "failed", note: waitFailedWord(w.kind, pr.state) };
 }
 
-/** The ids of `task`'s waiting waits on `pr`. A linked task's wait naming
- *  the PR's number under a repository where no PR row is found any more is on
- *  it too: the repository was renamed or moved since the wait was set, and
- *  the row followed, so the wait follows the row. */
+/** The ids of `task`'s waiting waits on `pr`. The waits naming the PR's own
+ *  repository, and only those when there are any. A wait naming the PR's
+ *  number under a repository where no PR row is found any more is on it too,
+ *  but only as a fallback: the repository was renamed or moved since the wait
+ *  was set and the row followed, so the wait follows the row. Number alone is
+ *  too weak to settle on while an exact match is in hand — a task holding
+ *  `old-org/api#42`, whose row is gone, and `acme/web#42` would otherwise have
+ *  the first marked "merged" by the second's merge. */
 async function waitsOnPr(ctx: Ctx, pr: PR, task: Task): Promise<Set<string>> {
   const repository = normalizeRepository(pr.repository);
+  const onNumber = (task.waits ?? []).filter((w): w is PrWait => w.state === "waiting" && isPrWaitTarget(w) && w.pr_number === pr.number);
+  const exact = onNumber.filter((w) => normalizeRepository(w.repository) === repository);
+  if (exact.length) return new Set(exact.map((w) => w.id));
   const out = new Set<string>();
-  for (const w of task.waits ?? []) {
-    if (w.state !== "waiting" || !isPrWaitTarget(w) || w.pr_number !== pr.number) continue;
-    if (normalizeRepository(w.repository) === repository || !(await prByNumber(ctx, w.repository, w.pr_number))) out.add(w.id);
-  }
+  for (const w of onNumber) if (!(await prByNumber(ctx, w.repository, w.pr_number))) out.add(w.id);
   return out;
 }
 
@@ -596,59 +675,64 @@ export const settlePr = internalMutation({
   },
 });
 
-/** One-off: link the PR waits set before PR rows carried `waiting_task_ids`,
- *  and settle each linked PR as it now stands. Idempotent; run until it
- *  reports `done`, then delete it (ct-58147 tracks both). */
-export const linkPrWaits = internalMutation({
-  args: { cursor: v.optional(v.union(v.string(), v.null())) },
-  handler: async (ctx, { cursor }) => {
-    const page = await ctx.db
-      .query("tasks")
-      .withIndex("by_waiting_since", (q) => q.gt("waiting_since", 0))
-      .paginate({ cursor: cursor ?? null, numItems: 200 });
-    let linked = 0;
-    for (const task of page.page) {
-      for (const w of task.waits ?? []) {
-        if (w.state !== "waiting" || !isPrWaitTarget(w)) continue;
-        const pr = await prByNumber(ctx, w.repository, w.pr_number);
-        if (!pr || !(await linkTask(ctx, pr, task._id))) continue;
-        linked++;
-        await ctx.scheduler.runAfter(0, internal.taskWaits.settlePr, { pr_id: pr._id });
-      }
-    }
-    return { linked, cursor: page.continueCursor, done: page.isDone };
-  },
-});
-
 /** The tasks a decision's waits sit on, through its back reference. */
 async function tasksWaitingOn(ctx: Ctx, row: Doc<"session_decisions">): Promise<Task[]> {
   const rows = await Promise.all((row.waiting_task_ids ?? []).map((id) => ctx.db.get(id)));
   return rows.filter((t): t is Task => !!t);
 }
 
-/** A decision's waits settle: answered meets them, dismissed or withdrawn
- *  fails them. `by` is who resolved it, told nothing of their own act. */
+/** Which of a task's waits one decision's resolution decides: `on` names the
+ *  decision at all (the back reference is kept for those), `hit` still waits,
+ *  and `stale` was met before the row's latest resolution, so it holds an
+ *  answer a person has since changed (an advisory override,
+ *  settleClientResolution). */
+function decisionWaits(row: Doc<"session_decisions">) {
+  const on = (w: TaskWait) => w.kind === "decision" && w.decision === row.short_id;
+  return {
+    on,
+    hit: (w: TaskWait) => w.state === "waiting" && on(w),
+    stale: (w: TaskWait) => w.state === "met" && on(w) && (w.settled_at ?? 0) < (row.resolved_at ?? 0),
+  };
+}
+
+/** The session an answer reaches another way: delivered to its asker as a
+ *  message of its own (deliverAnswer, or the web client's send), which wakes
+ *  it, so a session that parked on its own question is not woken twice. A
+ *  silent card, a run's gate and an answer with no words deliver nothing
+ *  there. */
+function answerTold(row: Doc<"session_decisions">, verdict: Verdict): Id<"conversations"> | undefined {
+  const answered = verdict.status === "answered";
+  return answered && !row.silent && !row.workflow_run_id && !!answerLabel(row, verdict) ? row.conversation_id : undefined;
+}
+
+/** One task's waits on a decision settle: answered meets them, dismissed or
+ *  withdrawn fails them, and an answer changed since the wait was met is
+ *  restated. `by` is who resolved it, told nothing of their own act. */
+async function settleTaskWaitsOn(ctx: Ctx, row: Doc<"session_decisions">, verdict: Verdict, task: Task, by: Omit<UnblockBy, "key">): Promise<void> {
+  const { hit, stale } = decisionWaits(row);
+  const answered = verdict.status === "answered";
+  const told = answerTold(row, verdict);
+  if (answered && task.waits?.some(stale)) task = await restateAnswer(ctx, task, row, verdict, stale, [by.conversationId, told]);
+  if (!task.waits?.some(hit)) return;
+  const settle: Settle = answered
+    ? { state: "met", note: await answeredNote(ctx, row, verdict, task) }
+    : { state: "failed", note: waitFailedWord("decision", verdict.status) };
+  await settleWaits(ctx, task, (w) => (hit(w) ? settle : undefined), { ...by, told });
+}
+
+/**
+ * Every waiting task of a decision settled in THIS transaction. Only the
+ * session purge uses it (sessionDelete): the decision row goes with the
+ * session, so there is no row left for a job of its own to read, and a task
+ * whose wait it fails would otherwise wait on something gone. Every other
+ * resolution goes through `scheduleDecisionSettle`, which gives each task its
+ * own job and prunes the back reference, because this walk writes a waits
+ * patch, history rows, a comment, a notification and an owner wake for each
+ * task in one transaction.
+ */
 export async function settleTaskWaits(ctx: Ctx, row: Doc<"session_decisions">, verdict: Verdict, by: Omit<UnblockBy, "key"> = {}): Promise<void> {
   if (!row.short_id) return;
-  const on = (w: TaskWait) => w.kind === "decision" && w.decision === row.short_id;
-  const hit = (w: TaskWait) => w.state === "waiting" && on(w);
-  // A wait met before the row's latest resolution holds an answer a person
-  // has since changed (an advisory override, settleClientResolution).
-  const stale = (w: TaskWait) => w.state === "met" && on(w) && (w.settled_at ?? 0) < (row.resolved_at ?? 0);
-  const answered = verdict.status === "answered";
-  // An answer delivered to its asker as a message of its own (deliverAnswer,
-  // or the web client's send) wakes it, so a session that parked on its own
-  // question is not woken twice. A silent card, a run's gate and an answer
-  // with no words deliver nothing there.
-  const told = answered && !row.silent && !row.workflow_run_id && !!answerLabel(row, verdict) ? row.conversation_id : undefined;
-  for (let task of await tasksWaitingOn(ctx, row)) {
-    if (answered && task.waits?.some(stale)) task = await restateAnswer(ctx, task, row, verdict, stale, [by.conversationId, told]);
-    if (!task.waits?.some(hit)) continue;
-    const settle: Settle = answered
-      ? { state: "met", note: await answeredNote(ctx, row, verdict, task) }
-      : { state: "failed", note: waitFailedWord("decision", verdict.status) };
-    await settleWaits(ctx, task, (w) => (hit(w) ? settle : undefined), { ...by, told });
-  }
+  for (const task of await tasksWaitingOn(ctx, row)) await settleTaskWaitsOn(ctx, row, verdict, task, by);
 }
 
 /** A person changed the answer that met `task`'s wait: the wait carries the
@@ -681,7 +765,11 @@ async function restateAnswer(
  *  proposals' card withdraw): its waits settle in a job of their own, so a
  *  failure there never rolls back the answer. */
 export async function scheduleDecisionSettle(
-  ctx: Ctx,
+  // Only the scheduler, so the decision modules, which type their ctx
+  // structurally, reach the one scheduler of a settle without `ctx as any`
+  // erasing the check on a boundary that goes on to write task rows,
+  // comments, notifications and session wakes.
+  ctx: Pick<Ctx, "scheduler">,
   row: Doc<"session_decisions">,
   by: { user_id?: Id<"users">; via?: Id<"conversations"> } = {},
 ): Promise<void> {
@@ -693,47 +781,164 @@ export async function scheduleDecisionSettle(
   });
 }
 
-/** The job: it reads the decision as it stands, so a repeat settles the same
- *  way and one reopened since settles nothing. Who resolved it comes from
- *  the row too when the row names them (every answer and dismissal does), so
- *  a job from before a reopen settles as the latest answer's. A withdraw
- *  names nobody on the row, so its job carries the actor. */
+/** Who the settle is by: the row when it names them (every answer and
+ *  dismissal does), so a job from before a reopen settles as the latest
+ *  answer's. A withdraw names nobody on the row, so its job carries the
+ *  actor. */
+const decisionSettleBy = (row: Doc<"session_decisions">, args: { actor_user_id?: Id<"users">; conversation_id?: Id<"conversations"> }) =>
+  row.answered_by
+    ? { actorUserId: row.resolved_by, conversationId: row.answered_by.via }
+    : { actorUserId: args.actor_user_id, conversationId: args.conversation_id };
+
+/**
+ * The fan-out: it reads the decision as it stands, so a repeat settles the
+ * same way and one reopened since settles nothing, and hands each waiting
+ * task to a job of its own.
+ *
+ * One task's settle writes a waits patch, history rows, a comment, a
+ * notification and an owner wake, so walking them all here would run a
+ * decision's whole set in one transaction: a throw on any row, or the
+ * per-mutation ceiling, would roll back every sibling's settle and leave only
+ * the quarter-hourly sweep to recover them. That is the coupling
+ * `settleOneOverdueTask` exists to undo, and this is the same shape — one
+ * task per transaction, each reading the decision again, so a settle that
+ * throws cannot strand its mates.
+ *
+ * It also prunes the back reference, which `writeWaits` only ever appends to:
+ * an id whose task is gone, or which no longer holds a wait naming this
+ * decision, can never be settled or reopened again, while a MET wait's id
+ * stays, because a reopen has to find it (schema.ts session_decisions).
+ * Without the prune every later resolution of a long-lived decision — an
+ * advisory re-answer, reopen-then-answer — would re-read every task that ever
+ * waited on it.
+ */
 export const settleDecision = internalMutation({
   args: { decision_id: v.id("session_decisions"), actor_user_id: v.optional(v.id("users")), conversation_id: v.optional(v.id("conversations")) },
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.decision_id);
     const verdict = row && verdictOfRow(row);
-    if (!row || !verdict) return;
-    const by = row.answered_by
-      ? { actorUserId: row.resolved_by, conversationId: row.answered_by.via }
-      : { actorUserId: args.actor_user_id, conversationId: args.conversation_id };
-    await settleTaskWaits(ctx, row, verdict, by);
+    if (!row || !verdict || !row.short_id) return;
+    const { on, hit, stale } = decisionWaits(row);
+    const answered = verdict.status === "answered";
+    const waiting = row.waiting_task_ids ?? [];
+    const still: Id<"tasks">[] = [];
+    let scheduled = 0;
+    for (const id of waiting) {
+      const task = await ctx.db.get(id);
+      if (!task?.waits?.some(on)) continue;
+      still.push(id);
+      if (!task.waits.some(hit) && !(answered && task.waits.some(stale))) continue;
+      scheduled++;
+      await ctx.scheduler.runAfter(0, internal.taskWaits.settleDecisionTask, {
+        decision_id: row._id,
+        task_id: id,
+        ...(args.actor_user_id ? { actor_user_id: args.actor_user_id } : {}),
+        ...(args.conversation_id ? { conversation_id: args.conversation_id } : {}),
+      });
+    }
+    if (still.length !== waiting.length) await ctx.db.patch(row._id, { waiting_task_ids: still });
+    return { scheduled, pruned: waiting.length - still.length };
   },
 });
 
-/** A reopened decision (sessionDecisions.reopenCore) puts its met waits back
- *  to waiting, and the task and its owner hear that the answer no longer stands. */
-export async function reopenTaskWaits(ctx: Ctx, row: Doc<"session_decisions">): Promise<void> {
-  if (!row.short_id) return;
-  const hit = (w: TaskWait) => w.state === "met" && w.kind === "decision" && w.decision === row.short_id;
-  for (const task of await tasksWaitingOn(ctx, row)) {
-    const reopened = task.waits?.find(hit);
-    if (!reopened) continue;
-    const next = task.waits!.map((w) => {
-      if (!hit(w)) return w;
-      const { settled_at: _s, note: _n, ...rest } = w;
-      return { ...rest, state: "waiting" as const };
-    });
-    const { task: after } = await writeWaits(ctx, task, next, bySystem);
-    if (isTerminalTaskStatus(after.status)) continue;
-    await insertTaskComment(ctx, after._id, { author: SENDER, text: `Waiting again: ${row.short_id} was reopened, so its answer no longer stands.`, comment_type: "note" });
-    await wakeOwner(
-      ctx,
-      after,
-      `reopened:${reopened.id}:${reopened.settled_at}`,
-      `${taskName(after)} waits on ${row.short_id} again: the decision was reopened, so its earlier answer no longer stands. Hold any work that depends on it until it is answered again.`,
-    );
-  }
+/** One task's share of a decision's settle, in its own transaction
+ *  (`settleDecision`). It re-reads both rows, so a decision reopened or a
+ *  wait removed between the fan-out and this job settles nothing. */
+export const settleDecisionTask = internalMutation({
+  args: {
+    decision_id: v.id("session_decisions"),
+    task_id: v.id("tasks"),
+    actor_user_id: v.optional(v.id("users")),
+    conversation_id: v.optional(v.id("conversations")),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.decision_id);
+    const verdict = row && verdictOfRow(row);
+    if (!row || !verdict || !row.short_id) return;
+    const task = await ctx.db.get(args.task_id);
+    if (!task) return;
+    await settleTaskWaitsOn(ctx, row, verdict, task, decisionSettleBy(row, args));
+  },
+});
+
+/** The met waits one reopened decision takes back. */
+const reopenableWaits = (row: Doc<"session_decisions">) => (w: TaskWait) =>
+  w.state === "met" && w.kind === "decision" && w.decision === row.short_id;
+
+/** A reopened decision (sessionDecisions.reopenCore): its met waits go back
+ *  to waiting in jobs of their own, so a failure there never rolls back the
+ *  reopen itself. The settle side is scheduled for that reason
+ *  (scheduleDecisionSettle), and this side needs it more: the quarter-hourly
+ *  sweep only settles waits and never puts a met one back, so a reopen rolled
+ *  back by one task's throw would leave the decision pending with its waits
+ *  still met and nothing to recover them. */
+export async function scheduleDecisionReopen(
+  // Only the scheduler, as scheduleDecisionSettle takes: the decision modules
+  // type their ctx structurally and reach the reopen without `ctx as any`
+  // erasing the check on a boundary that goes on to write task rows, comments
+  // and session wakes.
+  ctx: Pick<Ctx, "scheduler">,
+  row: Doc<"session_decisions">,
+): Promise<void> {
+  if (!row.waiting_task_ids?.length) return;
+  await ctx.scheduler.runAfter(0, internal.taskWaits.reopenDecision, { decision_id: row._id });
+}
+
+/** The reopen's fan-out, settleDecision's shape: it reads the decision as it
+ *  stands, so one answered again since the reopen takes nothing back, and
+ *  hands each task holding a met wait on it a job of its own. The back
+ *  reference is not pruned here — a met wait's id is exactly what a reopen
+ *  needs to find, and the settle path prunes what nothing can settle again. */
+export const reopenDecision = internalMutation({
+  args: { decision_id: v.id("session_decisions") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.decision_id);
+    if (!row?.short_id || row.status !== "pending") return;
+    const hit = reopenableWaits(row);
+    let scheduled = 0;
+    for (const id of row.waiting_task_ids ?? []) {
+      const task = await ctx.db.get(id);
+      if (!task?.waits?.some(hit)) continue;
+      scheduled++;
+      await ctx.scheduler.runAfter(0, internal.taskWaits.reopenDecisionTask, { decision_id: row._id, task_id: id });
+    }
+    return { scheduled };
+  },
+});
+
+/** One task's share of a reopen, in its own transaction (`reopenDecision`).
+ *  It re-reads both rows, so a decision answered again or a wait removed
+ *  between the fan-out and this job takes nothing back. */
+export const reopenDecisionTask = internalMutation({
+  args: { decision_id: v.id("session_decisions"), task_id: v.id("tasks") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.decision_id);
+    if (!row?.short_id || row.status !== "pending") return;
+    const task = await ctx.db.get(args.task_id);
+    if (task) await reopenTaskWait(ctx, row, task);
+  },
+});
+
+/** One task's met waits on `row` go back to waiting, and the task and its
+ *  owner hear that the answer no longer stands. */
+async function reopenTaskWait(ctx: Ctx, row: Doc<"session_decisions">, task: Task): Promise<void> {
+  const hit = reopenableWaits(row);
+  const reopened = task.waits?.find(hit);
+  if (!reopened) return;
+  const next = task.waits!.map((w) => {
+    if (!hit(w)) return w;
+    const { settled_at: _s, note: _n, ...rest } = w;
+    return { ...rest, state: "waiting" as const };
+  });
+  const { task: after } = await writeWaits(ctx, task, next, bySystem);
+  if (isTerminalTaskStatus(after.status)) return;
+  await insertTaskComment(ctx, after._id, { author: SENDER, text: `Waiting again: ${row.short_id} was reopened, so its answer no longer stands.`, comment_type: "note" });
+  await wakeOwner(
+    ctx,
+    after,
+    `reopened:${reopened.id}:${reopened.settled_at}`,
+    `${taskName(after)} waits on ${row.short_id} again: the decision was reopened, so its earlier answer no longer stands. Hold any work that depends on it until it is answered again.`,
+  );
 }
 
 /** A time wait's job. It settles only a wait that still exists, still waits
@@ -745,6 +950,185 @@ export const settleTimeWait = internalMutation({
     if (!task) return;
     const hit = (w: TaskWait) => w.id === args.wait_id && w.kind === "time" && w.at === args.at && w.state === "waiting";
     await settleWaits(ctx, task, (w) => (hit(w) ? { state: "met", note: waitMetNote("time") } : undefined));
+  },
+});
+
+/**
+ * What the state of a still-waiting wait's own target makes of it now. This is
+ * the settle the dedicated jobs run, reached from the target rather than from
+ * an event: `prSettle` against the PR row as it stands (the same read
+ * `settlePr` makes), the decision's current verdict (the same read
+ * `settleDecision` makes), and the clock for a time wait. A target that cannot
+ * be read lends no verdict, and a PR whose events no longer reach the task is
+ * left to `settlePr` on its next move rather than failed here, so the sweep
+ * invents no outcome of its own.
+ */
+async function overdueSettle(ctx: Ctx, task: Task, w: TaskWait, now: number): Promise<Settle | undefined> {
+  if (isPrWaitTarget(w)) {
+    const pr = await prByNumber(ctx, w.repository, w.pr_number);
+    return pr && (await prReachesTask(ctx, pr, task)) ? prSettle(pr, w) : undefined;
+  }
+  if (w.kind === "decision") {
+    const row = await decisionByShortId(ctx, w.decision);
+    const verdict = row && verdictOfRow(row);
+    if (!row || !verdict) return undefined;
+    return verdict.status === "answered"
+      ? { state: "met", note: await answeredNote(ctx, row, verdict, task) }
+      : { state: "failed", note: waitFailedWord("decision", verdict.status) };
+  }
+  return w.kind === "time" && w.at <= now ? { state: "met", note: waitMetNote("time") } : undefined;
+}
+
+/** The target rows one sweep page has read, so a PR or decision several
+ *  waiting tasks name costs one read between them. */
+function sweepTargets(ctx: Ctx) {
+  const once = <T>(cache: Map<string, Promise<T>>, key: string, read: () => Promise<T>): Promise<T> => {
+    const held = cache.get(key);
+    if (held) return held;
+    const reading = read();
+    cache.set(key, reading);
+    return reading;
+  };
+  const prs = new Map<string, Promise<PR | null>>();
+  const decisions = new Map<string, Promise<Doc<"session_decisions"> | null>>();
+  return {
+    pr: (repository: string, number: number) =>
+      once(prs, `${normalizeRepository(repository)}#${number}`, () => prByNumber(ctx, repository, number)),
+    decision: (shortId: string) => once(decisions, shortId, () => decisionByShortId(ctx, shortId)),
+  };
+}
+
+/**
+ * Whether a wait's own target already decides it. This is the gate
+ * `overdueSettle` applies, at a page's cost instead of a settle's: the same
+ * rows, read once per page, through the same pure verdicts (`prSettle`,
+ * `verdictOfRow`, the clock). What the settle adds — the PR's reach to the
+ * task, the answer's note — never turns no verdict into one, so a wait this
+ * declines is a wait no settle would have written; the one wait it admits for
+ * nothing is one whose PR has moved but no longer reaches the task, which
+ * `settlePr` fails on that PR's next move.
+ */
+async function targetDecides(t: ReturnType<typeof sweepTargets>, w: TaskWait, now: number): Promise<boolean> {
+  if (isPrWaitTarget(w)) {
+    const pr = await t.pr(w.repository, w.pr_number);
+    return !!pr && !!prSettle(pr, w);
+  }
+  if (w.kind === "decision") {
+    const row = await t.decision(w.decision);
+    return !!row && !!verdictOfRow(row);
+  }
+  return w.kind === "time" && w.at <= now;
+}
+
+/**
+ * The recovery for a wait whose settle never completed. Every kind settles
+ * from exactly one scheduled job — `settleTimeWait` at the moment addWaitCore
+ * queues, `settlePr` on a PR's state or checks move, `settleDecision` on a
+ * decision resolving — and Convex does not retry a scheduled mutation that
+ * threw. The settle commits the waits patch, the history rows, the task
+ * comment, the notification and the owner's wake in one transaction, so a
+ * throw anywhere downstream rolls the whole settle back. Nothing then looks at
+ * the wait again: a resolved decision has no later resolution to settle from,
+ * and a merged PR makes no further move for patchPullRequest to schedule on.
+ * The wait stays `waiting` for good, holding the task and every dependent of
+ * it on something no event can clear — TG2's rule is that a wait which cannot
+ * settle is a trap.
+ *
+ * So the sweep walks the tasks that still hold an open wait whose own target
+ * ALREADY decides it (`targetDecides`) and hands each to
+ * `settleOneOverdueTask`, which reads that target again and settles the wait
+ * the way its job would (`overdueSettle`). That is idempotent by
+ * construction: it sees only waits that still wait, and a target it cannot
+ * read or that has not moved yet lends no verdict, so a run where every job
+ * did fire writes nothing. `tasks.by_waiting_since` is sparse — writeWaits
+ * keeps the field set exactly while a wait is open — so a page holds tasks
+ * with open waits and nothing else.
+ *
+ * The gate is what keeps the recovery's standing cost proportional to the
+ * settles that went missing rather than to healthy parked work: a task waiting
+ * on an open PR or a pending decision has nothing to settle, so it costs the
+ * page one target read and no job, for as long as it waits. Gating on the task
+ * row alone instead would hand every parked task a mutation of its own on each
+ * of the 96 firings in a day, for as long as its PR stayed open.
+ */
+export const settleOverdueWaits = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, { cursor }) => {
+    const now = Date.now();
+    const page = await ctx.db
+      .query("tasks")
+      .withIndex("by_waiting_since", (q) => q.gt("waiting_since", 0))
+      // A page reads each task's wait targets too, so it is kept small enough
+      // that a page of PR rows (bodies, commits, checks) stays well inside one
+      // transaction's read budget. The index is sparse, so the usual tree is
+      // one page anyway, and a longer one pages on by itself.
+      .paginate({ cursor: cursor ?? null, numItems: 50 });
+    // The sweep only READS: one mutation per task does the settling, and the
+    // cursor is handed on whatever any of them makes of its row. A settle
+    // reads its own targets (the PR row, the decision, the task's
+    // repositories and sessions) and writes the waits patch, the history, a
+    // comment, a notification and the owner's wake, so a page of them in one
+    // transaction would run at Convex's per-mutation ceiling and let one
+    // poisoned row roll back every task on the page AND the hand-on with it —
+    // the coupling this recovery exists to undo, at page scale.
+    //
+    // Reading a target is not that: it is one indexed read and a pure verdict,
+    // so the page can tell a wait nothing has decided yet from one whose
+    // settle went missing, and only the second kind costs a job.
+    //
+    // A closed task holds nothing (blockersHoldingBack), so an unsettled wait
+    // left on it is history and settling it would write a patch, a history row
+    // and a `[met]` entry nothing reads. It keeps its `waiting_since` all the
+    // same — the index entry has to survive, or a task reopened after its
+    // scheduled settles have fired would never be swept again — so the filter
+    // is what skips it, every pass, for no job.
+    const targets = sweepTargets(ctx);
+    const due: Task[] = [];
+    for (const task of page.page) {
+      if (isTerminalTaskStatus(task.status)) continue;
+      for (const w of task.waits ?? []) {
+        if (w.state !== "waiting" || !(await targetDecides(targets, w, now))) continue;
+        due.push(task);
+        break;
+      }
+    }
+    for (const task of due) {
+      await ctx.scheduler.runAfter(0, internal.taskWaits.settleOneOverdueTask, { task_id: task._id });
+    }
+    // The whole index in one pass, a page at a time: a cron carries no cursor
+    // from one firing to the next, so the run hands its own cursor on.
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.taskWaits.settleOverdueWaits, { cursor: page.continueCursor });
+    return { scheduled: due.length, done: page.isDone };
+  },
+});
+
+/**
+ * One task's overdue settle, each from its own targets and in its own
+ * transaction (settleOverdueWaits). A decision's settle walks every task in
+ * its `waiting_task_ids` in one transaction, so one bad row there strands all
+ * of them; the recovery must not repeat that coupling, at any scale.
+ *
+ * It re-reads the row, so a wait that settled between the sweep's read and
+ * this one no longer waits and lends no verdict, and a task whose waits were
+ * removed in between settles nothing.
+ */
+export const settleOneOverdueTask = internalMutation({
+  args: { task_id: v.id("tasks") },
+  handler: async (ctx, { task_id }) => {
+    const now = Date.now();
+    const task = await ctx.db.get(task_id);
+    if (!task) return { settled: 0 };
+    const decided = new Map<string, Settle>();
+    for (const w of task.waits ?? []) {
+      if (w.state !== "waiting") continue;
+      const s = await overdueSettle(ctx, task, w, now);
+      if (s) decided.set(w.id, s);
+    }
+    if (!decided.size) return { settled: 0 };
+    // A wait id is stable within its task, so the settle lands on the waits
+    // these verdicts were read for.
+    await settleWaits(ctx, task, (w) => (w.state === "waiting" ? decided.get(w.id) : undefined));
+    return { settled: decided.size };
   },
 });
 
@@ -822,10 +1206,19 @@ export async function tellReleased(ctx: Ctx, pending: PendingRelease[], by: Task
 }
 
 /** Nothing in blocked_by is open and every wait is met, reading blockers from
- *  the database. `override` answers for rows the caller knows better. */
+ *  the database. `override` answers for rows the caller knows better, and
+ *  speaks for a ref only when it answers something: `undefined` (not looked
+ *  up) falls through to the database, while `null` (looked up, gone) stands,
+ *  as StatusOf defines them. */
 export async function isTaskUnblocked(ctx: Ctx, task: Task, override?: StatusOf): Promise<boolean> {
   const { statusOf } = await taskLookups(ctx, task);
-  return isUnblocked(task, override ? (r) => override(r) ?? statusOf(r) : statusOf);
+  const lookup: StatusOf = override
+    ? (r) => {
+      const known = override(r);
+      return known === undefined ? statusOf(r) : known;
+    }
+    : statusOf;
+  return isUnblocked(task, lookup);
 }
 
 // ---------------------------------------------------------------------------
@@ -859,6 +1252,23 @@ async function wakeOwner(ctx: Ctx, task: Task, key: string, content: string, ski
  *  session's prompt, so it stays one escaped line. */
 const taskName = (task: Task) => `${task.short_id}${task.title ? ` ("${inlineForeignText(task.title).replace(/"/g, "'").slice(0, 80)}")` : ""}`;
 
+/** The person to tell when no live session could be woken: the task's
+ *  assignee, when the assignee names a user rather than an agent label
+ *  ("agent:codex") or a bot. Null when there is nobody, or when the task is
+ *  ephemeral bookkeeping, which rings nobody (TG9).
+ *
+ *  The task's own comment is not a substitute for this. A comment reaches
+ *  people through taskThreadParticipants, and taskThreadMembership admits the
+ *  assignee only on a human task or from an assignee row a human wrote, so on
+ *  an agent-filed task whose assignee an agent set the comment reaches nobody
+ *  at all. */
+async function assigneeToTell(ctx: Ctx, task: Task): Promise<Doc<"users"> | null> {
+  if (task.ephemeral || !task.assignee) return null;
+  const assignee = ctx.db.normalizeId("users", task.assignee);
+  const person = assignee ? await ctx.db.get(assignee) : null;
+  return !person || person.is_bot ? null : person;
+}
+
 /**
  * The task's last open blocker just cleared (TG2): a comment on the task, then
  * the owning session is woken to continue, or else a person it is assigned to
@@ -874,10 +1284,9 @@ export async function onUnblocked(ctx: Ctx, task: Task, cause: string, by: Unblo
     `${taskName(task)} is unblocked: ${cause}. Nothing it waits on is open any more, so continue the work.`,
     [by.conversationId, by.told],
   );
-  if (woke || task.ephemeral || !task.assignee) return;
-  const assignee = ctx.db.normalizeId("users", task.assignee);
-  const person = assignee ? await ctx.db.get(assignee) : null;
-  if (!person || person.is_bot) return;
+  if (woke) return;
+  const person = await assigneeToTell(ctx, task);
+  if (!person) return;
   await emitNotification(ctx, {
     event_type: "task_unblocked",
     actor_name: SENDER,
@@ -902,17 +1311,43 @@ export async function onBlockedAgain(ctx: Ctx, task: Task, cause: string, by: Un
   );
 }
 
-/** A wait that can no longer be met keeps blocking; the task needs a new
- *  plan, so the task says so and its owner is woken. */
-async function onWaitFailed(ctx: Ctx, task: Task, w: TaskWait, words: WaitLabelOptions, skip?: Id<"conversations">): Promise<void> {
-  // The full ref, so the comment renders the PR as a live pill.
-  const what = waitFailedCause(w, { ...words, fullRef: true });
-  await insertTaskComment(ctx, task._id, { author: SENDER, text: `Still blocked: ${what}, so this wait can no longer clear.`, comment_type: "blocker" });
-  await wakeOwner(
+/** Waits that can no longer be met keep blocking; the task needs a new plan,
+ *  so the task says so and its owner is woken. Every wait one event failed is
+ *  told at once, keyed on the set, so the owner spends one turn on it and
+ *  reads one message rather than a near-identical one per wait. */
+async function onWaitFailed(ctx: Ctx, task: Task, failed: TaskWait[], words: WaitLabelOptions, now: number, by: Omit<UnblockBy, "key"> = {}): Promise<void> {
+  // The full ref, so the comment renders each PR as a live pill.
+  const what = failed.map((w) => waitFailedCause(w, { ...words, fullRef: true })).join(", ");
+  const one = failed.length === 1;
+  await insertTaskComment(ctx, task._id, {
+    author: SENDER,
+    text: `Still blocked: ${what}, so ${one ? "this wait" : "these waits"} can no longer clear.`,
+    comment_type: "blocker",
+  });
+  const woke = await wakeOwner(
     ctx,
     task,
-    `failed:${w.id}:${w.settled_at}`,
-    `${taskName(task)} is still blocked: ${what}, so that wait can no longer clear. The task needs a new plan: ${failedWaitAdvice(task.short_id, [w])}`,
-    [skip],
+    `failed:${failed.map((w) => w.id).join(",")}@${now}`,
+    `${taskName(task)} is still blocked: ${what}, so ${one ? "that wait" : "those waits"} can no longer clear. The task needs a new plan: ${failedWaitAdvice(task.short_id, failed)}`,
+    [by.conversationId],
   );
+  // The failure path needs a person more than any other wake does: the wait
+  // keeps blocking, so the task is off `cast task ready` until somebody
+  // re-plans it, and no later event can clear it. The other wakes here say
+  // "hold work" about a state that still settles on its own, so they leave
+  // the task's comment to carry them rather than ring a person's phone.
+  if (woke) return;
+  const person = await assigneeToTell(ctx, task);
+  if (!person) return;
+  await emitNotification(ctx, {
+    event_type: "task_blocked",
+    actor_name: SENDER,
+    // Whoever dismissed or withdrew it rings no bell of their own (TG2), the
+    // same rule onUnblocked's notification keeps.
+    ...(by.actorUserId ? { actor_user_id: by.actorUserId } : {}),
+    entity_type: "task",
+    entity_id: String(task._id),
+    message: `${task.short_id} is still blocked: ${what}, so ${one ? "that wait" : "those waits"} can no longer clear`,
+    recipient_ids: [person._id],
+  });
 }
