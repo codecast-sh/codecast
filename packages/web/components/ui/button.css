@@ -47,6 +47,26 @@ html.hosted-mode body :where(.cc-btn-cyan) {
   color: var(--pd-bg);
 }
 
+/* Accent tones: a filled button in one of the theme's accents (the same
+   --sol-class-* variable bg-sol-<accent> reads, so hosted mode remaps them
+   too). The label is worked out from the tint: light text on a dark fill,
+   dark text tinted with the fill's own hue on a light one, so no call site
+   picks a text colour for a filled button. */
+html body :where(.cc-btn-violet) { --btn-tint: var(--sol-class-violet); }
+html body :where(.cc-btn-red) { --btn-tint: var(--sol-class-red); }
+html body :where(.cc-btn-green) { --btn-tint: var(--sol-class-green); }
+html body :where(.cc-btn-blue) { --btn-tint: var(--sol-class-blue); }
+html body :where(.cc-btn-amber) { --btn-tint: var(--sol-class-amber); }
+html body :where(.cc-btn-tone) {
+  --btn-ink: var(--sol-bg);
+  color: var(--btn-ink);
+}
+@supports (color: oklch(from red l c h)) {
+  html body :where(.cc-btn-tone) {
+    --btn-ink: oklch(from var(--btn-tint) calc(clamp(0, (0.7 - l) * 100, 1) * 0.78 + 0.22) calc(0.03 - clamp(0, (0.7 - l) * 100, 1) * 0.03) h);
+  }
+}
+
 html body :where(.cc-btn-fill) {
   --btn-fill: var(--btn-tint);
   --btn-fill-hover: color-mix(in oklab, var(--btn-fill) 88%, var(--btn-ink));

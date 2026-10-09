@@ -11,6 +11,7 @@ export {
   capForeignText,
   escapeForeignControlChars,
   fenceForeignText,
+  fenceNonce,
   inlineForeignText,
   type FenceOptions,
 } from "@platform/fence";

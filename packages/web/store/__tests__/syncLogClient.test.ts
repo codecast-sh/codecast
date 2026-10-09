@@ -301,6 +301,39 @@ describe("applyLogPage with cargo (through catchUpScope)", () => {
     expect(s.tasks.t9).toBeUndefined();
     expect(s.syncLogApplyStats).toEqual({ direct: 1, refetch: 3 });
   });
+  test("a page of cargo lands in one store write, not one per row", async () => {
+    const tasks: Record<string, any> = {};
+    const actions: any[] = [];
+    for (let i = 0; i < 200; i++) {
+      tasks[`t${i}`] = { _id: `t${i}`, title: "old" };
+      actions.push({ position: i + 1, entity_type: "tasks", entity_id: `t${i}`, op: "upsert", patch: { title: `new ${i}` } });
+    }
+    actions.push({ position: 201, entity_type: "docs", entity_id: "d1", op: "upsert", patch: { title: "seeded" }, full: true });
+    useInboxStore.setState({
+      syncMeta: { [scopeMetaKey("user:u1")]: { cursor: 0 } },
+      tasks,
+      docs: {},
+      pending: {},
+      syncLogApplyStats: { direct: 0, refetch: 0 },
+    } as any);
+    const convex = scripted([
+      { actions, nextFrom: 201, hasMore: false },
+      { docs: [{ _id: "d1", title: "seeded" }] },
+    ]);
+    let taskWrites = 0;
+    const unsub = useInboxStore.subscribe((s: any, prev: any) => { if (s.tasks !== prev.tasks) taskWrites++; });
+    try {
+      await catchUpScope(convex, { scope_key: "user:u1", position: 201, floor: 0 }, new Set());
+    } finally {
+      unsub();
+    }
+    const s = useInboxStore.getState() as any;
+    expect(taskWrites).toBe(1);
+    expect(s.tasks.t0.title).toBe("new 0");
+    expect(s.tasks.t199.title).toBe("new 199");
+    expect(s.docs.d1.title).toBe("seeded");
+    expect(s.syncLogApplyStats).toEqual({ direct: 201, refetch: 1 });
+  });
 });
 
 describe("applyLogPage: a delete for an id the replica does not hold needs no byIds probe", () => {

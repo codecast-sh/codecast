@@ -10,7 +10,7 @@
 
 import { toast } from "sonner";
 import {
-  MOD_COLLECTIONS, MOD_PROTOCOL, canRead, canWrite, permissionsSig,
+  MOD_COLLECTIONS, MOD_PROTOCOL, canRead, canWrite,
   type FrameToHost, type HostToFrame, type ModContext, type ModEventName, type ModManifest, type ModNode, type ModSurface,
 } from "@codecast/shared/contracts/mods";
 import { withoutUndo } from "@platform/engine";
@@ -19,6 +19,7 @@ import { WORKSPACE_SCOPED_KEYS } from "../../store/clientSyncRegistry";
 import { filterByWorkspace } from "../workspaceScope";
 import { activeWorkspaceKeyOf } from "../workspaceScope";
 import { objectByShortId } from "./objects";
+import { modIsActive } from "./active";
 
 export type ModRow = {
   _id: string;
@@ -33,6 +34,10 @@ export type ModRow = {
   is_mine?: boolean;
   shared?: boolean;
   owner_name?: string;
+  /** Whether it has a local half, and (the author only) where that runs. */
+  has_local?: boolean;
+  local_off?: string[];
+  local_devices?: { device: string; state: "running" | "off" | "failed"; error?: string; at: number }[];
   updated_at: number;
 };
 
@@ -712,11 +717,7 @@ class ModHost {
    */
   sync(rows: ModRow[], installed: readonly string[] = []): void {
     if (!this.container) return;
-    const mine = (r: ModRow) => r.is_mine !== false;
-    // A teammate's mod runs at the grants it was installed with (`<id>:<permissionsSig>`):
-    // widened grants stop it until the viewer reviews them.
-    const consented = (r: ModRow) => installed.includes(`${r._id}:${permissionsSig(r.manifest)}`);
-    const want = new Map(rows.filter((r) => r.code && r.enabled && (mine(r) || consented(r))).map((r) => [r._id, r]));
+    const want = new Map(rows.filter((r) => r.code && modIsActive(r, installed)).map((r) => [r._id, r]));
     let changed = false;
     for (const [id, rt] of this.runtimes) {
       const next = want.get(id);

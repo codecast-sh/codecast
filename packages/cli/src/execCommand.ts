@@ -412,7 +412,7 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
     .argument("[prompt...]", "Prompt; omit or pass '-' to read stdin")
     .option("--agent <type>", `Agent: ${AGENT_NAMES} (default: claude, or the definition's)`)
     .option("-m, --model <model>", "Model (picker key or raw id, e.g. opus, grok-4.6)")
-    .option("--effort <level>", "Reasoning effort (claude: low|medium|high|max; varies by agent)")
+    .option("--effort <level>", "Reasoning effort (claude: low|medium|high|xhigh|max; varies by agent)")
     .option("--as <definition>", "Run as a named agent definition (cast agent ls); explicit flags override it")
     .option("--chain <name>", "Run a chain: the prompt is the task, each step's output feeds the next")
     .option("-j, --jobs <n>", "Parallel: each prompt is its own run, at most n at once")
