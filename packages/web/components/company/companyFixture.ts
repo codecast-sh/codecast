@@ -3,8 +3,9 @@
 // own tree, projects and first goals proposal (components/org/goalsFixture),
 // with each live goal's intent record filled in (why, done when, milestones,
 // numbers over time), one goal that feeds another, the tasks under each
-// project, and a second small proposal that changes the roles. Read by the model and mount tests and
-// the rig.
+// project, a colour, a target day or a risk on a few projects, the day each
+// person joined, and a second small proposal that changes the roles. Read by
+// the model and mount tests and the rig.
 import type { InitiativeRow, InitiativeScore } from "@codecast/shared/contracts/initiative";
 import { UNION_GOALS_CHANGES, UNION_GOALS_DATA, UNION_GOALS_PROPOSAL, UNION_GOALS_TREE } from "../org/goalsFixture";
 import type { OrgProposalChange, OrgProposalRow } from "../org/orgStaffingTypes";
@@ -70,8 +71,16 @@ const TEN_BROKERS: InitiativeRow = {
 
 export const COMPANY_FIXTURE_INITIATIVES: InitiativeRow[] = [...live, TEN_BROKERS];
 
+/** What a few projects carry beyond their name: a colour, a target day, a risk in the charter. */
+const PROJECT_EXTRA: Record<string, Partial<CompanyProject>> = {
+  "pr-6": { color: "blue", target_date: T0 + 45 * DAY },
+  "pr-7": { color: "cyan", target_date: T0 + 20 * DAY },
+  "pr-2": { color: "magenta", target_date: T0 - 5 * DAY },
+  "pr-4": { color: "green", risks: ["One region, no failover"] },
+};
+
 /** The lens' projects as the store holds them: each with its last change. */
-export const COMPANY_FIXTURE_PROJECTS: CompanyProject[] = UNION_GOALS_DATA.projects.map((p, i) => ({ ...p, updated_at: T0 - (i * 2 + 1) * DAY }));
+export const COMPANY_FIXTURE_PROJECTS: CompanyProject[] = UNION_GOALS_DATA.projects.map((p, i) => ({ ...p, updated_at: T0 - (i * 2 + 1) * DAY, ...PROJECT_EXTRA[p.short_id ?? ""] }));
 
 /** The workspace's tasks: every fourth project has none; the others have work
  *  done, in progress and open, plus rows a project's board never lists (a
@@ -86,8 +95,8 @@ export const COMPANY_FIXTURE_TASKS: BoardTask[] = COMPANY_FIXTURE_PROJECTS.flatM
 export const COMPANY_FIXTURE_TREE = UNION_GOALS_TREE;
 
 export const COMPANY_FIXTURE_ROSTER: CompanyMember[] = [
-  { _id: "fixture-user-me", name: "Ashot Petrosian", github_username: "ashot" },
-  { _id: "fixture-user-samvit", name: "Samvit Ramadurgam", github_username: "samvit" },
+  { _id: "fixture-user-me", name: "Ashot Petrosian", github_username: "ashot", joined_at: Date.UTC(2026, 0, 12) },
+  { _id: "fixture-user-samvit", name: "Samvit Ramadurgam", github_username: "samvit", joined_at: Date.UTC(2026, 5, 3) },
 ];
 
 /** The head of people's first goals proposal: a purpose over every project and the goals under it. */
