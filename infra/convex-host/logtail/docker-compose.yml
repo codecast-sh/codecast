@@ -1,0 +1,26 @@
+# Durable copy of the backend's function log (see logtail.mjs). Its own compose
+# project, in /srv/convex-logtail on the host, so bringing it up can never
+# recreate the backend. It only joins the shared network to reach `backend`.
+#
+# The admin key lives only on the host, in /srv/convex-logtail/.env (mode 600):
+#   CONVEX_SELF_HOSTED_ADMIN_KEY=<from: docker exec convex-backend-1 ./generate_admin_key.sh>
+services:
+  logtail:
+    build: .
+    image: codecast/convex-logtail:1
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      CONVEX_SELF_HOSTED_URL: http://backend:3210
+      RETAIN_DAYS: "14"
+    networks: [codecast]
+    volumes:
+      - /srv/convex/logs:/logs
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "2" }
+
+networks:
+  codecast:
+    external: true

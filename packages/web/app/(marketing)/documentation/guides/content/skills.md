@@ -1,103 +1,104 @@
-A snippet teaches an agent that a command exists. It does not teach a procedure. "Hand this work over" is a procedure: write down the decisions, pin the state, file a doc, then fork, spawn or message the right session. An agent that rebuilds that sequence from memory each time does it differently each time, and skips steps.
+Some jobs are the same every time: pick up where yesterday's work stopped, hand a piece of work to a teammate, get a second opinion before shipping, see a pull request through to merge. An agent asked to do one of these from scratch does it a little differently each time, and skips steps. Skills are the codecast versions of those jobs, written down once: slash commands your agent runs the same careful way every time.
 
-A skill is a packaged set of instructions for one kind of task. It is a directory with a `SKILL.md` file: a name, a description that says when to use it, and the steps. Claude Code lists each skill by its description and loads the body only when the skill is invoked, as a slash command (`/cast-handoff`) or because the task matches the description. A skill you never invoke costs the description line and nothing more.
+What makes them worth having is that they reach past one session. A skill can read your task board, your team's earlier sessions, other sessions working right now, pull requests, calls and team chat, which a single agent on its own can't see.
 
-```figure
-SkillLoadingFigure
-The descriptions are always listed; a skill's steps enter the context only when it runs.
-```
+![A conversation started with /cast-second-opinion: the agent sends the change to a second model, checks each finding against the code, fixes the two real bugs and lists what it left alone](/documentation/skills/conversation.webp "/cast-second-opinion on a small change. The skill shows as a pill on your message; the agent got a review from a different model, verified both findings, fixed them, and left two judgment calls to you.")
 
-The `cast-*` skills are the procedures that need what one session cannot see: the task board, the team's session history, other live sessions, pull requests, calls and chat. Each one is a sequence of ordinary `cast` commands. A skill adds no capability of its own. It fixes the order, the checks, and what evidence to leave behind.
+## Turn it on
 
-```bash
-cast install skills             # write all 24 skills
-cast install skills --disable   # remove them
-ls ~/.claude/skills/            # cast-pickup/SKILL.md, cast-ship/SKILL.md, and the rest
-```
+Skills work with Claude Code.
 
-```text
-/cast-pickup ct-4102
-/cast-why src/sync.ts:212 why is this debounced
-/cast-bakeoff a queue table | an in memory buffer
-```
+1. Open **Agent features** from your account menu and pick the computer your agents run on.
+2. Switch on **Skills**, under *Tracking & automation*.
+3. Start a new session. The commands are there.
 
-## How the skills ship and install
+![The Skills feature's detail in Agent features](/documentation/skills/skills-feature.webp "The Skills detail. The switch at the top right turns it on for the selected computer.")
 
-The skill files are compiled into the CLI binary as text imports. A compiled binary has no source tree beside it, so an installer that looks for files next to the executable finds nothing on a release install. With the bytes inside the binary, a Homebrew install and a run from source write the same files.
+A skill costs nothing until it runs. Your agent sees a one-line description of each, and reads the steps only when one is used.
 
-The whole set installs as one catalog snippet named `skills` ([how snippets work](/documentation/agent-snippets)). The wizard, `cast install skills`, and the toggle on the web Settings page all reach the same installer. It writes each skill to `~/.claude/skills/<name>/SKILL.md`. An install with no interactive terminal turns skills on by default, the same as memory.
+## Use one
 
-The installer compares each file byte for byte. A file that already matches is not touched. After a CLI update, the refresh of enabled snippets rewrites only the skills whose text changed, so a revised skill reaches the machine without a version bump. `--disable` removes the 24 `cast-*` directories and nothing else, so your own skills in `~/.claude/skills/` are safe. The orchestrate skill is separate: it belongs to the `orchestration` snippet, which also installs three agent types and two hooks ([orchestration](/documentation/orchestration)).
+Type `/` in the message box of any Claude Code session, in the web app or the Mac app, and a menu lists the commands available there. Keep typing to filter, and pick one with the arrow keys and Enter. Add anything the skill should know after the name: a task, a file and line, a question.
 
-```figure
-SkillInstallFigure
-Every route to the skills reaches the same installer, which writes only what changed and never touches a skill it does not own.
-```
+![The slash command menu in the message box, filtered to cast- skills, each with its description](/documentation/skills/slash-menu.webp "Type / to see every skill and command for the session, with what each does.")
 
-## The catalog
+You don't have to remember the names. Ask in plain words and the agent picks the skill that fits: "hand this over to tomorrow's session", "get another model to look at this before I merge", "what did the team do yesterday?"
 
-Start, stop, and hand over:
+## The skills
 
-| Skill | What it does | Built on |
-|-------|--------------|----------|
-| `/cast-pickup` | Reads the bound task or plan, the pinned state, recent team work and the repository, then names the work and the next three actions | `cast task`, `cast plan`, `cast state`, `cast feed` |
-| `/cast-handoff` | Writes decisions, verified work, open questions and ordered next steps as a shared doc, pins the state, and can fork, spawn or message a session | `cast doc`, `cast state`, `cast fork`, `cast spawn`, `cast send` |
-| `/cast-pass` | Hands this session to a teammate: pins where it stands, adds them as an owner, sends the brief | `cast state`, `cast send`, `cast chat` |
-| `/cast-ask-team` | Posts a question to the team channel, parks the session as dormant, and continues when an answer arrives | `cast chat`, `cast state`, `cast trigger` |
-| `/cast-worktree` | Moves the work into an isolated worktree with its own env files, ports and setup | `cast ws` |
+Start, stop and hand over:
+
+| Command | What it does |
+|---------|--------------|
+| `/cast-pickup` | Reads the task, the session's pinned state, what the team did recently and the state of the code, then names the work and the next three steps |
+| `/cast-handoff` | Writes down the decisions, what's verified, open questions and next steps as a shared doc, so the next session or a teammate can continue without reading the thread |
+| `/cast-pass` | Hands this session to a teammate: it lands in their inbox with where things stand and what's next |
+| `/cast-ask-team` | Posts a question to team chat with enough context to answer it cold, pauses the session, and picks up again when someone replies |
+| `/cast-worktree` | Moves the work into its own isolated copy of the repository, so it can't collide with other sessions |
 
 Plan and reconsider:
 
-| Skill | What it does | Built on |
-|-------|--------------|----------|
-| `/cast-plan` | Explores the code, searches earlier sessions and decisions, interviews the user, then writes a plan with tasks and dependencies | `cast plan`, `cast task`, `cast search`, `cast decisions` |
-| `/cast-rethink` | Rebuilds the history of a piece of work from sessions, decisions and tasks before touching code | `cast search`, `cast context`, `cast task`, `cast plan` |
-| `/cast-bakeoff` | Forks the conversation once for each approach, waits for the branches, and compares diff, evidence and cost | `cast fork`, `cast sessions -w`, `cast diff`, `cast read` |
-| `/cast-conflicts` | Finds live sessions on this repository that change the same files, shows what they changed, and warns them | `cast sessions`, `cast diff`, `cast send` |
+| Command | What it does |
+|---------|--------------|
+| `/cast-plan` | Explores the code, looks for earlier attempts in past sessions, asks you the open questions, then writes a plan with tasks for the team to review |
+| `/cast-rethink` | Steps back and rebuilds the history of a piece of work from earlier sessions and decisions before touching code |
+| `/cast-bakeoff` | Tries several approaches in parallel, one branch of the conversation each, then compares them side by side with a verdict |
+| `/cast-conflicts` | Finds other live sessions changing the same files, shows what they changed, and warns them |
 
 Prove and ship:
 
-| Skill | What it does | Built on |
-|-------|--------------|----------|
-| `/cast-verify` | Runs the repository's checks, exercises the change in the browser or on the command line, and attaches the evidence to the task | `cast browser`, `cast image`, `cast task comment` |
-| `/cast-ship` | Commits in topical pieces, opens the pull request, and binds the session to it so reviews and failing checks wake it until merge | `cast pr shepherd`, `cast task`, `cast state` |
-| `/cast-review` | Reviews another session from its transcript and diff, and sends findings with file and line | `cast read`, `cast diff`, `cast summary`, `cast send` |
-| `/cast-second-opinion` | Gives a different model the intent, the plan and the diff in a fresh context, then verifies its findings | `cast exec --agent` |
-| `/cast-why` | Traces a line of code to the session that wrote it and the message where it was decided | `cast blame`, `cast read`, `cast link` |
+| Command | What it does |
+|---------|--------------|
+| `/cast-verify` | Runs the checks, tries the change in your browser or on the command line, and attaches screenshots and output to the task |
+| `/cast-ship` | Commits in sensible pieces, opens the pull request, and stays with it so reviews and failing checks wake the session until it merges |
+| `/cast-review` | Reviews another session's work from its conversation and changes, and sends it the findings with file and line |
+| `/cast-second-opinion` | Has a different model review the change in a fresh context, then checks each finding before acting on it |
+| `/cast-why` | Explains why a line of code is the way it is, from the session that wrote it and the message where it was decided |
 
-Run the fleet:
+Run the day:
 
-| Skill | What it does | Built on |
-|-------|--------------|----------|
-| `/cast-loop` | Arms a recurring trigger that spawns one fresh session for each ready task, with a precheck that skips the run when the queue is empty | `cast trigger add --every --spawn --precheck`, `cast task ready`, `cast decide` |
-| `/cast-triage` | Reads every session by who acts next, stashes the finished, kills the dead, and surfaces the few that need a person | `cast sessions`, `cast stash`, `cast kill`, `cast send` |
-| `/cast-morning` | Lists what waits on the human: sessions that need input, pull requests, ready tasks, overnight trigger runs, unread chat | `cast sessions`, `cast pr`, `cast task`, `cast trigger`, `cast chat` |
-| `/cast-eod` | Checks each live session for an honest pinned state, writes handoffs, arms overnight follow ups, tidies the inbox | `cast state`, `cast trigger`, `cast stash`, `cast kill` |
-| `/cast-standup` | Builds a digest for a time window from sessions, commits, tasks, pull requests, calls and chat | `cast feed`, `cast task`, `cast pr`, `cast calls`, `cast publish` |
+| Command | What it does |
+|---------|--------------|
+| `/cast-morning` | What waits on you: sessions that need input, pull requests, ready tasks, what ran overnight, unread chat and mail |
+| `/cast-eod` | Closes the day: makes sure each live session says where it stands, writes handoffs, sets up overnight follow-ups, tidies the inbox |
+| `/cast-standup` | A digest for a time window from the team's sessions, commits, tasks, pull requests, calls and chat |
+| `/cast-triage` | Tidies a crowded inbox: clears finished and stalled sessions and surfaces the few that need you, with a one-line ask each |
+| `/cast-loop` | Works through a queue of ready tasks unattended, one fresh session per task, each verified and opened as a pull request for you to merge |
 
-Learn, and keep the records true:
+Learn and keep records true:
 
-| Skill | What it does | Built on |
-|-------|--------------|----------|
-| `/cast-learn` | Turns this session's corrections, decisions and gotchas into repository guidance, recorded decisions, or a doc | `cast decisions`, `cast doc` |
-| `/cast-lessons` | Collects the corrections humans made across the team's sessions in a window and proposes the guidance that would have prevented each | `cast search`, `cast read`, `cast decisions` |
-| `/cast-from-call` | Checks each action item of a call against the transcript and files it as a task marked as decided in a meeting | `cast call`, `cast task create --from-meeting` |
-| `/cast-org` | Reads what the code and sessions show, proposes seats, scopes and record fixes with evidence, and posts the result for the person to accept | `cast org` |
-| `/cast-mod` | Builds a codecast mod (a pane, a command or a new block type in the app) with the person watching, pushing each change live | `cast mod new`, `cast mod build`, `cast mod push`, `cast mod logs` |
+| Command | What it does |
+|---------|--------------|
+| `/cast-learn` | Turns what this session learned (your corrections, decisions, gotchas) into guidance the next session will read |
+| `/cast-lessons` | Collects the corrections people made across the team's sessions and proposes the guidance that would have prevented each |
+| `/cast-from-call` | Turns a call's action items into tasks, each linked to the moment in the transcript where it was agreed |
+| `/cast-org` | Talks through who works on what, for agents and people, and posts each agreed change for you to approve |
 
-## How a skill composes the primitives
+Build things in codecast:
 
-`/cast-bakeoff` shows the pattern. It runs one `cast fork --tip --label bakeoff-<topic>` with one direction for each approach, so every branch keeps the whole thread ([forks and spawn](/documentation/forks-and-spawn)). It tells each branch to work in its own worktree. It then watches `cast sessions --label bakeoff-<topic> -w --json`, a stream that prints nothing until a branch changes state. When the branches settle it reads `cast diff` and `cast read` for each one, puts the results in a table, gives a verdict, and stashes the branches that lost.
+| Command | What it does |
+|---------|--------------|
+| `/cast-mod` | Builds a mod (a pane, a command or a new kind of block in the app) with you watching each change live |
+| `/cast-dashboard` | Builds a live dashboard as a published page over your team's work and product data; every chart shows its query and refreshes itself |
+| `/cast-motion` | Makes an animated explainer, published as a page that plays, scrubs and takes comments pinned to moments |
 
-```figure
-BakeoffFigure
-/cast-bakeoff is fork, watch, read and stash, in a fixed order with a verdict at the end.
-```
+## What you see
 
-`/cast-loop` is built on [triggers](/documentation/triggers) and [tasks](/documentation/tasks-and-plans). The task board is the queue. A recurring `--spawn` trigger starts a fresh session for each run, and the `--precheck` command exits with a failure when `cast task ready` returns nothing, so an idle loop spends no session. Each run claims one task, works in a worktree, runs `/cast-verify`, and opens a pull request with `/cast-ship`. It does not merge. The skill also states when to cancel the trigger: when the queue is empty, when two runs in a row fail the same way, or at the time limit given with `--for`.
+The skill shows as a pill on your message, so you can tell at a glance which conversations ran one. The agent's steps appear in the conversation like any others, and what a skill produces lands where it belongs: a handoff as a doc, a plan on the Plans page, evidence on the task, a pull request on its page with the session shown as its shepherd, a dashboard as a published page.
 
-![A pull request page with its shepherd session](/documentation/shots/pull-request.webp "What /cast-ship leaves behind: the pull request bound to its session, shown on the Shepherd line as waking on changes, with checks and the review beside it.")
+## What they will and won't do
 
-`/cast-ask-team` combines three primitives so that a question does not block a session. It posts to a channel with `cast chat send` and mentions its own short session ID, so a reply on the thread arrives as a session message ([messaging](/documentation/messaging)). It declares `cast state --status dormant` and names the thread as the wake ([thread state](/documentation/thread-state)). When the default answer is safe to reverse, it arms a `cast trigger add --in <time>` that takes the default if nobody replies.
+- **They follow the same rules as the agent.** A skill adds no new powers. It is the same agent with the same permissions, following a fixed sequence of steps.
+- **Leaving a mark still waits for you.** `/cast-ship` opens a pull request but doesn't merge it. `/cast-loop` never merges either. `/cast-org` posts proposals for you to accept rather than changing the org itself.
+- **Your own skills are safe.** Turning Skills off removes the codecast skills and nothing else; any skills you wrote yourself stay.
+- **They stay current.** When codecast updates, improved skills reach your machine without you doing anything.
 
-Skills call each other by name, as `/cast-loop` does with `/cast-verify` and `/cast-ship`. That works because every skill in the set installs together.
+## When something is off
+
+| What you notice | What to do |
+|-----------------|------------|
+| Typing `/` shows no cast- commands | Check Skills is on for the computer the session runs on, then start a new session |
+| The session isn't Claude Code | Skills are Claude Code commands. Ask a Claude Code session, or describe the job in plain words |
+| A skill stops to ask you something | Some skills (`/cast-plan`, `/cast-org`) interview you on purpose. Answer in the conversation and it continues |
+
+Orchestrating a whole plan across several agents is its own feature; see [orchestration](/documentation/orchestration).

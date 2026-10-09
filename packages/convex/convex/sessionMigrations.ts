@@ -122,6 +122,9 @@ export type PlannedRow = {
   from_device_id?: string;
   to_device_id: string;
   executor_device_id: string;
+  /** The executor is offline: the row waits in its queue and starts when that
+   *  machine's daemon checks in (reissueWaitingMigrations). Its label. */
+  waits_for?: string;
 };
 
 export type SkippedRow = { conversation_id: string; short_id?: string; title?: string; reason: string };
@@ -160,21 +163,25 @@ export function planMigration(opts: {
     if (c.owner_device_id === opts.targetDeviceId) { skip(`already on ${target.label ?? "that device"}`); continue; }
     if (target.is_remote) {
       if (owner?.is_remote) { skip("moving between two cloud hosts is not supported"); continue; }
-      // The transcript and worktree live on the OWNER: only it can push them.
-      // An unowned row (legacy) is a best-effort push from the freshest laptop.
-      if (owner && !online(owner)) { skip(`${owner.label ?? "its machine"} is offline — it holds the session's files`); continue; }
-      const executor = owner ? owner.device_id : mostRecentOnlineLocal?.device_id;
+      // The transcript and worktree live on the OWNER: only it can push them,
+      // so an offline owner's row waits for it. An unowned row (legacy) is a
+      // best-effort push from the freshest laptop.
+      const executor = owner ?? mostRecentOnlineLocal;
       if (!executor) { skip("no online local machine can run the transfer (start the codecast daemon on your laptop)"); continue; }
       rows.push({
         conversation_id: c._id, session_id: c.session_id, title: c.title, short_id: c.short_id,
-        direction: "to_cloud", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: executor,
+        direction: "to_cloud", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: executor.device_id,
+        ...(online(executor) ? {} : { waits_for: executor.label ?? "its machine" }),
       });
     } else {
       if (!owner?.is_remote) { skip("only sessions on a cloud host can be brought back (use Run on this device for a laptop-to-laptop move)"); continue; }
-      if (!online(target)) { skip(`${target.label ?? "the destination"} is offline`); continue; }
+      // The destination runs the transfer, so an offline destination's row
+      // waits for it rather than being refused: a laptop whose heartbeat is
+      // late under load is still the machine that will pull it.
       rows.push({
         conversation_id: c._id, session_id: c.session_id, title: c.title, short_id: c.short_id,
         direction: "to_local", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: target.device_id,
+        ...(online(target) ? {} : { waits_for: target.label ?? "the destination" }),
       });
     }
   }
@@ -886,10 +893,11 @@ export async function performFinishSession(
 }
 
 /**
- * Who holds the host checkout a move would land in, asked BEFORE the push:
- * the push resets that checkout, so a holder's uncommitted work would be lost
- * if the check waited for the handoff. Rows of this batch are the runner's to
- * coordinate (one push per laptop folder) and never count.
+ * Who holds the host checkout a move would land in, asked BEFORE the push by
+ * CLIs released before moves merged into the checkout: their push resets it,
+ * so a holder's uncommitted work would be lost if the check waited for the
+ * handoff, and they land beside it instead. Rows of this batch are the
+ * runner's to coordinate (one push per laptop folder) and never count.
  */
 export async function performCheckoutHolder(ctx: { db: any }, userId: Id<"users">, args: { migration_id: Id<"session_migrations">; project_path: string }) {
   const row = await ctx.db.get(args.migration_id);

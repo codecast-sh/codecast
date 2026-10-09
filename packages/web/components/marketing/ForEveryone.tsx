@@ -3,9 +3,10 @@
 // Newsreader for the headline, Instrument Sans for the rest), so the step
 // into /welcome reads as the same product rather than a hand-off to another.
 // One way in, three real errands that start /welcome with that ask, and a
-// small picture of what a conversation looks like. The nav's "For everyone"
-// lands here (#everyone). Light on purpose, like everything the public pages
-// import.
+// small picture of what a conversation looks like. It is the whole page of
+// the non-developer door (/?for=assistant, which /everyone redirects to); the
+// developer home page does not show it. Light on purpose, like everything the
+// public pages import.
 import Link from "next/link";
 import { ArrowRight, Check } from "lucide-react";
 import { track } from "../../lib/analytics";
@@ -18,45 +19,23 @@ import { stepAsk } from "@platform/assistant/steps";
 import { LANE_PATHS, welcomeAskPath } from "../simple/lanePaths";
 import { AssistantMark } from "../simple/AssistantMark";
 
-const EVERYONE_ANCHOR = "everyone";
-
 /** Errands that need nothing connected, worded to work as asked. */
 const ERRANDS = [ASKS.sayNo, ASKS.compare, ASKS.trip];
 
 const READ = "var(--pd-font-read, Georgia, serif)";
 const UI = "var(--pd-font-ui, ui-sans-serif, system-ui)";
-/** The marketing bands' cream above and below, which the section fades from. */
-const MARKETING_CREAM = "#fdf6e3";
 
 export function ForEveryone() {
   const mail = useConnectAvailable().available === true;
-  // Arriving from another page's nav link (/#everyone): the router lands at
-  // the top, and the section mounts before the page above it has its height,
-  // so it brings itself into view once layout has settled.
-  useMountEffect(() => {
-    if (window.location.hash !== `#${EVERYONE_ANCHOR}`) return;
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const id = window.setTimeout(() => {
-      document.getElementById(EVERYONE_ANCHOR)?.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
-    }, 120);
-    return () => window.clearTimeout(id);
-  });
   return (
     <section
-      id={EVERYONE_ANCHOR}
-      className="scroll-mt-20 px-6 pt-20 pb-36"
+      className="px-6 pt-12 pb-24"
       style={{
-        // The family's paper, eased in from the cream band above and handed
-        // back over a long fade below, so the page's turn to developers reads
-        // as a change of room rather than a seam.
-        background: `linear-gradient(${MARKETING_CREAM}, var(--pd-bg, #f6f1e7) 64px, var(--pd-bg, #f6f1e7) calc(100% - 120px), ${MARKETING_CREAM})`,
+        background: "var(--pd-bg, #f6f1e7)",
         color: "var(--pd-ink, #1f1a14)",
         fontFamily: UI,
       }}
     >
-      {/* A rule and air between the developer buttons above and this
-          section's own way in, so the two "Get started" never compete. */}
-      <div aria-hidden className="mx-auto mb-16 h-px max-w-5xl" style={{ background: "var(--pd-rule, #e6dccb)" }} />
       <div className="mx-auto grid max-w-5xl gap-12 md:grid-cols-[1.05fr_1fr] md:items-center">
         <div>
           {/* Who is talking, before the headline speaks as "I". */}
@@ -78,11 +57,13 @@ export function ForEveryone() {
                 <Link
                   href={welcomeAskPath(errand)}
                   onClick={() => track("assistant_path_clicked", { location: "landing_everyone_ask" })}
-                  className="group inline-flex items-baseline gap-2 text-[16px] leading-snug underline-offset-4 hover:underline"
+                  className="group grid grid-cols-[1fr_auto] items-start gap-2 text-[16px] leading-snug underline-offset-4 hover:underline"
                   style={{ fontFamily: READ, color: "var(--pd-ink, #1f1a14)", textDecorationColor: "var(--pd-rule-strong, #d3c6af)" }}
                 >
+                  {/* A fixed two-column grid: the arrow sits at the top right
+                      of every errand, one line or two, so the three line up. */}
                   <span>&ldquo;{errand}&rdquo;</span>
-                  <ArrowRight aria-hidden size={14} className="shrink-0 translate-y-[2px] transition-transform group-hover:translate-x-0.5" style={{ color: "var(--pd-accent, #c93a0e)" }} />
+                  <ArrowRight aria-hidden size={14} className="mt-[5px] shrink-0 transition-transform group-hover:translate-x-0.5" style={{ color: "var(--pd-accent, #c93a0e)" }} />
                 </Link>
               </li>
             ))}
@@ -97,6 +78,23 @@ export function ForEveryone() {
         <GetStarted location="landing_everyone_end" centered />
       </div>
     </section>
+  );
+}
+
+/** The foot of the assistant's door, where the page ends: pricing and
+ *  privacy, and a small way over to the developer page for someone who came
+ *  in the wrong door. Nothing about installing follows the promise that
+ *  nothing needs installing. */
+export function EveryoneFooter() {
+  const link = "underline-offset-4 hover:underline";
+  return (
+    <footer className="px-6 pb-12" style={{ background: "var(--pd-bg, #f6f1e7)", color: "var(--pd-ink-faint, #8f8676)", fontFamily: UI }}>
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 border-t pt-6 text-[13.5px]" style={{ borderColor: "var(--pd-rule, #e6dccb)" }}>
+        <Link href="/pricing?for=assistant" className={link}>Pricing</Link>
+        <Link href="/privacy" className={link}>Privacy</Link>
+        <Link href="/" className={`${link} ml-auto`}>Are you a developer? See Codecast for teams</Link>
+      </div>
+    </footer>
   );
 }
 
@@ -121,8 +119,8 @@ function GetStarted({ className, location, centered }: { className?: string; loc
  *  question is the step's ask (stepAsk) and the yes line is routineYesWords,
  *  so the promise and the product name the first approval the same way. */
 const PICTURE_ROUTINE = { name: "schedule_routine", input: { title: "Plan the week" } };
-const PICTURE_SUMMARY = "Every Monday at 9 AM I'll remind you to plan the week, with a short list to start from.";
-const PICTURE_YES = routineYesWords("Monday at 9:00 AM", true);
+const PICTURE_SUMMARY = "Every Monday at 9:00 AM I'll remind you to plan the week, with a short list to start from.";
+const PICTURE_YES = routineYesWords(true);
 
 /** A part of the still before and after its entrance: 8px down and clear,
  *  then in place over 240ms, ease-out. Delays stagger the parts by 120ms. */
@@ -176,7 +174,7 @@ function ConversationPicture() {
         <AssistantMark size={26} />
         <div className="min-w-0 flex-1">
           <p className="text-[16.5px] leading-[1.55]" style={{ fontFamily: READ }}>
-            Happy to. Here&apos;s the routine; say yes and it starts Monday.
+            Happy to. Say yes and it starts Monday.
           </p>
           <div className={`mt-4 rounded-[10px] border p-3.5 ${ENTER} delay-[240ms]`} style={{ borderColor: "var(--pd-rule, #e6dccb)", background: "var(--pd-bg, #f6f1e7)" }}>
             <p className="text-[13.5px] font-semibold">{`${stepAsk(PICTURE_ROUTINE)}?`}</p>

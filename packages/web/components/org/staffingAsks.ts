@@ -89,18 +89,6 @@ export function proposalAsks(p: Pick<OrgProposalRow, "asks" | "changes">, names?
   });
 }
 
-/**
- * The phone's bar at the foot of the conversation (S19), in two parts: the
- * count a person reads, and the verb that says the bar opens the asks (a
- * count alone read as a status line: "nothing tells me so", org eval round
- * 3). The verb goes on a chip drawn as a control.
- */
-export function asksBarWords(toDecide: number, total: number): { count: string; action: string } {
-  return toDecide === 0
-    ? { count: `All ${total} answered`, action: "See them" }
-    : { count: `${toDecide} to decide`, action: "Open them" };
-}
-
 /** The header's count: an ask is answered once nothing in it waits (a note
  *  alone leaves it open). */
 export function asksProgress(asks: AskView[]): { decided: number; total: number; remaining: number } {
@@ -113,10 +101,6 @@ export function askOfChange(asks: AskView[], changeId: string | null | undefined
   if (!changeId) return null;
   return asks.find((a) => a.changes.some((c) => c._id === changeId)) ?? null;
 }
-
-// ---------------------------------------------------------------- the cost line
-
-
 
 // ---------------------------------------------------------------- the letter
 
@@ -179,22 +163,4 @@ export function letterIntro(authorName: string, named: boolean): string {
   return `${who} You decide each one, and nothing changes until you approve it.`;
 }
 
-
 // ---------------------------------------------------------------- proposal (S19)
-
-/**
- * The asks column: one line of header, one card per ask, one line of cost.
- * Who wrote the proposal, when, and why is the letter in the conversation
- * beside it; the 157 rows are inside the cards' folds. Nothing else is here
- * on purpose: every line added to this column is a line a person reads
- * before they find what to press.
- */
-/** "2 of 3 answered", or "loading" while the changes are still on their way. */
-export function asksProgressLine(progress: { decided: number; total: number }, loading: boolean): string {
-  return loading ? "loading" : `${progress.decided} of ${progress.total} answered`;
-}
-
-/** The changes are still on their way: the counts say there are some and none has arrived. */
-export function asksLoading(proposal: Pick<OrgProposalRow, "changes" | "counts">): boolean {
-  return proposal.changes.length === 0 && (proposal.counts?.total ?? 0) > 0;
-}

@@ -265,9 +265,3 @@ export const GRANTS: { name: string; id: string; why: string }[] = [
     why: "Lets the helper take a picture of the window it just read, so an image comes back beside the text. The text works without it; only the picture fails.",
   },
 ];
-
-export const PERMISSIONS_OUT = [
-  "Computer permissions checked.",
-  "  Helper app: ~/.codecast/computer/codecast computer.app",
-  "  Permissions: accessibility=granted, screenshots=granted",
-];

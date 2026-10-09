@@ -27,7 +27,11 @@ import {
 import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
 import { mediaBucketFromEnv, r2Presign } from "./lib/r2";
 import { CAST_PLAYER_JS } from "./lib/castPlayer";
-import { pageUsesPlayer } from "@codecast/shared/contracts";
+import { CAST_MOTION_JS } from "./lib/castMotion";
+import { CAST_DATA_JS } from "./lib/castData";
+import { pageUsesData } from "@codecast/shared/contracts/pageData";
+import { servePageData, type ValidatedQuery } from "./pageData";
+import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageUsesPlayer } from "@codecast/shared/contracts";
 import { injectPageTheme } from "@codecast/shared/render";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
@@ -170,10 +174,11 @@ function contentTypeFor(path: string): string {
 }
 
 /** Normalize a bundle-relative path; null = rejected. Blocks traversal,
- * absolute paths, and our reserved `_v/` versioned-asset namespace. */
+ * absolute paths, our reserved `_v/` versioned-asset namespace, and the
+ * page's `_data` route. */
 export function normalizeAssetPath(raw: string): string | null {
   const path = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/{2,}/g, "/");
-  if (!path || path.startsWith("/") || path.startsWith("_v/") || path.includes("..") || path.includes("\0")) return null;
+  if (!path || path.startsWith("/") || path.startsWith("_v/") || path === "_data" || path.startsWith("_data/") || path.includes("..") || path.includes("\0")) return null;
   if (path.length > 512) return null;
   return path;
 }
@@ -253,6 +258,16 @@ function isOwnMediaUrl(url: unknown): url is string {
   return url.startsWith(prefix) && /^[a-f0-9]{64}\.[a-z0-9]{2,4}$/.test(url.slice(prefix.length));
 }
 
+/** The filename a ?download= request saves a media asset as: the asked name
+ * reduced to safe characters, keeping the asset's own extension, or null when
+ * nothing was asked. Safe to put inside a quoted Content-Disposition. */
+export function mediaDownloadName(asked: string | null, assetPath: string): string | null {
+  if (asked === null) return null;
+  const ext = assetPath.match(/\.([a-z0-9]{2,4})$/i)?.[1]?.toLowerCase() ?? "bin";
+  const base = asked.replace(/\.[a-z0-9]{2,4}$/i, "").replace(/[^\w.-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 80);
+  return `${base || assetPath.split("/").pop()!.replace(/\.[^.]+$/, "") || "download"}.${ext}`;
+}
+
 export const mediaSign = httpAction(async (ctx, request) => {
   try {
     const { api_token, sha256, size, ext } = await request.json();
@@ -282,6 +297,50 @@ export const playerJs = httpAction(async () =>
   }),
 );
 
+export const motionJs = httpAction(async () =>
+  new Response(CAST_MOTION_JS, {
+    status: 200,
+    headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" },
+  }),
+);
+
+/** A HyperFrames composition gets the pinned runtime and the motion player.
+ * The runtime goes first in <head>, so window.__timelines exists before the
+ * composition's own scripts register into it; the player is deferred. */
+export function injectMotion(html: string, apiBase: string): string {
+  if (!pageIsMotion(html) || /\/cli\/motion\.js/.test(html)) return html;
+  const runtime = pageHasHyperframesRuntime(html)
+    ? ""
+    : `<script src="${HYPERFRAMES_RUNTIME.url}" integrity="${HYPERFRAMES_RUNTIME.integrity}" crossorigin="anonymous"></script>`;
+  const tags = `${runtime}<script src="${apiBase}/cli/motion.js" defer></script>`;
+  const head = html.match(/<head[^>]*>/i);
+  if (!head) return tags + html;
+  const at = html.indexOf(head[0]) + head[0].length;
+  return html.slice(0, at) + tags + html.slice(at);
+}
+
+export const dataJs = httpAction(async () =>
+  new Response(CAST_DATA_JS, {
+    status: 200,
+    headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" },
+  }),
+);
+
+/** Pages that read live data get the data runtime first in <head>, so window.cast exists before the page's own scripts; it carries the page's data URL, gate tokens included. */
+export function injectData(html: string, dataUrl: string, apiBase: string): string {
+  if (!pageUsesData(html) || /\/cli\/data\.js/.test(html)) return html;
+  const tag = `<script src="${apiBase}/cli/data.js" data-endpoint="${dataUrl.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"></script>`;
+  const head = html.match(/<head[^>]*>/i);
+  if (!head) return tag + html;
+  const at = html.indexOf(head[0]) + head[0].length;
+  return html.slice(0, at) + tag + html.slice(at);
+}
+
+/** A page's content hash with its live query set folded in: publish and rollback agree on it. */
+async function withDataHash(contentHash: string, setJson: string): Promise<string> {
+  return setJson ? await sha256Hex(`${contentHash}\ndata:${setJson}`) : contentHash;
+}
+
 /** Pages with <cast-player> or a <video> get the player script, from the host that served them. */
 function injectPlayer(html: string, apiBase: string): string {
   if (!pageUsesPlayer(html) || /\/cli\/player\.js/.test(html)) return html;
@@ -293,7 +352,7 @@ function injectPlayer(html: string, apiBase: string): string {
 export const publish = httpAction(async (ctx, request) => {
   try {
     const body = await request.json();
-    const { api_token, content, title, source_path, force_new, kind: rawKind, files, session_ref, access, thumb_b64, task, plan } = body;
+    const { api_token, content, title, source_path, force_new, kind: rawKind, files, session_ref, access, thumb_b64, task, plan, data } = body;
     if (!api_token || !title) return json({ error: "Missing api_token or title" }, 400);
     const kind = rawKind === "markdown" || rawKind === "bundle" ? rawKind : "html";
     if (kind !== "bundle" && typeof content !== "string") return json({ error: "Missing content" }, 400);
@@ -395,6 +454,24 @@ export const publish = httpAction(async (ctx, request) => {
       }
     }
 
+    // Live data (cast-data.json): checked against the readers and the
+    // publisher's access before anything is stored, and part of the content
+    // hash, so a changed declaration is a new version and an unchanged one
+    // stays on the fast path.
+    let dataSet: { workspace: string; queries: ValidatedQuery[] } | null = null;
+    if (data !== undefined && data !== null) {
+      const checked = await ctx.runQuery(internal.pageData.validateDeclaration, {
+        owner: who.user_id,
+        declaration: data,
+        order: data && typeof data === "object" && data.queries && typeof data.queries === "object" ? Object.keys(data.queries) : undefined,
+        conversation_id: typeof session_ref === "string" && session_ref ? session_ref : undefined,
+        project_path: typeof source_path === "string" && source_path ? source_path : undefined,
+      });
+      if (!checked.ok) return json({ error: `cast-data.json: ${checked.error}` }, 400);
+      dataSet = { workspace: checked.workspace, queries: checked.queries };
+      contentHash = await withDataHash(contentHash, JSON.stringify(dataSet));
+    }
+
     // Unchanged fast path — common under --watch: no blob stores at all.
     if (existing && existing.content_hash === contentHash && !thumb_b64) {
       if (accessSet && Object.keys(accessSet).length) {
@@ -408,6 +485,7 @@ export const publish = httpAction(async (ctx, request) => {
         updated: true,
         unchanged: true,
         manage_url: ownerKey ? `${url}#o=${ownerKey}` : url,
+        ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length } } : {}),
       });
     }
 
@@ -476,8 +554,16 @@ export const publish = httpAction(async (ctx, request) => {
       plan_id: binding.plan_id,
       station: binding.station,
     });
+    // A republish replaces the page's query set; a page without one has none.
+    await ctx.runMutation(internal.pageData.replaceQueries, {
+      slug: result.slug,
+      owner: who.user_id,
+      version: result.version,
+      set_json: dataSet ? JSON.stringify(dataSet) : "",
+    });
     return json({
       ...result,
+      ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length } } : {}),
       manage_url: result.owner_key ? `${result.url}#o=${result.owner_key}` : result.url,
       ...(binding.task_id || binding.plan_id
         ? { evidence: { task: binding.task_short_id ?? null, plan: binding.plan_short_id ?? null, station: binding.station ?? null } }
@@ -618,8 +704,11 @@ async function performRollback(ctx: ActionCtx, slug: string, targetVersion: numb
   } else {
     contentHash = await sha256Hex(mainText);
   }
+  // The restored version's live queries come back with it.
+  const setJson: string | null = await ctx.runQuery(internal.pageData.setAt, { artifact_id: art._id, version: targetVersion });
+  if (setJson) contentHash = await withDataHash(contentHash, setJson);
 
-  await ctx.runMutation(internal.artifacts.appendVersion, {
+  const appended = await ctx.runMutation(internal.artifacts.appendVersion, {
     artifact_id: art._id,
     storage_id: newMain,
     size: past.size,
@@ -630,6 +719,7 @@ async function performRollback(ctx: ActionCtx, slug: string, targetVersion: numb
     edited_by: `rollback to v${targetVersion}`,
     assets: assets as never,
   });
+  await ctx.runMutation(internal.pageData.restoreSet, { artifact_id: art._id, from_version: targetVersion, to_version: appended.version });
   return null;
 }
 
@@ -801,16 +891,18 @@ export const comment = httpAction(async (ctx, request) => {
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
-      // deliver:false = discussion only. Delivery additionally needs the
-      // owner_key — without it the mutation stores the comments as discussion.
-      deliver: body.deliver === false ? false : undefined,
+      // "Send to agent", per batch and per comment. The mutation honors it
+      // only for the owner and verified teammates; anyone else's comments
+      // are stored as discussion whatever the request says.
+      deliver: typeof body.deliver === "boolean" ? body.deliver : undefined,
       owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
       identity_token: typeof body.identity_token === "string" ? body.identity_token : undefined,
       parent_id: typeof body.parent_id === "string" ? body.parent_id : undefined,
       comments: Array.isArray(body.comments)
-        ? body.comments.map((c: { text?: unknown; anchor?: unknown }) => ({
+        ? body.comments.map((c: { text?: unknown; anchor?: unknown; deliver?: unknown }) => ({
             text: String(c?.text ?? ""),
             anchor: typeof c?.anchor === "string" ? c.anchor : undefined,
+            deliver: typeof c?.deliver === "boolean" ? c.deliver : undefined,
           }))
         : [],
     });
@@ -960,10 +1052,14 @@ export const serve = httpAction(async (ctx, request) => {
     }
   }
 
+  // --- <page>/_data[/<id>] — the page's live query results, behind the same gates ---
+  if (tail === "_data" || tail.startsWith("_data/")) return await servePageData(ctx, artifact._id, tail.slice("_data".length));
+
   // --- ?meta=1 — version/state JSON for the in-page bar (never cached) ---
   if (q.get("meta") === "1") {
     const art = await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
     if (!art) return notFound("Page not found");
+    const agent = await ctx.runQuery(internal.artifacts.agentStateBySlug, { slug });
     return new Response(
       JSON.stringify({
         version: art.version,
@@ -973,6 +1069,11 @@ export const serve = httpAction(async (ctx, request) => {
         comment_count: art.comments_disabled ? 0 : artifact.comment_count,
         comments: art.comments_disabled ? [] : artifact.open_comments,
         session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, title: artifact.session_title } : null,
+        // The publishing session's live state for the agent chip: state is a
+        // work state (working / needs_input / done / dormant / idle), since
+        // when it last moved, awaiting_since when a comment sent to the agent
+        // has not been answered by a newer version yet.
+        agent,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
         versions: (art.versions as HistoryVersion[]).map((x) => ({
           version: x.version,
@@ -1026,6 +1127,18 @@ export const serve = httpAction(async (ctx, request) => {
     if (asset.content_type === MEDIA_POINTER_TYPE) {
       const { url: mediaUrl } = JSON.parse(await blob.text()) as { url: string };
       if (!isOwnMediaUrl(mediaUrl)) return notFound("Not found");
+      // ?download=<name> saves the file instead of playing it: a short-lived
+      // signed URL that asks R2 to answer as an attachment. (A download
+      // attribute does nothing on a link to another origin.)
+      const download = mediaDownloadName(q.get("download"), path);
+      const cfg = download ? mediaBucketFromEnv() : null;
+      if (download && cfg) {
+        const key = mediaUrl.slice(`${cfg.publicBase}/`.length);
+        const signed = await r2Presign(cfg, "GET", key, 3600, undefined, {
+          "response-content-disposition": `attachment; filename="${download}"`,
+        });
+        return new Response(null, { status: 302, headers: { Location: signed, "Cache-Control": "private, no-store", "Access-Control-Allow-Origin": "*" } });
+      }
       return new Response(null, { status: 302, headers: { Location: mediaUrl, "Cache-Control": cachePolicy(artifact), "Access-Control-Allow-Origin": "*" } });
     }
     return new Response(blob, {
@@ -1159,6 +1272,14 @@ export const serve = httpAction(async (ctx, request) => {
   }
   if (kind !== "markdown") html = injectPageTheme(html);
   html = injectPlayer(html, apiBase);
+  html = injectMotion(html, apiBase);
+  {
+    const gate = new URLSearchParams();
+    if (kToken) gate.set("k", kToken);
+    if (artifact.email_gate && q.get("e")) gate.set("e", q.get("e")!);
+    const qs = gate.toString();
+    html = injectData(html, `${apiBase}/cli/a/${artifact.slug}/_data${qs ? `?${qs}` : ""}`, apiBase);
+  }
   // A card's live thumbnail: the page alone. No bar means no view beacon and
   // no comment polling, so a gallery of previews counts nothing as a view.
   if (q.get("preview") === "1") return htmlResponse(html, 200, cachePolicy(artifact));
@@ -1186,6 +1307,7 @@ export const serve = httpAction(async (ctx, request) => {
     editMode: artifact.edit_mode ?? "owner",
     live: q.get("live") === "1",
     hasThumb: !!artifact.thumb_storage_id,
+    hasAgent: !!artifact.session_conversation_id,
   });
   return htmlResponse(branded, 200, cachePolicy(artifact));
 });

@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { charterPatch, projectCharterArgs } from "./lib/orgCharter";
 import type { Id } from "./_generated/dataModel";
-import { mutation, query } from "./functions";
+import { internalMutation, mutation, query } from "./functions";
+import { mintProjectShortId } from "./lib/projectShortId";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, explicitWorkspace } from "./data";
@@ -30,6 +31,7 @@ export const create = mutation({
     const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
 
     const id = await db.insert("projects", {
+      short_id: await mintProjectShortId(ctx, Date.now()),
       title: args.title,
       description: args.description,
       status: "active",
@@ -290,13 +292,15 @@ export const webCreate = mutation({
     // it lags the client's local pointer across a team switch.
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
     team_id: v.optional(v.id("teams")),
+    // The web's stub key for this create, stored so the synced row supersedes the stub.
+    client_key: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
     const now = Date.now();
-    const short_id = `pj-${now.toString(36)}`;
+    const short_id = await mintProjectShortId(ctx, now);
 
     let team_id: Id<"teams"> | undefined;
     if (args.workspace === "team") {
@@ -326,6 +330,7 @@ export const webCreate = mutation({
       updated_at: now,
     };
     if (team_id) doc.team_id = team_id;
+    if (args.client_key) doc.client_key = args.client_key;
 
     const id = await ctx.db.insert("projects", doc);
 
@@ -366,5 +371,26 @@ export const webUpdate = mutation({
 
     await ctx.db.patch(args.id, updates);
     return { success: true };
+  },
+});
+
+/**
+ * Gives every project that has no short id one (D17: `pj-…` is the address
+ * every link takes). Projects made before every create path minted one carry
+ * none, so their links fell back to the raw row id. Minted from the row's
+ * creation time; one page per run, so a big table is walked a call at a time:
+ * `packages/convex/run.sh projects:backfillShortIds '{}'` until `done`.
+ */
+export const backfillShortIds = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())), limit: v.optional(v.number()) },
+  handler: async (ctx, { cursor, limit }) => {
+    const page = await ctx.db.query("projects").paginate({ cursor: cursor ?? null, numItems: Math.min(limit ?? 200, 500) });
+    let minted = 0;
+    for (const p of page.page as any[]) {
+      if (p.short_id) continue;
+      await ctx.db.patch(p._id, { short_id: await mintProjectShortId(ctx, p.created_at ?? p._creationTime) });
+      minted++;
+    }
+    return { minted, cursor: page.continueCursor, done: page.isDone };
   },
 });
