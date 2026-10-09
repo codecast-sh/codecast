@@ -9,6 +9,7 @@ import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration } from "../../../../lib/workflowRun";
 import { WorkflowGraphView, type WFNode, type NodeStatus } from "../../../../components/WorkflowGraphView";
 import { ChangeCardView, answererNameOf } from "../../../../components/decisions/ChangeCardView";
+import { DecisionDiscussion } from "../../../../components/decisions/DecisionDiscussion";
 import { CauseRunList, ReportChip, ReportSection, RunOutcomeText, RunPathView, answerTone, useCauseRuns } from "../../../../components/line/RunReport";
 import { runPath, cardName, choiceWords, shortDay, type ReportRun, type ReportTask } from "../../../../lib/line/runReport";
 import { SHIPPED_LINE } from "../../../../lib/line/shippedLine.generated";
@@ -177,7 +178,7 @@ function RunDetailContent({ runId }: { runId: string }) {
           </div>
           {/* What ran, and how long and what it cost unless the card below says so. */}
           <p className="text-xs text-sol-text-dim mt-0.5 truncate" data-run-subtitle>
-            {line ? `Line run${projectTitle ? ` on ${projectTitle}` : ""}` : `Run of ${workflow?.name ?? run.workflow_name ?? "a workflow"}`}
+            {line ? `Line run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${workflow?.name ?? run.workflow_name ?? "a workflow"}` : "Workflow run"}
             {run.goal_override && !run.task_title ? `: ${run.goal_override}` : ""}
             {!card && (agentMin != null && !isActive
               ? <span title="Agent time summed over the run's sessions"> · {agentMin} agent min</span>
@@ -264,7 +265,7 @@ function RunDetailContent({ runId }: { runId: string }) {
             </div>
           )}
 
-          <ReportSection title="The path">
+          <ReportSection title={line ? "The path" : "Steps"}>
             <RunPathView phases={phases} ended={ended} />
           </ReportSection>
 
@@ -277,6 +278,7 @@ function RunDetailContent({ runId }: { runId: string }) {
               {/* Who answered is the path's Decide row and what shipped is the
                   outcome above, so an answered card carries no footer. */}
               <ChangeCardView card={card} density="inline" recommend={decision?.status !== "answered"} diffAnchor="run-card-diff" />
+              {run.gate_decision_id && <div className="mt-4"><DecisionDiscussion decisionId={run.gate_decision_id} /></div>}
             </ReportSection>
           )}
 
