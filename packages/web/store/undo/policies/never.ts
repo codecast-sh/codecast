@@ -91,6 +91,9 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   mergeQueued: never("shared: a merged message is one turn others may already have seen; remove it from the queue instead"),
   clearDraftFinal: DRAFT,
   answerDecision: never("send: an answered decision has already been read by the agent that asked"),
+  adoptDecision: LOCAL_ECHO,
+  discussDecision: SEND,
+  dropDiscussionSend: LOCAL_ECHO,
   startShip: never("send: Ship starts a session that commits, pushes and opens a pull request; stopping it is the way back"),
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
@@ -199,6 +202,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setCloudSharedCheckout: SETTINGS,
   setDefaultModel: SETTINGS,
   setDeviceShares: SETTINGS,
+  setDeviceSnippet: SETTINGS,
   setIsolatedWorktreeMode: SETTINGS,
   setLocalMirror: SETTINGS,
   setMyStatus: SETTINGS,
@@ -215,6 +219,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setOpsSourceStatus: SETTINGS,
   startOpsReplayImport: MACHINE,
   stopOpsReplayImport: MACHINE,
+  stopHostedTurn: MACHINE,
   loadOpsWatchHistory: MACHINE,
   setOpsGroupStatus: never("triage: resolve, ignore and reopen sit on the same status control"),
   grantOpsAction: never("permission: a grant changes what agents may do; revoke it explicitly"),
@@ -246,6 +251,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   editLineProfile: never("machine control: the daemon rewrites the project's line.toml on its host, and the field is set back in the same settings control"),
   fileLineCause: CREATE,
   startLineCause: never("machine control: it starts a run on a machine; cancelling the run is the way back"),
+  resumeLineRun: never("machine control: it restarts a run's runner on its machine; the run itself is the way back"),
   removeTaskStub: never("internal: takes back a create the server refused, which never landed"),
 
   // A project's expectations (LM5): every change is a version judges grade against

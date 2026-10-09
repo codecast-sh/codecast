@@ -9,7 +9,7 @@
 // rows. A workspace with no line yet teaches the first step.
 import { Fragment, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronDown, Copy, SlidersHorizontal } from "lucide-react";
+import { ArrowRight, ChevronDown, SlidersHorizontal } from "lucide-react";
 import { formatTokens } from "@codecast/shared/render/changeCardHtml";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
@@ -19,7 +19,6 @@ import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../short
 import { LINE_STATION_SETTINGS, lineSettingsHref, lineTabHref } from "../../lib/lineSettings";
 import { formatElapsed } from "../../lib/taskLine";
 import { cn } from "../../lib/utils";
-import { copyText } from "../../lib/copyText";
 import {
   buildLineFlow, lineHeadline, scopeLine, ALL_PROJECTS, NO_PROJECT,
   type HeadlinePart, type LineProject, type GoalRow,
@@ -27,7 +26,7 @@ import {
 import { LINE_SETTINGS_NODE } from "../../lib/line/lineMapUrl";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Spark } from "../Spark";
-import { LineProjectSwitcher, LineRollup, lineKeys } from "./LineProjects";
+import { LineOverview, LineProjectSwitcher, lineKeys } from "./LineProjects";
 import { useLineFloor } from "./useLineFloor";
 import { LineSetup } from "./LineSetup";
 import { LineMapView, useLineMapUrl } from "./map/LineMapView";
@@ -40,20 +39,17 @@ const ago = (from: number | null | undefined, now: number) => (from == null ? nu
 const compactElapsed = (ms: number) => ago(0, ms) ?? "";
 
 type StationKey = "sense" | "causes" | "build" | "awaiting" | "watching" | "closed";
-/** what and cmd teach an empty station: what feeds it, and the command. */
-type Station = { key: StationKey; name: string; short: string; sub?: string; wide?: boolean; slim?: boolean; tail?: boolean; what: string; cmd: string };
+/** `what` teaches an empty station: what it is for, in plain words. */
+type Station = { key: StationKey; name: string; what: string };
 
 const STATIONS: Station[] = [
-  { key: "sense", name: "Sense", short: "Sense", sub: "last 24h", slim: true, what: "Finders write signals here: Sentry, PostHog, evals, lessons, or a person.", cmd: "cast signal add" },
-  { key: "causes", name: "Causes", short: "Causes", what: "A signal opens a cause, or joins the open one that shares its fingerprint.", cmd: "cast signal ls" },
-  { key: "build", name: "In build", short: "In build", what: "The sweep starts the top cause while you hold fewer than five open cards.", cmd: "cast workflow run line --task ct-N" },
-  { key: "awaiting", name: "Awaiting you", short: "Yours", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
-  { key: "watching", name: "Watching", short: "Watching", tail: true, what: "A shipped cause is watched. A repeat of its signal reopens it; a quiet watch resolves it.", cmd: "cast task update ct-N --watch-days 7" },
-  { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", tail: true, what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls -s done" },
+  { key: "sense", name: "Sources report", what: "Sentry, PostHog, evals, an agent watching your agents, or a person: each report is a signal." },
+  { key: "causes", name: "Problems", what: "Signals about the same thing join one problem. Problems wait their turn, the most important first." },
+  { key: "build", name: "Worked on", what: "Agents and scripts take the top problem through the line's steps: find the cause, prove it, build a fix, check it." },
+  { key: "awaiting", name: "You decide", what: "Each finished fix comes to you with its proof. You ship it, send it back, or drop it." },
+  { key: "watching", name: "Watched", what: "A shipped fix is watched. If the problem comes back, it opens again; a quiet watch closes it." },
+  { key: "closed", name: "Closed", what: "Problems shipped, closed without a change, or resolved in the last seven days." },
 ];
-
-/** The first command a new line needs: file one signal by hand. */
-const FIRST_SIGNAL = `cast signal add --source person --kind bug --title "What you saw"`;
 
 /** `project` pins the page to one project's line: the project's Line tab
  *  embeds it with no switcher, and links out to the whole /line. One
@@ -121,7 +117,7 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
   // the project switcher right above already names this line.
   const headline = useMemo(() => {
     const parts = headlineLead(lineHeadline(flow, now, elsewhere ? null : scopeName));
-    return elsewhere ? parts.map((p) => (p.tone === "clear" ? { ...p, text: "nothing waiting on you here" } : p)) : parts;
+    return elsewhere ? parts.map((p) => (p.tone === "clear" ? { ...p, text: "nothing needs you here" } : p)) : parts;
   }, [flow, now, scopeName, elsewhere]);
   const panelOpen = !!(mapUrl.state.node || mapUrl.state.edge);
 
@@ -140,10 +136,10 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
         <header className="shrink-0 px-4 sm:px-6 pt-4 pb-2.5 flex flex-col gap-2.5">
           <div className="flex items-baseline gap-3 min-w-0">
             <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
-            <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
+            <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">every problem your sources find, worked through to a shipped, watched fix</span>
             {tabHref && (
-              <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This project's line: its map, sources, stations and versions" data-line-tab-link>
-                Line tab
+              <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This line on its project's page, with what each version of it delivered" data-line-tab-link>
+                On the project's page
               </Link>
             )}
           </div>
@@ -152,7 +148,7 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
         </header>
       )}
 
-      {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => line.select(k)} />
+      {rollupView ? <LineOverview rollup={rollup} onSelect={(k) => line.select(k)} />
         : !onMap ? <Onboarding projects={projects} />
         : (
           <div className={cn("flex-1 min-h-0", !pinned && "border-t border-sol-border/30")} data-line-flow>
@@ -166,7 +162,7 @@ export function LinePage({ project: pinned, workspace }: { project?: string; wor
               admit={admit}
               footEnd={<FooterLinks projectsKeys={rollup.length > 0 && !pinned} />}
               barEnd={pinned ? (
-                <Link href={line.href} className="shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project's line on one floor" data-line-all-link>All lines</Link>
+                <Link href={line.href} className="shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project on one page" data-line-all-link>All projects</Link>
               ) : undefined}
             />
           </div>
@@ -195,13 +191,12 @@ function FooterLinks({ projectsKeys }: { projectsKeys: boolean }) {
   );
 }
 
-/** A line nothing has reached yet: the one command that starts it. */
+/** A line nothing has reached yet: where its work will come from. */
 function FirstSignal() {
   return (
-    <div className="lmap-note flex flex-wrap items-center gap-x-3 gap-y-2" data-line-first-signal>
-      <span>Nothing has reached this line yet. File the first signal, and watch it move through the map:</span>
-      <div className="w-fit max-w-full"><Cmd cmd={FIRST_SIGNAL} /></div>
-    </div>
+    <p className="lmap-note" data-line-first-signal>
+      Nothing has reached this line yet. Problems arrive when one of its sources reports something; you can also ask for a change from any step on the map, and it runs through the line like any other problem.
+    </p>
   );
 }
 
@@ -250,10 +245,14 @@ function Headline({ parts, onStation, elsewhere, onElsewhere }: { parts: Headlin
       {parts.map((p, i) => {
         // A count never ends a line apart from the word it counts, nor an
         // age apart from the word before it ("oldest 1d").
-        const text = (i === 0 ? p.text.charAt(0).toUpperCase() + p.text.slice(1) : p.text).replace(/(\d+) /g, "$1\u00a0").replace(/ (\d+\w*)$/, "\u00a0$1");
+        // A part that gives its reason ("...: automatic starting is off") is a
+        // sentence of its own, so the next part starts a new one.
+        const ends = (q: HeadlinePart | undefined) => !!q && q.text.includes(":");
+        const opens = i === 0 || ends(parts[i - 1]);
+        const text = (opens ? p.text.charAt(0).toUpperCase() + p.text.slice(1) : p.text).replace(/(\d+) /g, "$1\u00a0").replace(/ (\d+\w*)$/, "\u00a0$1");
         const station = p.station;
         // The comma rides the part before it, so a wrap never opens a line with one.
-        const sep = i < parts.length - 1 ? ", " : "";
+        const sep = i < parts.length - 1 ? (ends(p) ? ". " : ", ") : "";
         return (
           <Fragment key={i}>
             {p.href
@@ -269,7 +268,7 @@ function Headline({ parts, onStation, elsewhere, onElsewhere }: { parts: Headlin
         <>
           <span className="line-headline-sep" aria-hidden> · </span>
           <button type="button" onClick={onElsewhere} className="line-headline-link text-sol-yellow" data-line-headline-elsewhere={elsewhere.key}>
-            {boldNumbers(`${elsewhere.count}\u00a0${elsewhere.count === 1 ? "card waits" : "cards wait"} in ${elsewhere.title}${elsewhere.projects > 1 ? ` and ${elsewhere.projects - 1} more` : ""}`)}
+            {boldNumbers(`${elsewhere.count}\u00a0finished ${elsewhere.count === 1 ? "fix waits" : "fixes wait"} for you in ${elsewhere.title}${elsewhere.projects > 1 ? ` and ${elsewhere.projects - 1} more` : ""}`)}
             <ArrowRight className="inline-block w-[0.8em] h-[0.8em] ml-1 align-[-0.05em]" aria-hidden />
           </button>
         </>
@@ -290,29 +289,29 @@ function Throughput({ t, lead: headline, brief }: { t: ReturnType<typeof buildLi
   if (brief) return <div className="line-head-row" data-brief="true">{headline}</div>;
   const moved = t.signalsIn + t.opened + t.dissolved + t.shipped + t.reopened > 0;
   if (!moved) {
-    return <div className="line-head-row">{headline}<span className="text-[12px] text-sol-text-dim" data-line-throughput="quiet">no signals this week</span></div>;
+    return <div className="line-head-row">{headline}<span className="text-[12px] text-sol-text-dim" data-line-throughput="quiet">no signals reported this week</span></div>;
   }
   const inWatch = t.shippedInWatch > 0 ? (t.shippedInWatch === t.shipped ? "now in watch" : `${t.shippedInWatch} in watch`) : null;
   const median = t.medianToShip === null ? null : compactElapsed(t.medianToShip);
   // A metric with nothing measured yet stays out, so it never reads as a value.
   const lead: Array<{ label: string; value: string | number; tip: string; spark?: number[]; note?: string | null }> = [
-    { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, note: inWatch, tip: `Causes shipped in the last 7 days, per day.${t.shippedInWatch ? ` ${t.shippedInWatch} still in Watching; a ship moves to Closed when its watch ends quiet.` : ""}` },
-    ...(median ? [{ label: "median signal to ship", value: median, tip: "From a cause's first signal to its ship, median over this week's ships" }] : []),
+    { label: "fixes shipped this week", value: t.shipped, spark: t.daily.shipped, note: inWatch, tip: `Fixes shipped in the last 7 days, per day.${t.shippedInWatch ? ` ${t.shippedInWatch} still being watched; a fix counts as closed once its watch ends quiet.` : ""}` },
+    ...(median ? [{ label: "usual time from first report to ship", value: median, tip: "From a problem's first signal to its fix shipping, the median over this week's ships" }] : []),
   ];
   const flowCells: Array<{ label: string; value: string | number; tone?: string; spark?: number[]; tip: string; unit?: string }> = [
-    { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn, tip: "signals in this week, per day" },
-    { label: "causes opened", value: t.opened, spark: t.daily.opened, tip: "causes opened this week, per day" },
-    { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved, tip: "causes dissolved this week, per day" },
-    { label: "reopened", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened, tip: "causes reopened this week, per day" },
-    ...(t.tokensPerShip === null ? [] : [{ label: "cost per ship", value: formatTokens(Math.round(t.tokensPerShip)), unit: "tokens", tip: "Cost per shipped change, in run tokens. Runs record tokens, not dollars." }]),
+    { label: "signals reported", value: t.signalsIn, spark: t.daily.signalsIn, tip: "Signals the sources reported this week, per day" },
+    { label: "new problems", value: t.opened, spark: t.daily.opened, tip: "Problems opened this week, per day" },
+    { label: "closed without a change", value: t.dissolved, spark: t.daily.dissolved, tip: "Problems that did not reproduce and closed without a change this week, per day" },
+    { label: "came back after a fix", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened, tip: "Problems that came back after their fix shipped, this week, per day" },
+    ...(t.tokensPerShip === null ? [] : [{ label: "cost per shipped fix", value: formatTokens(Math.round(t.tokensPerShip)), unit: "tokens", tip: "What each shipped fix cost, in tokens. Runs record tokens, not dollars." }]),
   ];
   // The station headers already count signals in and what sits in watch, so
   // the clause says only the week's outcome: what shipped, how fast, and a
   // reopen when there is one.
   const summary: Array<{ n: string | number; words: string; tone?: string }> = [
-    { n: t.shipped, words: " shipped this week" },
-    ...(median ? [{ n: median, words: " median to ship" }] : []),
-    ...(t.reopened ? [{ n: t.reopened, words: " reopened", tone: "text-sol-red" }] : []),
+    { n: t.shipped, words: t.shipped === 1 ? " fix shipped this week" : " fixes shipped this week" },
+    ...(median ? [{ n: median, words: " usually, from first report to ship" }] : []),
+    ...(t.reopened ? [{ n: t.reopened, words: " came back", tone: "text-sol-red" }] : []),
   ];
   return (
     <div className="flex flex-col gap-2 min-w-0">
@@ -374,55 +373,8 @@ function SettingsLink({ href, station }: { href: string; station: StationKey }) 
   );
 }
 
-/** A command split where it may wrap: the words before the first flag, then
- *  each `--flag value` pair whole. Quoted values stay one token. */
-function cmdChunks(cmd: string): string[] {
-  const tokens = cmd.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-  const chunks: string[] = [];
-  for (const t of tokens) {
-    const last = chunks.length - 1;
-    const pairs = last >= 0 && chunks[last].startsWith("--") && !chunks[last].includes(" ") && !t.startsWith("--");
-    if (pairs) chunks[last] += ` ${t}`;
-    else chunks.push(t);
-  }
-  return chunks;
-}
-
-/** A command chip that wraps between words and flag pairs, and splits a pair
- *  at its space only when the pair alone is wider than the chip; a token never
- *  splits, not even at its hyphens. The copy button floats in the first line,
- *  so the lines below it get the chip's full width: shown on hover, or always
- *  when the station holds the cursor. */
-function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: boolean }) {
-  return (
-    <div className={cn("line-cmd group/cmd relative rounded-md min-w-0", primary && "line-cmd-primary")} data-line-cmd>
-      <code className={cn("block whitespace-normal break-normal px-2 py-1.5 leading-[16px]", primary ? "text-[13px] text-sol-text" : "text-[11px] text-sol-text-muted")}>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); void copyText(cmd, "Command copied"); }}
-          title="Copy the command"
-          aria-label="Copy the command"
-          className={cn(
-            "line-cmd-copy float-right ml-1 -mr-1 w-5 h-4 rounded flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-opacity",
-            shown || primary ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-hover/cmd:opacity-100 focus-visible:opacity-100",
-          )}
-        >
-          <Copy className="w-3 h-3" />
-        </button>
-        {cmdChunks(cmd).map((c, i) => (
-          <Fragment key={i}>
-            {i > 0 && " "}
-            <span className="line-cmd-chunk">{c.split(" ").map((t, j) => <Fragment key={j}>{j > 0 && " "}<span className="whitespace-nowrap">{t}</span></Fragment>)}</span>
-          </Fragment>
-        ))}
-      </code>
-    </div>
-  );
-}
-
-/** The line before anything has reached it: the first command, then the six
- *  stations in one row, each saying what will feed it and, on hover or under
- *  the cursor, the command that does. */
+/** The line before anything has reached it: the projects that can start
+ *  one, then how work moves through a line, one step per column. */
 function Onboarding({ projects }: { projects: LineProject[] }) {
   const [focusedCol, onFocus] = useState(0);
   const settingsOf = (station: StationKey) => lineSettingsHref({ section: LINE_STATION_SETTINGS[station]?.section });
@@ -434,12 +386,10 @@ function Onboarding({ projects }: { projects: LineProject[] }) {
       <div className="flex flex-col gap-5 pt-1 pb-4">
       {projects.length > 0 && <ProjectStarts projects={projects} />}
       <div className="line-start shrink-0 rounded-xl p-5 sm:p-6 max-w-[760px]">
-        <div className="line-start-title text-sol-text">File the first signal.</div>
+        <div className="line-start-title text-sol-text">How a line works</div>
         <p className="mt-2 text-[13px] text-sol-text-muted leading-relaxed max-w-[60ch]">
-          A signal is one thing someone saw. It opens a cause, the line builds a fix, and you answer one card.
-          Sentry, PostHog and evals file their own once connected.
+          A source reports something it saw: a signal. Signals about the same thing make one problem. The line's steps find its cause, prove it and build a fix, then you decide whether it ships.
         </p>
-        <div className="mt-5 w-fit max-w-full"><Cmd cmd={FIRST_SIGNAL} primary /></div>
       </div>
       <div className="line-ghost-scroll shrink-0">
       <ol className="line-ghost" aria-label="Stations">
@@ -457,7 +407,7 @@ function Onboarding({ projects }: { projects: LineProject[] }) {
               <span className="text-[13px] font-medium text-sol-text whitespace-nowrap">{s.name}</span>
             </div>
             <p className="line-ghost-what mt-2 text-[11px] leading-relaxed text-sol-text-muted" title={s.what}>{s.what}</p>
-            <div className="line-ghost-cmd mt-auto pt-3 flex flex-col gap-2"><Cmd cmd={s.cmd} shown={focusedCol === i} /><SettingsLink href={settingsOf(s.key)} station={s.key} /></div>
+            <div className="line-ghost-cmd mt-auto pt-3 flex flex-col gap-2"><SettingsLink href={settingsOf(s.key)} station={s.key} /></div>
           </li>
         ))}
       </ol>

@@ -1,20 +1,21 @@
 "use client";
 /**
- * The Updates tab: a project's own feed of posts.
+ * A project's update posts: the composer and the card each post wears on the
+ * project's Timeline (components/ProjectTimeline.tsx), where the composer sits
+ * on top and the posts stand among everything else that happened.
  *
  * Tasks say what is true right now; updates say what happened and why it
- * matters, in a human voice — a status post before a review, an agent's weekly
+ * matters, in a human voice: a status post before a review, an agent's weekly
  * digest of what changed. Each post carries a flat comment thread underneath,
  * the same shape task comments have.
  *
- * The list renders from the store's projectUpdates collection, fed by
+ * Posts render from the store's projectUpdates collection, fed by
  * projectUpdates.webList for the project on screen, and every gesture is a
  * store action (store/projectUpdatesSlice.ts) that paints at once and rides
  * the outbox to the web mutation. Editing a post's body is undoable.
  */
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Megaphone, MessageSquare, Pencil, Sparkles, Trash2 } from "lucide-react";
-import { useProjectUpdates } from "../hooks/useProjectUpdates";
 import { useInboxStore } from "../store/inboxStore";
 import { newProjectUpdateKey, type ProjectUpdateComment, type ProjectUpdateRow } from "../store/projectUpdatesSlice";
 import { relTimeShort } from "../lib/utils";
@@ -81,7 +82,7 @@ function GrowingTextarea({
   );
 }
 
-function UpdateComposer({ projectId }: { projectId: string }) {
+export function UpdateComposer({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -103,7 +104,8 @@ function UpdateComposer({ projectId }: { projectId: string }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-sol-border/30 text-xs text-sol-text-dim hover:border-sol-border/60 hover:text-sol-text-muted transition-colors text-left"
+        className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-sol-border/30 bg-sol-bg-alt/40 text-xs text-sol-text-dim hover:border-sol-border/60 hover:text-sol-text-muted transition-colors text-left"
+        data-project-update-open
       >
         <Megaphone className="w-3.5 h-3.5 flex-shrink-0" />
         Post an update…
@@ -112,7 +114,7 @@ function UpdateComposer({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="rounded-lg border border-sol-border/40 bg-sol-bg p-3">
+    <div className="rounded-lg border border-sol-border/40 bg-sol-bg p-3" data-project-update-form>
       <input
         type="text"
         value={title}
@@ -168,7 +170,7 @@ function CommentRow({ comment }: { comment: UpdateComment }) {
   );
 }
 
-function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; currentUserId?: string }) {
+export function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; currentUserId?: string }) {
   const [commenting, setCommenting] = useState(false);
   const [commentDraft, setCommentDraft] = useState("");
   const [editing, setEditing] = useState(false);
@@ -209,7 +211,7 @@ function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; currentU
   }, [armed, update._id]);
 
   return (
-    <div className="rounded-lg border border-sol-border/30 bg-sol-bg group">
+    <div className="flex-1 min-w-0 rounded-lg border border-sol-border/30 bg-sol-bg group" id={`update-${update._id}`} data-project-update={update._id}>
       <div className="p-3">
         <div className="flex items-center gap-2">
           <CommentAvatar name={update.author} isAgent={update.author_kind === "agent"} size={22} />
@@ -315,55 +317,6 @@ function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; currentU
           <MessageSquare className="w-3 h-3" />
           {update.comments.length > 0 ? "Reply" : "Comment"}
         </button>
-      )}
-    </div>
-  );
-}
-
-export function ProjectUpdates({ projectId }: { projectId: string }) {
-  const { ready, error, refused, retry, updates: list } = useProjectUpdates(projectId);
-  const currentUserId = useInboxStore((s: any) => s.currentUser?._id && String(s.currentUser._id));
-
-  if (error && list.length === 0) {
-    return (
-      <div className="max-w-3xl mx-auto py-12 text-center">
-        <p className="text-xs text-sol-text-dim">Updates could not load.</p>
-        <button onClick={retry} className="mt-2 text-[11px] text-sol-cyan hover:underline">
-          Try again
-        </button>
-      </div>
-    );
-  }
-  if (!ready && list.length === 0) {
-    return (
-      <div className="max-w-3xl mx-auto py-12 text-center text-xs text-sol-text-dim">Loading updates…</div>
-    );
-  }
-  // null = the server refused (signed out, or no access to this project).
-  // Showing a live composer here would just set the poster up to fail.
-  if (refused) {
-    return (
-      <div className="max-w-3xl mx-auto py-12 text-center text-xs text-sol-text-dim">
-        You don't have access to this project's updates.
-      </div>
-    );
-  }
-
-  return (
-    <div className="max-w-3xl mx-auto py-4 px-2 space-y-3">
-      <UpdateComposer projectId={projectId} />
-      {list.map((u) => (
-        <UpdateCard key={u._id} update={u} currentUserId={currentUserId} />
-      ))}
-      {list.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-          <Megaphone className="w-8 h-8 text-sol-text-dim/20 mb-2" />
-          <p className="text-xs text-sol-text-dim">No updates yet</p>
-          <p className="text-[11px] text-sol-text-dim/60 mt-1">
-            Post the first one above, or let an agent post with{" "}
-            <code className="px-1 py-px rounded bg-sol-bg-alt text-sol-text-muted">cast project post</code>
-          </p>
-        </div>
       )}
     </div>
   );

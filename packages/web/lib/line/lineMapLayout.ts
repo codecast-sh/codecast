@@ -41,9 +41,12 @@ export type EdgePath = { id: string; d: string; kind: MapEdge["kind"]; labelAt: 
 export type PhaseSpan = { key: string; label: string; x: number; w: number };
 export type MapLayout = { width: number; height: number; boxes: Map<string, NodeBox>; paths: Map<string, EdgePath>; phases: PhaseSpan[] };
 
+/** A line cause's own stations (line-map.md LX6) stand in for main ones, so they draw as wide. */
+const STANDS_IN = new Set(["prove_line", "implement_line"]);
+
 /** Narrow nodes: a branch, and the card's routine assembly steps. */
 export const isSmallNode = (n: Pick<MapNode, "id" | "kind" | "main">) =>
-  n.kind === "end" ? !n.main : n.kind === "station" && (!n.main || !isMainStation(n.id));
+  n.kind === "end" ? !n.main : n.kind === "station" && !STANDS_IN.has(n.id) && (!n.main || !isMainStation(n.id));
 
 const PHASE_LABEL: Record<string, string> = {
   sense: "Sense", admit: "Admit", understand: "Understand", prove: "Prove", build: "Build", check: "Check", decide: "Decide", ship: "Ship", end: "Ends",
@@ -97,7 +100,12 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   for (const [id, l] of lane) lane.set(id, used.indexOf(l));
 
   // ── columns, left to right, each as wide as its widest node ──
-  const widthOf = (n: MapNode) => (n.kind === "source" || n.kind === "expectations" ? NODE_W_SOURCE : isSmallNode(n) ? NODE_W_SMALL : NODE_W);
+  // A step where you decide carries a "you" tag beside its name, so it is wider.
+  // A node is as wide as its whole name needs, never cut to "Investig...".
+  const widthOf = (n: MapNode) => Math.max(
+    n.kind === "source" || n.kind === "expectations" ? NODE_W_SOURCE : n.who === "person" ? NODE_W + 18 : isSmallNode(n) ? NODE_W_SMALL : NODE_W,
+    nameWidth(n),
+  );
   const colW = new Map<number, number>();
   for (const n of map.nodes) colW.set(n.col, Math.max(colW.get(n.col) ?? 0, widthOf(n)));
   const colX = new Map<number, number>();
@@ -230,6 +238,12 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
 
   return { width, height, boxes, paths, phases };
 }
+
+/** A node's name at the map's 11.5px mono (about 7px a glyph), with its
+ *  padding, lamp, and the "you" tag a step where you decide carries. */
+const NAME_CH = 7;
+export const nameWidth = (n: Pick<MapNode, "label" | "who" | "kind">) =>
+  n.kind === "end" ? 0 : Math.ceil(n.label.length * NAME_CH) + 36 + (n.who === "person" ? 30 : 0);
 
 function span(e: MapEdge, boxes: Map<string, NodeBox>): number {
   const a = boxes.get(e.from);
