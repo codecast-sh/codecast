@@ -60,9 +60,13 @@ export function setRelatedEdge(tasks: Rows, a: string, b: string, on: boolean): 
  *  carries an empty repository, which the server resolves from the task. */
 export type TaskWaitInput = { id: string; target: WaitTarget };
 
-/** Whether wait `w` is on `target`, as addWaitCore compares them. A bare
- *  `#42` matches only another unresolved `#42`: which repository it names is
- *  the server's to say. */
+/** Whether wait `w` is on `target`, deliberately stricter than the server's
+ *  `sameWaitTarget` (which addWaitCore uses alone, and under which an empty
+ *  repository matches that number in any repository): a bare `#42` matches
+ *  only another unresolved `#42`, because which repository it names is the
+ *  server's to say. Being stricter only ever paints a wait the server may
+ *  refuse, and addWaitCore refuses a wait carrying a client id that lands on
+ *  an existing one, so the draft rolls back instead of holding a copy. */
 export function waitIsOn(w: TaskWait, target: WaitTarget): boolean {
   const bare = (t: WaitTarget) => "repository" in t && !t.repository;
   return bare(w) === bare(target) && sameWaitTarget(w, target);
