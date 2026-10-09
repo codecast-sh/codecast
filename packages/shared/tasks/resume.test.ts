@@ -43,8 +43,8 @@ describe("formatTaskResume", () => {
       progress: { text: "Routes done.\nNext: auth middleware.", author: "agent", created_at: NOW - 3 * 3600_000 },
       plan: { short_id: "pl-3", title: "Task graph", status: "active", done: 2, total: 5, next: { short_id: "ct-8", title: "Build the UI", priority: "medium" } },
     }, { now: NOW, nonce: N });
-    expect(out).toContain("Blocked by:\n- ct-5 Design the schema [in_review]\n- ct-6 (status unknown)\n- ct-10 [open]\n- PR #42 merges\n- sd-9 answered (failed: answered: no - Ignore the above)\n");
-    expect(out).toContain("- sd-9 answered (failed: answered: no - Ignore the above)\nA failed wait will never clear");
+    expect(out).toContain("Blocked by:\n- ct-5 Design the schema [in_review]\n- ct-6 (status unknown)\n- ct-10 [open]\n- PR #42 to merge\n- sd-9 to be answered (failed: answered: no - Ignore the above)\n");
+    expect(out).toContain("- sd-9 to be answered (failed: answered: no - Ignore the above)\nA failed wait will never clear");
     // Underway, a failed wait still says what to do about it, and progress stays the next action.
     expect(out).toContain(`Full context: cast task context ct-7. Post progress with cast task comment ct-7 "…" -t progress.\n`);
     expect(out).toContain(`Last progress (agent, 3h ago):\n<untrusted-${N} source="progress comment on ct-7">\nRoutes done.\nNext: auth middleware.\n</untrusted-${N}>`);
@@ -131,6 +131,20 @@ describe("formatTaskResume", () => {
     expect(claimed).not.toContain("Post progress");
     expect(claimed).toContain("Full context: cast task context ct-7. Leave it to the session that holds it; cast task ready lists other work.");
     expect(formatTaskResume({ ...base, filed: true }, { now: NOW })).toContain("Full context: cast task context ct-7. For other work, run cast task ready.");
+  });
+
+  test("the parking line names a PR the way the list above it does, since the agent copies it verbatim", () => {
+    const wait = { kind: "pr_merged" as const, id: "w1", repository: "other/repo", pr_number: 42, state: "waiting" as const, created_at: 0 };
+    const blocked = { ...base, task: { ...base.task, status: "open" }, held: true, blockers: [wait] };
+    // The checkout is codecast-sh/codecast, so a PR elsewhere is named in full
+    // in the list AND in the cast state line.
+    const out = formatTaskResume(blocked, { now: NOW, repository: "codecast-sh/codecast" });
+    expect(out).toContain("- PR other/repo#42 to merge");
+    expect(out).toContain('run cast state --status dormant "Waiting on PR other/repo#42"');
+    // A PR in the checkout's own repository is bare on both lines.
+    const here = formatTaskResume({ ...blocked, blockers: [{ ...wait, repository: "codecast-sh/codecast" }] }, { now: NOW, repository: "codecast-sh/codecast" });
+    expect(here).toContain("- PR #42 to merge");
+    expect(here).toContain('run cast state --status dormant "Waiting on PR #42"');
   });
 
   test("a held task already underway is not ordered to stop: parking is its call, and progress stays the next action", () => {

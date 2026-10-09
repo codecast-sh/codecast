@@ -40,6 +40,15 @@ export function isTerminalTaskStatus(category: string | undefined | null): boole
   return category === "done" || category === "dropped";
 }
 
+/** Categories that mean someone is on the task. One pair for every rule that
+ *  turns on it: a parent being worked owns its decomposition (`readinessOf`),
+ *  a blocker someone works no longer gates pickup (`blockerGatesPickup`), and
+ *  a session that got this far keeps its blocked task rather than parking
+ *  (resume.ts). */
+export function isTaskBeingWorked(category: string | undefined | null): boolean {
+  return category === "in_progress" || category === "in_review";
+}
+
 /** Accent token names a custom status may use; the web maps them to sol-* classes. */
 export const TASK_STATUS_COLORS = [
   "blue",

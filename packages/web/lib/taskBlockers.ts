@@ -121,12 +121,16 @@ export function blockedMark(blockers: Blocker[], opts: { now?: number; titleOf?:
   return { count: blockers.length, failed: blockers.some(isFailedWait), tip: phrases.join(" · ") };
 }
 
+/** A ref's title from the same answer as its status, so a ref the lookup
+ *  refuses (another workspace, a snapshot without the row) is nameless and a
+ *  line never mixes a real title with "status unknown". The web's row mark
+ *  and the phone's task graph both name blockers through this. */
+export function storeTitleOf(statusOf: StatusOf): (ref: string) => string | undefined {
+  return (ref) => (statusOf(ref) as { title?: string } | null | undefined)?.title;
+}
+
 /** `task`'s blocked mark read from the store, its task blockers titled. */
 export function storeBlockedMark(task: BoardTask, tasks: TaskRows, now = Date.now()): BlockedMark | null {
   const statusOf = storeStatusOf(tasks, task);
-  const titleOf = (ref: string) => {
-    const row = statusOf(ref);
-    return row && typeof row === "object" ? (row as { title?: string }).title : undefined;
-  };
-  return blockedMark(blockersHoldingBack(task, statusOf), { now, titleOf });
+  return blockedMark(blockersHoldingBack(task, statusOf), { now, titleOf: storeTitleOf(statusOf) });
 }

@@ -237,7 +237,8 @@ describe("draft writes", () => {
 describe("the timeline's graph rows", () => {
   test("blockers, links and waits read as what happened", () => {
     expect(graphChange({ field: "blocked_by", old_value: "ct-1", new_value: "ct-1, ct-2" })).toEqual({ tone: "blocked", clauses: [{ verb: "made it wait on", refs: ["ct-2"] }] });
-    expect(graphChange({ field: "blocked_by", old_value: "ct-1, ct-2", new_value: "ct-2" })).toEqual({ tone: "met", clauses: [{ verb: "removed blocker", refs: ["ct-1"] }] });
+    // A removal is withdrawn, not met: green beside "removed blocker ct-1" would read as "ct-1 finished".
+    expect(graphChange({ field: "blocked_by", old_value: "ct-1, ct-2", new_value: "ct-2" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "removed blocker", refs: ["ct-1"] }] });
     expect(graphChange({ field: "related", old_value: "", new_value: "ct-3" })).toEqual({ tone: "link", clauses: [{ verb: "marked it related to", refs: ["ct-3"] }] });
     expect(graphChange({ field: "found_during", old_value: "", new_value: "ct-12" })!.clauses[0]).toEqual({ verb: "found it while working on", refs: ["ct-12"] });
     expect(graphChange({ field: "superseded_by", old_value: "", new_value: "ct-9" })!.clauses[0]).toEqual({ verb: "superseded it with", refs: ["ct-9"] });
@@ -246,8 +247,8 @@ describe("the timeline's graph rows", () => {
     expect(graphChange({ field: "waits", old_value: "Waiting on PR #42", new_value: "PR #42 merged" })!.tone).toBe("met");
     expect(graphChange({ field: "waits", old_value: "Waiting on PR #42", new_value: "Wait on PR #42 failed: closed without merging" })!.tone).toBe("failed");
     expect(graphChange({ field: "waits", old_value: "sd-4 answered", new_value: "Waiting on sd-4" })!.clauses[0]).toEqual({ verb: "reopened the wait", text: "on sd-4" });
-    expect(graphChange({ field: "waits", old_value: "Waiting on sd-4", new_value: "" })!.clauses[0]).toEqual({ verb: "stopped waiting", text: "on sd-4" });
-    expect(graphChange({ field: "waits", old_value: "PR #42 merged", new_value: "" })!.clauses[0]).toEqual({ verb: "removed the wait:", text: "PR #42 merged" });
+    expect(graphChange({ field: "waits", old_value: "Waiting on sd-4", new_value: "" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "stopped waiting", text: "on sd-4" }] });
+    expect(graphChange({ field: "waits", old_value: "PR #42 merged", new_value: "" })).toEqual({ tone: "withdrawn", clauses: [{ verb: "removed the wait:", text: "PR #42 merged" }] });
     expect(graphChange({ field: "status", old_value: "open", new_value: "done" })).toBeNull();
   });
 });
