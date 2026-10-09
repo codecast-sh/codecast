@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, syncLogScopeMetaKey } from "../store/inboxStore";
+import { sessionWithinRetention } from "../store/cacheRetention";
 import { planCargoApply, projectCountTouched } from "../lib/syncLogCargo";
 import { track } from "../lib/analytics";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -168,13 +169,36 @@ export async function batchGet(convex: any, coll: Collection, ids: string[]): Pr
   return rows;
 }
 
+// The session rows a log page may add to this replica. A change to a session
+// the replica holds always applies. One it does not hold enters only if the
+// server lists it in the live inbox or hydration would keep it on its own
+// stamps: the log carries every write to every session the viewer owns, and a
+// bulk restamp of old ones (a team mapping backfill re-resolving each session
+// in a repository) otherwise streams the viewer's whole history back into a
+// map that never prunes. Measured 2026-10-08: 1,200 rows at boot, 10,400 half
+// an hour later, 7,900 of them older than thirty days, and every O(sessions)
+// subscriber paying for all of them on each push. Pure; unit-tested.
+export function admitLogSessions<T extends { _id: string }>(
+  rows: T[],
+  isHeld: (id: string) => boolean,
+  liveInboxIds: ReadonlySet<string>,
+  now: number,
+): T[] {
+  return rows.filter((r) => {
+    const id = String(r._id);
+    return isHeld(id) || liveInboxIds.has(id) || sessionWithinRetention(r, now);
+  });
+}
+
 // Stage two: fetch current state for a set of per-collection ids, overlay what
 // the authorized query returned, prune what it omitted. Shared by the log
 // applier, the legacy bridge and the sessions floor's warm-cache probe; apply
-// is idempotent.
+// is idempotent. `fromLog` marks the ids as a change stream's rather than a
+// surface's own request, which is what lets admitLogSessions leave some out.
 export async function applyEntityIds(
   convex: any,
   idsByCollection: Record<Collection, string[]>,
+  opts: { fromLog?: boolean } = {},
 ): Promise<Set<string>> {
   const applied = new Set<string>();
   const store = useInboxStore.getState();
@@ -185,7 +209,11 @@ export async function applyEntityIds(
     // the delta merge, THEN overlay current state.
     store.clearFeedExcludes(coll, ids);
     const rows = await batchGet(convex, coll, ids);
-    if (rows.length) store.syncTable(coll, rows as any, { isDelta: true } as any);
+    const state = useInboxStore.getState();
+    const admitted = coll === "sessions" && opts.fromLog
+      ? admitLogSessions(rows, (id) => heldRow(state, coll, id) !== undefined, new Set(state.liveInboxIdList), Date.now())
+      : rows;
+    if (admitted.length) store.syncTable(coll, admitted as any, { isDelta: true } as any);
     const present = new Set(rows.map((r: any) => String(r._id)));
     for (const id of ids) {
       if (present.has(id)) applied.add(`${coll}:${id}`);
@@ -330,7 +358,7 @@ async function applyLogPage(
   for (const pid of projectIds) byIds.push({ entity_type: "projects", entity_id: pid });
   state.noteSyncLogApply(direct, byIds.length);
   tallyApply(direct, byIds.length);
-  if (byIds.length) await applyEntityIds(convex, planFeedApply(byIds));
+  if (byIds.length) await applyEntityIds(convex, planFeedApply(byIds), { fromLog: true });
   store.recordSyncMeta(scopeMetaKey(scopeKey), { cursor: upTo });
 }
 

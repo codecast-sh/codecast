@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { BYIDS_CHUNK, chunkIds, planFeedApply, type FeedChange } from "./useSyncChangeFeed";
+import { BYIDS_CHUNK, admitLogSessions, chunkIds, planFeedApply, type FeedChange } from "./useSyncChangeFeed";
 
 const c = (entity_type: string, entity_id: string): FeedChange => ({ entity_type, entity_id });
 
@@ -53,5 +53,35 @@ describe("chunkIds", () => {
   it("keeps a small page in one chunk and an empty page in none", () => {
     expect(chunkIds(["a", "b"])).toEqual([["a", "b"]]);
     expect(chunkIds([])).toEqual([]);
+  });
+});
+
+describe("admitLogSessions", () => {
+  const NOW = 1_800_000_000_000;
+  const DAY = 24 * 60 * 60 * 1000;
+  const old = { _id: "old", updated_at: NOW - 60 * DAY, inbox_dismissed_at: NOW - 40 * DAY };
+  const recent = { _id: "recent", updated_at: NOW - 2 * DAY };
+  const none = () => false;
+
+  it("leaves out a session the replica does not hold and hydration would drop", () => {
+    expect(admitLogSessions([old, recent], none, new Set(), NOW)).toEqual([recent]);
+  });
+
+  it("applies a change to an old session the replica holds", () => {
+    expect(admitLogSessions([old], (id) => id === "old", new Set(), NOW)).toEqual([old]);
+  });
+
+  it("admits an old session the server lists in the live inbox", () => {
+    expect(admitLogSessions([old], none, new Set(["old"]), NOW)).toEqual([old]);
+  });
+
+  it("admits a row with no stamps: it cannot be judged old", () => {
+    expect(admitLogSessions([{ _id: "bare" }], none, new Set(), NOW)).toEqual([{ _id: "bare" }]);
+  });
+
+  it("admits an old session that is pinned or was dismissed inside the window", () => {
+    const pinned = { ...old, _id: "pinned", is_pinned: true };
+    const justDismissed = { ...old, _id: "dismissed", inbox_dismissed_at: NOW - DAY };
+    expect(admitLogSessions([pinned, justDismissed], none, new Set(), NOW)).toEqual([pinned, justDismissed]);
   });
 });

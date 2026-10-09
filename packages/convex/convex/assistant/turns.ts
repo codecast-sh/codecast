@@ -38,15 +38,11 @@ import {
 import {
   allowScopeIn,
   approvalContext,
-  cadenceOf,
-  clockMinutes,
-  firstCadenceRun,
-  firstRunWords,
   humanLabel,
   NEVER,
   scopeMatch,
-  weekdayNumbers,
   stepAsk,
+  stepAskWhy,
   systemPrompt as assistantPrompt,
   withRules as withRulesIn,
   type AllowScope,
@@ -70,6 +66,7 @@ import { ALLOW_SCOPES, toolsFor, type ToolsForOptions } from "./tools";
 import { normalizeTimezone } from "../lib/teamDay";
 import { decisionAnswerOf, pendingInput, turnsIn, type Input, type Turn } from "./input";
 import { closeProviderIncident, noteProviderFault } from "./incidents";
+import { freeTurnRefusal, noteFreeSpend, offerEmailCode, type FreeRefusal } from "./freeGate";
 import { titleAfterHostedAnswer } from "../titleGeneration";
 import { earlierHistory, historyState, type LongHistory } from "./longHistory";
 import {
@@ -225,6 +222,14 @@ export async function leaseTurn(
     turnId = await ctx.db.insert("assistant_turns", { conversation_id: conversationId, user_id: userId, cost_reserved_usd: 0, ...fields });
   }
 
+  // The Free plan serves a proven person, one Free month per mailbox, within
+  // the day's ceiling (freeGate.ts); a turn a card pays for always passes.
+  const refusal = await freeTurnRefusal(ctx, userId, now);
+  if (refusal) {
+    await refuseTurn(ctx, (await ctx.db.get(turnId))!, input, freeNotice(ctx, userId, refusal));
+    return "budget";
+  }
+
   // The full ceiling when the wallet has it (reserve frees leaked holds
   // before it refuses), else whatever room is left.
   let held = await reserve(ctx, userId, turnId, plan.turn_ceiling_usd);
@@ -233,7 +238,8 @@ export async function leaseTurn(
     held = room >= MIN_TURN_USD && (await reserve(ctx, userId, turnId, room));
   }
   if (!held) {
-    await refuseForBudget(ctx, (await ctx.db.get(turnId))!, input);
+    const turn = (await ctx.db.get(turnId))!;
+    await refuseTurn(ctx, turn, input, { kind: "budget", line: () => budgetLine(ctx, turn.user_id, true) });
     return "budget";
   }
   // A new turn leaves the last one's stop behind.
@@ -252,15 +258,16 @@ async function isFirstTurn(ctx: MutationCtx, conversationId: Id<"conversations">
   return true;
 }
 
-/** No room in the wallet: the person's words go into the transcript (so a
- *  sweep never wakes the conversation for them again), a plain line says why
- *  nothing happened and what to do, and the turn ends with reason `budget`.
+/** The turn may not spend (no room in the wallet, or the Free plan's gate):
+ *  the person's words go into the transcript (so a sweep never wakes the
+ *  conversation for them again), the notice says why nothing happened and
+ *  what to do, and the turn ends with reason `budget`.
  *  A parked approval this turn took up ends as begin would end it (settleParked),
  *  and its call is answered as not run, right after the call's message and
  *  before any later row, so the transcript never holds a call with no result
  *  and a later turn never runs a call the person saw refused for usage. The
  *  result names the real reason: usage only when the person approved it. */
-async function refuseForBudget(ctx: MutationCtx, turn: Turn, input: Input): Promise<void> {
+async function refuseTurn(ctx: MutationCtx, turn: Turn, input: Input, notice: Notice): Promise<void> {
   const parked = await settleParked(ctx, turn, input);
   if (parked?.call) {
     await writeRows(ctx, turn.conversation_id, [{
@@ -273,17 +280,17 @@ async function refuseForBudget(ctx: MutationCtx, turn: Turn, input: Input): Prom
   await takeTyped(ctx, turn.conversation_id, input.typed);
   for (const row of input.answers) await markPendingDelivered(ctx, row);
   const end: TurnEnd = { status: "done", reason: "budget", costUsd: 0 };
-  // A routine firing while the allowance is still out says so once: the
-  // conversation already ends on the budget line (hosted_stop clears when a
-  // turn starts), so a daily routine does not repeat it every morning.
+  // A routine firing while the same stop still holds says so once: the
+  // conversation already ends on that line (hosted_stop clears when a turn
+  // starts), so a daily routine does not repeat it every morning.
   const conversation = await ctx.db.get(turn.conversation_id);
   const byRoutineOnly = routineOnly(input.typed);
-  if (conversation?.hosted_stop === "budget" && byRoutineOnly) {
+  if (conversation?.hosted_stop === notice.kind && byRoutineOnly) {
     await endTurn(ctx, turn, end);
     await setWorkState(ctx, turn.conversation_id, "idle");
     return;
   }
-  await stopTurn(ctx, turn, end, { kind: "budget", line: () => budgetLine(ctx, turn.user_id, true) });
+  await stopTurn(ctx, turn, end, notice);
 }
 
 /** Ends a running turn whose action died: it charges what the turn recorded
@@ -319,7 +326,8 @@ async function endTurn(ctx: MutationCtx, turn: Turn, end: TurnEnd): Promise<void
     ...(end.model ? { model: end.model } : {}),
     ...(end.usage ? { input_tokens: end.usage.input, output_tokens: end.usage.output } : {}),
   });
-  await settleTurn(ctx, turn._id, end.costUsd, end.model ?? turn.model);
+  const settled = await settleTurn(ctx, turn._id, end.costUsd, end.model ?? turn.model);
+  if (!settled.repeat) await noteFreeSpend(ctx, turn.user_id, settled.chargedUsd - settled.topupUsd);
 }
 
 /** Returns the turn_completed_at it stamped (none while working). */
@@ -431,6 +439,49 @@ async function budgetLine(ctx: MutationCtx, userId: Id<"users">, atStart: boolea
     : `${used} It starts fresh on ${reset}, or write to us for more.`;
 }
 
+/** Why the Free plan's gate (freeGate.ts) stopped a turn, in the person's
+ *  words. A `verify` stop mails the code when its line is written, so a
+ *  routine that repeats a stop the conversation already shows sends none. */
+function freeNotice(ctx: MutationCtx, userId: Id<"users">, refusal: FreeRefusal): Notice {
+  if (refusal.kind === "verify") {
+    return {
+      kind: "verify",
+      line: async () => {
+        await offerEmailCode(ctx, userId);
+        return `Before I start, please confirm your email. I sent a 6-digit code to ${refusal.email}. Enter it here and I'll pick this up right away.`;
+      },
+    };
+  }
+  return {
+    kind: "limit",
+    line: async () => {
+      const planOffer = billingStatus().plans.length > 0 ? " You can move to a paid plan from Plan to keep going." : "";
+      if (refusal.kind === "mailbox") {
+        return `This email address already has a Free plan on another Codecast account, so I can't work on this here.${planOffer || " Sign in with that account to keep going."}`;
+      }
+      const user = await ctx.db.get(userId);
+      return `I'm very busy today, so Free requests are paused until ${dayIn(refusal.resumesAt, user?.timezone)}.${planOffer}`;
+    },
+  };
+}
+
+/** Takes up a conversation again after the person cleared the stop its last
+ *  turn ended on (an outage the engine retries, an email now confirmed): a
+ *  turn with no new input that carries on from the one that stopped. Only
+ *  while the conversation still ends on that turn's notice: once the person
+ *  wrote, or anything else happened, their own input decides what runs. */
+export async function resumeAfterNotice(ctx: MutationCtx, conversationId: Id<"conversations">, after?: Id<"assistant_turns">): Promise<LeaseOutcome | null> {
+  const last = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conversationId))
+    .order("desc")
+    .first();
+  const key = last?.message_uuid?.startsWith(noticeUuid("")) ? last.message_uuid.slice(noticeUuid("").length) : null;
+  const turnId = key ? ctx.db.normalizeId("assistant_turns", key) : null;
+  if (!turnId || (after && turnId !== after)) return null;
+  return await leaseTurn(ctx, conversationId, { continues: turnId });
+}
+
 // ----------------------------------------------------------------- the gate
 
 export type { AllowScope, RuleView } from "@platform/assistant";
@@ -473,35 +524,14 @@ export function alwaysCovers(call: Pick<PendingCallView, "name" | "label">, scop
   return stepAsk({ name: call.name, input: {} }) ?? call.label ?? humanLabel(call.name);
 }
 
-/** When a routine call would first run, read the way the tool reads it:
- *  days and a time on the person's clock (firstCadenceRun), else first_run.
- *  Null when the input names neither. */
-function routineFirstRun(input: Record<string, unknown>, timezone: string | null | undefined, now: number): number | null {
-  const weekdays = Array.isArray(input.days) ? weekdayNumbers(input.days.map(String)) : [];
-  const minutes = typeof input.time === "string" ? clockMinutes(input.time) : null;
-  if (weekdays.length && minutes !== null) {
-    return firstCadenceRun(cadenceOf(minutes, timezone, weekdays), now, typeof input.starts_on === "string" ? input.starts_on : undefined);
-  }
-  const at = typeof input.first_run === "string" ? Date.parse(input.first_run) : Number.NaN;
-  return Number.isNaN(at) ? null : at;
-}
-
 /** What the yes on a card does, in the person's words. A routine's yes says
- *  when it starts, from today ("today at 8:00 AM"), that it keeps going until
- *  paused on Routines, and where each run arrives; the card's When line
- *  already says how often. A write that could be always allowed is "just this
- *  time", set against the Always allow below it. */
-export function approveWords(
-  call: Pick<PendingCallView, "name" | "input">,
-  alwaysOffered: boolean,
-  opts: { timezone?: string | null; now?: number } = {},
-): string {
+ *  only what the card's summary and When line leave out: that a repeating one
+ *  runs until paused, and where each run arrives. A write that could be
+ *  always allowed is "just this time", set against the Always allow below it. */
+export function approveWords(call: Pick<PendingCallView, "name" | "input">, alwaysOffered: boolean): string {
   if (call.name === "schedule_routine") {
-    const now = opts.now ?? Date.now();
-    const first = routineFirstRun(call.input, opts.timezone, now);
     const hours = call.input.repeat_every_hours;
-    const repeats = (Array.isArray(call.input.days) && call.input.days.length > 0) || (typeof hours === "number" && hours > 0);
-    return routineYesWords(first === null ? "" : firstRunWords(first, opts.timezone, now), repeats);
+    return routineYesWords((Array.isArray(call.input.days) && call.input.days.length > 0) || (typeof hours === "number" && hours > 0));
   }
   return alwaysOffered ? "Just this time." : "Go ahead.";
 }
@@ -515,7 +545,7 @@ async function askApproval(ctx: MutationCtx, conversation: Doc<"conversations">,
   const scope = call.risk === "write" ? allowScope(call) : NEVER;
   const timezone = (await ctx.db.get(conversation.user_id))?.timezone;
   const options = [
-    { label: APPROVE, description: approveWords(call, scope.kind !== "never", { timezone }) },
+    { label: APPROVE, description: approveWords(call, scope.kind !== "never") },
     ...(scope.kind === "never" ? [] : [{ label: ALWAYS_ALLOW, description: `${alwaysCovers(call, scope)} from now on without asking.` }]),
     { label: DECLINE, description: "Don't do it." },
   ];
@@ -526,7 +556,9 @@ async function askApproval(ctx: MutationCtx, conversation: Doc<"conversations">,
     options,
     // Times in the draft read on the person's own clock (their profile's
     // zone), and a short field the question already quotes is not repeated.
-    context_md: approvalContext(call.input, { timezone, question }),
+    // A call that looks harmless says why it asks (a page the person did
+    // not name) above the draft.
+    context_md: [stepAskWhy(call), approvalContext(call.input, { timezone, question })].filter(Boolean).join("\n\n"),
     blocking: true,
   });
   if (!asked?.id) throw new Error(asked?.error ?? "The approval could not be asked");
@@ -983,19 +1015,11 @@ async function providerChain(ctx: MutationCtx, turn: Turn): Promise<number> {
 }
 
 /** The engine trying a turn again by itself after no provider could serve
- *  it. It runs only while the conversation still ends on that turn's notice:
- *  once the person wrote, or anything else happened, their own input decides
- *  what runs. */
+ *  it (resumeAfterNotice). */
 export const retry = internalMutation({
   args: { conversation_id: v.id("conversations"), after: v.id("assistant_turns") },
   handler: async (ctx, args): Promise<null> => {
-    const last = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", args.conversation_id))
-      .order("desc")
-      .first();
-    if (last?.message_uuid !== noticeUuid(String(args.after))) return null;
-    await leaseTurn(ctx, args.conversation_id, { continues: args.after });
+    await resumeAfterNotice(ctx, args.conversation_id, args.after);
     return null;
   },
 });
