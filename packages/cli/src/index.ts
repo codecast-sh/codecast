@@ -113,7 +113,9 @@ import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
   resolveWorkspaceForWrite,
+  scopeFlagFor,
   workspaceArgs,
+  workspaceFromKey,
   workspaceScope,
   workspaceLabel,
   workspaceHasFeature,
@@ -18406,10 +18408,17 @@ plan
     const createdTasks: Array<{ short_id: string; title: string }> = [];
     say(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
 
+    // Where the plan actually landed: this create names no workspace, so the
+    // server decided (the session's team, else the directory rule). The steps
+    // are filed there explicitly rather than re-derived, and the next step
+    // printed below carries the scope a read of it needs (scopeFlagFor).
+    let readScope = "";
     if (steps) {
       const deps = taskGraphDeps();
+      const filed = await cliPost("/cli/plans/get", { short_id: result.short_id });
+      readScope = scopeFlagFor(workspaceFromKey(await workspaceRoster(), filed?.workspace), await readWorkspace());
       try {
-        const base = planStepBase(deps, { human: options.human, sessionId, plan: { project_id: body.project_id } });
+        const base = planStepBase(deps, { human: options.human, sessionId, plan: { ...filed, ...(body.project_id ? { project_id: body.project_id } : {}) } });
         createdTasks.push(...(await createPlanSteps(deps, result.short_id, steps, { base, say })));
       } catch (err) {
         console.error((err as Error).message);
@@ -18419,7 +18428,7 @@ plan
     }
     // The way forward closes the output, after any steps.
     if (sessionId && !options.fromSession) say(fmt.muted(`  Run ${c.cyan}cast plan bind ${result.short_id}${c.reset} to bind this session to the plan`));
-    if (steps) say(fmt.muted(`  ${c.cyan}cast task ready --plan ${result.short_id} --claim${c.reset} takes the first ready step`));
+    if (steps) say(fmt.muted(`  ${c.cyan}cast task ready --plan ${result.short_id}${readScope} --claim${c.reset} takes the first ready step`));
     if (options.json) printJson({ short_id: result.short_id, title, tasks: createdTasks });
   });
 
