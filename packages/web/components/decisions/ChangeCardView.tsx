@@ -179,11 +179,23 @@ export const cardAskedQuestion = (card: ChangeCard, question: string | undefined
  * line: the title and the row's facts). `href` makes a
  * row's change its link; `folded` keeps only the change.
  */
-export function ChangeCardHeadline({ card, question, size = "title", facts, href, folded = false, className = "" }: { card: ChangeCard; question?: string; size?: "title" | "card" | "row"; facts?: SepItem[]; href?: string; folded?: boolean; className?: string }) {
+/** `questionFirst`: the decision page, where the question asked is the
+ *  headline ("Ship the fix for C117?") and the change reads under it. */
+export function ChangeCardHeadline({ card, question, size = "title", facts, href, folded = false, questionFirst = false, className = "" }: { card: ChangeCard; question?: string; size?: "title" | "card" | "row"; facts?: SepItem[]; href?: string; folded?: boolean; questionFirst?: boolean; className?: string }) {
   const asked = cardAskedQuestion(card, question);
   // A card written for a cold reader leads with its plain headline and the one
   // sentence saying what the affected part is; older cards lead with the change.
   const title = card.headline || card.change;
+  if (questionFirst && asked && size === "title" && !folded) {
+    return (
+      <div className={`cc-head cc-head-title ${className}`}>
+        <h1 className="cc-change cc-change-title" data-card-question>{asked}</h1>
+        <p className="cc-change-sub" data-card-change>{title}</p>
+        {card.context && <p className="cc-context" data-card-context>{card.context}</p>}
+        <ChangeCardCause card={card} brief={false} facts={facts} />
+      </div>
+    );
+  }
   const change = size === "title" ? <h1 className="cc-change cc-change-title">{title}</h1>
     : size === "card" ? <p className="cc-change">{title}</p>
     : href ? <Link href={href} className="cc-line-change" title={title}>{title}</Link>
@@ -345,6 +357,22 @@ function ProofPair({ before, after }: { before: boolean; after: boolean }) {
  * fixed case keeps its before and after values on its line; several keep
  * theirs on hover.
  */
+/** A test runner's tally in its own output ("4 pass 2 fail", "6 passed, 0 failed"), the last one it printed. */
+export function runnerTally(text: string | undefined): { pass: number; fail: number } | null {
+  const all = [...(text ?? "").matchAll(/(\d+)\s+pass(?:ed)?\b[\s,]*(\d+)\s+fail(?:ed)?\b/gi)];
+  const m = all[all.length - 1];
+  return m ? { pass: Number(m[1]), fail: Number(m[2]) } : null;
+}
+
+/** A case whose before and after are a test runner's whole log reads as its
+ *  counts ("2 failing → 6 of 6 passing"); null when either side is not one. */
+export function runnerChange(before: string | undefined, after: string | undefined): string | null {
+  const b = runnerTally(before);
+  const a = runnerTally(after);
+  if (!b || !a) return null;
+  return `${b.fail} failing \u2192 ${a.pass} of ${a.pass + a.fail} passing`;
+}
+
 function ProofStrip({ card, summarized }: { card: ChangeCard; summarized: boolean }) {
   const summary = proofSummary(card.proof);
   const after = new Map(card.proof.after.map((c) => [c.name, c]));
@@ -371,15 +399,31 @@ function ProofStrip({ card, summarized }: { card: ChangeCard; summarized: boolea
       </div>
       {!empty && (
         <ol className="cc-proof">
-          {fixed.map((b, i) => (
-            <li key={b.name} className="cc-proof-row is-fixed" style={{ ["--i" as any]: i }} data-cc-proof-fixed>
-              <ProofPair before={false} after />
-              <span className="cc-proof-fixed-name">
-                <span className="cc-proof-name" title={[b.name, values(b)].filter(Boolean).join(": ")}>{names.split(b.name).leaf}</span>
-                {fixed.length === 1 && values(b) && <span className="cc-proof-fixed-vals" data-cc-proof-values>{values(b)}</span>}
-              </span>
-            </li>
-          ))}
+          {fixed.map((b, i) => {
+            // A runner's log reads as its counts, the log itself one click away.
+            const counts = runnerChange(b.detail, after.get(b.name)?.detail);
+            return (
+              <li key={b.name} className="cc-proof-row is-fixed" style={{ ["--i" as any]: i }} data-cc-proof-fixed>
+                <ProofPair before={false} after />
+                <span className="cc-proof-fixed-name">
+                  <span className="cc-proof-name" title={counts ? b.name : [b.name, values(b)].filter(Boolean).join(": ")}>{names.split(b.name).leaf}</span>
+                  {counts ? <span className="cc-proof-fixed-vals" data-cc-proof-counts>{counts}</span>
+                    : fixed.length === 1 && values(b) && <span className="cc-proof-fixed-vals" data-cc-proof-values>{values(b)}</span>}
+                </span>
+                {counts && (
+                  <details className="cc-proof-log" data-cc-proof-log>
+                    <summary>Test output</summary>
+                    <div className="cc-proof-log-body">
+                      <div className="cc-proof-log-head">Before the change</div>
+                      <pre>{b.detail}</pre>
+                      <div className="cc-proof-log-head">After</div>
+                      <pre>{after.get(b.name)?.detail}</pre>
+                    </div>
+                  </details>
+                )}
+              </li>
+            );
+          })}
           {still.map((b, i) => {
             const a = after.get(b.name);
             // A row still red says so once, in its own words: red to red
