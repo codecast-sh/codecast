@@ -8,7 +8,8 @@ import type { Id } from "./_generated/dataModel";
  * The local tier of codecast mods (plan pl-839): the half of a mod that the
  * daemon runs on a machine the author owns. This module is the bridge between
  * that half and the app. A daemon fetches the local code of its user's
- * enabled mods (it runs only versions approved on that device), publishes
+ * enabled mods (and runs each unless it is turned off for that machine),
+ * reports what each is doing there, publishes
  * values the sandboxed half reads ($.publish / $.local.get), and claims and
  * answers the calls the sandboxed half makes ($.local.call).
  */
@@ -37,10 +38,47 @@ export const cliLocalMods = query({
     return {
       mods: rows
         .filter((r: any) => r.local_code)
-        .map((r: any) => ({ id: r._id, name: r.name, title: r.title, rev: r.rev, enabled: r.enabled, local_hash: r.local_hash, local_code: r.local_code, manifest: r.manifest })),
+        .map((r: any) => ({ id: r._id, name: r.name, title: r.title, rev: r.rev, enabled: r.enabled, local_hash: r.local_hash, local_code: r.local_code, manifest: r.manifest, local_off: r.local_off ?? [], local_devices: r.local_devices ?? [] })),
     };
   },
 });
+
+/** A daemon says what a local half is doing on its machine. Written only on a change: every viewer syncs the mod row. */
+export const cliReportLocal = mutation({
+  args: { api_token: v.string(), name: v.string(), device_name: v.string(), state: v.union(v.literal("running"), v.literal("off"), v.literal("failed")), error: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await tokenUser(ctx, args.api_token);
+    if (!userId) return { error: "Unauthorized" };
+    const mod = await ownMod(ctx, userId, args.name);
+    if (!mod) return { error: `no mod named "${args.name}"` };
+    const error = args.state === "failed" ? args.error?.slice(0, 500) : undefined;
+    const list: any[] = mod.local_devices ?? [];
+    const prev = list.find((d) => d.device === args.device_name);
+    if (prev && prev.state === args.state && prev.error === error) return { ok: true, unchanged: true };
+    const next = [...list.filter((d) => d.device !== args.device_name), { device: args.device_name, state: args.state, ...(error ? { error } : {}), at: Date.now() }];
+    await ctx.db.patch(mod._id, { local_devices: next });
+    return { ok: true };
+  },
+});
+
+/** Turn a local half on or off for one machine. The same field the Mods page writes. */
+export const cliSetLocalDevice = mutation({
+  args: { api_token: v.string(), name: v.string(), device_name: v.string(), on: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await tokenUser(ctx, args.api_token);
+    if (!userId) return { error: "Unauthorized" };
+    const mod = await ownMod(ctx, userId, args.name);
+    if (!mod?.local_code) return { error: `${args.name} has no local half (its manifest names one under "local")` };
+    await ctx.db.patch(mod._id, { local_off: withDevice(mod.local_off, args.device_name, !args.on) });
+    return { ok: true };
+  },
+});
+
+/** The off-list with `device` added or removed. */
+export function withDevice(list: string[] | undefined, device: string, off: boolean): string[] {
+  const rest = (list ?? []).filter((d) => d !== device);
+  return off ? [...rest, device] : rest;
+}
 
 /** One value from a local half, latest write wins. */
 export const cliPublish = mutation({

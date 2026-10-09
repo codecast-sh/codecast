@@ -136,7 +136,7 @@ test("Approve on a group stages one answer over every record in it, named by the
   expect(batch()).toEqual([["group:project:pr-901", "approve", "", 20, 20, "Matching Engine & Funnel"]]);
   expect(calls).toEqual([]);
   expect(a().getAttribute("data-subject-answer")).toBe("approve");
-  expect(a().querySelector("[data-staged]")!.textContent).toBe("Approved. Applies when you send.Undo");
+  expect(a().querySelector("[data-staged]")!.textContent).toBe("Approval added to your reply. Nothing changes until you send it.Undo");
   expect(a().querySelector("[data-subject-approve]")).toBeNull();
   expect(c.querySelector("[data-approve-rest]")!.textContent).toBe("Approve the rest");
   click(a().querySelector("[data-staged-undo]")!);
@@ -177,7 +177,7 @@ test("Reject on a group opens the field with the group's ask; the words and Ente
   expect(batch()).toEqual([["group:project:pr-902", "reject", "Leave #20 out", 18, 18, "Callers & Call Management"]]);
   key(ta, "Enter");
   expect(b().querySelector("[data-subject-reply-field]")).toBeNull();
-  expect(b().querySelector("[data-staged]")!.textContent).toBe("Rejected. Sent when you send.UndoYou: Leave #20 out");
+  expect(b().querySelector("[data-staged]")!.textContent).toBe("Rejection added to your reply. Goes out when you send it.UndoYou: Leave #20 out");
   expect(b().querySelector("[data-subject-you]")!.getAttribute("data-subject-you")).toBe("reject");
   // Reply asks the same way about these records.
   click(group(c, "plan:pl-911").querySelector("[data-subject-reply]")!);

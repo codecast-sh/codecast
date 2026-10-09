@@ -1,51 +1,68 @@
-// The org screen (docs/architecture/org-staffing.md S41) mounted in jsdom
-// against a seeded store, the embed and the map stubbed: the two columns and
-// what each gets, the strip and its click scrolling the thread to the card,
-// `?proposal=` and `&focus=` on arrival, a foreign proposal expanded in the
-// strip, the link line, the no-head column, the read states, the stacked
-// layout and its switch, the map alone beside the head's own thread, the
-// history and compose links, hover to the map, and the dev preview.
+// The Org screen (essence spec §3.2, §5) mounted in jsdom against a seeded
+// store, the surface, the sheets and the embed stubbed: the header, one
+// resizable panel beside the surface that the address alone opens (an
+// object, `?session=`, `?proposal=`), opens that push history and a close
+// that pushes the view, Esc, the panel's stored size and its reset, the
+// narrow screen where the panel fills, the read views' addresses, History,
+// compose, the link line, and New ▸ Goal.
 // Run: bun test --timeout 240000 components/org/OrgScreen.mount.test.tsx
 process.env.DEV = "1";
-import { test, expect, afterAll, mock } from "bun:test";
+import { test, expect, afterAll, afterEach, mock } from "bun:test";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+
+// The avatar art is image files. Re-evaluating a module graph for a later
+// mock.module, bun can read one as code and fail the whole file, so the
+// module holding the art is stubbed before anything loads it.
+const { AVATAR_KEYS } = await import("@codecast/shared/contracts/orgAvatars");
+const byKey = <T,>(f: (k: string) => T) => Object.fromEntries(AVATAR_KEYS.map((k) => [k, f(k)]));
+mock.module("../../lib/orgAvatars", () => ({ AVATAR_URLS: byKey((k) => `/avatars/${k}.webp`), AVATAR_LABELS: byKey((k) => k), AVATAR_ART: byKey(() => () => null), avatarLength: (size: number | string) => (typeof size === "number" ? `${size}px` : size) }));
 
 const { JSDOM } = await import("jsdom");
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/org", pretendToBeVisual: true });
-for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement", "Element", "Node", "NodeFilter", "MutationObserver", "CustomEvent", "Event", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "localStorage", "sessionStorage", "DOMMatrixReadOnly"]) {
+for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLAnchorElement", "HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "SVGElement", "Element", "Node", "NodeFilter", "MutationObserver", "CustomEvent", "Event", "MouseEvent", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "localStorage", "sessionStorage", "DOMMatrixReadOnly", "DOMRect"]) {
   const v = (dom.window as any)[key];
   if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true, writable: true });
 }
 (globalThis as any).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
+// The split's Group builds its observer from the element's own window.
+(dom.window as any).ResizeObserver ??= (globalThis as any).ResizeObserver;
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (dom.window as any).HTMLElement.prototype.scrollIntoView = () => {};
+// jsdom lays nothing out; the Group needs a width to take a layout.
+Object.defineProperty((dom.window as any).HTMLElement.prototype, "offsetWidth", { configurable: true, get() { return 1440; } });
 afterAll(() => { delete process.env.DEV; closeDomWindow(dom); });
 
 const React = await import("react");
 const h = React.createElement;
 const { act } = React;
 
-// The screen's world: its address (written back through the router), its
-// width, and what the tree feeder reports.
+// The screen's world: its address (written back through the router) and its width.
+let path = "/org";
 let search = "";
+const pushed: string[] = [];
 const replaced: string[] = [];
-const router = { push(path: string) { replaced.push(path); }, replace(path: string) { replaced.push(path); search = path.split("?")[1] ?? ""; } };
-const env = { width: 1440 as number | null, ready: true, missing: false, refused: false, error: null as { message: string } | null };
+const go = (to: string) => { const [p, qs = ""] = to.split("?"); path = p; search = qs; };
+const router = { push(to: string) { pushed.push(to); go(to); }, replace(to: string) { replaced.push(to); go(to); } };
+/** The route params the tables hand the page: `org/:id` or `org/:view/:id`. */
+const paramsOf = () => {
+  const [, a, b] = /^\/org(?:\/([^/]+))?(?:\/([^/]+))?$/.exec(path) ?? [];
+  return b ? { view: a, id: b } : a ? { id: a } : {};
+};
+const env = { width: 1440 as number | null, orgOn: true, ready: true, missing: false, refused: false, error: null as { message: string } | null };
 const calls: string[] = [];
 const embeds: any[] = [];
-let hover: ((id: string | null) => void) | null = null;
 
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
-mock.module("next/navigation", () => ({ useRouter: () => router, useSearchParams: () => new URLSearchParams(search), usePathname: () => "/org" }));
-const realOpen = { ...(await import("../../hooks/useOpenLinkedSession")) };
-mock.module("../../hooks/useOpenLinkedSession", () => ({ ...realOpen, useOpenLinkedSession: () => (row: { _id: string }) => calls.push(`open:${row._id}`) }));
+mock.module("next/navigation", () => ({ useRouter: () => router, useSearchParams: () => new URLSearchParams(search), usePathname: () => path, useParams: () => paramsOf() }));
 mock.module("../../hooks/useMeasuredWidth", () => ({ useMeasuredWidth: () => ({ width: env.width, measureRef: () => {} }) }));
 const realPhone = { ...(await import("../../hooks/useIsPhone")) };
 mock.module("../../hooks/useIsPhone", () => ({ ...realPhone, useIsPhone: () => false, useMinWidth: () => true }));
+const realGate = { ...(await import("../../hooks/useOrgFeatureOn")) };
+mock.module("../../hooks/useOrgFeatureOn", () => ({ ...realGate, useOrgFeatureOn: () => env.orgOn }));
 const realSwitch = { ...(await import("../../hooks/useSwitchWorkspace")) };
 mock.module("../../hooks/useSwitchWorkspace", () => ({ ...realSwitch, useSwitchWorkspace: () => async (teamId: string | null) => { calls.push(`switch:${teamId}`); } }));
 const convexReact = { ...(await import("convex/react")) };
-mock.module("convex/react", () => ({ ...convexReact, useQuery: () => undefined, useQueries: () => ({}), useMutation: () => async () => ({ roles: [], proposals: 0 }) }));
+mock.module("convex/react", () => ({ ...convexReact, useQuery: () => undefined, useQueries: () => ({}), useMutation: () => async () => ({ roles: [], proposals: 0 }), useConvex: () => undefined }));
 const noThrow = { ...(await import("../../hooks/useQueryNoThrow")) };
 mock.module("../../hooks/useQueryNoThrow", () => ({ ...noThrow, useQueryNoThrow: () => ({ data: undefined, error: undefined, retry: () => {} }) }));
 const { useInboxStore } = await import("../../store/inboxStore");
@@ -54,397 +71,432 @@ mock.module("../../hooks/useSyncOrgTree", () => ({ ...realTree, useSyncOrgTree: 
 const realProposals = { ...(await import("../../hooks/useSyncOrgProposals")) };
 // The get feeder answers "no such proposal" for a ref the store does not hold.
 mock.module("../../hooks/useSyncOrgProposals", () => ({ ...realProposals, useSyncOrgProposal: (ref: string | null) => ({ ready: !!ref, missing: !!ref && !Object.values(useInboxStore.getState().orgProposals).some((p: any) => p.short_id === ref) }), useSyncOrgProposals: () => ({ ready: true, missing: false }) }));
-const realHealth = { ...(await import("../../hooks/useSyncOrgHealth")) };
-mock.module("../../hooks/useSyncOrgHealth", () => ({ ...realHealth, useSyncOrgHealth: () => ({ health: null, ready: true, missing: false, refresh: async () => {} }) }));
-// The embed reports what it was handed; the hire card keeps its one button.
+// The embed reports what it was handed.
 const realAnchor = { ...(await import("../anchor/AnchorConversation")) };
 mock.module("../anchor/AnchorConversation", () => ({
   ...realAnchor,
-  AnchorConversation: (props: any) => { embeds.push(props); return h("div", { "data-embed": props.conversationId, "data-embed-jump": props.jump ? `${props.jump.messageId ?? ""}|${props.jump.timestamp ?? ""}|${props.jump.nonce}` : "", "data-embed-find": props.jump?.find ?? "" }); },
-  HireHeadOfPeopleCard: () => h("div", { "data-hire-card": true }, h("button", { type: "button" }, "Hire Head of People")),
+  AnchorConversation: (props: any) => { embeds.push(props); return h("div", { "data-embed": props.conversationId, "data-embed-jump": props.jump ? `${props.jump.messageId ?? ""}|${props.jump.timestamp ?? ""}` : "", "data-embed-find": props.jump?.find ?? "" }); },
 }));
-// The map echoes what the screen hands it.
-const realMap = { ...(await import("./OrgMap")) };
-mock.module("./OrgMap", () => ({ ...realMap, OrgMap: (p: any) => h("div", { "data-org-map": p.filter, "data-map-proposed": p.asProposed ? "on" : "off", "data-map-highlight": p.highlightChangeId ?? "", "data-map-changes": p.proposal?.changes.length ?? 0, "data-map-focus": p.focusTarget ? `${p.focusTarget.id}#${p.focusTarget.seq}` : "" }) }));
-mock.module("./OrgGraph", () => ({ OrgGraph: () => h("div", { "data-graph": true }) }));
-// The feeders report their refs; the stub also lends the test the hover channel the cards use.
-const { useOrgHover } = await import("./proposalContexts");
-mock.module("./OrgProposalFeeders", () => ({ OrgProposalFeeders: ({ refs }: { refs: string[] }) => { calls.push(`feed:${refs.join(",")}`); hover = useOrgHover(); return null; } }));
-// The card internals are the cards worker's; the preview draws one stub per proposal.
+// The surface is the canvas worker's: a stub that says what it was asked to show.
+mock.module("../company/CompanyDocument", () => ({ CompanyDocument: (p: any) => h("div", { "data-doc": p.filter, "data-doc-selected": p.selected ?? "" }) }));
+// The sheets' bodies are the sheet workers'; the frame is the panel's own.
+const { SheetFrame } = await import("./company/SheetFrame");
+const { useSheetHost } = await import("./company/sheetHost");
+const renames: string[] = [];
+const SEAT = { conversationId: "fixture-growth-conv", name: "Head of Growth", role: null, caption: null };
+const stubSheet = (kind: string) => function Stub({ sheet }: any) {
+  const host = useSheetHost();
+  return h(SheetFrame, { kind, idRef: sheet.ref, glyph: null, title: `Sheet ${sheet.ref}`, onRename: (t: string) => renames.push(`${sheet.ref}:${t}`), crumbs: [{ kind: "initiative", ref: "", title: "Fixture" }], talk: kind === "project" ? SEAT : null } as any,
+    h("p", { "data-stub-sheet": sheet.ref, "data-stub-intent": host?.intent ?? "" }, sheet.ref),
+    h("button", { type: "button", "data-stub-talk": sheet.ref, onClick: () => host?.talk(sheet) }, "talk"),
+    h("button", { type: "button", "data-stub-talk-role": sheet.ref, onClick: () => host?.talk({ kind: "role", ref: "or-1" }) }, "talk to growth"),
+    h("button", { type: "button", "data-stub-open-session": sheet.ref, onClick: () => host?.open({ kind: "session", id: "fixture-anchor-conv" }) }, "session"),
+    h("button", { type: "button", "data-stub-pick-lead": sheet.ref, onClick: () => host?.open({ kind: "project", ref: "pj-k3x9", intent: "pick-lead" }) }, "pick"));
+};
+mock.module("./company/sheetRegistry", () => ({ SHEETS: { initiative: stubSheet("initiative"), project: stubSheet("project"), role: stubSheet("role"), person: stubSheet("person") } }));
+mock.module("./OrgProposalFeeders", () => ({ OrgProposalFeeders: ({ refs }: { refs: string[] }) => { calls.push(`feed:${refs.join(",")}`); return null; } }));
 const realCard = { ...(await import("./ProposalCard")) };
 mock.module("./ProposalCard", () => ({ ...realCard, ProposalBody: ({ proposal }: any) => h("div", { "data-proposal-body": proposal.short_id }) }));
-mock.module("../EntityObjectCard", () => ({ EntityObjectCard: ({ refId }: { refId: string }) => h("div", { "data-card-stub": refId }) }));
+const { useReviewComposer } = await import("../reviewContext");
+const realObjectCard = { ...(await import("../EntityObjectCard")) };
+mock.module("../EntityObjectCard", () => ({ ...realObjectCard, EntityObjectCard: ({ refId }: { refId: string }) => h("div", { "data-card-stub": refId, "data-card-batch": useReviewComposer()?.conversationId ?? "" }) }));
 mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => h("p", null, content) }));
 
 const { createRoot } = await import("react-dom/client");
 const { OrgScreen } = await import("./OrgPage");
-const { ORG_FIXTURE, ORG_FIXTURE_WITH_HEAD } = await import("./orgFixture");
+const { LinkLine } = await import("./OrgDetailPanel");
+const { ORG_FIXTURE_WITH_HEAD } = await import("./orgFixture");
 
 const HEAD = "fixture-head-conv";
 const AUTHOR = { kind: "role" as const, id: "fixture-role-head", name: "Head of People", handle: "head-of-people", short_id: "or-9", avatar: "owl" };
 const T0 = 1_700_000_000_000;
-const row = (n: number, extra: Record<string, unknown> = {}) => ({ _id: `p${n}`, short_id: `op-${n}`, team_id: "fixture-team", author: AUTHOR, title: `Proposal ${n}`, summary_md: "", mode: "review", status: "open", created_at: T0 + n * 60_000, thread: { conversation_id: HEAD }, counts: { total: 3, decided: 0, applied: 0, failed: 0, skipped: 0 }, ...extra });
+/** The active team, as a real id: the screen reads proposals for the
+ *  workspace the sidebar names (activeOrgWorkspace). */
+const TEAM = "k57fixture0000000000000000000000";
+const row = (n: number, extra: Record<string, unknown> = {}) => ({ _id: `p${n}`, short_id: `op-${n}`, team_id: TEAM, author: AUTHOR, title: `Proposal ${n}`, summary_md: "", mode: "review", status: "open", created_at: T0 + n * 60_000, thread: { conversation_id: HEAD }, counts: { total: 3, decided: 0, applied: 0, failed: 0, skipped: 0 }, ...extra });
 const change = (proposal_id: string, seq: number) => ({ _id: `${proposal_id}-c${seq}`, proposal_id, seq, change: { kind: "role", name: `Role ${seq}`, handle: `role-${seq}`, reports_to: "me", scope: { projects: [] } }, rationale: "", evidence: [], status: "proposed" });
 const MESSAGES = [
   { _id: "m1", role: "assistant", content: "Here is my review of the org.", timestamp: T0 },
   { _id: "m2", role: "assistant", content: "op-7", timestamp: T0 + 1 },
-  { _id: "m3", role: "user", content: "Thanks, looking.", timestamp: T0 + 2 },
+  { _id: "m3", role: "user", content: "Thanks, looking.", timestamp: T0 + 10 * 60_000 },
 ];
 function seed(overrides: Record<string, unknown> = {}) {
-  useInboxStore.setState({
-    orgTree: ORG_FIXTURE_WITH_HEAD,
-    orgProposals: { p7: row(7), p8: row(8, { thread: { conversation_id: "other-conv" } }), p9: row(9, { status: "resolved" }), p10: row(10, { team_id: "other-team" }) },
+  const state: Record<string, any> = {
+    orgTree: { ...ORG_FIXTURE_WITH_HEAD, workspace: { ...ORG_FIXTURE_WITH_HEAD.workspace, id: TEAM } },
+    orgProposals: { p7: row(7), p8: row(8, { thread: { conversation_id: "other-conv" } }), p9: row(9, { thread: null }), p10: row(10, { team_id: "other-team" }) },
     orgProposalChanges: Object.fromEntries([1, 2, 3].map((n) => [`p7-c${n}`, change("p7", n)])),
     messages: { [HEAD]: MESSAGES },
     conversations: {},
-    sessions: {},
+    sessions: { "fixture-anchor-conv": { _id: "fixture-anchor-conv", title: "Fix the deploy" } },
     reviewComments: {},
     orgFocusChangeId: null,
     currentUser: undefined,
     clientStateInitialized: true,
-    clientState: { ui: { org_intro_seen: true } },
+    clientState: { ui: { org_intro_seen: true, active_team_id: TEAM } },
     ...overrides,
-  } as any);
+  };
+  useInboxStore.setState(state as any);
 }
 
 const q = (sel: string, root: ParentNode = document) => root.querySelector(sel) as HTMLElement | null;
 const qa = (sel: string, root: ParentNode = document) => [...root.querySelectorAll(sel)] as HTMLElement[];
-const lastEmbed = () => embeds.at(-1)!;
-const jumpOf = (el: ParentNode) => q("[data-embed]", el)?.getAttribute("data-embed-jump") ?? null;
-const findOf = (el: ParentNode) => q("[data-embed]", el)?.getAttribute("data-embed-find") ?? null;
+const grow = (el: ParentNode, id: string) => q(`#${id}[data-panel]`, el)!.style.flexGrow;
+const press = (key: string) => act(async () => { window.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
 
-const { TabParamsCtx } = await import("../../lib/tabParams");
-type TabCtx = NonNullable<React.ContextType<typeof TabParamsCtx>>;
-/** The pane scope a stage leaf (or a plain tab, with no leafId) hands the page. */
-const tabScope = (tabId: string, leafId?: string): TabCtx => ({ tabId, pathname: "/org", params: {}, searchParams: new URLSearchParams(search), isActive: true, isVisible: true, leafId });
+/** Screens a failed test left mounted: they would keep answering the shared address. */
+const live = new Set<() => Promise<void>>();
+afterEach(async () => { for (const off of [...live]) await off(); live.clear(); });
 
-async function mount(address = "", scope: TabCtx | null = null) {
-  search = address;
+async function mount(address = "/org") {
+  go(address);
+  pushed.length = 0;
   replaced.length = 0;
   embeds.length = 0;
   calls.length = 0;
   const el = document.createElement("div");
   document.body.appendChild(el);
   const root = createRoot(el);
-  const render = () => act(async () => { root.render(scope ? h(TabParamsCtx.Provider, { value: scope }, h(OrgScreen)) : h(OrgScreen)); });
+  const render = () => act(async () => { root.render(h(OrgScreen)); });
   await render();
-  return { el, render, unmount: async () => { await act(async () => { root.unmount(); }); el.remove(); } };
+  // The split moves a microtask after it renders.
+  await render();
+  const unmount = async () => { if (!live.delete(unmount)) return; await act(async () => { root.unmount(); }); el.remove(); };
+  live.add(unmount);
+  return { el, render, unmount };
 }
-const openRows = (el: ParentNode) => act(async () => { q("[data-org-strip-toggle]", el)!.click(); });
 
-test("wide: the head row and the strip paint from the tree, the embed gets the standing conversation whole, and the row is seeded for a cold open", async () => {
+test("/org: the header is Org, New and the menu; the canvas alone, no separator showing, no strip and no conversation", async () => {
   seed();
-  const { el, unmount } = await mount();
-  expect(el.firstElementChild!.getAttribute("data-org-screen")).toBe("wide");
-  expect(q("[data-org-conversation]", el)!.getAttribute("data-org-conversation-state")).toBe("live");
-  expect(q("[data-org-conversation-head]", el)!.textContent).toContain("Head of People");
-  expect(q("[data-org-header]", el)).not.toBeNull();
-  const embed = lastEmbed();
-  expect(embed.conversationId).toBe(HEAD);
-  expect(embed.foldWorkingTurns).toBe(true);
-  expect(embed.foldBootstrap).toBe(true);
-  expect("since" in embed).toBe(false);
-  expect("openAtTop" in embed).toBe(false);
-  expect(embed.composerPlaceholder).toBe("Ask Head of People");
-  // The strip is the pinned context: the thread's sticky last prompt stays off.
-  expect(embed.stickyPrompt).toBe(false);
-  // The head row is the face and the name; the state line's one home is the thread's pinned panel.
-  expect(q("[data-org-conversation-head]", el)!.textContent).toBe("Head of People");
-  expect(q("[data-org-column='conversation']", el)).not.toBeNull();
-  expect(q("[data-org-column='map']", el)).not.toBeNull();
-  expect(useInboxStore.getState().conversations[HEAD]).toMatchObject({ _id: HEAD });
-  // The strip is one line; its rows, behind the chevron, are the open proposals of
-  // this workspace, oldest first; the resolved one and the other workspace's are not rows.
-  expect(q("[data-org-strip-head]", el)!.textContent).toBe("2 proposals wait on you·6 changes");
-  expect(q("[data-org-strip-row]", el)).toBeNull();
-  await openRows(el);
-  expect(qa("[data-org-strip-row]", el).map((r) => r.getAttribute("data-org-strip-row"))).toEqual(["op-7", "op-8"]);
-  expect(q("[data-org-strip-row='op-8']", el)!.getAttribute("data-org-strip-foreign")).toBe("true");
-  expect(q("[data-org-strip-row='op-7']", el)!.getAttribute("data-org-strip-foreign")).toBeNull();
-  // One change feeder per open proposal.
-  expect(calls.filter((c) => c.startsWith("feed:")).at(-1)).toBe("feed:op-7,op-8");
-  // The map draws the newest open proposal on this thread, with every filter off and the overlay on.
-  expect(q("[data-org-map]", el)!.getAttribute("data-org-map")).toBe("everything");
-  expect(q("[data-org-map]", el)!.getAttribute("data-map-proposed")).toBe("on");
-  expect(q("[data-org-map]", el)!.getAttribute("data-map-changes")).toBe("3");
-  // Seeing the screen sells the feature once.
-  expect(useInboxStore.getState().clientState.ui?.org_upsell_seen).toBe(true);
-  // The header carries the three controls and nothing about hiring.
-  expect(q("[data-org-health-link]", el)!.getAttribute("href")).toBe("/org?view=health");
-  expect(q("[data-org-add-role]", el)).not.toBeNull();
-  expect(q("[data-org-more]", el)).not.toBeNull();
-  expect(q("[data-org-header]", el)!.textContent).not.toMatch(/Propose an org now|Hire/);
-  await unmount();
+  const screen = await mount();
+  expect(q("[data-org-title]", screen.el)!.textContent).toBe("Org");
+  expect(q("[data-org-new]", screen.el)).not.toBeNull();
+  expect(q("[data-org-more]", screen.el)).not.toBeNull();
+  expect(q("[data-org-header]", screen.el)!.textContent).not.toMatch(/exists to|Fixture|Personal/);
+  expect(q("[data-doc]", screen.el)!.getAttribute("data-doc")).toBe("everything");
+  expect(q("[data-org-split]", screen.el)!.getAttribute("data-org-split")).toBe("closed");
+  expect(qa("[role=separator]", screen.el).every((s) => s.classList.contains("is-hidden"))).toBe(true);
+  expect(grow(screen.el, "org-detail")).toBe("0");
+  expect(q("[data-org-panel]", screen.el)).toBeNull();
+  expect(q("[data-embed]", screen.el)).toBeNull();
+  expect(q("[data-org-strip]", screen.el)).toBeNull();
+  // The proposals' change rows are still fed (Waits on you reads them).
+  expect(calls.filter((c) => c.startsWith("feed:")).at(-1)).toBe("feed:op-7,op-8,op-9");
+  await screen.unmount();
 });
 
-test("a strip pick scrolls the thread to the card's message, names the proposal in the address and on the line, and closes the rows; a second pick asks again; the breadcrumb's x forgets it", async () => {
-  seed();
-  const { el, render, unmount } = await mount();
-  await openRows(el);
-  await act(async () => { q("[data-org-strip-row='op-7']", el)!.click(); });
-  expect(jumpOf(el)).toBe("m2||1");
-  expect(replaced.at(-1)).toBe("/org?proposal=op-7");
-  expect(q("[data-org-strip-row]", el)).toBeNull();
-  await render();
-  expect(jumpOf(el)).toBe("m2||1");
-  expect(q("[data-org-strip-current]", el)!.getAttribute("data-org-strip-current")).toBe("op-7");
-  expect(q("[data-org-strip-current]", el)!.textContent).toContain("Proposal 7");
-  await openRows(el);
-  expect(q("[data-org-strip-row='op-7']", el)!.getAttribute("aria-current")).toBe("true");
-  await act(async () => { q("[data-org-strip-row='op-7']", el)!.click(); });
-  expect(jumpOf(el)).toBe("m2||2");
-  await act(async () => { q("[data-org-strip-clear]", el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org");
-  await render();
-  expect(q("[data-org-strip-current]", el)).toBeNull();
-  await unmount();
+test("/org/<ref>: the object opens beside the canvas, never over it, at the stored size; the canvas marks it", async () => {
+  seed({ clientState: { ui: { org_intro_seen: true, active_team_id: TEAM }, layouts: { org_detail: { detail: 40 } } } });
+  const screen = await mount("/org/in-2");
+  expect(screen.el.firstElementChild!.getAttribute("data-org-screen")).toBe("wide");
+  expect(q("[data-org-split]", screen.el)!.getAttribute("data-org-split")).toBe("open");
+  expect(q("[data-org-panel]", screen.el)!.getAttribute("data-org-panel")).toBe("initiative:in-2");
+  expect(q("[data-stub-sheet='in-2']", screen.el)).not.toBeNull();
+  // Beside: the canvas is still drawn, at the width the panel leaves it.
+  expect(q("[data-doc]", screen.el)!.getAttribute("data-doc-selected")).toBe("in-2");
+  expect([grow(screen.el, "org-canvas"), grow(screen.el, "org-detail")]).toEqual(["60", "40"]);
+  const seam = qa("[role=separator]", screen.el)[0]!;
+  expect(seam.classList.contains("cc-split")).toBe(true);
+  expect(seam.classList.contains("is-hidden")).toBe(false);
+  // No slide replays: the panel crossfades in, and nothing animates its own entrance.
+  expect(q("[data-org-panel]", screen.el)!.className).toContain("org-panel-swap");
+  expect(q(".org-sheet", screen.el)).toBeNull();
+  // The bar: the crumb leads with Org, which closes, and the close; no Back.
+  expect(q("[data-sheet-crumb-workspace]", screen.el)!.textContent).toBe("Org");
+  expect(q("[data-sheet-back]", screen.el)).toBeNull();
+  await screen.unmount();
 });
 
-test("?proposal=op-7&focus=2 on arrival: one jump, the change lit for the cards and the map, and no second jump on a re-render", async () => {
+test("the split: a drag's end is the person's size, a double-click puts back 44%, a scope page's seam is never written", async () => {
+  seed({ clientState: { ui: { org_intro_seen: true, active_team_id: TEAM }, layouts: { org: { conversation: 62, company: 38 } } } });
+  const screen = await mount("/org/in-2");
+  // No stored size yet: 44%.
+  expect(grow(screen.el, "org-detail")).toBe("44");
+  // A size from elsewhere (another window) moves the live panel.
+  await act(async () => { useInboxStore.getState().updateClientLayout("org_detail", { detail: 52 }); });
+  await screen.render();
+  expect(grow(screen.el, "org-detail")).toBe("52");
+  await act(async () => { qa("[role=separator]", screen.el)[0]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
+  expect(useInboxStore.getState().clientState.layouts?.org_detail).toEqual({ detail: 44 });
+  expect(useInboxStore.getState().clientState.layouts?.org).toEqual({ conversation: 62, company: 38 });
+  await screen.unmount();
+});
+
+test("every open pushes history; Back is the previous object; Esc and the crumb close by pushing the view", async () => {
   seed();
-  const { el, render, unmount } = await mount("proposal=op-7&focus=2");
-  expect(jumpOf(el)).toBe("m2||1");
-  // The embed lands on the card itself after the thread settles on the message (W1): the request carries the landing.
-  expect(typeof lastEmbed().jump.onSettled).toBe("function");
-  expect(() => lastEmbed().jump.onSettled()).not.toThrow();
+  const screen = await mount("/org/in-2");
+  // A Talk on a project opens its lead's conversation in the panel.
+  go("/org/pj-k3x9");
+  await screen.render();
+  await act(async () => { q("[data-sheet-talk]", screen.el)!.click(); });
+  expect(pushed.at(-1)).toBe("/org?session=fixture-growth-conv");
+  await screen.render();
+  expect(q("[data-org-panel]", screen.el)!.getAttribute("data-org-panel")).toBe("session:fixture-growth-conv");
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed")).toBe("fixture-growth-conv");
+  // The browser's Back: the address goes back, and so does the panel.
+  go("/org/pj-k3x9");
+  await screen.render();
+  expect(q("[data-org-panel]", screen.el)!.getAttribute("data-org-panel")).toBe("project:pj-k3x9");
+  // A project with no lead has no one to talk to: its Talk opens nothing.
+  const before = pushed.length;
+  await act(async () => { q("[data-stub-talk='pj-k3x9']", screen.el)!.click(); });
+  expect(pushed.length).toBe(before);
+  // A Talk to a role opens the role itself: its head over its conversation.
+  await act(async () => { q("[data-stub-talk-role='pj-k3x9']", screen.el)!.click(); });
+  expect(pushed.at(-1)).toBe("/org/or-1");
+  await screen.render();
+  // The role already open: nothing moves.
+  await act(async () => { q("[data-stub-talk-role='or-1']", screen.el)!.click(); });
+  expect(pushed.at(-1)).toBe("/org/or-1");
+  expect(pushed.filter((p) => p === "/org/or-1")).toHaveLength(1);
+  // Esc closes: the view itself is pushed.
+  pushed.length = 0;
+  await press("Escape");
+  expect(pushed).toEqual(["/org"]);
+  await screen.render();
+  // The panel folds away still showing what it held, then lets it go.
+  expect(q("[data-org-split]", screen.el)!.getAttribute("data-org-split")).toBe("closed");
+  expect(q("[data-org-split]", screen.el)!.hasAttribute("data-org-split-moving")).toBe(true);
+  await act(async () => { await new Promise((r) => setTimeout(r, 260)); });
+  expect(q("[data-org-split]", screen.el)!.hasAttribute("data-org-split-moving")).toBe(false);
+  expect(q("[data-org-panel]", screen.el)).toBeNull();
+  // Esc with nothing open does nothing.
+  await press("Escape");
+  expect(pushed).toEqual(["/org"]);
+  // The crumb's Org closes too.
+  go("/org/in-2");
+  await screen.render();
+  await act(async () => { q("[data-sheet-crumb-workspace]", screen.el)!.click(); });
+  expect(pushed.at(-1)).toBe("/org");
+  await screen.unmount();
+});
+
+test("a role opens as its head above its conversation, in one panel", async () => {
+  seed();
+  const screen = await mount("/org/or-9");
+  expect(q("[data-org-role-head] [data-stub-sheet='or-9']", screen.el)).not.toBeNull();
+  expect(q("[data-org-role-conversation]", screen.el)!.getAttribute("data-org-role-conversation")).toBe(HEAD);
+  expect(embeds.at(-1).conversationId).toBe(HEAD);
+  expect(embeds.at(-1).composerPlaceholder).toBe("Ask Head of People");
+  // A role has no Talk of its own: the panel is its conversation.
+  expect(q("[data-sheet-talk]", screen.el)).toBeNull();
+  // The Head of People is a role like any other: nothing redirects its address.
+  expect(replaced).toEqual([]);
+  await screen.unmount();
+});
+
+test("?session= opens that conversation, named in the bar, with a cold row seeded", async () => {
+  seed();
+  const screen = await mount("/org/in-2?session=fixture-anchor-conv");
+  expect(q("[data-org-panel]", screen.el)!.getAttribute("data-org-panel")).toBe("session:fixture-anchor-conv");
+  expect(q("[data-org-panel-title]", screen.el)!.textContent).toBe("Fix the deploy");
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed")).toBe("fixture-anchor-conv");
+  await act(async () => { q("[data-org-panel-close]", screen.el)!.click(); });
+  expect(pushed.at(-1)).toBe("/org");
+  // A standing conversation the inbox never seeded gets its minimal row.
+  go("/org?session=fixture-growth-conv");
+  await screen.render();
+  expect(useInboxStore.getState().conversations["fixture-growth-conv"]).toMatchObject({ _id: "fixture-growth-conv" });
+  expect(q("[data-org-panel-title]", screen.el)!.textContent).toBe("Head of Growth");
+  await screen.unmount();
+});
+
+test("?proposal= opens its thread at its card; one from another thread opens that thread; one a person posted is its card alone", async () => {
+  seed();
+  const screen = await mount("/org?proposal=op-7&focus=2");
+  expect(q("[data-org-panel-title]", screen.el)!.textContent).toBe("Proposal 7");
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed")).toBe(HEAD);
+  // The thread's rows already reach past the proposal: it lands on the card's message.
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed-jump")).toMatch(/^m2\|/);
+  // The focus lights the change for the cards.
   expect(useInboxStore.getState().orgFocusChangeId).toBe("p7-c2");
-  expect(q("[data-org-map]", el)!.getAttribute("data-map-highlight")).toBe("p7-c2");
-  expect(q("[data-org-map]", el)!.getAttribute("data-map-focus")).toMatch(/^p7-c2#\d+$/);
-  await render();
-  expect(jumpOf(el)).toBe("m2||1");
-  // Escape in the conversation clears the focus and strips the parameter.
-  await act(async () => { q("[data-org-conversation]", el)!.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-  expect(useInboxStore.getState().orgFocusChangeId).toBeNull();
-  expect(replaced.at(-1)).toBe("/org?proposal=op-7");
-  await unmount();
+  go("/org?proposal=op-8");
+  await screen.render();
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed")).toBe("other-conv");
+  // Its thread's rows have not arrived: the landing waits for them rather than jump by time.
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed-jump")).toBe("");
+  // They arrive, past the proposal's time and without its card: it jumps by time and names the card to find.
+  await act(async () => { useInboxStore.setState((st: any) => ({ messages: { ...st.messages, "other-conv": [{ _id: "o1", role: "assistant", content: "Later.", timestamp: T0 + 20 * 60_000 }] } })); });
+  await screen.render();
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed-find")).toBe("op-8");
+  expect(q("[data-embed]", screen.el)!.getAttribute("data-embed-jump")).toBe(`|${T0 + 8 * 60_000}`);
+  go("/org?proposal=op-9");
+  await screen.render();
+  expect(q("[data-embed]", screen.el)).toBeNull();
+  expect(q("[data-card-stub='op-9']", screen.el)!.getAttribute("data-card-batch")).toBe(HEAD);
+  await screen.unmount();
 });
 
-test("the thread's rows decide the jump: before they reach the proposal's time the click waits for them, and the card's message then lands by id; a tail past that time without the card lands on the time and names the card", async () => {
-  seed({ messages: { [HEAD]: [MESSAGES[0]] } });
-  const { el, unmount } = await mount();
-  await openRows(el);
-  await act(async () => { q("[data-org-strip-row='op-7']", el)!.click(); });
-  // The one loaded row is older than op-7: nothing to jump to yet.
-  expect(jumpOf(el)).toBe("");
-  await act(async () => { useInboxStore.setState((s: any) => ({ messages: { [HEAD]: [...s.messages[HEAD], MESSAGES[1]] } })); });
-  expect(jumpOf(el)).toBe("m2||1");
-  await unmount();
-  // Rows past the proposal's time, none of them the card: the time, with the card named for the embed's window.
-  seed({ messages: { [HEAD]: [MESSAGES[0], { _id: "m9", role: "assistant", content: "Later words.", timestamp: T0 + 9 * 60_000 }] } });
-  const second = await mount();
-  await openRows(second.el);
-  await act(async () => { q("[data-org-strip-row='op-7']", second.el)!.click(); });
-  expect(jumpOf(second.el)).toBe(`|${T0 + 7 * 60_000}|1`);
-  expect(findOf(second.el)).toBe("op-7");
-  await second.unmount();
+test("a proposal the screen does not hold says so in the bar: in another workspace with a Switch, or unreadable", async () => {
+  seed({ orgProposals: { p10: row(10, { team_id: "k57other0000000000000000000000000" }) } });
+  const screen = await mount("/org?proposal=op-77");
+  expect(q("[data-org-link-line='unreadable']", screen.el)!.textContent).toBe("This is not a proposal you can read.");
+  expect(q("[data-embed]", screen.el)).toBeNull();
+  go("/org?proposal=op-10");
+  await screen.render();
+  const line = q("[data-org-link-line='foreign']", screen.el)!;
+  expect(line.textContent).toContain("This proposal is in");
+  await act(async () => { q("[data-org-link-switch]", line)!.click(); });
+  expect(calls).toContain("switch:k57other0000000000000000000000000");
+  await screen.unmount();
 });
 
-test("a proposal from another thread opens its card under the line and never scrolls; its row toggles it closed; a pick on this thread closes it too", async () => {
+test("the link line in its three kinds", async () => {
+  const el = document.createElement("div");
+  document.body.appendChild(el);
+  const root = createRoot(el);
+  const switched: (string | null)[] = [];
+  const draw = (line: any) => act(async () => { root.render(h(LinkLine, { line, onSwitchWorkspace: (t: string | null) => switched.push(t) })); });
+  await draw({ kind: "foreign", shortId: "op-77", workspaceName: "Union", teamId: "team-union" });
+  expect(q("[data-org-link-line='foreign']", el)!.textContent).toBe("This proposal is in Union.Switch");
+  await act(async () => { q("[data-org-link-switch]", el)!.click(); });
+  expect(switched).toEqual(["team-union"]);
+  await draw({ kind: "unreadable", shortId: "op-77" });
+  expect(q("[data-org-link-line='unreadable']", el)!.textContent).toBe("This is not a proposal you can read.");
+  await draw({ kind: "loading", shortId: "op-77" });
+  expect(q("[data-org-link-line='loading']", el)!.textContent).toBe("Looking for it…");
+  await act(async () => { root.unmount(); });
+  el.remove();
+});
+
+test("under 900px an open panel fills the content area with ← Org; the canvas folds, still mounted", async () => {
   seed();
-  const { el, render, unmount } = await mount("proposal=op-8");
-  expect(q("[data-org-strip-expanded]", el)!.getAttribute("data-org-strip-expanded")).toBe("op-8");
-  expect(q("[data-card-stub]", el)!.getAttribute("data-card-stub")).toBe("op-8");
-  expect(q("[data-org-strip-current]", el)!.getAttribute("data-org-strip-current")).toBe("op-8");
-  expect(jumpOf(el)).toBe("");
-  await openRows(el);
-  await act(async () => { q("[data-org-strip-row='op-8']", el)!.click(); });
-  await render();
-  expect(q("[data-org-strip-expanded]", el)).toBeNull();
-  await openRows(el);
-  await act(async () => { q("[data-org-strip-row='op-8']", el)!.click(); });
-  await render();
-  expect(q("[data-org-strip-expanded]", el)!.getAttribute("data-org-strip-expanded")).toBe("op-8");
-  await openRows(el);
-  await act(async () => { q("[data-org-strip-row='op-7']", el)!.click(); });
-  await render();
-  expect(q("[data-org-strip-expanded]", el)).toBeNull();
-  expect(jumpOf(el)).toBe("m2||1");
-  await unmount();
-});
-
-test("a link the rows do not hold: unreadable, or in another workspace with a Switch", async () => {
-  seed();
-  const first = await mount("proposal=op-77");
-  expect(q("[data-org-link-line]", first.el)!.getAttribute("data-org-link-line")).toBe("unreadable");
-  expect(q("[data-org-link-line]", first.el)!.textContent).toBe("op-77 is not a proposal you can read.");
-  await first.unmount();
-  useInboxStore.setState({ teams: [{ _id: "other-team", name: "Union" }] } as any);
-  const second = await mount("proposal=op-10");
-  const line = q("[data-org-link-line]", second.el)!;
-  expect(line.getAttribute("data-org-link-line")).toBe("foreign");
-  expect(line.textContent).toBe("op-10 is in Union.Switch");
-  await act(async () => { (line.querySelector("button") as HTMLButtonElement).click(); });
-  expect(calls).toContain("switch:other-team");
-  await second.unmount();
-});
-
-test("no Head of People: the hire card and one Propose an org now, none in the header; a head that has not started", async () => {
-  seed({ orgTree: ORG_FIXTURE, orgProposals: {}, orgProposalChanges: {} });
-  const noHead = await mount();
-  expect(q("[data-org-conversation]", noHead.el)!.getAttribute("data-org-conversation-state")).toBe("no-head");
-  expect(q("[data-hire-card] button", noHead.el)!.textContent).toBe("Hire Head of People");
-  expect(qa("[data-org-propose-now]", noHead.el).length).toBe(1);
-  expect(q("[data-org-header] [data-org-propose-now]", noHead.el)).toBeNull();
-  expect(q("[data-org-propose-now-line]", noHead.el)!.textContent).toContain("Or have a fresh session review the org once:");
-  expect(q("[data-embed]", noHead.el)).toBeNull();
-  await noHead.unmount();
-  const notStarted = { ...ORG_FIXTURE_WITH_HEAD, roles: ORG_FIXTURE_WITH_HEAD.roles.map((r) => r.handle === "head-of-people" ? { ...r, standing: null } : r) };
-  seed({ orgTree: notStarted, orgProposals: {}, orgProposalChanges: {} });
-  const started = await mount();
-  expect(q("[data-org-conversation]", started.el)!.getAttribute("data-org-conversation-state")).toBe("not-started");
-  expect(started.el.textContent).toContain("Head of People has not started yet. Its conversation appears here when it does.");
-  await started.unmount();
-});
-
-test("the read states: refused in both columns with no hire card, an error with Try again, a stale banner over a cached tree", async () => {
-  seed({ orgTree: null, orgProposals: {}, orgProposalChanges: {} });
-  env.refused = true;
-  const refused = await mount();
-  expect(qa("[data-org-read='refused']", refused.el).length).toBe(2);
-  expect(q("[data-org-conversation]", refused.el)!.getAttribute("data-org-conversation-state")).toBe("refused");
-  expect(q("[data-hire-card]", refused.el)).toBeNull();
-  await refused.unmount();
-  env.refused = false;
-  env.error = { message: "Server Error\nUncaught Error: Too many reads in a single function execution" };
-  const errored = await mount();
-  expect(qa("[data-org-read='error']", errored.el).length).toBe(2);
-  expect(errored.el.textContent).toContain("Too many reads in a single function execution");
-  await act(async () => { (q("[data-org-conversation] button", errored.el) as HTMLButtonElement).click(); });
-  expect(calls).toContain("retry");
-  await errored.unmount();
-  seed();
-  const stale = await mount();
-  expect(q("[data-org-read='stale']", stale.el)!.textContent).toContain("this is the last copy");
-  expect(q("[data-org-map]", stale.el)).not.toBeNull();
-  expect(q("[data-embed]", stale.el)).not.toBeNull();
-  await stale.unmount();
-  env.error = null;
-});
-
-test("under 980px the columns stack behind a switch; show=map opens on the map and a new ?proposal= flips back", async () => {
-  seed();
-  env.width = 1000;
-  const wide = await mount();
-  expect(wide.el.firstElementChild!.getAttribute("data-org-screen")).toBe("wide");
-  await wide.unmount();
-  env.width = 960;
-  const stacked = await mount();
-  expect(stacked.el.firstElementChild!.getAttribute("data-org-screen")).toBe("stacked");
-  expect(q("[data-org-switch]", stacked.el)!.getAttribute("data-org-switch")).toBe("conversation");
-  expect(q("[data-org-map]", stacked.el)).toBeNull();
-  expect(q("[data-embed]", stacked.el)).not.toBeNull();
-  // A pick writes the proposal and the column in ONE address.
-  await openRows(stacked.el);
-  await act(async () => { q("[data-org-strip-row='op-7']", stacked.el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?proposal=op-7&show=conversation");
-  search = "";
-  await stacked.render();
-  await act(async () => { q("[data-org-switch-pick='map']", stacked.el)!.click(); });
-  expect(replaced.at(-1)).toBe("/org?show=map");
-  await stacked.render();
-  expect(q("[data-org-map]", stacked.el)).not.toBeNull();
-  // The thread stays mounted behind the map (hidden, not gone), so a flip never loses its place.
-  expect(q("[data-org-column='conversation']", stacked.el)!.classList.contains("hidden")).toBe(true);
-  await stacked.unmount();
-  const onMap = await mount("show=map");
-  expect(q("[data-org-map]", onMap.el)).not.toBeNull();
-  expect(q("[data-org-column='conversation']", onMap.el)!.classList.contains("hidden")).toBe(true);
-  search = "show=map&proposal=op-7";
-  await onMap.render();
-  expect(replaced.at(-1)).toBe("/org?show=conversation&proposal=op-7");
-  await onMap.render();
-  expect(q("[data-org-conversation]", onMap.el)).not.toBeNull();
-  expect(jumpOf(onMap.el)).toBe("m2||1");
-  await onMap.unmount();
+  env.width = 820;
+  const screen = await mount("/org/in-2");
+  expect(screen.el.firstElementChild!.getAttribute("data-org-screen")).toBe("narrow");
+  expect(q("[data-org-split]", screen.el)!.getAttribute("data-org-split")).toBe("fills");
+  expect([grow(screen.el, "org-canvas"), grow(screen.el, "org-detail")]).toEqual(["0", "100"]);
+  expect(q("[data-doc]", screen.el)).not.toBeNull();
+  expect(q("[data-sheet-crumb-workspace]", screen.el)!.textContent).toBe("← Org");
+  go("/org?session=fixture-anchor-conv");
+  await screen.render();
+  expect(q("[data-org-panel-crumb-org]", screen.el)!.textContent).toBe("← Org");
+  // Closed, the canvas is the whole screen again.
+  go("/org");
+  await screen.render();
+  await screen.render();
+  expect([grow(screen.el, "org-canvas"), grow(screen.el, "org-detail")]).toEqual(["100", "0"]);
   env.width = 1440;
+  await screen.unmount();
 });
 
-test("beside the head's own thread only the map draws", async () => {
+test("the read views: /org/goals and /org/projects/<ref> are the screen, the object opens in the panel and closes to the view", async () => {
   seed();
-  const { el, unmount } = await mount(`beside=${HEAD}&show=map`);
-  expect(el.firstElementChild!.getAttribute("data-org-screen")).toBe("map-only");
-  expect(q("[data-org-switch]", el)).toBeNull();
-  expect(q("[data-org-strip]", el)).toBeNull();
-  expect(q("[data-embed]", el)).toBeNull();
-  expect(q("[data-org-header]", el)).toBeNull();
-  expect(q("[data-org-map]", el)).not.toBeNull();
-  expect(q("[data-chart-follow]", el)!.getAttribute("data-chart-follow")).toBe("on");
-  // The thread's next pointer re-points the map.
-  await act(async () => { useInboxStore.setState((s: any) => ({ messages: { [HEAD]: [...s.messages[HEAD], { _id: "m4", role: "assistant", content: "Look here: /org?proposal=op-7&focus=3", timestamp: T0 + 9 }] } })); });
-  expect(replaced.at(-1)).toBe(`/org?beside=${HEAD}&show=map&proposal=op-7&focus=3`);
-  await unmount();
+  const screen = await mount("/org/goals");
+  expect(screen.el.firstElementChild!.getAttribute("data-org-view")).toBe("goals");
+  expect(q("[data-doc]", screen.el)!.getAttribute("data-doc")).toBe("goals");
+  expect(q("[data-org-panel]", screen.el)).toBeNull();
+  go("/org/projects/pj-k3x9");
+  await screen.render();
+  expect(q("[data-doc]", screen.el)!.getAttribute("data-doc")).toBe("projects");
+  expect(q("[data-org-panel]", screen.el)!.getAttribute("data-org-panel")).toBe("project:pj-k3x9");
+  await act(async () => { q("[data-stub-open-session='pj-k3x9']", screen.el)!.click(); });
+  expect(pushed.at(-1)).toBe("/org/projects?session=fixture-anchor-conv");
+  await press("Escape");
+  expect(pushed.at(-1)).toBe("/org/projects");
+  await screen.unmount();
 });
 
-test("?panel=history opens the sheet and leaves the address; ?compose= seeds the head's draft once", async () => {
+test("a project opened to pick its lead carries the intent to its sheet, for this visit only", async () => {
   seed();
-  const history = await mount("panel=history");
+  const screen = await mount("/org/in-2");
+  expect(q("[data-stub-intent]", screen.el)!.getAttribute("data-stub-intent")).toBe("");
+  await act(async () => { q("[data-stub-pick-lead='in-2']", screen.el)!.click(); });
+  // The intent is not in the address.
+  expect(pushed.at(-1)).toBe("/org/pj-k3x9");
+  await screen.render();
+  expect(q("[data-stub-intent]", screen.el)!.getAttribute("data-stub-intent")).toBe("pick-lead");
+  // Any later open lets it go.
+  await act(async () => { q("[data-stub-open-session='pj-k3x9']", screen.el)!.click(); });
+  go("/org/pj-k3x9");
+  await screen.render();
+  expect(q("[data-stub-intent]", screen.el)!.getAttribute("data-stub-intent")).toBe("");
+  await screen.unmount();
+});
+
+test("?panel=history opens History and leaves the address; ?compose= seeds the Head of People's draft once and opens its conversation", async () => {
+  seed();
+  const screen = await mount("/org/in-2?panel=history");
   expect(q("[data-org-history-sheet]")).not.toBeNull();
-  expect(replaced.at(-1)).toBe("/org");
-  await history.unmount();
-  const compose = await mount("compose=hello%20there");
+  expect(replaced.at(-1)).toBe("/org/in-2");
+  await screen.unmount();
+  const composing = await mount("/org?compose=hello%20there");
   expect(useInboxStore.getState().getDraft(HEAD)?.draft_message).toBe("hello there");
-  expect(replaced.at(-1)).toBe("/org");
-  expect(replaced.some((p) => p.includes("view=health"))).toBe(false);
-  await compose.unmount();
+  expect(replaced.at(-1)).toBe(`/org?session=${HEAD}`);
+  await composing.render();
+  expect(q("[data-embed]", composing.el)!.getAttribute("data-embed")).toBe(HEAD);
+  await composing.unmount();
 });
 
-test("a hovered card lights the map; leaving falls back to the focused change", async () => {
+test("the read states: a refused read and an error say so on the surface; a stale tree draws under a banner", async () => {
+  seed({ orgTree: null });
+  env.refused = true;
+  let screen = await mount();
+  expect(q("[data-doc]", screen.el)).toBeNull();
+  expect(screen.el.textContent).not.toContain("Hire Head of People");
+  await screen.unmount();
+  env.refused = false;
+  env.error = { message: "boom" };
+  screen = await mount();
+  expect(q("[data-doc]", screen.el)).toBeNull();
+  await screen.unmount();
+  env.error = null;
   seed();
-  const { el, unmount } = await mount("proposal=op-7&focus=2");
-  expect(q("[data-org-map]", el)!.getAttribute("data-map-highlight")).toBe("p7-c2");
-  await act(async () => { hover!("p7-c3"); });
-  expect(q("[data-org-map]", el)!.getAttribute("data-map-highlight")).toBe("p7-c3");
-  await act(async () => { hover!(null); });
-  expect(q("[data-org-map]", el)!.getAttribute("data-map-highlight")).toBe("p7-c2");
-  await unmount();
+  screen = await mount();
+  expect(q("[data-doc]", screen.el)).not.toBeNull();
+  await screen.unmount();
 });
 
-test("the dev preview: the fixtures as the thread, one bubble per proposal, no pref written, and the preview batch cleared on the way in and out", async () => {
-  seed({ orgTree: null, orgProposals: {}, orgProposalChanges: {}, clientState: { ui: { org_intro_seen: true } }, reviewComments: { "preview:org": [{ id: "stale", messageId: "", blockIndex: 0, quote: "", body: "", createdAt: T0, proposal: { id: "p7", card: "role:1", verdict: "approve", change_ids: [], seqs: [1] } }] } });
-  const { el, unmount } = await mount("preview=1");
-  expect(useInboxStore.getState().reviewComments["preview:org"]).toBeUndefined();
-  expect(q("[data-org-conversation]", el)!.getAttribute("data-org-conversation-state")).toBe("preview");
-  expect(qa("[data-preview-card]", el).map((c) => c.getAttribute("data-preview-card"))).toEqual(["op-7", "op-9", "op-8"]);
-  await openRows(el);
-  expect(qa("[data-org-strip-row]", el).length).toBeGreaterThan(0);
-  // The preview column draws every fixture itself: no row is foreign, and a click never opens a live card.
-  expect(qa("[data-org-strip-row][data-org-strip-foreign]", el).length).toBe(0);
-  await act(async () => { q("[data-org-strip-row='op-8']", el)!.click(); });
-  expect(q("[data-org-strip-expanded]", el)).toBeNull();
-  expect(q("[data-card-stub]", el)).toBeNull();
-  // The preview is said once, as the banner.
-  expect(qa("[data-org-preview-banner]", el).length).toBe(1);
-  expect(q("[data-org-header]", el)!.textContent).not.toMatch(/preview/i);
-  expect(q("[data-thread-preview]", el)!.textContent).toContain("Reply to the Head of People");
-  expect(useInboxStore.getState().clientState.ui?.org_upsell_seen).toBeUndefined();
-  expect(calls.filter((c) => c.startsWith("feed:")).at(-1)).toBe("feed:");
-  await unmount();
+test("the org feature off: the company alone, with no review in the menu and people from the roster", async () => {
+  seed({ orgTree: null, teamMembers: [{ _id: "u-sam", name: "Samvit Jain" }], currentUser: { _id: "u-me", name: "Ashot" } });
+  env.orgOn = false;
+  const screen = await mount();
+  expect(q("[data-doc]", screen.el)).not.toBeNull();
+  expect(q("[data-org-review-now]")).toBeNull();
+  env.orgOn = true;
+  await screen.unmount();
 });
 
-test("the staged answers join the line; inside a tab the screen takes the width while mounted, not beside a conversation", async () => {
-  seed({ reviewComments: { [HEAD]: [{ id: "a1", messageId: "", blockIndex: 0, quote: "", body: "", createdAt: T0, proposal: { id: "p7", card: "role:1", verdict: "approve", change_ids: ["p7-c1"], seqs: [1] } }] } });
-  const leaf = await mount("", tabScope("tab-1", "leaf-1"));
-  expect(q("[data-org-strip-answered-line]", leaf.el)!.textContent).toBe("1 answered, waiting for your send");
-  expect(q("[data-org-strip-head]", leaf.el)!.textContent).toBe("2 proposals wait on you·6 changes·1 answered, waiting for your send");
-  expect(lastEmbed().composerPlaceholder).toBe("Ask Head of People, or send your answers as they are");
-  // A stage leaf: the tab and the leaf are named for as long as the screen is here.
-  expect(useInboxStore.getState().stageWide).toEqual({ tabId: "tab-1", leafId: "leaf-1" });
-  await leaf.unmount();
-  expect(useInboxStore.getState().stageWide).toBeNull();
-  // A plain tab names the tab alone.
-  const plain = await mount("", tabScope("tab-2"));
-  expect(useInboxStore.getState().stageWide).toEqual({ tabId: "tab-2", leafId: null });
-  // The person took the split back: the screen does not insist until it mounts again.
-  await act(async () => { useInboxStore.getState().setStageWide(null); });
-  await plain.render();
-  expect(useInboxStore.getState().stageWide).toBeNull();
-  await plain.unmount();
-  // Opened beside a conversation on purpose, side by side stands.
-  const beside = await mount("beside=other-conv", tabScope("tab-3", "leaf-3"));
-  expect(useInboxStore.getState().stageWide).toBeNull();
-  await beside.unmount();
-  // Outside any tab (a test, a bare route) nothing is claimed.
-  const bare = await mount();
-  expect(useInboxStore.getState().stageWide).toBeNull();
-  await bare.unmount();
+test("New ▸ Goal writes the goal at once and opens it in the panel with the name ready to type; the name survives the stub becoming its row", async () => {
+  seed({ currentUser: { _id: "fixture-user-me", name: "Ashot" } });
+  const screen = await mount();
+  renames.length = 0;
+  const created: any[] = [];
+  const real = useInboxStore.getState().createInitiative;
+  useInboxStore.setState({ createInitiative: (input: any) => { created.push(input); real(input); } } as any);
+  await act(async () => { q("[data-org-new]", screen.el)!.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await act(async () => { q("[data-org-new-goal]")!.click(); });
+  useInboxStore.setState({ createInitiative: real } as any);
+  expect(created).toHaveLength(1);
+  const key = created[0].client_key;
+  expect(useInboxStore.getState().initiatives[key]).toMatchObject({ title: "Untitled goal", short_id: "" });
+  expect(pushed.at(-1)).toBe(`/org/${key}`);
+  await screen.render();
+  // The closing menu lets go of focus; the name takes it on the next frame.
+  await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(null))); });
+  const panel = q("[data-org-panel]", screen.el)!;
+  const input = q("[data-sheet-title-input]", screen.el) as HTMLInputElement;
+  expect(input).not.toBeNull();
+  expect(document.activeElement === input).toBe(true);
+  const setValue = Object.getOwnPropertyDescriptor((dom.window as any).HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => { setValue.call(input, "Grow the pipeline"); input.dispatchEvent(new (dom.window as any).Event("input", { bubbles: true })); });
+  // The server row supersedes the stub with its short id; the address moves to it in place.
+  const stub = useInboxStore.getState().initiatives[key];
+  await act(async () => {
+    useInboxStore.setState((s: any) => {
+      const { [key]: _gone, ...rest } = s.initiatives;
+      return { initiatives: { ...rest, k57goal000000000000000000000012: { ...stub, _id: "k57goal000000000000000000000012", short_id: "in-12" } } };
+    });
+  });
+  await screen.render();
+  await screen.render();
+  expect(path).toBe("/org/in-12");
+  expect(replaced.at(-1)).toBe("/org/in-12");
+  // The same panel, the same field, the typed name still in it.
+  expect(q("[data-org-panel]", screen.el) === panel).toBe(true);
+  expect(q("[data-sheet-title-input]", screen.el) === input).toBe(true);
+  expect(input.value).toBe("Grow the pipeline");
+  await act(async () => { input.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  expect(renames).toEqual(["in-12:Grow the pipeline"]);
+  expect(q("[data-sheet-title-input]", screen.el)).toBeNull();
+  await screen.unmount();
 });
