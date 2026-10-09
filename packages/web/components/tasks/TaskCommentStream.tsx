@@ -18,6 +18,7 @@ import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { EarlierButton } from "../threads/readerFold";
 import { useReaderFold } from "../../hooks/useReaderFold";
+import { objectHref } from "../../lib/entityLinks";
 const api = _api as any;
 
 // A task's comment stream: the comment rows and the composer that posts to
@@ -71,7 +72,7 @@ export function UserBadge({ name, image, username }: { name: string; image?: str
     </span>
   );
   if (username) {
-    return <Link href={`/team/${username}`}>{content}</Link>;
+    return <Link href={objectHref("person", username)}>{content}</Link>;
   }
   return content;
 }

@@ -1,14 +1,23 @@
-// The words the org page uses (docs/architecture/org-staffing.md S17),
+// The words the Org screen uses (docs/architecture/org-staffing.md S17),
 // defined in one place: one sentence each, and an example drawn from the
-// reader's own workspace when the tree, the health read or the open proposal
-// carry one. Nothing else in the product restates a definition; surfaces link
-// here. One word per thing: a role (never a seat or an agent), its area, its
-// sessions, its triggers, a proposal, a goal.
+// reader's own workspace when the tree, the health read, the open proposal or
+// the company's goals and projects carry one. Nothing else in the product
+// restates a definition; surfaces link here. One word, one meaning: a goal is
+// the company's (never a person's priorities, which are their focus), a
+// project is a body of work, a role is an agent (never a seat), and every
+// sheet reads with the same three relations: Serves, Carried by, Now.
 import type { OrgTree } from "./orgTypes";
 import type { OrgHealth, OrgProposalRow } from "./orgStaffingTypes";
 import { isHeadOfPeopleRole } from "./orgStaffingTypes";
 
-export type GlossaryWord = "role" | "area" | "charter" | "session" | "trigger" | "proposal" | "goal" | "head_of_people";
+export type GlossaryWord = "goal" | "project" | "serves" | "carried_by" | "now" | "role" | "area" | "charter" | "focus" | "session" | "trigger" | "proposal" | "head_of_people";
+
+/** The company's goals and projects, for examples from the reader's own
+ *  workspace. Optional: without them the company words use general ones. */
+export type GlossaryCompany = {
+  goals: readonly { _id: string; title: string; parent_initiative_id?: string; project_ids?: readonly string[] }[];
+  projects: readonly { _id: string; title: string }[];
+};
 
 export type GlossaryEntry = {
   word: GlossaryWord;
@@ -22,27 +31,37 @@ export type GlossaryEntry = {
   own: boolean;
 };
 
-export const GLOSSARY_ORDER: GlossaryWord[] = ["role", "area", "charter", "session", "trigger", "proposal", "goal", "head_of_people"];
+export const GLOSSARY_ORDER: GlossaryWord[] = ["goal", "project", "serves", "carried_by", "now", "role", "area", "charter", "focus", "session", "trigger", "proposal", "head_of_people"];
 
 export const GLOSSARY_TERM: Record<GlossaryWord, string> = {
+  goal: "Goal",
+  project: "Project",
+  serves: "Serves",
+  carried_by: "Carried by",
+  now: "Now",
+  focus: "Focus",
   role: "Role",
   area: "Area",
   charter: "Charter",
   session: "Sessions",
   trigger: "Trigger",
   proposal: "Proposal",
-  goal: "Goal",
   head_of_people: "Head of people",
 };
 
 const DEFINITION: Record<GlossaryWord, string> = {
+  goal: "Something the company is trying to reach, measured by a number when it has one, with one person or role who answers for it.",
+  project: "A body of work with a lead and a board of tasks, which says what it is for and which goals it serves.",
+  serves: "What a thing is in service of: a project serves its goals, a goal serves the goal above it or the mission, and a role serves the goals it drives.",
+  carried_by: "What moves a thing forward: a goal is carried by its projects and sub-goals, a project by the roles and people working on it, a person by the roles they host and the projects they lead.",
+  now: "What is happening on a thing at this moment: the sessions at work on it, what waits on you, and any open proposal that would change it.",
+  focus: "A person's own priorities, kept by the role they report to so it can match its work against them, as distinct from a goal, which is the company's.",
   role: "An agent with a name and a face that keeps working for you: it reports to someone, and sessions report to it.",
   area: "The projects and plans a role looks after; a role with no area still runs its check and answers what it is asked.",
   charter: "A short written statement of what a role or a project is for, so a role can tell its own work from someone else's.",
   session: "The pieces of work under a role, each in its own thread; the role answers them so you do not have to.",
   trigger: "What wakes a role on its own: its check on a schedule, or a session under it that is waiting; a message from you wakes it too.",
   proposal: "A change to the org that the head of people suggests in conversation; you accept it, skip it or ask about it, and nothing moves until you accept.",
-  goal: "Something the company is trying to reach, with the projects that carry it and the person or role that drives it.",
   head_of_people: "The role that keeps the structure true: it reviews the org with you every week, proposes roles and owners, and looks after whatever no other role has taken.",
 };
 
@@ -56,7 +75,7 @@ const listOf = (xs: string[], max = 2) => xs.length <= max ? xs.join(" and ") : 
  * proposal; the Head of People names itself. Where the workspace has none of that
  * yet, the example says what one would be.
  */
-export function glossaryEntries(tree: OrgTree | null | undefined, health: OrgHealth | null | undefined, proposal: Pick<OrgProposalRow, "short_id" | "changes" | "counts"> | null | undefined): GlossaryEntry[] {
+export function glossaryEntries(tree: OrgTree | null | undefined, health: OrgHealth | null | undefined, proposal: Pick<OrgProposalRow, "short_id" | "changes" | "counts"> | null | undefined, company?: GlossaryCompany | null): GlossaryEntry[] {
   const roles = (tree?.roles ?? []).filter((r) => r.status !== "retired");
   const head = roles.find((r) => isHeadOfPeopleRole(r)) ?? null;
   const scoped = roles.find((r) => r.scope_names.projects.length + r.scope_names.plans.length > 0 && !isHeadOfPeopleRole(r)) ?? roles.find((r) => !isHeadOfPeopleRole(r)) ?? roles[0] ?? null;
@@ -84,13 +103,37 @@ export function glossaryEntries(tree: OrgTree | null | undefined, health: OrgHea
   const proposalEx = proposal
     ? { text: `The one open now: ${total} ${total === 1 ? "change" : "changes"}, ${decided} decided.`, own: true }
     : { text: "\"Add a Platform lead and move the sync plans under it.\" Accept, Skip or Ask.", own: false };
-  const goalEx = { text: "\"Ship the mobile app by March\", carried by two projects and driven by the Platform lead.", own: false };
+  // The company words: a goal with projects under it names all three
+  // relations; a sub-goal names what it serves when no goal has projects.
+  const projectTitle = new Map((company?.projects ?? []).map((p) => [p._id, p.title]));
+  const goalTitle = new Map((company?.goals ?? []).map((g) => [g._id, g.title]));
+  const carried = (company?.goals ?? []).map((g) => ({ g, projects: (g.project_ids ?? []).map((id) => projectTitle.get(id)).filter((t): t is string => !!t) })).find((x) => x.projects.length > 0) ?? null;
+  const subGoal = (company?.goals ?? []).find((g) => g.parent_initiative_id && goalTitle.has(g.parent_initiative_id)) ?? null;
+  const anyGoal = carried?.g ?? company?.goals[0] ?? null;
+  const anyProject = carried ? carried.projects[0] : company?.projects[0]?.title ?? null;
+  const goalEx = anyGoal
+    ? { text: `"${anyGoal.title}"${carried ? `, carried by ${listOf(carried.projects)}` : ""}.`, own: true }
+    : { text: "\"Increase top of funnel\": 10,000 cold emails a day by December, owned by the Outbound lead.", own: false };
+  const projectEx = anyProject
+    ? { text: `"${anyProject}"${carried ? `, which serves "${carried.g.title}"` : ""}.`, own: true }
+    : { text: "\"Lead lists\": a lead, 22 tasks on its board, and the goal it moves.", own: false };
+  const servesEx = carried
+    ? { text: `"${carried.projects[0]}" serves "${carried.g.title}".`, own: true }
+    : subGoal
+      ? { text: `"${subGoal.title}" serves "${goalTitle.get(subGoal.parent_initiative_id!)}".`, own: true }
+      : { text: "The Lead lists project serves the goal Increase top of funnel, which serves Make revenue.", own: false };
+  const carriedEx = carried
+    ? { text: `"${carried.g.title}" is carried by ${listOf(carried.projects.map((t) => `"${t}"`), 3)}.`, own: true }
+    : { text: "Make revenue is carried by Increase top of funnel and two projects.", own: false };
+  const nowEx = { text: "Two sessions at work on Lead lists, one decision waiting on you, and a proposal to give it a new lead.", own: false };
+  const focusEx = { text: "\"Close the seed round (high)\": what you told the role you report to, so it brings you what moves it.", own: false };
   const headEx = head
     ? { text: `${handle(head.handle)}, ${head.status === "paused" ? "hired and paused" : "hired"}.`, own: true }
     : { text: "Not hired here yet; \"Hire a Head of People\" on the org page hires one.", own: false };
 
   const examples: Record<GlossaryWord, { text: string; own: boolean }> = {
-    role: roleEx, area: areaEx, charter: charterEx, session: sessionEx, trigger: triggerEx, proposal: proposalEx, goal: goalEx, head_of_people: headEx,
+    goal: goalEx, project: projectEx, serves: servesEx, carried_by: carriedEx, now: nowEx,
+    role: roleEx, area: areaEx, charter: charterEx, focus: focusEx, session: sessionEx, trigger: triggerEx, proposal: proposalEx, head_of_people: headEx,
   };
   return GLOSSARY_ORDER.map((word) => ({ word, term: GLOSSARY_TERM[word], definition: DEFINITION[word], example: examples[word].text, own: examples[word].own }));
 }
@@ -108,7 +151,7 @@ function trimTo(text: string, max: number): string {
 export const HOW_THIS_WORKS: { heading: string; body: string }[] = [
   {
     heading: "What you are looking at",
-    body: "The org page is the reporting chart of your workspace: the people, their roles, and every session under them. A role can have an area it looks after, so it knows what to pick up and what to leave alone.",
+    body: "On the right is the company: its goals, the projects that carry them, and the people and roles who answer for each, as a document to read or a map. Each one opens as a sheet that reads the same way: what it serves, what carries it, and what is happening now. On the left is the conversation with whoever answers for what you are reading.",
   },
   {
     heading: "Where a proposal comes from",

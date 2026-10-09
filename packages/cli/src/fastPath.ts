@@ -31,11 +31,17 @@ export function isCredentialHelperFastPath(argv: string[]): boolean {
   return argv[2] === "git-credential" && argv.length === 4 && ["get", "store", "erase"].includes(argv[3]!);
 }
 
+/** A SessionStart hook verb, bare or with `--client <client>`. */
+function isSessionStartVerb(argv: string[], verb: string): boolean {
+  return argv[2] === verb && (argv.length === 3 || (argv.length === 5 && argv[3] === "--client"));
+}
+
 export function isStableContextFastPath(argv: string[]): boolean {
-  return (
-    argv[2] === "stable-context" &&
-    (argv.length === 3 || (argv.length === 5 && argv[3] === "--client"))
-  );
+  return isSessionStartVerb(argv, "stable-context");
+}
+
+export function isTaskContextFastPath(argv: string[]): boolean {
+  return isSessionStartVerb(argv, "_task-context");
 }
 
 /** Runs the verb when argv names a hot-path verb. Returns true when claimed
@@ -135,6 +141,25 @@ export function runFastPath(argv: string[]): boolean {
         ),
       )
       .catch(() => {});
+    return true;
+  }
+  if (isTaskContextFastPath(argv)) {
+    // SessionStart hook after compaction or a resume (taskContextHook.ts).
+    // Same contract as stable-context: stdout is the block or nothing.
+    Promise.all([import("./taskContextHook.js"), import("./stableContext.js"), import("./config/readAuthConfig.js")])
+      .then(([hook, stable, cfg]) => {
+        let unreadable: string | undefined;
+        const config = cfg.readAuthConfig(cfg.defaultConfigDir(), { onUnreadable: (message) => { unreadable = message; } });
+        return hook.runTaskContextHook(config, stable.parseStableHookClient(argv[4]), unreadable);
+      })
+      // A throw outside the read still leaves its line in task-context.log.
+      // When the hook module itself cannot load, the exit code makes the
+      // hook script write that line instead. Stdout stays empty either way.
+      .catch((err) =>
+        import("./taskContextHook.js")
+          .then((hook) => hook.logFailure(undefined, `_task-context failed: ${err instanceof Error ? err.message : String(err)}`))
+          .catch(() => { process.exitCode = 1; }),
+      );
     return true;
   }
   return false;
