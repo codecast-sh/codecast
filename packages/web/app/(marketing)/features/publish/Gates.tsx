@@ -75,6 +75,15 @@ const GATES: Gate[] = [
   },
 ];
 
+/** What a reader meets at each gate: the password, email and expiry screens side by side. */
+export function GateScreens() {
+  return (
+    <div className="grid sm:grid-cols-3 gap-4 justify-items-center">
+      {GATES.filter((g) => ["password", "email", "expires"].includes(g.id)).map((g) => <div key={g.id} className="w-full flex justify-center">{g.screen}</div>)}
+    </div>
+  );
+}
+
 function GateBoard() {
   const [active, setActive] = useState(GATES[0].id);
   const g = GATES.find((x) => x.id === active) ?? GATES[0];

@@ -53,6 +53,8 @@ test("the section count sits after the chevron, not inside the link", () => {
 });
 
 test("chat mention counts are red", () => {
-  expect(source).toContain('tone="bg-sol-red text-white" kind="mention"');
+  const badge = source.match(/<NavCount n=\{channel\.mentionCount[^>]*\/>/)?.[0] ?? "";
+  expect(badge).toContain('tone="bg-sol-red text-white"');
+  expect(badge).toContain('kind="mention"');
   expect(source).not.toContain("bg-sol-orange text-sol-bg");
 });
