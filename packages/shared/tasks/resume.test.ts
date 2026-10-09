@@ -133,6 +133,20 @@ describe("formatTaskResume", () => {
     expect(formatTaskResume({ ...base, filed: true }, { now: NOW })).toContain("Full context: cast task context ct-7. For other work, run cast task ready.");
   });
 
+  test("the parking line names a PR the way the list above it does, since the agent copies it verbatim", () => {
+    const wait = { kind: "pr_merged" as const, id: "w1", repository: "other/repo", pr_number: 42, state: "waiting" as const, created_at: 0 };
+    const blocked = { ...base, task: { ...base.task, status: "open" }, held: true, blockers: [wait] };
+    // The checkout is codecast-sh/codecast, so a PR elsewhere is named in full
+    // in the list AND in the cast state line.
+    const out = formatTaskResume(blocked, { now: NOW, repository: "codecast-sh/codecast" });
+    expect(out).toContain("- PR other/repo#42 merges");
+    expect(out).toContain('run cast state --status dormant "Waiting on PR other/repo#42"');
+    // A PR in the checkout's own repository is bare on both lines.
+    const here = formatTaskResume({ ...blocked, blockers: [{ ...wait, repository: "codecast-sh/codecast" }] }, { now: NOW, repository: "codecast-sh/codecast" });
+    expect(here).toContain("- PR #42 merges");
+    expect(here).toContain('run cast state --status dormant "Waiting on PR #42"');
+  });
+
   test("a held task already underway is not ordered to stop: parking is its call, and progress stays the next action", () => {
     for (const status of ["in_progress", "in_review"]) {
       const out = formatTaskResume({ ...base, task: { ...base.task, status }, held: true, blockers: [{ kind: "task", ref: "ct-5", status: "in_review", title: "Review the schema" }] }, { now: NOW });

@@ -25,7 +25,7 @@ import { RailBare, RailDay, RailRow, StatusWord } from "../timeline/Rail";
 import { TaskCommentItem, UserBadge, type TaskCommentRow } from "./TaskCommentStream";
 import type { TaskLinkedSession } from "./TaskSessionList";
 import { EntityIdPill } from "../EntityIdPill";
-import { findStoredWaitTime, formatWaitTime, graphChange, type GraphChange, type GraphTone } from "@codecast/shared/tasks";
+import { graphChange, localWaitTimes, type GraphChange, type GraphTone } from "@codecast/shared/tasks";
 
 type Person = { name: string; image?: string; github_username?: string };
 
@@ -88,17 +88,13 @@ const GRAPH_STYLE: Record<GraphTone, { icon: typeof Pencil; color: string }> = {
   link: { icon: Link2, color: "text-sol-cyan" },
 };
 
-/** A graph change's text, its stored UTC time (TG11) shown in the viewer's
- *  zone, as the Blocked by row shows it, the stored words on hover. */
+/** A graph change's text, its stored UTC times (TG11) shown in the viewer's
+ *  zone, as the Blocked by row shows them, the stored words on hover. One
+ *  rewriter for every reader of stored text (`cast task show` too). */
 function GraphText({ text }: { text: string }) {
   const now = useCoarseNow(60_000);
-  const t = findStoredWaitTime(text);
-  if (!t) return <span className="text-sol-text min-w-0">{text}</span>;
-  return (
-    <span className="text-sol-text min-w-0" title={text}>
-      {text.slice(0, t.start)}{formatWaitTime(t.at, { now })}{text.slice(t.end)}
-    </span>
-  );
+  const local = localWaitTimes(text, { now });
+  return <span className="text-sol-text min-w-0" title={local === text ? undefined : text}>{local}</span>;
 }
 
 /** A linked session named inline, opening it on click. */

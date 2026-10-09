@@ -289,7 +289,7 @@ export const WORK_SNIPPET = `
 
 A human tracks your work through a dashboard: report status through tasks and plans, not chat. Your harness's todo list is for steps inside this session; anything that should outlive the session or show on the board is a task.
 
-**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default; add \`--human\` only when the human must see and manage it themselves (a decision only they can make, a manual step, follow-up that outlives you). \`--from-meeting\` is only for tasks people decided in a meeting or conversation, never your own work; \`--from-call cl-42\` also links the task to that call, so it shows on the call's page.
+**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default: \`--human\` only when the human must see and manage it themselves (a decision only they can make, a manual step), \`--ephemeral\` for bookkeeping of your own (a checklist, a probe) the board should never carry. \`--from-meeting\` is only for tasks people decided in a meeting or conversation, never your own work.
 
 **Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with \`--parent\`, shallow and small, and never mirror a plan as a subtask tree. Check for existing work before creating (\`cast task ls -q "<topic>"\`, \`cast plan ls -q\`, \`cast task ready\`), and file under a project when one fits (\`cast project ls\`).
 
@@ -337,7 +337,11 @@ cast task show ct-1 ct-2 --json             # several ids; .sessions = linked se
 cast task context <id>                      # full context (--current for this session's task)
 cast task start|done|comment <id>           # lifecycle
 cast task start <id> --spawn                # claim it AND hand it to a fresh agent session
-cast task create "Title" -t task -p high    # also --human, --plan <plan_id>, --parent <task_id>, --project "<name>", --from-meeting
+cast task create "Title" -t task -p high    # also --human, --plan <plan_id>, --parent <task_id>, --project "<name>", --from-meeting, --effort <level>
+cast task create "Title" --ephemeral        # your own bookkeeping (a checklist, a probe): off the board, the feed and notifications, and only yours from cast task ready
+cast task keep <id>                         # the opposite: an ephemeral task that turned out to matter goes back on the board
+cast task create "Title" --found-during ct-7  # the task this was found while working on; 'none' files it unlinked (default: the task this session holds)
+cast task create "Title" --from-call cl-42  # pulled from that call: implies --from-meeting, and the task shows on the call's page
 cast task create --parent <task_id> - <<'EOF'   # bulk subtasks, one per line
 First step
 Second step
