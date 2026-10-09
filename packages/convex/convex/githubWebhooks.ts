@@ -46,6 +46,7 @@ import {
   prUrl,
   resolveTaskLinks,
   normalizeRepository,
+  prByNumber,
   resolveTaskLinksFromText,
   shortSha,
 } from "./lib/gitRefs";
@@ -152,13 +153,6 @@ export async function resolveTeamForRepository(
     if (team) return team;
   }
   return null;
-}
-
-async function prByNumber(ctx: { db: any }, repository: string, number: number) {
-  return await ctx.db
-    .query("pull_requests")
-    .withIndex("by_repository_number", (q: any) => q.eq("repository", repository).eq("number", number))
-    .first();
 }
 
 /**
