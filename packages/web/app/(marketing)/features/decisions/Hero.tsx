@@ -87,7 +87,7 @@ function Swap({ t, before, after }: { t: number; before: ReactNode; after: React
   );
 }
 
-function SessionsPanel() {
+export function SessionsPanel() {
   return (
     <div className="dq-in rounded-xl border overflow-hidden" style={at(0.5, { borderColor: LINE, backgroundColor: "rgba(253,246,227,.7)" })}>
       <div className="px-4 h-9 flex items-center border-b text-[11px] font-mono" style={{ borderColor: LINE, color: DIM }}>
@@ -131,7 +131,7 @@ function Count() {
   );
 }
 
-function QueueStage() {
+export function QueueStage() {
   return (
     <div className="dq-in relative" style={at(0.2)}>
       <div className="flex items-center gap-3 mb-3 px-1 text-[12px]" style={{ color: DIM }}>

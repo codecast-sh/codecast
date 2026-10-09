@@ -21,7 +21,7 @@ const WEB = join(import.meta.dir, "..", "..");
  *  fall. Pinned at 54 when the rule widened to bespoke-fed keys (`writtenBy`)
  *  and to Convex client calls, with the team, org, PR and palette gestures it
  *  first caught moved onto store actions. */
-const PIN_DIRECT_SYNCED_WRITES = 51;
+const PIN_DIRECT_SYNCED_WRITES = 44;
 const CONVEX = join(WEB, "..", "convex", "convex");
 const DISPATCH = readFileSync(join(CONVEX, "dispatch.ts"), "utf8");
 
@@ -158,8 +158,28 @@ describe("surfaces write through the store action that owns the write", () => {
 // shrink: the fix is a store action (a draft write plus a named dispatch side
 // effect, classified in store/undo/policy.ts), never a new entry.
 const SYNCED_MODULES = new Set(Object.keys(SYNCED_WRITER_MODULES));
+
+// A mutation whose whole effect is queueing a daemon command (a probe of a
+// machine, a login, an action on a session) writes no synced row, so there is
+// nothing for a store action to paint: it is not a write of the collection its
+// module feeds. Judged by what the handler writes: one or more inserts into
+// daemon_commands and no other write, no write helper, no scheduled or nested
+// function. A command mutation that also patches a synced row still counts.
+const DB_WRITE = /\bctx\.db\.(insert|patch|replace|delete)\(\s*(?:"(\w+)")?/g;
+function queuesOnlyACommand(body: string): boolean {
+  const writes = [...body.matchAll(DB_WRITE)];
+  return writes.length > 0
+    && writes.every((w) => w[1] === "insert" && w[2] === "daemon_commands")
+    && writeHelpersOf(body).length === 0
+    && !/\bctx\.(scheduler|runMutation|runAction)\b/.test(body);
+}
+const COMMAND_ONLY = new Set([...publicMutations()].filter(([, body]) => queuesOnlyACommand(body)).map(([path]) => path));
 // A hook (`useMutation(api.x.y)`) or a Convex client call (`convex.mutation(api.x.y, ...)`).
 const MUTATION_REF = /(?:useMutation|\.mutation)\(\s*\(?_?api(?:\s+as\s+any\))?\.((?:\w+\.)*\w+)/g;
+// A cast anywhere along the api path hides nothing: `(api.x as any).y`,
+// `(api as any).x.y` and `(api.x as unknown as T).y` all read as `api.x.y`.
+const API_CAST = /\(\s*(_?api(?:\.\w+)*)\s+as\s+[^()]*?\)/g;
+const mutationRefs = (src: string) => [...codeOnly(src).replace(API_CAST, "$1").matchAll(MUTATION_REF)].map((m) => m[1]!);
 const ownedByAction = ownedMutations();
 
 const directSyncedWrites = checkRatchet({
@@ -172,10 +192,9 @@ const directSyncedWrites = checkRatchet({
   // guest's own row by its secret. The store rule has nothing to route it to.
   exempt: (rel) => /\.test\.tsx?$/.test(rel) || rel.startsWith("app/meet/"),
   count: (src) =>
-    [...codeOnly(src).matchAll(MUTATION_REF)].filter((m) => {
-      const path = m[1]!;
-      return SYNCED_MODULES.has(path.split(".").slice(0, -1).join(".")) && !ownedByAction.has(path);
-    }).length,
+    mutationRefs(src).filter((path) =>
+      SYNCED_MODULES.has(path.split(".").slice(0, -1).join(".")) && !ownedByAction.has(path) && !COMMAND_ONLY.has(path),
+    ).length,
   allowlist: join(import.meta.dir, "storeActionMutations.allowlist.txt"),
   pin: PIN_DIRECT_SYNCED_WRITES,
   fix: "Add a store action for the gesture (draft write + named dispatch side effect in convex/dispatch.ts), classify it in store/undo/policy.ts, and call it.",
@@ -201,6 +220,28 @@ describe("gestures on synced collections go through a store action", () => {
     for (const m of ["codeComments.resolve", "codeComments.unresolve", "codeComments.update", "codeComments.remove"]) {
       expect(ownedByAction.has(m)).toBe(true);
     }
+  });
+
+  test("a cast on the api path never hides the mutation it reaches", () => {
+    expect(mutationRefs(`useMutation((api.devices as any).enqueueX)`)).toEqual(["devices.enqueueX"]);
+    expect(mutationRefs(`useMutation((api as any).devices.enqueueX)`)).toEqual(["devices.enqueueX"]);
+    expect(mutationRefs(`useMutation((api.devices as unknown as Api).enqueueX)`)).toEqual(["devices.enqueueX"]);
+    expect(mutationRefs(`convex.mutation((api.tasks as any).update, {})`)).toEqual(["tasks.update"]);
+    expect(mutationRefs(`useMutation(api.devices.enqueueX)`)).toEqual(["devices.enqueueX"]);
+  });
+
+  test("a mutation counts as queueing only a command by what it writes", () => {
+    for (const path of ["devices.enqueueAgentToolSetupCommand", "devices.enqueueCloudAgentLoginCommand", "devices.enqueueCloudAgentActionCommand"]) {
+      expect(COMMAND_ONLY.has(path), path).toBe(true);
+    }
+    // These also patch the device row the roster paints, so they stay writes.
+    for (const path of ["devices.enqueueProviderKeyCommand", "devices.setDeviceSnippet"]) {
+      expect(COMMAND_ONLY.has(path), path).toBe(false);
+    }
+    expect(queuesOnlyACommand(`await ctx.db.insert("daemon_commands", {}); await ctx.db.patch(id, {});`)).toBe(false);
+    expect(queuesOnlyACommand(`await ctx.db.insert("daemon_commands", {}); await ctx.scheduler.runAfter(0, x, {});`)).toBe(false);
+    expect(queuesOnlyACommand(`await ctx.db.insert("tasks", {});`)).toBe(false);
+    expect(queuesOnlyACommand(`return null;`)).toBe(false);
   });
 
   test("no new surface writes a synced collection's rows past the store", () => {

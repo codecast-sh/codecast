@@ -9,6 +9,7 @@ import { cwdGitRoot } from "../cloud/hostGit.js";
 import { readHostDeviceId, readyHostHome, remoteRepoPath, waitForDeviceOnline } from "../cloud/prepare.js";
 import { convexClient } from "../remote/convexClient.js";
 import { SSHD_KEEPALIVE_SCRIPT } from "../cloud/reach.js";
+import { macDesktopScript, parseMacDesktop } from "./macLogin.js";
 
 /**
  * FUSE for reached folders (cloud/reach.ts): FUSE-T needs no kernel extension
@@ -135,6 +136,8 @@ export async function provisionMacHost(host: RemoteHost, opts: { skipDaemon?: bo
     const daemon = run(host, macDaemonScript(host), 60_000);
     if (!daemon.includes("MAC-DAEMON-OK")) throw new Error(`Mac service failed: ${daemon.slice(-600)}`);
   }
+  log("signing the session login into the Mac's desktop (cast computer, a headed browser)…");
+  const desktop = macDesktop(host);
   const deviceId = readHostDeviceId(host);
   if (!deviceId) throw new Error("Mac did not report its Codecast device identity");
   const version = remoteExec(host, `${MAC_HOST_PATH}; cast --version`, 30_000).trim();
@@ -142,5 +145,27 @@ export async function provisionMacHost(host: RemoteHost, opts: { skipDaemon?: bo
     const { client, api, token } = await convexClient();
     await waitForDeviceOnline(client, api, token, deviceId, log);
   }
-  return { deviceId, version };
+  return { deviceId, version, ...desktop };
+}
+
+/** Make the session login the Mac's desktop and report where that stands. */
+export function macDesktop(host: RemoteHost): ReturnType<typeof parseMacDesktop> {
+  return parseMacDesktop(run(host, macDesktopScript(host.user), 60_000));
+}
+
+/** The helper grants macOS lets only a person at the screen give, still missing
+ *  on a desktop that is live. Empty when both are on or unreadable. */
+export function macMissingGrants(host: RemoteHost): string[] {
+  try {
+    const out = remoteExec(host, `${MAC_HOST_PATH}; cast computer permissions --json`, 120_000);
+    const status = JSON.parse(out) as { permissions?: Array<{ id: string; status: string }> };
+    return (status.permissions ?? []).filter((p) => p.status !== "granted").map((p) => p.id === "screenshots" ? "Screen Recording" : "Accessibility");
+  } catch {
+    return [];
+  }
+}
+
+/** Whether any agent session runs on the Mac: a reboot would end it. */
+export function macRunsSessions(host: RemoteHost): boolean {
+  return remoteExec(host, "pgrep -x tmux >/dev/null && echo busy || echo idle", 30_000).trim() === "busy";
 }
