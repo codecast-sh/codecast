@@ -2,88 +2,30 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Terminal, Cmd, SOL, H2, P, Code, Figure, Screenshot } from "../blogChrome";
+import { BlogNav, SOL, H2, P, Code, Figure, Screenshot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 import { ArrivalFigure, CloudsTable, FigureStyles, GitFigure, MapFigure, MigrateFigure, SleepFigure, SyncFigure, TravelFigure } from "./figures";
 
-// Genuine CLI output from the codecast team's own machines on 2026-10-07. The
-// two hosts' public IPs are replaced with documentation addresses
-// (203.0.113.0/24); everything else is as printed, with omissions marked "…".
+// Screenshots are single elements of the real app (Settings → Devices,
+// Settings → Migration, the conversation header's machine menu), captured
+// with scripts/app-element-shot.ts from the codecast team's own workspace on
+// 2026-10-09. Nothing else from that workspace is in frame.
 
-const REMOTE_HOSTS = `this device: macOS - MacBook-Pro-182  (76e7d3d6801fca2b)
-  i-084309c56a91e15ff  ubuntu@203.0.113.24  aws running  [default]
-  i-021a32d2d254c07d3  codecast@203.0.113.80  aws running  [default]
-`;
-
-const HOSTS_LS = `i-084309c56a91e15ff  aws · us-west-2
-  state      awake  203.0.113.24
-  device     Linux - ip-172-31-40-243 — online  28d80e225ed21f45
-  sessions   51
-    jx72k01  codecast                       line                               active
-    jx79p8f  cloud-5646a5  origin/main@641432e UI polish audit                    active
-    …
-  worktrees
-    codecast  cloud-4213bb  ready  main-4213bb@07a081b, uncommitted changes
-    codecast  cloud-5646a5  ready  codecast/cloud-5646a5@eccc7c6, uncommitted changes
-    codecast  cloud-54e335  ready  codecast/cloud-54e335@5831cb2, uncommitted changes  no session (orphan)
-    codecast  shared-checkout  main@fb2fe9d, uncommitted changes  main checkout, free
-    …
-  git        device-key: push access to git@github.com:codecast-sh/codecast.git, checked 1d ago
-  tools      7 ok, 0 installed, 4 missing, 0 unsupported, 3 MCP servers disabled (codex: node_repl, codex: paper, claude: ios-simulator)
-  setup      in step: nothing declared beyond the tools step (applied 2026-10-06T05:33:54Z)
-  cost       awake: about $0.0416/hour running, about $6.40/month disk
-
-i-021a32d2d254c07d3  aws · us-east-2
-  state      awake  203.0.113.80
-  device     macOS - Mac-mini — online  0c621d6e4176bed7
-  sessions   12
-  …
-  cost       Mac dedicated host billing continues while the instance is stopped; 24-hour minimum allocation.
-`;
-
-const SPAWN = `cast spawn --cloud "port the v1 routes to the new router"
-cast spawn --cloud --from origin-main "audit the public API docs"
-cast spawn --cloud --shared "run the data migration"
-cast fork --cloud "try it with a queue" "try it with a cron"`;
-
-const HOST_TOML = `# .codecast/workspace.toml (committed, read by every host)
-[host]
-packages = ["postgresql", "redis-server"]
-services = ["postgresql", "redis-server"]
-run = ["./scripts/seed-dev-db.sh"]
-
-# this repository's own file says only:
-[host]
-simulators = ["iOS"]`;
-
-const MIGRATE_LS = `mg-03p71vdf  → Linux - ip-172-31-40-243 (cloud)  done      1/1 done  41h ago
-mg-k28o8e34  → macOS - MacBook-Pro-182  done      1/1 done  3d ago
-mg-f7qy8sqs  → macOS - Mac-mini (cloud)  done      1/1 done  3d ago
-mg-x0ocus1i  → macOS - MacBook-Pro-182  done      3/3 done  3d ago
-mg-st7mdwnx  → macOS - MacBook-Pro-182  partial   5/8 done, 3 failed  3d ago
-mg-lnu1wdnm  → macOS - Mac-mini (cloud)  done      2/2 done  3d ago
-mg-2uvjb2z1  → Linux - ip-172-31-40-243 (cloud)  partial   1/2 done, 1 failed  3d ago
-…
-`;
+const IMG = "/blog/codecast-in-the-cloud";
 
 const MOVE_NOTICE = `[codecast] This session just moved to a different machine. It now runs on
 Linux - ip-172-31-40-243 in /home/ubuntu/work/codecast (previously
 macOS - MacBook-Pro-182). Processes, ports, and any files outside the working
 tree from the previous machine are not here.`;
 
-const BORROW = `cast browser sync linear.app       # one site's login, from your laptop's Chrome
-cast hosts vnc                     # the host's whole screen, inside codecast
-cast hosts reach ~/notes           # a laptop folder, mounted on the host, no copy
-cast computer get-app-state --app gedit   # native apps on the host, over AT-SPI`;
-
 const LIMITS: [string, string][] = [
-  ["Waking a sleeping host needs a laptop online.", "Queued work marks the host for waking, and the next laptop heartbeat starts it. A server-side waker exists, but it is enabled per host by the operator, not from the app."],
-  ["Only Linux hosts stop themselves.", "A Mac host stays up, and AWS bills its dedicated host for at least 24 hours either way."],
-  ["Only Claude Code sessions move.", "Any agent can be started on a host, but migrating a running session between machines works for Claude Code only, and never directly from one host to another."],
-  ["Most tool logins travel when they exist.", "Claude, Codex, Gemini and a few others only travel while their tokens are live. Logins for gh, aws, npm and similar CLIs travel whenever the file is present. Your Anthropic API key and Google logins never do."],
-  ["Opening a pull request from a host may need a gh login.", "The per-push token is for fetching and pushing. Most hosts already have a gh login copied from the laptop; if not, run gh auth login there."],
-  ["[host] packages and services are Ubuntu-only.", "On a Mac host, only run commands and simulators apply."],
+  ["Waking a sleeping machine needs your laptop online.", "Work sent to an asleep machine wakes it through the laptop that manages it. If that laptop is closed, the work waits."],
+  ["Only Linux machines sleep on their own.", "A cloud Mac stays up, and AWS bills its dedicated host for at least 24 hours either way."],
+  ["Only Claude Code sessions move.", "Any agent can start on a cloud machine, but moving a running session between machines works for Claude Code, and never straight from one cloud machine to another."],
+  ["Most tool sign-ins travel when they exist.", "Claude, Codex, Gemini and a few others travel only while their sign-in is valid. Sign-ins for tools like GitHub, AWS and npm travel whenever your laptop has them. Your Anthropic API key and your Google logins never do."],
+  ["Adding a machine runs one command on your laptop.", "The Add a cloud machine dialog builds it for you, because your AWS credentials and SSH key live on your laptop, not in a browser."],
+  ["A cloud Mac only applies part of a repository's setup.", "System packages and services are set up on Linux machines; on a Mac, setup commands and iOS simulators apply."],
 ];
 
 export default function CodecastInTheCloudPost() {
@@ -115,7 +57,7 @@ export default function CodecastInTheCloudPost() {
             <span aria-hidden>&middot;</span>
             <time dateTime={post?.date}>{post?.dateLabel ?? "October 2026"}</time>
             <span aria-hidden>&middot;</span>
-            <span>{post?.readingMinutes ?? 16} min read</span>
+            <span>{post?.readingMinutes ?? 14} min read</span>
           </div>
         </header>
 
@@ -124,218 +66,178 @@ export default function CodecastInTheCloudPost() {
           else&apos;s sandbox. Your uncommitted change is not there, your <Code>.env.local</Code>{" "}
           is not there, your agent instructions and your logins are not there, and the agent
           spends its first ten minutes rebuilding a world you already had. Codecast went the
-          other way. A cloud host is a machine in your own AWS account that codecast sets up
-          to look like your laptop, and a session sent there starts from the folder you are
-          standing in.
+          other way. A cloud machine is a computer in your own AWS account that codecast sets
+          up to look like your laptop, and a session you send there starts from the folder you
+          are working in.
         </P>
         <P>
-          This post covers all of it: the host itself, what travels when a session starts,
-          how the host is made to feel like home, how pushes are authorized, the live mirror
-          of an agent&apos;s edits, moving running sessions between machines, the laptop
-          capabilities a host can borrow, cloud Macs with iOS simulators, sleep and wake,
-          what happens when something breaks, and the other companies&apos; clouds codecast
-          also reads from. Every command here is in the CLI today, and the limits are at the
-          end, stated plainly.
+          This post walks through all of it, in the order you meet it in the app: adding a
+          machine, starting a session there, what the machine is given, how it pushes code,
+          keeping the agent&apos;s edits on your laptop as they happen, moving running sessions
+          between machines, watching a cloud session&apos;s browser and screen, cloud Macs with
+          iOS simulators, sleep and wake, and the other companies&apos; clouds codecast also
+          shows in your inbox. The limits are at the end, stated plainly.
         </P>
 
-        <Figure wide caption="Everything that moves between your laptop and your host. Paper is the laptop, night is the host.">
+        <Figure wide caption="Everything that moves between your laptop and a cloud machine. Paper is the laptop, night is the cloud machine.">
           <MapFigure />
         </Figure>
 
         <P>
-          One idea runs through the whole design: <strong>the laptop is the source of
-          truth, and the host is a pair of hands.</strong> Files and logins go from the
-          laptop to the host over SSH. When the host needs something only the laptop has,
-          such as a site&apos;s login or a file outside the repository, it asks through
-          codecast, and the laptop does the work. Codecast&apos;s servers carry commands and
-          short-lived tokens, never your source.
+          One idea runs through the whole design: <strong>your laptop is the source of
+          truth, and the cloud machine is a second pair of hands.</strong> Files and sign-ins go
+          from the laptop to the machine directly. When the machine needs something only the
+          laptop has, such as a site&apos;s login, it asks, and the laptop does the work.
+          Codecast&apos;s servers carry instructions and short-lived tokens, never your source.
         </P>
 
-        <H2>A host is an EC2 instance you own</H2>
+        <H2>Add a machine</H2>
         <P>
-          A host is Ubuntu 24.04 on any instance type, or macOS on an AWS dedicated host. You
-          pay AWS directly, at AWS prices. <Code>cast hosts create linux</Code> launches one
-          with sensible defaults (a <Code>t3.medium</Code> with an encrypted 80 GiB disk in{" "}
-          <Code>us-west-2</Code>), and <Code>cast hosts add &lt;instance-id&gt; --provision</Code>{" "}
-          adopts one you already run. In the web app, Settings, Devices, Add a cloud machine
-          asks a few questions and builds that command for you to paste on the laptop;
-          nothing is provisioned from a browser, because the AWS credentials and the SSH key
-          live on your machine.
-        </P>
-        <P>
-          Provisioning installs what a session needs and nothing exotic: tmux, git, a
-          virtual display with Chrome on it, bun, the codecast CLI, your agent CLIs at the
-          same versions as your laptop, and a <Code>codecast-daemon</Code> service that runs
-          unattended. From then on the host shows up next to your laptops. Here is the
-          codecast team&apos;s own list this afternoon, one Linux host and one Mac:
+          Open <strong>Settings → Devices</strong>. It lists every machine connected to
+          codecast and whether it is online; under <strong>Machines</strong>, <strong>Add a
+          cloud machine</strong> sets up a Linux or Mac machine in your own AWS account. Pick
+          Linux for general development (it sleeps when idle) or Mac for Xcode and iOS work,
+          connect an instance you already run or create a new one, and fill in the AWS details.
         </P>
 
-        <Terminal label="cast remote hosts">
-          <Cmd>cast remote hosts</Cmd>
-          {REMOTE_HOSTS}
-        </Terminal>
+        <Screenshot
+          src={`${IMG}/add-cloud-machine.webp`}
+          alt="The Add a cloud machine dialog: Linux or Mac, connect existing or create new, the instance details, and a Copy setup command button."
+          caption="Add a cloud machine. AWS bills you directly; codecast never runs machines on its own account."
+        />
 
         <P>
-          <Code>cast hosts ls</Code> is the fuller picture: whether each host is awake, which
-          sessions run there, every worktree on it, whether it can push, which tools are
-          missing, and what it costs. Fifty-one sessions on a <Code>t3.medium</Code> for about
-          four cents an hour is the number that made us stop running long jobs on laptops.
+          The dialog builds one setup command, which you copy and run once in a terminal on
+          your laptop, from your project. That step stays on the laptop on purpose: it is
+          where your AWS credentials and SSH key live. Setup installs what a session needs,
+          copies your agent configuration over, and waits for the machine to come online.
+        </P>
+        <P>
+          From then on the machine has its own panel in Settings → Devices. It shows whether
+          the machine is <strong>Awake</strong>, <strong>Waking</strong>, <strong>Going to
+          sleep</strong> or <strong>Asleep</strong>, its size and region, what it costs per
+          hour awake and per month for its disk, and when it next sleeps. The buttons wake it,
+          put it to sleep, apply the repository&apos;s setup again, or <strong>Save
+          image</strong>, which snapshots a ready machine so the next one starts ready. Rows
+          for your setup, sign-ins and tools say what is in step, and which sign-ins were held
+          back and why, before an agent finds out the hard way.
         </P>
 
-        <Terminal label="cast hosts ls">
-          <Cmd>cast hosts ls</Cmd>
-          {HOSTS_LS}
-        </Terminal>
-
+        <H2>Start a session from your screen, not from main</H2>
         <P>
-          Two rows are worth a second look. <em>orphan</em> marks a worktree whose session
-          ended; a disk sweep on the host releases those once they are clean, with no stash
-          and no unpushed commits, and keeps anything else with a logged reason. And the
-          tools line names three MCP servers that were switched off on the host because
-          they cannot run on Linux (one is a macOS app, one drives an iOS simulator), so an
-          agent there gets a clear absence instead of a server that crashes on start.
+          Once a cloud machine exists, the composer grows a <strong>run in the cloud</strong>{" "}
+          switch. Turn it on and the new session runs on the machine in a worktree of its own.
+          Two more choices sit beside it. <strong>start from</strong> is <strong>my
+          checkout</strong> (your exact working state) or <strong>origin/main</strong> (a clean
+          start). <strong>isolated worktree</strong>, on by default, can be turned off to run in
+          the machine&apos;s main checkout, for a job like a data migration that must run where
+          everything else is; that is refused if the checkout has changes or another session
+          is using it. An asleep machine wakes when the session starts, and the header reads{" "}
+          <em>preparing cloud host</em> while its checkout is made.
         </P>
-
-        <H2>A session starts from your screen, not from main</H2>
         <P>
-          Starting work on the host is the flag you would expect. In the web composer it is
-          a toggle labeled <strong>run in the cloud</strong>, with <strong>start from</strong>{" "}
-          set to <strong>my checkout</strong> or <strong>origin/main</strong>. From a terminal
-          or from another agent:
-        </P>
-
-        <Terminal label="starting work on the host" wrap>
-          {SPAWN.split("\n").map((l) => <Cmd key={l}>{l}</Cmd>)}
-        </Terminal>
-
-        <P>
-          What happens next is the part that took the longest to get right. The laptop
-          takes one snapshot of your folder: a commit built through a temporary git index
-          with every file in it, ignored ones included, so your own index and branch never
-          move. That snapshot is pushed to the host, the host&apos;s own <Code>cast ws</Code>{" "}
-          creates a worktree for each task with its own ports and its own dependency install,
-          and the worktree is then reset so your uncommitted edits show up as uncommitted
-          again. A tree hash comparison proves the host&apos;s folder matches yours before the
-          agent starts. Any agent works: Claude Code, Codex, Cursor, Gemini, opencode, pi or
-          Grok.
+          &ldquo;My checkout&rdquo; is the part that took the longest to get right. Your laptop
+          takes one snapshot of your folder, ignored files included, without moving anything in
+          your checkout. The machine restores it so your uncommitted edits show up as
+          uncommitted again, and checks that its folder matches yours before the agent starts.
+          Any agent works there: Claude Code, Codex, Cursor, Gemini, opencode, pi or Grok.
         </P>
 
         <Screenshot
           wide
           src="/blog/field-manual/cloud-spawn.webp"
-          alt="Two commit graphs. Laptop: an unpushed commit and modified files captured by a temporary index into a snapshot commit. Host: the same commit with the files uncommitted again."
-          caption="The snapshot carries your exact working state, and the host restores it as uncommitted work."
+          alt="Two commit graphs. Laptop: an unpushed commit and modified files captured into a snapshot. Cloud machine: the same commit with the files uncommitted again."
+          caption="The snapshot carries your exact working state, and the machine restores it as uncommitted work."
         />
 
         <P>
-          Not everything should travel. Dependency folders are rebuilt on the host, because
-          a <Code>node_modules</Code> built on a Mac is wrong on Linux anyway. Big untracked
+          Not everything should travel. Dependency folders are rebuilt on the machine, because
+          a <Code>node_modules</Code> built on a Mac is wrong on Linux anyway, and big untracked
           media and binaries stay home. Each file left behind is listed under the reason it
           stayed, so you can see the decision rather than discover it.
         </P>
 
-        <Figure wide caption="What a cloud spawn carries. Tracked files always travel, whatever their size; .env files travel too, since both machines are yours.">
+        <Figure wide caption="What a cloud start carries. Tracked files always travel, whatever their size; .env files travel too, since both machines are yours.">
           <TravelFigure />
         </Figure>
 
         <P>
-          A fan-out of five tasks takes one snapshot and makes five worktrees, so five agents
-          start from the same instant of your work. <Code>--shared</Code> is the exception:
-          one task, in the host&apos;s main checkout instead of a worktree, for jobs like a
-          migration that must run where everything else is. It refuses a dirty checkout or
-          one a live session holds, rather than trampling either. If any step fails, the
-          session fails loudly. It falls back to <Code>origin/main</Code> only when your folder
-          is not a git repository at all, and says so.
+          Agents can start cloud sessions too. One that fans out five tasks gets five worktrees
+          from a single snapshot, so all five start from the same instant of your work (for an
+          agent, that is <Code>cast spawn --cloud</Code>).
         </P>
 
-        <H2>The host is set up like your laptop</H2>
+        <H2>The machine is set up like your laptop</H2>
         <P>
           An agent is only as good as its context, and most of the context lives outside the
-          repository: <Code>~/.claude</Code>, your <Code>CLAUDE.md</Code>, the skills and hooks
-          you wrote, the shell setup your hooks assume, the logins for the CLIs your agents
-          call. Before any session starts, and again whenever the host wakes for one, the
-          laptop brings the host into step, in this order:
+          repository: your agent settings, your <Code>CLAUDE.md</Code>, the skills and hooks you
+          wrote, the shell setup your hooks assume, the sign-ins for the tools your agents call.
+          You never set a cloud machine up by hand. Before a session starts, and whenever the
+          machine wakes for one, your laptop brings it into step:
         </P>
 
-        <Figure wide caption="The host's checklist before a session starts. Every step except the disk check and the mirror is allowed to fail without blocking work.">
+        <Figure wide caption="The machine's checklist before a session starts. Every step except the disk check and the configuration copy may fail without blocking work, and says so in the machine's panel.">
           <ArrivalFigure />
         </Figure>
 
         <P>
-          The <strong>home mirror</strong> carries agent folders (<Code>.claude</Code>,{" "}
-          <Code>.codex</Code>, <Code>.cursor</Code> and the rest), instruction files, your shell
-          rc files and the files they source, small scripts from <Code>~/.local/bin</Code>, and
-          your Claude project memory. Laptop paths are rewritten to host paths on the way. It
-          is checked every minute and only sends when something changed. Memories an agent
-          writes on the host are merged back into the laptop before the next push, so what a
-          cloud session learns is not stranded there. Credentials, transcripts, caches,{" "}
-          <Code>.ssh</Code>, keychains and browser profiles are on a denylist and never travel.
+          <strong>Your agent setup</strong> travels: agent settings, instruction files, skills,
+          hooks, your shell setup and your agents&apos; memory, with laptop paths rewritten to
+          the machine&apos;s. Memory comes back the other way too, so what a cloud session learns
+          is not stranded there. Credentials, transcripts, caches, SSH keys and browser profiles
+          never travel.
         </P>
         <P>
-          <strong>Logins</strong> go one way, from the laptop to the host, and never back. The
-          Claude credential is the delicate one: refreshing it would rotate the laptop&apos;s
-          refresh token and log you out at home, so it is sent only while its access token is
-          still live, and the host is never allowed to refresh it. It is sent again shortly
-          after the laptop&apos;s token renews. Your <Code>ANTHROPIC_API_KEY</Code> deliberately
-          stays home, because its presence would move every Claude on the host off your
-          subscription and onto metered API billing.
+          <strong>Sign-ins</strong> go one way, from your laptop to the machine. The Claude
+          sign-in is the delicate one: refreshing it on the machine would log you out at home,
+          so the machine is never allowed to refresh it, and your laptop sends a fresh one when
+          its own renews. Your Anthropic API key deliberately stays home, because its presence
+          would move every Claude on the machine off your subscription and onto metered API
+          billing. <strong>Tools</strong> arrive at your laptop&apos;s versions, installed for
+          your user without admin rights.
         </P>
         <P>
-          <strong>Tools</strong> are installed without sudo, into your user&apos;s home: agent
-          CLIs at your laptop&apos;s versions, a recent Node, bun, gh, uv, and any helper
-          command your hooks or skills name. What the repository itself needs goes in one
-          committed file:
+          When a repository needs more on the machine, a database or a system package, ask an
+          agent to add it to the repository&apos;s codecast setup. Every machine applies it before
+          the next session starts, and skips it when it is already in step.
         </P>
 
-        <Terminal label=".codecast/workspace.toml">
-          {HOST_TOML}
-        </Terminal>
-
+        <H2>Pushing code without leaving a key on the machine</H2>
         <P>
-          The <Code>[host]</Code> table runs before any worktree exists, and it is skipped
-          when the host is already in step, so a warm host pays one SSH round trip for it.
-          A personal <Code>~/.codecast/host.toml</Code> merges in for the things that are
-          yours rather than the repository&apos;s, like your shell. Every login shell on a host
-          also sees <Code>CODECAST_CLOUD=1</Code>, so a hook can tell where it is running.
+          A machine that runs agents unattended should not hold a long-lived GitHub token. With
+          the codecast GitHub app installed for a repository, the machine asks for a token each
+          time it pushes, and codecast hands back one scoped to that one repository, after
+          checking that you are allowed to push. It expires within the hour and is never written
+          to disk.
         </P>
 
-        <H2>Pushing from a host without leaving a key on it</H2>
-        <P>
-          A machine that runs agents unattended should not hold a long-lived GitHub token.
-          So git on the host asks for credentials every time it needs them, through{" "}
-          <Code>cast git-credential</Code>, and codecast answers with a GitHub App
-          installation token for that one repository. For a team installation it first
-          checks that you are allowed to push. The token expires within the hour and is
-          handed to git in memory, never written to disk.
-        </P>
-
-        <Figure wide caption="One push from the host. The token lives about as long as the push does.">
+        <Figure wide caption="One push from a cloud machine. The token lives about as long as the push does.">
           <GitFigure />
         </Figure>
 
         <P>
-          Two fallbacks exist for setups the App cannot cover. Each host has its own ed25519
-          device key, which <Code>cast hosts key --grant</Code> adds to GitHub through your
-          gh login. And <Code>cast hosts forward-agent</Code>, strictly opt-in, exposes your
-          laptop&apos;s ssh-agent to the host over one held connection, for when the host must
-          use exactly the keys you have.
+          Where the app cannot help, Settings → Devices marks the repository <strong>needs
+          access</strong> and shows the machine&apos;s own public key with a <strong>Copy</strong>{" "}
+          button. Add it on GitHub as a deploy key with write access, and pushing starts working
+          within minutes.
         </P>
 
         <H2>The agent&apos;s edits, on your laptop, as they happen</H2>
         <P>
-          A session on a host is only half useful if its work is stuck there. Pick{" "}
-          <strong>Sync with MacBook-Pro</strong> in the session&apos;s machine menu, or run{" "}
-          <Code>cast remote sync &lt;session&gt;</Code>, and codecast keeps a copy of the
-          session&apos;s folder on your laptop, both ways, a few seconds behind. Open it in
-          your editor, run the tests locally, or fix a line yourself and let the agent see it.
+          A cloud session is only half useful if its work is stuck there. Click the machine name
+          in a cloud session&apos;s header and choose <strong>Sync with</strong> your laptop. The
+          session&apos;s folder is then kept in step with a copy on your laptop, both ways, a few
+          seconds behind. Open it in your editor, run the tests locally, or fix a line yourself
+          and let the agent see it. A chip in the header shows the state: <em>syncing</em>,{" "}
+          <em>in step</em> with the time of the last sync, or <em>sync paused</em> while the
+          session is idle, so the machine can still sleep. Its menu opens the copy in Cursor or
+          VS Code.
         </P>
         <P>
-          Each tick snapshots both sides and compares them with the last tree they agreed
-          on. If only one side changed, its changes land on the other. If both changed, git
-          does a three-way merge in memory without touching either folder; the clean files
-          land, and a file changed on both sides is held as it is on each side while
-          everything else keeps flowing. Only files that actually changed are written, so
-          your editor and your dev server do not see a storm of rewrites.
+          When only one side changed, its changes land on the other. When both changed, the
+          files that merge cleanly land, and a file changed on both sides is held as it is on
+          each side while everything else keeps flowing. Only files that actually changed are
+          written, so your editor and your dev server do not see a storm of rewrites.
         </P>
 
         <Figure wide caption="Thirty seconds of a synced session. Ticks run every 3 s while the agent works, and pause when it goes quiet.">
@@ -343,213 +245,183 @@ export default function CodecastInTheCloudPost() {
         </Figure>
 
         <P>
-          A held file never gets conflict markers written into it. You pick a side, from the
-          menu (<strong>Keep the laptop&apos;s</strong>, <strong>Keep the cloud&apos;s</strong>)
-          or with <Code>cast sync keep laptop|cloud</Code>. When the agent goes quiet, the
-          sync pauses and only reads the laptop&apos;s copy every 15 seconds; a laptop edit
-          is sent only if the host is already awake, so a forgotten sync never keeps a billed
-          machine running. <Code>--watch-only</Code> makes it one way, from cloud to laptop,
-          and if you then edit the copy anyway it stops and asks what you meant.
+          A held file never gets conflict markers written into it: the chip lists it with{" "}
+          <strong>Keep the laptop&apos;s</strong> and <strong>Keep the cloud&apos;s</strong>.{" "}
+          <strong>Cloud to laptop only</strong> turns the copy into a mirror you read rather
+          than edit, and if you edit it anyway, the sync stops and asks whether to send your
+          edits or take the cloud&apos;s.
         </P>
 
         <Screenshot
           wide
           src="/blog/field-manual/cloud-mirror.webp"
-          alt="The machine menu for a synced cloud session: synced both ways, one file held because it changed on both sides, and a list of what stayed on the host."
-          caption="A conflict holds one file, not the sync. Heavy and machine-specific files stay on their own side."
+          alt="The machine menu for a synced cloud session: synced both ways, one file held because it changed on both sides, and a list of what stayed on the cloud machine."
+          caption="A conflict holds one file, not the sync. Heavy and machine-specific files stay on their own side, listed with the reason."
+        />
+
+        <H2>Move running sessions before you close the lid</H2>
+        <P>
+          The most common reason to want a cloud machine is the moment you need your laptop
+          back: a flight, a meeting, a laptop pinned at full load. Click the machine name in a
+          conversation&apos;s header for <strong>Run on device · which machine</strong>, and pick
+          where the session should run. An asleep cloud machine is marked{" "}
+          <em>asleep, wakes on move</em>.
+        </P>
+
+        <Screenshot
+          src={`${IMG}/machine-menu.webp`}
+          alt="The machine menu in a conversation's header: the session is running here on the MacBook Pro and can move to Cloud Linux or the Mac-mini."
+          caption="The session runs here on the laptop; it can move to either cloud machine."
         />
 
         <P>
-          The verbs work from either machine: <Code>cast sync status</Code>, <Code>diff</Code>,{" "}
-          <Code>pull</Code> and <Code>push</Code>, even without a running sync. From the host,{" "}
-          <Code>cast sync pull ~/data/export.csv</Code> fetches a file from outside the
-          repository, up to 2 GB, and <Code>--ref</Code> fetches a branch only the laptop has.
-          One rule keeps the two mirrors from fighting: every file has exactly one carrier.
-          Folder sync carries the working folder; the home mirror carries your agent config.
+          For many sessions at once, select them in the inbox and choose <strong>Move
+          to…</strong>, or open <strong>Settings → Migration</strong>. Migration lists your
+          sessions with filters, and you pick a destination: each card says whether the machine
+          is online and how many sessions already run there.
         </P>
 
-        <H2>Moving twenty sessions before you close the lid</H2>
-        <P>
-          The most common reason to want a host is the moment you need your laptop back: a
-          flight, a meeting, a machine pinned at full load. <Code>cast migrate</Code> moves
-          running Claude Code sessions between a laptop and a host as one batch, in either
-          direction, and the session continues on the other side with its transcript, its
-          working tree and its place in your inbox.
-        </P>
-
-        <Terminal label="cast migrate" wrap>
-          <Cmd>cast migrate start --to linux --label rollout --dry-run</Cmd>
-          <Cmd>cast migrate start --to linux --label rollout</Cmd>
-          <Cmd>cast migrate start --to macbook --from linux</Cmd>
-        </Terminal>
+        <Screenshot
+          src={`${IMG}/migration-dest.webp`}
+          alt="Settings, Migration, Destination: cards for Cloud Linux and Mac-mini (cloud hosts, online) and a MacBook Pro (laptop, offline), each with its session count."
+          caption="Settings → Migration. Moving to a cloud machine pushes each worktree and transcript there; moving to a laptop pulls them back with uncommitted work intact."
+        />
 
         <P>
-          Each row goes through the same steps. New turns are blocked first, so steady
-          traffic cannot keep a session busy forever; anything you send it meanwhile is held
-          and delivered on the other side. A session in the middle of a turn gets to finish
-          it, up to <Code>--wait</Code> minutes (ten by default). One stopped at a permission
-          prompt moves at once and asks again on the destination. Then the agent is stopped,
-          the work is transferred, ownership flips in one transaction, and the session
-          resumes.
+          Then you decide how to treat a session that is in the middle of a turn. It finishes
+          the turn first, up to the wait you choose, or is interrupted at once. Anything you send
+          it meanwhile is held and delivered on the other side. A session waiting on a
+          permission prompt moves at once and asks again on the new machine.
         </P>
 
-        <Figure wide caption="A batch of five, schematic. Failures restart the agent where it was; nothing is left half moved.">
+        <Screenshot
+          src={`${IMG}/migration-turns.webp`}
+          alt="How to handle running turns: Sessions mid-turn set to Wait up to 10 minutes, and Transfers at once set to 2."
+          caption="Mid-turn sessions get to finish. Messages sent meanwhile wait and arrive after the move."
+        />
+
+        <P>
+          Each session walks through the same steps, shown live under <strong>Migrations</strong>{" "}
+          on the same page: new turns are held, the turn finishes, the agent stops, its work
+          and conversation transfer, and it resumes on the other side. Coming home, the cloud
+          machine&apos;s work lands in your checkout as uncommitted changes. If it does not apply
+          cleanly, that session fails with the reason, nothing in your folder changes, and the
+          session keeps running where it was.
+        </P>
+
+        <Figure wide caption="A batch of five, schematic. A failed session restarts where it was; nothing is left half moved.">
           <MigrateFigure />
         </Figure>
 
         <P>
-          Going out, the transfer reuses the spawn snapshot, plus the gitignored files and
-          the transcript with its paths rewritten. Coming home, the host&apos;s work is applied
-          to your checkout as uncommitted changes with a three-way merge. If it does not
-          apply cleanly, the row fails with the reason and nothing in your folder changes.
-          Here is our own history from the past few days, failures included:
+          The conversation marks the move with a rule reading <em>now running on …</em>, and the
+          agent is told, so it does not go looking for a dev server it left behind:
         </P>
 
-        <Terminal label="cast migrate ls">
-          <Cmd>cast migrate ls</Cmd>
-          {MIGRATE_LS}
-        </Terminal>
+        <Figure caption="What the agent reads after a move.">
+          <pre className="p-4 font-mono text-[12px] leading-relaxed whitespace-pre-wrap" style={{ color: SOL.base01 }}>{MOVE_NOTICE}</pre>
+        </Figure>
 
         <P>
-          The partial batches are the honest part. Their failed rows read{" "}
-          <em>handoff refused: the host checkout is in use by session jx70vhm</em> and{" "}
-          <em>CONFLICT: the host&apos;s changes do not apply to this folder as it is now;
-          nothing was changed here</em>. In both cases the session kept running where it was.
-          When a move succeeds, the agent is told, so it does not go looking for a dev server
-          it left behind:
-        </P>
-
-        <Terminal label="what the agent reads after a move" wrap>
-          {MOVE_NOTICE}
-        </Terminal>
-
-        <P>
-          There are three other ways in. The machine chip in a session&apos;s header lists every
-          machine you can use and moves the session with one click; a sleeping host reads{" "}
-          <em>asleep, wakes on move</em>. <strong>Run here</strong> on a laptop brings a cloud
-          session home without ever interrupting a running turn. And when your laptop is under
-          sustained pressure (memory, CPU, or load at three times its core count for a minute
-          or more), the Resources page offers to offload sessions and spread them for you,
-          for you to review and confirm.
+          <strong>Run here</strong>, on any laptop, brings a cloud session home without
+          interrupting a turn in progress. And when your laptop is under sustained pressure
+          (memory, CPU, or load for a minute or more), the <strong>Resources</strong> page offers
+          to offload sessions to a cloud machine, spreads them for you, and waits for you to
+          confirm. On the iPhone app, tap the machine in a session&apos;s header to move it.
         </P>
 
         <Screenshot
           wide
           src="/blog/field-manual/film-remote.webp"
-          alt="A Codex session running on a cloud host, with its browser tab, in the same inbox as the laptop's sessions."
-          caption="A session on a host sits in the same inbox as everything on your laptop, browser tab and all."
+          alt="A Codex session running on a cloud machine, with its browser tab, in the same inbox as the laptop's sessions."
+          caption="A cloud session sits in the same inbox as everything on your laptop, browser tab and all."
         />
 
-        <H2>Borrowing the laptop from the cloud</H2>
+        <H2>Watch the cloud machine work</H2>
         <P>
-          Some things only exist on your laptop, and some work needs a screen. The host has
-          its own Chrome on a virtual display, so <Code>cast browser</Code> on a host drives
-          that Chrome and never yours. When an agent there needs to be signed in somewhere,
-          the laptop decrypts its own cookies for that one site and injects them into the
-          host&apos;s browser over an SSH tunnel. Google is refused outright, requests are rate
-          limited, and a request never wakes a host on its own.
-        </P>
-
-        <Terminal label="from the host, or about it" wrap>
-          {BORROW.split("\n").map((l) => <Cmd key={l}>{l}</Cmd>)}
-        </Terminal>
-
-        <P>
-          <Code>cast hosts vnc</Code> opens the host&apos;s whole screen inside codecast, with
-          mouse and keyboard, for anything outside the agent&apos;s tab. The stream reaches your
-          browser through the laptop, one SSH channel per connection, and closes ten minutes
-          after the last viewer leaves. <Code>cast computer</Code>, which drives native apps
-          through their accessibility tree, works on Linux hosts too, over AT-SPI on the
-          virtual display.
+          A cloud machine has its own Chrome, so agents there verify UI and read behind sign-ins
+          without touching yours. <strong>watch live</strong> on a browser step shows the
+          agent&apos;s tab beside the conversation. <strong>Take the wheel</strong> gives you the
+          mouse and keyboard, for example to sign in where the agent cannot, and{" "}
+          <strong>Hand back</strong> returns it. When an agent needs a site you are already
+          signed in to, your laptop copies that one site&apos;s login across. Google logins are
+          never copied.
         </P>
         <P>
-          <Code>cast hosts reach ~/notes</Code> is the strangest of these and our favorite. It
-          mounts a folder from your laptop on the host at the same path, with no copy. The
-          laptop serves it through an <Code>sftp-server</Code> locked in a macOS sandbox that
-          cannot touch the network, run programs, or read any file outside that folder, and
-          the host mounts it over the SSH connection the laptop already holds. The host never
-          connects to your laptop. Your home folder and anything holding keys are refused.
-          When the laptop sleeps, the mount drops and leaves a note in its place.
+          For anything outside the tab, a popup, a file picker or a native dialog, the screen
+          button opens the machine&apos;s whole display in a <strong>Host screen</strong> pane.
+          The <strong>tmux</strong> pill in the header opens the agent&apos;s terminal; typing
+          works there, a moment behind. Agents on the machine can also drive native Linux apps
+          the same way they do on a Mac.
         </P>
         <P>
-          Underneath all of these is one small relay. The host writes a request to codecast,
-          the laptop daemon picks it up and does the work over SSH, and the host reads the
-          outcome. There is no inbound port on your laptop and no relay server holding your
-          data. When both machines are on the same Tailscale network, the laptop dials the
-          host&apos;s tailnet address instead of its public one.
+          One capability is command-line only today: mounting a folder from your laptop on the
+          cloud machine at the same path, with no copy (<Code>cast hosts reach ~/notes</Code>). The
+          laptop serves just that folder from a locked-down sandbox, and the folder is there only
+          while your laptop is.
         </P>
 
         <H2>Cloud Macs and iOS simulators</H2>
         <P>
-          A Mac host is for work that needs Xcode. Add <Code>simulators = [&quot;iOS&quot;]</Code>{" "}
-          to the <Code>[host]</Code> table and setup copies your laptop&apos;s Xcode to the host,
-          downloads the iOS runtime without an Apple ID, and installs the tools{" "}
-          <Code>cast sim</Code> drives. After that an agent on the Mac host runs{" "}
-          <Code>cast sim acquire</Code>, installs its build, taps through it and screenshots
-          it into the thread, exactly as it would on your laptop, from a pool of three
-          simulators that are reaped when nobody holds them. The first Xcode copy is slow,
-          close to an hour for us; it happens once.
+          A cloud Mac is for work that needs Xcode. Add iOS simulators to the repository&apos;s
+          codecast setup (or ask an agent to), and the Mac gets a copy of your laptop&apos;s
+          Xcode, the iOS runtime and the tools agents use to drive a simulator. From then on an
+          agent on the Mac installs its build in a simulator, taps through it and puts
+          screenshots in the conversation, exactly as it would on your laptop. The first Xcode
+          copy is slow, close to an hour for us; it happens once.
         </P>
 
         <H2>It sleeps when nothing is happening</H2>
         <P>
-          A host that runs all night for nothing is the fastest way to stop trusting the
-          feature, so a Linux host watches for real work and stops itself without it. A
-          timer checks every two minutes. Real work means an SSH session, someone watching
-          the screen, an agent mid-turn, a headless <Code>claude -p</Code> or{" "}
-          <Code>codex exec</Code>, a live process under an agent, or CPU moving in one. An
-          agent idling at a prompt is not work. After twenty idle minutes (configurable, or
-          zero to disable) the host powers off, and a stopped instance costs only its disk.
+          A machine that runs all night for nothing is the fastest way to stop trusting the
+          feature, so a Linux machine watches for real work and stops itself without it. Real
+          work means an agent mid-turn, a background job, someone watching its screen, or a
+          process using CPU. An agent idling at a prompt is not work. After twenty idle minutes
+          the machine powers off, and a stopped machine costs only its disk. Its panel in
+          Settings → Devices says when it will sleep.
         </P>
 
-        <Figure wide caption="Schematic, except the wake: on September 5 a queued trigger reached a stopped host's session 60 seconds later.">
+        <Figure wide caption="Schematic, except the wake: on September 5 a queued trigger reached a stopped machine's session 60 seconds later.">
           <SleepFigure />
         </Figure>
 
         <P>
-          Waking is automatic in the common case. Work queued for a stopped host, a message
-          or a trigger, marks it for waking, and the next heartbeat from a laptop that manages
-          it starts the instance and waits for SSH. For a deliberately quiet job, such as a
-          long download with no CPU, <Code>cast hosts keepalive 30</Code> on the host takes
-          a lease that holds it awake for thirty minutes. The host&apos;s panel in Settings
-          shows all of it: Awake, Waking, Going to sleep or Asleep, how long until it sleeps,
-          and buttons to wake it, put it to sleep, re-apply setup, or save an image to start
-          new hosts from.
+          Waking is automatic. Work for an asleep machine, a message, a moved session or a
+          scheduled trigger, wakes it through your laptop, and the work starts once it is up.
+          You can also press <strong>Wake</strong> in its panel. A Mac is different: its AWS
+          host bills while allocated, awake or asleep, so it does not sleep on its own.
         </P>
 
         <H2>When something breaks</H2>
         <P>
-          Machines fail in boring ways, and most of the work here went into making the
-          failures boring too. Every daemon, on a host or a laptop, runs a watchdog that looks
-          for sessions whose agent process died mid-work. It restarts them with a note
-          explaining what happened, at most three times in six hours per session, and never
-          one you stopped yourself. Each host reports its readiness (mirror, logins, tools,
-          setup) on its heartbeat, and the laptop collects a cost and state report every
-          fifteen minutes, so the panel tells you which logins were held back and why before
-          an agent finds out the hard way. A migration row that stops reporting for thirty
-          minutes is failed by the server, and the session stays where it was.
+          Machines fail in boring ways, and most of the work here went into making the failures
+          boring too. If an agent&apos;s process dies in the middle of work, on a cloud machine
+          or a laptop, codecast restarts the session with a note explaining what happened, at
+          most three times in six hours, and never one you stopped yourself. A move that stops
+          reporting for thirty minutes is failed, and the session stays where it was. The
+          machine&apos;s panel shows which sign-ins and tools are missing before an agent trips
+          over them.
         </P>
 
         <H2>The other clouds</H2>
         <P>
-          Your host is not the only cloud your agents run in. Codecast also reads, and mostly
-          drives, the cloud agents other companies run, so they land in the same inbox and the
-          same search as everything else. Cursor Cloud agents appear as sessions once you add
-          a Cursor key; you can launch one from the composer with <strong>run in Cursor
-          Cloud</strong>, and your messages become its follow-ups. Codex Cloud tasks sync from
-          your own <Code>codex login</Code> when you turn it on, with up to four attempts per
-          task, a draft pull request, or the result applied to your checkout. Claude Code
-          sessions you started on the web are mirrored with their full transcripts, and you can
-          reply to them from codecast.
+          Your cloud machine is not the only cloud your agents run in. Codecast also shows, and
+          mostly drives, the cloud agents other companies run, in the same inbox and the same
+          search as everything else. Add a Cursor key and your Cursor Cloud agents appear as
+          sessions; the composer&apos;s <strong>run in Cursor Cloud</strong> starts one, and your
+          messages become its follow-ups. Turn on Codex Cloud tasks and <strong>run in
+          OpenAI&apos;s cloud</strong> starts one with up to four attempts, then <strong>Create
+          draft PR</strong> or <strong>Apply locally</strong>. Claude Code sessions you started on
+          the web show up with their full transcripts, and you can reply from codecast.
         </P>
 
-        <Figure wide caption="Four kinds of cloud session, one inbox. Only your own host starts from your uncommitted work.">
+        <Figure wide caption="Four kinds of cloud session, one inbox. Only your own machine starts from your uncommitted work.">
           <CloudsTable />
         </Figure>
 
         <P>
           The difference is the starting point. A vendor&apos;s cloud starts from what is on
-          GitHub. Your host starts from what is on your screen, which is why we built it.
+          GitHub. Your machine starts from what is on your screen, which is why we built it.
         </P>
 
         <H2>What it needs, and where it stops</H2>
@@ -577,20 +449,20 @@ export default function CodecastInTheCloudPost() {
           </Link>
           <Link href="/features/cloud">
             <Button size="lg" variant="outline" className="bg-transparent text-base px-8 h-12 font-medium" style={{ borderColor: SOL.base1, color: SOL.base01 }}>
-              The cloud hosts page
+              The cloud machines page
             </Button>
           </Link>
         </div>
 
         <p className="mt-10 text-sm leading-relaxed" style={{ color: SOL.base1 }}>
-          The terminal captures are genuine output from the codecast team&apos;s laptop and
-          its two hosts on 2026-10-07, with the hosts&apos; public IP addresses replaced by
-          documentation addresses and long lists trimmed where marked. The spawn, migrate and
-          borrow blocks show commands, not their output. The 60 second wake was measured on
-          2026-09-05 and is written up in the CLI&apos;s cloud workspaces doc. The figures are
-          drawn from the code&apos;s own constants (tick rates, timeouts, idle minutes); the
-          migration batch and the sync timeline are schematic. The three screenshots come from
-          the field manual&apos;s cloud chapter.
+          The screenshots of Add a cloud machine, the machine menu and Settings → Migration are
+          single elements of the real app, captured from the codecast team&apos;s own workspace
+          on 2026-10-09 with nothing else in frame; two unrelated offline machines are hidden
+          from the menu and the destination list. The 60 second wake was measured on 2026-09-05.
+          The figures are drawn from the code&apos;s own constants (tick rates, timeouts, idle
+          minutes); the migration batch and the sync timeline are schematic. Three illustrations
+          come from the field manual&apos;s cloud chapter. If you script codecast, every action
+          here also has a <Code>cast</Code> command; <Code>cast --help</Code> lists them.
         </p>
       </article>
     </main>

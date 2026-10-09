@@ -69,7 +69,10 @@ export function reapIdleSimulators(opts: { graceSecs?: number; log?: (m: string)
   const dir = lockDir();
   const booted = new Set(listDevices().filter((d) => d.state === "Booted").map((d) => d.udid));
   const ps = spawnSync("ps", ["-axo", "pid=,pcpu=,etime=,args="], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 }).stdout ?? "";
-  const front = spawnSync("osascript", ["-e", 'tell application "System Events" to get name of first application process whose frontmost is true'], { encoding: "utf-8", timeout: 10_000 }).stdout?.trim();
+  // lsappinfo, not System Events: asking System Events needs an Automation
+  // grant, and on a Mac nobody sits at (a cloud host) its prompt waits forever.
+  const asn = spawnSync("lsappinfo", ["front"], { encoding: "utf-8", timeout: 10_000 }).stdout?.trim();
+  const front = asn ? /"LSDisplayName"="(.*)"/.exec(spawnSync("lsappinfo", ["info", "-only", "name", asn], { encoding: "utf-8", timeout: 10_000 }).stdout ?? "")?.[1] : undefined;
   const current = front === "Simulator" ? spawnSync("defaults", ["read", "com.apple.iphonesimulator", "CurrentDeviceUDID"], { encoding: "utf-8" }).stdout?.trim() : undefined;
   const now = Math.floor(Date.now() / 1000);
   for (const entry of poolStatus(pool, dir)) {

@@ -35,6 +35,30 @@ export const IMPORT_MAP = {
   },
 };
 
+const ESM_BUILT = {
+  react: `https://esm.sh/react@${REACT_VERSION}/es2022/react.mjs`,
+  jsxRuntime: `https://esm.sh/react@${REACT_VERSION}/es2022/jsx-runtime.mjs`,
+  reactDom: `https://esm.sh/react-dom@${REACT_VERSION}/X-ZXJlYWN0LHJlYWN0LWRvbQ/es2022/react-dom.mjs`,
+  client: `https://esm.sh/react-dom@${REACT_VERSION}/X-ZXJlYWN0LHJlYWN0LWRvbQ/es2022/client.mjs`,
+};
+
+/** Where esm.sh's entry for each pinned module lands for a modern browser,
+ *  and what that file imports in turn. The import map an app is served with
+ *  points straight at these, skipping the hop through each entry, and the
+ *  page preloads the whole chain at once. */
+export const ESM_RESOLVED: Record<string, { url: string; imports: string[] }> = {
+  [IMPORT_MAP.imports.react]: { url: ESM_BUILT.react, imports: [] },
+  [IMPORT_MAP.imports["react/jsx-runtime"]]: { url: ESM_BUILT.jsxRuntime, imports: [] },
+  [IMPORT_MAP.imports["react-dom"]]: { url: ESM_BUILT.reactDom, imports: [ESM_BUILT.react] },
+  [IMPORT_MAP.imports["react-dom/client"]]: {
+    url: ESM_BUILT.client,
+    imports: [ESM_BUILT.react, ESM_BUILT.reactDom, "https://esm.sh/scheduler@^0.26.0?target=es2022", "https://esm.sh/scheduler@0.26.0/es2022/scheduler.mjs"],
+  },
+};
+
+/** The SDK at a URL that names its build, so it caches forever. */
+export const sdkPathFor = (hash: string) => `${SDK_PATH}/${hash}`;
+
 export function importMapScript(): string {
   return `<script type="importmap">${JSON.stringify(IMPORT_MAP, null, 2)}</script>`;
 }
@@ -98,8 +122,9 @@ removeWhere, not one remove each.
 An app holds at most ${MAX_DATA_DOCS_PER_APP} docs in all; past that inserts are refused.
 Data that only matters for a while (strokes, guesses, a round's moves)
 carries its round or session in a field, is read with where, and is cleared
-with removeWhere when the round ends. A refused write rejects with a readable
-message, and the room is told; never swallow write errors with an empty
+with removeWhere when the round ends. A refused write rejects and the room
+is told why. Never print a write error's message in the app: keep what the
+person entered so they can try again, and never swallow it with an empty
 catch.
 
 Every app's room already has a Copy link button. An in-app invite is

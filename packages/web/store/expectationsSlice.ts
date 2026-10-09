@@ -3,7 +3,8 @@
 // projectExpectations row on the click and riding `dispatch` to the side
 // effect of the same name (convex/dispatch.ts):
 //
-// - editExpectations: a person's own line, or a retirement with the reason.
+// - editExpectations: a person's own line, a change to a line (its words, its
+//   area, its open question settled), or a retirement with the reason.
 //   It is a proposal cited as them (personOp), and it applies as they make it
 //   exactly when personEditApplies says so; the server applies by the same
 //   rule, so the paint and the echo agree. Otherwise it paints as an open
@@ -20,6 +21,7 @@ import {
   applyOps,
   expectationPrefix,
   personEditApplies,
+  personEditSummary,
   personOp,
   type Expectation,
   type ExpectationOp,
@@ -55,7 +57,7 @@ export function paintPersonEdit(row: ProjectExpectationsRow, edit: PersonEdit, m
   const op = personOp(edit, me, now);
   const base = row.doc?.version ?? 0;
   if (personEditApplies(op, !!row.you_answer) && applyToRow(row, [op], base, now)) return;
-  row.proposals = [{ short_id: "", status: "open", summary: edit.op === "add" ? edit.text : `Retire ${edit.id}: ${edit.reason}`, changes: 1, base_version: base, created_at: now, ops: [op] }, ...(row.proposals ?? [])];
+  row.proposals = [{ short_id: "", status: "open", summary: personEditSummary(edit, "You"), changes: 1, base_version: base, created_at: now, ops: [op] }, ...(row.proposals ?? [])];
 }
 
 /** Paint Apply or Drop on an open proposal; returns the proposal's card id when one was asked. */

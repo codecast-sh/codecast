@@ -1,15 +1,16 @@
 "use client";
-// The intent record of a goal
-// (docs/architecture/initiatives-projects-role-page.md I5), in the order of
-// the test a goal page must pass: why it matters, what done looks like, the
-// milestones on the way, what is still undecided, what was decided, and who
-// said this and where. Every section edits in place: the row moves in the
-// store in the same tick (`updateInitiative` for the two written fields,
-// `recordInitiativeEntry` for one entry of a list, named by its key) and the
-// page paints from the store. An entry is added, edited, closed and removed
-// from its own row. The record is keyed by its goal, so a draft or an open
-// form never follows the page to another goal.
-import { useCallback, useState, type KeyboardEvent, type ReactNode } from "react";
+// The record of a goal (docs/architecture/initiatives-projects-role-page.md
+// I5; cohesive build spec §5.2): what done looks like, the milestones on the
+// way, what is still undecided, what was decided, and who said this and
+// where. It sits folded at the foot of the goal's sheet, and only what has
+// been written shows: a list nobody has started is one word in the row that
+// adds to the record, never a sentence saying it is empty. Every section
+// edits in place: the row moves in the store in the same tick
+// (`updateInitiative` for the written fields, `recordInitiativeEntry` for one
+// entry of a list, named by its key) and the sheet paints from the store. The
+// record is keyed by its goal, so a draft or an open form never follows the
+// sheet to another goal.
+import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, Circle, CircleHelp, Flag, Pencil, Plus, Undo2, X, type LucideIcon } from "lucide-react";
 import { INITIATIVE_RECORD_MAX, INITIATIVE_RECORD_NOUN, intentSourceAddress, intentSourceKey, milestoneCounts, nextMilestone, orderedMilestones, type InitiativeDecision, type InitiativeMilestone, type InitiativeQuestion, type InitiativeRecordList, type InitiativeRow, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { formatTargetDay, targetDayOf, targetDayPassed, targetDayStamp } from "@codecast/shared/time";
@@ -19,48 +20,65 @@ import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 import { cn } from "../../lib/utils";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ByChip, SourceLink, shortDate } from "./InitiativeAtoms";
+import { RECORD_PARTS as PARTS, recordParts, type RecordPart } from "./recordModel";
+
+export type { RecordPart } from "./recordModel";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
-const FIELD = "h-7 min-w-0 rounded-md border bg-transparent px-2 text-[12.5px] outline-none placeholder:text-sol-text-dim focus:border-sol-magenta/60";
-const EMPTY = "text-[12.5px] italic";
+const FIELD = "h-7 min-w-0 rounded-md border bg-transparent px-2 text-[12.5px] outline-none placeholder:text-sol-text-dim focus:border-sol-cyan/60";
 const META = "flex items-center gap-x-2.5 gap-y-0.5 flex-wrap text-[11px]";
 
-/** A section of the goal page: a small heading, a count, one control on the
- *  right. InitiativePanel's sections wear the same attribute. */
+/** A section of a goal's sheet: the small heading every sheet section wears,
+ *  a count, one control on the right. The sheet's own sections wear the same
+ *  attribute. */
 export function RecordSection({ name, label, count, action, children }: { name: string; label: string; count?: number; action?: ReactNode; children: ReactNode }) {
   return (
     <section data-initiative-section={name}>
-      <div className="flex items-center gap-2 mb-2.5 min-h-[24px]">
-        <h2 className="text-[12.5px] font-semibold tracking-tight">{label}</h2>
-        {count ? <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{count}</span> : null}
-        <span className="flex-1" />
-        {action}
-      </div>
+      <SectionHead label={label} count={count} action={action} />
       {children}
     </section>
   );
 }
 
-/** `part` splits the record where the goal's numbers go on its page: the
- *  intent (why, done when) reads before them, the progress (milestones,
- *  questions, decisions, sources) after. Without it, the whole record. */
-export function InitiativeRecord({ initiative, now, part }: { initiative: InitiativeRow; all: InitiativeRow[]; now: number; part?: "intent" | "progress" }) {
-  const record = useCallback((op: InitiativeRecordOp) => useInboxStore.getState().recordInitiativeEntry(initiative._id, op), [initiative._id]);
+/** The one section heading every sheet draws: a small label, an optional
+ *  count, and an action at its right, on a row of one fixed height, so a
+ *  heading sits at the same place on every kind of sheet. */
+export function SectionHead({ label, count, action }: { label: string; count?: number; action?: ReactNode }) {
   return (
-    <div key={initiative._id} className="space-y-7" data-initiative-record={initiative.short_id || initiative._id} data-initiative-record-part={part}>
-      {part !== "progress" && (
-        <>
-          <Written initiative={initiative} field="why" label="Why it matters" rows={4} markdown placeholder="What changes for the company when this is reached, and what it costs to miss it." empty="Nobody has said why this matters yet." />
-          <Written initiative={initiative} field="done_when" label="Done when" rows={3} placeholder="The sentence a person checks the result against." empty="Nobody has said what done looks like yet." />
-        </>
-      )}
-      {part !== "intent" && (
-        <>
-          <Milestones initiative={initiative} now={now} record={record} />
-          <Questions initiative={initiative} now={now} record={record} />
-          <Decisions initiative={initiative} now={now} record={record} />
-          <Sources initiative={initiative} now={now} record={record} />
-        </>
+    <div className="flex items-center gap-2 mb-1.5 min-h-[24px]">
+      <h3 className="text-[12px] font-normal" style={{ color: "var(--sol-text-dim)" }}>{label}</h3>
+      {count ? <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{count}</span> : null}
+      <span className="flex-1" />
+      {action}
+    </div>
+  );
+}
+
+const PART_ADD: Record<RecordPart, string> = { done_when: "Done when", milestones: "Milestone", questions: "Question", decisions: "Decision", sources: "Source" };
+
+/** The record: each part that holds something, then one row that starts a
+ *  part nobody has written yet. `start` opens a part with its form ready (a
+ *  sheet's "write what done looks like"). */
+export function InitiativeRecord({ initiative, now, start }: { initiative: InitiativeRow; all?: InitiativeRow[]; now: number; start?: RecordPart | null }) {
+  const record = useCallback((op: InitiativeRecordOp) => useInboxStore.getState().recordInitiativeEntry(initiative._id, op), [initiative._id]);
+  // A part the person opened stays open until the record moves to another goal.
+  const [opened, setOpened] = useState<ReadonlySet<RecordPart>>(() => new Set(start ? [start] : []));
+  const filled = new Set(recordParts(initiative));
+  const shown = (p: RecordPart) => filled.has(p) || opened.has(p);
+  const begun = (p: RecordPart) => opened.has(p) && !filled.has(p);
+  const missing = PARTS.filter((p) => !shown(p) && (p === "done_when" || canAdd(initiative, p)));
+  return (
+    <div key={initiative._id} className="space-y-6" data-initiative-record={initiative.short_id || initiative._id}>
+      {shown("done_when") && <Written initiative={initiative} field="done_when" label="Done when" rows={3} placeholder="The sentence a person checks the result against." start={begun("done_when")} />}
+      {shown("milestones") && <Milestones initiative={initiative} now={now} record={record} start={begun("milestones")} />}
+      {shown("questions") && <Questions initiative={initiative} now={now} record={record} start={begun("questions")} />}
+      {shown("decisions") && <Decisions initiative={initiative} now={now} record={record} start={begun("decisions")} />}
+      {shown("sources") && <Sources initiative={initiative} now={now} record={record} start={begun("sources")} />}
+      {missing.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap" data-initiative-record-add>
+          <span className="mr-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Add</span>
+          {missing.map((p) => <Ghost key={p} icon={Plus} onClick={() => setOpened(new Set([...opened, p]))} data-initiative-add-part={p}>{PART_ADD[p]}</Ghost>)}
+        </div>
       )}
     </div>
   );
@@ -102,7 +120,7 @@ function FormButtons({ submit, onCancel, onSubmit, disabled }: { submit: string;
   return (
     <>
       <button type="button" onClick={onCancel} className="h-7 px-2.5 rounded-md text-[12px] hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-      <button type="button" onClick={onSubmit} disabled={disabled} className="h-7 px-3 rounded-md text-[12px] font-medium disabled:opacity-45" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)" }} data-initiative-form-submit>{submit}</button>
+      <button type="button" onClick={onSubmit} disabled={disabled} className="h-7 px-3 rounded-md text-[12px] font-medium disabled:opacity-45" style={{ background: "var(--sol-text)", color: "var(--sol-bg)" }} data-initiative-form-submit>{submit}</button>
     </>
   );
 }
@@ -171,19 +189,48 @@ function EditAction({ list, onClick }: { list: InitiativeRecordList; onClick: ()
 
 // ------------------------------------------------------- why and done when
 
-/** A written field of the record, edited in place. */
-function Written({ initiative, field, label, rows, markdown, placeholder, empty }: { initiative: InitiativeRow; field: "why" | "done_when"; label: string; rows: number; markdown?: boolean; placeholder: string; empty: string }) {
-  const value = initiative[field] ?? "";
-  const [draft, setDraft] = useState<string | null>(null);
-  const cancel = () => setDraft(null);
+/** A written field of a goal, edited in place. `fallback` is what reads in
+ *  its place while it is unwritten (a goal's description under Why); the
+ *  editor still writes the field itself. */
+export function Written({ initiative, field, ...rest }: { initiative: InitiativeRow; field: "why" | "done_when" } & Omit<WrittenFieldProps, "name" | "value" | "onSave">) {
+  const save = (next: string) => useInboxStore.getState().updateInitiative(initiative._id, field === "why" ? { why: next || null } : { done_when: next || null });
+  return <WrittenField name={field} value={initiative[field] ?? ""} onSave={save} {...rest} />;
+}
+
+type WrittenFieldProps = {
+  name: string; label: string; value: string; onSave: (next: string) => void; rows: number; markdown?: boolean; placeholder: string;
+  /** Open on its editor. */
+  start?: boolean;
+  /** What reads in its place while it is unwritten. */
+  fallback?: string | null;
+  /** The editor closed, saved or not. */
+  onDone?: () => void;
+  /** Cap the words at about seven lines, with Read all where they are cut. */
+  clamp?: boolean;
+};
+
+/** One paragraph a sheet writes in place: a goal's why and what done looks
+ *  like, a project's what it is for. Unwritten and with nothing to fall back
+ *  on, it is its heading and the one word that writes it. The save goes
+ *  through the caller's store action, so the words paint in the same tick. */
+function WrittenField({ name, label, value, onSave, rows, markdown, placeholder, start, fallback, onDone, clamp }: WrittenFieldProps) {
+  const shown = value || fallback?.trim() || "";
+  const [draft, setDraft] = useState<string | null>(start ? value : null);
+  const cancel = () => { setDraft(null); onDone?.(); };
   const save = () => {
     if (draft === null) return;
     const next = draft.trim();
-    if (next !== value) useInboxStore.getState().updateInitiative(initiative._id, field === "why" ? { why: next || null } : { done_when: next || null });
+    if (next !== value) onSave(next);
     setDraft(null);
+    onDone?.();
   };
+  const words = !shown ? null : markdown ? (
+    <MarkdownRenderer content={shown} className="text-[13px] leading-relaxed" />
+  ) : (
+    <p className="text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: "var(--sol-text-secondary)" }} data-written={name}>{shown}</p>
+  );
   return (
-    <RecordSection name={field} label={label} action={draft === null ? <Ghost icon={Pencil} onClick={() => setDraft(value)} data-initiative-edit={field}>{value ? "Edit" : "Write"}</Ghost> : undefined}>
+    <RecordSection name={name} label={label} action={draft === null ? <Ghost icon={Pencil} onClick={() => setDraft(value || shown)} data-initiative-edit={name}>{shown ? "Edit" : "Write"}</Ghost> : undefined}>
       {draft !== null ? (
         <div>
           <textarea
@@ -194,20 +241,44 @@ function Written({ initiative, field, label, rows, markdown, placeholder, empty 
             rows={rows}
             placeholder={placeholder}
             aria-label={label}
-            className="w-full resize-y rounded-lg border bg-transparent px-3 py-2 text-[13px] leading-relaxed outline-none placeholder:text-sol-text-dim focus:border-sol-magenta/60"
+            className="w-full resize-y rounded-lg border bg-transparent px-3 py-2 text-[13px] leading-relaxed outline-none placeholder:text-sol-text-dim focus:border-sol-cyan/60"
             style={{ borderColor: HAIRLINE }}
-            data-initiative-field={field}
+            data-initiative-field={name}
           />
           <div className="mt-2 flex justify-end gap-1.5"><FormButtons submit="Save" onCancel={cancel} onSubmit={save} /></div>
         </div>
-      ) : !value ? (
-        <p className={EMPTY} style={{ color: "var(--sol-text-dim)" }}>{empty}</p>
-      ) : markdown ? (
-        <MarkdownRenderer content={value} className="text-[13px] leading-relaxed" />
-      ) : (
-        <p className="text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: "var(--sol-text)" }}>{value}</p>
-      )}
+      ) : words && clamp ? <Clamped key={shown}>{words}</Clamped> : words}
     </RecordSection>
+  );
+}
+
+/** Words held to about seven lines, faded where they are cut, with Read all
+ *  under them. The toggle shows only when the words run past the cap. */
+function Clamped({ children }: { children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [cut, setCut] = useState(false);
+  const [all, setAll] = useState(false);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || all) return;
+    const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [all]);
+  const fade = cut && !all ? "linear-gradient(to bottom, black calc(100% - 2.6em), transparent)" : undefined;
+  return (
+    <div data-clamped={all ? "open" : cut ? "cut" : "whole"}>
+      <div ref={box} className={cn("text-[13px]", !all && "max-h-[11.4em] overflow-hidden")} style={fade ? { maskImage: fade, WebkitMaskImage: fade } : undefined}>{children}</div>
+      {(cut || all) && (
+        <button type="button" onClick={() => setAll(!all)} className="mt-0.5 -ml-1.5 h-6 inline-flex items-center px-1.5 rounded-md text-[11.5px] hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} data-clamp-toggle>
+          {all ? "Show less" : "Read all"}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -228,16 +299,14 @@ const canAdd = (initiative: InitiativeRow, list: InitiativeRecordList) => (initi
 /** The steps on the way, in reading order. Reached ones stay, so the list is
  *  also the record of progress; the next one is marked, and one past its day
  *  is red. */
-function Milestones({ initiative, now, record }: { initiative: InitiativeRow; now: number; record: Record1 }) {
-  const [adding, setAdding] = useState(false);
+function Milestones({ initiative, now, record, start }: { initiative: InitiativeRow; now: number; record: Record1; start?: boolean }) {
+  const [adding, setAdding] = useState(!!start);
   const rows = orderedMilestones(initiative.milestones);
   const next = nextMilestone(initiative);
   const counts = milestoneCounts(initiative);
   return (
     <RecordSection name="milestones" label="Milestones" count={counts.total} action={!adding && canAdd(initiative, "milestones") ? <Ghost icon={Plus} onClick={() => setAdding(true)} data-initiative-add="milestones">Add</Ghost> : undefined}>
-      {rows.length === 0 && !adding ? (
-        <p className={EMPTY} style={{ color: "var(--sol-text-dim)" }}>No milestones yet.</p>
-      ) : (
+      {rows.length > 0 && (
         <ol>
           {rows.map((m, i) => <MilestoneRow key={m.key} milestone={m} state={milestoneState(m, next, now)} isNext={next?.key === m.key} last={i === rows.length - 1} now={now} record={record} />)}
         </ol>
@@ -297,14 +366,13 @@ function MilestoneRow({ milestone: m, state, isNext, last, now, record }: { mile
 
 /** What is still undecided, open ones first. An answer closes a question and
  *  it stays on the record, folded away under the open ones. */
-function Questions({ initiative, now, record }: { initiative: InitiativeRow; now: number; record: Record1 }) {
-  const [adding, setAdding] = useState(false);
+function Questions({ initiative, now, record, start }: { initiative: InitiativeRow; now: number; record: Record1; start?: boolean }) {
+  const [adding, setAdding] = useState(!!start);
   const all = initiative.questions ?? [];
   const open = all.filter((q) => !q.answer);
   const answered = all.filter((q) => q.answer).sort((a, b) => (b.answered_at ?? 0) - (a.answered_at ?? 0));
   return (
     <RecordSection name="questions" label="Open questions" count={open.length} action={!adding && canAdd(initiative, "questions") ? <Ghost icon={Plus} onClick={() => setAdding(true)} data-initiative-add="questions">Ask</Ghost> : undefined}>
-      {open.length === 0 && !adding && <p className={EMPTY} style={{ color: "var(--sol-text-dim)" }}>Nothing is waiting on an answer.</p>}
       {open.length > 0 && <ul className="space-y-2">{open.map((q) => <OpenQuestion key={q.key} question={q} now={now} record={record} />)}</ul>}
       {adding && (
         <EntryForm
@@ -405,12 +473,11 @@ function OpenQuestion({ question: q, now, record }: { question: InitiativeQuesti
 // --------------------------------------------------------------- decisions
 
 /** What was decided, newest first, each with who decided it, when and where. */
-function Decisions({ initiative, now, record }: { initiative: InitiativeRow; now: number; record: Record1 }) {
-  const [adding, setAdding] = useState(false);
+function Decisions({ initiative, now, record, start }: { initiative: InitiativeRow; now: number; record: Record1; start?: boolean }) {
+  const [adding, setAdding] = useState(!!start);
   const rows = (initiative.decisions ?? []).map((d, i) => ({ d, i })).sort((a, b) => b.d.at - a.d.at || b.i - a.i).map((x) => x.d);
   return (
     <RecordSection name="decisions" label="Decisions" count={rows.length} action={!adding && canAdd(initiative, "decisions") ? <Ghost icon={Plus} onClick={() => setAdding(true)} data-initiative-add="decisions">Record</Ghost> : undefined}>
-      {rows.length === 0 && !adding && <p className={EMPTY} style={{ color: "var(--sol-text-dim)" }}>No decisions recorded yet.</p>}
       {adding && (
         <div className="mb-2.5">
           <EntryForm
@@ -458,12 +525,11 @@ function DecisionRow({ decision: d, now, record }: { decision: InitiativeDecisio
 // ----------------------------------------------------------------- sources
 
 /** Where the goal was stated: who said it and where, with the words as said. */
-function Sources({ initiative, now, record }: { initiative: InitiativeRow; now: number; record: Record1 }) {
-  const [adding, setAdding] = useState(false);
+function Sources({ initiative, now, record, start }: { initiative: InitiativeRow; now: number; record: Record1; start?: boolean }) {
+  const [adding, setAdding] = useState(!!start);
   const rows = initiative.sources ?? [];
   return (
     <RecordSection name="sources" label="Sources" count={rows.length} action={!adding && canAdd(initiative, "sources") ? <Ghost icon={Plus} onClick={() => setAdding(true)} data-initiative-add="sources">Add</Ghost> : undefined}>
-      {rows.length === 0 && !adding && <p className={EMPTY} style={{ color: "var(--sol-text-dim)" }}>Nobody has said where this goal was stated.</p>}
       {rows.length > 0 && <ul className="space-y-2">{rows.map((s) => <SourceRow key={intentSourceKey(s)} source={s} now={now} record={record} />)}</ul>}
       {adding && (
         <EntryForm
