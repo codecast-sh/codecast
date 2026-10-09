@@ -4,11 +4,13 @@
 // addBlocker/addWait/relateTasks, whose side effects make the real write.
 import {
   dependencyLoopChecker,
+  GRAPH_LINK_CAP,
   isActiveTask,
   isCleared,
   isTerminalTaskStatus,
   isPrWaitTarget,
   newWaitId,
+  orderBlockerEntries,
   parseBlockerRef,
   prRef,
   taskBlockerEntries,
@@ -17,9 +19,11 @@ import {
   waitIsReplaceable,
   waitTargetOf,
   type WaitLabelOptions,
+  type Blocker,
   type GraphTask,
   type StatusOf,
   type TaskWait,
+  type WaitState,
   type WaitTarget,
 } from "@codecast/shared/tasks";
 import { localTimeZone } from "@codecast/shared/time";
@@ -28,8 +32,10 @@ import { useInboxStore, type TaskItem } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { waitIsOn } from "../store/taskGraphDraft";
 import { counted, undoAsOne } from "../store/undo/labels";
+import { lookup } from "./liveEntities";
+import { setTaskParent } from "./taskActions";
 import { storeStatusOf, type BoardTask } from "./taskBlockers";
-import { filterByWorkspace, workspaceKeyOfRow } from "./workspaceScope";
+import { sameWorkspaceAs, workspaceKeyOfRow } from "./workspaceScope";
 
 // ---------------------------------------------------------------------------
 // The Blocked by row
@@ -46,28 +52,71 @@ export type BlockerLine =
   | { key: string; kind: "task"; ref: string; raws: string[]; state: "open" | "met" | "missing" | "unknown"; status?: string }
   | { key: string; kind: "wait"; wait: TaskWait };
 
-/** Every blocker of `task`, task blockers in `blocked_by` order then waits:
- *  the shared entries readiness filters, so this row and readiness agree. */
+/** Every blocker of `task`, task blockers and waits in one list: the shared
+ *  entries readiness filters, so this row and readiness agree, in the shared
+ *  reading order (`orderBlockerEntries`) so the row leads with what is stopping
+ *  the task and keeps its cleared history at the bottom — the same order `cast
+ *  task show` prints (TG12). */
 export function blockerLines(task: GraphTask, statusOf: StatusOf): BlockerLine[] {
-  const lines: BlockerLine[] = taskBlockerEntries(task, statusOf).map(({ blocker: b, raws }) => {
+  const entries: Array<{ blocker: Blocker; line: BlockerLine }> = taskBlockerEntries(task, statusOf).map(({ blocker: b, raws }) => {
     const state = "missing" in b ? "missing" : isCleared(b) ? "met" : b.status === UNKNOWN_BLOCKER_STATUS ? "unknown" : "open";
     const status = "status" in b && b.status !== UNKNOWN_BLOCKER_STATUS ? b.status : undefined;
-    return { key: `task:${b.ref}`, kind: "task", ref: b.ref, raws, state, ...(status ? { status } : {}) };
+    return { blocker: b, line: { key: `task:${b.ref}`, kind: "task", ref: b.ref, raws, state, ...(status ? { status } : {}) } };
   });
-  for (const w of task.waits ?? []) lines.push({ key: `wait:${w.id}`, kind: "wait", wait: w });
-  return lines;
+  for (const w of task.waits ?? []) entries.push({ blocker: w, line: { key: `wait:${w.id}`, kind: "wait", wait: w } });
+  return orderBlockerEntries(entries, (e) => e.blocker).map((e) => e.line);
 }
 
-/** The store's tasks that were found while working on `task` (TG5), in its workspace. */
-export function foundHereOf(task: Pick<TaskItem, "short_id" | "workspace" | "team_id">, tasks: Record<string, TaskItem>): TaskItem[] {
+/** The store's tasks that were found while working on `task` (TG5), in its
+ *  workspace, oldest first and stopped at the shared cap, so the page and
+ *  `cast task show` list the same tasks (convex foundHereRows). */
+export function foundHereOf(task: Pick<TaskItem, "short_id" | "workspace" | "team_id" | "user_id">, tasks: Record<string, TaskItem>): TaskItem[] {
   return sameWorkspace(tasks, task)
     .filter((t) => t.found_during === task.short_id)
-    .sort((a, b) => a.created_at - b.created_at);
+    .sort((a, b) => a.created_at - b.created_at)
+    .slice(0, GRAPH_LINK_CAP);
 }
 
-/** The store's tasks in `task`'s own workspace: what its relations may name. */
-function sameWorkspace(tasks: Record<string, TaskItem>, task: Pick<TaskItem, "workspace" | "team_id">): TaskItem[] {
-  return filterByWorkspace(Object.values(tasks), workspaceKeyOfRow(task));
+/** `task`'s `blocks` mirror as every surface prints it (convex taskLinksOf):
+ *  stopped at the shared cap, and without an entry the client can see has
+ *  gone stale — a dependent whose row it holds and whose `blocked_by` no
+ *  longer names this task. An entry whose row the store lacks stays, so an
+ *  unloaded dependent is never hidden. */
+export function blocksOf(task: TaskItem, tasks: Record<string, TaskItem>): string[] {
+  const self = new Set([task.short_id, String(task._id)]);
+  const home = workspaceKeyOfRow(task);
+  // Capped before the entries are dropped, exactly as the server reads it,
+  // so both name the same tasks on a row that got past the cap.
+  return (task.blocks ?? [])
+    .slice(0, GRAPH_LINK_CAP)
+    .filter((ref) => {
+      const row = lookup(tasks, ref);
+      // A ref the store holds no row for stays: the client cannot tell a
+      // stale entry from an unloaded dependent, and hiding it would hide a
+      // real one. A row it holds in ANOTHER workspace is dropped, as the
+      // server drops it (taskLinksOf's readableLink refuses a link outside
+      // the task's workspace), so this page and `cast task show` name the
+      // same tasks.
+      if (!row) return true;
+      if (workspaceKeyOfRow(row) !== home) return false;
+      return ((row.blocked_by ?? []) as string[]).some((r) => self.has(r));
+    });
+}
+
+/** `task`'s see-also links at the same cap, so the page and `cast task show`
+ *  list the same tasks even on a row that got past the write-time cap. */
+export function relatedOf(task: TaskItem): string[] {
+  return (task.related ?? []).slice(0, GRAPH_LINK_CAP);
+}
+
+/** The store's tasks in `task`'s own workspace: what its relations may name.
+ *  Row-relative, so both sides are read through `workspaceKeyOfRow`
+ *  (`sameWorkspaceAs`) — the viewer-relative `inWorkspace` would admit any
+ *  key-less, team-less row, a teammate's legacy task included, which the
+ *  server refuses for the same lists (assertDependencyEdges, foundHereRows). */
+function sameWorkspace(tasks: Record<string, TaskItem>, task: Pick<TaskItem, "workspace" | "team_id" | "user_id">): TaskItem[] {
+  const key = workspaceKeyOfRow(task);
+  return Object.values(tasks).filter((t) => sameWorkspaceAs(t, key));
 }
 
 /** Whether `task` has a wait on `target` that `is` matches. One that stands
@@ -81,10 +130,18 @@ const isWaiting = (w: TaskWait) => w.state === "waiting";
 const stands = (w: TaskWait) => !waitIsReplaceable(w);
 
 // ---------------------------------------------------------------------------
-// The palette (modes "blocker" and "related")
+// The palette (modes "blocker", "blocks" and "related")
 // ---------------------------------------------------------------------------
 
-export type RelationMode = "blocker" | "related";
+/** The modes, their words and the guard live in a leaf module (lib/relationActs)
+ *  so the palette's rows and the row menu can read what a button is called
+ *  without pulling the store in; re-exported here, which is where the rest of
+ *  the relation code already imports from. */
+export { isRelationMode, RELATION_ACT, RELATION_MODES, relationPlaceholder, type RelationMode } from "./relationActs";
+import type { RelationMode } from "./relationActs";
+
+/** The modes that edit the one dependency edge, in either direction. */
+const isDepMode = (mode: RelationMode) => mode === "blocker" || mode === "blocks";
 
 /** A palette row: a task to link, or (blocker) a wait parsed from the query.
  *  A task row carries what its line draws (`task`); `warn` marks a hint that
@@ -101,8 +158,12 @@ export type RelationItem = {
 /** A task as a palette line draws it: its id, title and status glyph. */
 export type RelationTask = { ref: string; title?: string; status?: string };
 
-/** The task links a mode edits on `t`. */
-const linksOf = (t: TaskItem, mode: RelationMode): string[] => (mode === "blocker" ? t.blocked_by : t.related) ?? [];
+/** The task links a mode edits on `t`. `found_during` holds one task, so it
+ *  reads as a list of nought or one and a pick on another task repoints it. */
+const linksOf = (t: TaskItem, mode: RelationMode): string[] =>
+  mode === "found_during"
+    ? (t.found_during ? [t.found_during] : [])
+    : (mode === "blocker" ? t.blocked_by : mode === "blocks" ? t.blocks : t.related) ?? [];
 
 /** Where a row sits: list rows carry their plan and project ids untyped. */
 type Placed = { plan_id?: string; project_id?: string; project_path?: string };
@@ -139,8 +200,10 @@ export function blockerForms(targets: TaskItem[], now = Date.now()): string[] {
 
 /** The query read as a ref: what to offer first, or why it reads as none.
  *  An error is only an error once no task title matches either.
- *  `unrecognized`: the query has none of the mode's shapes, so the hint
- *  lists the forms rather than the error. */
+ *  `unrecognized`: the query has no ref's shape at all, so the hint lists the
+ *  forms rather than the error. A ref of the WRONG KIND for the mode (a PR
+ *  pasted into "Link related task…") is recognized: it parsed, so the hint says
+ *  which kind the mode takes, and its sentence already names the form. */
 export function parseRelationQuery(search: string, mode: RelationMode, now = Date.now(), timeZone = localTimeZone()):
   { pick: RelationItem["pick"] } | { error: string; unrecognized?: true } | null {
   const text = search.trim();
@@ -148,24 +211,86 @@ export function parseRelationQuery(search: string, mode: RelationMode, now = Dat
   const ref = parseBlockerRef(text, { now, timeZone });
   if (!ref.ok) return ref.unrecognized ? { error: ref.error, unrecognized: true } : { error: ref.error };
   if (ref.kind === "task") return { pick: { kind: "task", ref: ref.ref } };
-  if (mode === "related") return { error: `A related link is to a task (ct-12), not ${text}`, unrecognized: true };
+  if (mode === "blocks") return { error: `A task that waits on this one is a task (ct-12), not ${text}` };
+  if (mode === "related") return { error: `A related link is to a task (ct-12), not ${text}` };
+  if (mode === "found_during") return { error: `A task is found while working on a task (ct-12), not ${text}` };
   return { pick: { kind: "wait", target: waitTargetOf(ref) } };
 }
 
+/** Why the palette's query is no relation: set once it matches no task and
+ *  reads as no ref. The hint shows it, in place of the list's "No results". */
+export function relationQueryError(search: string, mode: RelationMode, matched: boolean) {
+  const parsed = matched ? null : parseRelationQuery(search, mode);
+  return parsed && "error" in parsed ? parsed : null;
+}
+
+/** Detach the parent; the store refuses only a task it cannot find. The task
+ *  page's breadcrumb is where a subtask states its parent, so it carries this. */
+export function removeTaskParent(id: string): void {
+  const r = setTaskParent(id, "");
+  if (!r.ok) toast.error(r.reason);
+}
+
+/** A relations line's state glyph as words. The bare state value ("met") has
+ *  no subject, and a met blocker's line carries no other text, so a reader
+ *  hearing it would not learn WHAT is met. `subject` is what the line is
+ *  about, in the same vocabulary as the CLI's ("blocker", "wait").
+ *
+ *  `history` is the fourth word a line can carry, and the reason it is not a
+ *  state: a closed task waits on nothing (TG1), so under the row's "Blocked
+ *  by (cleared)" heading an entry that never settled is history, and saying
+ *  "still waiting on this wait" there contradicts the heading directly above
+ *  it. These are the entries `cast task show` brackets `[history]`
+ *  (`waitRefLine`, `taskBlockerLine`), and only those: a failed wait keeps
+ *  `[failed]` on a closed task there, so it keeps its own words here.
+ *
+ *  Keyed by the shared `WaitState` set rather than branched on, so a state
+ *  added to `WAIT_STATES` fails this build instead of silently reading as
+ *  "still waiting". */
+const LINE_STATE_WORDS: Record<WaitState | "history", (subject: string) => string> = {
+  waiting: (subject) => `still waiting on this ${subject}`,
+  met: (subject) => `${subject} met`,
+  failed: (subject) => `${subject} failed, needs a re-plan`,
+  // What never settled, said of each subject: a wait was left unsettled, a
+  // task blocker is simply still open.
+  history: (subject) => `${subject === "wait" ? "wait left unsettled" : "blocker still open"} (history)`,
+};
+
+export function lineStateLabel(state: WaitState | "history", subject: "blocker" | "wait"): string {
+  return LINE_STATE_WORDS[state](subject);
+}
+
 /**
- * Why a target cannot wait on a ref, over the edges the server counts: the
- * target's workspace, done and dropped tasks left out (TG4). One index per
- * workspace, built on first use, so marking every candidate reads the
- * collection once.
+ * Why one task cannot wait on another, over the edges the server counts:
+ * `owner` names the workspace to read (done and dropped tasks left out, TG4)
+ * and the pair is the edge, whichever way round the palette writes it. One
+ * index per workspace, built on first use, so marking every candidate reads
+ * the collection once.
  */
-function loopChecker(tasks: Record<string, TaskItem>): (task: TaskItem, ref: string) => string | null {
+function loopChecker(tasks: Record<string, TaskItem>): (owner: TaskItem, task: string, blocker: string) => string | null {
   const byWorkspace = new Map<string | null, (task: string, blocker: string) => string | null>();
-  return (task, ref) => {
-    const key = workspaceKeyOfRow(task);
+  return (owner, task, blocker) => {
+    const key = workspaceKeyOfRow(owner);
     let check = byWorkspace.get(key);
-    if (!check) byWorkspace.set(key, (check = dependencyLoopChecker(sameWorkspace(tasks, task).filter((t) => !isTerminalTaskStatus(t.status)))));
-    return check(task.short_id, ref);
+    if (!check) byWorkspace.set(key, (check = dependencyLoopChecker(sameWorkspace(tasks, owner).filter((t) => !isTerminalTaskStatus(t.status)))));
+    return check(task, blocker);
   };
+}
+
+/** The edge a pick writes, as the loop checker reads it: which task would
+ *  wait, and on what. "blocks" is the same edge from the other side, so the
+ *  check is the same one, with its ends swapped. */
+const depEdge = (mode: RelationMode, target: TaskItem, ref: string): [task: string, blocker: string] =>
+  mode === "blocks" ? [ref, target.short_id] : [target.short_id, ref];
+
+/** Whether the link a pick would write is already on `target`. For "blocks"
+ *  both rows are read: the dependent's own `blocked_by` is the authority for
+ *  the edge (by either form it may name the task under), and the mirror alone
+ *  can lag it, so a pick on a task that already waits is never offered as new. */
+function alreadyLinked(mode: RelationMode, target: TaskItem, ref: string, row: TaskItem | undefined): boolean {
+  if (mode !== "blocks") return linksOf(target, mode).includes(ref);
+  const forms = [target.short_id, String(target._id)];
+  return (target.blocks ?? []).includes(ref) || ((row?.blocked_by ?? []) as string[]).some((r) => forms.includes(r));
 }
 
 /** The palette rows for `targets`: the parsed ref first, then open, active
@@ -182,9 +307,12 @@ export function relationItems(
 ): RelationItem[] {
   const target = targets[0];
   if (!target) return [];
-  const linked = new Set(targets.flatMap((t) => [t.short_id, ...linksOf(t, mode)]));
+  const selves = new Set(targets.map((t) => t.short_id));
   const rows = sameWorkspace(tasks, target);
   const byShort = new Map(rows.map((t) => [t.short_id, t]));
+  // What a pick would not change, on any target (the loose list) or on all of
+  // them (the pasted ref's hint).
+  const linkedAny = (ref: string, row?: TaskItem) => targets.some((t) => alreadyLinked(mode, t, ref, row));
   const loops = loopChecker(tasks);
   const q = search.trim().toLowerCase();
   const out: RelationItem[] = [];
@@ -202,17 +330,28 @@ export function relationItems(
       // A pasted ref that is already linked is still listed, saying why a pick would change nothing.
       const ref = parsed.pick.ref;
       const self = targets.some((t) => t.short_id === ref);
-      const already = targets.every((t) => linksOf(t, mode).includes(ref));
+      const already = targets.every((t) => alreadyLinked(mode, t, ref, byShort.get(ref)));
       const item = taskItem(mode, ref, byShort.get(ref), targets, loops);
-      const hint = self ? "this task" : already ? (mode === "blocker" ? "already a blocker" : "already linked") : item.hint;
+      const alreadyWords = mode === "blocker" ? "already a blocker" : mode === "blocks" ? "already waiting on this" : "already linked";
+      const hint = self ? "this task" : already ? alreadyWords : item.hint;
       out.push({ ...item, ...(hint ? { hint } : {}) });
     }
   }
+  // A closed task holds nothing, so the two dependency modes offer only live
+  // work (TG1/TG4). The other two usually point AT finished work — a see-also
+  // link to where the first half was done, and a `found_during` correction
+  // naming the task the filing session had just closed (TG5: the server's
+  // guess comes off that session's bound task) — and `cast task relate`
+  // accepts one, so a typed search here reaches it too. The empty field still
+  // lists live work; the row draws the candidate's status glyph, so a done one
+  // reads as done.
+  const offersClosed = !isDepMode(mode) && q !== "";
   const loose = rows
     .filter((t) =>
-      !linked.has(t.short_id) &&
+      !selves.has(t.short_id) &&
+      !linkedAny(t.short_id, t) &&
       !out.some((i) => i.pick.kind === "task" && i.pick.ref === t.short_id) &&
-      !isTerminalTaskStatus(t.status) &&
+      (offersClosed || !isTerminalTaskStatus(t.status)) &&
       isActiveTask(t) &&
       !String(t._id).startsWith("temp_") &&
       (q === "" || t.title?.toLowerCase().includes(q) || t.short_id.toLowerCase().includes(q)))
@@ -223,7 +362,7 @@ export function relationItems(
 }
 
 function taskItem(mode: RelationMode, ref: string, row: TaskItem | undefined, targets: TaskItem[], loops: ReturnType<typeof loopChecker>): RelationItem {
-  const loop = mode === "blocker" && targets.some((t) => t.short_id !== ref && loops(t, ref));
+  const loop = isDepMode(mode) && targets.some((t) => t.short_id !== ref && loops(t, ...depEdge(mode, t, ref)));
   return {
     key: `task:${ref}`,
     label: row?.title ? `${ref}  ${row.title}` : ref,
@@ -276,10 +415,25 @@ export function applyRelationPick(mode: RelationMode, targets: TaskItem[], pick:
     const parked = `${nameOf(fresh)} will wait ${on} once it reaches the server`;
     return { ok: true, pending: true, message: `Checking PR ${prRef(pick.target, { fullRef: true })} for ${nameOf(fresh)}…`, parked, landed };
   }
-  if (targets.some((t) => t.short_id === pick.ref)) return { ok: false, message: `A task can't ${mode === "blocker" ? "wait on" : "relate to"} itself` };
-  const fresh = targets.filter((t) => !linksOf(t, mode).includes(pick.ref));
+  const selfVerb = mode === "related" ? "relate to" : mode === "found_during" ? "be found during" : "wait on";
+  if (targets.some((t) => t.short_id === pick.ref)) return { ok: false, message: `A task can't ${selfVerb} itself` };
+  const row = lookup(s.tasks as Record<string, TaskItem>, pick.ref);
+  const fresh = targets.filter((t) => !alreadyLinked(mode, t, pick.ref, row));
   if (!fresh.length) {
-    return { ok: false, message: mode === "blocker" ? `${names} already ${waits(targets)} on ${pick.ref}` : `${names} already linked to ${pick.ref}` };
+    return {
+      ok: false,
+      message: mode === "blocker" ? `${names} already ${waits(targets)} on ${pick.ref}`
+        : mode === "blocks" ? `${pick.ref} already waits on ${names}`
+        : mode === "found_during" ? `${names} already found during ${pick.ref}`
+        : `${names} already linked to ${pick.ref}`,
+    };
+  }
+  // One task per row, so a pick on a task the row does not already name
+  // REPLACES the link the create guessed rather than adding to it.
+  if (mode === "found_during") {
+    const writes = undoAsOne(`Found ${counted(fresh.length, "task")} during ${pick.ref}`, () =>
+      fresh.map((t) => s.updateTask(t.short_id, { found_during: pick.ref })));
+    return sent(`${nameOf(fresh)} found during ${pick.ref}`, writes);
   }
   if (mode === "related") {
     const writes = undoAsOne(`Linked ${counted(fresh.length, "task")} to ${pick.ref}`, () => fresh.map((t) => s.relateTasks(t.short_id, pick.ref)));
@@ -287,8 +441,14 @@ export function applyRelationPick(mode: RelationMode, targets: TaskItem[], pick:
   }
   const loops = loopChecker(s.tasks as Record<string, TaskItem>);
   for (const t of fresh) {
-    const loop = loops(t, pick.ref);
+    const loop = loops(t, ...depEdge(mode, t, pick.ref));
     if (loop) return { ok: false, message: loop };
+  }
+  // "blocks" writes the one edge from the other side: the picked task waits on
+  // this one, so addBlocker is called with its ends swapped.
+  if (mode === "blocks") {
+    const writes = undoAsOne(`Made ${pick.ref} wait on ${counted(fresh.length, "task")}`, () => fresh.map((t) => s.addBlocker(pick.ref, t.short_id)));
+    return sent(`${pick.ref} waits on ${nameOf(fresh)}`, writes);
   }
   const writes = undoAsOne(`Made ${counted(fresh.length, "task")} wait on ${pick.ref}`, () => fresh.map((t) => s.addBlocker(t.short_id, pick.ref)));
   return sent(`${nameOf(fresh)} ${waits(fresh)} on ${pick.ref}`, writes);
@@ -315,3 +475,4 @@ export function reportRelationPick(res: RelationPickResult): void {
 export function storeBlockerLines(task: BoardTask, tasks: Record<string, any>): BlockerLine[] {
   return blockerLines(task, storeStatusOf(tasks, task));
 }
+

@@ -14,7 +14,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "./proc.js";
-import { LAUNCHD_LABEL_ENV, startLaunchdJob } from "./launchdJob.js";
+import { INLINE_LAUNCHD_LABEL, LAUNCHD_LABEL_ENV, startLaunchdJob } from "./launchdJob.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
 import { acquireFileSlot } from "./lockFile.js";
 import { machineCap } from "./machineCaps.js";
@@ -37,7 +37,17 @@ export function priorityClamped(): boolean {
  * as CODECAST_SESSION_ID, since the job runs outside the agent's process tree.
  */
 export async function runAsInteractiveJob(command: string[], opts: { cwd?: string; stdin?: string } = {}): Promise<number> {
-  const runHere = () => spawnSync(command[0]!, command.slice(1), { stdio: "inherit", cwd: opts.cwd }).status ?? 1;
+  // Run inline, telling the child it is already past this wrapper. A script
+  // that re-execs itself through run-interactive.ts while the label is unset
+  // (packages/convex/deploy.sh) would otherwise wrap itself without end
+  // wherever launchd declines the job: over SSH on a cloud Mac there is no
+  // gui/<uid> domain, and a deploy there nested nine wrappers deep in ten
+  // minutes before anything ran.
+  const runHere = () => spawnSync(command[0]!, command.slice(1), {
+    stdio: "inherit",
+    cwd: opts.cwd,
+    env: { ...process.env, [LAUNCHD_LABEL_ENV]: process.env[LAUNCHD_LABEL_ENV] ?? INLINE_LAUNCHD_LABEL },
+  }).status ?? 1;
   if (process.platform !== "darwin" || process.env[LAUNCHD_LABEL_ENV]) return runHere();
   // Each job is a scheduling group of its own, so it competes with every agent
   // session as an equal; a cap on how many run at once keeps a burst of them
