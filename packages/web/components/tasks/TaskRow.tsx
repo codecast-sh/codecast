@@ -280,7 +280,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       {internals && task.execution_status && (
         <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0 cq-hide-compact" />
       )}
-      <TaskBlockedMark task={task} className="cq-hide-compact" />
+      {/* Kept at every width: "can I pick this up" is the row's own question,
+          and a narrow list pane is where triage happens (TG12). */}
+      <TaskBlockedMark task={task} />
       {internals && task.labels && task.labels.length > 0 && (
         <LabelChips labels={task.labels} onLabelClick={onFilterLabel} className="cq-hide-compact" />
       )}

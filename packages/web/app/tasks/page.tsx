@@ -1253,8 +1253,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
             { key: "", label: "Active", count: taskCounts.active, icon: Activity,
               title: "Live work: " + statusOptionList.filter((st) => ACTIVE.includes(st.category as TaskStatus)).map((st) => st.name).join(", ") },
             // A hosted to-do list has no dependency graph to read.
+            // Said in the board's own words: READY_MEANS is the whole
+            // definition, which reads as CLI help in a tooltip.
             ...(hostedMode ? [] : [{ key: UNBLOCKED_VIEW, label: "Unblocked", count: taskCounts[UNBLOCKED_VIEW], icon: CirclePlay,
-              title: "Open work that can start now: nothing blocking it, triaged, its parent not being worked" }]),
+              title: "Open work nothing is holding: no blockers, no unmet waits, no parent being worked" }]),
             { key: "all", label: "All", count: taskCounts.all, icon: Layers, title: "Every status, Backlog and Done and Dropped included" },
             { key: doneValue || "done", label: "Done", count: taskCounts.done || 0, icon: STATUS_CONFIG.done.icon,
               title: "Finished work" },
@@ -1373,14 +1375,20 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           emptyMessage={
             hostedMode ? "No to-dos yet"
             // An empty Unblocked view is an answer, not a broken filter, unless
-            // a narrower filter emptied it. Readiness turns tasks away for more
-            // than blockers (superseded, a parent being worked), so the words
-            // name what holds them without claiming every one waits.
-            : statusFilter === UNBLOCKED_VIEW && !(priorityFilter || labelFilter || assigneeFilter || sessionFilter) ? (
+            // a narrower filter emptied it. Said in the board's own words, and
+            // in the board's word for it ("unblocked", TG1): READY_MEANS is the
+            // whole definition, which belongs in `cast --help`, not on a board.
+            // Source=Suggested and =Dismissed select on the `triage_status`
+            // readiness itself turns away, so there the view says nothing about
+            // what holds the rows and falls through to "No tasks found".
+            : statusFilter === UNBLOCKED_VIEW && sourceFilter !== "triage" && sourceFilter !== "dismissed"
+              && !(priorityFilter || labelFilter || assigneeFilter || sessionFilter) ? (
               taskCounts.open ? (
                 <>
-                  Nothing can start right now
-                  <span className="block mt-1 text-xs text-sol-text-dim">Open tasks here are waiting on another task, a PR, a decision, a time or their parent</span>
+                  {/* Both lines centre inside the <p>, which the sentence below
+                      makes wider than the headline. */}
+                  <span className="block text-center">Nothing can start right now</span>
+                  <span className="block mt-1 max-w-md text-center text-xs text-sol-text-dim">Every open task is waiting on a blocker, a wait, or a parent being worked</span>
                 </>
               ) : "No open tasks"
             )
