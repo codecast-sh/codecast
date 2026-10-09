@@ -88,6 +88,10 @@ export type ClientLayouts = {
   inbox?: { main: number; sidebar: number };
   conversation_diff?: { content: number; diff: number };
   file_diff?: { tree: number; content: number };
+  /** The seam between a conversation and the panel beside it, in percent:
+   *  one value shared by the org screen, the role page and the goal page, so
+   *  the seam stays where it was put as the person moves between them. */
+  org?: { conversation: number; company: number };
 };
 
 export type ClientDismissed = {
