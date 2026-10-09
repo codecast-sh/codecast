@@ -12,28 +12,23 @@ import { v } from "convex/values";
 import { internalMutation, mutation, type MutationCtx } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
-import { canAccessTask, isSameWorkspace, requireSameWorkspace, workspaceForResource, type AuthorizedWorkspace } from "./lib/access";
-import { assertDependencyEdges, dependentRefs, GRAPH_LINK_CAP, openUpstream, requireTaskByRef, taskByRef, taskLookups, writeEdges } from "./lib/taskGraph";
+import { canAccessPullRequest, canAccessTask, isSameWorkspace, requireSameWorkspace, workspaceForResource, type AuthorizedWorkspace } from "./lib/access";
+import { assertDependencyEdges, dependentRefs, loopedBlockers, mirrorNext, openBlockersOf, openUpstream, requireTaskByRef, taskByRef, taskLookups, taskRefForms, writeEdges, writeLink } from "./lib/taskGraph";
+import { prByNumber } from "./lib/gitRefs";
 import { bySystem, byUser, recordTaskChange, type TaskChangeBy } from "./lib/taskHistory";
 import { patchTask } from "./lib/taskWrite";
 import { insertTaskComment, moveTaskStatus, openDirectSubtasks, reconcilePlanMembership, releaseBoundSessions, taskAncestorIds } from "./tasks";
 import { cliCaller, isTaskUnblocked, onBlockedAgain, onUnblocked, pendingReleases, releaseDependents, SENDER, tellReleased, unblockBy } from "./taskWaits";
-import { isTerminalTaskStatus, parseStoredList, taskBlockerEntries, type StatusOf, type TitledTaskBlocker } from "@codecast/shared/tasks";
+import { checksWaitPr, GRAPH_LINK_CAP, isTerminalTaskStatus, parseBlockerRef, parseStoredList, taskBlockerEntries, type Blocker, type StatusOf, type TitledTaskBlocker } from "@codecast/shared/tasks";
 
 /** A linked task as every surface prints it. */
 export type LinkRef = { short_id: string; title: string; status: string };
 
 const linkRef = (t: Doc<"tasks">): LinkRef => ({ short_id: t.short_id, title: t.title, status: t.status });
 
-/** Every ref that names `t` in an edge: its short id, or the `_id` a plan's older rows used. */
-const refsOf = (t: Doc<"tasks">) => new Set([t.short_id, String(t._id)]);
-
 /** Who a status move is by: a session's agent when it carries a conversation. */
 const actorBy = (userId: Id<"users">, conversationId?: Id<"conversations">): TaskChangeBy =>
   conversationId ? { user_id: userId, actor_type: "agent", conversation_id: conversationId } : byUser(userId);
-
-/** How many tasks "found here" lists. */
-const FOUND_HERE_LIMIT = 50;
 
 type ReadCtx = Pick<QueryCtx, "db">;
 type Ctx = MutationCtx;
@@ -82,7 +77,11 @@ export async function foundDuringForCreate(
   const explicit = o.explicit?.trim();
   if (explicit) {
     if (explicit.toLowerCase() === "none") return undefined;
-    const source = await requireTaskByRef(ctx, userId, explicit);
+    // A task ref is read through the one grammar (TG3), so CT-012 names ct-12
+    // here as it does in blocked_by; anything else is left for the lookup to
+    // refuse by name (a plan's older `_id` resolves too).
+    const parsed = parseBlockerRef(explicit);
+    const source = await requireTaskByRef(ctx, userId, parsed.ok && parsed.kind === "task" ? parsed.ref : explicit);
     requireSameWorkspace(source, o.workspace, "found-during task");
     return source.short_id;
   }
@@ -96,28 +95,107 @@ export async function foundDuringForCreate(
   return source.short_id;
 }
 
-/** What was found while working on `task`, readable by `userId`. */
-export async function foundHere(ctx: ReadCtx, userId: Id<"users">, task: Doc<"tasks">): Promise<LinkRef[]> {
-  const rows = await ctx.db
-    .query("tasks")
-    .withIndex("by_found_during", (q) => q.eq("found_during", task.short_id))
-    .take(FOUND_HERE_LIMIT);
-  const out: LinkRef[] = [];
-  for (const t of rows) {
-    if (isSameWorkspace(t, workspaceForResource(task)) && (await canAccessTask(ctx, userId, t))) out.push(linkRef(t));
+/** `found_during` as a CORRECTION (TG5). The server guesses the link from the
+ *  filing session's bound task and can be wrong, so `cast task update
+ *  --found-during` and the task page's Found during row both repoint it: the
+ *  ref is resolved through the same workspace rule as create's explicit one,
+ *  "" or "none" clears it, and no task may be found during itself. */
+export async function foundDuringUpdate(
+  ctx: ReadCtx,
+  userId: Id<"users">,
+  task: Doc<"tasks">,
+  ref: string,
+  // The access key the write that carries this link LEAVES the task in: a
+  // caller that can also move the task's team passes it, since on a row with
+  // no stored `workspace` the move changes the key (workspaceForResource
+  // falls back to team_id) and the link would be stored across workspaces.
+  workspace: AuthorizedWorkspace = workspaceForResource(task),
+): Promise<string | undefined> {
+  const source = await foundDuringForCreate(ctx, userId, { explicit: ref, workspace });
+  if (source === task.short_id) throw new Error(`${task.short_id} cannot be found during itself`);
+  return source;
+}
+
+/** The tasks found while working on `task` that `userId` may read. The
+ *  reverse of `found_during`, which only this index answers: a caller holding
+ *  the task alone cannot derive it. */
+export async function foundHereRows(ctx: ReadCtx, userId: Id<"users">, task: Doc<"tasks">): Promise<Doc<"tasks">[]> {
+  const workspace = workspaceForResource(task);
+  const out: Doc<"tasks">[] = [];
+  // The cap counts rows the reader is SHOWN, so it is applied after the
+  // workspace and access filter, not before: the web counts the readable rows
+  // its store holds (foundHereOf), and a take(cap) ahead of the filter would
+  // list fewer here than the page does. The scan is bounded all the same, so a
+  // task that hundreds of unreadable rows name stays one cheap read.
+  let scanned = 0;
+  for await (const t of ctx.db.query("tasks").withIndex("by_found_during", (q) => q.eq("found_during", task.short_id))) {
+    if (isSameWorkspace(t, workspace) && (await canAccessTask(ctx, userId, t))) out.push(t);
+    if (out.length >= GRAPH_LINK_CAP || ++scanned >= GRAPH_LINK_CAP * 10) break;
   }
   return out;
 }
 
+/** What was found while working on `task`, readable by `userId`. */
+export async function foundHere(ctx: ReadCtx, userId: Id<"users">, task: Doc<"tasks">): Promise<LinkRef[]> {
+  return (await foundHereRows(ctx, userId, task)).map(linkRef);
+}
+
 /** Each task in `blocked_by` as readiness reads it (taskBlockerEntries, under
  *  graphOutside's rule): missing when it is gone, status unknown when it sits
- *  outside the task's workspace, else with its title. Done ones are listed too. */
-async function blockerLinks(ctx: ReadCtx, task: Doc<"tasks">): Promise<TitledTaskBlocker[]> {
+ *  outside the task's workspace, else with its title. Done ones are listed too.
+ *  The STATUS follows the workspace rule, so this list and readiness agree;
+ *  only a blocker `userId` may read lends its TITLE, same as taskResume's
+ *  context. Task access is not workspace equality — a task's assignee holds a
+ *  grant (accessStampFromDoc) — so without the check a blocker's title reaches
+ *  a reader for whom every other link on the row is left out. */
+async function blockerLinks(ctx: ReadCtx, userId: Id<"users">, task: Doc<"tasks">): Promise<TitledTaskBlocker[]> {
   const { statusOf } = await taskLookups(ctx, task);
-  return taskBlockerEntries(task, statusOf).map(({ blocker: b }): TitledTaskBlocker => {
-    const row = "missing" in b ? null : statusOf(b.ref);
-    return row && "title" in row ? { ...b, title: (row as Doc<"tasks">).title } : b;
-  });
+  return await Promise.all(
+    taskBlockerEntries(task, statusOf).map(async ({ blocker: b }): Promise<TitledTaskBlocker> => {
+      const row = "missing" in b ? null : statusOf(b.ref);
+      const found = row && "title" in row ? (row as Doc<"tasks">) : null;
+      return found && (await canAccessTask(ctx, userId, found)) ? { ...b, title: found.title } : b;
+    }),
+  );
+}
+
+/** The `checks_state` of the PR each still-waiting checks wait names, keyed by
+ *  wait id. Without it a text surface words such a wait "PR #42 checks to go
+ *  green [waiting]" whether the checks are running or have been red for hours,
+ *  and TG2 keeps a red wait waiting forever: the agent is told to park on it.
+ *  `checksWaitPr` is the one rule for which waits need the read, so this, the
+ *  task page and the phone ask for the same ones; a PR in a team the reader is
+ *  not in lends nothing. */
+async function waitChecks(ctx: ReadCtx, userId: Id<"users">, task: Doc<"tasks">): Promise<Record<string, string>> {
+  const closed = isTerminalTaskStatus(task.status);
+  const out: Record<string, string> = {};
+  for (const w of task.waits ?? []) {
+    const target = checksWaitPr(w, { closed });
+    if (!target) continue;
+    const pr = await prByNumber(ctx, target.repository, target.pr_number);
+    if (pr?.checks_state && (await canAccessPullRequest(ctx, userId, pr))) out[w.id] = pr.checks_state;
+  }
+  return out;
+}
+
+/** `openBlockersOf` with each still-waiting checks wait carrying its PR's
+ *  `checks_state`, for the one answer whose blockers are read as words with no
+ *  state bracket beside them: `tasks.update`'s `open_blockers`, which
+ *  `cast task start` prints as "Still blocked by: …" and then builds its
+ *  parking advice from. Red checks keep such a wait waiting forever (TG2), so
+ *  a start that worded one "PR #42 checks to go green" would send the session
+ *  dormant on checks nothing but a new push can turn green — the failure TG10
+ *  names, on the other surface that orders a session dormant. The same read
+ *  `waitChecks` does for `cast task show`, so the two agree.
+ *
+ *  Stamped on the entry rather than returned beside it: a task can hold two
+ *  checks waits in different states, and every reader downstream labels one
+ *  entry at a time. */
+export async function openBlockersWithChecks(ctx: ReadCtx, userId: Id<"users">, task: Doc<"tasks">): Promise<Array<Blocker & { checks?: string }>> {
+  const blockers = await openBlockersOf(ctx, task);
+  if (!blockers.some((b) => b.kind === "pr_checks_green")) return blockers;
+  const checks = await waitChecks(ctx, userId, task);
+  return blockers.map((b) => (b.kind !== "task" && checks[b.id] ? { ...b, checks: checks[b.id] } : b));
 }
 
 /** Every link of `task`, resolved for `userId`, for `cast task show`,
@@ -130,7 +208,7 @@ export async function taskLinksOf(ctx: ReadCtx, userId: Id<"users">, task: Doc<"
     return t ? linkRef(t) : null;
   };
   // A blocks entry is a mirror; it counts only while that task still waits on this one.
-  const self = refsOf(task);
+  const self = taskRefForms(task);
   const dependent = async (ref: string) => {
     const t = await readableLink(ctx, userId, task, ref);
     return t && (t.blocked_by ?? []).some((r) => self.has(r)) ? linkRef(t) : null;
@@ -138,7 +216,8 @@ export async function taskLinksOf(ctx: ReadCtx, userId: Id<"users">, task: Doc<"
   const related = await Promise.all((task.related ?? []).slice(0, GRAPH_LINK_CAP).map(one));
   const blocks = await Promise.all((task.blocks ?? []).slice(0, GRAPH_LINK_CAP).map(dependent));
   return {
-    blocked_by: await blockerLinks(ctx, task),
+    blocked_by: await blockerLinks(ctx, userId, task),
+    wait_checks: await waitChecks(ctx, userId, task),
     blocks: blocks.filter((r): r is LinkRef => !!r),
     found_during: await one(task.found_during),
     found_here: await foundHere(ctx, userId, task),
@@ -194,22 +273,18 @@ async function tellFlipped(ctx: Ctx, by: TaskChangeBy, rewired: [Id<"tasks">, bo
   }
 }
 
-/** Add tasks to a task's blocks mirror (by short id, unless it already
- *  names them in either form: TG4) or remove refs from it, from the row as it
- *  stands now; nothing is written when nothing changes. A system write, so
- *  no access check (patchDepMirror's is for a caller's own edge). */
+/** Add tasks to a task's blocks mirror or take refs out of it, from the row as
+ *  it stands now, by TG4's one rule (mirrorNext); nothing is written when
+ *  nothing changes. Removal names the entries as the mirror itself holds them,
+ *  which is where every caller here read them. A system write, so no access
+ *  check and no workspace test — each caller already picked its dependents
+ *  through movableDependent, which keeps only rows in the one workspace
+ *  (patchDepMirror answers that question for itself, since its ref is a
+ *  caller's). */
 async function editBlocks(ctx: Ctx, by: TaskChangeBy, taskId: Id<"tasks">, edit: { add: Doc<"tasks">[] } | { remove: Iterable<string> }): Promise<void> {
   const row = await ctx.db.get(taskId);
   if (!row) return;
-  const prior = row.blocks ?? [];
-  let next: string[];
-  if ("add" in edit) {
-    next = [...prior];
-    for (const t of edit.add) if (!next.some((r) => refsOf(t).has(r))) next.push(t.short_id);
-  } else {
-    const named = new Set(edit.remove);
-    next = prior.filter((r) => !named.has(r));
-  }
+  const next = mirrorNext(row.blocks ?? [], "add" in edit ? { add: edit.add } : { remove: [...edit.remove] });
   await writeEdges(ctx, row, "blocks", next, by);
 }
 
@@ -259,7 +334,7 @@ export async function redirectDependents(
   o: { fromWas?: string; onLoop?: "refuse" | "leave" } = {},
 ): Promise<string[]> {
   const workspace = workspaceForResource(from);
-  const [fromRefs, toRefs] = [refsOf(from), refsOf(to)];
+  const [fromRefs, toRefs] = [taskRefForms(from), taskRefForms(to)];
   const { fromWas } = o;
   const asItStood: StatusOf | undefined = fromWas ? (r) => (fromRefs.has(r) ? { short_id: from.short_id, status: fromWas } : undefined) : undefined;
   const moved: Doc<"tasks">[] = [];
@@ -334,7 +409,7 @@ async function blockersBeforeMove(
  * whose edge back to `from` would close a loop (it is told). Returns the
  * short ids moved back.
  */
-export async function restoreDependents(
+async function restoreDependents(
   ctx: Ctx,
   userId: Id<"users">,
   by: TaskChangeBy,
@@ -343,7 +418,7 @@ export async function restoreDependents(
   cause: string,
 ): Promise<string[]> {
   const workspace = workspaceForResource(from);
-  const [fromRefs, toRefs] = [refsOf(from), refsOf(to)];
+  const [fromRefs, toRefs] = [taskRefForms(from), taskRefForms(to)];
   const restored: Doc<"tasks">[] = [];
   const leftTo: string[] = [];
   const rewired: [Id<"tasks">, boolean][] = [];
@@ -393,11 +468,31 @@ async function restoreFromLink(ctx: Ctx, userId: Id<"users">, by: TaskChangeBy, 
 async function reopenLinkedTask(ctx: Ctx, task: Doc<"tasks">, userId: Id<"users">, by: TaskChangeBy): Promise<void> {
   if (!task.superseded_by && !task.duplicate_of) return;
   if (task.superseded_by) {
-    await ctx.db.patch(task._id, { superseded_by: undefined, updated_at: Date.now() });
-    await recordTaskChange(ctx, task._id, by, [["superseded_by", task.superseded_by, ""]]);
+    await writeLink(ctx, task, "superseded_by", undefined, by);
     await restoreFromLink(ctx, userId, by, task, "superseded_by", `${task.short_id} was reopened`);
   }
   if (task.duplicate_of) await restoreFromLink(ctx, userId, by, task, "duplicate_of", `${task.short_id} was reopened`);
+}
+
+/**
+ * A task back from done or dropped: cut any blocker edge of its own that is
+ * part of a loop (lib/taskGraph loopedBlockers). The loop check judges a new
+ * edge among open tasks only, because a closed task holds nothing back, so a
+ * loop can be stored through one: an edge named onto a done blocker that
+ * already waits on the dependent, or a dependent moved onto a done
+ * replacement (redirectDependents, whose check a closed `to` has nothing to
+ * walk). The reopen is the moment such a loop would hold both ends for good,
+ * and no later write re-checks an edge it does not touch. The reopened task
+ * carries the cut, since its own edge is the one nobody could judge when it
+ * was written, and it is the only edge every loop through the task shares.
+ */
+async function cutReopenedLoops(ctx: Ctx, taskId: Id<"tasks">): Promise<void> {
+  const task = await ctx.db.get(taskId);
+  if (!task) return;
+  for (const { ref, error } of await loopedBlockers(ctx, task, workspaceForResource(task))) {
+    const blocker = await taskByRef(ctx, ref);
+    if (blocker) await cutEdge(ctx, task._id, blocker._id, `${task.short_id} is open again, and the edge closes a loop. ${error}`);
+  }
 }
 
 /**
@@ -434,7 +529,10 @@ export async function afterStatusEdges(ctx: Ctx, task: Doc<"tasks">, next: strin
   const by = actorUserId ? actorBy(actorUserId, conversationId) : bySystem;
   await dropDuplicate(ctx, task, next, userId, by);
   await releaseDependents(ctx, task, next, release);
-  if (isTerminalTaskStatus(task.status) && !isTerminalTaskStatus(next)) await reopenLinkedTask(ctx, task, userId, by);
+  if (isTerminalTaskStatus(task.status) && !isTerminalTaskStatus(next)) {
+    await reopenLinkedTask(ctx, task, userId, by);
+    await cutReopenedLoops(ctx, task._id);
+  }
 }
 
 /** A duplicate mark cleared on a task that stays open takes its dependents
@@ -460,7 +558,7 @@ export async function afterDuplicateCleared(ctx: Ctx, userId: Id<"users">, task:
  * but not dropped or itself replaced (requireLiveReplacement). A task already
  * superseded by another is refused: reopen it first.
  */
-export async function supersedeCore(
+async function supersedeCore(
   ctx: Ctx,
   userId: Id<"users">,
   oldRef: string,
@@ -490,12 +588,17 @@ export async function supersedeCore(
   const moved = await redirectDependents(ctx, userId, by, old, replacement, `${old.short_id} superseded by ${replacement.short_id}`);
   // Redirect first: the drop below then releases nobody (afterStatusMove).
   const current = (await ctx.db.get(old._id)) ?? old;
-  await recordTaskChange(ctx, old._id, by, [["superseded_by", old.superseded_by, replacement.short_id]]);
+  // Through writeLink, the one writer of this field (TG11), rather than riding
+  // the status patch's `extra` bag with a history row of its own: supersede is
+  // the main writer of superseded_by, and a step added to writeLink later must
+  // not be the one write that skips it. Landing it before the drop is the same
+  // write to every reader, since nothing in the status move's own path
+  // (afterStatusMove, afterStatusEdges) reads superseded_by.
+  await writeLink(ctx, current, "superseded_by", replacement.short_id, by);
   await moveTaskStatus(ctx, current, "dropped", {
     actorUserId: userId,
     actorType: by.actor_type,
     conversationId: by.conversation_id,
-    extra: { superseded_by: replacement.short_id },
   });
   // A session bound to the old task moves on with it, as a close does.
   await releaseBoundSessions(ctx, old, by.conversation_id);
@@ -511,7 +614,14 @@ export async function supersedeCore(
 /** Add or remove a see-also link on both rows, at most GRAPH_LINK_CAP on a
  *  row (what readers list). Removing tolerates a far side that is gone, and
  *  clears its mirror entry wherever it sits now (another workspace, out of
- *  the caller's reach): only the entry naming `a` goes. */
+ *  the caller's reach): only the entry naming `a` goes.
+ *
+ *  `missing: "ignore"` makes removing a link that is already gone a no-op
+ *  instead of an error, for a caller whose write may be replayed (the web's
+ *  durable outbox re-drives an entry whose ack was lost, so a removal that did
+ *  commit would otherwise fail on every boot). A caller that reports to a
+ *  person or an agent keeps the default and still hears that there was no
+ *  such link. */
 export async function relateCore(
   ctx: Ctx,
   userId: Id<"users">,
@@ -519,11 +629,13 @@ export async function relateCore(
   bRef: string,
   op: "add" | "remove",
   by: TaskChangeBy = byUser(userId),
+  opts: { missing?: "throw" | "ignore" } = {},
 ): Promise<{ success: true }> {
   const a = await requireTaskByRef(ctx, userId, aRef);
   const b = op === "add" ? await requireTaskByRef(ctx, userId, bRef) : await taskByRef(ctx, bRef.trim());
   const bId = b?.short_id ?? bRef.trim();
   if (op === "remove" && !(a.related ?? []).includes(bId) && !(b?.related ?? []).includes(a.short_id)) {
+    if (opts.missing === "ignore") return { success: true };
     throw new Error(`${a.short_id} is not related to ${bRef.trim()}`);
   }
   if (op === "add") {
@@ -536,10 +648,7 @@ export async function relateCore(
   }
   const write = async (t: Doc<"tasks">, other: string) => {
     const prior = t.related ?? [];
-    const next = op === "add" ? (prior.includes(other) ? prior : [...prior, other]) : prior.filter((r) => r !== other);
-    if (next.length === prior.length) return;
-    await ctx.db.patch(t._id, { related: next, updated_at: Date.now() });
-    await recordTaskChange(ctx, t._id, by, [["related", prior, next]]);
+    await writeLink(ctx, t, "related", op === "add" ? (prior.includes(other) ? prior : [...prior, other]) : prior.filter((r) => r !== other), by);
   };
   await write(a, bId);
   if (b) await write(b, a.short_id);
@@ -549,6 +658,9 @@ export async function relateCore(
 // ---------------------------------------------------------------------------
 // Edges across workspaces
 // ---------------------------------------------------------------------------
+
+/** Why a crossed edge goes, as the dependent's note reads it. */
+const CROSSED = "the two tasks are in different workspaces now, so this one could never see it finish.";
 
 /**
  * Tasks whose workspace key changed (a conversation's visibility moved:
@@ -568,11 +680,11 @@ export const cutCrossedEdges = internalMutation({
       const workspace = workspaceForResource(task);
       for (const ref of task.blocked_by ?? []) {
         const blocker = await taskByRef(ctx, ref);
-        if (blocker && !isSameWorkspace(blocker, workspace)) await cutEdge(ctx, task._id, blocker._id);
+        if (blocker && !isSameWorkspace(blocker, workspace)) await cutEdge(ctx, task._id, blocker._id, CROSSED);
       }
       for (const ref of await dependentRefs(ctx, task)) {
         const dependent = await taskByRef(ctx, ref);
-        if (dependent && !isSameWorkspace(dependent, workspace)) await cutEdge(ctx, dependent._id, task._id);
+        if (dependent && !isSameWorkspace(dependent, workspace)) await cutEdge(ctx, dependent._id, task._id, CROSSED);
       }
       const parent = task.parent_id ? await ctx.db.get(task.parent_id) : null;
       if (parent && !isSameWorkspace(parent, workspace)) await cutParent(ctx, task, parent);
@@ -599,13 +711,14 @@ async function cutParent(ctx: Ctx, child: Doc<"tasks">, parent: Doc<"tasks">): P
 }
 
 /** Remove the edge from both rows, with the dependent's history, a note
- *  saying why, and the release a removeDep would tell. */
-async function cutEdge(ctx: Ctx, dependentId: Id<"tasks">, blockerId: Id<"tasks">): Promise<void> {
+ *  saying why (`why` finishes "No longer waits on ct-12: …"), and the release
+ *  a removeDep would tell. */
+async function cutEdge(ctx: Ctx, dependentId: Id<"tasks">, blockerId: Id<"tasks">, why: string): Promise<void> {
   const [dependent, blocker] = await Promise.all([ctx.db.get(dependentId), ctx.db.get(blockerId)]);
   if (!dependent || !blocker) return;
   const before = dependent.blocked_by ?? [];
-  const next = before.filter((r) => !refsOf(blocker).has(r));
-  await editBlocks(ctx, bySystem, blocker._id, { remove: refsOf(dependent) });
+  const next = before.filter((r) => !taskRefForms(blocker).has(r));
+  await editBlocks(ctx, bySystem, blocker._id, { remove: taskRefForms(dependent) });
   if (next.length === before.length) return;
   const now = Date.now();
   const releases = await pendingReleases(ctx, dependent, { blocked_by: next });
@@ -613,11 +726,47 @@ async function cutEdge(ctx: Ctx, dependentId: Id<"tasks">, blockerId: Id<"tasks"
   if (!isTerminalTaskStatus(dependent.status)) {
     await insertTaskComment(ctx, dependent._id, {
       author: SENDER,
-      text: `No longer waits on ${blocker.short_id}: the two tasks are in different workspaces now, so this one could never see it finish.`,
+      text: `No longer waits on ${blocker.short_id}: ${why}`,
       comment_type: "note",
     });
   }
   await tellReleased(ctx, releases, bySystem);
+}
+
+/**
+ * Unlink a task that is about to be deleted outright (tasks.adminDeleteTask,
+ * the support path; the product's own verb is "dropped"). Every edge that
+ * names the row goes first, because a ref to a row that is gone reads as
+ * missing, which holds nothing back: a dependent would silently become ready
+ * with nobody told, so each one is cut the way removeDep cuts it, with its
+ * history, a note and the release that wakes a session parked on the blocker.
+ * The mirrors the row sits in go too: its blockers' `blocks`, both sides of
+ * `related`, and the `found_during` of what was found while working on it.
+ * A `superseded_by` or `duplicate_of` ref pointing at the row is left: it has
+ * no index to find it by, it holds no task back, and every reader resolves it
+ * through a lookup that answers nothing for a ref naming nothing.
+ */
+export async function unlinkDeletedTask(ctx: Ctx, task: Doc<"tasks">): Promise<void> {
+  const why = `${task.short_id} was deleted.`;
+  for (const ref of await dependentRefs(ctx, task)) {
+    const dependent = await taskByRef(ctx, ref);
+    if (dependent && dependent._id !== task._id) await cutEdge(ctx, dependent._id, task._id, why);
+  }
+  const self = taskRefForms(task);
+  for (const ref of task.blocked_by ?? []) {
+    const blocker = await taskByRef(ctx, ref);
+    if (blocker && blocker._id !== task._id) await editBlocks(ctx, bySystem, blocker._id, { remove: self });
+  }
+  for (const ref of task.related ?? []) {
+    const other = await taskByRef(ctx, ref);
+    if (!other || other._id === task._id) continue;
+    await writeLink(ctx, other, "related", (other.related ?? []).filter((r) => !self.has(r)), bySystem);
+  }
+  const found = await ctx.db.query("tasks").withIndex("by_found_during", (q) => q.eq("found_during", task.short_id)).collect();
+  for (const t of found) {
+    if (t._id === task._id) continue;
+    await writeLink(ctx, t, "found_during", undefined, bySystem);
+  }
 }
 
 // ---------------------------------------------------------------------------
