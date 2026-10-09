@@ -187,6 +187,13 @@ declare module "codecast-mod" {
     readonly key?: string;
   }
 
+  export type ThemePalette = Partial<Record<
+    | "bg" | "bg-alt" | "card" | "border" | "text" | "text-muted" | "text-dim" | "link"
+    | "red" | "orange" | "amber" | "yellow" | "green" | "cyan" | "blue" | "violet" | "magenta"
+    | "font-ui" | "font-mono",
+    string
+  >>;
+
   export type Manifest = {
     name: string; title?: string; description?: string; version?: string; icon?: string; main?: string;
     permissions?: { read?: Collection[] | "*"; write?: ("tasks" | "sessions" | "docs" | "clipboard" | "objects")[] | "*"; fetch?: string[] | "*" };
@@ -196,7 +203,13 @@ declare module "codecast-mod" {
     sidebar?: { id: string; title: string }[];
     /** What agents should know to use this mod well: its objects, its fences, when to reach for them. `cast mod guide` prints it to every agent that asks. */
     agents?: string;
-    /** The local half: a module the daemon runs on machines where you approved it (cast mod approve). */
+    /**
+     * Color themes the person can pick in Settings > Appearance. Data, not CSS: a hex
+     * value per token for light and/or dark; a token left out keeps codecast's own.
+     * Accents also recolor every Tailwind scale of their hue, and bg/text the grays.
+     */
+    themes?: { id: string; title: string; light?: ThemePalette; dark?: ThemePalette }[];
+    /** The local half: a module the daemon runs on each of your machines (cast mod revoke stops it on one). */
     local?: { main: string; description?: string };
     /**
      * New kinds of first-class objects. Each gets `<prefix>-<n>` short ids that render as live pills
