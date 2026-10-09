@@ -19,7 +19,7 @@ export function EdgeArrows({ scroller, edges, label, step = 0.7, waiting }: {
   waiting?: { left: number; right: number };
 }) {
   const badge = (n: number) => (n > 0 ? <span className="line-edge-count" data-edge-waiting={n}>{n}</span> : null);
-  const say = (n: number) => (n > 0 ? `, ${n} card${n === 1 ? "" : "s"} waiting on you that way` : "");
+  const say = (n: number) => (n > 0 ? `, ${n} ${n === 1 ? "decision" : "decisions"} waiting on you that way` : "");
   const move = (dir: -1 | 1) => {
     const el = scroller.current;
     if (el) el.scrollBy({ left: dir * el.clientWidth * step, behavior: "smooth" });
