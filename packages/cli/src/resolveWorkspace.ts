@@ -19,6 +19,7 @@
 // notices a team switch) and shared by every subcommand.
 
 import { workspaceFeatureEnabled, type TeamFeatureKey, type TeamFeatures } from "@codecast/shared/contracts";
+import { shq } from "./remote/session-move.js";
 
 export type Workspace =
   | { kind: "team"; teamId: string; name?: string }
@@ -179,6 +180,84 @@ export function workspaceScope(ws: Workspace): { workspace: "team"; team_id: str
 /** How to name the resolved workspace in output. */
 export function workspaceLabel(ws: Workspace): string {
   return ws.kind === "team" ? (ws.name || ws.teamId) : "personal";
+}
+
+/** A row's stored access key (`team:<id>`, `user:<id>`) as a workspace — the
+ *  ONE place the CLI reads one, so a new key variant is understood everywhere
+ *  or nowhere. `null` for a key it cannot read (a row from an older server, a
+ *  future `restricted:`): an unknown key names nothing, the way it grants
+ *  nothing. */
+export function parseWorkspaceKey(key: string | null | undefined): Workspace | null {
+  if (key?.startsWith("team:")) return { kind: "team", teamId: key.slice(5) };
+  if (key?.startsWith("user:")) return { kind: "personal" };
+  return null;
+}
+
+/** The same key with the team's name from the roster, for output that says
+ *  where a row lives. */
+export function workspaceFromKey(roster: WorkspaceRoster, key: string | null | undefined): Workspace | null {
+  const ws = parseWorkspaceKey(key);
+  if (ws?.kind !== "team") return ws;
+  const hit = roster.teams.find((t) => t._id === ws.teamId);
+  return hit ? { ...ws, name: hit.name } : ws;
+}
+
+/** A `--team` value as one shell word: a bare word stands as it is, anything
+ *  else is quoted the one way the CLI quotes a shell argument (`shq`). */
+function teamArg(value: string): string {
+  return /^[A-Za-z0-9._-]+$/.test(value) ? value : shq(value);
+}
+
+/** The ` --team …` that names one workspace, however a command prints it: the
+ *  team's name when the roster holds it, else its id, and the positive word for
+ *  personal. Empty for a workspace this CLI cannot name, where no flag beats a
+ *  wrong one. Every printed `--team` is worded here. A printed WRITE takes this
+ *  one and keeps it (a write names its workspace); a printed READ takes
+ *  `scopeFlagFor`, which drops it where it would say nothing. */
+export function teamFlagFor(ws: Workspace | null): string {
+  if (!ws) return "";
+  return ws.kind === "personal" ? " --team personal" : ` --team ${teamArg(ws.name || ws.teamId)}`;
+}
+
+/**
+ * `teamFlagFor(filed)` when `filed` is somewhere other than `here`, and
+ * nothing when the two are the same workspace — for output worth printing
+ * only when they differ (`filedElsewhereLine`). This is a comparison of two
+ * named workspaces and nothing more: it cannot say where an UNSCOPED read
+ * lands, since a server resolves that from the directory mappings while this
+ * process resolves the active pointer. A printed command names its workspace
+ * outright (`teamFlagFor`) rather than lean on this.
+ */
+export function scopeFlagFor(filed: Workspace | null, here: Workspace): string {
+  if (!filed) return "";
+  if (here.kind === "personal" && filed.kind === "personal") return "";
+  if (here.kind === "team" && filed.kind === "team" && here.teamId === filed.teamId) return "";
+  return teamFlagFor(filed);
+}
+
+/**
+ * Why a read answered nothing about `ref`: it is filed in a workspace that
+ * read did not cover. An empty list names no scope, so "no ready tasks" and
+ * "no tasks found" read as "there is no work" when the truth is "not where
+ * this looked".
+ *
+ * `found` is what the same read, scoped to `filed`, returned — so this says
+ * only what has been shown: an empty list has causes besides the workspace (a
+ * project filter, a checkout whose path no row carries), and the workspace an
+ * unscoped read lands in is the server's to resolve. Null when that read found
+ * nothing either, which is when the empty answer is the honest one.
+ */
+export function filedElsewhereLine(ref: string, filed: Workspace | null, found: number, command: string): string | null {
+  if (!filed || found <= 0) return null;
+  return `${ref} is filed in the ${workspaceLabel(filed)} workspace, where ${found === 1 ? "1 task answers" : `${found} tasks answer`}: ${command}${teamFlagFor(filed)}`;
+}
+
+/** The inverse of `workspaceScope`: what a route's workspace argument (or a
+ *  create's `base`) names, as a workspace. Null when it names neither, which
+ *  leaves the route's own default in force. */
+export function workspaceOfScope(scope: { workspace?: string; team_id?: string } | null | undefined): Workspace | null {
+  if (scope?.workspace === "team" && scope.team_id) return { kind: "team", teamId: String(scope.team_id) };
+  return scope?.workspace === "personal" ? { kind: "personal" } : null;
 }
 
 /**

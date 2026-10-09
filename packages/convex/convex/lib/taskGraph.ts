@@ -329,8 +329,7 @@ async function walkUpstream(ctx: ReadCtx, start: DepNode, workspace: AuthorizedW
   const nodes = new Map<string, DepNode>([[start.short_id, start]]);
   const looked = new Set<string>();
   for (;;) {
-    const { shortIds, ids } = blockerRefs(nodes.values());
-    const refs = [...shortIds, ...ids].filter((r) => !looked.has(r));
+    const refs = blockerRefs(nodes.values()).filter((r) => !looked.has(r));
     if (!refs.length) return nodes;
     if (nodes.size >= LOOP_WALK_CAP) {
       throw new Error(`Cannot check ${start.short_id}'s dependencies for a loop: more than ${LOOP_WALK_CAP} open tasks wait behind it.`);
@@ -352,6 +351,38 @@ export async function openUpstream(ctx: ReadCtx, task: Doc<"tasks">, workspace: 
   const nodes = await walkUpstream(ctx, depNode(task), workspace);
   nodes.delete(task.short_id);
   return new Set(nodes.keys());
+}
+
+/**
+ * The stored blockers of `task` whose edge is part of a loop, each with the
+ * error naming the path, judged among the open tasks of `workspace`. An edge
+ * is checked when it is written (assertDependencyEdges), but only against
+ * open tasks: an edge through a done or dropped task holds nothing back, so
+ * it is accepted, and the moment that task leaves a terminal status the loop
+ * is live and holds every task in it for good. Every loop through `task` runs
+ * through one of its own `blocked_by` edges, so the edges named here break all
+ * of them when they are cut (taskLinks cutReopenedLoops). A graph too large to
+ * walk whole (walkUpstream's cap) names none: nothing can be proved about
+ * those edges, and a reopen is not a write that may fail.
+ */
+export async function loopedBlockers(
+  ctx: ReadCtx,
+  task: Doc<"tasks">,
+  workspace: AuthorizedWorkspace,
+): Promise<{ ref: string; error: string }[]> {
+  const refs = task.blocked_by ?? [];
+  if (!refs.length || !openIn(workspace)(task)) return [];
+  let nodes: Map<string, DepNode>;
+  try {
+    nodes = await walkUpstream(ctx, depNode(task), workspace);
+  } catch {
+    return [];
+  }
+  const loopError = dependencyLoopChecker(nodes.values());
+  return refs.flatMap((ref) => {
+    const error = loopError(task.short_id, ref);
+    return error ? [{ ref, error }] : [];
+  });
 }
 
 /**

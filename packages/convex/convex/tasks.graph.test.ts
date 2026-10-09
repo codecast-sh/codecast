@@ -4,7 +4,7 @@
 // label change writes task_history through one helper (TG11).
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { addDep, create, getReadyTasks, list, removeDep, update, webList } from "./tasks";
+import { addDep, create, list, removeDep, update, webList } from "./tasks";
 import { get as getPlan, webGet as webGetPlan } from "./plans";
 import { readinessLookups, stampGraphStatus } from "./lib/taskGraph";
 import { isUnblocked } from "@codecast/shared/tasks";
@@ -140,18 +140,6 @@ describe("ready (TG1)", () => {
       { ref: "ct-1", short_id: "ct-1", status: "dropped" },
       { ref: "ct-3", short_id: "ct-3", status: "done" },
     ]);
-  });
-
-  test("getReadyTasks applies the same rule", async () => {
-    const { ctx } = await makeCtx([
-      task("ct-1", { status: "done" }),
-      task("ct-2", { blocked_by: ["ct-1"] }),
-      task("ct-3", { blocked_by: ["ct-2"] }),
-      task("ct-4", { triage_status: "suggested" }),
-      task("ct-5", { status: "in_review" }),
-      task("ct-6", { parent_id: "task_ct-5" }),
-    ]);
-    expect(ids(await call(getReadyTasks, ctx, {}))).toEqual(["ct-2"]);
   });
 
   // A page can mix workspaces (the web's team view holds a viewer's private
