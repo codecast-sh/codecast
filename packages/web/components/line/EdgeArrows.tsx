@@ -17,9 +17,17 @@ export function EdgeArrows({ scroller, edges, label, step = 0.7, waiting }: {
   step?: number;
   /** Cards waiting past each edge: the arrow carries their count in the ask color, so a clipped item that needs you still shows. */
   waiting?: { left: number; right: number };
+  /** What lies past each edge, nearest first ("Build", "Check"): the arrow names it, so a reader knows the row goes on and to what. */
+  names?: { left: string[]; right: string[] };
 }) {
+  const named = (list: string[] | undefined) => {
+    if (!list?.length) return null;
+    const shown = list.slice(0, 2).join(", ");
+    return <span className="line-edge-names">{list.length > 2 ? `${shown} +${list.length - 2}` : shown}</span>;
+  };
+  const sayNames = (list: string[] | undefined) => (list?.length ? `: ${list.join(", ")}` : "");
   const badge = (n: number) => (n > 0 ? <span className="line-edge-count" data-edge-waiting={n}>{n}</span> : null);
-  const say = (n: number) => (n > 0 ? `, ${n} card${n === 1 ? "" : "s"} waiting on you that way` : "");
+  const say = (n: number) => (n > 0 ? `, ${n} ${n === 1 ? "decision" : "decisions"} waiting on you that way` : "");
   const move = (dir: -1 | 1) => {
     const el = scroller.current;
     if (el) el.scrollBy({ left: dir * el.clientWidth * step, behavior: "smooth" });
@@ -27,13 +35,13 @@ export function EdgeArrows({ scroller, edges, label, step = 0.7, waiting }: {
   return (
     <>
       {edges.left && (
-        <button type="button" tabIndex={-1} className="line-edge-arrow" data-side="left" onMouseDown={(e) => e.preventDefault()} onClick={() => move(-1)} aria-label={`Scroll ${label} back${say(waiting?.left ?? 0)}`} title={`More of ${label} this way${say(waiting?.left ?? 0)}`} data-edge-arrow="left" data-waiting={waiting?.left ? "true" : undefined}>
-          <ChevronLeft className="w-3.5 h-3.5" />{badge(waiting?.left ?? 0)}
+        <button type="button" tabIndex={-1} className="line-edge-arrow" data-side="left" onMouseDown={(e) => e.preventDefault()} onClick={() => move(-1)} aria-label={`Scroll ${label} back${sayNames(names?.left)}${say(waiting?.left ?? 0)}`} title={`More of ${label} this way${sayNames(names?.left)}${say(waiting?.left ?? 0)}`} data-edge-arrow="left" data-waiting={waiting?.left ? "true" : undefined} data-named={names?.left.length ? "true" : undefined}>
+          <ChevronLeft className="w-3.5 h-3.5 shrink-0" />{named(names?.left)}{badge(waiting?.left ?? 0)}
         </button>
       )}
       {edges.right && (
-        <button type="button" tabIndex={-1} className="line-edge-arrow" data-side="right" onMouseDown={(e) => e.preventDefault()} onClick={() => move(1)} aria-label={`Scroll ${label} on${say(waiting?.right ?? 0)}`} title={`More of ${label} this way${say(waiting?.right ?? 0)}`} data-edge-arrow="right" data-waiting={waiting?.right ? "true" : undefined}>
-          {badge(waiting?.right ?? 0)}<ChevronRight className="w-3.5 h-3.5" />
+        <button type="button" tabIndex={-1} className="line-edge-arrow" data-side="right" onMouseDown={(e) => e.preventDefault()} onClick={() => move(1)} aria-label={`Scroll ${label} on${sayNames(names?.right)}${say(waiting?.right ?? 0)}`} title={`More of ${label} this way${sayNames(names?.right)}${say(waiting?.right ?? 0)}`} data-edge-arrow="right" data-waiting={waiting?.right ? "true" : undefined} data-named={names?.right.length ? "true" : undefined}>
+          {badge(waiting?.right ?? 0)}{named(names?.right)}<ChevronRight className="w-3.5 h-3.5 shrink-0" />
         </button>
       )}
     </>

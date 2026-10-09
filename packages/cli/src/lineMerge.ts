@@ -6,7 +6,7 @@
 // the role reports it. Every refusal exits 0 with one line saying why: an
 // approved task whose merge is left to a person is not a failed run.
 
-import { spawnSync } from "child_process";
+import { spawnSync } from "./proc.js";
 
 export type Exec = (cmd: string, args: string[], cwd: string) => { status: number; stdout: string; stderr: string };
 
