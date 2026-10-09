@@ -13,7 +13,7 @@ import { checkLabel } from '@codecast/shared/contracts';
 import { useSyncPullRequest, usePullRequest } from '@codecast/web/hooks/useSyncTimeline';
 import { usePRDetails } from '@codecast/web/hooks/usePRDetails';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
-import { accentVar, type ExternalEventAccent } from '@codecast/web/lib/externalEvents';
+import { accentVar, type ExternalEventAccent } from '@codecast/web/lib/externalEventRules';
 import {
   CHECK_OUTCOME_ACCENT, PR_STATE_META, REVIEW_STATE_ACCENT,
   checkOutcome, compareChecks, foldChecks, mergeStateMeta, prStateKey, reviewDecisionMeta, type PrCheck,
