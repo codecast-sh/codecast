@@ -51,6 +51,7 @@ import {
   insertTaskComment,
   recalcPlanProgress,
   reconcilePlanMembership,
+  releaseBoundSessions,
   resolveAssigneeToUserId,
   resolveParentTask,
 } from "./tasks";
@@ -59,7 +60,7 @@ import { recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib
 import { verifyApiToken } from "./apiTokens";
 import { installationCoversRepo } from "./githubApp";
 import { connectionForWork } from "./oauthConnectors";
-import { teamTaskStatuses } from "@codecast/shared/tasks";
+import { isTerminalTaskStatus, teamTaskStatuses } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { mintProjectShortId } from "./lib/projectShortId";
 
@@ -700,6 +701,12 @@ async function updateTaskFromIssue(
   // a dropped duplicate hands them to its canonical and a reopen takes back
   // what a supersede moved (TG5).
   await afterStatusEdges(ctx, task, diff.status);
+  // And it ends every binding, as a close by any other writer does: a session
+  // left on a closed task has nothing to advance, and no unblock path can wake
+  // it (each stops at a terminal status).
+  if (diff.status && diff.status !== task.status && isTerminalTaskStatus(diff.status)) {
+    await releaseBoundSessions(ctx, task);
+  }
   return diff;
 }
 

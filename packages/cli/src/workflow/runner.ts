@@ -990,9 +990,17 @@ async function loadPlanContext(options: RunOptions, context: Record<string, stri
   );
   context["plan_acceptance_criteria"] = (plan.acceptance_criteria || [])
     .map((c: string) => inlineForeignText(c)).join("\n- ");
-  const { open, ready } = planReadiness<any>(plan.tasks || [], plan.graph_outside);
+  const { open, ready, parked, waiting, stuck } = planReadiness<any>(plan.tasks || [], plan.graph_outside);
   context["ready_tasks"] = String(ready.length);
   context["open_tasks"] = String(open.length);
+  // Why there is nothing ready, which `ready_tasks = 0` alone cannot say:
+  // a plan that is finished, one that is all backlog waiting to be moved, and
+  // one parked on a PR or a moment that arrives by itself all read the same
+  // to a graph that only counts the frontier. `open_tasks` counts backlog
+  // too, so it cannot tell them apart either.
+  context["parked_tasks"] = String(parked.length);
+  context["waiting_tasks"] = String(waiting.length);
+  context["stuck_tasks"] = String(stuck.length);
 }
 
 // The repo's default branch, for prompts that diff a hand's branch against it.
