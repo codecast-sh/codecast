@@ -19,6 +19,15 @@ export type RunNodeSession = {
   updated_at?: number;
   agent_type?: string;
   parent_conversation_id?: string;
+  /** The session's pin (`cast state`): its first line is what the station says it did. */
+  state?: string;
+  state_status?: string;
+  /** The pin's json block, whole: what the station reported for its edges. */
+  result?: string;
+  /** The session was killed; with no message, it never started. */
+  killed?: boolean;
+  /** Its last `cast task handoff` on the run's task: how a builder ended. */
+  handoff?: { status: string; note?: string; at?: number };
 };
 
 export type RunNodeRow = {
@@ -41,6 +50,37 @@ export type RunNodeRow = {
 };
 
 export type RunNodeGroup = { title?: string; detail?: string; rows: RunNodeRow[] };
+
+type SyncedRun = { _id: string; node_statuses?: Array<{ node_id: string; session_id?: string; session?: unknown }> };
+
+/**
+ * Every run feed attaches each node's session under a read budget
+ * (workflow_runs.withAgentSessions), so a wide feed (the line floor) hands back
+ * older runs with bare nodes while the cause's own feed attached them. A bare
+ * node keeps the session the store already holds for the same node and hand,
+ * so the feeds overlay without stripping what a station reported. Returns the
+ * same array when nothing was carried.
+ */
+export function carryNodeSessions<T extends SyncedRun>(rows: T[], prev: Record<string, SyncedRun | undefined> | undefined): T[] {
+  if (!prev || !Array.isArray(rows)) return rows;
+  let changed = false;
+  const out = rows.map((r) => {
+    const old = r && prev[r._id]?.node_statuses;
+    if (!old?.length || !Array.isArray(r.node_statuses)) return r;
+    let nodes: NonNullable<SyncedRun["node_statuses"]> | null = null;
+    r.node_statuses.forEach((n, i) => {
+      if (n.session || !n.session_id) return;
+      const was = old.find((o) => o.node_id === n.node_id && o.session_id === n.session_id && o.session);
+      if (!was) return;
+      nodes ??= [...r.node_statuses!];
+      nodes[i] = { ...n, session: was.session };
+    });
+    if (!nodes) return r;
+    changed = true;
+    return { ...r, node_statuses: nodes };
+  });
+  return changed ? out : rows;
+}
 
 const HIDDEN_TYPES = new Set(["start", "exit"]);
 
@@ -125,6 +165,42 @@ export function runNodeLine(row: RunNodeRow): string | undefined {
     : row.result_preview || row.activity;
   const line = raw ? stripMarkdown(raw) : "";
   return line || undefined;
+}
+
+const VERDICT_WORDS: Record<string, string> = { PASS: "Passed", PASSED: "Passed", APPROVE: "Approved", APPROVED: "Approved", NEEDS_CHANGES: "Needs changes", REJECT: "Rejected", REJECTED: "Rejected", FAIL: "Failed", FAILED: "Failed" };
+
+/** One string field of a JSON object's head, read even when the head was cut
+ *  off mid-object (a step's preview is the first few hundred characters). */
+function headField(text: string, key: string): { value: string; cut: boolean } | undefined {
+  const m = text.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)(")?`));
+  if (!m) return undefined;
+  const body = m[1].replace(/\\u?[0-9a-fA-F]{0,3}$/, "");
+  let value: string;
+  try { value = JSON.parse(`"${body}"`); } catch { value = body.replace(/\\(.)/g, "$1"); }
+  return { value, cut: !m[2] };
+}
+
+/** A step's output in words, never as the object it printed. A station
+ *  script's routing JSON reads as its `why`; an agent's structured result as
+ *  its `summary`, a reviewer's as its verdict (with how many issues, when the
+ *  whole object is at hand). JSON with none of those reads as nothing, so the
+ *  step's own words stand. Any other output reads as it is. */
+export function scriptLine(line: string | undefined): string | undefined {
+  const text = line?.trim();
+  if (!text?.startsWith("{")) return line;
+  let obj: Record<string, unknown> | null = null;
+  try { obj = JSON.parse(text.slice(0, text.lastIndexOf("}") + 1)); } catch {}
+  const field = (key: string) => {
+    if (!obj) return headField(text, key);
+    const v = obj[key];
+    return typeof v === "string" ? { value: v, cut: false } : undefined;
+  };
+  const prose = [field("why"), field("summary")].find((f) => f?.value.trim());
+  const verdict = field("verdict")?.value.trim().toUpperCase();
+  const issues = Array.isArray(obj?.issues) ? (obj!.issues as unknown[]).length : null;
+  const head = verdict ? (VERDICT_WORDS[verdict] ?? verdict.charAt(0) + verdict.slice(1).toLowerCase().replace(/_/g, " ")) + (issues ? `: ${issues} ${issues === 1 ? "issue" : "issues"}` : "") : "";
+  const words = prose ? prose.value.replace(/\s+/g, " ").trim() + (prose.cut ? "…" : "") : "";
+  return [head, words].filter(Boolean).join(". ") || undefined;
 }
 
 export function formatRunDuration(startMs: number, endMs?: number, now = Date.now()): string {

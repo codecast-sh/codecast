@@ -29,6 +29,7 @@ import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync
 import type { ChildProcess } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
+import { poolFile } from "./sim/pool.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
 import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantRows, findOtherDaemonRows, killProcessTree, liveTmuxServerPid, parseProcessTable, restoreTmuxServerSocket, snapshotProcessTableAsync, staleTmuxServerKillPlan, type ProcRow } from "./processTable.js";
@@ -65,7 +66,7 @@ import {
   writeDeviceAccountStamp,
 } from "./deviceAccount.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
+import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush } from "./remote/agentAuth.js";
 import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
@@ -151,6 +152,7 @@ import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { resolveCastInvocation } from "./castInvocation.js";
+import { parseAgentToolSetupArgs, runAgentToolSetup } from "./agentToolSetup.js";
 import { CursorTranscriptWatcher, cursorTranscriptSessionId, isCursorTranscriptPath, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { activeCodexProfileName, autoSaveActiveCodexProfile, getCodexAccountsHeartbeatPayload, migrateLegacyCodexProfileNames, refreshCodexUsageSnapshots, resolveCodexAccount } from "./codexAccounts.js";
@@ -387,7 +389,7 @@ import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
 import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, withMirrorSynced, writeMirrorSynced, type CloudAgentDeviceCode, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
-import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
+import { blankCodexRecoveryParams, buildLaunchArgs, claudeSessionIdArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
@@ -484,7 +486,7 @@ function tmuxExecSync(args: string[], opts?: { timeout?: number; killSignal?: st
 async function typeIntoPane(target: string, command: string): Promise<void> {
   let line = command;
   if (Buffer.byteLength(command) > PANE_TYPED_LINE_MAX) {
-    const dir = path.join(CONFIG_DIR, "launch-scripts");
+    const dir = path.join(CONFIG_DIR, LAUNCH_SCRIPTS_DIRNAME);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = path.join(dir, `${randomUUID()}.sh`);
     fs.writeFileSync(file, `rm -f ${shq(file)}\n${command}\n`, { mode: 0o600 });
@@ -494,6 +496,8 @@ async function typeIntoPane(target: string, command: string): Promise<void> {
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
 }
 const PANE_TYPED_LINE_MAX = 512;
+// paneContentAfterLaunchEcho finds a script-launched command by this name in its echo.
+const LAUNCH_SCRIPTS_DIRNAME = "launch-scripts";
 
 async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): Promise<{ stdout: string; stderr: string }> {
   const exec = (argv: string[]) => _execFileAsync("tmux", argv, {
@@ -983,6 +987,12 @@ async function reapPidTrees(rootPids: number[]): Promise<number> {
 
 const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]);
 
+/** The function that called the caller of this one, for log lines that say who acted. */
+function callerName(): string {
+  const frame = new Error().stack?.split("\n")[3]?.trim() ?? "";
+  return frame.replace(/^at (async )?/, "").split(" ")[0] || "unknown";
+}
+
 // Fully terminate a tmux session: reap every pane's process tree (so no orphaned
 // claude/MCP/caffeinate survives), THEN kill the session. Order matters — once
 // the session is gone we can't enumerate its pane pids. All panes go into one
@@ -993,20 +1003,32 @@ const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]
 // and an auth restart once took the user's whole terminal down with it
 // (2026-09-28). Callers that hold the agent's pid reap its tree separately, so
 // the agent still stops and the user's shell and other windows survive.
-export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
+export async function killTmuxSessionAndTree(tmuxSession: string, reason?: string): Promise<void> {
   if (!validateTmuxTarget(tmuxSession)) return;
   if (!isCodecastCreatedTmuxName(tmuxSession)) {
     log(`[REAP] Left tmux ${tmuxSession} standing: codecast did not create it`);
     return;
   }
+  // Every pane codecast destroys passes here, so this line is the one record
+  // of which pane died and who asked. Without a reason, the calling function's
+  // name says it (the daemon runs from source, so names survive).
+  const by = reason ?? callerName();
+  let panePids: number[] = [];
   try {
     const { stdout } = await tmuxExec(
       ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"],
       { timeout: 3000, killSignal: "SIGKILL" },
     );
-    await reapPidTrees(stdout.trim().split(/\s+/).map((tok) => parseInt(tok, 10)));
+    panePids = stdout.trim().split(/\s+/).map((tok) => parseInt(tok, 10)).filter((pid) => Number.isFinite(pid));
+    await reapPidTrees(panePids);
   } catch {}
-  try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
+  try {
+    await tmuxExec(["kill-session", "-t", tmuxSession]);
+    log(`[KILL] tmux=${tmuxSession} panes=${panePids.join(",") || "-"} by=${by}`);
+  } catch (err) {
+    // Usually the session was already gone; a live one that refused is worth seeing.
+    log(`[KILL] tmux=${tmuxSession} kill-session failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) panes=${panePids.join(",") || "-"} by=${by}`, panePids.length ? "warn" : "info");
+  }
   // Release the OAuth refresh gate now rather than on the next reconcile: when
   // this was the last claude on the keychain login, the drain listener fires a
   // usage refetch, and a ten minute wait for it is a stale meter (ct-49526).
@@ -1210,15 +1232,21 @@ const PID_FILE_STALE_GRACE_MS = 2_000;
  * thread started without bypass permissions, but only sometimes" (only when
  * session creation routes through a blank-fallback path rather than the normal
  * start/resume). jsonlBypass is always false here: there is no transcript.
+ *
+ * A claude launch takes an assigned `--session-id`, as start_session does:
+ * Claude writes no transcript until its first turn, so a blank pane nobody
+ * types into can only be linked to its conversation by an id known up front.
  */
 export function buildBlankLaunchArgs(
   agentType: AgentClientId,
   config: Config | null | undefined,
+  assignedClaudeSessionId?: string,
 ): string[] {
   const permFlags = getPermissionFlags(agentType, config);
   if (agentType === "claude") {
-    const flags = combineClaudeResumeFlags(getAgentArgs(config, "claude"), permFlags, false);
-    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+    const configured = getAgentArgs(config, "claude");
+    const flags = combineClaudeResumeFlags(configured, permFlags, false);
+    return [...claudeSessionIdArgs(assignedClaudeSessionId, configured || ""), ...(flags ? flags.split(/\s+/).filter(Boolean) : [])];
   }
   if (agentType === "codex") {
     // getPermissionFlags already returns null when codex_args pins an approval
@@ -3304,7 +3332,7 @@ async function executeCommandBatch(
   if (siteUrl && config.auth_token) primeCommandClaims(fresh.map((c) => c.id), siteUrl, config.auth_token);
   try {
     for (const cmd of fresh) {
-      log(`[${source}] Executing command: ${cmd.command} (${cmd.id})`);
+      log(`[${source}] Executing command: ${cmd.command} (${cmd.id})${commandLogContext(cmd.args)}`);
       const run = executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       if (DETACHED_COMMANDS.has(cmd.command)) void run.catch((err) => log(`[${source}] ${cmd.command} (${cmd.id}) failed: ${err instanceof Error ? err.message : String(err)}`));
       else await run;
@@ -5919,6 +5947,33 @@ function recordObservedPermissionMode(sessionId: string, conversationId: string,
   if (syncServiceRef) publishHookStatus(syncServiceRef, conversationId, sessionId, data, false, true);
 }
 
+// The head-window allowance is hit by every long transcript on every pass, and
+// was a fifth of daemon.log. It is expected, so it stays out of the file;
+// other metadata warnings are news.
+function transcriptWarningLevel(warning: string): LogLevel {
+  return /allowance exhausted/.test(warning) ? "debug" : "info";
+}
+
+const OUTCOME_LOGGED_COMMANDS = new Set([
+  "kill_session", "start_session", "resume_session", "fork_session", "hibernate_session",
+  "move_to_device", "switch_account", "escape", "rewind",
+]);
+
+// Which conversation a command acts on and who asked for it, for the
+// "Executing command" line: a kill used to log only its command id, so finding
+// what tore a session down meant dumping daemon_commands from prod.
+function commandLogContext(args: string | undefined): string {
+  if (!args) return "";
+  try {
+    const parsed = JSON.parse(args);
+    const conv = typeof parsed?.conversation_id === "string" ? ` conv=${parsed.conversation_id.slice(0, 12)}` : "";
+    const cause = typeof parsed?.cause === "string" ? ` cause=${parsed.cause}` : "";
+    return conv + cause;
+  } catch {
+    return "";
+  }
+}
+
 async function executeRemoteCommand(
   commandId: string,
   command: string,
@@ -8002,10 +8057,15 @@ async function executeRemoteCommand(
             // auto-resume. Building from config args alone here launched a bare
             // `claude` that fell into the project's dontAsk default — the agent
             // came back stranded with every tool denied.
-            const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
+            // Without an assigned id, discovery waits for a transcript the
+            // pane never writes until someone types into it: a restart with
+            // nothing to redeliver left the pane unlinked and the conversation
+            // stuck on its old session id.
+            const blankSessionId = blankAgentType === "claude" ? randomUUID() : undefined;
+            const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config, blankSessionId));
             // Same account rule as every other Claude launch (blankLaunchAccount).
             const blankAccount = blankAgentType === "claude" ? await blankLaunchAccount(conversationId) : { prefix: "" as string, account: undefined as string | undefined };
-            const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
@@ -8026,6 +8086,7 @@ async function executeRemoteCommand(
                 projectPath: cwd,
                 startedAt: Date.now(),
                 agentType: blankAgentType,
+                sessionId: blankSessionId,
               });
               discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
                 log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
@@ -8035,7 +8096,10 @@ async function executeRemoteCommand(
               // the previous owner, has to reach this one.
               await clearConversationDeliveryAndResumeState(conversationId, undefined, "resume_session_blank");
               result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
-              log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+              // A blank pane links to the conversation only once a prompt shows up
+              // in it; this line names the new session so a pane that never links
+              // can be traced back to here.
+              log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)} newSid=${blankSessionId?.slice(0, 8) ?? "-"} (the old session could not be resumed)`, "warn");
             } catch (spawnErr) {
               error = `Failed to start fresh session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
             }
@@ -8599,6 +8663,15 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "agent_tool_setup": {
+        // The setup card under a `cast browser`/`cast computer` command that
+        // needed the Chrome extension or the macOS grants: check reads where
+        // they stand here, start opens the next step on this screen.
+        const setupArgs = parseAgentToolSetupArgs(commandArgs);
+        if (!setupArgs) { error = "agent_tool_setup needs a tool browser|computer and an op check|start"; break; }
+        result = JSON.stringify(await runAgentToolSetup(setupArgs, { runCast: (a) => runCastCommand(a, { timeoutMs: 90 * 1000 }) }));
+        break;
+      }
       case "cloud_agent_action": {
         // A session header's action on its cloud agent (Create PR, Apply
         // locally, Archive, Unarchive), run by the daemon that hosts the
@@ -8616,11 +8689,17 @@ async function executeRemoteCommand(
     error = err instanceof Error ? err.message : String(err);
   }
 
+  // The outcome, beside the "Executing command" line. Bodies are logged only
+  // for session lifecycle commands: other results can carry tokens.
+  const body = OUTCOME_LOGGED_COMMANDS.has(command) && result ? ` result=${result.slice(0, 160)}` : "";
+  log(`[CMD] ${command} (${commandId})${commandLogContext(commandArgs)} -> ${error ? `error=${error.slice(0, 200)}` : "ok"}${body}`, error ? "warn" : "info");
+
   // Report result
   try {
     await postCommandResult(siteUrl, config.auth_token, commandId, result, error);
-  } catch {
-    // Ignore
+  } catch (err) {
+    // The server keeps the command pending and may redeliver it.
+    log(`[CMD] ${command} (${commandId}) result not reported: ${err instanceof Error ? err.message : String(err)}`, "warn");
   } finally {
     // The lease dies with the report either way: a reported command carries an
     // executed_at, and the server refuses to release one of those.
@@ -8941,6 +9020,12 @@ async function transcriptGitInfo(projectPath: string | undefined, sessionId: str
   return cloud?.remoteUrl ? { remoteUrl: cloud.remoteUrl, branch: cloud.gitBranch } : undefined;
 }
 
+/** The checkout a session's repository is: a worktree's main checkout, a move clone's host checkout, else the toplevel. */
+function repoCheckoutRoot(commonDir: string | undefined, toplevel: string | undefined): string | undefined {
+  const root = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : toplevel;
+  return root && checkoutOfMoveClone(root);
+}
+
 async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
   const execGit = (args: string): Promise<string | undefined> =>
     new Promise((resolve) => {
@@ -8964,8 +9049,7 @@ async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
   const diffStaged = await execGit("diff --cached");
   const root = await execGit("rev-parse --show-toplevel");
 
-  const commonDir = await execGit("rev-parse --path-format=absolute --git-common-dir");
-  const repoRoot = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : root;
+  const repoRoot = repoCheckoutRoot(await execGit("rev-parse --path-format=absolute --git-common-dir"), root);
 
   const worktreeName = managedWorktreeName(projectPath);
 
@@ -10874,7 +10958,12 @@ async function processSessionFilePass(
     let messages = ingest.messages;
     const permissionObservation = permissionJustResolved.capture(sessionId);
     const suppressPermissionResponses = permissionObservation !== undefined;
-    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
+    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`, transcriptWarningLevel(warning));
+    // A subagent by where its file sits (subagents/) or by its own records (a
+    // sidechain written beside top-level sessions); the parent comes from the
+    // same two places. Every create below keys off these, never the path alone.
+    const subagentTranscript = isSubagent || !!metadata.sidechain;
+    const subagentParent = subagentParentSessionFromPath(filePath) ?? metadata.sidechain?.parentSessionId;
 
     if (suppressPermissionResponses) {
       const before = messages.length;
@@ -10977,7 +11066,7 @@ async function processSessionFilePass(
       // Detect parent conversation from file path (subagents/) or content (plan handoff)
       let isPlanHandoff = false;
       if (!parentConversationId) {
-        const parentSessionId = subagentParentSessionFromPath(filePath);
+        const parentSessionId = subagentParent;
         if (parentSessionId && conversationCache[parentSessionId]) {
           parentConversationId = conversationCache[parentSessionId];
           log(`Detected subagent parent for ${sessionId}: ${parentConversationId}`);
@@ -11013,7 +11102,7 @@ async function processSessionFilePass(
       }
 
       let matchedStartedConversation: string | null = null;
-      if (!conversationId && !isSubagent && !parentConversationId) {
+      if (!conversationId && !subagentTranscript && !parentConversationId) {
         matchedStartedConversation = (await matchStartedStub("claude", sessionId, actualProjectPath))?.conversationId ?? null;
       }
 
@@ -11051,7 +11140,7 @@ async function processSessionFilePass(
         const cliFlags = metadata.cliFlags;
         let subagentDescription: string | undefined;
         let subagentAgentType: string | undefined;
-        if (isSubagent && metadata.subagent) {
+        if (subagentTranscript && metadata.subagent) {
           subagentDescription = metadata.subagent.description;
           subagentAgentType = metadata.subagent.agentType;
           if (subagentDescription) subagentDescriptions.set(sessionId, subagentDescription);
@@ -11059,12 +11148,12 @@ async function processSessionFilePass(
         // Teammate transcripts self-identify on every line — stamp the team
         // identity at create so the row never exists without it. The parent
         // LINK still happens via maybeLinkTeamSpawn below (lead resolution).
-        const teamInfo = !isSubagent ? metadata.teamInfo : undefined;
+        const teamInfo = !subagentTranscript ? metadata.teamInfo : undefined;
         // A headless claude child (`claude -p` run from another session's Bash)
         // nests under its spawner as a subagent. Fork lineage (parentMessageUuid)
         // and agent-team teammates keep their first-class semantics — teammates
         // link via linkSpawnedBy, never via parent_conversation_id.
-        if (!parentConversationId && !isSubagent && !parentMessageUuid && !teamInfo) {
+        if (!parentConversationId && !subagentTranscript && !parentMessageUuid && !teamInfo) {
           try {
             const spawnerConvId = await resolveSpawnerConversation(filePath, sessionId, "claude", conversationCache);
             if (spawnerConvId) {
@@ -11090,7 +11179,7 @@ async function processSessionFilePass(
           subagentDescription,
           // Path-derived: true even when the parent conversation isn't cached
           // yet, so the server never briefly sees this as a top-level session.
-          isSubagent: isSubagent || undefined,
+          isSubagent: subagentTranscript || undefined,
           agentTaskId: triggerRunTaskId(sessionId),
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
@@ -11111,7 +11200,7 @@ async function processSessionFilePass(
         // Create plan entity for Plan-type subagents and bind to parent conversation
         if (subagentAgentType === "Plan" && parentConversationId && !planModeSynced.has(sessionId)) {
           planModeSynced.add(sessionId);
-          const parentSessionUuid = subagentParentSessionFromPath(filePath);
+          const parentSessionUuid = subagentParent;
           if (parentSessionUuid) {
             syncService.syncPlanFromPlanMode({
               sessionId: parentSessionUuid,
@@ -11185,7 +11274,7 @@ async function processSessionFilePass(
       // daemon): the pending-link sweep re-links it once both sides are cached.
       // jx70pyh (2026-07-29): a network blip here minted a workflow agent as a
       // flat, unparented conversation because the retry op dropped the parent.
-      const subagentParentSession = subagentParentSessionFromPath(filePath);
+      const subagentParentSession = subagentParent;
       if (subagentParentSession) {
         pendingSubagentParents.set(sessionId, subagentParentSession);
       }
@@ -11218,7 +11307,7 @@ async function processSessionFilePass(
         slug,
         startedAt: firstMsgTimestamp,
         gitInfo,
-        isSubagent: isSubagent || undefined,
+        isSubagent: subagentTranscript || undefined,
       }, errMsg);
 
       return;
@@ -11237,7 +11326,7 @@ async function processSessionFilePass(
   // conversation yet on the pass that saw the stamp, and the lead may only
   // resolve once the team's panes are live. Cheap string gate first — only
   // teammate transcripts carry the stamp.
-  if (conversationId && !isSubagent && !teamLinkDone.has(sessionId) && metadata.teamInfo) {
+  if (conversationId && !subagentTranscript && !teamLinkDone.has(sessionId) && metadata.teamInfo) {
     maybeLinkTeamSpawn(sessionId, conversationId, JSON.stringify(metadata.teamInfo), syncService, conversationCache).catch((err) => {
       log(`Teammate link attempt failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -11343,7 +11432,7 @@ async function processSessionFilePass(
   // the authority, not sync success, so this precedes the batch send. Subagent
   // transcripts sync under their own session id, so a workflow's internal
   // turns never move the parent session's mark.
-  if (!isSubagent) {
+  if (!subagentTranscript) {
     const turnTs = latestTurnStartTs(messages);
     if (turnTs !== null) markTurnStarted(sessionId, turnTs);
   }
@@ -11375,6 +11464,10 @@ async function processSessionFilePass(
       const firstUserMessage = messages.find(msg => msg.role === "user");
       const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
 
+      // A recreated subagent keeps its place under its parent, exactly as the
+      // first create placed it; without these it comes back as a top-level
+      // inbox session.
+      const recreateParent = parentConversationId ?? (subagentParent ? conversationCache[subagentParent] : undefined);
       const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
       conversationId = await syncService.createConversation({
         userId,
@@ -11386,6 +11479,8 @@ async function processSessionFilePass(
         title,
         startedAt: firstMessageTimestamp,
         gitInfo,
+        parentConversationId: recreateParent,
+        isSubagent: subagentTranscript || undefined,
       });
       conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
@@ -11962,7 +12057,7 @@ async function processCodexSessionPass(
     const {messages,bytesConsumed,metadata} = ingest;
     if (!bytesConsumed) return;
     const sessionMetaHead = metadata.appServerHead ?? "";
-    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`);
+    for (const warning of metadata.warnings) log(`Transcript metadata ${sessionId}: ${warning}`, transcriptWarningLevel(warning));
     const persistedAppServerThreadIds = new Set(
       [...persistedAppServerThreads.values()].map((record) => record.threadId),
     );
@@ -13931,7 +14026,9 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
               }
               log(`CWD match found ${unclaimed.length} unclaimed candidates for ${shortId(sessionId)}, could not disambiguate`);
             } else {
-              log(`CWD match found ${candidates.length} candidates for ${shortId(sessionId)} but all claimed by other sessions`);
+              // Debug: it fires on every pass for every unmatched subagent and was a
+              // tenth of daemon.log, which keeps only ~50 MB of history.
+              log(`CWD match found ${candidates.length} candidates for ${shortId(sessionId)} but all claimed by other sessions`, "debug");
             }
           } catch {}
         }
@@ -15162,8 +15259,15 @@ export function extractTmuxLiveRegion(paneContent: string): string {
 // readline echoes it again after the prompt. Cutting at the first echo read a
 // mirrored ~/.bash_profile's brew error as a failed launch on every cloud
 // session (2026-10-04).
+// A launch longer than PANE_TYPED_LINE_MAX is typed as `. '<launch script>'`
+// (typeIntoPane), so its echo names the script directory instead; missing
+// that shape read rc noise as a crash on every resume of a migrated session
+// and restarted it without its history (2026-10-09).
 export function paneContentAfterLaunchEcho(paneContent: string): string {
-  const idx = paneContent.lastIndexOf("env -u CLAUDECODE");
+  const idx = Math.max(
+    paneContent.lastIndexOf("env -u CLAUDECODE"),
+    paneContent.lastIndexOf(`/${LAUNCH_SCRIPTS_DIRNAME}/`),
+  );
   if (idx < 0) return paneContent;
   const nl = paneContent.indexOf("\n", idx);
   return nl >= 0 ? paneContent.slice(nl + 1) : "";
@@ -20871,6 +20975,12 @@ async function runHeartbeatMaintenance(): Promise<void> {
     await sweepGitPlaneFleet(ids).catch((e) => log(`[GITPLANE] pass error: ${(e as Error)?.message ?? e}`));
   }
 
+  // Shared checkouts that opted in ([ship] level) follow their upstream in
+  // place, touching only files nobody changed (land/levelSweep.ts).
+  if (tick % LEVEL_EVERY_N_FLUSHES === 0) {
+    await sweepLevelCheckouts(ids).catch((e) => log(`[LEVEL] pass error: ${(e as Error)?.message ?? e}`));
+  }
+
   // Reflog tail fallback: the watchers report within a second; this catches
   // anything they missed at the flush cadence. See pollGitActivity.
   await pollGitActivity().catch((e) => log(`[GITACTIVITY] poll error: ${(e as Error)?.message ?? e}`));
@@ -20898,6 +21008,22 @@ async function runHeartbeatMaintenance(): Promise<void> {
 //     past the watchdog's stale-heartbeat threshold on a large repo.
 const WIP_SNAPSHOT_EVERY_N_FLUSHES = 10; // ~5 min (flush = 30s), same cadence as the reaper
 const GIT_PLANE_EVERY_N_FLUSHES = 10; // ~5 min repair latency; fetches self-gate to ~10 min per repo
+const LEVEL_EVERY_N_FLUSHES = 2; // ~1 min: how stale a shared checkout may get behind its upstream
+
+async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
+  if (readConfig()?.level_checkouts_enabled === false) return;
+  const roots = new Set<string>();
+  for (const t of collectGitSweepTargets(sessionIds)) {
+    const root = await repoRootFor(t.cwd);
+    if (root) roots.add(root);
+  }
+  if (!roots.size) return;
+  const { levelOne, describeLevel } = await import("./land/levelSweep.js");
+  for (const root of roots) {
+    const line = describeLevel(await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) })));
+    if (line) log(`[LEVEL] ${line}`);
+  }
+}
 const WIP_SNAPSHOT_CONCURRENCY = 3;
 // PUSHES per pass, not sessions per pass. Every eligible session is snapshotted
 // every pass (local and cheap), and the tree hash gates the network — so steady
@@ -22112,7 +22238,7 @@ async function reapOrphanEngines(): Promise<void> {
 }
 
 async function reapIdleSimulators(): Promise<void> {
-  if (process.platform !== "darwin" || (!process.env.SIM_POOL && !fs.existsSync(path.join(process.env.HOME || "", ".codecast", "sim", "pool.json")))) return;
+  if (process.platform !== "darwin" || (!process.env.SIM_POOL && !fs.existsSync(poolFile()))) return;
   const { executablePath, args } = selfExecInfo("sim", "reap");
   const { stdout } = await _execFileAsync(executablePath, args, { timeout: 120_000, env: scrubAgentEnv({ ...process.env }) });
   for (const line of String(stdout ?? "").split("\n")) if (line.trim() && !/nothing to reap/.test(line)) reaperLog(`simulators: ${line.trim()}`);
@@ -22259,7 +22385,10 @@ export function publishHookStatus(sync: SyncService, conversationId: string, ses
   } else pendingOpenTaskReports.delete(sessionId);
   if (data.status === "stopped" && statusChanged) {
     const restartTs = restartingSessionIds.get(sessionId);
-    if (!restartTs || Date.now() - restartTs >= RESTART_GUARD_TTL_MS) void sync.markSessionCompleted(conversationId).catch(logConvexFailure);
+    if (!restartTs || Date.now() - restartTs >= RESTART_GUARD_TTL_MS) {
+      log(`[COMPLETE] conv=${conversationId.slice(0, 12)} sid=${sessionId.slice(0, 8)} via=hook-stopped`);
+      void sync.markSessionCompleted(conversationId).catch(logConvexFailure);
+    }
   }
 }
 const HIBERNATION_PANE_FORMAT = "#{session_id}|#{pane_id}|#{pane_pid}|#{session_name}|#{session_attached}|#{@codecast_session_id}|#{@codecast_conversation_id}|#{pane_dead}";
@@ -23444,16 +23573,21 @@ async function discoverAndLinkSession(
   for (const f of await fs.promises.readdir(projectDir).catch(() => [] as string[])) {
     if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
   }
+  // The session this pane replaces. A restart that found nothing to resume
+  // starts a blank pane while the cache still maps the dead session to the
+  // conversation; that mapping is what this link supersedes, not a rival.
+  const replacedSessionId = buildReverseConversationCache(readConversationCache())[conversationId];
 
   const link = async (linkedSessionId: string, how: string): Promise<void> => {
     const startedEntry = startedSessionTmux.get(conversationId);
     const cache = readConversationCache();
-    const reverseCache = buildReverseConversationCache(cache);
-    if (reverseCache[conversationId]) {
-      log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
+    const current = buildReverseConversationCache(cache)[conversationId];
+    if (current && current !== replacedSessionId && current !== linkedSessionId) {
+      log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${current.slice(0, 8)} by another writer`);
       deleteStartedSession(conversationId);
       return;
     }
+    if (replacedSessionId && replacedSessionId !== linkedSessionId) stopManagedSessionHeartbeat(replacedSessionId);
     cache[linkedSessionId] = conversationId;
     if (conversationCacheRef) {
       conversationCacheRef[linkedSessionId] = conversationId;
@@ -23543,7 +23677,7 @@ async function discoverAndLinkSession(
       return;
     }
   }
-  log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
+  log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)} in tmux ${tmuxSession} (cwd ${cwd}): the pane stays unlinked until a message reaches it`, "warn");
 }
 
 // A daemon restart reloads startedSessionTmux from disk but not the discovery
@@ -25680,10 +25814,11 @@ async function startFreshSessionForDelivery(
   // that spawns a fresh agent must enter bypass, not the project's dontAsk
   // default (which silently denies every tool until the user manually opens
   // permissions). This is the path that strands "started without bypass" threads.
-  const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config));
+  const blankSessionId = randomUUID();
+  const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config, blankSessionId));
   // Same account rule as every other Claude launch (blankLaunchAccount).
   const blankAccount = await blankLaunchAccount(conversationId);
-  const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${["claude", ...safeBlankArgs].join(" ")}`;
+  const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
@@ -25698,6 +25833,7 @@ async function startFreshSessionForDelivery(
       projectPath,
       startedAt: Date.now(),
       agentType: "claude",
+      sessionId: blankSessionId,
     };
     startedSessionTmux.set(conversationId, entry);
     if (syncServiceRef) {
@@ -26574,9 +26710,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
       return {};
     }
     const commonDir = await gitOut("rev-parse --path-format=absolute --git-common-dir", cwd);
-    const root = commonDir?.endsWith("/.git")
-      ? commonDir.slice(0, -5)
-      : await gitOut("rev-parse --show-toplevel", cwd);
+    const root = repoCheckoutRoot(commonDir, commonDir?.endsWith("/.git") ? undefined : await gitOut("rev-parse --show-toplevel", cwd));
     const identity: RepoIdentity = root ? { root, remote: await gitOut("remote get-url origin", cwd) } : {};
     repoRootCache.set(projectPath, identity);
     return identity;
@@ -28787,13 +28921,17 @@ function startWatchdog(
               continue;
             }
           }
-          log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
+          log(`[COMPLETE] Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} conv=${convId.slice(0, 12)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
           deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
           sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
           await fs.promises.unlink(filePath).catch(() => {});
-        } catch {}
+        } catch (err) {
+          log(`Watchdog: status sweep failed for ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`, "warn");
+        }
       }
-    } catch {}
+    } catch (err) {
+      log(`Watchdog: status sweep failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
+    }
 
     // Tier 3 warm pool (opt-in): after stale files are reaped above, re-warm the most
     // recently-active sessions whose agent has died so a follow-up skips the cold boot.
@@ -30628,6 +30766,10 @@ async function main(): Promise<void> {
   // minutes after the first has a freshly-restarted watcher and a just-swept
   // backlog, so re-running the full recovery only adds load at the worst time.
   pushUnsyncedFilesHandler = syncUnsyncedFiles;
+  // `cast sync` asks for this sweep with SIGUSR2, so a manual sync runs the
+  // daemon's own ingest (subagent parenting, redaction, the shared cache)
+  // instead of a second uploader racing it.
+  process.on("SIGUSR2", () => { void syncUnsyncedFiles("Manual sync").catch(() => {}); });
   const WAKE_RECOVERY_MIN_INTERVAL_MS = 3 * 60 * 1000;
   let wakeRecoveryInProgress = false;
   let lastWakeRecoveryDoneAt = 0;

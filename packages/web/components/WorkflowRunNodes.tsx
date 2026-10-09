@@ -13,7 +13,7 @@ import Link from "next/link";
 import { Bot, CheckCircle2, Circle, GitFork, Loader2, Merge, Terminal, User, XCircle, Zap } from "lucide-react";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
-import { formatRunDuration, runNodeGroups, runNodeLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
+import { formatRunDuration, runNodeGroups, runNodeLine, scriptLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
 import { TaskSessionRow, type TaskLinkedSession } from "./tasks/TaskSessionList";
 
 const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -94,7 +94,7 @@ function SessionNodeRow({ row, now, onOpen }: { row: RunNodeRow; now: number; on
       tone={stepTone(row)}
       leading={<span className="mt-0.5 flex-shrink-0" data-step-status={row.status}><StepMark row={row} /></span>}
       badge={titled ? <NodeLabelChip label={row.label} /> : undefined}
-      fallbackLine={runNodeLine(row)}
+      fallbackLine={scriptLine(runNodeLine(row))}
       meta={<StepMeta row={row} now={now} />}
     />
   );
@@ -103,7 +103,7 @@ function SessionNodeRow({ row, now, onOpen }: { row: RunNodeRow; now: number; on
 function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
   const TypeIcon = TYPE_ICONS[row.type] ?? Bot;
   const tone = stepTone(row);
-  const line = runNodeLine(row);
+  const line = scriptLine(runNodeLine(row));
   const href = row.session_id ? `/conversation/${row.session_id}` : null;
   const body = (
     <>
