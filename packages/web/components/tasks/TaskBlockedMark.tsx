@@ -1,28 +1,7 @@
 import { useMemo } from "react";
-import { Ban, Check, Hourglass, type LucideIcon } from "lucide-react";
-import { isTerminalTaskStatus, waitTone, type WaitState } from "@codecast/shared/tasks";
+import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { useInboxStore } from "../../store/inboxStore";
-import { blockerStatusSig, storeBlockedMark, WAIT_TONE_STYLE, type BoardTask } from "../../lib/taskBlockers";
-
-/** A wait that can no longer clear, wherever one is drawn: a "no entry" sign,
- * never the warning triangle, which marks urgent priority on the same rows. */
-export const FailedWaitIcon = Ban;
-
-type WaitStyle = { icon: LucideIcon; token: string; text: string };
-
-const WAIT_ICON: Record<WaitState, LucideIcon> = { waiting: Hourglass, met: Check, failed: FailedWaitIcon };
-
-/** Each wait state's glyph in its own colour (`WAIT_TONE_STYLE`). Where it
- *  sits on a task, read `waitStateStyle`. */
-export const WAIT_STATE_STYLE = Object.fromEntries(
-  Object.entries(WAIT_ICON).map(([state, icon]) => [state, { icon, ...WAIT_TONE_STYLE[state as WaitState] }]),
-) as Record<WaitState, WaitStyle>;
-
-/** A wait's glyph on a task in `status`, in its `waitTone`: its state's
- *  colour while it holds something, dim past that. */
-export function waitStateStyle(state: WaitState, status: string | null | undefined, opts?: { untilClosed?: boolean }): WaitStyle {
-  return { icon: WAIT_ICON[state], ...WAIT_TONE_STYLE[waitTone(state, status, opts)] };
-}
+import { blockerStatusSig, storeBlockedMark, waitStateStyle, type BoardTask } from "../../lib/taskBlockers";
 
 /**
  * A blocked task's one mark on its row and card (task-graph.md TG12): an
@@ -45,12 +24,18 @@ export function TaskBlockedMark({ task, small = false, className = "" }: { task:
   );
   if (!mark) return null;
   const style = waitStateStyle(mark.failed ? "failed" : "waiting", task.status);
+  // Dim says the mark gates nothing right now, not that it is one more
+  // metadata counter: at --sol-text-dim with a bare numeral it was character
+  // for character the row's session count (TaskRow's Link2 chip), and the two
+  // sit adjacent on a row with no other chips. One notch brighter keeps the
+  // "one glyph distinct from the session count" TG12 asked for.
+  const text = style.tone === "dim" ? "text-sol-text-muted" : style.text;
   return (
     <span
       role="img"
       aria-label={mark.tip}
       title={mark.tip}
-      className={`flex items-center gap-0.5 flex-shrink-0 text-[10px] font-mono ${style.text} ${className}`}
+      className={`flex items-center gap-0.5 flex-shrink-0 text-[10px] font-mono ${text} ${className}`}
     >
       <style.icon className={small ? "w-3 h-3" : "w-3.5 h-3.5"} />
       {mark.count > 1 && mark.count}

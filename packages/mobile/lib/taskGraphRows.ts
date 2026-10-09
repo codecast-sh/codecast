@@ -5,6 +5,7 @@
 import {
   blockerEntriesOf,
   blockerStateLabel,
+  checksWaitPr,
   isCleared,
   isTerminalTaskStatus,
   isUnblocked,
@@ -16,8 +17,8 @@ import {
   type WaitKind,
   type WaitState,
 } from '@codecast/shared/tasks';
-import { findEntityInStore, lookup } from '@codecast/web/lib/liveEntities';
-import { storeStatusOf, type BoardTask } from '@codecast/web/lib/taskBlockers';
+import { findEntityInStore } from '@codecast/web/lib/liveEntities';
+import { storeStatusOf, storeTitleOf, type BoardTask } from '@codecast/web/lib/taskBlockers';
 
 type TaskRows = Record<string, any> | null | undefined;
 
@@ -50,11 +51,16 @@ export function taskGraphView(task: BoardTask & { found_during?: string | null }
   const statusOf = storeStatusOf(tasks, task);
   const checksOf = (pr: PrKey): string | undefined =>
     (findEntityInStore({ pullRequests }, 'pr', `${pr.repository}#${pr.number}`) as { checks_state?: string } | undefined)?.checks_state;
-  const titleOf = (ref: string): string | undefined => lookup(tasks, ref)?.title;
+  // A title comes from the same answer as the status (storeTitleOf), so a row
+  // the workspace rule refuses (storeStatusOf, graphOutside) is nameless here
+  // too and a line never mixes a real title with "status unknown".
+  const titleOf = storeTitleOf(statusOf);
   const link = (ref: string | null | undefined): LinkedTask | null => (ref ? { ref, title: titleOf(ref) } : null);
   return {
     blockedBy: blockerRows(task, statusOf, titleOf, checksOf, now),
-    unblocked: isUnblocked(task, statusOf),
+    // A closed task is held by nothing by definition, so it says nothing —
+    // the web suppresses the word the same way (TaskRelations).
+    unblocked: !isTerminalTaskStatus(task.status) && isUnblocked(task, statusOf),
     foundDuring: link(task.found_during),
     supersededBy: link(task.superseded_by),
   };
@@ -72,7 +78,10 @@ function blockerRows(
     const cleared = isCleared(b);
     // A kind added after this bundle shipped (an OTA lags the server) reads by its name and state.
     if (b.kind !== 'task') {
-      const pr = b.kind === 'pr_checks_green' && b.state === 'waiting' && !closed && b.repository ? { repository: b.repository, number: b.pr_number } : undefined;
+      // Whether this row needs its PR's checks read is the shared rule
+      // (`checksWaitPr`), the same one the web's WaitLine asks.
+      const target = checksWaitPr(b, { closed });
+      const pr = target ? { repository: target.repository, number: target.pr_number } : undefined;
       const checks = pr && checksOf(pr);
       const word = waitStateWord(b, { now, closed, checks }) ?? b.state;
       const row: BlockerRow = { key: `wait:${b.id}`, kind: b.kind, label: waitLabel(b, { now }) ?? b.kind, state: b.state, word, cleared };
