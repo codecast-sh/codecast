@@ -1,14 +1,17 @@
 "use client";
 // The one place the product's words are defined (docs/architecture/
 // org-staffing.md S17): a dialog with two pages. "How this works" is the
-// short page the staffing pane's intro links to; "The words" is the glossary,
-// each term with one sentence and an example from this workspace.
-// The pane and the chart both open it; nothing else restates a definition.
-import { useEffect, useState } from "react";
+// short page the Org screen links to; "The words" is the glossary, each term
+// with one sentence and an example from this workspace: the company's words
+// (goal, project, and the relations every sheet reads with: Serves, Carried
+// by, Now) first, then the agents' words. Nothing else restates a definition.
+import { useEffect, useMemo, useState } from "react";
 import { BookOpen, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "../ui/dialog";
 import { cn } from "../../lib/utils";
-import { HOW_THIS_WORKS, glossaryEntries } from "./orgGlossaryWords";
+import { useInitiatives } from "../../hooks/useInitiatives";
+import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
+import { HOW_THIS_WORKS, glossaryEntries, type GlossaryCompany } from "./orgGlossaryWords";
 import type { OrgTree } from "./orgTypes";
 import type { OrgHealth, OrgProposalRow } from "./orgStaffingTypes";
 
@@ -25,7 +28,6 @@ export function OrgGlossary({ open, onClose, tree, health, proposal }: {
   const [cur, setCur] = useState<GlossaryPage>(open ?? "how");
   // eslint-disable-next-line no-restricted-syntax -- the dialog opens on the section it was asked for
   useEffect(() => { if (open) setCur(open); }, [open]);
-  const entries = glossaryEntries(tree, health, proposal);
   return (
     <Dialog open={!!open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent hideClose className="max-w-[440px] p-0 gap-0 overflow-hidden" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} data-org-glossary={cur}>
@@ -62,21 +64,36 @@ export function OrgGlossary({ open, onClose, tree, health, proposal }: {
               </button>
             </div>
           ) : (
-            <dl className="flex flex-col gap-3" data-glossary-words>
-              {entries.map((e) => (
-                <div key={e.word} className="rounded-lg border px-3 py-2.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)", background: "var(--sol-bg)" }} data-glossary-word={e.word}>
-                  <dt className="text-[13px] font-semibold" style={{ color: "var(--sol-text)", fontFamily: "var(--font-serif)" }}>{e.term}</dt>
-                  <dd className="mt-0.5 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>{e.definition}</dd>
-                  <dd className="mt-1.5 text-[11.5px] leading-snug flex items-baseline gap-1.5" style={{ color: "var(--sol-text-muted)" }} data-glossary-example={e.own ? "own" : "general"}>
-                    <span className="shrink-0 uppercase tracking-[0.08em] text-[9.5px]" style={{ color: e.own ? "var(--sol-violet)" : "var(--sol-text-dim)" }}>{e.own ? "in your workspace" : "for example"}</span>
-                    <span className="min-w-0">{e.example}</span>
-                  </dd>
-                </div>
-              ))}
-            </dl>
+            <GlossaryWords tree={tree} health={health} proposal={proposal} />
           )}
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+type ProjectTitle = { _id: string; title: string };
+const projectTitleSig = (p: ProjectTitle) => p.title;
+
+/** The words, with examples from this workspace's goals and projects. Mounted
+ *  only while its page is open, so the dialog's closed state reads nothing. */
+function GlossaryWords({ tree, health, proposal }: { tree: OrgTree | null; health: OrgHealth | null; proposal: Pick<OrgProposalRow, "short_id" | "changes" | "counts"> | null }) {
+  const goals = useInitiatives();
+  const projects = useWorkspaceCollection<ProjectTitle>("projects", projectTitleSig);
+  const company = useMemo<GlossaryCompany>(() => ({ goals, projects }), [goals, projects]);
+  const entries = glossaryEntries(tree, health, proposal, company);
+  return (
+    <dl className="flex flex-col gap-3" data-glossary-words>
+      {entries.map((e) => (
+        <div key={e.word} className="rounded-lg border px-3 py-2.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)", background: "var(--sol-bg)" }} data-glossary-word={e.word}>
+          <dt className="text-[13px] font-semibold" style={{ color: "var(--sol-text)", fontFamily: "var(--font-serif)" }}>{e.term}</dt>
+          <dd className="mt-0.5 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>{e.definition}</dd>
+          <dd className="mt-1.5 text-[11.5px] leading-snug flex items-baseline gap-1.5" style={{ color: "var(--sol-text-muted)" }} data-glossary-example={e.own ? "own" : "general"}>
+            <span className="shrink-0 uppercase tracking-[0.08em] text-[9.5px]" style={{ color: e.own ? "var(--sol-violet)" : "var(--sol-text-dim)" }}>{e.own ? "in your workspace" : "for example"}</span>
+            <span className="min-w-0">{e.example}</span>
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }

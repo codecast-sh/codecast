@@ -10,7 +10,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, ChevronRight, CircleStop, RotateCcw } from "lucide-react";
-import { lineTabHref } from "../../../lib/lineSettings";
+import { expectationsHref } from "../../../lib/expectations/view";
 import { runHref } from "../../../lib/decisionLinks";
 import { cn } from "../../../lib/utils";
 import { lineTraceHref as traceHref } from "../../../lib/line/lineMapUrl";
@@ -19,6 +19,7 @@ import { finderName, replacedWords, runEndTone, traceBlocks, type LineTrace, typ
 import { APPROVED_WORDS, isGateNode, runOutcome, type ReportRun, type StepState } from "../../../lib/line/runReport";
 import { useProjectExpectations, useSyncProjectExpectations } from "../../../hooks/useSyncProjectExpectations";
 import { ReportChip, RunOutcomeText, StepMark } from "../RunReport";
+import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 
 /** "Sep 16, 2:05 PM": when a step happened. */
 const when = (at: number) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -34,7 +35,7 @@ export function took(ms: number): string {
 }
 
 const STAGE_LABEL: Record<TraceStep["stage"], string> = {
-  finding: "Finding", group: "Group", cause: "Cause", ground: "Ground", station: "Run", card: "Card", ship: "Ship", watch: "Watch", outcome: "Outcome",
+  finding: "Signal", group: "Group", cause: "Cause", ground: "Ground", station: "Run", card: "Your decision", ship: "Ship", watch: "Watch", outcome: "Outcome",
 };
 
 /** The rail's dot, and the path strip's: a step that passed is green, one
@@ -112,7 +113,7 @@ export function TraceStory({ trace, rows, compact = false, onFocusNode }: TraceS
         const s = b.step;
         const full = s.stage === "finding" && !compact && focusSignal?.detail_md ? focusSignal.detail_md : null;
         const words = s.stage === "ground" ? groundWords(s) : null;
-        return <StepItem key={s.id} step={words ? { ...s, detail: words.detail } : s} title={words?.title ?? stepTitle(s, trace, focusSignal?.source)} last={last} nextFuture={nextFuture} ctx={ctx} fullWords={full} hideAt={sameMinute.has(i)} />;
+        return <StepItem key={s.id} step={words ? { ...s, detail: words.detail } : s} title={words?.title ?? stepTitle(s, trace, focusSignal?.source)} last={last} nextFuture={nextFuture} ctx={ctx} fullWords={full} hideAt={sameMinute.has(i)} focusSource={focusSignal?.source} />;
       })}
     </ol>
   );
@@ -146,7 +147,9 @@ export function groundWords(s: Pick<TraceStep, "status" | "detail">): { title: s
   }
   const note = (m[2] ?? "").trim();
   const semi = note.lastIndexOf(";");
-  if (semi < 0) return { title: m[1], detail: note };
+  // Only a clause that sizes the fix ("fix is a two-line rewrite") joins the
+  // title; any other clause after a semicolon is the note's own reasoning.
+  if (semi < 0 || !/^\s*(?:the\s+)?fix\b/i.test(note.slice(semi + 1))) return { title: m[1], detail: note };
   // The fix clause moves to the title; the body keeps the rest of the note, so nothing is said twice.
   const [fix, ...after] = note.slice(semi + 1).split(",");
   const rest = after.join(",").trim();
@@ -199,7 +202,7 @@ function Rail({ dot, last, dashed, compact }: { dot: string; last: boolean; dash
   );
 }
 
-function StepItem({ step: s, title, last, nextFuture, ctx, fullWords, hideAt }: { step: TraceStep; title: string; last: boolean; nextFuture: boolean; ctx: Ctx; fullWords: string | null; hideAt?: boolean }) {
+function StepItem({ step: s, title, last, nextFuture, ctx, fullWords, hideAt, focusSource }: { step: TraceStep; title: string; last: boolean; nextFuture: boolean; ctx: Ctx; fullWords: string | null; hideAt?: boolean; focusSource?: string | null }) {
   const { trace, compact } = ctx;
   const outcome = s.stage === "outcome";
   const dot = (outcome && OUTCOME_DOT[trace.outcome]) || DOT[s.status];
@@ -231,9 +234,9 @@ function StepItem({ step: s, title, last, nextFuture, ctx, fullWords, hideAt }: 
           <div className="mt-1">
             <button type="button" onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11.5px] text-sol-text-dim hover:text-sol-text-muted" aria-expanded={open} data-trace-finder-words>
               <ChevronRight className={cn("w-3 h-3 transition-transform", open && "rotate-90")} />
-              {open ? "The finder's words" : "Read the finder's words"}
+              {open ? `What ${finderName(focusSource)} wrote` : `Read what ${finderName(focusSource)} wrote`}
             </button>
-            {open && <div className="mt-1 whitespace-pre-wrap rounded-md border border-sol-border/30 bg-sol-bg-alt/40 px-3 py-2 text-[12.5px] leading-relaxed text-sol-text-muted" data-trace-finder-text>{finderText(fullWords)}</div>}
+            {open && <div className="trace-words mt-1 text-sol-text-muted" data-trace-finder-text><MarkdownRenderer content={fullWords} /></div>}
           </div>
         )}
         {finding && (links.length > 0 || breaks) && (
@@ -317,18 +320,17 @@ function BreaksLink({ id, projectId }: { id: string; projectId: string | null })
   const label = text ? text.split(/[:;]\s/)[0].trim() : null;
   const words = label ? `Breaks: ${label}` : "Breaks an expectation";
   if (!projectId) return <span className="text-[11.5px] text-sol-text-dim" title={id} data-trace-breaks={id}>{words}</span>;
-  return <span data-trace-breaks={id} className="min-w-0 max-w-full inline-flex"><TextLink href={`${lineTabHref(projectId)}#${id}`} title={`${text ?? "This expectation"} (${id}). Open it in the project's expectations`}>{words}</TextLink></span>;
+  return <span data-trace-breaks={id} className="min-w-0 max-w-full inline-flex"><TextLink href={expectationsHref(projectId, id)} title={`${text ?? "This expectation"} (${id}). Open it in the project's expectations`}>{words}</TextLink></span>;
 }
 
 /** A finder's markdown without its heading marks: the words, not the labels. */
-const finderText = (md: string) => md.split("\n").filter((l) => !/^#{1,6}\s/.test(l.trim())).join("\n").trim();
 
 function ArtifactChip({ a, projectId }: { a: TraceArtifact; projectId: string | null }) {
   // A session or a card opens elsewhere in the app: a text link with its arrow, like every other link on the page.
-  if ((a.kind === "session" || a.kind === "decision") && a.href) return <TextLink href={a.href} out title={a.label}>{a.kind === "session" ? "Session" : "Card"}</TextLink>;
+  if ((a.kind === "session" || a.kind === "decision") && a.href) return <TextLink href={a.href} out title={a.label}>{a.kind === "session" ? "Session" : "Decision"}</TextLink>;
   if (a.kind === "expectation" && a.ref) {
     return projectId
-      ? <ReportChip href={`${lineTabHref(projectId)}#${a.ref}`} title="Open this line in the project's expectations">{a.label}</ReportChip>
+      ? <ReportChip href={expectationsHref(projectId, a.ref)} title="Open this line in the project's expectations">{a.label}</ReportChip>
       : <span className="text-[11.5px] text-sol-text-dim">{a.label}</span>;
   }
   if (a.kind === "signal" && a.ref) return <ReportChip href={traceHref(a.ref)} title="Trace this signal">{a.label}</ReportChip>;
@@ -338,8 +340,11 @@ function ArtifactChip({ a, projectId }: { a: TraceArtifact; projectId: string | 
 
 /** The other signals on the cause: each opens its own trace, and links back
  *  to where it was seen. */
+/** The few reports that matter (the most repeated, then the newest), the rest folded. */
+const SIBLINGS_SHOWN = 5;
 function SiblingList({ artifacts, compact, focusRef }: { artifacts: TraceArtifact[]; compact: boolean; focusRef?: string | null }) {
-  const shown = compact ? artifacts.slice(0, 3) : artifacts;
+  const [all, setAll] = useState(false);
+  const shown = compact ? artifacts.slice(0, 3) : all ? artifacts : artifacts.slice(0, SIBLINGS_SHOWN);
   return (
     <ul className="mt-1.5 space-y-0.5" data-trace-siblings>
       {shown.map((a) => (
@@ -348,11 +353,15 @@ function SiblingList({ artifacts, compact, focusRef }: { artifacts: TraceArtifac
           {a.ref
             ? <Link href={traceHref(a.ref)} className={cn("min-w-0 truncate hover:text-sol-blue hover:underline decoration-sol-blue/40 underline-offset-2", a.ref === focusRef ? "text-sol-text" : "text-sol-text-muted")} title="Trace this signal">{a.label}</Link>
             : <span className="min-w-0 truncate text-sol-text-muted">{a.label}</span>}
+          {a.count && <span className="shrink-0 text-[11px] text-sol-text-dim" data-trace-sibling-count>{a.count} times</span>}
           {a.ref && <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{a.ref}</span>}
           {a.href && <a href={a.href} target="_blank" rel="noreferrer" className="shrink-0 text-sol-text-dim hover:text-sol-blue" title="Where it was seen"><ArrowUpRight className="w-3 h-3" /></a>}
         </li>
       ))}
-      {artifacts.length > shown.length && <li className="pl-3 text-[11px] text-sol-text-dim">and {artifacts.length - shown.length} more</li>}
+      {artifacts.length > shown.length && (compact
+        ? <li className="pl-3 text-[11px] text-sol-text-dim">and {artifacts.length - shown.length} more</li>
+        : <li className="pl-3"><button type="button" onClick={() => setAll(true)} className="text-[11px] text-sol-text-dim hover:text-sol-text" data-trace-siblings-more>Show {artifacts.length - shown.length} more</button></li>)}
+      {!compact && all && artifacts.length > SIBLINGS_SHOWN && <li className="pl-3"><button type="button" onClick={() => setAll(false)} className="text-[11px] text-sol-text-dim hover:text-sol-text">Show fewer</button></li>}
     </ul>
   );
 }
@@ -361,13 +370,20 @@ function SiblingList({ artifacts, compact, focusRef }: { artifacts: TraceArtifac
 
 type RunBlockData = Extract<TraceBlock, { kind: "run" }>;
 
+/** A step that passed and said nothing of its own: no session, no words beyond "Done". */
+const isQuietRow = (r: TraceRunRow) => r.kind === "station" && r.step.status === "done" && !r.step.visits
+  && (r.routine || (!r.step.artifacts.length && !r.step.links.length && /^(?:done)?$/i.test(r.step.detail.trim())));
+
 function RunBlock({ block: b, numbered, run, superseded, last, nextFuture, ctx, rounds, sameAs, end }: { block: RunBlockData; numbered: boolean; run: ReportRun | null; superseded: boolean; last: boolean; nextFuture: boolean; ctx: Ctx; rounds?: number[]; sameAs?: number; end?: TraceRun }) {
   const { compact } = ctx;
   const [showRoutine, setShowRoutine] = useState(false);
   // A repeat of an earlier run keeps its steps folded until asked.
   const [showSteps, setShowSteps] = useState(sameAs == null);
-  const routine = b.rows.filter((r) => r.kind === "station" && r.routine && r.step.status === "done").length;
-  const rows = showRoutine ? b.rows : b.rows.filter((r) => !(r.kind === "station" && r.routine && r.step.status === "done"));
+  // Steps that finished without saying anything (scripts that print nothing,
+  // the card's assembly) fold into one quiet line, so the steps that did
+  // something (Prove, Build, Review, Decide) stand out.
+  const quiet = b.rows.filter(isQuietRow).length;
+  const rows = showRoutine ? b.rows : b.rows.filter((r) => !isQuietRow(r));
   const many = (rounds?.length ?? 0) > 1;
   const label = many ? `Runs ${roundsWords(rounds!)}` : numbered ? `Run ${b.round}` : "Run";
   // A replaced run passed its steps and lost its change: its own dot, and its headline says what happened to the card.
@@ -391,7 +407,7 @@ function RunBlock({ block: b, numbered, run, superseded, last, nextFuture, ctx, 
         {(many || sameAs != null) && (
           <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-[11.5px] text-sol-text-dim" data-trace-run-repeat={many ? rounds!.join(",") : `same-as-${sameAs}`}>
             <span>{replaced
-              ? many ? "Each reached a card and was replaced before anyone answered." : `Like run ${sameAs}, it reached a card and was replaced before anyone answered.`
+              ? many ? "Each reached your decision and was replaced before anyone answered." : `Like run ${sameAs}, it reached your decision and was replaced before anyone answered.`
               : many ? "Each ended the same way, through the same steps." : `The same steps and end as run ${sameAs}.`}</span>
             {sameAs != null && (
               <button type="button" onClick={() => setShowSteps((o) => !o)} className="inline-flex items-center gap-1 hover:text-sol-text-muted" aria-expanded={showSteps} data-trace-run-steps>
@@ -409,11 +425,11 @@ function RunBlock({ block: b, numbered, run, superseded, last, nextFuture, ctx, 
         {showSteps && <ul className={cn("mt-1.5 rounded-md border border-sol-border/25 bg-sol-bg-alt/20", compact ? "px-2 py-1 space-y-0.5" : "px-2.5 py-1.5 space-y-1")} data-trace-stations>
           {rows.map((r, i) => <RunRow key={r.kind === "station" ? r.step.id : `loop-${i}`} row={r} ctx={ctx} card={r.kind === "station" && r.step.nodeId === CARD_GATE_NODE_ID ? b.card : undefined} />)}
           {b.card && !rows.some((r) => r.kind === "station" && r.step.nodeId === CARD_GATE_NODE_ID) && <CardRow card={b.card} compact={compact} />}
-          {routine > 0 && (
+          {quiet > 0 && (
             <li>
-              <button type="button" onClick={() => setShowRoutine((o) => !o)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted" aria-expanded={showRoutine} data-trace-routine={routine}>
+              <button type="button" onClick={() => setShowRoutine((o) => !o)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted" aria-expanded={showRoutine} data-trace-routine={quiet}>
                 <ChevronRight className={cn("w-3 h-3 transition-transform", showRoutine && "rotate-90")} />
-                {showRoutine ? "Hide the card's routine steps" : `${routine} routine ${routine === 1 ? "step" : "steps"} assembling the card`}
+                {showRoutine ? "Hide the automatic steps" : `${quiet} automatic ${quiet === 1 ? "step" : "steps"}`}
               </button>
             </li>
           )}
@@ -493,7 +509,7 @@ function RunRow({ row, ctx, card }: { row: TraceRunRow; ctx: Ctx; card?: RunBloc
     );
   }
   const s = row.step;
-  const session = s.artifacts.find((a) => a.kind === "session" || a.kind === "decision");
+  const session = s.artifacts.find((a) => a.kind === "session" || a.kind === "decision" || (a.kind === "evidence" && a.href?.startsWith("/line/trace/")));
   return (
     <li
       className={cn("flex items-baseline gap-2 min-w-0 text-[12px]", s.visits && "flex-wrap")}
@@ -502,7 +518,8 @@ function RunRow({ row, ctx, card }: { row: TraceRunRow; ctx: Ctx; card?: RunBloc
       onMouseLeave={ctx.onFocusNode ? () => ctx.onFocusNode!(null) : undefined}
     >
       <RowMark step={s} />
-      <span className={cn("shrink-0 truncate text-sol-text-dim", compact ? "w-16 text-[11px]" : "w-20 text-[11.5px]")} title={s.title}>{s.title}</span>
+      {/* Wide enough for a station's whole name ("Approved earlier"); a longer one wraps rather than cuts. */}
+      <span className={cn("shrink-0 text-sol-text-dim leading-snug break-words", compact ? "w-24 text-[11px]" : "w-32 text-[11.5px]")} title={s.title}>{s.title}</span>
       {card ? <CardWords card={card} /> : <span className={cn("min-w-0", compact ? "truncate" : "", ROW_TONE[s.status])} data-trace-result>{s.detail}</span>}
       {row.visit > 1 && <span className="shrink-0 rounded px-1 text-[10.5px] text-sol-yellow border border-sol-yellow/30" title="This station ran again in this run" data-trace-visit-chip>visit {row.visit}</span>}
       {s.visits && <LoopChip step={s} open={visitsOpen} onToggle={() => setVisitsOpen((o) => !o)} />}
@@ -510,7 +527,7 @@ function RunRow({ row, ctx, card }: { row: TraceRunRow; ctx: Ctx; card?: RunBloc
         {!compact && s.durationMs != null && s.durationMs > 0 && <span className="text-[11px] text-sol-text-dim tabular-nums">{took(s.durationMs)}</span>}
         {session?.href && (
           <Link href={session.href} className="inline-flex items-center gap-0.5 text-[11px] text-sol-text-dim hover:text-sol-blue" title={session.label} data-trace-session>
-            {session.kind === "decision" ? "card" : "session"}<ArrowUpRight className="w-3 h-3" />
+            {session.kind === "decision" ? "decision" : session.kind === "evidence" ? "its owner" : "session"}<ArrowUpRight className="w-3 h-3" />
           </Link>
         )}
       </span>}

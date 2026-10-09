@@ -5,7 +5,7 @@ import "fake-indexeddb/auto";
 
 const id = "j".repeat(32);
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: `http://localhost/inbox?s=${id}` });
-for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "MutationObserver", "CustomEvent", "getComputedStyle"]) {
+for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node", "MutationObserver", "CustomEvent", "getComputedStyle", "localStorage"]) {
   Object.defineProperty(globalThis, key, { configurable: true, value: (dom.window as any)[key] });
 }
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -35,7 +35,7 @@ mock.module("../../ActivityFeed", () => ({ ActivityFeed: () => <div data-home />
 for (const name of ["SharePopover", "PlanContextPanel", "WorkflowContextPanel", "TriggerContextPanel", "EmptyState"]) {
   mock.module(`../../${name}`, () => ({ [name]: () => null }));
 }
-mock.module("../../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null }));
+mock.module("../../SessionErrorBanner", () => ({ SessionErrorBanner: () => null, SessionResumeBanner: () => null, sessionLooksAbandoned: () => false }));
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
