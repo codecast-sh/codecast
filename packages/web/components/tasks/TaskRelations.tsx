@@ -2,16 +2,16 @@
 /**
  * The task page's relations (docs/architecture/task-graph.md TG12), rows of
  * its property grid: one editable Blocked by row listing task blockers and
- * waits together, then Blocks, Found during, Found here, Related and Parent,
- * each shown once it has something in it. Each line carries its live pill, its
+ * waits together, then Blocks, Found during, Found here and Related, each
+ * shown once it has something in it. Each line carries its live pill, its
  * state and a remove control; "Add blocker…" opens the palette, which takes a
  * task search or any blocker ref (TG3), and one last line offers whichever of
- * "Link related…" and "Set parent…" has no row yet.
+ * "Link related…" and "Set parent…" the task has no answer for yet. The parent
+ * is stated once, by the page's breadcrumb, which carries its own remove.
  *
  * Everything reads the store's task rows and writes through store actions
- * (addBlocker, removeBlocker, removeBlocks, removeWait, unrelateTasks,
- * setTaskParent), so a change paints
- * at once and the side effect makes the real write.
+ * (addBlocker, removeBlocker, removeBlocks, removeWait, unrelateTasks), so a
+ * change paints at once and the side effect makes the real write.
  */
 import { useMemo, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -22,9 +22,8 @@ import { EntityIdPill } from "../EntityIdPill";
 import { useInboxStore, type TaskItem } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useEntityResolution } from "../../lib/entityDisplay";
-import { blockerForms, clauseOf, foundHereOf, parseRelationQuery, storeBlockerLines, type BlockerLine, type RelationMode } from "../../lib/taskRelations";
+import { blockerForms, blocksOf, clauseOf, foundHereOf, parseRelationQuery, relatedOf, storeBlockerLines, type BlockerLine, type RelationMode } from "../../lib/taskRelations";
 import { storeStatusOf } from "../../lib/taskBlockers";
-import { lookup } from "../../lib/liveEntities";
 import { workspaceKeyOfRow } from "../../lib/workspaceScope";
 import { setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undo/labels";
@@ -37,6 +36,8 @@ const ROW = "grid grid-cols-[7rem_1fr] items-start px-4 py-1 hover:bg-sol-bg-alt
 const LABEL = "h-5 flex items-center text-xs text-sol-text-dim";
 const LINE_H = "min-h-5";
 const DIM = "text-xs text-sol-text-dim";
+/** The gutter a line's state glyph sits in, kept by lines that have none. */
+const GLYPH = "flex-shrink-0 w-3 flex justify-center";
 
 function RelationRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -47,15 +48,21 @@ function RelationRow({ label, children }: { label: string; children: ReactNode }
   );
 }
 
-function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
+/** A line's remove control: quiet until the line is hovered or focused, and
+ *  focusable with the same ring as the row's other buttons. `offer` is for a
+ *  line whose only purpose is to be cleaned up (a blocker that names no task):
+ *  it stays at full strength and says the word, since a hidden X would hide
+ *  the one action the line affords. */
+export function RemoveButton({ label, onClick, offer }: { label: string; onClick: () => void; offer?: boolean }) {
+  const quiet = "opacity-0 group-hover/line:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-60";
   return (
     <button
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="p-1.5 -m-1 rounded text-sol-text-dim hover:text-sol-red opacity-0 group-hover/line:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-60 transition-opacity flex-shrink-0"
+      className={`rounded text-sol-text-dim hover:text-sol-red focus-visible:text-sol-red transition-opacity flex-shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan focus-visible:outline-offset-2 ${offer ? "px-1 -mx-0.5 text-xs" : `p-1.5 -m-1 ${quiet}`}`}
     >
-      <X className="w-3 h-3" />
+      {offer ? "Remove" : <X className="w-3 h-3" />}
     </button>
   );
 }
@@ -75,12 +82,12 @@ function Line({ state, status, children, detail, onRemove, removeLabel }: { stat
   const dim = state === "met" || (isTerminalTaskStatus(status) && state !== "missing");
   return (
     <div className={`group/line flex items-center gap-1.5 min-w-0 ${LINE_H} ${dim ? "opacity-60" : ""}`} data-blocker-state={state}>
-      <span className="flex-shrink-0 w-3 flex justify-center">{glyph}</span>
+      <span className={GLYPH}>{glyph}</span>
       <span className="min-w-0 flex items-center gap-1.5 text-xs">
         {children}
         {detail && <span className="flex-shrink-0 max-w-[45%] truncate">{detail}</span>}
       </span>
-      <RemoveButton label={removeLabel} onClick={onRemove} />
+      <RemoveButton label={removeLabel} onClick={onRemove} offer={state === "missing"} />
     </div>
   );
 }
@@ -114,7 +121,7 @@ function UnheldTaskBlockerLine({ line, task, onRemove }: TaskLineProps) {
   const word = entity ? BLOCKER_UNKNOWN_WORDS : missing ? BLOCKER_NOT_FOUND_WORDS : undefined;
   return (
     <Line state={missing ? "missing" : "waiting"} status={task.status} onRemove={onRemove} removeLabel={`Remove blocker ${line.ref}`}
-      detail={word ? <span className={DIM}>{word}</span> : undefined}>
+      detail={word ? <span title={word} className={DIM}>{word}</span> : undefined}>
       <span className="text-xs font-mono text-sol-text-muted">{line.ref}</span>
     </Line>
   );
@@ -134,13 +141,18 @@ function PlainPill({ title, children }: { title?: string; children: ReactNode })
  *  they fail, which keeps it waiting (TG2), so the page says why it is not moving. */
 function ChecksWord({ wait, repository, pr_number }: { wait: TaskWait; repository: string; pr_number: number }) {
   const checks = useEntityResolution(`${repository}#${pr_number}`, "pr").entity?.checks_state;
-  return <WaitWord wait={wait} checks={checks} />;
+  const word = waitStateWord(wait, { checks });
+  return word ? <WaitWord word={word} fails={waitWordFails(wait, { checks })} /> : null;
 }
 
-/** A wait's word, red when it reads as a failure (`waitWordFails`), dim otherwise. */
-function WaitWord({ wait, closed, checks, now }: { wait: TaskWait; closed?: boolean; checks?: string; now?: number }) {
-  const word = waitStateWord(wait, { now, closed, checks });
-  return word ? <span className={waitWordFails(wait, { closed, checks }) ? "text-xs text-sol-red" : DIM}>{word}</span> : null;
+/** A wait's word, red when it reads as a failure (`waitWordFails`), dim
+ *  otherwise. `Line` truncates a detail at 45% of a column that is ~250px wide
+ *  in the inline peek, and a word like `answered: <the answer>` is the most
+ *  informative thing on the line, so it carries its full text as its title the
+ *  way the time pill does. The word is worked out by whoever has the inputs
+ *  for it (a checks wait reads the PR's checks), and passed in. */
+function WaitWord({ word, fails }: { word: string; fails: boolean }) {
+  return <span title={word} className={fails ? "text-xs text-sol-red" : DIM}>{word}</span>;
 }
 
 function WaitLine({ wait: w, now, status, onRemove }: { wait: TaskWait; now: number; status: string; onRemove: () => void }) {
@@ -150,9 +162,10 @@ function WaitLine({ wait: w, now, status, onRemove }: { wait: TaskWait; now: num
     : w.kind === "decision" ? <EntityIdPill type="decision" shortId={w.decision} wide />
     : w.repository ? <EntityIdPill type="pr" id={`${w.repository}#${w.pr_number}`} certain wide />
     : <PlainPill><GitPullRequest className="w-[1em] h-[1em]" />#{w.pr_number}</PlainPill>;
+  const word = waitStateWord(w, { now, closed });
   const detail = w.kind === "pr_checks_green" && w.state === "waiting" && !closed && w.repository
     ? <ChecksWord wait={w} repository={w.repository} pr_number={w.pr_number} />
-    : waitStateWord(w, { now, closed }) ? <WaitWord wait={w} closed={closed} now={now} /> : undefined;
+    : word ? <WaitWord word={word} fails={waitWordFails(w, { closed })} /> : undefined;
   return (
     <Line state={w.state} status={status} onRemove={onRemove} removeLabel={`Remove the wait ${clauseOf(w, { now })}`} detail={detail}>
       {pill}
@@ -163,10 +176,13 @@ function WaitLine({ wait: w, now, status, onRemove }: { wait: TaskWait; now: num
 type IsClosed = (ref: string) => boolean;
 
 /** Task links, one titled pill per line as Blocked by lists them, a closed
- *  one dim like a met blocker, each removable when `onRemove` is given. */
+ *  one dim like a met blocker, each removable when `onRemove` is given. The
+ *  empty leading box is `Line`'s state glyph: every value in the grid starts
+ *  at one left edge, so Blocks reads as a continuation of Blocked by. */
 function TaskLinks({ refs, isClosed, onRemove, removeLabel }: { refs: string[]; isClosed: IsClosed; onRemove?: (ref: string) => void; removeLabel?: (ref: string) => string }) {
   return refs.map((ref) => (
     <div key={ref} className={`group/line flex items-center gap-1.5 min-w-0 ${LINE_H} text-xs ${isClosed(ref) ? "opacity-60" : ""}`}>
+      <span className={GLYPH} />
       <EntityIdPill type="task" shortId={ref} wide />
       {onRemove && <RemoveButton label={removeLabel?.(ref) ?? `Remove ${ref}`} onClick={() => onRemove(ref)} />}
     </div>
@@ -176,7 +192,7 @@ function TaskLinks({ refs, isClosed, onRemove, removeLabel }: { refs: string[]; 
 /** The quiet add control closing a row, with its palette key (if it has one) on hover. */
 function AddButton({ label, hotkey, plus, onClick }: { label: string; hotkey?: string; plus: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} className="group/add h-5 flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors w-fit">
+    <button onClick={onClick} className="group/add h-5 flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-text focus-visible:text-sol-text text-left transition-colors w-fit rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan focus-visible:outline-offset-2">
       {plus && <Plus className="w-3 h-3" />}
       {label}
       {hotkey && <span className="opacity-0 group-hover/add:opacity-100 group-focus-visible/add:opacity-100 transition-opacity"><KeyCap size="xs">{hotkey}</KeyCap></span>}
@@ -194,8 +210,9 @@ function removeBlocker(id: string, line: Extract<BlockerLine, { kind: "task" }>)
   else undoAsOne(`Removed blocker ${line.ref} from ${id}`, write);
 }
 
-/** Detach the parent; the store refuses only a task it cannot find. */
-function removeParent(id: string) {
+/** Detach the parent; the store refuses only a task it cannot find. The
+ *  page's breadcrumb is where a subtask states its parent, so it carries this. */
+export function removeTaskParent(id: string) {
   const r = setTaskParent(id, "");
   if (!r.ok) toast.error(r.reason);
 }
@@ -204,6 +221,10 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
   const now = useCoarseNow(60_000);
   const lines = useMemo(() => storeBlockerLines(task, tasks), [task, tasks]);
   const foundHere = useMemo(() => foundHereOf(task, tasks).map((t) => t.short_id), [task, tasks]);
+  // Both mirrors as the server's reader prints them, so this page and `cast
+  // task show` name the same tasks (TG12).
+  const blocks = useMemo(() => blocksOf(task, tasks), [task, tasks]);
+  const related = relatedOf(task);
   const isClosed = useMemo<IsClosed>(() => {
     const statusOf = storeStatusOf(tasks, task);
     return (ref) => {
@@ -211,9 +232,9 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
       return isTerminalTaskStatus(found?.status);
     };
   }, [task, tasks]);
-  // `parent_id` holds the parent's _id; its pill reads best by short id.
-  const parentId = task.parent_id ? String(task.parent_id) : null;
-  const parent = parentId ? (lookup(tasks, parentId)?.short_id ?? parentId) : null;
+  // The parent itself is stated by the page's breadcrumb (one home per fact);
+  // here it only decides whether "Set parent…" is on offer.
+  const hasParent = !!task.parent_id;
   const store = useInboxStore.getState;
   const id = task.short_id;
 
@@ -229,9 +250,9 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
         )}
         <AddButton label="Add blocker…" hotkey="b" plus={lines.length > 0} onClick={() => onAdd("blocker")} />
       </RelationRow>
-      {!!task.blocks?.length && (
+      {blocks.length > 0 && (
         <RelationRow label="Blocks">
-          <TaskLinks refs={task.blocks} isClosed={isClosed} onRemove={(ref) => store().removeBlocks(id, ref)} removeLabel={(ref) => `${ref} stops waiting on ${id}`} />
+          <TaskLinks refs={blocks} isClosed={isClosed} onRemove={(ref) => store().removeBlocks(id, ref)} removeLabel={(ref) => `${ref} stops waiting on ${id}`} />
         </RelationRow>
       )}
       {task.found_during && (
@@ -244,22 +265,17 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
           <TaskLinks refs={foundHere} isClosed={isClosed} />
         </RelationRow>
       )}
-      {!!task.related?.length && (
+      {related.length > 0 && (
         <RelationRow label="Related">
-          <TaskLinks refs={task.related} isClosed={isClosed} onRemove={(ref) => store().unrelateTasks(id, ref)} removeLabel={(ref) => `Unlink ${ref}`} />
-          <AddButton label="Link related…" hotkey="k" plus onClick={() => onAdd("related")} />
+          <TaskLinks refs={related} isClosed={isClosed} onRemove={(ref) => store().unrelateTasks(id, ref)} removeLabel={(ref) => `Unlink ${ref}`} />
+          <AddButton label="Link related…" hotkey="k" plus={false} onClick={() => onAdd("related")} />
         </RelationRow>
       )}
-      {parent && (
-        <RelationRow label="Parent">
-          <TaskLinks refs={[parent]} isClosed={isClosed} onRemove={() => removeParent(id)} removeLabel={() => "Remove parent"} />
-        </RelationRow>
-      )}
-      {(!task.related?.length || !parent) && (
+      {(related.length === 0 || !hasParent) && (
         <RelationRow label="">
           <div className="flex items-center gap-4">
-            {!task.related?.length && <AddButton label="Link related…" hotkey="k" plus={false} onClick={() => onAdd("related")} />}
-            {!parent && <AddButton label="Set parent…" hotkey="t" plus={false} onClick={() => onAdd("parent")} />}
+            {related.length === 0 && <AddButton label="Link related…" hotkey="k" plus={false} onClick={() => onAdd("related")} />}
+            {!hasParent && <AddButton label="Set parent…" hotkey="t" plus={false} onClick={() => onAdd("parent")} />}
           </div>
         </RelationRow>
       )}

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   blockersHoldingBack,
+  localWaitTimes,
   waitTone,
+  waitRefLine,
   waitStateWord,
   waitWordFails,
   isWaitId,
@@ -16,7 +18,6 @@ import {
   blockerRefs,
   isCleared,
   dependencyLoopChecker,
-  findStoredWaitTime,
   formatWaitTime,
   isReady,
   isUnblocked,
@@ -103,25 +104,25 @@ describe("blockersHoldingBack", () => {
       { short_id: "ct-2", status: "done", blocked_by: ["ct-50", "ct-60"] },
     ];
     const refs = blockerRefs(page);
-    expect(refs).toEqual({ shortIds: ["ct-50", "ct-60"], ids: [] });
+    expect(refs).toEqual(["ct-50", "ct-60"]);
     // ct-50 found done in the database, ct-60 looked up and gone.
-    const lookup = statusLookup([...page, { short_id: "ct-50", status: "done" }], refs.shortIds);
+    const lookup = statusLookup([...page, { short_id: "ct-50", status: "done" }], refs);
     expect(blockerEntriesOf(page[1], lookup).filter((b) => !isCleared(b))).toEqual([{ kind: "task", ref: "ct-60", missing: true }]);
     expect(isUnblocked(page[1], lookup)).toBe(true);
   });
 
-  test("an _id blocker outside the page is looked up by _id, never read as missing by a short id search", () => {
+  test("an _id blocker outside the page is listed with the short ids, and blocks until it is searched", () => {
     const page = [{ short_id: "ct-1", status: "open", blocked_by: ["k57abc", "ct-5"] }];
     const refs = blockerRefs(page);
-    expect(refs).toEqual({ shortIds: ["ct-5"], ids: ["k57abc"] });
-    // Only the short id was searched: the _id stays unknown and blocks.
-    const shortOnly = statusLookup([...page, { short_id: "ct-5", _id: "k57ct5", status: "done" }], refs.shortIds);
+    expect(refs).toEqual(["k57abc", "ct-5"]);
+    // A ref left out of `searched` stays unknown and blocks, whichever kind it is.
+    const shortOnly = statusLookup([...page, { short_id: "ct-5", _id: "k57ct5", status: "done" }], ["ct-5"]);
     expect(blockersHoldingBack(page[0], shortOnly)).toEqual([{ kind: "task", ref: "k57abc", status: "unknown" }]);
     // Both searched: the _id resolves to its open task and prints as its short id.
-    const both = statusLookup([...page, { short_id: "ct-5", status: "done" }, { short_id: "ct-7", _id: "k57abc", status: "open" }], [...refs.shortIds, ...refs.ids]);
+    const both = statusLookup([...page, { short_id: "ct-5", status: "done" }, { short_id: "ct-7", _id: "k57abc", status: "open" }], refs);
     expect(blockersHoldingBack(page[0], both)).toEqual([{ kind: "task", ref: "ct-7", status: "open" }]);
     // Both searched and the _id is gone: missing, so it no longer blocks.
-    expect(isUnblocked(page[0], statusLookup([...page, { short_id: "ct-5", status: "done" }], [...refs.shortIds, ...refs.ids]))).toBe(true);
+    expect(isUnblocked(page[0], statusLookup([...page, { short_id: "ct-5", status: "done" }], refs))).toBe(true);
   });
 
   test("a blocker absent from the caller's page still resolves through statusOf", () => {
@@ -425,12 +426,24 @@ describe("words", () => {
     expect(formatWaitTime(new Date(2026, 8, 20, 4, 13).getTime(), { now, withDay: true })).toBe("Sep 20 04:13");
   });
 
-  test("a stored UTC time is found again inside its line", () => {
+  test("a stored UTC time is found again inside its line, and the words around it kept", () => {
     const at = Date.UTC(2026, 9, 11, 9, 26);
     const line = `until ${formatWaitTime(at, { absolute: true, timeZone: "UTC" })}`;
     expect(line).toBe("until Oct 11, 2026 09:26 UTC");
-    expect(findStoredWaitTime(line)).toEqual({ at, start: 6, end: line.length });
-    expect(findStoredWaitTime("on PR #42")).toBeNull();
+    expect(localWaitTimes(line, { now: at, timeZone: "UTC" })).toBe("until 09:26");
+    // A line naming no stored moment, and one naming a moment in another zone, come back whole.
+    expect(localWaitTimes("on PR #42", { now: at, timeZone: "UTC" })).toBe("on PR #42");
+    expect(localWaitTimes("until Oct 11, 2026 02:26 PDT", { now: at, timeZone: "UTC" })).toBe("until Oct 11, 2026 02:26 PDT");
+  });
+
+  test("stored text reads in the reader's clock, so one screen says one moment one way", () => {
+    const at = Date.UTC(2026, 9, 11, 9, 26);
+    const stored = `saw the wait met: ${formatWaitTime(at, { absolute: true, timeZone: "UTC" })} passed`;
+    expect(localWaitTimes(stored, { now: at, timeZone: "UTC" })).toBe("saw the wait met: 09:26 passed");
+    // Every moment in the line, not just the first, and text naming none is untouched.
+    const two = `${formatWaitTime(at, { absolute: true, timeZone: "UTC" })} to ${formatWaitTime(at + 86_400_000, { absolute: true, timeZone: "UTC" })}`;
+    expect(localWaitTimes(two, { now: at, timeZone: "UTC" })).toBe("09:26 to Mon 09:26");
+    expect(localWaitTimes("Waiting on PR #42", { now: at })).toBe("Waiting on PR #42");
   });
 
   test("the runtime's zone needs no Intl, so Hermes prints what the tests see", () => {
@@ -468,8 +481,14 @@ describe("words", () => {
   test("blockerLabel covers every entry", () => {
     expect(blockerLabel({ kind: "task", ref: "ct-3", status: "open" })).toBe("ct-3");
     expect(blockerLabel({ kind: "task", ref: "ct-9", missing: true })).toBe("ct-9 (not found)");
-    expect(blockerLabel(prWait())).toBe("PR #42 merges");
-    expect(blockerLabel({ ...prWait("failed"), note: "closed without merging" })).toBe("PR #42 merges (failed: closed without merging)");
+    // A wait that still holds reads as holding: never waitLabel's present
+    // tense, which for a decision and a checks wait is the met wording itself.
+    expect(blockerLabel(prWait())).toBe("PR #42 to merge");
+    expect(blockerLabel({ ...prWait(), kind: "pr_checks_green" })).toBe("PR #42 checks to go green");
+    expect(blockerLabel(wait({ kind: "decision", decision: "sd-412" }))).toBe("sd-412 to be answered");
+    expect(blockerLabel(wait({ kind: "time", at: new Date(2026, 9, 9, 9, 0).getTime() }), { now })).toBe("until Fri 09:00");
+    expect(blockerLabel({ ...prWait("failed"), note: "closed without merging" })).toBe("PR #42 to merge (failed: closed without merging)");
+    expect(blockerLabel({ ...prWait("met"), note: "merged" })).toBe("PR #42 merged");
   });
 });
 
@@ -651,6 +670,29 @@ describe("waitStateWord", () => {
     expect(waitStateWord(checks, { checks: "failure", closed: true })).toBe("");
     expect(waitStateWord({ ...checks, state: "met" }, { checks: "failure" })).toBe("checks green");
   });
+  test("a text list's wait line ends in its state, the way a task blocker ends in its status", () => {
+    expect(waitRefLine(checks)).toBe("PR #4 checks to go green [waiting]");
+    expect(waitRefLine({ ...checks, state: "met", note: "checks green" })).toBe("PR #4 checks green [met]");
+    expect(waitRefLine({ ...checks, state: "failed", note: "closed before its checks went green" })).toBe("PR #4 closed before its checks went green [failed]");
+    // A wait on a closed task has no word; the marker still says where it stands.
+    expect(waitRefLine(checks, { closed: true })).toBe("PR #4 [waiting]");
+    expect(waitRefLine(checks, { inline: (w) => w.toUpperCase() })).toBe("PR #4 CHECKS TO GO GREEN [waiting]");
+  });
+
+  test("a time wait's countdown rounds up, so a wait set from 2h never reads 1h", () => {
+    const now = Date.UTC(2026, 9, 9, 12, 0, 0);
+    const time = (at: number) => ({ id: "w2", kind: "time", at, state: "waiting", created_at: 0 }) as TaskWait;
+    // A 2h wait read a second after it was set has 1h59m59s left.
+    expect(waitStateWord(time(now + 2 * 3_600_000 - 1000), { now })).toBe("in 2h");
+    expect(waitStateWord(time(now + 26 * 3_600_000), { now })).toBe("in 2d");
+    expect(waitStateWord(time(now + 30_000), { now })).toBe("any moment");
+    // A moment just past is still "any moment": the settle job has a minute.
+    expect(waitStateWord(time(now - 30_000), { now })).toBe("any moment");
+    // Past that, nothing is coming, and the word says so rather than reading as normal.
+    expect(waitStateWord(time(now - 20 * 60_000), { now })).toBe("overdue by 20m");
+    expect(waitStateWord(time(now - 3 * 86_400_000), { now })).toBe("overdue by 3d");
+  });
+
   test("the word reads red only for a failed wait or failing checks, on an open task", () => {
     expect(waitWordFails(checks)).toBe(false);
     expect(waitWordFails(checks, { checks: "failure" })).toBe(true);
