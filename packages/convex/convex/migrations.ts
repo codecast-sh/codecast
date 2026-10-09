@@ -2,7 +2,7 @@ import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { redactSecrets } from "./redact";
-import { normalizeRepository } from "./lib/gitRefs";
+import { normalizeRepository, prByNumber } from "./lib/gitRefs";
 import { commitRecordedBy } from "./githubWebhooks";
 import { repositoryOfCheckout } from "./users";
 import { standingReportsToFields } from "./lib/standingSeat";
@@ -19,6 +19,8 @@ import { isHandBriefing } from "./spawn";
 import { seatTitlePatch } from "./anchors";
 import { findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf } from "./lib/orgRoutine";
 import { applyCancel, applyReactivate } from "./agentTasks";
+import { linkTask } from "./taskWaits";
+import { isPrWaitTarget } from "@codecast/shared/tasks";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -1077,3 +1079,30 @@ export async function releaseFolderHeld(ctx: { db: any; scheduler?: any }, args:
     return { dryRun, roles: roles.length, ...counts, released, stamped, rows };
   }
 }
+
+// One-off (ct-58147): link the PR waits set before PR rows carried
+// `waiting_task_ids`, and settle each linked PR as it now stands. Without the
+// back reference those waits never settle, and a wait that cannot settle is a
+// trap (task-graph.md TG2). Idempotent; run it until it reports `done`,
+// passing the cursor back, then delete it:
+//   packages/convex/run.sh migrations:linkPrWaits
+export const linkPrWaits = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, { cursor }) => {
+    const page = await ctx.db
+      .query("tasks")
+      .withIndex("by_waiting_since", (q) => q.gt("waiting_since", 0))
+      .paginate({ cursor: cursor ?? null, numItems: 200 });
+    let linked = 0;
+    for (const task of page.page) {
+      for (const w of task.waits ?? []) {
+        if (w.state !== "waiting" || !isPrWaitTarget(w)) continue;
+        const pr = await prByNumber(ctx, w.repository, w.pr_number);
+        if (!pr || !(await linkTask(ctx, pr, task._id))) continue;
+        linked++;
+        await ctx.scheduler.runAfter(0, internal.taskWaits.settlePr, { pr_id: pr._id });
+      }
+    }
+    return { linked, cursor: page.continueCursor, done: page.isDone };
+  },
+});

@@ -297,14 +297,9 @@ export default function TaskDetailScreen() {
 
         {graph?.foundDuring && <TaskLinkRow icon="search" label="Found during" link={graph.foundDuring} />}
 
-        {task.description && (
-          <RNView style={styles.section}>
-            <CollapsibleBody fadeColor={Theme.bg} height={180}>
-              <MarkdownContent text={task.description} baseStyle={styles.description} />
-            </CollapsibleBody>
-          </RNView>
-        )}
-
+        {/* Relations before the body, as on the web: "what is holding this?" is
+            a stuck task's first question, and a phone's description fold would
+            otherwise bury the answer. */}
         {graph && graph.blockedBy.length > 0 && (
           <RNView style={styles.section}>
             <RNView style={styles.subtaskHeader}>
@@ -314,6 +309,14 @@ export default function TaskDetailScreen() {
               )}
             </RNView>
             {graph.blockedBy.map((b) => <BlockerRowView key={b.key} row={b} taskStatus={task.status} />)}
+          </RNView>
+        )}
+
+        {task.description && (
+          <RNView style={styles.section}>
+            <CollapsibleBody fadeColor={Theme.bg} height={180}>
+              <MarkdownContent text={task.description} baseStyle={styles.description} />
+            </CollapsibleBody>
           </RNView>
         )}
 

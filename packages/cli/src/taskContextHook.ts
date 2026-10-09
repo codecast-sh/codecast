@@ -13,7 +13,7 @@
 // leaves one line in ~/.codecast/task-context.log.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { formatTaskResume, formatTaskResumeUnavailable, restoresTaskContext, type TaskResumeContext } from "@codecast/shared/tasks";
+import { AGENT_WAIT_WORDS, formatTaskResume, formatTaskResumeUnavailable, restoresTaskContext, type TaskResumeContext } from "@codecast/shared/tasks";
 import { readTaskPulseFor } from "./taskPulse.js";
 import { checkoutWords } from "./checkoutWords.js";
 import { codecastHooksDir, installCodexSessionStartHook, removeCodexSessionStartHook, wrapForClient, type StableHookClient, type StableContextConfig } from "./stableContext.js";
@@ -112,7 +112,13 @@ export async function taskContextFor(
       ...(pulse?.plan ? { plan_id: pulse.plan } : {}),
       session_id: sessionId,
     });
-    return context?.task ? formatTaskResume(context, { now, ...checkoutWords(payload.cwd || process.cwd()) }) : null;
+    // A time wait is named absolute here (TG11): this block is read by an
+    // agent, beside the stored history, the unblock comment, the wake message
+    // and `cast task context`, which all name the date, the year and the zone
+    // — and the agent is told to copy the parking line's `cast state` text
+    // verbatim, where a bare local-clock "14:00" is pinned, read later by
+    // other sessions in other zones, and meaningless once the day turns.
+    return context?.task ? formatTaskResume(context, { now, ...AGENT_WAIT_WORDS, ...checkoutWords(payload.cwd || process.cwd()) }) : null;
   } catch {
     return pulse?.task ? formatTaskResumeUnavailable(pulse.task, pulse.plan || undefined) : null;
   }
