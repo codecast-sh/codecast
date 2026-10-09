@@ -11,8 +11,8 @@ true answer, and a person looking at a task can see why it is not moving.
 ## TG1. One readiness function
 
 `packages/shared/tasks/graph.ts` owns the definition. Convex (`tasks.list`,
-`tasks.webList`, `tasks.getReadyTasks`), the CLI (`planReadiness.ts`) and the
-web all call it; none keeps its own copy.
+`tasks.webList`), the CLI (`planReadiness.ts`) and the web all call it; none
+keeps its own copy.
 
 A task is **unblocked** when every task in `blocked_by` is done or dropped
 and every wait in `waits` is met. A task is **ready** when it is unblocked,
@@ -27,11 +27,12 @@ absence. A blocker id that resolves to nothing does not block; it is reported
 as `missing` so the UI can offer to remove it. A lookup answers `null` for
 "looked up, not found" and `undefined` for "not looked up"; the second blocks
 (status `unknown`), so a page that left a blocker out degrades to blocked,
-never to ready. A caller holding a page takes `{shortIds, ids} =
-blockerRefs(page)`, fetches `shortIds` through the short id index and `ids`
-(older plan rows name blockers by `_id`) by `_id`, and builds
-`statusLookup([...page, ...fetched], searched)` where `searched` holds only
-the refs it really looked up. The parent rule follows the same convention:
+never to ready. A caller holding a page takes
+`searched = blockerRefs(page)` — every ref its tasks name that none of them
+is, short ids and `_id`s alike, since older plan rows name blockers by
+`_id` — looks each one up, and builds `statusLookup([...page, ...fetched],
+searched)`, so a ref it chose not to look up stays unknown rather than
+reading as missing. The parent rule follows the same convention:
 `parentStatusOf` answers `null` for a parent looked up and gone (an orphan,
 ready) and `undefined` for one not looked up (not ready, `parent_unknown`).
 On the server both are read by `graphOutside` (`lib/taskGraph.ts`), which
@@ -44,10 +45,21 @@ closed one, which waits on nothing), so the CLI's blocked tags and counts
 never read the raw `blocked_by`.
 
 `blockersHoldingBack(task, statusOf)` returns what holds the task back as
-typed entries (`{kind: "task", ref}` or the wait itself). Readiness, the
+typed entries (`{kind: "task", ref}` or the wait itself). A closed task holds
+nothing, and that is decided inside the function, not by each caller: every
+unblock path stops at a terminal status, so a leftover wait on a done task is
+history and a reader that called it blocked would park on something nothing
+can settle. Readiness, the
 CLI's "blocked by" lines, the row tooltip and the task page all render from
 that one list; `blockerEntriesOf` is the whole Blocked by, cleared and
-missing entries included, for a surface that lists history. A plan's tasks
+missing entries included, for a surface that lists history. Both order by
+what each entry is doing to the task rather than by where it is stored
+(`blockerBand`): a failed wait first, since it needs a re-plan and not
+patience, then everything that still holds, then the entries holding nothing
+(a cleared blocker, a met wait, an id naming no task), each band stable in
+storage order. Storage order interleaved the three, which left a long list
+separating "why am I stuck" from "what already happened" by a glyph's colour
+alone. A plan's tasks
 are judged together by `planVerdicts` (`shared/tasks/planVerdicts.ts`),
 which the CLI's plan commands and the plan's fenced task list share.
 
@@ -98,13 +110,24 @@ reference, so an event reads only its own tasks, never a scan.
   org proposals' card withdraw, so a failure there never rolls back the
   answer. The job reads the decision as it stands (one reopened since settles
   nothing) and carries who resolved it, so a person answering or a session
-  withdrawing is not told of their own act. Purging a session fails the waits
+  withdrawing is not told of their own act. It settles no task itself: each
+  waiting task gets a job of its own (`settleDecisionTask`, which re-reads
+  both rows), so one task's throw cannot roll back its siblings' settles, and
+  it prunes the back reference to the tasks still holding a wait that names
+  the decision — a met wait's task stays, since a reopen has to find it.
+  Purging a session fails the waits
   on its open decisions in the purge itself, since the row goes with it. The
   note carries the answer ("answered: Ship it") only when
   everyone who can read the task can read the decision; otherwise it says
   "answered", because the note reaches the task's history, its comment, the
-  owner's wake and the bell. `reopenCore` puts a met decision wait back to
-  `waiting`, notes it on the task and wakes the owner.
+  owner's wake and the bell. `reopenCore` gives the reopen the same shape:
+  it schedules `taskWaits.reopenDecision`, whose fan-out re-reads the row (one
+  answered again since takes nothing back) and hands each task holding a met
+  wait on it a job of its own (`reopenDecisionTask`), which puts the wait back
+  to `waiting`, notes it on the task and wakes the owner. The reopen needs the
+  split more than the settle does: the overdue sweep only settles waits and
+  never puts a met one back, so a reopen rolled back by one task's throw would
+  have nothing to recover it.
 - Time: creating a `time` wait schedules one `runAt` job. The job re-reads
   the task and settles the wait only if it still exists and is still
   waiting, so removing a wait needs no cancellation.
@@ -112,6 +135,23 @@ reference, so an event reads only its own tasks, never a scan.
   already answered is met at once (and says so). A PR codecast cannot see
   (no app installation, not in `pull_requests`) is refused with the reason;
   a wait that can never settle is a trap.
+- Every one of those settles is a single scheduled job, and Convex does not
+  retry one that threw; the settle commits the waits patch, the history, the
+  comment, the notification and the wake in one transaction, so a throw
+  anywhere downstream rolls it back and no later event looks at the wait
+  again. A quarter-hourly cron (`settleOverdueWaits`) is the recovery: it pages
+  `tasks.by_waiting_since` and hands each task holding an open wait its own
+  target ALREADY decides to `settleOneOverdueTask`, which settles each
+  still-waiting wait from that target the way its job would: the PR row as
+  it stands, the decision's current verdict, the clock. The page reads each
+  target to apply that gate, so a task parked on an open PR, a pending
+  decision or a moment still to come costs a read and no job, and the
+  recovery's standing cost follows the settles that went missing rather than
+  the healthy parked work. A target it cannot read, or one that has not moved,
+  lends no verdict, so a pass behind jobs that all fired writes nothing. The sweep itself only reads: one task per
+  transaction, and the cursor handed on regardless, so a settle that throws
+  (the very thing being recovered from) cannot roll back its page mates or
+  strand the pages behind it.
 
 ### When a task unblocks
 
@@ -121,7 +161,9 @@ edge is removed by `removeDep` or an `update` that overwrites `blocked_by` or
 cascade close, an org proposal's close or an issue sync's close),
 `onUnblocked` runs once:
 
-1. a system comment on the task: "Unblocked: PR #42 merged".
+1. a system comment on the task: "Unblocked: PR acme/api#42 merged". The PR
+   is named in full there, as a failed wait's comment names it, so the
+   comment renders it as a live pill away from any checkout.
 2. If a session owns the task (`conversations.active_task_id`), that session
    gets a message saying what cleared and that the task is ready. This is how
    an agent parks: it sets a wait on its own task and ends its turn.
@@ -179,7 +221,13 @@ this edge would close a loop. Blocked by names what a task needs: if ct-9
 needs ct-5, that edge already exists." The check is
 `dependencyLoopChecker` in `graph.ts`, run by `assertDependencyEdges`
 (`lib/taskGraph.ts`) over the workspace's open edges, and by the web palette
-over the store's. Topological order (`getDependencyChain`, the plan graph) is
+over the store's. Open edges only, because a done or dropped task holds
+nothing back: a loop can be stored through one, so a task leaving a terminal
+status judges its own blockers again (`loopedBlockers`, cut by `taskLinks`
+`cutReopenedLoops`) and gives up the edge that closes a loop, with the
+history, note and release a cut edge carries. Every loop through a task runs
+through one of its own `blocked_by` edges, and that edge is the one no check
+could judge while the task was closed. Topological order (`getDependencyChain`, the plan graph) is
 `graph.ts` `topologicalOrder` / `topoLayers` over the same edges. A short id
 and the `_id` an older plan row names a task by are one edge: an add never
 stores the second form, a remove takes both, and an update that swaps one
@@ -202,7 +250,8 @@ naming it, even when a mixed page (the web's team view) holds the row.
   working on. The server fills it on create when the creating session is
   bound to a task and the new task is not that task's own subtask or plan
   step; `--found-during` sets it explicitly and `--found-during none` skips
-  it. The task page shows "Found during ct-12", and the source task lists
+  it. `cast task update --found-during <task|none>` corrects the link
+  afterwards, since the one the server filled in can be wrong. The task page shows "Found during ct-12", and the source task lists
   what was found while working on it.
 - `superseded_by` (task short id): this task was replaced. Superseding drops
   the old task with a note and **moves its dependents**: anything blocked by
@@ -279,6 +328,15 @@ every session runs under its person's token, so the user alone would hand one
 session's checklist to the whole fleet). `cast task create --ephemeral`
 sets it; `cast task keep <id>` clears it. Nothing is deleted.
 
+A surface that judges readiness therefore has to say who it judges for.
+`plans.get` sends the asking session with the plan (`graph_viewer`), and the
+surfaces that report to that caller pass it on (`cast plan show`, `context`,
+`status`, `wave`), so they agree with `cast task ready --plan` instead of
+telling the filing session that its own bookkeeping is somebody else's. The
+surfaces that decide what a FRESH session could be spawned for (`orchestrate`,
+`autopilot`, the workflow runner) name nobody, because a spawned session is
+never the owner: there every ephemeral step reads as its owner's.
+
 ## TG10. Context survives compaction
 
 A SessionStart job, independent of stable mode, reads the hook input's
@@ -286,6 +344,24 @@ A SessionStart job, independent of stable mode, reads the hook input's
 pulse), it prints a compact block: the task, its status, its open blockers
 and waits, the last progress comment, and the plan. Startup sessions are
 left alone; the bound task is already in front of them.
+
+The block ends by telling a session holding a blocked task what to do about
+it, so it carries what `cast task show` carries about a wait that cannot
+clear on its own: a still-waiting checks wait ships its PR's `checks_state`
+(`checksWaitPr`, the one rule for which waits need the read) and reads "PR
+#42 checks failing", and the parking advice says that only a new push turns
+them green. Without it the one surface that orders a session dormant was also
+the one that could not see red CI. A task blocker in `backlog` is called out
+the same way: it holds pickup, and nothing schedules backlog, so parking on it
+waits for a wake that is not coming until a person moves it to open (the words
+the plan surfaces use for parked work).
+
+The plan is named for what it is. `planOf` falls back to the plan the SESSION
+is bound to when the task has none of its own, and a session bound to a plan
+routinely starts a task filed outside it, so the block carries which of the
+two it holds (`mine`) and drops the wording that presupposes membership
+("after this task", "no other plan step") for a plan the task is not a step
+of.
 
 ## TG11. A history that covers the graph
 
@@ -303,19 +379,166 @@ history line, the "Unblocked" comment) is written with `absolute: true`,
 "Oct 14, 2026 09:00 UTC", because Convex has no viewer zone and the text is
 read later; relative words ("Thu 09:00") are only for live rendering.
 
+A surface that shows a stored line beside a live wait renders the stored
+moment in its own clock, or one screen carries two spellings of one moment:
+`localWaitTimes` (`@codecast/shared/tasks`) rewrites every absolute time in
+stored text, and the web's timeline (`GraphText`) and `cast task show` — its
+history lines and its comments alike, since the "Unblocked" comment stores its
+moment absolute too — all go through it. The exception is the output written
+for an agent rather than a person: `cast task context` and the compaction
+block (TG10) print their waits absolute, matching the stored history, the
+"Unblocked" comment, the wake message and a claim's skip reason, so every
+agent-read surface names the moment the same way. The compaction block needs
+it twice over: its parking line quotes a `cast state` pin the agent is told to
+copy verbatim, and a bare local-clock "14:00" in that pin is read later, by
+other sessions in other zones, and means nothing once the day turns.
+
+Every other surface either party reads words the moment by WHO is reading
+(`readerWords`): local for a person at a terminal, absolute for a session,
+since one invocation has one reader. `cast task ls`/`ready`, `start`, `dep`,
+`create` and the plan's `show`, `status` and `wave` lines all take it, so two
+commands an agent runs in a row cannot spell one moment two ways. `cast task
+show` is the one terminal surface that keeps the local clock whoever reads it,
+because it prints the stored history and comments beside the live waits and
+those are rewritten into this machine's clock.
+
 ## TG12. Surfaces
 
 - **Task page.** One editable "Blocked by" row lists task blockers and waits
   together, each with its live pill (`EntityIdPill`, `PrStatusChip`, a time
   pill), its state, and a remove control; "Add blocker…" opens the palette,
-  which accepts task search and any TG3 ref. "Blocks", "Found during",
-  "Found here" and "Related" sit beside it. A superseded task shows the
-  replacement at the top.
+  which accepts task search and any TG3 ref. Once every line is cleared the
+  row says "unblocked" (`isUnblocked`), the same word the phone uses, so the
+  verdict is read rather than inferred from the glyphs. Under the lines the
+  row names what nothing will settle, once per kind and in the number of the
+  lines above it (`lostWaitAdvice`): a failed wait, which never clears, and a
+  time wait whose moment went by unsettled, whose word reads red there for the
+  same reason red checks do — still waiting, nothing coming. The verdict half
+  of that sentence is the CLI's own (`stalledWaitDiagnosis`), so a person
+  reading the page and an agent reading its parking line get one diagnosis.
+  "Blocks", "Found
+  during", "Found during this" (the mirror: what was found while on this
+  one) and "Related" sit beside it; Blocks edits the one
+  dependency edge from the other side ("Add blocked task…"), so making another
+  task wait on this one never means opening that task — from a board row
+  either, where the palette and the row menu offer it as "Make a task wait on
+  this…". An add with no row label above it (the closing line's, the palette's,
+  the menu's) names its whole act, since there the direction cannot lean on a
+  label. A closed task holds
+  nothing, so it keeps its history, is offered no adds, and heads the row
+  "Blocked by (cleared)" — the CLI's words for the same section, because the
+  verdict word is suppressed there and a wait left unsettled has no state
+  word, so without the heading a done task's dim hourglass reads as live. Both
+  words come from `shared/tasks/graph.ts` (`blockedByLabel`, `UNBLOCKED_WORD`),
+  as every other phrase these three surfaces share does; only the condition is
+  each surface's own (the CLI asks what still holds the task, the web and the
+  phone whether the task is terminal). A
+  superseded task shows the replacement at the top.
 - **Task rows.** A blocked task shows one glyph distinct from the session
   count, with a tooltip that names what it waits on.
 - **Tasks board.** An "Unblocked" view next to Active.
 - **Plan graph.** Waits appear as small nodes feeding their task; colors use
-  sol tokens.
+  sol tokens. The picture explains why a wave is not moving rather than
+  ranking what to pick up, so an unmet wait keeps its colour until its task
+  closes (`untilClosed`, as the task page does) — the main way a wait appears
+  is an agent parking its own `in_progress` task, and dimming that pill would
+  hide the one thing holding the wave. The key names every tone the picture
+  draws, so the two read from the same rule. A node carries no bracket, so a
+  wait that still holds is worded as what it waits FOR (`blockerLabel`), the
+  same reason the CLI's bracketless lists are: its state would otherwise live
+  in hue alone, `waitLabel`'s present tense being the met wording verbatim for
+  a decision and a checks wait. The node's hover title names the task it is
+  about, and says it HOLDS that task only while it does: a failed wait keeps
+  blocking (TG2) and so still holds, while a met one is "on" its task, since
+  "PR #42 merged — holds ct-12" would contradict itself. A task node draws and
+  is named by its status as every other surface shows it (a team's own status
+  keeps its name and colour), and the key names each status the graph drew
+  alongside the marks it makes in colour and dash alone.
 - **Mobile.** The task screen lists blockers and waits, read-only.
 - **CLI.** `cast task show` and `context` print blockers, waits and links in
-  the same order as the web.
+  the same order as the web. The text list has no pill to carry a state, so
+  every Blocked by entry ends in a bracketed one: a task's status
+  (`taskRefLine`) and a wait's state (`waitRefLine`, "PR #42 to merge
+  [waiting]", "PR #42 checks green [met]"). Without it a met wait reads as
+  holding, since its word differs from a waiting one's only by tense. Two
+  cases need more than the bare state. On a CLOSED task every entry that would
+  otherwise read as holding brackets `history` — an unsettled wait, and a task
+  blocker still open by its own status (`[in_review, history]`) — because it
+  holds nothing and the live word would contradict the "Blocked by (cleared)"
+  heading above it. And a time wait, whose subject
+  is already a moment, parenthesizes its countdown ("Oct 9, 2026 05:25 UTC
+  (in 3h) [waiting]") rather than run two time expressions together.
+  A list with no room for that bracket — "blocked by …" in `cast task
+  ls`/`ready`/`start`, a plan's Stuck and Blocked lines, the compaction
+  block — carries the state in the words instead: `blockerLabel` renders a
+  wait that still holds as what it is waiting FOR ("PR #42 to merge", "sd-412
+  to be answered"), never in `waitLabel`'s present tense, which for a
+  decision and a checks wait is the met wording verbatim and would tell an
+  agent the opposite of the truth. For the same reason a time wait whose
+  moment has gone by unsettled appends its countdown there
+  ("until Oct 6, 2026 12:00 UTC (overdue by 3d)"): with no bracket to say
+  `waiting`, a past moment reads exactly like one still to come, on the very
+  lines that tell an agent to park on it. A moment still ahead needs no word.
+  Only a
+  time wait also prints `· id w…`: that id is its removal handle, where a PR
+  or decision wait is removed by what it waits on (`waitRemoveRef`), already
+  unique on a task. `cast task context` prints the parking line
+  directly under its Blocked by lines, where the compaction block puts the
+  same sentence, because its subject is those lines and under a link section
+  it would read as an instruction about the link. It is for the session whose
+  own pulse holds the task (`parkHeldLine`, shared
+  with `cast task dep` and the compaction block): it is the surface the
+  installed snippet names for regrounding, and `offFrontierReason` says
+  nothing for a blocked task, so without it an agent reads its blockers and no
+  instruction. A removal that matched nothing says so and exits non-zero —
+  `--remove-blocked-by <wait id>` is idempotent on the server, for the web's
+  dispatch retry, and the CLI is where a silent success would read as an
+  unblocked task.
+
+### The workspace a printed command names
+
+A task or plan is read in the workspace this directory maps to, and written in
+the one the caller named (the session's team, else that mapping). On a
+checkout mapped elsewhere the two differ, and the gap reads as absence: a
+`--plan` list answers nothing and an agent reads "no work" rather than "not
+here". So the CLI says which scope it means, from one parser and the wordings
+beside it (`resolveWorkspace.ts`), and every claim about why a read came back
+empty is proved by a read rather than inferred:
+
+- `parseWorkspaceKey` is the only place a stored access key (`team:<id>`,
+  `user:<id>`) becomes a workspace, so an unknown variant is understood
+  nowhere rather than in three places differently. A `user:` key keeps WHOSE
+  workspace it named, because the wire word `personal` means the caller's own:
+  a row key reaching a scope goes through `rowWorkspaceScope`, which sends no
+  workspace at all for a personal key naming anyone else (a task filed in a
+  teammate's personal workspace is readable here, since its assignee is a
+  grant) and leaves the route's own default in force — the same verdict
+  `namedWorkspace` reaches when it declines to name one.
+- `teamFlagFor` words every printed `--team`: the team's name when the roster
+  holds it, else its id, and `personal` as a positive value. A printed CREATE
+  (`unfiledStepsAdvice`) keeps that flag even where the directory would file
+  there anyway — a write names its workspace.
+  A printed READ keeps it too: `cast plan create --steps` closes with `cast
+  task ready --plan pl-N --team Codecast --claim`, named from the workspace
+  the plan's own create answer reports, because the line runs later in a shell
+  whose mapping this process cannot see.
+  No printed command drops the flag on the grounds that the next shell would
+  land there anyway: a server resolves an unscoped read from the directory
+  mappings and this process resolves the active pointer, so nothing printed
+  may claim what this directory reads.
+- `filedElsewhereLine` is what an empty `--plan` read adds: "pl-857 is filed
+  in the Codecast Labs workspace, where 3 tasks answer: cast task ready --plan
+  pl-857 --team 'Codecast Labs'". The count is the proof, so it makes that
+  claim only once a read scoped there has answered, since an empty list has
+  causes besides the workspace.
+- The directory is the other one. Every `cast task ls`/`ready` sends this
+  checkout's `project_path`, which narrows the scoped query
+  (`wrapProjectQuery`), so a plan whose steps were filed from another checkout
+  — or from a worktree, which has a path of its own — answers nothing here in
+  EVERY workspace, and `cast plan status` (which reads the plan by short id)
+  disagrees with `cast task ready`. `outOfReachLine` is what the empty read
+  adds then, proved the same way: the read runs once more with the path filter
+  lifted too, so a list emptied by anything else (a project filter, which the
+  server answers without the path wrapper at all) claims nothing. On `ready`
+  the note replaces "cast plan status shows what holds the rest", which would
+  be the wrong cause.
