@@ -13,6 +13,7 @@ export const PREFERENCE_MAP: Record<string, string> = {
   task_completed: "task_activity",
   task_failed: "task_activity",
   task_unblocked: "task_activity",
+  task_blocked: "task_activity",
   doc_updated: "doc_activity",
   doc_commented: "doc_activity",
   plan_status_changed: "plan_activity",

@@ -156,8 +156,21 @@ function writeDeviceBinding(binding: DeviceBinding): void {
  * as a laptop because of who started its daemon.
  */
 export const REMOTE_DEVICE_MARKER_REL = ".codecast/remote-device";
-const REMOTE_DEVICE_MARKER = path.join(defaultConfigDir(), "remote-device");
+/**
+ * Where the marker lives for THIS process. Resolved per call, not once at
+ * import: a test that points CODECAST_DIR at its own directory must not read
+ * (or write) the marker of the machine it happens to run on, and on a cloud
+ * host the real one is always there.
+ */
+function remoteDeviceMarkerPath(): string {
+  return path.join(defaultConfigDir(), "remote-device");
+}
 let cachedRemoteMarker: boolean | null = null;
+
+/** Forget the marker verdict, so a test can decide the question itself. */
+export function resetRemoteDeviceForTests(): void {
+  cachedRemoteMarker = null;
+}
 
 /** The remote verdict from its two sources: the launch environment, and the marker on disk. */
 export function resolveRemoteDevice(input: { env: string | undefined; marker: boolean }): boolean {
@@ -172,15 +185,16 @@ export function resolveRemoteDevice(input: { env: string | undefined; marker: bo
  */
 export function isRemoteDevice(): boolean {
   if (cachedRemoteMarker === null) {
+    const marker = remoteDeviceMarkerPath();
     try {
-      cachedRemoteMarker = fs.existsSync(REMOTE_DEVICE_MARKER);
+      cachedRemoteMarker = fs.existsSync(marker);
       // A process launched as a remote device records it, so a daemon started
       // later without the variable (a self-restart, a hand-run start over SSH)
       // still knows. Without it a Mac host's daemon took itself for a laptop
       // and froze on the window server it does not have (2026-10-05).
       if (!cachedRemoteMarker && process.env.CODECAST_REMOTE_DEVICE === "1") {
-        fs.mkdirSync(path.dirname(REMOTE_DEVICE_MARKER), { recursive: true, mode: 0o700 });
-        fs.writeFileSync(REMOTE_DEVICE_MARKER, "");
+        fs.mkdirSync(path.dirname(marker), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(marker, "");
         cachedRemoteMarker = true;
       }
     } catch {

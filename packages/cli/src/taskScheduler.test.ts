@@ -3,7 +3,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { TaskScheduler, buildRunLaunch, buildRunScript, runPaneFinished, triggerRunTaskId } from "./taskScheduler.js";
-import { deviceId } from "./remote/device.js";
+import { deviceId, resetRemoteDeviceForTests } from "./remote/device.js";
+import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { triggerPrecheckPassed } from "@codecast/shared/contracts";
 
@@ -16,17 +17,28 @@ import { triggerPrecheckPassed } from "@codecast/shared/contracts";
 
 let dir: string;
 let savedRemoteEnv: string | undefined;
+let isolatedConfigDir: IsolatedCodecastDir;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "tasksched-"));
   savedRemoteEnv = process.env.CODECAST_REMOTE_DEVICE;
   delete process.env.CODECAST_REMOTE_DEVICE;
+  // `isRemoteDevice()` reads the environment AND a marker file under the config
+  // dir, and caches the marker for the process. On a cloud host that marker is
+  // really there, so clearing the variable alone leaves the device remote and
+  // the local-device cases below fail for the machine, not for the code. Give
+  // the test its own config dir and forget the cached verdict, so the variable
+  // is the only thing that decides.
+  isolatedConfigDir = isolateCodecastDir("tasksched-config-");
+  resetRemoteDeviceForTests();
 });
 
 afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
   if (savedRemoteEnv === undefined) delete process.env.CODECAST_REMOTE_DEVICE;
   else process.env.CODECAST_REMOTE_DEVICE = savedRemoteEnv;
+  isolatedConfigDir.restore();
+  resetRemoteDeviceForTests();
 });
 
 interface MockCalls {

@@ -41,6 +41,12 @@ test("an assignee of an owner-only task receives none of the owner's graph tasks
   expect(result._id).toBe("task1");
   expect(result.graph_tasks).toEqual([]);
   expect(result.graph_missing).toEqual([]);
+  // The blocker's STATUS follows the workspace rule all the same, as it does
+  // for the list page and for `cast task show` (taskLinks.blockerLinks): it is
+  // in this task's workspace, so the page reads the task as blocked instead of
+  // "status unknown" while every other surface calls it blocked. Only its
+  // title is withheld.
+  expect(result.graph_status).toEqual([{ ref: "ct-2", short_id: "ct-2", status: "open" }]);
 });
 
 test("team routing does not grant access to a private workspace task", async () => {
@@ -103,4 +109,10 @@ test("the detail ships the tasks its graph names in its own workspace, and none 
   // missing (not found, never blocking); a self-link is skipped.
   expect(result.graph_tasks.map((t: any) => t.short_id).sort()).toEqual(["ct-2", "ct-4"]);
   expect(result.graph_missing).toEqual(["ct-404"]);
+  // The same snapshot the list page carries: ct-3 is left off, so it stays
+  // unknown and blocks, and ct-404 answers null (looked up, names no task).
+  expect(result.graph_status).toEqual([
+    { ref: "ct-2", short_id: "ct-2", status: "done" },
+    { ref: "ct-404", status: null },
+  ]);
 });

@@ -29,10 +29,11 @@ export const NO_CLEAR = Symbol("no-clear");
 type WireTable = Record<string, unknown>;
 
 // tasks.webUpdate (packages/convex/convex/tasks.ts): "" unsets status_id,
-// execution_status, project_id, project_path, duplicate_of and parent; it
-// stores "" for assignee and description and [] for labels (clears below);
-// it ignores an empty priority, title or triage_status and has no clear for
-// sort_order.
+// execution_status, project_id, project_path, duplicate_of, found_during
+// (through foundDuringUpdate, which reads "" as the clear `--found-during
+// none` writes) and parent; it stores "" for assignee and description and []
+// for labels (clears below); it ignores an empty priority, title or
+// triage_status and has no clear for sort_order.
 const TASK_WIRE: WireTable = {
   status: NO_CLEAR,
   status_id: "",
@@ -48,6 +49,7 @@ const TASK_WIRE: WireTable = {
   parent_id: "",
   sort_order: NO_CLEAR,
   duplicate_of: "",
+  found_during: "",
 };
 const TASK_CLEARS = { assignee: "", description: "", labels: [] } as const;
 
