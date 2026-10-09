@@ -1,5 +1,7 @@
 import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
+import twColors from "tailwindcss/colors";
+import { SCALES, SHADES, scaleVar } from "./lib/theme/scales";
 
 // A theme colour that lives in a CSS variable (light and dark swap the value
 // at runtime) AND honours Tailwind's opacity modifier. A plain `var(--x)`
@@ -24,6 +26,12 @@ const themed = (variable: string): string =>
       : `color-mix(in srgb, var(${variable}) calc(${alpha} * 100%), transparent)`;
   }) as unknown as string;
 
+// Every Tailwind color scale reads a variable that holds Tailwind's own value
+// (the plugin below), so a color theme can retune the scales and nothing else
+// changes (lib/theme/scales.ts).
+const scaleColors = Object.fromEntries(SCALES.map((s) => [s, Object.fromEntries(SHADES.map((n) => [n, themed(scaleVar(s, n))]))]));
+const scaleDefaults = Object.fromEntries(SCALES.flatMap((s) => SHADES.map((n) => [scaleVar(s, n), (twColors as any)[s][n] as string])));
+
 const config: Config = {
     darkMode: ["class"],
     content: [
@@ -46,6 +54,7 @@ const config: Config = {
   theme: {
   	extend: {
   		colors: {
+  			...scaleColors,
   			sol: {
   				base03: '#002b36',
   				base02: '#073642',
@@ -198,6 +207,9 @@ const config: Config = {
     require("@tailwindcss/typography"),
     plugin(function ({ addVariant }) {
       addVariant("light", ".light &");
+    }),
+    plugin(function ({ addBase }) {
+      addBase({ ":root": scaleDefaults });
     }),
       require("tailwindcss-animate")
 ],

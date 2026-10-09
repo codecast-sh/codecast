@@ -67,6 +67,12 @@ describe("taskOrigin", () => {
     expect(isOnHumanBoard({ source: "todo_sync", assignee: "ms71rq_role_id" })).toBe(true);
     expect(isOnHumanBoard({ source: "agent", assignee: "" })).toBe(false);
   });
+
+  test("isOnHumanBoard: ephemeral bookkeeping is never on it (TG9)", () => {
+    expect(isOnHumanBoard({ source: "human", ephemeral: true })).toBe(false);
+    expect(isOnHumanBoard({ source: "agent", assignee: "user_1", promoted: true, ephemeral: true })).toBe(false);
+    expect(isOnHumanBoard({ source: "human", ephemeral: false })).toBe(true);
+  });
 });
 
 describe("buildTaskTree", () => {
