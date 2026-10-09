@@ -1246,9 +1246,11 @@ export function ActionSubmenu({
     mode === "device" ? "Move to machine — pick where these sessions run…" :
     mode === "model" ? "Change model & effort..." :
     mode === "view" ? "Switch view — filter by label or project..." :
-    mode === "parent" ? "Set parent — search tasks..." :
-    mode === "blocker" ? "Add blocker — search tasks..." :
-    mode === "related" ? "Link a related task — search tasks..." :
+    mode === "parent" ? "Set parent — search tasks…" :
+    // A blocker is any of TG3's refs, not only a task; the hint under the field
+    // carries the exact forms.
+    mode === "blocker" ? "Add blocker — a task, a PR, a decision or a time…" :
+    mode === "related" ? "Link a related task — search tasks…" :
     mode === "layout_save" ? "Save current layout — type a name..." :
     mode === "layout_update" ? "Update layout to the current arrangement..." :
     mode === "layout_rename" ? (renameId ? "Rename layout — type the new name..." : "Rename layout — pick one...") :

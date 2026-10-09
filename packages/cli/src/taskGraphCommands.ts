@@ -23,8 +23,7 @@ import {
   UNKNOWN_BLOCKER_STATUS,
   waitingOnLabel,
   waitMetLabel,
-  waitStateWord,
-  waitSubject,
+  waitRefLine,
   type Blocker,
   type GraphTask,
   type NotReadyReason,
@@ -39,6 +38,7 @@ import { c, fmt } from "./colors.js";
 import { shq } from "./remote/session-move.js";
 import { stdinText } from "./sendBody.js";
 import { workOriginStamp } from "./sessionIdentity.js";
+import { parseWorkspaceKey, workspaceScope } from "./resolveWorkspace.js";
 import { readTaskPulseFor, type TaskPulse } from "./taskPulse.js";
 
 /** What the commands here need from index.ts. */
@@ -81,7 +81,7 @@ export function routeBlockerRef(text: string, opts: { now?: number; removing?: b
   if (!parsed.ok) {
     // A wait's id (isWaitId) is checked after the grammar, which it could pass for.
     if (opts.removing && isWaitId(trimmed)) return { kind: "wait_id", id: trimmed };
-    throw new Error(opts.removing ? `${parsed.error}. A wait can also be removed by its id (the \`id w…\` that cast task show and context print after each wait)` : parsed.error);
+    throw new Error(opts.removing ? `${parsed.error}. A wait can also be removed by its id (the \`id w…\` that cast task show and context print after a time wait)` : parsed.error);
   }
   if (parsed.kind === "task") return { kind: "task", ref: parsed.ref };
   return { kind: "wait", ref: trimmed, barePr: isPrWaitTarget(parsed) && !parsed.repository };
@@ -150,7 +150,7 @@ export async function applyBlockers(deps: GraphDeps, shortId: string, refs: stri
       for (const w of (result?.removed ?? []) as TaskWait[]) console.log(`${c.green}ok${c.reset} ${shortId} is no longer ${waitingOn(w, words)}`);
     }
   }
-  const park = parkAfterBlocking(ctx.sessionId, shortId, added.filter(holdsBack), readTaskPulseFor(ctx.sessionId));
+  const park = parkAfterBlocking(ctx.sessionId, shortId, added.filter(holdsBack), readTaskPulseFor(ctx.sessionId), words);
   if (park) console.log(fmt.muted(park));
 }
 
@@ -162,10 +162,11 @@ function sameTask(a: string, b: string): boolean {
 
 /** After an agent blocks a task: how to park on it when this session holds
  *  it, else that nothing will wake this session when the blockers clear (a
- *  clearing wakes only the session holding the task, TG2). */
-export function parkAfterBlocking(sessionId: string | null, shortId: string, open: Blocker[], pulse: TaskPulse | null): string | null {
+ *  clearing wakes only the session holding the task, TG2). `words` names PRs
+ *  as the lines above it did (checkoutWords), so one PR is not named two ways. */
+export function parkAfterBlocking(sessionId: string | null, shortId: string, open: Blocker[], pulse: TaskPulse | null, words: WaitLabelOptions = {}): string | null {
   if (!sessionId || !open.length) return null;
-  if (pulse?.started && pulse.task && sameTask(pulse.task, shortId)) return parkingLine(open, shortId);
+  if (pulse?.started && pulse.task && sameTask(pulse.task, shortId)) return parkingLine(open, shortId, words);
   return `This session does not hold ${shortId}, so nothing wakes it when ${open.length === 1 ? "this clears" : "these clear"} (cast task start ${shortId} to hold it).`;
 }
 
@@ -203,16 +204,19 @@ export function supersededLine(links: GraphLinks | null | undefined, inline: Inl
  * their status, then waits with their state), Blocks, Found during, Found
  * here, Related. Empty sections are left out. `holds` marks a Blocked by
  * section with something still open; one with nothing open says "cleared".
- * Each wait ends with its id, which `--remove-blocked-by` takes (`waitId`
- * styles it). `inline` cleans a title for a reader that feeds the output to
- * an agent.
+ * A time wait ends with its id, which `--remove-blocked-by` takes (`waitId`
+ * styles it); a PR or decision wait is removed by its target, which is already
+ * unique on a task, so its id would be noise. `inline` cleans a title for a
+ * reader that feeds the output to an agent.
  */
 export function taskGraphSections(t: GraphTaskRow, links: GraphLinks | null | undefined, opts: WaitLabelOptions & { inline?: Inline; waitId?: Inline } = {}): GraphSection[] {
   const inline = opts.inline ?? asIs;
   const waitId = opts.waitId ?? asIs;
   const task = (l: LinkRef) => taskRefLine(l, inline);
-  // The web's words: what the wait is on, then its state ("PR #42 to merge").
-  const wait = (w: TaskWait) => `${waitSubject(w, opts)} ${inline(waitStateWord(w, { now: opts.now }))}${waitId(` · id ${w.id}`)}`;
+  // The web's words, plus the state marker a task blocker carries, since this
+  // list is read as text ("PR #42 to merge [waiting]"); then, for a time wait,
+  // its id — the only kind whose removal needs it (waitRemoveRef).
+  const wait = (w: TaskWait) => `${waitRefLine(w, { ...opts, inline })}${w.kind === "time" ? waitId(` · id ${w.id}`) : ""}`;
   const waits = t.waits ?? [];
   // A server older than the graph sends no links; its raw ids are all it can say.
   const blockers: TitledTaskBlocker[] = links?.blocked_by ?? (t.blocked_by ?? []).map((ref) => ({ kind: "task", ref, status: UNKNOWN_BLOCKER_STATUS }));
@@ -468,12 +472,12 @@ export function planStepBase(
   };
 }
 
-/** A plan row's stored access key (`team:<id>` / `user:<id>`) as the
- *  workspace a create names; nothing when the row carries neither. */
+/** A plan row's stored access key (`parseWorkspaceKey`) as the workspace a
+ *  create names; a row with no key falls back to its routing team, and one
+ *  with neither names nothing, leaving the route's own default in force. */
 export function planWorkspace(plan: { workspace?: string; team_id?: string } | undefined): { workspace: "team"; team_id: string } | { workspace: "personal" } | {} {
-  const key = plan?.workspace;
-  if (key?.startsWith("team:")) return { workspace: "team", team_id: key.slice(5) };
-  if (key?.startsWith("user:")) return { workspace: "personal" };
+  const ws = parseWorkspaceKey(plan?.workspace);
+  if (ws) return workspaceScope(ws);
   return plan?.team_id ? { workspace: "team", team_id: plan.team_id } : {};
 }
 

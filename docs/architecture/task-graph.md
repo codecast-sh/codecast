@@ -27,11 +27,12 @@ absence. A blocker id that resolves to nothing does not block; it is reported
 as `missing` so the UI can offer to remove it. A lookup answers `null` for
 "looked up, not found" and `undefined` for "not looked up"; the second blocks
 (status `unknown`), so a page that left a blocker out degrades to blocked,
-never to ready. A caller holding a page takes `{shortIds, ids} =
-blockerRefs(page)`, fetches `shortIds` through the short id index and `ids`
-(older plan rows name blockers by `_id`) by `_id`, and builds
-`statusLookup([...page, ...fetched], searched)` where `searched` holds only
-the refs it really looked up. The parent rule follows the same convention:
+never to ready. A caller holding a page takes
+`searched = blockerRefs(page)` — every ref its tasks name that none of them
+is, short ids and `_id`s alike, since older plan rows name blockers by
+`_id` — looks each one up, and builds `statusLookup([...page, ...fetched],
+searched)`, so a ref it chose not to look up stays unknown rather than
+reading as missing. The parent rule follows the same convention:
 `parentStatusOf` answers `null` for a parent looked up and gone (an orphan,
 ready) and `undefined` for one not looked up (not ready, `parent_unknown`).
 On the server both are read by `graphOutside` (`lib/taskGraph.ts`), which
@@ -318,4 +319,8 @@ read later; relative words ("Thu 09:00") are only for live rendering.
   sol tokens.
 - **Mobile.** The task screen lists blockers and waits, read-only.
 - **CLI.** `cast task show` and `context` print blockers, waits and links in
-  the same order as the web.
+  the same order as the web. The text list has no pill to carry a state, so
+  every Blocked by entry ends in a bracketed one: a task's status
+  (`taskRefLine`) and a wait's state (`waitRefLine`, "PR #42 to merge
+  [waiting]", "PR #42 checks green [met]"). Without it a met wait reads as
+  holding, since its word differs from a waiting one's only by tense.

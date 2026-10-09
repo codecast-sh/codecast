@@ -68,7 +68,8 @@ const page = task(1, {
     { id: "w1", kind: "pr_merged", repository: "o/r", pr_number: 42, state: "waiting", created_at: 0 },
     { id: "w2", kind: "pr_checks_green", repository: "o/r", pr_number: 43, state: "failed", created_at: 0, note: "closed without merging" },
     { id: "w3", kind: "decision", decision: "sd-4", state: "met", created_at: 0, note: "answered: Ship it" },
-    { id: "w4", kind: "time", at: Date.now() + 2 * HOUR + 60_000, state: "waiting", created_at: 0 },
+    // 1h59m out: the countdown rounds up, so the pill reads the span asked for.
+    { id: "w4", kind: "time", at: Date.now() + 2 * HOUR - 60_000, state: "waiting", created_at: 0 },
     { id: "w5", kind: "pr_checks_green", repository: "o/r", pr_number: 44, state: "waiting", created_at: 0 },
     { id: "w6", kind: "pr_checks_green", repository: "o/r", pr_number: 45, state: "waiting", created_at: 0 },
   ],
