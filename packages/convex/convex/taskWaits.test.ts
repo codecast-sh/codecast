@@ -5,7 +5,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { addWait, linkPrWaits, removeWait, settleDecision, settlePr, settleTimeWait } from "./taskWaits";
+import { addWait, isTaskUnblocked, removeWait, settleDecision, settlePr, settleTimeWait } from "./taskWaits";
+import { linkPrWaits } from "./migrations";
 import { firePrTrigger, patchPullRequest } from "./prShepherd";
 import { reopenCore, settleClientResolution, withdrawCore } from "./sessionDecisions";
 import { create, update } from "./tasks";
@@ -279,6 +280,33 @@ describe("setting a wait", () => {
     expect(row(tables, "ct-1").waits).toEqual([]);
     expect(row(tables, "ct-1").waiting_since).toBeUndefined();
     expect(tables.task_history.at(-1)).toMatchObject({ field: "waits", old_value: "Waiting on PR #42", new_value: "" });
+  });
+});
+
+describe("what an override may answer for a blocker", () => {
+  // StatusOf's three answers (shared/tasks/graph.ts): a row, `null` for
+  // looked up and gone (clears), `undefined` for not looked up (falls through
+  // to the database). A nullish fallthrough would hand the next caller
+  // database truth where it asked for "gone".
+  const ctxWith = (tasks: any[]) => ({ db: makeFakeDb({ tasks }) }) as any;
+  const held = { _id: "task_1", short_id: "ct-1", user_id: USER, status: "open" };
+  const waiter = { _id: "task_2", short_id: "ct-2", user_id: USER, status: "open", blocked_by: ["ct-1"] } as any;
+
+  test("no override reads the database: an open blocker holds", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter)).toBe(false);
+  });
+
+  test("null means gone, so it clears even though the row is open", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter, () => null)).toBe(true);
+  });
+
+  test("undefined means not looked up, so the database still decides", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter, () => undefined)).toBe(false);
+    expect(await isTaskUnblocked(ctxWith([{ ...held, status: "done" }, waiter]), waiter, () => undefined)).toBe(true);
+  });
+
+  test("a row the override hands back is believed over the database", async () => {
+    expect(await isTaskUnblocked(ctxWith([held, waiter]), waiter, () => ({ short_id: "ct-1", status: "done" }))).toBe(true);
   });
 });
 

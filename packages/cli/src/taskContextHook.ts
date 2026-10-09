@@ -112,7 +112,13 @@ export async function taskContextFor(
       ...(pulse?.plan ? { plan_id: pulse.plan } : {}),
       session_id: sessionId,
     });
-    return context?.task ? formatTaskResume(context, { now, ...checkoutWords(payload.cwd || process.cwd()) }) : null;
+    // A time wait is named absolute here (TG11): this block is read by an
+    // agent, beside the stored history, the unblock comment, the wake message
+    // and `cast task context`, which all name the date, the year and the zone
+    // — and the agent is told to copy the parking line's `cast state` text
+    // verbatim, where a bare local-clock "14:00" is pinned, read later by
+    // other sessions in other zones, and meaningless once the day turns.
+    return context?.task ? formatTaskResume(context, { now, absolute: true, ...checkoutWords(payload.cwd || process.cwd()) }) : null;
   } catch {
     return pulse?.task ? formatTaskResumeUnavailable(pulse.task, pulse.plan || undefined) : null;
   }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { TaskWait } from "@codecast/shared/tasks";
-import { NODE_W, planGraphLayout, wrapTitle } from "../PlanGraphView";
+import { edgeDraw, NODE_W, planGraphKey, planGraphLayout, waitNodeLabel, wrapTitle } from "../PlanGraphView";
 
 const task = (n: number, extra: Record<string, unknown> = {}) => ({ _id: `id${n}`, short_id: `ct-${n}`, title: `Task ${n}`, status: "open", ...extra });
 const wait = (id: string, state: TaskWait["state"]): TaskWait =>
@@ -118,4 +118,59 @@ test("a title breaks at a word onto a second line, clipped there", () => {
   // A first word longer than the id's line breaks inside it, so that line is not left empty.
   expect(wrapTitle("Supercalifragilistic", 8, 30)).toEqual(["Supercal", "ifragilistic"]);
   expect(wrapTitle("packages/web/components/PlanGraphView.tsx wrap", 10, 20)).toEqual(["packages/w", "eb/components/PlanG…"]);
+});
+
+const NOW = Date.UTC(2026, 9, 9, 9, 0);
+const UTC = { now: NOW, timeZone: "UTC" };
+const timeWait = (at: number, state: TaskWait["state"]): TaskWait => ({ id: "w", kind: "time", at, state, created_at: 0 }) as TaskWait;
+const prWait = (kind: string, state: TaskWait["state"]): TaskWait =>
+  ({ id: "w", kind, repository: "codecast-sh/codecast", pr_number: 4213, state, created_at: 0 }) as TaskWait;
+
+test("every wait label fits its node whole: the PR number and a settled wait's verb survive", () => {
+  const labels = [
+    prWait("pr_merged", "waiting"), prWait("pr_merged", "met"),
+    prWait("pr_checks_green", "waiting"), prWait("pr_checks_green", "met"), prWait("pr_checks_green", "failed"),
+    { id: "w", kind: "decision", decision: "sd-412", state: "waiting", created_at: 0 } as TaskWait,
+    timeWait(Date.UTC(2026, 9, 11, 9, 0), "waiting"),
+    timeWait(Date.UTC(2027, 9, 14, 9, 0), "waiting"),
+    timeWait(Date.UTC(2026, 9, 9, 1, 23), "met"),
+    timeWait(Date.UTC(2026, 8, 14, 9, 0), "met"),
+    // The widest label a node can carry: a date in another year, with a verb.
+    timeWait(Date.UTC(2027, 9, 14, 9, 0), "met"),
+  ].map((w) => waitNodeLabel(w, UTC));
+  for (const label of labels) expect(label).not.toContain("…");
+  expect(labels).toEqual([
+    "PR #4213 merges", "PR #4213 merged",
+    "checks green on #4213", "checks green on #4213", "checks green on #4213",
+    "sd-412 answered",
+    "until Sun 09:00", "until Oct 14, 2027 09:00",
+    "Fri 01:23 passed", "Sep 14 09:00 passed", "Oct 14, 2027 09:00 passed",
+  ]);
+});
+
+test("the key names only the marks the graph makes, each drawn as the mark itself", () => {
+  const { edges, waitNodes } = planGraphLayout([
+    task(1, { status: "done" }),
+    task(2, { waits: [wait("w1", "waiting"), wait("w2", "met"), wait("w3", "failed")] }),
+    // ct-1 is cleared, ct-2 still blocks.
+    task(3, { blocked_by: ["ct-1", "ct-2"] }),
+    // Being worked already, so its open blocker holds nothing back.
+    task(4, { status: "in_progress", blocked_by: ["ct-2"] }),
+  ]);
+  const key = planGraphKey({ edges, waitNodes, blocked: true });
+  expect(key.map((k) => k.word)).toEqual([
+    "still blocking", "not holding it back", "cleared", "still waiting", "wait met", "wait failed", "the agent is blocked",
+  ]);
+  // Each line swatch is drawn exactly as some edge in the graph.
+  for (const item of key) {
+    if (item.mark !== "line") continue;
+    expect(edges.map(edgeDraw)).toContainEqual(item.draw);
+  }
+  // Nothing is said about a mark the graph does not make.
+  expect(planGraphKey({ edges: [], waitNodes: [], blocked: false })).toEqual([]);
+  expect(planGraphKey({ edges: [], waitNodes, blocked: false }).map((k) => k.word)).toEqual(["still waiting", "wait met", "wait failed"]);
+  // A wait on a task already being worked draws dim: it holds nothing, so the
+  // key says nothing about it.
+  const worked = planGraphLayout([task(5, { status: "in_progress", waits: [wait("w1", "waiting")] })]);
+  expect(planGraphKey({ edges: [], waitNodes: worked.waitNodes, blocked: false })).toEqual([]);
 });

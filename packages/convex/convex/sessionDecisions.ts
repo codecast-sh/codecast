@@ -66,7 +66,11 @@ export const kindValidator = v.union(v.literal("single"), v.literal("multi"), v.
 type DecisionKind = "single" | "multi" | "rank" | "form";
 type DecisionRow = Doc<"session_decisions">;
 // Resolve paths run in mutations, so the scheduler is there to wake a hosted
-// conversation (wakeHostedConversation); reads pass a bare { db }.
+// conversation (wakeHostedConversation) and to settle the task waits on the
+// row (task-graph.md TG2); reads pass a bare { db }. The settle paths below
+// reach helpers that take the real mutation ctx, which this structural type
+// cannot satisfy, so they cast; typing the chain honestly means typing every
+// module that reaches it (dispatch, workflow_runs, org, orgInit).
 type Ctx = { db: any; scheduler?: any };
 
 // Resolved rows stay in the subscription window briefly so an answer made on

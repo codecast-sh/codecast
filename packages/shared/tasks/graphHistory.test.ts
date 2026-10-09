@@ -28,6 +28,17 @@ describe("a graph change as a history line", () => {
     expect(line("blocked_by", "ct-1", "ct-2")).toBe("made it wait on ct-2 and removed ct-1");
   });
 
+  // A removal withdraws an edge; it does not say the work behind it got done,
+  // so a timeline may not draw it with the green check a met wait earns.
+  test("a removal is withdrawn, a wait genuinely met is met", () => {
+    const tone = (field: string, old_value: string, new_value: string) => graphChange({ field, old_value, new_value })!.tone;
+    expect(tone("blocked_by", "ct-12", "")).toBe("withdrawn");
+    expect(tone("blocked_by", "", "ct-12")).toBe("blocked");
+    expect(tone("waits", "Waiting on PR #42", "")).toBe("withdrawn");
+    expect(tone("waits", "PR #42 merged", "")).toBe("withdrawn");
+    expect(tone("waits", "Waiting on PR #42", "PR #42 merged")).toBe("met");
+  });
+
   test("any other field is not a graph change", () => {
     expect(graphChange({ field: "priority", old_value: "low", new_value: "high" })).toBeNull();
   });
