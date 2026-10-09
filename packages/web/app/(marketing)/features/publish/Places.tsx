@@ -55,7 +55,7 @@ function Pill({ children }: { children: ReactNode }) {
 }
 
 /** An assistant turn in a codecast conversation, showing all three ways a page link renders. */
-function ConversationMock() {
+export function ConversationMock() {
   return (
     <div className="rounded-2xl border overflow-hidden" style={{ borderColor: "rgba(88,110,117,.25)", backgroundColor: SOL.base3, boxShadow: "0 30px 60px -34px rgba(0,43,54,.45)" }}>
       <div className="flex items-center gap-2 px-4 h-10 border-b font-mono text-[11.5px]" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
