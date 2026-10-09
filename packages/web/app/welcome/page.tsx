@@ -14,7 +14,7 @@
 // (`client_state.ui.lane`).
 import { LogoMark } from "../../components/Logo";
 import { HostedWordmark } from "../../components/HostedWordmark";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { ArrowRight, CalendarDays, Check, Mail, ShieldCheck } from "lucide-react";
@@ -27,6 +27,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 import { useInboxStore } from "../../store/inboxStore";
+import { UseWhiskNow } from "../../components/simple/UseWhiskNow";
 import { ASSISTANT_HEADLINE, MAIL_COMING, THINKING_DOWN, assistantPromise, useConnectAvailable, useThinkingAvailable } from "../../components/simple/assistantPromise";
 import { AssistantPrivacyNote } from "../../components/simple/AssistantPrivacyNote";
 import { Composer } from "../../components/simple/Composer";
@@ -34,6 +35,7 @@ import { ConnectNotice } from "../../components/simple/ConnectNotice";
 import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
 import { LaneSync } from "../../components/simple/LaneSync";
 import { ASK_FIRST, LANE_COPY, LANE_PATHS, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
+import { LANE_SWITCH } from "../../components/simple/lanePref";
 import { HOSTED_HOME, WELCOME_ASK_PARAM, hostedConversationPath } from "../../components/simple/lanePaths";
 import { isHostedUi, writeLane } from "../../components/simple/lanePref";
 import { carriedAsk, forgetCarriedAsk, keepCarriedAsk, takeCarriedAsk } from "../../components/simple/carriedAsk";
@@ -240,12 +242,14 @@ function SignedIn() {
   // Signed in again after a moment that only looked signed out: back to the
   // page AuthGuard left (lib/authReturn). Someone who already talks to the
   // assistant and came here with no step and nothing to ask goes to their
-  // inbox rather than the starters.
+  // inbox rather than the starters. A conversation this page just started is
+  // not a return: its first ask is on its way to the conversation itself.
   const returning = useInboxStore((s) => hasHostedConversations(s.sessions));
+  const asked = useRef(false);
   useWatchEffect(() => {
     const back = takeAuthReturn();
     if (back) { navigate(back, { replace: true }); return; }
-    if (returning && params.toString() === "" && !carriedAsk()) navigate(HOSTED_HOME, { replace: true });
+    if (returning && !asked.current && params.toString() === "" && !carriedAsk()) navigate(HOSTED_HOME, { replace: true });
   }, [returning]);
   const connecting = params.get(STEP_PARAM) === CONNECT_VALUE;
   const mail = useLaneMail(LANE_PATHS.welcome);
@@ -279,6 +283,7 @@ function SignedIn() {
           // Only once the connection has answered: a read still in flight
           // is not "not connected".
           mailComing={mail.known && available === false && !mail.connected}
+          onAsk={() => { asked.current = true; }}
         />
       ) : (
         <div className="wl-skeleton" role="status">
@@ -356,7 +361,7 @@ function Connect({ mail, onSkip }: { mail: ReturnType<typeof useLaneMail>; onSki
 
 // ── 3. The first useful thing ──────────────────────────────────────────────
 
-function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onConnect: (() => void) | null; mailComing: boolean }) {
+function Start({ can, onConnect, mailComing, onAsk }: { can: MailAbilities | null; onConnect: (() => void) | null; mailComing: boolean; onAsk: () => void }) {
   const navigate = useNavigate();
   // An errand the person picked on the marketing page leads, ahead of the
   // asks this step would offer.
@@ -378,6 +383,7 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
 
   const begin = (text: string) => {
     if (leaving) return;
+    onAsk();
     forgetCarriedAsk();
     joinLane();
     const id = startHostedConversation(text);
@@ -415,9 +421,9 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
           : "Tap one to start, or say it in your own words."}
         {/* What is missing is said once, in the same line, and never ahead of
             an ask the person carried in. */}
-        {mailComing && !carried ? ` ${MAIL_COMING}` : null}
+        {mailComing && !carried ? <> {MAIL_COMING} <UseWhiskNow inline className="wl-link" />.</> : null}
       </p>
-      {developer ? <p className="wl-aside sl-rise" style={rise(i++)}>Asking here switches Codecast to assistant mode. You can switch back in Settings.</p> : null}
+      {developer ? <p className="wl-aside sl-rise" style={rise(i++)}>{LANE_SWITCH.welcomeSwitches}</p> : null}
       {down ? <p className="sl-callout is-sun sl-rise" role="status" style={rise(i++)}>{THINKING_DOWN}</p> : null}
       {/* While no provider can think, asks would only fail: a carried errand
           stays, held, and the rest wait with the composer. */}

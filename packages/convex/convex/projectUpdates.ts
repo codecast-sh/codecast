@@ -252,7 +252,8 @@ export async function buildProjectTimeline(
     .take(TIMELINE_MAX_TASKS);
   const tasks: any[] = [];
   for (const t of rawTasks) {
-    if (await canAccessTask(ctx, userId, t)) tasks.push(t);
+    // Ephemeral bookkeeping stays out of the feed (task-graph.md TG9).
+    if (!t.ephemeral && (await canAccessTask(ctx, userId, t))) tasks.push(t);
   }
   const taskRef = (t: any) => ({
     short_id: t.short_id,
