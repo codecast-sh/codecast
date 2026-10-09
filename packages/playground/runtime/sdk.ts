@@ -18,6 +18,7 @@ import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { api } from "../convex/_generated/api";
 import { matchesWhere, type Where } from "../convex/lib/appData";
 import type { PlaygroundErrorData } from "../convex/lib/errors";
+import { SDK_LOADED_FLAG } from "../convex/lib/bootCatcher";
 import type { Id } from "../convex/_generated/dataModel";
 import type { DataDoc, PersonView, SharedView } from "../convex/runtime";
 import type { PublicVisitor } from "../convex/visitors";
@@ -30,6 +31,7 @@ import { updateShared, type SharedState } from "./sharedUpdate";
 /** The bundle holds CONVEX_URL_PLACEHOLDER here (scripts/build-sdk.ts); the
  *  router fills in its deployment when it serves the file. */
 const CONVEX_URL = process.env.PLAYGROUND_CONVEX_URL!;
+/** Without a shell that answers by then, the app runs on its own. */
 const HANDSHAKE_MS = 4_000;
 const PAINT_WAIT_MS = 3_000;
 const READY_RESEND_MS = 250;
@@ -51,12 +53,15 @@ function fromShell(e: MessageEvent): ShellMessage | null {
 function handshake(): Promise<InitMessage | null> {
   if (window.parent === window) return Promise.resolve(null);
   return new Promise((resolve) => {
-    const ask = () => postToShell({ type: "ready" });
+    const version = /\/v\/(\d+)\//.exec(location.pathname);
+    const ask = () => postToShell({ type: "ready", version: version ? Number(version[1]) : null });
     const resend = setInterval(ask, READY_RESEND_MS);
     const giveUp = setTimeout(() => done(null), HANDSHAKE_MS);
     function onMessage(e: MessageEvent) {
       const message = fromShell(e);
       if (message?.type === "init") done(message);
+      // The shell is here and still learning who this is: wait as long as it takes.
+      else if (message?.type === "hold") clearTimeout(giveUp);
     }
     function done(init: InitMessage | null) {
       clearInterval(resend);
@@ -85,16 +90,10 @@ window.addEventListener("message", (e) => {
     : null;
 });
 
-/** A write refused because this screen is looking only (a past version, or
- *  a gallery preview). The app may catch it; uncaught, it is no app error. */
-class LookingOnly extends Error {}
-const LOOKING_ONLY = "Looking only. Make this version live or fork it to use it.";
-
 let errorReports = 0;
 /** Errors the shell has heard about, so an uncaught one is not told twice. */
 const reported = new WeakSet<object>();
 function reportError(error: unknown) {
-  if (error instanceof LookingOnly) return;
   if (typeof error === "object" && error !== null) {
     if (reported.has(error)) return;
     reported.add(error);
@@ -104,10 +103,9 @@ function reportError(error: unknown) {
   postToShell({ type: "error", message: message.slice(0, 500) });
 }
 window.addEventListener("error", (e) => reportError(e.error ?? e.message));
-window.addEventListener("unhandledrejection", (e) => {
-  if (e.reason instanceof LookingOnly) e.preventDefault();
-  reportError(e.reason);
-});
+// The page's boot catcher (convex/lib/runtime BOOT_CATCHER) hands over here.
+(window as unknown as Record<string, boolean>)[SDK_LOADED_FLAG] = true;
+window.addEventListener("unhandledrejection", (e) => reportError(e.reason));
 
 const init = await handshake();
 const client = init ? new ConvexClient(CONVEX_URL, { unsavedChangesWarning: false }) : null;
@@ -119,12 +117,13 @@ const watching = () => creds?.token.startsWith("w") === true;
 let lastRefusal = 0;
 const REFUSAL_GAP_MS = 1_000;
 
-/** Refuse a write softly: nothing changes, and the shell is told once a
- *  moment so it can say why. */
-function refuse(): never {
+/** Refuse a write quietly: nothing changes and the app hears nothing (the
+ *  write never settles, so it has no error to print and no success to
+ *  claim). The shell is told, once a moment, and says why. */
+function refuse(): Promise<never> {
   if (Date.now() - lastRefusal > REFUSAL_GAP_MS) postToShell({ type: "refused" });
   lastRefusal = Date.now();
-  throw new LookingOnly(LOOKING_ONLY);
+  return new Promise(() => {});
 }
 
 // ---- People -----------------------------------------------------------------
@@ -234,7 +233,6 @@ type LocalStore = Parameters<NonNullable<Parameters<ConvexClient["mutation"]>[2]
 
 function connected(): { client: ConvexClient; creds: Creds } {
   if (!client || !creds) throw new Error("This app is not connected to Clayground. Open it from its Clayground link.");
-  if (watching()) refuse();
   return { client, creds };
 }
 
@@ -247,6 +245,7 @@ async function write<M extends Mutation>(
   args: Omit<FunctionArgs<M>, keyof Creds>,
   optimistic?: (store: LocalStore, creds: Creds) => void,
 ): Promise<FunctionReturnType<M>> {
+  if (watching()) return refuse();
   const { client, creds } = connected();
   try {
     return await client.mutation(mutation, { ...creds, ...args } as FunctionArgs<M>, {
