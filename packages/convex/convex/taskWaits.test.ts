@@ -5,7 +5,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { addWait, linkPrWaits, removeWait, settleDecision, settlePr, settleTimeWait } from "./taskWaits";
+import { addWait, removeWait, settleDecision, settlePr, settleTimeWait } from "./taskWaits";
+import { linkPrWaits } from "./migrations";
 import { firePrTrigger, patchPullRequest } from "./prShepherd";
 import { reopenCore, settleClientResolution, withdrawCore } from "./sessionDecisions";
 import { create, update } from "./tasks";
@@ -206,6 +207,14 @@ describe("setting a wait", () => {
   test("a PR closed without merging is refused: it would never clear", async () => {
     const { ctx, movePr } = await makeCtx({ tasks: [task("ct-1")], pull_requests: [pr(42, { state: "closed" })] });
     await expect(call(addWait, ctx, { short_id: "ct-1", ref: `${REPO}#42` })).rejects.toThrow(/closed without merging/);
+  });
+
+  test("REPOCOUNT", async () => {
+    const { ctx, tables } = await makeCtx({ tasks: [task("ct-1", { conversation_ids: ["conv_owner"] })], pull_requests: [pr(42)] });
+    void tables;
+    (globalThis as any).__repoReads = 0;
+    await call(addWait, ctx, { short_id: "ct-1", ref: "#42" });
+    expect((globalThis as any).__repoReads).toBe(1);
   });
 
   test("a bare #42 takes its repository from the task's sessions, else the caller's", async () => {

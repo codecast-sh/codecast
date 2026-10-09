@@ -114,7 +114,7 @@ function UnheldTaskBlockerLine({ line, task, onRemove }: TaskLineProps) {
   const word = entity ? BLOCKER_UNKNOWN_WORDS : missing ? BLOCKER_NOT_FOUND_WORDS : undefined;
   return (
     <Line state={missing ? "missing" : "waiting"} status={task.status} onRemove={onRemove} removeLabel={`Remove blocker ${line.ref}`}
-      detail={word ? <span className={DIM}>{word}</span> : undefined}>
+      detail={word ? <span title={word} className={DIM}>{word}</span> : undefined}>
       <span className="text-xs font-mono text-sol-text-muted">{line.ref}</span>
     </Line>
   );
@@ -137,10 +137,14 @@ function ChecksWord({ wait, repository, pr_number }: { wait: TaskWait; repositor
   return <WaitWord wait={wait} checks={checks} />;
 }
 
-/** A wait's word, red when it reads as a failure (`waitWordFails`), dim otherwise. */
+/** A wait's word, red when it reads as a failure (`waitWordFails`), dim
+ *  otherwise. `Line` truncates a detail at 45% of a column that is ~250px wide
+ *  in the inline peek, and a word like `answered: <the answer>` is the most
+ *  informative thing on the line, so it carries its full text as its title the
+ *  way the time pill does. */
 function WaitWord({ wait, closed, checks, now }: { wait: TaskWait; closed?: boolean; checks?: string; now?: number }) {
   const word = waitStateWord(wait, { now, closed, checks });
-  return word ? <span className={waitWordFails(wait, { closed, checks }) ? "text-xs text-sol-red" : DIM}>{word}</span> : null;
+  return word ? <span title={word} className={waitWordFails(wait, { closed, checks }) ? "text-xs text-sol-red" : DIM}>{word}</span> : null;
 }
 
 function WaitLine({ wait: w, now, status, onRemove }: { wait: TaskWait; now: number; status: string; onRemove: () => void }) {
@@ -176,7 +180,7 @@ function TaskLinks({ refs, isClosed, onRemove, removeLabel }: { refs: string[]; 
 /** The quiet add control closing a row, with its palette key (if it has one) on hover. */
 function AddButton({ label, hotkey, plus, onClick }: { label: string; hotkey?: string; plus: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} className="group/add h-5 flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors w-fit">
+    <button onClick={onClick} className="group/add h-5 flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-text focus-visible:text-sol-text text-left transition-colors w-fit rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan focus-visible:outline-offset-2">
       {plus && <Plus className="w-3 h-3" />}
       {label}
       {hotkey && <span className="opacity-0 group-hover/add:opacity-100 group-focus-visible/add:opacity-100 transition-opacity"><KeyCap size="xs">{hotkey}</KeyCap></span>}
@@ -247,7 +251,7 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
       {!!task.related?.length && (
         <RelationRow label="Related">
           <TaskLinks refs={task.related} isClosed={isClosed} onRemove={(ref) => store().unrelateTasks(id, ref)} removeLabel={(ref) => `Unlink ${ref}`} />
-          <AddButton label="Link related…" hotkey="k" plus onClick={() => onAdd("related")} />
+          <AddButton label="Link related…" hotkey="k" plus={false} onClick={() => onAdd("related")} />
         </RelationRow>
       )}
       {parent && (

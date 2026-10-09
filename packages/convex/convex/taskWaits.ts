@@ -77,12 +77,23 @@ export const SENDER = "codecast";
 /** Stored text about a wait is read later, in other zones (TG11). */
 const STORED = { absolute: true } as const;
 
+/** The repositories of a task's work, read at most once however many callers
+ *  in one mutation ask for them: taskRepositories walks the directory mappings
+ *  and up to twenty of the task's sessions, and one addWait asks twice (a bare
+ *  `#42` resolving its repository, then the words its history is stored in). */
+export type TaskRepos = () => Promise<string[]>;
+
+export function taskReposOnce(ctx: Ctx, task: Task): TaskRepos {
+  let read: Promise<string[]> | undefined;
+  return () => (read ??= taskRepositories(ctx, task));
+}
+
 /** STORED for `task`'s own text. It is also read away from any checkout, so a
  *  PR outside the task's one repository (taskRepositories) is named in full. */
-async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? []): Promise<WaitLabelOptions> {
+async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? [], repos = taskReposOnce(ctx, task)): Promise<WaitLabelOptions> {
   if (!waits.some(isPrWaitTarget)) return STORED;
-  const repos = await taskRepositories(ctx, task);
-  return { ...STORED, ...prWords(repos.length === 1 ? repos[0] : null) };
+  const named = await repos();
+  return { ...STORED, ...prWords(named.length === 1 ? named[0] : null) };
 }
 
 // ---------------------------------------------------------------------------
@@ -97,19 +108,31 @@ async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits 
  * written and the words its waits are stored in (storedWords), for the
  * caller's own text about them.
  */
-export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: TaskChangeBy, now = Date.now()): Promise<{ task: Task; words: WaitLabelOptions }> {
+export async function writeWaits(
+  ctx: Ctx,
+  task: Task,
+  next: TaskWait[],
+  by: TaskChangeBy,
+  now = Date.now(),
+  repos = taskReposOnce(ctx, task),
+): Promise<{ task: Task; words: WaitLabelOptions }> {
   const prev = task.waits ?? [];
   const waiting_since = next.some((w) => w.state === "waiting") ? (task.waiting_since ?? now) : undefined;
   await patchTask(ctx, task, { waits: next, waiting_since, updated_at: now });
 
   const before = new Map(prev.map((w) => [w.id, w]));
   const kept = new Set(next.map((w) => w.id));
-  const words = await storedWords(ctx, task, [...prev, ...next]);
-  // Both sides of a line are rendered in today's words, so a wait left as it
-  // was renders the same twice and recordTaskChange writes nothing for it.
+  const gone = prev.filter((w) => !kept.has(w.id));
+  const moved = next.filter((w) => before.get(w.id) !== w);
+  // The words are what a wait's history line is stored in, so they are read
+  // only when a line can move; a write that left every wait as it was reads
+  // the task's repositories for nothing. Both sides of a line are rendered in
+  // today's words, so a wait rebuilt unchanged renders the same twice and
+  // recordTaskChange writes nothing for it.
+  const words = gone.length || moved.length ? await storedWords(ctx, task, [...prev, ...next], repos) : STORED;
   const changes: TaskFieldChange[] = [
-    ...prev.filter((w) => !kept.has(w.id)).map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
-    ...next.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
+    ...gone.map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
+    ...moved.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
   ];
   await recordTaskChange(ctx, task._id, by, changes, now);
 
@@ -124,8 +147,10 @@ export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: Tas
   return { task: { ...task, waits: next, waiting_since, updated_at: now }, words };
 }
 
-/** Add `taskId` to a wait target's back reference. */
-async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
+/** Add `taskId` to a wait target's back reference. Exported for the one-off
+ *  that links the PR waits set before PR rows carried one
+ *  (migrations.linkPrWaits); every live write of it is writeWaits's. */
+export async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
   const linked = target.waiting_task_ids ?? [];
   if (linked.some((id) => String(id) === String(taskId))) return false;
   await ctx.db.patch(target._id, { waiting_task_ids: [...linked, taskId] });
@@ -200,7 +225,7 @@ function targetFromInput(raw: any): UnresolvedTarget {
 }
 
 /** The target `input` names, with a bare `#42` given its repository. */
-async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: AddWaitInput, now: number): Promise<WaitTarget> {
+async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: AddWaitInput, now: number, repos: TaskRepos): Promise<WaitTarget> {
   let target: UnresolvedTarget;
   if (input.target) target = targetFromInput(input.target);
   else {
@@ -215,13 +240,14 @@ async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: A
   if (target.kind === "decision" || target.kind === "time") return target;
   const repository = target.repository
     ? normalizeRepository(target.repository)
-    : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository));
+    : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository), repos);
   return { kind: target.kind, repository, pr_number: target.pr_number };
 }
 
 /** The repositories a task's work happens in: the mapped checkout covering its
  *  project's path, and the remotes of the sessions on it. */
 async function taskRepositories(ctx: Ctx, task: Task): Promise<string[]> {
+  (globalThis as any).__repoReads = ((globalThis as any).__repoReads ?? 0) + 1;
   const out = new Set<string>();
   const project = task.project_id ? await ctx.db.get(task.project_id) : null;
   const path = task.project_path || project?.project_path;
@@ -250,8 +276,8 @@ async function taskRepositories(ctx: Ctx, task: Task): Promise<string[]> {
  * sees PR #42; still several, or none, the caller's checkout settles it when
  * it is one of them, else it fails with the candidates.
  */
-async function repositoryForBarePr(ctx: Ctx, userId: Id<"users">, task: Task, n: number, fallback?: string): Promise<string> {
-  const fromProject = await taskRepositories(ctx, task);
+async function repositoryForBarePr(ctx: Ctx, userId: Id<"users">, task: Task, n: number, fallback: string | undefined, repos: TaskRepos): Promise<string> {
+  const fromProject = await repos();
   const candidates = fromProject.length ? fromProject : fallback ? [normalizeRepository(fallback)] : [];
   if (!candidates.length) throw new Error(`#${n}: ${task.short_id} names no repository to find it in. Write owner/repo#${n}.`);
   if (candidates.length === 1) return candidates[0];
@@ -335,7 +361,8 @@ export async function addWaitCore(
 ): Promise<AddWaitResult> {
   const now = Date.now();
   const task = await writableTask(ctx, userId, shortId);
-  const target = await resolveTarget(ctx, userId, task, input, now);
+  const repos = taskReposOnce(ctx, task);
+  const target = await resolveTarget(ctx, userId, task, input, now, repos);
   const waits = task.waits ?? [];
   const id = str(input.id);
   const own = id ? waits.find((w) => w.id === id) : undefined;
@@ -361,7 +388,7 @@ export async function addWaitCore(
   const { created_by: _createdBy, ...changeBy } = by;
   const replaced = waits.filter((w) => waitIsReplaceable(w) && sameWaitTarget(w, target));
   const wasUnblocked = replaced.length && check.met ? await isTaskUnblocked(ctx, task) : true;
-  const { task: after, words } = await writeWaits(ctx, task, [...waits.filter((w) => !replaced.includes(w)), wait], changeBy, now);
+  const { task: after, words } = await writeWaits(ctx, task, [...waits.filter((w) => !replaced.includes(w)), wait], changeBy, now, repos);
   if (!wasUnblocked && !isTerminalTaskStatus(after.status) && (await isTaskUnblocked(ctx, after))) {
     await onUnblocked(ctx, after, waitMetCause(wait, words), unblockBy(changeBy, `met:${wait.id}`));
   }
@@ -593,30 +620,6 @@ export const settlePr = internalMutation({
       if (task.waits?.some(onThis)) still.push(id);
     }
     if (still.length !== pr.waiting_task_ids.length) await ctx.db.patch(pr._id, { waiting_task_ids: still });
-  },
-});
-
-/** One-off: link the PR waits set before PR rows carried `waiting_task_ids`,
- *  and settle each linked PR as it now stands. Idempotent; run until it
- *  reports `done`, then delete it (ct-58147 tracks both). */
-export const linkPrWaits = internalMutation({
-  args: { cursor: v.optional(v.union(v.string(), v.null())) },
-  handler: async (ctx, { cursor }) => {
-    const page = await ctx.db
-      .query("tasks")
-      .withIndex("by_waiting_since", (q) => q.gt("waiting_since", 0))
-      .paginate({ cursor: cursor ?? null, numItems: 200 });
-    let linked = 0;
-    for (const task of page.page) {
-      for (const w of task.waits ?? []) {
-        if (w.state !== "waiting" || !isPrWaitTarget(w)) continue;
-        const pr = await prByNumber(ctx, w.repository, w.pr_number);
-        if (!pr || !(await linkTask(ctx, pr, task._id))) continue;
-        linked++;
-        await ctx.scheduler.runAfter(0, internal.taskWaits.settlePr, { pr_id: pr._id });
-      }
-    }
-    return { linked, cursor: page.continueCursor, done: page.isDone };
   },
 });
 
