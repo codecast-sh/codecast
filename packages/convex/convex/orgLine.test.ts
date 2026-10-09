@@ -390,6 +390,18 @@ describe("orgLine admission (LE6)", () => {
     expect(q.items.map((i) => i.task_id)).toEqual(["tasks_late"]);
   });
 
+  // TG9: an ephemeral task is ready only for the session that filed it. The
+  // scoped pool drops it in resolveScope, so a whole workspace role reading
+  // rows straight off the index is the one path that could pick one up.
+  test("a whole workspace role never picks up ephemeral bookkeeping", async () => {
+    const whole = { ...caps(), handle: HEAD_OF_PEOPLE_HANDLE, scope: undefined };
+    const assigned = { assignee: `agent:${HEAD_OF_PEOPLE_HANDLE}` };
+    const live = fixtures({ role: whole, task: assigned });
+    expect((await lineCandidates(live.ctx, live.tables.org_roles[0])).map((t) => t._id)).toEqual(["tasks_1"]);
+    const book = fixtures({ role: whole, task: { ...assigned, ephemeral: true } });
+    expect(await lineCandidates(book.ctx, book.tables.org_roles[0])).toEqual([]);
+  });
+
   test("the hands cap holds causes and the queue says so", async () => {
     const { ctx, tables } = fixtures({
       role: { ...caps({ hands_per_day: 2 }), counters: { day: TODAY, hands: 1, wakes: 0, tokens: 0 } },

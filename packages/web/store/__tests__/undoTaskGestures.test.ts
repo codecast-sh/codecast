@@ -48,6 +48,25 @@ describe("task gestures record one entry each", () => {
     expect(s().tasks[A].priority).toBe("medium");
   });
 
+  it("setting and clearing where a task was found names the link, and the undo reaches the server", async () => {
+    // The task page's Found during row: the server GUESSES the link from the
+    // filing session's bound task (TG5), so both the repoint and the clear are
+    // ordinary edits with an undo that webUpdate can carry ("" is its clear).
+    s().updateTask("ct-1", { found_during: "ct-2" });
+    expect(labels()).toEqual(["Marked ct-1 as found during ct-2"]);
+    expect(s().tasks[A].found_during).toBe("ct-2");
+    performUndo();
+    expect(s().tasks[A].found_during ?? null).toBe(null);
+
+    _resetUndoStacks();
+    s().updateTask("ct-1", { found_during: "ct-2" });
+    _resetUndoStacks();
+    s().updateTask("ct-1", { found_during: "" });
+    expect(labels()).toEqual(["Cleared where ct-1 was found"]);
+    performUndo();
+    expect(s().tasks[A].found_during).toBe("ct-2");
+  });
+
   it("debounced description saves record nothing: the editor owns text undo", () => {
     for (const d of ["a", "ab", "abc"]) s().updateTask("ct-1", { description: d });
     expect(labels()).toEqual([]);

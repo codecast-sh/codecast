@@ -91,11 +91,36 @@ describe("planReadiness", () => {
     ]);
     expect(ids(r.waiting)).toEqual([]);
     expect(ids(r.stuck)).toEqual(["ct-2", "ct-3", "ct-4", "ct-6", "ct-7"]);
-    expect(stuckNote(r)).toBe("ct-2: blocked by ct-1, PR #6 merges (failed: closed without merging); ct-3: blocked by ct-99 (status unknown); ct-4: its parent could not be read; ct-6: blocked by ct-5; ct-7: blocked by ct-3");
+    // A failed wait leads the list it is in (`blockerBand`): it needs a
+    // re-plan, and an agent reading one line reads that one.
+    expect(stuckNote(r)).toBe("ct-2: blocked by PR #6 to merge (failed: closed without merging), ct-1; ct-3: blocked by ct-99 (status unknown); ct-4: its parent could not be read; ct-6: blocked by ct-5; ct-7: blocked by ct-3");
+    // Every stuck cause names a next action, the unreadable parent included:
+    // it is the one an agent is least likely to diagnose, and it carries no
+    // blocker to act on.
     expect(stuckAdvice(r)).toEqual([
       "ct-2: remove it (cast task dep ct-2 --remove-blocked-by o/r#6) or replace it (add the new wait with cast task dep ct-2 --blocked-by; a wait on the same target takes the failed one's place), or change the approach, and say on the task what you decided.",
       "ct-3: a blocker this workspace cannot read; cast task show ct-3 names it",
+      "ct-4: its parent is in another workspace or could not be read; cast task show ct-4 names it, and cast task update ct-4 --parent '' lifts it to the top level",
     ]);
+  });
+
+  // A time wait whose moment went by unsettled is the trap a failed one is:
+  // nothing is going to clear it, so the plan must not file it under "will
+  // become ready without anyone touching them" and go quiet about it
+  // (isStalledTimeWait, the same predicate the holding session's compaction
+  // block judges it by).
+  test("a time wait whose settle never landed is stuck, not waiting, and says the wake is not coming", () => {
+    const now = 1_760_000_000_000;
+    const late = { kind: "time", at: now - 5 * 60 * 60_000, id: "w9", state: "waiting", created_at: 1 };
+    const soon = { kind: "time", at: now + 60 * 60_000, id: "w8", state: "waiting", created_at: 1 };
+    const r = planReadiness<any>([t("ct-1", { waits: [late] }), t("ct-2", { blocked_by: ["ct-1"] }), t("ct-3", { waits: [soon] })], null, { now });
+    expect(ids(r.stuck)).toEqual(["ct-1", "ct-2"]);
+    expect(ids(r.waiting)).toEqual(["ct-3"]);
+    expect(stuckAdvice(r, { now })[0]).toBe(
+      "ct-1: a wait whose moment has gone by was never settled, so no wake is coming: remove it (cast task dep ct-1 --remove-blocked-by w9) and, if the work still has to wait, add the new wait with cast task dep ct-1 --blocked-by, or change the approach, and say on the task what you decided.",
+    );
+    // A moment still ahead, or one only minutes past, is a settle on its way.
+    expect(ids(planReadiness<any>([t("ct-1", { waits: [late] })], null, { now: late.at + 60_000 }).waiting)).toEqual(["ct-1"]);
   });
 
   // Planned by viewer null, an ephemeral step is its owner's to run (TG9).
@@ -113,6 +138,6 @@ describe("openBlockerLabels", () => {
     const pr42 = { kind: "pr_merged", repository: "o/r", pr_number: 42, id: "w1", state: "waiting", created_at: 1 };
     const tasks = [t("ct-1", { status: "done" }), t("ct-2"), t("ct-3", { blocked_by: ["ct-1", "ct-2"], waits: [pr42] })];
     const { statusOf } = planReadiness<any>(tasks);
-    expect(openBlockerLabels(tasks[2] as any, statusOf)).toEqual(["ct-2", "PR #42 merges"]);
+    expect(openBlockerLabels(tasks[2] as any, statusOf)).toEqual(["ct-2", "PR #42 to merge"]);
   });
 });

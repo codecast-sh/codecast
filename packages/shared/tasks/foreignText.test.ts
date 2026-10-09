@@ -136,6 +136,16 @@ describe("renderFencedTaskRecord", () => {
   test("a task with no prose gets no empty fence", () => {
     expect(renderFencedTaskRecord({ short_id: "ct-1", description: "   " })).toBeNull();
   });
+
+  test("a caller that printed the title gets no block for a task whose only prose IS its title", () => {
+    const titleOnly = { short_id: "ct-1", title: "Wire the frontier" };
+    expect(renderFencedTaskRecord(titleOnly, "reference", { title: true })).toBeNull();
+    // A caller with no heading of its own keeps it, and so does a task that
+    // carries more than its title.
+    expect(renderFencedTaskRecord(titleOnly, "assignment")).toContain("Title: Wire the frontier");
+    expect(renderFencedTaskRecord({ ...titleOnly, description: "From the wave" }, "reference", { title: true }))
+      .toContain("Title: Wire the frontier");
+  });
 });
 
 describe("foreignTaskSource", () => {

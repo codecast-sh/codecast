@@ -12,8 +12,9 @@ import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { inboxVisibilityFields } from "./inboxProjection";
 import { liveConversationIdSet } from "./lib/liveSessions";
-import { docRelatesToTask } from "@codecast/shared/tasks";
-import { graphNeighbors } from "./lib/taskGraph";
+import { docRelatesToTask, type GraphRefStatus } from "@codecast/shared/tasks";
+import { graphNeighbors, stampGraphStatus } from "./lib/taskGraph";
+import { foundHereRows } from "./taskLinks";
 
 // Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
 export const mineConversationAfterInsight = internalAction({
@@ -1402,9 +1403,25 @@ export const webGetTaskDetail = query({
     // task through a grant alone, so only rows they may read ship whole.
     const graphTasks: Doc<"tasks">[] = [];
     for (const t of graph.tasks) if (await canAccessTask(ctx, userId, t)) graphTasks.push(t);
+    // "Found here" is the reverse of found_during, which only the index
+    // answers: without these rows the client could show no more than the ones
+    // its list happens to hold, and would disagree with `cast task show`.
+    // Already workspace- and access-checked by foundHereRows.
+    const seen = new Set(graphTasks.map((t) => String(t._id)));
+    for (const t of await foundHereRows(ctx, userId, task)) if (!seen.has(String(t._id))) graphTasks.push(t);
+    // The same snapshot `tasks.webList` and `plans.get` stamp, for the same
+    // reason: `graph_tasks` ships only the rows this viewer may READ, while a
+    // blocker's STATUS follows the workspace rule (taskLinks.blockerLinks,
+    // readinessLookups). Task access is not workspace equality — an assignee
+    // holds a grant (accessStampFromDoc) — so an in-workspace blocker assigned
+    // to somebody else is in neither list, and without the stamp the page
+    // would read it as "status unknown" and withhold the unblocked verdict
+    // while `cast task show` and `task ready` named its real status (TG1).
+    const stamped: Doc<"tasks"> & { graph_status?: GraphRefStatus[] } = { ...task };
+    await stampGraphStatus(ctx, [stamped]);
 
     return {
-      ...task,
+      ...stamped,
       assignee_info,
       comments: enrichedComments,
       linked_conversations: linkedConversations,
