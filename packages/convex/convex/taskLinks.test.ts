@@ -97,6 +97,24 @@ describe("found_during (TG5)", () => {
     expect(row(tables, auto.short_id).found_during).toBeUndefined();
   });
 
+  // The server fills the link by itself, so a wrong one must be correctable:
+  // update takes the same ref grammar and workspace rule as create.
+  test("update rewrites the link the filing session set, and none clears it", async () => {
+    const { ctx, tables } = await makeCtx([task("ct-1"), task("ct-5")], { active_task_id: "task_ct-1" });
+    const { short_id } = await call(create, ctx, { title: "Found bug", conversation_id: SESSION });
+    expect(row(tables, short_id).found_during).toBe("ct-1");
+
+    await call(update, ctx, { short_id, found_during: "CT-5" });
+    expect(row(tables, short_id).found_during).toBe("ct-5");
+    await call(update, ctx, { short_id, found_during: "none" });
+    expect(row(tables, short_id).found_during).toBeUndefined();
+    expect(tables.task_history.filter((h: any) => h.field === "found_during").map((h: any) => [h.old_value, h.new_value]))
+      .toEqual([["", "ct-1"], ["ct-1", "ct-5"], ["ct-5", ""]]);
+
+    await expect(call(update, ctx, { short_id, found_during: short_id })).rejects.toThrow("cannot be found during itself");
+    await expect(call(update, ctx, { short_id, found_during: "ct-404" })).rejects.toThrow("not found");
+  });
+
   test("the source lists what was found there; show and context resolve every link", async () => {
     const { ctx } = await makeCtx([
       task("ct-1", { related: ["ct-3"] }),
@@ -636,6 +654,53 @@ describe("status moves outside tasks.ts (TG5)", () => {
     const notes = commentsOn(tables, "ct-2");
     expect(notes[0]).toMatch(/^Released from ct-1 rather than moved to ct-7 .*: Cannot check ct-7's dependencies/);
     expect(notes[1]).toBe("Unblocked: ct-1 dropped");
+  });
+});
+
+// A loop can be STORED while one of its tasks is closed: the loop check walks
+// open tasks only, because a closed one holds nothing back. The reopen is the
+// moment it would hold both ends for good, so it is re-checked there (TG4).
+describe("a loop stored through a closed task (TG4)", () => {
+  test("an edge accepted onto a done blocker is cut when that blocker reopens, and the newer edge stays", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-1", { status: "done", blocked_by: ["ct-2"], closed_at: 2 }),
+      task("ct-2", { blocks: ["ct-1"] }),
+    ]);
+    // Accepted: ct-1 is done, so nothing waits behind it and no loop is live.
+    await addDepCore(ctx, USER as any, { short_id: "ct-2", blocked_by: "ct-1" });
+    expect([row(tables, "ct-1").blocked_by, row(tables, "ct-2").blocked_by]).toEqual([["ct-2"], ["ct-1"]]);
+
+    await moveTaskStatus(ctx, row(tables, "ct-1"), "open", { actorUserId: USER as any });
+    expect(row(tables, "ct-1").blocked_by).toEqual([]);
+    expect(row(tables, "ct-2").blocked_by).toEqual(["ct-1"]);
+    expect(row(tables, "ct-2").blocks).toEqual([]);
+    expect(commentsOn(tables, "ct-1")[0]).toMatch(/^No longer waits on ct-2: ct-1 is open again, and the edge closes a loop\./);
+    expect(historyOf(tables, "ct-1", "blocked_by")).toEqual([["ct-2", ""]]);
+  });
+
+  test("a dependent moved onto a done replacement is left waiting on it; the replacement's own edge gives way", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-A", { blocked_by: ["ct-B"] }),
+      task("ct-B", { blocks: ["ct-A"] }),
+      task("ct-C", { status: "done", blocked_by: ["ct-A"], closed_at: 2 }),
+    ]);
+    await call(supersede, ctx, { short_id: "ct-B", by: "ct-C" });
+    expect(row(tables, "ct-A").blocked_by).toEqual(["ct-C"]);
+
+    await moveTaskStatus(ctx, row(tables, "ct-C"), "open", { actorUserId: USER as any });
+    expect(row(tables, "ct-C").blocked_by).toEqual([]);
+    expect(row(tables, "ct-A").blocked_by).toEqual(["ct-C"]);
+    expect(commentsOn(tables, "ct-C").some((t: string) => t.startsWith("No longer waits on ct-A:"))).toBe(true);
+  });
+
+  test("a blocker edge that closes no loop survives a reopen", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-1", { status: "done", blocked_by: ["ct-2"], closed_at: 2 }),
+      task("ct-2", { blocks: ["ct-1"] }),
+    ]);
+    await moveTaskStatus(ctx, row(tables, "ct-1"), "open", { actorUserId: USER as any });
+    expect(row(tables, "ct-1").blocked_by).toEqual(["ct-2"]);
+    expect(commentsOn(tables, "ct-1")).toEqual([]);
   });
 });
 

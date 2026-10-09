@@ -226,7 +226,10 @@ export const create = mutation({
       });
     }
 
-    return { id, short_id, doc_id: docId };
+    // The workspace this create resolved to (the session's team, else the
+    // directory rule): the caller files the plan's steps there and words the
+    // next step's scope from it, without reading the plan back to find out.
+    return { id, short_id, doc_id: docId, workspace: db.workspaceKey, ...(db.axes.team_id ? { team_id: db.axes.team_id } : {}) };
   },
 });
 

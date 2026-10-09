@@ -13,12 +13,12 @@ import { internalMutation, mutation, type MutationCtx } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { canAccessTask, isSameWorkspace, requireSameWorkspace, workspaceForResource, type AuthorizedWorkspace } from "./lib/access";
-import { assertDependencyEdges, dependentRefs, GRAPH_LINK_CAP, openUpstream, requireTaskByRef, taskByRef, taskLookups, writeEdges } from "./lib/taskGraph";
+import { assertDependencyEdges, dependentRefs, GRAPH_LINK_CAP, loopedBlockers, openUpstream, requireTaskByRef, taskByRef, taskLookups, writeEdges } from "./lib/taskGraph";
 import { bySystem, byUser, recordTaskChange, type TaskChangeBy } from "./lib/taskHistory";
 import { patchTask } from "./lib/taskWrite";
 import { insertTaskComment, moveTaskStatus, openDirectSubtasks, reconcilePlanMembership, releaseBoundSessions, taskAncestorIds } from "./tasks";
 import { cliCaller, isTaskUnblocked, onBlockedAgain, onUnblocked, pendingReleases, releaseDependents, SENDER, tellReleased, unblockBy } from "./taskWaits";
-import { isTerminalTaskStatus, parseStoredList, taskBlockerEntries, type StatusOf, type TitledTaskBlocker } from "@codecast/shared/tasks";
+import { isTerminalTaskStatus, parseBlockerRef, parseStoredList, taskBlockerEntries, type StatusOf, type TitledTaskBlocker } from "@codecast/shared/tasks";
 
 /** A linked task as every surface prints it. */
 export type LinkRef = { short_id: string; title: string; status: string };
@@ -82,7 +82,11 @@ export async function foundDuringForCreate(
   const explicit = o.explicit?.trim();
   if (explicit) {
     if (explicit.toLowerCase() === "none") return undefined;
-    const source = await requireTaskByRef(ctx, userId, explicit);
+    // A task ref is read through the one grammar (TG3), so CT-012 names ct-12
+    // here as it does in blocked_by; anything else is left for the lookup to
+    // refuse by name (a plan's older `_id` resolves too).
+    const parsed = parseBlockerRef(explicit);
+    const source = await requireTaskByRef(ctx, userId, parsed.ok && parsed.kind === "task" ? parsed.ref : explicit);
     requireSameWorkspace(source, o.workspace, "found-during task");
     return source.short_id;
   }
@@ -401,6 +405,27 @@ async function reopenLinkedTask(ctx: Ctx, task: Doc<"tasks">, userId: Id<"users"
 }
 
 /**
+ * A task back from done or dropped: cut any blocker edge of its own that is
+ * part of a loop (lib/taskGraph loopedBlockers). The loop check judges a new
+ * edge among open tasks only, because a closed task holds nothing back, so a
+ * loop can be stored through one: an edge named onto a done blocker that
+ * already waits on the dependent, or a dependent moved onto a done
+ * replacement (redirectDependents, whose check a closed `to` has nothing to
+ * walk). The reopen is the moment such a loop would hold both ends for good,
+ * and no later write re-checks an edge it does not touch. The reopened task
+ * carries the cut, since its own edge is the one nobody could judge when it
+ * was written, and it is the only edge every loop through the task shares.
+ */
+async function cutReopenedLoops(ctx: Ctx, taskId: Id<"tasks">): Promise<void> {
+  const task = await ctx.db.get(taskId);
+  if (!task) return;
+  for (const { ref, error } of await loopedBlockers(ctx, task, workspaceForResource(task))) {
+    const blocker = await taskByRef(ctx, ref);
+    if (blocker) await cutEdge(ctx, task._id, blocker._id, `${task.short_id} is open again, and the edge closes a loop. ${error}`);
+  }
+}
+
+/**
  * A duplicate is dropped: what still waits on it moves to its canonical, as
  * the mark itself did, rather than being released (TG5). That covers a
  * dependent added after the mark and one a reopen gave back. Runs after the
@@ -434,7 +459,10 @@ export async function afterStatusEdges(ctx: Ctx, task: Doc<"tasks">, next: strin
   const by = actorUserId ? actorBy(actorUserId, conversationId) : bySystem;
   await dropDuplicate(ctx, task, next, userId, by);
   await releaseDependents(ctx, task, next, release);
-  if (isTerminalTaskStatus(task.status) && !isTerminalTaskStatus(next)) await reopenLinkedTask(ctx, task, userId, by);
+  if (isTerminalTaskStatus(task.status) && !isTerminalTaskStatus(next)) {
+    await reopenLinkedTask(ctx, task, userId, by);
+    await cutReopenedLoops(ctx, task._id);
+  }
 }
 
 /** A duplicate mark cleared on a task that stays open takes its dependents
@@ -559,6 +587,9 @@ export async function relateCore(
  * no release would reach it (releaseDependents); a subtask would read its
  * parent as unknown and never be ready.
  */
+/** Why a crossed edge goes, as the dependent's note reads it. */
+const CROSSED = "the two tasks are in different workspaces now, so this one could never see it finish.";
+
 export const cutCrossedEdges = internalMutation({
   args: { task_ids: v.array(v.id("tasks")) },
   handler: async (ctx, { task_ids }) => {
@@ -568,11 +599,11 @@ export const cutCrossedEdges = internalMutation({
       const workspace = workspaceForResource(task);
       for (const ref of task.blocked_by ?? []) {
         const blocker = await taskByRef(ctx, ref);
-        if (blocker && !isSameWorkspace(blocker, workspace)) await cutEdge(ctx, task._id, blocker._id);
+        if (blocker && !isSameWorkspace(blocker, workspace)) await cutEdge(ctx, task._id, blocker._id, CROSSED);
       }
       for (const ref of await dependentRefs(ctx, task)) {
         const dependent = await taskByRef(ctx, ref);
-        if (dependent && !isSameWorkspace(dependent, workspace)) await cutEdge(ctx, dependent._id, task._id);
+        if (dependent && !isSameWorkspace(dependent, workspace)) await cutEdge(ctx, dependent._id, task._id, CROSSED);
       }
       const parent = task.parent_id ? await ctx.db.get(task.parent_id) : null;
       if (parent && !isSameWorkspace(parent, workspace)) await cutParent(ctx, task, parent);
@@ -599,8 +630,9 @@ async function cutParent(ctx: Ctx, child: Doc<"tasks">, parent: Doc<"tasks">): P
 }
 
 /** Remove the edge from both rows, with the dependent's history, a note
- *  saying why, and the release a removeDep would tell. */
-async function cutEdge(ctx: Ctx, dependentId: Id<"tasks">, blockerId: Id<"tasks">): Promise<void> {
+ *  saying why (`why` finishes "No longer waits on ct-12: …"), and the release
+ *  a removeDep would tell. */
+async function cutEdge(ctx: Ctx, dependentId: Id<"tasks">, blockerId: Id<"tasks">, why: string): Promise<void> {
   const [dependent, blocker] = await Promise.all([ctx.db.get(dependentId), ctx.db.get(blockerId)]);
   if (!dependent || !blocker) return;
   const before = dependent.blocked_by ?? [];
@@ -613,7 +645,7 @@ async function cutEdge(ctx: Ctx, dependentId: Id<"tasks">, blockerId: Id<"tasks"
   if (!isTerminalTaskStatus(dependent.status)) {
     await insertTaskComment(ctx, dependent._id, {
       author: SENDER,
-      text: `No longer waits on ${blocker.short_id}: the two tasks are in different workspaces now, so this one could never see it finish.`,
+      text: `No longer waits on ${blocker.short_id}: ${why}`,
       comment_type: "note",
     });
   }

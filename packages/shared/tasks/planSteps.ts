@@ -72,7 +72,9 @@ export function stepsFromWaves(waves: readonly (readonly string[])[]): PlanStep[
   const steps: PlanStep[] = [];
   let previous: number[] = [];
   for (const wave of waves) {
-    const current = wave.map((line) => steps.push({ ...stepFromLine(line), after: previous }) - 1);
+    // A copy per step: the steps are handed out, and a caller editing one
+    // step's `after` must not rewrite its siblings'.
+    const current = wave.map((line) => steps.push({ ...stepFromLine(line), after: [...previous] }) - 1);
     previous = current;
   }
   return steps;

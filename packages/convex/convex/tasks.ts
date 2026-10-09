@@ -17,7 +17,7 @@ import { blockersHoldingBack, docRelatesToTask, isStaleTask, readinessOf, topolo
 import { assertDependencyEdges, offFrontierReason, openBlockersOf, orderFrontier, readinessLookups, readyTasks, requireTaskByRef, stampGraphStatus, storedGraphRefs, taskByRef, writeEdges } from "./lib/taskGraph";
 import { addWaitsAtCreate, cliCaller, pendingReleases, tellReleased } from "./taskWaits";
 import { commentReaches, executionHintArgs, executionHintPatch, isEphemeralTask } from "./lib/taskExecution";
-import { bySystem, byUser, recordTaskChange, type TaskChangeBy } from "./lib/taskHistory";
+import { bySystem, byUser, recordTaskChange, trackedFieldChanges, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
 import { afterDuplicateCleared, afterStatusEdges, foundDuringForCreate, redirectDependents, requireLiveReplacement, taskLinksOf } from "./taskLinks";
 import {
   MAX_TASK_DEPTH,
@@ -1384,8 +1384,14 @@ export const create = mutation({
       estimated_minutes: args.estimated_minutes,
     } as any);
 
+    // Each task blocker as it landed, so the caller can echo the edge and say
+    // when a blocker is already done or dropped and so holds nothing (depAddedLine,
+    // the same line `cast task dep` prints). A ref naming no readable task keeps
+    // the write and reports no status.
+    const blockers: Array<{ ref: string; status?: string }> = [];
     for (const dep of args.blocked_by || []) {
-      await patchDepMirror(ctx, auth.userId, { short_id, workspace: db.workspace }, dep, "blocks", "add");
+      const other = await patchDepMirror(ctx, auth.userId, { short_id, workspace: db.workspace }, dep, "blocks", "add");
+      blockers.push({ ref: other?.short_id ?? dep, ...(other ? { status: other.status } : {}) });
     }
     if (found_during) await recordTaskChange(ctx, id, { user_id: auth.userId, actor_type: originConv ? "agent" : "user", conversation_id: created_from_conversation }, [["found_during", "", found_during]], now);
     const waits = await addWaitsAtCreate(ctx, auth.userId, short_id, args);
@@ -1429,7 +1435,7 @@ export const create = mutation({
     // session_bound: the creating session holds a task, so the CLI keeps its
     // pulse there rather than move it to what it filed along the way (TG10).
     // found_during, so the CLI can name the link a bound session made (TG5).
-    return { id, short_id, ...(waits ? { waits } : {}), ...(originConv?.active_task_id ? { session_bound: true } : {}), ...(found_during ? { found_during } : {}) };
+    return { id, short_id, ...(waits ? { waits } : {}), ...(blockers.length ? { blockers } : {}), ...(originConv?.active_task_id ? { session_bound: true } : {}), ...(found_during ? { found_during } : {}) };
   },
 });
 
@@ -2071,6 +2077,9 @@ export const update = mutation({
     watch_days: v.optional(v.number()),
     // model, effort and ephemeral (TG8, TG9); ephemeral:false is `cast task keep`.
     ...executionHintArgs,
+    // TG5: the link create fills from the filing session's bound task,
+    // correctable here; "" or "none" clears it.
+    found_during: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -2109,6 +2118,16 @@ export const update = mutation({
     if (args.promoted !== undefined) updates.promoted = args.promoted;
     const fromCall = await resolveFromCall(ctx, auth.userId, args.from_call);
     if (fromCall !== undefined) updates.from_call = fromCall ?? undefined;
+    // A found_during the server filled itself can be wrong (the filing session
+    // was bound to an unrelated task), so it is writable, through the same
+    // workspace rule as create's explicit --found-during.
+    if (args.found_during !== undefined) {
+      const ref = args.found_during.trim();
+      const cleared = !ref || ref.toLowerCase() === "none";
+      const source = cleared ? undefined : await foundDuringForCreate(ctx, auth.userId, { explicit: ref, workspace: workspaceForResource(task) });
+      if (source === task.short_id) throw new Error(`${task.short_id} cannot be found during itself`);
+      updates.found_during = source;
+    }
     const targetWorkspace = args.team_id
       ? { type: "team" as const, teamId: args.team_id }
       : task.team_id
@@ -2306,16 +2325,21 @@ export const update = mutation({
     // Did the parent actually change? (Reparent/detach need history + plan reconcile.)
     const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
 
-    // Record history for changed fields
-    const trackFields: [string, any, any][] = [];
-    if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
-    if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
-    if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
-    if ("assignee" in updates && updates.assignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", updates.assignee || ""]);
-    if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
-    if (args.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", args.review_verdict]);
-    if (args.labels) trackFields.push(["labels", task.labels, args.labels]);
-    if (args.blocked_by) trackFields.push(["blocked_by", prevDeps.blocked_by, args.blocked_by]);
+    // Record history for changed fields (lib/taskHistory, shared with webUpdate),
+    // plus the blocked_by overwrite only this path writes.
+    const trackFields: TaskFieldChange[] = [
+      ...trackedFieldChanges(task, {
+        status: nextStatus,
+        priority: args.priority,
+        title: args.title,
+        ...("assignee" in updates ? { assignee: { to: updates.assignee } } : {}),
+        ...(parentChanged ? { parent: { to: updates.parent_id } } : {}),
+        review_verdict: args.review_verdict,
+        labels: args.labels,
+      }),
+      ...(args.blocked_by ? [["blocked_by", prevDeps.blocked_by, args.blocked_by] as TaskFieldChange] : []),
+      ...("found_during" in updates ? [["found_during", task.found_during, updates.found_during] as TaskFieldChange] : []),
+    ];
 
     // A new edge on either side must stay in the workspace and not close a
     // loop (TG4). Edges join tasks by their stored access key, as addDep and
@@ -2610,6 +2634,11 @@ export const addComment = mutation({
 // the caller already made. The mirror may name `self` by its `_id` (a plan's
 // older rows): that form is the same edge, so it is never added twice and
 // is removed with the short id.
+//
+// Returns the referenced task when it was found and readable, whether or not
+// the mirror needed a patch, so a caller can report what the edge landed on
+// (its status: a done or dropped blocker holds nothing); null when the ref
+// names nothing this caller can see.
 export async function patchDepMirror(
   ctx: any,
   userId: Id<"users">,
@@ -2619,17 +2648,18 @@ export async function patchDepMirror(
   op: "add" | "remove",
   // Who made the edit: a blocked_by mirror is the other task's own history (TG11).
   by?: TaskChangeBy,
-) {
+): Promise<Doc<"tasks"> | null> {
   const other = await taskByRef(ctx, otherRef);
-  if (!other || !(await canAccessTask(ctx, userId, other))) return;
-  if (op === "add" && !isSameWorkspace(other, self.workspace)) return;
+  if (!other || !(await canAccessTask(ctx, userId, other))) return null;
+  if (op === "add" && !isSameWorkspace(other, self.workspace)) return other;
   const mirror: string[] = other[mirrorField] || [];
   const isSelf = (id: string) => id === self.short_id || (!!self._id && id === self._id);
-  if (op === "add" ? mirror.some(isSelf) : !mirror.some(isSelf)) return;
+  if (op === "add" ? mirror.some(isSelf) : !mirror.some(isSelf)) return other;
   const next = op === "add"
     ? [...mirror, self.short_id]
     : mirror.filter((id: string) => !isSelf(id));
   await writeEdges(ctx, other, mirrorField, next, by ?? bySystem);
+  return other;
 }
 
 export const addDep = mutation({
@@ -3781,17 +3811,23 @@ export async function updateTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
   const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
 
   const resolvedAssignee = updates.assignee || args.assignee;
-  // Record history for changed fields
-  const trackFields: [string, any, any][] = [];
-  if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
-  if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
-  if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
-  if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
-  if (updates.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", updates.review_verdict.verdict]);
-  if (args.execution_status !== undefined && args.execution_status !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", args.execution_status || ""]);
   const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
-  if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
-  if (args.labels) trackFields.push(["labels", task.labels, args.labels]);
+  // Record history for changed fields (lib/taskHistory, shared with update),
+  // plus the execution_status only the board writes.
+  const trackFields: TaskFieldChange[] = [
+    ...trackedFieldChanges(task, {
+      status: nextStatus,
+      priority: args.priority,
+      title: args.title,
+      ...(args.assignee !== undefined ? { assignee: { to: resolvedAssignee } } : {}),
+      ...(parentChanged ? { parent: { to: updates.parent_id } } : {}),
+      review_verdict: updates.review_verdict?.verdict,
+      labels: args.labels,
+    }),
+    ...(args.execution_status !== undefined
+      ? [["execution_status", task.execution_status || "", args.execution_status || ""] as TaskFieldChange]
+      : []),
+  ];
 
   await recordTaskChange(ctx, task._id, byUser(userId), trackFields, now);
 
