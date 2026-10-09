@@ -130,3 +130,18 @@ export function Flag({ children, color = CYAN }: { children: ReactNode; color?: 
     </code>
   );
 }
+
+/** A screenshot of the real app, framed like the drawn panels around it. */
+export function Shot({ src, alt, width, height, className = "" }: { src: string; alt: string; width: number; height: number; className?: string }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      loading="lazy"
+      className={`block w-full h-auto rounded-xl border bg-white ${className}`}
+      style={{ borderColor: "rgba(88,110,117,.25)", boxShadow: "0 18px 40px -26px rgba(0,43,54,.4)" }}
+    />
+  );
+}

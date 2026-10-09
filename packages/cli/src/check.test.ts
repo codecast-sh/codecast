@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
-import { checkProject, classifyWatchLine, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { checkProject, classifyWatchLine, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {
@@ -162,6 +162,25 @@ describe("which programs a tree carries", () => {
     expect(() => resolveProjects(tree, ["nope"], tree)).toThrow(/one of a, b, gone/);
   });
 
+  test("a path to a configured project's tsconfig is that project, not a second watcher", () => {
+    fs.mkdirSync(path.join(tree, ".codecast"));
+    fs.writeFileSync(path.join(tree, ".codecast/check.toml"), '[projects]\na = "packages/a/tsconfig.json"\n');
+    expect(resolveProjects(tree, ["packages/a"], tree)).toEqual([{ name: "a", tsconfig: "packages/a/tsconfig.json" }]);
+    expect(resolveProjects(tree, ["tsconfig.json"], path.join(tree, "packages/a"))).toEqual([{ name: "a", tsconfig: "packages/a/tsconfig.json" }]);
+    expect(resolveProjects(tree, ["packages/b"], tree)).toEqual([{ name: "packages-b", tsconfig: "packages/b/tsconfig.json" }]);
+  });
+
+  test("a sibling directory whose name starts with the tree's is outside it", () => {
+    const sibling = `${tree}-wt`;
+    fs.mkdirSync(path.join(sibling, "app"), { recursive: true });
+    fs.writeFileSync(path.join(sibling, "app/tsconfig.json"), "{}");
+    try {
+      expect(() => resolveProjects(tree, [path.join(sibling, "app")], tree)).toThrow(/outside this tree/);
+    } finally {
+      fs.rmSync(sibling, { recursive: true, force: true });
+    }
+  });
+
   test("a malformed config is named, not guessed around", () => {
     fs.mkdirSync(path.join(tree, ".codecast"));
     fs.writeFileSync(path.join(tree, ".codecast/check.toml"), "[projects]\na = 3\n");
@@ -264,6 +283,17 @@ describe("the machine wide watcher cap", () => {
     expect(readWatchState(watchDir("/tree", "busy"))).not.toBeNull();
   });
 
+  test("a run's own programs are stopped last, so `cast check` never rebuilds what it just checked", () => {
+    const state: WatchState = { pid: process.pid, project: "mine", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, askedAt: 1 };
+    writeWatchState(watchDir("/tree", "mine"), state);
+    writeWatchState(watchDir("/other", "theirs"), { ...state, project: "theirs", root: "/other", askedAt: 2 });
+    const protect = new Set([watchDir("/tree", "mine")]);
+    expect(makeRoom(2, () => {}, Date.now(), protect)?.map((w) => w.project)).toEqual(["theirs"]);
+    // Only protected programs left: the oldest still gives way rather than deadlocking the run.
+    expect(makeRoom(1, () => {}, Date.now(), protect)?.map((w) => w.project)).toEqual(["mine"]);
+    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(/ evict theirs \/other .*cap 2\n.* evict mine \/tree /);
+  });
+
   test("an ask waits in the queue while every slot holds a wanted pass, and gives up at its budget without killing any", async () => {
     const state: WatchState = { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt: Date.now() };
     writeWatchState(watchDir("/tree", "busy"), state);
@@ -364,5 +394,38 @@ describe("idle exit", () => {
     expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, finishedAt: t - 1000 }, t)).toBe(false);
     // A first pass still building on a loaded machine is not idle, however old.
     expect(shouldIdleExit({ ...base, inProgress: true, askedAt: t - 3 * IDLE_EXIT_MS }, t)).toBe(false);
+  });
+});
+
+
+describe("projectsTouching", () => {
+  let iso: IsolatedCodecastDir;
+  beforeEach(() => { iso = isolateCodecastDir(); });
+  afterEach(() => iso.restore());
+
+  test("picks the projects whose program holds a changed file, and a project above a file no program has seen", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "touching-")));
+    try {
+      const projects = [
+        { name: "web", tsconfig: "packages/web/tsconfig.json" },
+        { name: "cli", tsconfig: "packages/cli/tsconfig.json" },
+        { name: "convex", tsconfig: "packages/convex/tsconfig.json" },
+      ];
+      const info = (name: string, files: string[]) => {
+        const dir = watchDir(root, name);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: files.map((f) => path.relative(dir, path.join(root, f))) }));
+      };
+      info("web", ["packages/web/app.tsx", "packages/shared/x.ts"]);
+      info("cli", ["packages/cli/src/a.ts"]);
+      info("convex", ["packages/convex/f.ts", "packages/shared/x.ts"]);
+      const names = (changed: string[]) => projectsTouching(root, projects, changed).map((p) => p.name);
+      expect(names(["packages/shared/x.ts"])).toEqual(["web", "convex"]);
+      expect(names(["packages/cli/src/new.ts"])).toEqual(["cli"]);
+      expect(names(["README.md", "docs/a.md"])).toEqual([]);
+      expect(names(["packages/web/tsconfig.json"])).toEqual(["web"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

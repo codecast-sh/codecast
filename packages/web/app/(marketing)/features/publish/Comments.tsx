@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { SOL, Terminal } from "../../blog/blogChrome";
-import { C, CYAN, Note, PageBar, Section } from "./kit";
+import { SOL } from "../../blog/blogChrome";
+import { C, CYAN, Caption, Note, PageBar, Section, Shot } from "./kit";
 
 function Stage({ n, label, children, foot }: { n: string; label: string; children: ReactNode; foot: ReactNode }) {
   return (
@@ -97,42 +97,48 @@ function SessionMessage() {
   );
 }
 
+/** The three steps from a reader's note to the agent: pin, send, deliver. */
+export function CommentFlow() {
+  return (
+    <div className="grid md:grid-cols-3 gap-8 md:gap-6">
+      <Stage n="1" label="A reader pins a note" foot={<>The comment remembers the passage it was left on and the version it was read at. A teammate signed in to codecast comments as themselves; anyone else types a name.</>}>
+        <ReaderPin />
+      </Stage>
+      <Stage n="2" label="You choose what to send" foot={<>From the owner link, <strong style={{ color: SOL.base02 }}>Send all</strong> delivers every unsent comment as one message. Your own comments can go straight to the session, or post to the page without sending.</>}>
+        <OwnerQueue />
+      </Stage>
+      <Stage n="3" label="The agent gets one fenced message" foot={<>Reader text is marked as untrusted feedback, never as instructions. A comment that tries to fake the fence has its marker stripped before delivery.</>}>
+        <SessionMessage />
+      </Stage>
+    </div>
+  );
+}
+
 export function Comments() {
   return (
     <Section
       id="comments"
-      n="04"
+      n="03"
       tone="sand"
       title="Readers comment on the page. You decide what reaches the agent."
       lede={<>Anyone with the link can pin a comment to a sentence. Comments collect on the page as a discussion. Only the page&apos;s owner can send them into the session that published it, where the agent reads them, revises the file and publishes the next version to the same link.</>}
     >
-      <div className="grid md:grid-cols-3 gap-8 md:gap-6">
-        <Stage n="1" label="A reader pins a note" foot={<>The comment remembers the passage it was left on and the version it was read at. A teammate signed in to codecast comments as themselves; anyone else types a name.</>}>
-          <ReaderPin />
-        </Stage>
-        <Stage n="2" label="You choose what to send" foot={<>From the owner link, <strong style={{ color: SOL.base02 }}>Send all</strong> delivers every unsent comment as one message. Your own comments can go straight to the session, or post to the page without sending.</>}>
-          <OwnerQueue />
-        </Stage>
-        <Stage n="3" label="The agent gets one fenced message" foot={<>Reader text is marked as untrusted feedback, never as instructions. A comment that tries to fake the fence has its marker stripped before delivery.</>}>
-          <SessionMessage />
-        </Stage>
-      </div>
+      <CommentFlow />
 
-      <div className="mt-14 grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] gap-8 items-start">
-        <div className="min-w-0 [&>div]:my-0">
-          <Terminal label="after the revision">
-            <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> cast publish churn-audit.md</span>{"\n"}
-            <span style={{ color: SOL.green }}>✓</span> <span style={{ color: SOL.base2 }}>Q3 churn audit</span>  <span style={{ color: SOL.yellow }}>v4</span> → updated{"\n\n"}
-            <span style={{ color: SOL.green }}>$</span><span style={{ color: SOL.base1 }}> cast publish comments churn-audit.md --resolve-all</span>{"\n"}
-            <span style={{ color: SOL.green }}>✓</span> Resolved 2 comments
-          </Terminal>
+      <div className="mt-14 grid lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)] gap-8 items-start">
+        <div className="min-w-0">
+          <Shot src="/features/publish/page-discussion.webp" alt="A published test page with a comment pinned at 0:20 on its timeline, and the Discussion panel open: Pin on page, General note, and the comment Make the dock a touch wider, marked addressed in v3" width={1600} height={912} />
+          <Caption>A real page after the loop: the note is pinned to the moment it was about, and the panel marks it addressed in the version that fixed it.</Caption>
         </div>
         <div className="space-y-4">
           <Note>
-            <C>cast publish comments</C> lists open comments with who left them, the version they read, and the passage they were on. Resolve one with <C>--resolve &lt;id&gt;</C> or all of them with <C>--resolve-all</C>.
+            The <strong style={{ color: SOL.base02 }}>Discussion</strong> panel opens from the comment icon in the page&apos;s bar. <strong style={{ color: SOL.base02 }}>Pin on page</strong> leaves a note on a spot; <strong style={{ color: SOL.base02 }}>General note</strong> is about the whole page.
           </Note>
           <Note>
-            Turn the discussion off for a page with <C>--no-comments</C>. Comments are rate limited per page, so a link that leaks can&apos;t be used to flood a session.
+            Turn the discussion off with <strong style={{ color: SOL.base02 }}>Comments</strong> in Manage sharing. Comments are rate limited per page, so a link that leaks can&apos;t be used to flood a session.
+          </Note>
+          <Note>
+            For agents and scripts: <C>cast publish comments</C> lists open comments and resolves them.
           </Note>
         </div>
       </div>

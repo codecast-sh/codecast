@@ -107,6 +107,41 @@ describe("ModTree", () => {
   });
 });
 
+describe("ModTree looks native without the author styling it", () => {
+  const noop = () => {};
+  test("a Card with no header keeps its top padding", async () => {
+    const m = await mount(<ModTree tree={{ t: "Card", c: [{ t: "Row", c: [{ t: "Text", c: ["first row"] }, { t: "Button", p: { label: "Track", onPress: fn("k#1") } }] }] }} invoke={noop} navigate={noop} />);
+    try {
+      const body = m.root.querySelector("section > div") as HTMLElement;
+      expect(body.style.paddingTop).toBe("14px");
+    } finally { await m.done(); }
+  });
+
+  test("framed, a root Card is the frame's panel: no border of its own, its title left to the frame", async () => {
+    const tree: any = { t: "Card", p: { title: "Need of Claudio", subtitle: "HeblinGFC" }, c: [{ t: "Text", c: ["body"] }] };
+    const m = await mount(<ModTree tree={tree} invoke={noop} navigate={noop} framed />);
+    try {
+      const section = m.root.querySelector("section") as HTMLElement;
+      expect(section.className).not.toContain("border");
+      expect(m.html).not.toContain("Need of Claudio");
+      expect(m.html).toContain("HeblinGFC");
+    } finally { await m.done(); }
+    const plain = await mount(<ModTree tree={tree} invoke={noop} navigate={noop} />);
+    try {
+      expect((plain.root.querySelector("section") as HTMLElement).className).toContain("border");
+      expect(plain.html).toContain("Need of Claudio");
+    } finally { await plain.done(); }
+  });
+
+  test("a divided list squares its rows so the rules run straight, and links are not underlined", async () => {
+    const m = await mount(<ModTree tree={{ t: "Column", c: [{ t: "List", p: { divided: true }, c: [{ t: "Item", p: { title: "a", onPress: fn("k#2") } }, { t: "Item", p: { title: "b" } }] }, { t: "Link", p: { href: "https://example.com" }, c: ["Admin"] }] }} invoke={noop} navigate={noop} />);
+    try {
+      expect(m.html).toContain("[&amp;>*]:rounded-none");
+      expect((m.root.querySelector("a") as HTMLElement).className).toContain("no-underline");
+    } finally { await m.done(); }
+  });
+});
+
 describe("object pages", () => {
   const seed = () => useInboxStore.setState({
     currentUser: { _id: "u1", name: "Me" },

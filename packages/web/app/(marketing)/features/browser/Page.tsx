@@ -8,7 +8,6 @@ import { featureHref, featureDeepDives } from "../catalog";
 import { HeroStage } from "./HeroStage";
 import { BX_CSS, C, CAST_RED, GroupChip, INK } from "./kit";
 import { DoSection, ElsewhereSection, EvidenceSection, LimitsSection, ReferenceSection, RefsSection, SafetySection, ScenariosSection, TabGroupSection, WheelSection } from "./Sections";
-import { CopyCommand } from "../kit";
 
 const STORE_URL = "https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd";
 const RELATED = ["computer", "publish", "cloud", "agents"];
@@ -21,13 +20,13 @@ export default function BrowserPage() {
       <style>{BX_CSS}</style>
       <Hero />
       <TabGroupSection />
-      <RefsSection />
-      <DoSection />
-      <ScenariosSection />
       <EvidenceSection />
       <WheelSection />
+      <ScenariosSection />
       <SafetySection />
       <ElsewhereSection />
+      <RefsSection />
+      <DoSection />
       <ReferenceSection />
       <LimitsSection />
       <Related />
@@ -46,7 +45,7 @@ function Hero() {
         <div className="max-w-3xl">
           <div className="bx-rise flex items-center gap-2.5 text-[13px] font-mono" style={{ ...rise(0), color: SOL.base01 }}>
             <GroupChip label="Cast" />
-            <span>cast browser</span>
+            <span>Browser</span>
           </div>
           <h1 className="bx-rise mt-5 font-mono font-bold text-[34px] sm:text-[46px] lg:text-[54px] leading-[1.06] tracking-[-0.04em] [text-wrap:balance]" style={{ ...rise(0.08), color: INK }}>
             Your agents get a tab in the Chrome you are already signed in to.
@@ -54,8 +53,7 @@ function Hero() {
           <p className="bx-rise mt-6 text-[16px] sm:text-[17.5px] leading-8 max-w-2xl" style={{ ...rise(0.16), color: SOL.base01 }}>
             Each agent session drives its own background tab in your real Chrome, inside a red Cast tab group. It reads the page as numbered refs, acts on them, and posts every screenshot, console error and failed request into the conversation. You keep working in your own tabs.
           </p>
-          <div className="bx-rise mt-8 flex flex-wrap items-center gap-3" style={rise(0.24)}>
-            <CopyCommand cmd="cast browser open https://staging.acme.dev" />
+          <div className="bx-rise mt-8 flex flex-wrap items-center gap-x-5 gap-y-3" style={rise(0.24)}>
             <a
               href={STORE_URL}
               target="_blank"
@@ -66,6 +64,7 @@ function Hero() {
               Add the extension
               <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}><path d="M7 17L17 7M9 7h8v8" /></svg>
             </a>
+            <a href="#evidence" className="font-mono text-[13px] underline underline-offset-4" style={{ color: SOL.base01 }}>what you see in the thread</a>
           </div>
         </div>
         <div className="bx-rise" style={rise(0.3)}><SetupStrip /></div>
@@ -82,8 +81,8 @@ function Hero() {
 function SetupStrip() {
   const beats = [
     { k: "1", title: "Install the extension", body: <>From the Chrome Web Store, in the Chrome profile agents should use.</> },
-    { k: "2", title: "Pair it once", body: <><C>cast browser extension setup</C> opens the pairing page with the port filled in. One click on Pair.</> },
-    { k: "3", title: "Done", body: <>It prints <span className="font-mono text-[13px]" style={{ color: SOL.green }}>extension connected</span>. Every agent on the machine now uses your Chrome.</> },
+    { k: "2", title: "Switch on Browser", body: <>In <b style={{ color: INK }}>Agent features</b>, turn on the Browser card and click <b style={{ color: INK }}>Pair</b>. Chrome opens the extension; click Pair there too.</> },
+    { k: "3", title: "Done", body: <>The card reads <span className="font-mono text-[13px]" style={{ color: SOL.green }}>Chrome connected</span>. Every agent on the machine now uses your Chrome.</> },
   ];
   return (
     <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #eadfc2", backgroundColor: "rgba(255,250,240,.75)" }}>
@@ -97,6 +96,20 @@ function SetupStrip() {
           <p className="mt-2 text-[13.5px] leading-6 pl-[34px]" style={{ color: SOL.base01 }}>{b.body}</p>
         </div>
       ))}
+      <div className="px-5 pb-5">
+        <img
+          src="/features/browser/agent-features-browser.webp"
+          alt="The Browser card on the Agent features page: a Cast tab beside your own, the On badge and its switch, and the line Agents check their own UI work in your Chrome, with your sign-ins."
+          width={856}
+          height={575}
+          loading="lazy"
+          className="block w-full h-auto rounded-lg"
+          style={{ border: "1px solid #eadfc2" }}
+        />
+        <p className="mt-2 font-mono text-[11.5px] leading-5" style={{ color: SOL.base01 }}>
+          Scripting it? <C>cast browser extension setup</C> does the same pairing from a terminal.
+        </p>
+      </div>
     </div>
   );
 }
@@ -142,7 +155,7 @@ function Closing() {
           <a href={STORE_URL} target="_blank" rel="noreferrer" className="inline-flex h-10 items-center rounded-lg px-4 font-semibold text-white" style={{ backgroundColor: CAST_RED }}>
             Codecast for Chrome
           </a>
-          <span className="font-mono text-[13px]" style={{ color: SOL.base01 }}>then <C dark>cast browser extension setup</C></span>
+          <span className="font-mono text-[13px]" style={{ color: SOL.base01 }}>then Pair it from Agent features</span>
         </div>
       </div>
     </section>

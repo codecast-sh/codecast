@@ -51,6 +51,29 @@ export function listImages(opts: { region: string; profile?: string }, platform:
 }
 
 /**
+ * The public base images: a clean macOS with codecast's runtimes, a managed
+ * `codecast` login signed into the desktop, and the computer helper's
+ * Accessibility and Screen Recording grants, which macOS only takes from a
+ * person at the screen. Built once by codecast and published from this
+ * account, so nobody's first Mac needs that person. They carry no logins,
+ * keys or device identity; each host sets its own password and takes its own
+ * launch key on first provision (hosts/macLogin.ts).
+ */
+export const BASE_IMAGE_OWNER = "767398104971";
+export const BASE_IMAGE_LOGIN = "codecast";
+
+export function baseImageName(platform: string, now = new Date()): string {
+  return `codecast-base-${platform}-${now.toISOString().slice(0, 10)}`;
+}
+
+/** The newest public codecast base image for a platform in this region, or null. */
+export function latestBaseImage(opts: { region: string; profile?: string }, platform: string): ImageRef | null {
+  const out = aws(opts, ["ec2", "describe-images", "--owners", BASE_IMAGE_OWNER, "--filters", `Name=name,Values=codecast-base-${platform}-*`, "Name=state,Values=available"]);
+  const newest = (out.Images ?? []).sort((a: any, b: any) => (a.CreationDate < b.CreationDate ? 1 : -1))[0];
+  return newest ? { id: newest.ImageId, name: newest.Name, created: newest.CreationDate, platform } : null;
+}
+
+/**
  * cloud-init user data for a host launched from a codecast image: once per
  * instance, early in boot, before the codecast daemon starts.
  */

@@ -111,6 +111,21 @@ export function Pane({ machine, title, right, children, className = "", bodyClas
   );
 }
 
+/** A real screenshot of the app, framed like the page's host panes. */
+export function Shot({ src, alt, width, height, className = "", eager = false }: { src: string; alt: string; width: number; height: number; className?: string; eager?: boolean }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      loading={eager ? "eager" : "lazy"}
+      className={`block w-full h-auto rounded-xl border ${className}`}
+      style={{ borderColor: "#0b4a5a", backgroundColor: "#0f2a33", boxShadow: "0 24px 60px -28px rgba(0,0,0,.6)" }}
+    />
+  );
+}
+
 /** A terminal block for either machine; lines are children. */
 export function Term({ machine, label, children }: { machine: "laptop" | "host"; label: string; children: ReactNode }) {
   const host = machine === "host";
