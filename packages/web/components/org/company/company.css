@@ -1,0 +1,23 @@
+/* The Org screen's panel (essence spec §5). Its width animates on open and
+   close only (OrgScreen marks the split while it moves); switching objects
+   crossfades. Nothing moves under reduced motion. */
+@keyframes org-panel-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.org-panel-swap { animation: org-panel-fade 120ms ease both; }
+.org-split[data-org-split-moving] > [data-panel] { transition: flex-grow 180ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .org-panel-swap { animation: none; }
+  .org-split[data-org-split-moving] > [data-panel] { transition: none; }
+}
+
+/* The Org screen's threads are for talking to a seat, not for driving its
+   session: the composer's permission mode, a lone dot here, is left out. */
+[data-org-conversation] [data-composer-mode] { display: none; }
+
+/* A phone-width sheet: the id chip goes, since the crumb and the tab already
+ * name the object, so the title keeps the head row. Measures the sheet body. */
+@container (max-width: 459px) {
+  .org-sheet-id { display: none; }
+}

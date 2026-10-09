@@ -223,7 +223,7 @@ describe("buildEntityUrl", () => {
     expect(buildEntityUrl("plan", "pl-42")).toBe("https://codecast.sh/plans/pl-42");
     expect(buildEntityUrl("session", CONVEX_ID)).toBe(`https://codecast.sh/conversation/${CONVEX_ID}`);
     expect(buildEntityUrl("doc", CONVEX_ID)).toBe(`https://codecast.sh/docs/${CONVEX_ID}`);
-    expect(buildEntityUrl("project", "proj-1")).toBe("https://codecast.sh/projects/proj-1");
+    expect(buildEntityUrl("project", "pj-1")).toBe("https://codecast.sh/org/pj-1");
   });
 
   test("accepts url-segment aliases and a custom base (trailing slash trimmed)", () => {
@@ -552,6 +552,9 @@ describe("contextual pull request references", () => {
     const m = contextualPrRefRegex().exec("PRs 3254 and 3253 (feedback), 3261 next")!;
     expect(splitContextualPrRefs(m[1], m[2], m[3]).map((t) => ("text" in t ? t.text : `<${t.label}>`)).join("")).toBe("PRs <3254> and <3253> (feedback), <3261>");
     expect(m[0]).toBe("PRs 3254 and 3253 (feedback), 3261");
+    // A "#" after the words belongs to the label, so "PR #6" never reads "PR ##6".
+    const hashed = contextualPrRefRegex().exec("Still blocked: PR #6 merges")!;
+    expect(splitContextualPrRefs(hashed[1], hashed[2], hashed[3]).map((t) => ("text" in t ? t.text : `<${t.label}>`)).join("")).toBe("PR <#6>");
   });
 
   test("the payload round-trips number, label and whether the number stood alone", () => {
@@ -597,9 +600,10 @@ describe("initiatives (in-N)", () => {
     expect(entityMentionRegex().exec("the @[checkout in-app] flow")?.slice(1, 3)).toEqual(["checkout in-app", undefined]);
   });
 
-  test("an initiative routes to its goal page and its url parses back, old address included", () => {
-    expect(entityRoute("initiative", "in-7")).toBe("/goals/in-7");
-    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/goals/in-7");
+  test("an initiative routes to its sheet on the Org screen and its url parses back, old addresses included", () => {
+    expect(entityRoute("initiative", "in-7")).toBe("/org/in-7");
+    expect(buildEntityUrl("initiative", "in-7")).toBe("https://codecast.sh/org/in-7");
+    expect(parseEntityUrl("https://codecast.sh/org/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(parseEntityUrl("https://codecast.sh/goals/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(parseEntityUrl("https://codecast.sh/initiatives/in-7")).toEqual({ type: "initiative", id: "in-7" });
     expect(normalizeEntityType("initiatives")).toBe("initiative");
@@ -629,9 +633,9 @@ describe("proposals (op-N)", () => {
     expect(buildEntityUrl("proposal", "op-3")).toBe("https://codecast.sh/org?proposal=op-3");
     expect(parseEntityUrl("https://codecast.sh/org?proposal=op-3")).toEqual({ type: "proposal", id: "op-3" });
     expect(parseEntityUrl("/org?proposal=op-3")).toEqual({ type: "proposal", id: "op-3" });
-    // The org page alone, or a role's page under it, names no proposal.
+    // The org page alone names no proposal, and a role's sheet under it names the role.
     expect(parseEntityUrl("/org")).toBeNull();
-    expect(parseEntityUrl("https://codecast.sh/org/or-7")).toBeNull();
+    expect(parseEntityUrl("https://codecast.sh/org/or-7")).toEqual({ type: "role", id: "or-7" });
     expect(normalizeEntityType("org")).toBe("proposal");
   });
 

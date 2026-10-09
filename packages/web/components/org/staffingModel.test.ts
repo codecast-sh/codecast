@@ -8,7 +8,9 @@ import {
   collectHealthFlags,
   areaRows,
   cadenceLabel,
-  needsYou,
+  decisionSubject,
+  workspaceOpenProposals,
+  inWorkspace,
   rolesInTreeOrder,
   findHeadOfPeople,
   groupChanges,
@@ -160,25 +162,34 @@ describe("health summary", () => {
     expect(areaRows(null, H)).toEqual([]);
   });
 
-  test("needs you: the org's decisions first, then a role waiting on the person, then an open proposal; a decision and its pin are one ask", () => {
-    const queue: any[] = [
-      { key: "decide:1", source: "decide", conversationId: "fixture-head-conv", question: "Which market goes first?", options: [{ label: "Texas" }, { label: "Ohio" }], blocking: true, createdAt: 10, decisionId: "sd1" },
-      { key: "decide:2", source: "decide", conversationId: "fixture-growth-conv", question: "Keep the ads?", options: [{ label: "Yes" }, { label: "No" }], kind: "multi", blocking: false, createdAt: 5, decisionId: "sd2" },
-      { key: "decide:3", source: "decide", conversationId: "somebody-elses-session", question: "Not ours", options: [], blocking: true, createdAt: 1, decisionId: "sd3" },
-      { key: "decide:4", source: "decide", conversationId: "fixture-growth-conv", question: "Held by the lead", options: [{ label: "a" }], blocking: true, createdAt: 2, decisionId: "sd4", heldByRole: true },
+  test("a decision opens the goal or project it cites when the workspace holds it, else the role that asked", () => {
+    const growth = { short_id: "or-3" };
+    const holds = (ref: string) => ref === "in-2" || ref === "pj-k3x";
+    expect(decisionSubject({ question: "Move pj-k3x under in-2?" }, growth, holds)).toEqual({ kind: "project", ref: "pj-k3x" });
+    expect(decisionSubject({ question: "Which list?", contextMd: "For In-2 only." }, growth, holds)).toEqual({ kind: "initiative", ref: "in-2" });
+    expect(decisionSubject({ question: "Close in-9 and in-app checkout?" }, growth, holds)).toEqual({ kind: "role", ref: "or-3" });
+    expect(decisionSubject({ question: "Anything" }, null, holds)).toBeNull();
+  });
+
+  test("open proposals of one workspace, newest first, by the one workspace rule", () => {
+    const rows = [
+      { _id: "a", status: "open" as const, created_at: 1, team_id: "t1" },
+      { _id: "b", status: "open" as const, created_at: 3, team_id: "t1" },
+      { _id: "c", status: "resolved" as const, created_at: 2, team_id: "t1" },
+      { _id: "d", status: "open" as const, created_at: 4 },
+      { _id: "e", status: "open" as const, created_at: 5, team_id: "t2" },
     ];
-    const items = needsYou(tree, H, queue, [P], null);
-    expect(items.map((i) => i.kind)).toEqual(["decision", "decision", "proposal"]);
-    // Oldest first; a multi-choice card opens rather than answers in place.
-    expect(items[0]).toMatchObject({ kind: "decision", canAnswerInPlace: false, role: { handle: "growth" } });
-    expect(items[1]).toMatchObject({ kind: "decision", canAnswerInPlace: true, role: { handle: "head-of-people" } });
-    // The Head of People's blocked pin is the same ask as its decision, so no second row for it.
-    expect(items.some((i) => i.kind === "blocked")).toBe(false);
-    expect(items[2]).toMatchObject({ kind: "proposal", remaining: 6 });
-    // Without the decision, the Head of People's pin is a row of its own; the shown proposal is not repeated.
-    const pin = needsYou(tree, H, [], [P], P);
-    expect(pin).toEqual([expect.objectContaining({ kind: "blocked", conversationId: "fixture-head-conv", line: "Which market goes first?" })]);
-    expect(needsYou(ORG_FIXTURE, H, [], [], null)).toEqual([]);
+    expect(workspaceOpenProposals(rows, { kind: "team", id: "t1" }).map((p) => p._id)).toEqual(["b", "a"]);
+    expect(workspaceOpenProposals(rows, { kind: "user", id: "u1" }).map((p) => p._id)).toEqual(["d"]);
+    expect(workspaceOpenProposals(rows, null).map((p) => p._id)).toEqual(["e", "d", "b", "a"]);
+  });
+
+  test("one workspace rule: a team's rows, the personal rows, or every row before a workspace is known", () => {
+    expect(inWorkspace({ team_id: "t1" }, { kind: "team", id: "t1" })).toBe(true);
+    expect(inWorkspace({ team_id: "t2" }, { kind: "team", id: "t1" })).toBe(false);
+    expect(inWorkspace({}, { kind: "user", id: "u1" })).toBe(true);
+    expect(inWorkspace({ team_id: "t1" }, { kind: "user", id: "u1" })).toBe(false);
+    expect(inWorkspace({ team_id: "t1" }, null)).toBe(true);
   });
 
   test("a cadence reads as words", () => {
