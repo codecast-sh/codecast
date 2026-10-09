@@ -276,3 +276,46 @@ describe("cachePolicy", () => {
     }
   });
 });
+
+// Living pages: the bar reads the publishing session's state from ?meta=1,
+// and the comment route carries each comment's "Send to agent" choice to the
+// mutation, which alone decides whether it is honored.
+import { comment as commentRoute, serve } from "./artifactsHttp";
+
+describe("living pages over HTTP", () => {
+  const artifact = {
+    _id: "a1", slug: "s1", title: "T", version: 4, updated_at: 100, kind: "html", views: 2,
+    comment_count: 1, open_comments: [{ id: "c1", text: "x", delivered: true, delivered_at: 150, role: "owner" }],
+    session_short_id: "jx1", session_title: "Session", owner_key: "ok",
+  };
+  const agent = { state: "working", since: 140, awaiting_since: 150 };
+
+  test("?meta=1 carries the session's agent state next to the comments", async () => {
+    const ctx = {
+      runQuery: async (fn: unknown) => {
+        const name = getFunctionName(fn as never);
+        if (name === "artifacts:bySlug") return artifact;
+        if (name === "artifacts:historyBySlug") return { ...artifact, versions: [{ version: 4, title: "T", size: 1, published_at: 100 }] };
+        if (name === "artifacts:agentStateBySlug") return agent;
+        throw new Error(`unexpected query ${name}`);
+      },
+    };
+    const res = await (serve as any)._handler(ctx, new Request("https://x/cli/a/s1?meta=1"));
+    const body = await res.json();
+    expect(body.agent).toEqual(agent);
+    expect(body.comments[0]).toMatchObject({ delivered: true, role: "owner" });
+  });
+
+  test("the comment route passes the batch and per-comment deliver flags through", async () => {
+    const calls: Array<Record<string, any>> = [];
+    const ctx = { runMutation: async (_fn: unknown, args: Record<string, any>) => { calls.push(args); return { delivered: true, count: 2 }; } };
+    await (commentRoute as any)._handler(ctx, new Request("https://x/cli/artifacts/comment", {
+      method: "POST",
+      body: JSON.stringify({ slug: "s1", author_name: "A", deliver: false, identity_token: "tok", comments: [
+        { text: "one", deliver: true }, { text: "two", deliver: "yes" }, { text: "three" },
+      ] }),
+    }));
+    expect(calls[0].deliver).toBe(false);
+    expect(calls[0].comments.map((c: any) => c.deliver)).toEqual([true, undefined, undefined]);
+  });
+});

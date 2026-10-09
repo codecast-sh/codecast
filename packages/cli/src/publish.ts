@@ -38,8 +38,11 @@ import {
   type ArtifactLsRow,
 } from "./publishCommand.js";
 import { apiPost, missingRouteError, type PublishDeps } from "./castApi.js";
-import { CAST_PLAYER_GUIDE, pageUsesPlayer } from "@codecast/shared/contracts";
+import { CAST_PLAYER_GUIDE, describePageAnchor, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
+import { readPageData, runPublishData } from "./publishData.js";
+import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
+import { renderMotion, staleRenderNote } from "./publishMotion.js";
 
 const WATCH_DEBOUNCE_MS = 400;
 const THUMB_TIMEOUT_MS = 10_000;
@@ -123,6 +126,8 @@ interface PublishPayload {
   media?: Array<{ path: string; abs: string; size: number }>;
   /** Local path of the html document a thumbnail should render. */
   entryHtmlPath?: string;
+  /** The bundle's cast-data.json: the live queries the page reads. */
+  data?: unknown;
 }
 
 /** Read the file/dir into the /cli/artifacts/publish payload. Throws with a
@@ -130,7 +135,9 @@ interface PublishPayload {
 export function buildPublishPayload(absPath: string, titleOverride?: string): PublishPayload {
   const stat = fs.statSync(absPath);
   if (stat.isDirectory()) {
-    const relPaths = walkBundleDir(absPath);
+    // cast-data.json declares the page's live queries; it travels as data, not as a served file.
+    const data = readPageData(absPath);
+    const relPaths = walkBundleDir(absPath).filter((p) => p !== PAGE_DATA_FILE);
     const entry = pickBundleEntry(relPaths);
     if (!entry.entry) throw new Error(entry.error);
     const files: NonNullable<PublishPayload["files"]> = [];
@@ -155,6 +162,7 @@ export function buildPublishPayload(absPath: string, titleOverride?: string): Pu
       kind: "bundle",
       files,
       ...(media.length ? { media } : {}),
+      ...(data ? { data } : {}),
       entryHtmlPath: path.join(absPath, entry.entry),
     };
   }
@@ -197,7 +205,7 @@ export function describeEvidence(evidence?: { task?: string | null; plan?: strin
 }
 
 export function printPublishResult(
-  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null } },
+  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null }; data?: { workspace: string; queries: number } },
   title: string,
   access?: Record<string, unknown>,
   showsVideo?: boolean,
@@ -214,6 +222,9 @@ export function printPublishResult(
   }
   if (access) {
     console.log(`  ${fmt.label("gates:")} ${describeAccess(access)}`);
+  }
+  if (result.data) {
+    console.log(`  ${fmt.label("data:")} ${result.data.queries} live quer${result.data.queries === 1 ? "y" : "ies"} in ${result.data.workspace}; check them with \`cast publish data ${result.url.split("/").pop()}\``);
   }
   if (showsVideo) {
     console.log(`  ${fmt.label("video:")} plays in the cast player; \`cast publish video\` covers chapters and styling it to the page`);
@@ -467,16 +478,14 @@ async function runComments(
   console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)} — ${open_.length} open`);
   for (const c of open_) {
     const who = c.author_email ? `${c.author_name} <${c.author_email}>` : c.author_name;
-    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(`${who} · v${c.version} · ${ago(c.created_at)}`)}`);
+    // role: "owner" | "teammate" may steer the agent; anyone else is a viewer.
+    const meta = [who, c.role ?? "viewer", `v${c.version}`, ago(c.created_at)];
+    if (c.delivered) meta.push("sent to agent");
+    else if (c.role) meta.push("not sent to agent");
+    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(meta.join(" · "))}`);
     for (const line of String(c.text).split("\n")) console.log(`    ${line}`);
-    if (c.anchor) {
-      try {
-        const snippet = JSON.parse(c.anchor)?.snippet;
-        if (snippet) console.log(fmt.muted(`    ↳ on: "${String(snippet).slice(0, 100)}"`));
-      } catch {
-        /* opaque anchor */
-      }
-    }
+    const where = describePageAnchor(parsePageAnchor(c.anchor));
+    if (where.length) console.log(fmt.muted(`    ↳ ${where.join(", ")}`));
   }
   console.log(fmt.muted(`  resolve: cast publish comments ${row.slug} --resolve <id>  |  --resolve-all`));
 }
@@ -533,6 +542,8 @@ interface PublishOptions {
   /** Evidence (the-line.md L6): the task (ct-N) or plan (pl-N) this page is for. */
   task?: string;
   plan?: string;
+  /** Render a HyperFrames composition directory to MP4 before publishing. */
+  render?: boolean;
 }
 
 /** The /cli/artifacts/publish body: the payload plus the flags of this publish. */
@@ -546,6 +557,7 @@ export function publishRequestBody(
     ...(payload.kind ? { kind: payload.kind } : {}),
     ...(payload.content !== undefined ? { content: payload.content } : {}),
     ...(payload.files ? { files: payload.files } : {}),
+    ...(payload.data ? { data: payload.data } : {}),
     ...(extra.forceNew ? { force_new: true } : {}),
     ...(extra.access ? { access: extra.access } : {}),
     ...(extra.sessionRef ? { session_ref: extra.sessionRef } : {}),
@@ -616,6 +628,25 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   }
   const access = accessFromOptions(options);
   const sessionRef = deps.detectCurrentSessionId() ?? undefined;
+  const isDir = fs.statSync(absPath).isDirectory();
+
+  if (options.render) {
+    if (!isDir) {
+      console.error(fmt.error("--render publishes a directory: put the composition in its own folder as index.html"));
+      process.exit(1);
+    }
+    try {
+      process.stderr.write(fmt.muted("rendering MP4 (hyperframes render)…\n"));
+      const manifest = renderMotion(absPath, walkBundleDir(absPath));
+      process.stderr.write(fmt.muted(`rendered ${manifest.mp4} (${formatBytes(manifest.bytes)})\n`));
+    } catch (err) {
+      console.error(fmt.error(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  } else if (isDir) {
+    const note = staleRenderNote(absPath, walkBundleDir(absPath));
+    if (note) process.stderr.write(fmt.muted(`note: ${note}\n`));
+  }
 
   let result: any;
   let title: string;
@@ -645,7 +676,6 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   console.log(fmt.muted(`\nwatching ${target} — Ctrl+C to stop`));
   console.log(fmt.muted(`live view: ${result.url}?live=1`));
 
-  const isDir = fs.statSync(absPath).isDirectory();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let publishing = false;
   let dirty = false;
@@ -705,7 +735,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
   program
     .command("publish")
     .description(commandGroup("publish").description)
-    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | video")
+    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video")
     .argument("[args...]", "subcommand arguments")
     .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
@@ -726,8 +756,10 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--task <ct-N>", "Attach the page to a task as evidence at its current station (default: the session's active task)")
     .option("--plan <pl-N>", "Attach the page to a plan")
     .option("--open", "Open the published URL in the browser")
+    .option("--render", "Render a HyperFrames composition directory to MP4 and offer it on the page (slow; only when an MP4 is wanted)")
     .option("--resolve <id>", "comments: mark one comment resolved")
     .option("--resolve-all", "comments: mark every open comment resolved")
+    .option("--refresh", "data: run the page's queries now and wait for the rows")
     .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
       const json = !!options.json;
       if (!target) {
@@ -767,6 +799,13 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
           return runComments(deps, sub, { resolveId: o.resolve, resolveAll: !!o.resolveAll, json });
         }
         return runSet(deps, sub, options, json);
+      }
+      if (target === "data" && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error("Usage: cast publish data <slug|path> [query-id] [--refresh] [--json]"));
+          process.exit(1);
+        }
+        return runPublishData(deps, args[0], args[1], { refresh: !!(options as { refresh?: boolean }).refresh, json });
       }
       if (target === "open" && !fs.existsSync(target)) {
         if (!args[0]) {

@@ -6,7 +6,7 @@
 // is and every value that shapes it, edited in place through the line's edit
 // path, LX5), with asking an agent for a change (LX6) pinned to its footer so
 // it is always in reach. An edge's panel is the items that crossed it.
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, createContext, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowUpRight, ChevronRight, MessageSquarePlus, X } from "lucide-react";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
@@ -18,7 +18,7 @@ import { projectSig } from "../useLineFloor";
 import { LINE_FIELDS } from "../../../lib/lineSettings";
 import { decisionHref, runHref } from "../../../lib/decisionLinks";
 import { stationHistory, stationWords, type LineVersion } from "../../../lib/line/runReport";
-import { usualStay, type LineMap, type MapEdge, type MapItem, type MapLeft, type MapNode } from "../../../lib/line/lineMap";
+import { usualStay, type LineMap, type MapEdge, type MapItem, type MapLeft, type MapNode, type MapPassed } from "../../../lib/line/lineMap";
 import { lineTraceHref } from "../../../lib/line/lineMapUrl";
 import { KeyCap } from "../../KeyboardShortcutsHelp";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
@@ -34,6 +34,11 @@ import { admissionHold } from "../../../lib/lineFlow";
 import { useLineCauseActions } from "./useLineCause";
 import type { useLineAdmission } from "./useLineAdmission";
 import { edgeWords, throughWord } from "./LineMap";
+import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
+import { WHO_WORDS, gateAnswers, readableTemplate, stationPurpose, stationRefOf, stationWho, type GraphEdgeIn, type GraphNodeIn } from "../../../lib/line/lineGraphs";
+import { windowWords } from "../../../lib/line/lineMetricsWords";
+import { sourceSentence } from "../../../lib/line/lineSources";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import "../settings/settings.css";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -45,17 +50,21 @@ const END_WORDS: Record<string, string> = {
   reopened: "The problem came back during the watch, so the cause opened again.",
   dissolved: "Closed without a change: the problem did not reproduce.",
   dropped: "Closed without a change, by a person's answer.",
-  stopped: "The run ended without a change and without closing the cause: a refused card, a failed ship, an eval that could not score, or a run that failed.",
+  stopped: "The run ended without a change and without closing the cause: a refused decision, a failed ship, an eval that could not score, or a run that failed.",
 };
 
-export function nodeWhat(n: MapNode, projectId?: string | null): string {
+/** The graph's own station for a map node, for its purpose and instructions. */
+const graphNodeOf = (n: MapNode, stations?: PanelStations | null): GraphNodeIn => stations?.nodes.find((x) => x.id === n.id)
+  ?? { id: n.id, label: n.label, type: n.who === "person" ? "human" : n.who === "script" ? "command" : "agent" };
+
+export function nodeWhat(n: MapNode, projectId?: string | null, stations?: PanelStations | null, kinds: string[] = []): string {
   if (n.kind === "causes" && projectId === null) return "Open causes filed under no project. No line runs them until each is moved into a project.";
   if (n.kind === "expectations") return "What this project's agents should do, one cited line each. Finders that judge behavior grade against them.";
-  if (n.kind === "source") return n.finder ? `Files signals into this line: ${n.finder.kind === "any" ? "any kind" : n.finder.kind.join(", ")}, grouped by ${n.finder.fingerprint}.` : "Files signals into this line.";
-  if (n.kind === "signals") return "Every signal filed into the line. A signal joins the open cause that shares its fingerprint, or opens a new one.";
-  if (n.kind === "causes") return "The admission queue: open causes, ranked by goal and how often they were seen. While admission is on and a slot is free, the line starts the top one.";
+  if (n.kind === "source") return sourceSentence(n.source ?? n.label, n.finder, kinds);
+  if (n.kind === "signals") return "Every signal any source reported. A signal that matches a cause already open joins it; anything new opens a cause of its own.";
+  if (n.kind === "causes") return "Open causes waiting their turn, the most important first. While the line is switched on and has room, it starts the top one.";
   if (n.kind === "end") return END_WORDS[n.end ?? ""] ?? "";
-  return stationWords(n.id) ?? "A step of this project's line.";
+  return stationPurpose(graphNodeOf(n, stations), stations?.edges ?? []) || stationWords(n.id) || "A step of this project's line.";
 }
 
 /** The profile values that shape each node, by node id or kind (LP2). */
@@ -79,10 +88,10 @@ export const nodeFields = (id: string) => (NODE_FIELDS[id] ?? []).map((k) => LIN
 
 const isStationKind = (n: MapNode) => n.kind === "station" || n.kind === "decide" || n.kind === "ship" || n.kind === "watch";
 
-const ITEM_WORDS: Record<MapItem["kind"], string> = { signal: "signal", cause: "cause", run: "run", decision: "card" };
+const ITEM_WORDS: Record<MapItem["kind"], string> = { signal: "signal", cause: "cause", run: "run", decision: "decision" };
 
 const LEFT_WORDS: Record<MapLeft, string> = {
-  moved: "moved on", failed: "failed", live: "still here", held: "held", reopened: "reopened", dissolved: "dissolved", dropped: "dropped", stopped: "stopped", parked: "parked",
+  moved: "went on", failed: "failed", live: "still here", held: "held", reopened: "reopened", dissolved: "dissolved", dropped: "dropped", stopped: "stopped", parked: "parked",
 };
 
 /** Where an item opens: its run, its card, else its cause. */
@@ -105,11 +114,18 @@ export type PanelProps = {
   onTrace: (ref: string) => void;
   onSelectNode: (id: string) => void;
   onClose: () => void;
+  /** The tab the panel opens on (the map URL's `section`), else its first. */
+  section?: string | null;
   /** Whether the line may start its next cause, and its controls (Causes' Health). */
   admit?: ReturnType<typeof useLineAdmission>;
   /** What each version of the project's line delivered, for a station's own history (LX3). */
   versions?: LineVersion[];
+  /** The graph on show, with each station's instructions; `foreign` when it is not codecast's line (lineGraphs). */
+  stations?: PanelStations | null;
+  graphTitle?: string | null;
 };
+
+export type PanelStations = { nodes: GraphNodeIn[]; edges: GraphEdgeIn[]; foreign: boolean };
 
 export function LineMapPanel(p: PanelProps) {
   const byId = useMemo(() => new Map(p.map.nodes.map((n) => [n.id, n])), [p.map.nodes]);
@@ -118,45 +134,18 @@ export function LineMapPanel(p: PanelProps) {
   return null;
 }
 
-function PanelFrame({ title, kicker, what, onClose, nav, children, foot, data }: { title: ReactNode; kicker?: ReactNode; what?: ReactNode; onClose: () => void; nav?: string[]; children: ReactNode; foot?: ReactNode; data: Record<string, string> }) {
-  // The section strip tracks where the body is scrolled, so it says where you are.
+/** The section a tabbed panel shows; a section outside the tabs always shows. */
+const ActiveTab = createContext<{ active: string | null; tabs: string[] }>({ active: null, tabs: [] });
+
+function PanelFrame({ title, kicker, what, onClose, nav, section, children, foot, data }: { title: ReactNode; kicker?: ReactNode; what?: ReactNode; onClose: () => void; nav?: string[]; section?: string | null; children: ReactNode; foot?: ReactNode; data: Record<string, string> }) {
+  // The tabs switch the body: one section at a time, so the highlight is
+  // always the section on screen. A node opens on the tab its link names, else its first.
   const body = useRef<HTMLDivElement>(null);
-  const [active, setActive] = useState<string | null>(nav?.[0] ?? null);
-  // A picked tab jumps at once (smooth scrolling stalls in a background tab
-  // and lags a click anywhere) and holds the highlight until the scroll lands
-  // where the jump aimed, so neither the spy's first pass nor a short last
-  // section reached at the bottom takes the highlight from the one picked.
-  // A scroll that lands anywhere else is the viewer's own, and the spy resumes.
-  const picked = useRef<number | null>(null);
-  useEffect(() => {
-    const el = body.current;
-    if (!el || !nav?.length) return;
-    const spy = () => {
-      if (picked.current != null) {
-        const landed = Math.abs(el.scrollTop - picked.current) <= 2;
-        picked.current = null;
-        if (landed) return;
-      }
-      // The section whose top is nearest the body's top edge from above (or
-      // the first, before any has reached it) is the one being read.
-      const top = el.getBoundingClientRect().top + 32;
-      let at = nav[0];
-      let best = -Infinity;
-      for (const s of nav) {
-        const t = el.querySelector<HTMLElement>(`#lmap-${s.toLowerCase()}`)?.getBoundingClientRect().top;
-        // Strictly nearer only: sections stacked at one top go to the first of them.
-        if (t != null && t <= top && t > best) { best = t; at = s; }
-      }
-      // Scrolled to the end by the viewer: a short last section can never reach
-      // the top, so the bottom stands for it. A body too short to scroll sits at
-      // its end from the start, and there the first section still leads.
-      if (el.scrollTop > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 2) at = nav[nav.length - 1];
-      setActive((a) => (a === at ? a : at));
-    };
-    spy();
-    el.addEventListener("scroll", spy, { passive: true });
-    return () => el.removeEventListener("scroll", spy);
-  }, [nav]);
+  const opening = () => nav?.find((s) => s.toLowerCase() === section?.toLowerCase()) ?? nav?.[0] ?? null;
+  const [active, setActive] = useState<string | null>(opening);
+  const key = data["data-map-panel"] ?? "";
+  useWatchEffect(() => setActive(opening()), [key, section, nav?.join("|")]);
+  const tabs = useMemo(() => (nav ?? []).map((s) => s.toLowerCase()), [nav]);
   return (
     <aside className="lmap-panel" aria-label="Details" {...data}>
       <div className="lmap-panel-head">
@@ -170,31 +159,27 @@ function PanelFrame({ title, kicker, what, onClose, nav, children, foot, data }:
         {what && <p className="lmap-panel-what">{what}</p>}
       </div>
       {nav && (
-        <nav className="lmap-panel-nav" aria-label="Sections">
+        <nav className="lmap-panel-nav" role="tablist" aria-label="Sections">
           {nav.map((s) => (
             <a
               key={s}
               href={`#lmap-${s.toLowerCase()}`}
+              role="tab"
+              aria-selected={active === s}
               aria-current={active === s ? "true" : undefined}
               data-map-nav={s.toLowerCase()}
               onClick={(e) => {
                 e.preventDefault();
-                const sec = body.current?.querySelector<HTMLElement>(`#lmap-${s.toLowerCase()}`);
-                // Rects, not offsetTop: the body is not the sections' offset parent.
-                const el = body.current;
-                if (sec && el) {
-                  const top = Math.round(Math.max(0, Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + sec.getBoundingClientRect().top - el.getBoundingClientRect().top - 4)));
-                  // Already there: no scroll event will come, so nothing to hold for.
-                  picked.current = Math.abs(top - el.scrollTop) > 2 ? top : null;
-                  el.scrollTo({ top, behavior: "auto" });
-                }
                 setActive(s);
+                body.current?.scrollTo({ top: 0, behavior: "auto" });
               }}
-            >{s}</a>
+            >{NAV_LABEL[s] ?? s}</a>
           ))}
         </nav>
       )}
-      <div ref={body} className="lmap-panel-body">{children}</div>
+      <ActiveTab.Provider value={{ active: active?.toLowerCase() ?? null, tabs }}>
+        <div ref={body} className="lmap-panel-body">{children}</div>
+      </ActiveTab.Provider>
       {foot}
     </aside>
   );
@@ -202,8 +187,13 @@ function PanelFrame({ title, kicker, what, onClose, nav, children, foot, data }:
 
 /** `hideTitle`: the tab strip already names the section (Now leads the body), so its heading is for screen readers only. */
 function Section({ id, title, aside, hideTitle, children }: { id: string; title: string; aside?: ReactNode; hideTitle?: boolean; children: ReactNode }) {
+  const { active, tabs } = useContext(ActiveTab);
+  // A tabbed panel shows its picked tab only (the others stay mounted, so
+  // what was typed or opened in them survives a switch); the tab names it.
+  const off = !!active && tabs.includes(id) && id !== active;
+  hideTitle = hideTitle || (!!active && tabs.includes(id) && !aside);
   return (
-    <section id={`lmap-${id}`} className="lmap-sec" data-map-section={id}>
+    <section id={`lmap-${id}`} className="lmap-sec" data-map-section={id} hidden={off} role={tabs.includes(id) ? "tabpanel" : undefined}>
       <h3 className={hideTitle ? "sr-only" : "lmap-sec-title"}>{title}{aside && <small>{aside}</small>}</h3>
       {children}
     </section>
@@ -215,18 +205,21 @@ function Section({ id, title, aside, hideTitle, children }: { id: string; title:
 /** Lists in the panel show this many rows, then "Show all". */
 const ROWS_SHOWN = 8;
 
-function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClose, admit, versions }: PanelProps & { node: MapNode }) {
+function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClose, onSelectNode, section, admit, versions, stations, graphTitle }: PanelProps & { node: MapNode }) {
   const asks = n.id === CARD_GATE_NODE_ID ? flow.awaiting.items : [];
   const label = map.window.label;
   // A source never holds work, so its panel opens on what it filed (LX3).
   const holdsNothing = n.kind === "source";
   return (
     <PanelFrame
-      title={n.label}
-      kicker={<span className="lmap-chip" data-tone="muted">{kindWords(n)}</span>}
-      what={nodeWhat(n, projectId)}
+      // The step's name is the graph file's own ("Stamp"), as on the map and
+      // in every trace; a name in shop talk gets its plain words beside it.
+      title={<>{n.label}{n.plainLabel && <span className="lmap-panel-file" title="What this step does, in plain words" data-map-plain-label> {n.plainLabel}</span>}</>}
+      kicker={<span className="lmap-chip" data-tone={n.who === "person" ? "ask" : "muted"} data-map-who={n.who}>{kindWords(n)}</span>}
+      what={nodeWhat(n, projectId, stations, n.kind === "source" ? flow.sense.items.find((s) => s.source.toLowerCase() === n.source?.toLowerCase())?.kinds : [])}
       onClose={onClose}
       nav={holdsNothing ? NODE_NAV_PASSING : NODE_NAV}
+      section={section}
       foot={<AskBar node={n} projectId={projectId} />}
       data={{ "data-map-panel": n.id }}
     >
@@ -245,7 +238,7 @@ function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClo
           : asks.length === 0 && <p className="lmap-empty">{emptyNow(n)}</p>}
       </Section>}
 
-      <Section id="through" title="Through" aside={`the last ${label}`}>
+      <Section id="through" title="Recent" aside={windowWords(label)}>
         <Through node={n} map={map} now={now} tracing={tracing} onTrace={onTrace} />
       </Section>
 
@@ -255,14 +248,16 @@ function NodePanel({ map, node: n, projectId, flow, now, tracing, onTrace, onClo
         {n.kind === "causes" && admit?.admission && !admit.admission.noProject && <AdmissionRow admit={admit} hold={flow.causes.hold} />}
       </Section>
 
-      <Section id="definition" title="Definition">
-        <Definition node={n} projectId={projectId} flow={flow} now={now} versions={versions} />
+      <Section id="definition" title="How it works">
+        <Definition node={n} projectId={projectId} flow={flow} now={now} versions={versions} stations={stations} graphTitle={graphTitle} onSelectNode={onSelectNode} />
       </Section>
     </PanelFrame>
   );
 }
 
 const NODE_NAV = ["Now", "Through", "Health", "Definition"];
+/** What the tabs say; their ids stay the sections' own. */
+const NAV_LABEL: Record<string, string> = { Through: "Recent", Definition: "How it works" };
 const NODE_NAV_PASSING = NODE_NAV.slice(1);
 
 /** The panel's footer, always in view: one line that opens the composer
@@ -272,7 +267,7 @@ const NODE_NAV_PASSING = NODE_NAV.slice(1);
 function AskBar({ node: n, projectId: own }: { node: MapNode; projectId: string | null }) {
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
-  useEffect(() => setOpen(false), [n.id]);
+  useWatchEffect(() => setOpen(false), [n.id]);
   const projectId = own ?? picked;
   const pickedTitle = useProjectTitle(own ? null : picked);
   return (
@@ -366,11 +361,11 @@ function MoveToProject({ item }: { item: MapItem }) {
 }
 
 function kindWords(n: MapNode): string {
-  if (n.kind === "source") return n.undeclared ? "undeclared source" : "source";
-  if (n.kind === "end") return "end";
-  if (n.kind === "decide") return "your answer";
+  if (n.kind === "source") return "source";
+  if (n.kind === "end") return "where runs end";
   if (n.kind === "expectations" || n.kind === "signals" || n.kind === "causes") return "intake";
-  return n.main ? "station" : "branch";
+  if (n.who === "person") return "you decide here";
+  return n.who ? `done by ${WHO_WORDS[n.who].toLowerCase()}` : "step";
 }
 
 function emptyNow(n: MapNode): string {
@@ -594,18 +589,32 @@ function Through({ node: n, map, now, tracing, onTrace }: { node: MapNode; map: 
   if (n.passed.length) {
     const tally = new Map<MapLeft, number>();
     for (const v of n.passed) tally.set(v.left, (tally.get(v.left) ?? 0) + 1);
-    const items = n.passed.map((v) => ({ ...v.item, at: v.at }));
-    const visit = new Map(n.passed.map((v, i) => [i, v]));
+    // One row per cause, its newest visit, and every run that brought it
+    // here; a cause run twice never reads as two rows of the same title.
+    const byCause = new Map<string, { v: MapPassed; times: number; runs: MapPassed[] }>();
+    for (const v of n.passed) {
+      const key = v.item.taskId ?? v.item.title.trim().toLowerCase();
+      const had = byCause.get(key);
+      if (!had) byCause.set(key, { v, times: 1, runs: [v] });
+      else { had.times++; had.runs.push(v); if (v.at > had.v.at) had.v = v; }
+    }
+    const rows = [...byCause.values()].sort((a, b) => b.v.at - a.v.at);
+    const items = rows.map(({ v }) => ({ ...v.item, at: v.at }));
+    const visit = new Map(rows.map((r, i) => [i, r]));
     return (
       <>
         <div className="lmap-left-bar" role="img" aria-label={[...tally].map(([k, c]) => `${c} ${LEFT_WORDS[k]}`).join(", ")}>
           {[...tally].map(([k, c]) => <span key={k} data-left={k} style={{ flex: c }} title={`${c} ${LEFT_WORDS[k]}`} />)}
         </div>
-        <p className="lmap-empty mb-1">{[...tally].map(([k, c]) => `${c} ${LEFT_WORDS[k]}`).join(", ")}.</p>
+        <p className="lmap-empty mb-1" data-map-passed-words>{passedWords(n, map, byId)}</p>
         <ItemsWithIndex items={items} node={n} now={now} tracing={tracing} onTrace={onTrace} right={(i) => {
-          const v = visit.get(i)!;
-          const where = v.to && v.left === "moved" ? `to ${byId.get(v.to) ?? v.to}` : LEFT_WORDS[v.left];
-          return <>{where}{v.durationMs != null ? `, ${v.durationMs < 60_000 ? "under a minute" : ageShort(v.durationMs)}` : ""}</>;
+          const { v, times, runs } = visit.get(i)!;
+          const where = (x: MapPassed) => (x.to && x.left === "moved" ? `to ${byId.get(x.to) ?? x.to}` : LEFT_WORDS[x.left]);
+          const took = (x: MapPassed) => (x.durationMs != null ? `, took ${x.durationMs < 60_000 ? "under a minute" : ageShort(x.durationMs)}` : "");
+          if (times === 1) return <>{where(v)}{took(v)}</>;
+          // Several runs of one cause: each by its number on the cause, oldest first.
+          const ordered = [...runs].sort((a, b) => a.at - b.at);
+          return <span data-map-cause-runs={times}>{ordered.map((x, k) => <Fragment key={k}>{k > 0 && " / "}<span title={`${where(x)}${took(x)}`}>run {k + 1}</span></Fragment>)}{`: ${where(v)}${took(v)}`}</span>;
         }} />
       </>
     );
@@ -643,17 +652,19 @@ function Health({ node: n, label, sense, now }: { node: MapNode; label: string; 
 
 function healthyWords(n: MapNode, label: string): string {
   if (n.through === 0 && n.now.length === 0) return `Quiet: nothing reached it in the last ${label}.`;
-  if (n.kind === "source") return "Filing as expected.";
+  if (n.kind === "source") return "Healthy: it is reporting as usual.";
   if (n.kind === "end") return `${n.through} ended here in the last ${label}.`;
   return `Nothing wrong in the last ${label}.`;
 }
 
 /** What shapes the node, edited in place: finder declarations, a station's prompt, script and timeout, the profile values it reads, the expectations. */
-function Definition({ node: n, projectId, flow, now, versions }: { node: MapNode; projectId: string | null; flow: LineFlow; now: number; versions?: LineVersion[] }) {
-  if (!projectId) return <p className="lmap-empty">This map draws the shipped line. Work filed under no project has no settings and nothing runs it: move a cause into a project to run it through that project's line.</p>;
+function Definition({ node: n, projectId, flow, now, versions, stations, graphTitle, onSelectNode }: { node: MapNode; projectId: string | null; flow: LineFlow; now: number; versions?: LineVersion[]; stations?: PanelStations | null; graphTitle?: string | null; onSelectNode?: (id: string) => void }) {
+  if (!projectId) return <p className="lmap-empty">This map draws codecast's line. Causes filed under no project have no settings and nothing runs them: move a cause into a project to run it through that project's line.</p>;
   if (n.kind === "expectations") return <ExpectationsPanel projectId={projectId} scroll={false} />;
+  if (stations?.foreign && isStationKind(n)) return <StationInstructions node={graphNodeOf(n, stations)} stations={stations} graphTitle={graphTitle ?? "this line"} onSelectNode={onSelectNode} />;
   return (
     <div className="flex flex-col gap-3">
+      {n.who === "person" && <GateAnswers answers={gateAnswers(n.id, stations?.edges ?? [])} />}
       {isStationKind(n) && <StationDefinition projectId={projectId} stationId={n.id} />}
       {isStationKind(n) && versions && <StationHistory history={stationHistory(versions, n.id)} />}
       <ProfileValues node={n} projectId={projectId} flow={flow} now={now} />
@@ -686,7 +697,6 @@ function ProfileValues({ node: n, projectId, flow, now }: { node: MapNode; proje
           {fields.map((f) => <ProfileFieldRow key={f.key} field={f} lp={lp} writable={gate.writable} states={edits.states} device={device} now={edits.now} send={edits.send} clear={edits.clear} />)}
         </div>
       )}
-      {!edits.lp && <p className="lmap-cli" data-map-cli>Or in the checkout: <code>cast line profile --publish</code></p>}
     </div>
   );
 }
@@ -734,7 +744,7 @@ function AdmissionRow({ admit, hold: queueHold }: { admit: NonNullable<PanelProp
     <div className="lset-rows mt-2" data-map-admission={a.on ? "on" : "off"}>
       <LineValueRow
         label="Admission"
-        what={`@${a.role.handle} starts the top cause while a slot is free. Each run holds a slot until its card is answered.`}
+        what={`@${a.role.handle} starts the top cause while a slot is free. Each run holds a slot until you decide on its fix.`}
         note={a.role.paused ? `@${a.role.handle} is paused; nothing starts until it resumes.` : null}
         status={hold && !a.role.paused && a.on ? <span className="lset-status" data-state="warn" role="status">{hold.short}</span> : busy && a.on ? <span className="lset-status" data-state="saved">{busy}</span> : null}
       >
@@ -746,18 +756,18 @@ function AdmissionRow({ admit, hold: queueHold }: { admit: NonNullable<PanelProp
           onClick={() => admit.setOn(!a.on)}
           title={a.on ? "Stop starting causes on its own" : "Start causes on its own"}
           data-map-admission-switch
-        >{a.sweepOff ? (a.on ? "on, but the sweep is off" : "off") : a.on ? "on" : "off"}</button>
+        >{a.sweepOff ? (a.on ? "on, but starting is off everywhere" : "off") : a.on ? "on" : "off"}</button>
         {a.on && !a.sweepOff && (
           <>
-            <span className="lset-unit">at</span>
+            <span className="lset-unit">up to</span>
             <InlineEdit text={String(a.slots)} label="Admission slots" onCommit={commit} display={<span data-map-admission-slots>{a.slots}</span>} />
-            <span className="lset-unit">{a.slots === 1 ? "slot" : "slots"}</span>
+            <span className="lset-unit">at a time</span>
           </>
         )}
       </LineValueRow>
       {a.sweepOff && (
         <p className="lmap-empty break-words" data-map-sweep-off>
-          Codecast&apos;s line sweep is off for every line, so nothing starts on its own whatever this switch says. It turns on in code: <code>LINE_SWEEP_ON</code> in <code className="break-all">packages/convex/convex/lib/lineSweep.ts</code>, then a convex deploy. Until then, start a cause by hand.
+          Automatic starting is switched off in codecast itself for every line, so nothing starts on its own whatever this switch says. Until it is switched back on, start a cause by hand from its row under Causes.
         </p>
       )}
     </div>
@@ -786,5 +796,72 @@ function EdgePanel({ map, edge: e, byId, now, tracing, onTrace, onSelectNode, on
         {items.length ? <Items items={items} now={now} tracing={tracing} onTrace={onTrace} /> : <p className="lmap-empty">Nothing crossed in the last {map.window.label}.</p>}
       </Section>
     </PanelFrame>
+  );
+}
+
+/** What passed a station in the window, in one sentence: how many, and where
+ *  they went ("10 runs went through this step in the last 30 days, all went on to Analyze"). */
+export function passedWords(n: MapNode, map: LineMap, byId: Map<string, string>): string {
+  const total = n.passed.length;
+  const head = `${total} ${total === 1 ? "run" : "runs"} went through this step in ${windowWords(map.window.label)}`;
+  const parts = new Map<string, number>();
+  for (const v of n.passed) {
+    const key = v.left === "moved" && v.to ? `went on to ${byId.get(v.to) ?? v.to}` : v.left === "live" ? "are still here" : `${LEFT_WORDS[v.left]}`;
+    parts.set(key, (parts.get(key) ?? 0) + 1);
+  }
+  const ranked = [...parts].sort((a, b) => b[1] - a[1]);
+  if (ranked.length === 1) return `${head}, ${total === 1 ? "and it" : "all"} ${ranked[0][0].replace(/^are /, total === 1 ? "is " : "are ")}.`;
+  return `${head}: ${ranked.map(([k, c]) => `${c} ${k.replace(/^are /, c === 1 ? "is " : "are ")}`).join(", ")}.`;
+}
+
+/** A station of a graph that is not codecast's line: who does it and its
+ *  instructions in full, read only, since the graph lives in its project's
+ *  repo and changes there. */
+function StationInstructions({ node, stations, graphTitle, onSelectNode }: { node: GraphNodeIn; stations: PanelStations; graphTitle: string; onSelectNode?: (id: string) => void }) {
+  const prompt = typeof node.prompt === "string" ? readableTemplate(node.prompt.trim(), stations.nodes) : "";
+  const script = typeof node.script === "string" ? node.script.trim() : "";
+  const person = stationWho(node) === "person";
+  const answers = person ? gateAnswers(node.id, stations.edges) : [];
+  return (
+    <div className="flex flex-col gap-2" data-station-instructions={node.id}>
+      <GateAnswers answers={answers} />
+      {prompt ? (
+        <>
+          <p className="lmap-empty">{person ? "What you are shown:" : "The agent's instructions, in full:"}</p>
+          {/* A step named in the text opens its own panel (readableTemplate links it). */}
+          <div
+            className="lmap-instructions" data-station-prompt
+            onClickCapture={(e) => {
+              const id = stationRefOf((e.target as HTMLElement).closest("a")?.getAttribute("href"));
+              if (!id) return;
+              e.preventDefault();
+              e.stopPropagation();
+              onSelectNode?.(id);
+            }}
+          ><MarkdownRenderer content={prompt} /></div>
+        </>
+      ) : script ? (
+        <>
+          <p className="lmap-empty">A script runs this step:</p>
+          <pre className="lmap-script" data-station-script>{script}</pre>
+        </>
+      ) : (
+        <p className="lmap-empty">Its instructions are not shared with you: the line records that this step ran, not what it was told.</p>
+      )}
+      <p className="lmap-empty">This step belongs to {graphTitle}, which lives in the project's own repository and changes there.</p>
+    </div>
+  );
+}
+
+/** A person's step: the answers they can give there, and what each does. */
+function GateAnswers({ answers }: { answers: ReturnType<typeof gateAnswers> }) {
+  if (!answers.length) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="lmap-empty">Your answers here, and what each does:</p>
+      <ul className="lmap-answers" data-station-answers>
+        {answers.map((a) => <li key={a.answer}><b>{a.answer}</b>{a.does && <span>{a.does}</span>}</li>)}
+      </ul>
+    </div>
   );
 }
