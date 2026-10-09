@@ -10,11 +10,13 @@ import { mintVisitor } from "../src/lib/mint";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { APP_DAILY_BUDGET_USD, BUILD_CEILING_USD, GLOBAL_DAILY_BUDGET_USD, HERE_MAX, RATE, RATE_WINDOW_MAX_MS, REPORT_REASON_MAX, TRIAGE_CEILING_USD } from "./lib/limits";
+import { APP_DAILY_BUDGET_USD, BUILD_CEILING_USD, GLOBAL_DAILY_BUDGET_USD, HERE_MAX, RATE, RATE_WINDOW_MAX_MS, REPORT_REASON_MAX, TRIAGE_CEILING_USD, VISITOR_DAILY_BUDGET_USD } from "./lib/limits";
 import { PRESENCE } from "./lib/presence";
 import { PROOF_BITS, PROOF_BITS_FLOOD, proofHolds, solveProof } from "./lib/proof";
 import { newSecret, sha256Hex } from "./lib/identity";
 import { TALLY, dayKey } from "./tallies";
+import { chargeSpend } from "./builder/queue";
+import { CROWD_FACES, insertPresence } from "./presence";
 
 beforeAll(() => jest.useFakeTimers());
 afterAll(() => jest.useRealTimers());
@@ -221,8 +223,26 @@ describe("the global budget counts builds still running", () => {
   test("the app page's paused line reads charged spend only", async () => {
     const s = await setup();
     await spentWithRunning(s, GLOBAL_DAILY_BUDGET_USD - BUILD_CEILING_USD, 5);
-    const slug = (await s.t.run((ctx) => ctx.db.get(s.app_id)))!.slug;
-    expect((await s.t.query(api.apps.get, { ...s.A, slug }))?.builds_paused).toBeNull();
+    expect(await s.t.query(api.apps.buildsPaused, { ...s.A, app_id: s.app_id })).toBeNull();
+  });
+});
+
+describe("the paused line wakes only when a budget is crossed", () => {
+  test("a charge that uses up a budget marks it, and giving back clears the mark", async () => {
+    const s = await setup();
+    const asker = s.A.visitor_id as Id<"visitors">;
+    const charge = (usd: number, by?: Id<"visitors">) => s.t.run((ctx) => chargeSpend(ctx, s.app_id, by, usd));
+    const paused = () => s.t.query(api.apps.buildsPaused, { ...s.A, app_id: s.app_id });
+    const marks = async () => (await s.t.run((ctx) => ctx.db.query("tallies").collect())).filter((r) => r.key.startsWith("over:")).map((r) => r.key);
+    await charge(APP_DAILY_BUDGET_USD / 2);
+    await charge(APP_DAILY_BUDGET_USD / 4);
+    expect([await paused(), await marks()]).toEqual([null, []]);
+    await charge(APP_DAILY_BUDGET_USD / 4);
+    expect([await paused(), await marks()]).toEqual([expect.stringMatching(/This app/), [`over:${TALLY.appSpend(s.app_id)}`]]);
+    await charge(-APP_DAILY_BUDGET_USD / 2);
+    expect([await paused(), await marks()]).toEqual([null, []]);
+    await charge(VISITOR_DAILY_BUDGET_USD, asker);
+    expect(await paused()).toMatch(/a lot of changes today/);
   });
 });
 
@@ -233,7 +253,7 @@ describe("a flooded room stays a bounded read", () => {
     await s.t.run(async (ctx) => {
       for (let i = 0; i < HERE_MAX + 5; i++) {
         const visitor = await ctx.db.insert("visitors", { secret_hash: "x", created_at: now });
-        await ctx.db.insert("presence", { app_id: s.app_id, visitor_id: visitor, joined_at: now - i, last_seen: now - i, typing_until: 0, viewing_version: null });
+        await insertPresence(ctx, s.app_id, visitor, now - i);
       }
     });
     const here = await s.t.query(api.presence.here, { ...s.A, app_id: s.app_id });
@@ -245,8 +265,9 @@ describe("a flooded room stays a bounded read", () => {
     const order = here.map((h) => joined.get(h.visitor.id)!);
     expect(order[0]).toBe(now - (HERE_MAX - 1));
     expect(order).toEqual([...order].sort((a, b) => a - b));
-    const card = (await s.t.query(api.apps.gallery, { ...s.A })).apps.find((a) => a.id === s.app_id);
-    expect(card?.here_count).toBe(HERE_MAX);
+    const card = (await s.t.query(api.apps.gallery, {})).apps.find((a) => a.id === s.app_id);
+    // The gallery counts everyone from the app's crowd, one row, and shows the first few faces.
+    expect([card?.here_count, card?.here.length]).toEqual([HERE_MAX + 5, CROWD_FACES]);
   });
 });
 
@@ -303,8 +324,10 @@ describe("becoming a visitor costs a proof of work", () => {
 describe("every public function proves its caller", () => {
   const PUBLIC = /^export const (\w+) = (mutation|query|action)\(\{/gm;
   const PROOF = /\b(requireVisitor|findVisitor|requireRuntime|requireRuntimeVisitor)\(/;
-  /** Minting a visitor is the one door that needs no visitor. */
-  const OPEN = new Set(["visitors.register"]);
+  /** Minting a visitor needs no visitor, and what the home page and an app
+   *  link show says only what anyone can already see (the apps themselves,
+   *  /og/<slug>), so those pages draw before their visitor is known. */
+  const OPEN = new Set(["visitors.register", "apps.get", "apps.gallery", "activity.recent"]);
 
   function sources(dir: string, prefix = ""): { name: string; text: string }[] {
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
