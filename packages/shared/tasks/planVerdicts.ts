@@ -32,8 +32,8 @@ export function planVerdicts<T extends GraphTask & RefRow>(tasks: T[], outside?:
   return { statusOf, verdicts: new Map(tasks.map((t) => [t, readinessOf(t, { statusOf, parentStatusOf, viewer: null })])) };
 }
 
-/** What still holds a plan task back, one label each ("ct-12", "PR #42
- *  merges"), against the lookup `planVerdicts` built. */
+/** What still holds a plan task back, one label each ("ct-12", "PR #42 to
+ *  merge"), against the lookup `planVerdicts` built. */
 export function openBlockerLabels(task: GraphTask, statusOf: StatusOf, words: WaitLabelOptions = {}): string[] {
   return blockersHoldingBack(task, statusOf).map((b) => blockerLabel(b, words));
 }

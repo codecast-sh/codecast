@@ -64,8 +64,20 @@ function prose(value: unknown, maxChars: number): string | null {
   return cleaned.length > 0 ? capForeignText(cleaned, maxChars) : null;
 }
 
+/** What the caller has already shown outside the block, which decides whether
+ *  there is a block worth printing at all. */
+export type ForeignTaskShown = {
+  /** The caller printed the title itself (`cast task context`'s `# <title>`
+   *  heading). A block holding the title AND other prose still names it, so it
+   *  reads on its own; a block holding nothing else is dropped, because a
+   *  fence restating the line above it teaches the reader that the delimiter is
+   *  decoration. A caller with no heading of its own (the spawn prompt, the
+   *  reviewer prompt) leaves this off, and a title-only task keeps its block. */
+  title?: boolean;
+};
+
 /** The foreign body, before it is fenced. Exported so a test can pin the per-field caps. */
-export function renderForeignTaskBody(task: ForeignTaskRecord): string {
+export function renderForeignTaskBody(task: ForeignTaskRecord, printed: ForeignTaskShown = {}): string {
   const sections: string[] = [];
 
   const title = inline(task.title);
@@ -97,6 +109,8 @@ export function renderForeignTaskBody(task: ForeignTaskRecord): string {
     sections.push([heading, ...lines].join("\n"));
   }
 
+  // Nothing but the title, which the caller already printed: no block.
+  if (printed.title && sections.length === 1 && title) return "";
   return sections.join("\n\n");
 }
 
@@ -131,8 +145,9 @@ function guidanceFor(purpose: ForeignTaskPurpose, source: string): string {
 export function renderFencedTaskRecord(
   task: ForeignTaskRecord,
   purpose: ForeignTaskPurpose = "reference",
+  printed: ForeignTaskShown = {},
 ): string | null {
-  const body = renderForeignTaskBody(task);
+  const body = renderForeignTaskBody(task, printed);
   if (!body) return null;
   const source = foreignTaskSource(task);
   return fenceForeignText(body, source, {

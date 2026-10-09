@@ -4,6 +4,7 @@
 // addBlocker/addWait/relateTasks, whose side effects make the real write.
 import {
   dependencyLoopChecker,
+  GRAPH_LINK_CAP,
   isActiveTask,
   isCleared,
   isTerminalTaskStatus,
@@ -28,6 +29,7 @@ import { useInboxStore, type TaskItem } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { waitIsOn } from "../store/taskGraphDraft";
 import { counted, undoAsOne } from "../store/undo/labels";
+import { lookup } from "./liveEntities";
 import { storeStatusOf, type BoardTask } from "./taskBlockers";
 import { filterByWorkspace, workspaceKeyOfRow } from "./workspaceScope";
 
@@ -58,11 +60,41 @@ export function blockerLines(task: GraphTask, statusOf: StatusOf): BlockerLine[]
   return lines;
 }
 
-/** The store's tasks that were found while working on `task` (TG5), in its workspace. */
+/** The store's tasks that were found while working on `task` (TG5), in its
+ *  workspace, oldest first and stopped at the shared cap, so the page and
+ *  `cast task show` list the same tasks (convex foundHereRows). */
 export function foundHereOf(task: Pick<TaskItem, "short_id" | "workspace" | "team_id">, tasks: Record<string, TaskItem>): TaskItem[] {
   return sameWorkspace(tasks, task)
     .filter((t) => t.found_during === task.short_id)
-    .sort((a, b) => a.created_at - b.created_at);
+    .sort((a, b) => a.created_at - b.created_at)
+    .slice(0, GRAPH_LINK_CAP);
+}
+
+/** `task`'s `blocks` mirror as every surface prints it (convex taskLinksOf):
+ *  stopped at the shared cap, and without an entry the client can see has
+ *  gone stale — a dependent whose row it holds and whose `blocked_by` no
+ *  longer names this task. An entry whose row the store lacks stays, so an
+ *  unloaded dependent is never hidden. */
+export function blocksOf(task: TaskItem, tasks: Record<string, TaskItem>): string[] {
+  const self = new Set([task.short_id, String(task._id)]);
+  const home = workspaceKeyOfRow(task);
+  // Capped before the stale ones are dropped, exactly as the server reads it,
+  // so both name the same tasks on a row that got past the cap.
+  return (task.blocks ?? [])
+    .slice(0, GRAPH_LINK_CAP)
+    .filter((ref) => {
+      const row = lookup(tasks, ref);
+      // Only a live row in this task's workspace can answer: the server reads
+      // the mirror no further either (taskLinksOf's readableLink).
+      if (!row || workspaceKeyOfRow(row) !== home) return true;
+      return ((row.blocked_by ?? []) as string[]).some((r) => self.has(r));
+    });
+}
+
+/** `task`'s see-also links at the same cap, so the page and `cast task show`
+ *  list the same tasks even on a row that got past the write-time cap. */
+export function relatedOf(task: TaskItem): string[] {
+  return (task.related ?? []).slice(0, GRAPH_LINK_CAP);
 }
 
 /** The store's tasks in `task`'s own workspace: what its relations may name. */
