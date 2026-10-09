@@ -6,7 +6,7 @@ import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole,
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
 import { performReparentSession } from "./sessionOwnership";
 import { killConversation } from "./conversations";
-import { applyHideTransition } from "./cleanup";
+import { applyHideTransition } from "./hideTransition";
 import { isBootstrapPrompt, isSessionMessage } from "@codecast/shared/contracts";
 
 // A role's lifecycle a person can trust (docs/architecture/org-staffing.md

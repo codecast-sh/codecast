@@ -3,12 +3,14 @@ import {
   isGcableEmptyConversation,
   hasLiveDraft,
   shouldReapEmpty,
-  conversationHasNoWork,
   gcEmptyConversations,
   reapEmptyConversation,
+} from "./cleanup";
+import {
+  conversationHasNoWork,
   cascadeHideToNestedChildren,
   applyHideTransition,
-} from "./cleanup";
+} from "./hideTransition";
 import { continueKillCancellation, enqueuePendingMessage } from "./pendingMessages";
 
 // Minimal in-memory ctx.db honoring the .withIndex(name, q => q.eq(field,val))

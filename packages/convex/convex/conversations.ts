@@ -17,7 +17,7 @@ import { enqueueCloudSpawn } from "./cloud";
 import { isConversationSafetyBlocked, safetyBlockPatch } from "./conversationSafety";
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere, findConversationByAnyRef } from "./conversationSessionLookup";
-import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
+import { applyHideTransition, cascadeHideToNestedChildren } from "./hideTransition";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus, ThreadStateStatus } from "@codecast/shared/contracts";
