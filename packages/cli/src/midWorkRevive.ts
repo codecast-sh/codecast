@@ -17,7 +17,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { MID_WORK_REVIVE_MESSAGE } from "@codecast/shared/contracts";
+import { MID_WORK_REVIVE_MESSAGE, reviveClientId } from "@codecast/shared/contracts";
 import { workflowRunLastActivity } from "./workflowRunLive.js";
 
 // The statuses that mean the turn was not over. "waiting" is the daemon's word
@@ -48,9 +48,7 @@ export const REVIVE_MESSAGE = MID_WORK_REVIVE_MESSAGE;
 // Shares the recovery prefix family (isRecoveryContinueClientId), so the web
 // shows it as the system's message rather than the person's. Minute-bucketed
 // like blockedContinueClientId: a pass that runs twice cannot double-queue.
-export function reviveClientId(conversationId: string, at: number): string {
-  return `revive-${conversationId}-${Math.floor(at / 60_000)}`;
-}
+export { reviveClientId };
 
 export type ReviveLifecycle = {
   hideStateKnown?: boolean;

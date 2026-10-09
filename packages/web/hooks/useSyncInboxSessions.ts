@@ -9,10 +9,12 @@ import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { INBOX_RECOVERY_STALE_MS, useRecoveryPoll } from "./useRecoveryPoll";
+import { useIsSyncHost } from "./useSyncRole";
 import { queryWithSignal } from "../lib/queryWithSignal";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useLiveInboxSessions, applyInboxListPayload, settleDisownClaims, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useSplitQueryNoThrow } from "./useSplitQuery";
 import { useFeederError } from "./useSyncCollection";
 import { onSyncWake } from "./syncWake";
 import { useWatchEffect } from "./useWatchEffect";
@@ -248,10 +250,16 @@ export function useSyncInboxSessions() {
   // Every subscription here is a feeder (useQueryNoThrow, never useQuery): the
   // store keeps its cached rows through a terminal server error instead of the
   // whole feeder set unmounting — see useLiveInboxSessions.
-  const favorites = useQueryNoThrow(api.conversations.listFavoriteSessions, { include_liveness: false });
+  // A follower window (the call panel, the people window) receives `sessions`
+  // and the overlay's projection over replication, as it does the base list
+  // (useLiveInboxSessions): the overlay re-runs on every heartbeat and its
+  // whole payload re-sends each time, so a second subscriber doubled the
+  // desktop's largest stream (34 MB in 90s per window, 2026-10-08).
+  const isSyncHost = useIsSyncHost();
+  const favorites = useQueryNoThrow(api.conversations.listFavoriteSessions, isSyncHost ? { include_liveness: false } : "skip");
   useFeederError("conversations.listFavoriteSessions", favorites.error);
   const favoriteSessions = favorites.data;
-  const liveness = useQueryNoThrow(api.conversations.sessionsLiveness, {});
+  const liveness = useSplitQueryNoThrow(api.conversations.sessionsLiveness, isSyncHost ? {} : "skip", "liveness");
   useFeederError("conversations.sessionsLiveness", liveness.error);
   const sessionLiveness = liveness.data;
   const clientStateQ = useQueryNoThrow(api.client_state.get, {});
@@ -368,6 +376,8 @@ export function useSyncInboxSessions() {
   // Poll a one-shot query to catch divergence — same pattern as
   // useConversationMessages' watermark loop.
   useRecoveryPoll(lastSyncRef, useCallback(async (signal: AbortSignal) => {
+    // A follower has no subscription of its own to recover.
+    if (!isSyncHost) return;
     // `_probe` makes this a novel query token so Convex round-trips instead of
     // serving the (possibly stalled) cache of the live listInboxSessions
     // subscription — otherwise the "recovery" just re-reads the staleness.
@@ -375,16 +385,17 @@ export function useSyncInboxSessions() {
     if (signal.aborted || !applyInboxListPayload(fresh, convex)) return;
     warm();
     lastSyncRef.current = Date.now();
-  }, [convex, syncTable, warm]), INBOX_RECOVERY_STALE_MS);
+  }, [convex, syncTable, warm, isSyncHost]), INBOX_RECOVERY_STALE_MS);
 
   // Liveness can stall independently of the base list — recover it on the same
   // cadence so a frozen subscription doesn't leave every session reading a stale
   // (or null) agent_status after a sleep/reconnect.
   useRecoveryPoll(lastLivenessSyncRef, useCallback(async (signal: AbortSignal) => {
+    if (!isSyncHost) return;
     const fresh: any = await queryWithSignal(convex, api.conversations.sessionsLiveness, { _probe: Date.now() }, signal);
     if (signal.aborted || !applyMineLivenessPayload(fresh)) return;
     lastLivenessSyncRef.current = Date.now();
-  }, [convex]), INBOX_RECOVERY_STALE_MS);
+  }, [convex, isSyncHost]), INBOX_RECOVERY_STALE_MS);
 
   // currentUser carries daemon_last_seen — the input to the CLI-offline banner.
   // Its subscription stalls independently of listInboxSessions (sessions can
@@ -507,7 +518,7 @@ export function useSyncInboxSessions() {
     // whose create was given up (offline/outage/rate-limit) stops being a
     // permanently stuck ghost. Idempotent server-side, so a stub mid outbox
     // replay just resolves to the same row.
-    for (const stubId of strandedStubs) store.healStrandedStub(stubId).catch(() => {});
+    for (const stubId of strandedStubs) store.healStrandedStub(stubId).catch((err) => captureError(err, { source: "stub-heal", stubId }));
   }, [sweepNonce, hydrated]);
 
   return { activeSessions: inboxSessions };

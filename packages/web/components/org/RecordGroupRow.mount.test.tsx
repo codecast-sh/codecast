@@ -199,7 +199,7 @@ test("open, a group lists its records as numbered sentences, closed ones dim and
   expect(rows().map((r) => r.getAttribute("data-record-row"))).toEqual(Array.from({ length: 20 }, (_, i) => String(i + 1)));
   expect(rows()[0].querySelector("[data-record-seq]")!.textContent).toBe("#1");
   expect(rows()[0].querySelector("p")!.textContent).toBe(changeWords(ORG_RECORDS_FIXTURE_PROPOSAL.changes[0].change, { names }).sentence);
-  expect(rows()[0].querySelector("p b")!.textContent).toBe("Funnel stages v2");
+  expect(rows()[0].querySelector("p [data-subject-pill]")!.textContent).toBe("Funnel stages v2");
   // A closed row is dim, never struck through: the sentence says the status, and a strike reads as rejected.
   expect(rows()[0].querySelector("p")!.className).toContain("--sol-text-dim");
   expect(rows()[17].querySelector("p")!.className).not.toContain("--sol-text-dim");

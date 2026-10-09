@@ -2,43 +2,25 @@
 // /pages — gallery of the signed-in user's published pages
 // (cast publish). Data: store.artifacts, fed by artifacts.listForWeb (hooks/useSyncArtifacts).
 
-import { copyToClipboard } from "../../lib/utils";
 import { useState } from "react";
 import { useArtifacts } from "../../hooks/useSyncArtifacts";
-import { toast } from "sonner";
-import { Copy, Globe } from "lucide-react";
+import { Globe } from "lucide-react";
 import { ArtifactCard, type ArtifactRow } from "./ArtifactCard";
 import { ArtifactEditModal } from "./ArtifactEditModal";
 import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
 
-const EXAMPLE_CMD = "cast publish report.html";
-
 function EmptyState() {
-  const copyExample = async () => {
-    try {
-      await copyToClipboard(EXAMPLE_CMD);
-      toast.success("Command copied");
-    } catch {
-      toast.error("Couldn't copy");
-    }
-  };
   return (
     <div className="flex flex-col items-center justify-center gap-3 text-center py-24 px-8">
       <Globe className="w-10 h-10 text-sol-text-dim opacity-40" />
       <div className="text-sol-text font-medium">No published pages yet</div>
       <div className="text-sm text-sol-text-muted max-w-md">
-        Publish any HTML file, markdown doc, or directory from a session and it
-        gets a stable shareable link. Re-publishing the same file updates the
-        same URL, with full version history.
+        Any page an agent publishes gets a stable link you can share. Publishing
+        it again updates the same link and keeps every version.
       </div>
-      <button
-        onClick={copyExample}
-        className="group inline-flex items-center gap-2 text-[13px] font-mono bg-sol-bg-alt border border-sol-border/40 rounded px-4 py-2 text-sol-text hover:border-sol-border transition-colors"
-        title="Copy command"
-      >
-        <span>{EXAMPLE_CMD}</span>
-        <Copy className="w-3.5 h-3.5 text-sol-text-dim group-hover:text-sol-text-muted" />
-      </button>
+      <div className="text-sm text-sol-text-muted max-w-md">
+        Ask an agent to publish a report, a mockup or a chart, and it shows up here.
+      </div>
       <div className="text-xs text-sol-text-dim max-w-md">
         Viewer comments arrive back in the publishing session as messages.
       </div>
@@ -82,9 +64,6 @@ export function ArtifactGallery() {
         {data && artifacts.length > 0 && (
           <span className="text-xs text-sol-text-dim font-mono">{artifacts.length}</span>
         )}
-        <span className="ml-auto text-[11px] text-sol-text-dim font-mono hidden sm:inline">
-          cast publish &lt;file&gt;
-        </span>
       </div>
 
       <FeatureUpsell
