@@ -17,9 +17,17 @@ describe("the player URL", () => {
   test("carries the capability in the path and reads back", () => {
     const url = replayPlayerUrl({ cap: "abc_-.0f", t_ms: 83_400.6, mode: "frame" });
     expect(url).toBe(`${REPLAY_PLAYER_ORIGIN}/p/abc_-.0f?t=83401&mode=frame`);
-    expect(parseReplayPlayerUrl(url)).toEqual({ cap: "abc_-.0f", t_ms: 83_401, mode: "frame", controls: true, autoplay: false });
-    expect(parseReplayPlayerUrl(replayPlayerUrl({ cap: "c", controls: false, autoplay: true }))).toEqual({ cap: "c", t_ms: null, mode: "interactive", controls: false, autoplay: true });
+    expect(parseReplayPlayerUrl(url)).toEqual({ cap: "abc_-.0f", t_ms: 83_401, mode: "frame", controls: true, autoplay: false, remote_assets: false });
+    expect(parseReplayPlayerUrl(replayPlayerUrl({ cap: "c", controls: false, autoplay: true }))).toEqual({ cap: "c", t_ms: null, mode: "interactive", controls: false, autoplay: true, remote_assets: false });
     expect(parseReplayPlayerUrl("https://replay.codecast.sh/frame")).toBeNull();
+  });
+
+  test("remote assets are a per-view opt-in, and never in frame mode", () => {
+    const url = replayPlayerUrl({ cap: "c", remote_assets: true });
+    expect(url).toBe(`${REPLAY_PLAYER_ORIGIN}/p/c?assets=remote`);
+    expect(parseReplayPlayerUrl(url)?.remote_assets).toBe(true);
+    expect(replayPlayerUrl({ cap: "c", mode: "frame", remote_assets: true })).not.toContain("assets");
+    expect(parseReplayPlayerUrl(`${REPLAY_PLAYER_ORIGIN}/p/c?mode=frame&assets=remote`)?.remote_assets).toBe(false);
   });
 });
 
@@ -30,6 +38,7 @@ describe("messages", () => {
     expect(parseReplayHostMessage({ source: REPLAY_HOST_SOURCE, type: "speed", speed: 3 })).toBeNull();
     expect(parseReplayHostMessage({ source: REPLAY_HOST_SOURCE, type: "speed", speed: 2 })).toMatchObject({ speed: 2 });
     expect(parseReplayHostMessage({ source: "other", type: "play" })).toBeNull();
+    expect(parseReplayHostMessage({ source: REPLAY_HOST_SOURCE, type: "hello", extra: 1 })).toEqual({ source: REPLAY_HOST_SOURCE, type: "hello" });
     expect(isReplayPlayerMessage({ source: "codecast-replay-player", type: "time", t_ms: 1, playing: true })).toBe(true);
     expect(isReplayPlayerMessage("time")).toBe(false);
   });

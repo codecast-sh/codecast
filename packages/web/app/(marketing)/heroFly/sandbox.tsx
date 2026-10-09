@@ -8,6 +8,7 @@
  *   Convex        a stub client: queries load forever, writes resolve null
  *   entity pills  answered from the chapters' fixtures, no query, no store read
  *   personify     off, whatever the visitor chose
+ *   comment tools off, whatever the visitor chose
  *   theme         light Classic (tokens are also re-declared on .hero-sandbox)
  *   reveal bands  reported as already inside one, so none mounts a real pane
  *   hover cards   tooltips, entity cards and fork previews never open: each
@@ -51,6 +52,7 @@ import { MemoryRouter, UNSAFE_LocationContext } from "react-router";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeContext } from "@/components/ThemeProvider";
 import { PersonifyOverride } from "@/hooks/usePersonifyAll";
+import { CommentToolsOverride } from "@/hooks/useCommentTools";
 import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { HoverCardsOff } from "@/lib/hoverCardsOff";
 import { LabelColorsReadOnly } from "@/lib/labelColors";
@@ -165,6 +167,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
       <ConvexProvider client={heroConvexStub}>
         <ThemeContext.Provider value={HERO_THEME}>
           <PersonifyOverride.Provider value={false}>
+          <CommentToolsOverride.Provider value={false}>
           <TeamFeatureOverride.Provider value={NO_FEATURES}>
             <EntityFixtureContext.Provider value={HERO_ENTITIES}>
               <RevealInBandCtx.Provider value={true}>
@@ -212,6 +215,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
               </RevealInBandCtx.Provider>
             </EntityFixtureContext.Provider>
           </TeamFeatureOverride.Provider>
+          </CommentToolsOverride.Provider>
           </PersonifyOverride.Provider>
         </ThemeContext.Provider>
       </ConvexProvider>

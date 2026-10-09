@@ -1,13 +1,15 @@
 import { useCallback, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link as LinkIcon, Link2, ArrowUpRight, Check, ChevronDown, ChevronRight, Columns2, Maximize2, MessageSquarePlus, Minimize2, MoreHorizontal } from "lucide-react";
+import { Link as LinkIcon, Link2, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Columns2, MessageSquarePlus, MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { linkPreviewStale } from "@codecast/convex/convex/lib/linkPreviewMeta";
 import { PAGE_HEIGHT_MESSAGE } from "../../shared/render/pageTheme";
 import { useFrameTheme } from "../hooks/useFrameTheme";
 import { usePageNotes } from "../hooks/usePageNotes";
+import { usePageAgent, type PageAgent } from "../hooks/usePageAgent";
+import { PAGE_AGENT_LABELS } from "@codecast/shared/contracts";
 import { useNativeBrowserPane } from "../hooks/useNativeBrowserPane";
 import { copyToClipboard } from "../lib/utils";
 import { isDesktop } from "../lib/desktop";
@@ -166,9 +168,31 @@ function PagePill({ icon, text, title, href, hoverClass, pane }: {
 function usePageMeta(slug: string) {
   const { data } = useQueryNoThrow(api.artifacts.getShared, { slug });
   return data as
-    | { title: string; kind: string; gated: boolean; user: { name: string | null } | null }
+    | { title: string; kind: string; version: number; gated: boolean; user: { name: string | null } | null }
     | null
     | undefined;
+}
+
+/** The page's agent, as a quiet chip: a dot and a word, the dot breathing
+ *  while the agent is on the page. The same chip the page's own bar shows. */
+function PageAgentStatus({ agent }: { agent: PageAgent }) {
+  const tone =
+    agent.chip === "needs_input" ? "text-sol-yellow" :
+    agent.chip === "updating" ? "text-sol-red" :
+    agent.chip === "working" ? "text-sol-blue" : "text-sol-text-dim";
+  const busy = agent.chip === "working" || agent.chip === "updating";
+  return (
+    <span
+      className={`page-embed__agent inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-1.5 font-mono text-[10.5px] ${tone}`}
+      role="status"
+      title={agent.chip === "updating"
+        ? "A comment was sent to the session that made this page; it reloads here when a new version lands."
+        : "The session that made this page."}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full bg-current ${busy ? "page-embed__agent-dot--busy" : "opacity-70"}`} aria-hidden />
+      {PAGE_AGENT_LABELS[agent.chip]}
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +281,7 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
         {copied ? <Check className="h-3.5 w-3.5 text-sol-green" /> : <Link2 className="h-3.5 w-3.5" />}
       </Tool>
       <Tool label={expanded ? "Fit to the page" : "Expand"} onClick={onToggleExpand} pressed={expanded}>
-        {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+        {expanded ? <ChevronsDownUp className="h-3.5 w-3.5" /> : <ChevronsUpDown className="h-3.5 w-3.5" />}
       </Tool>
       {/* The pane frames the SERVING origin, so the page arrives under its own
           sandbox CSP and the share page's chrome does not wrap it twice. */}
@@ -275,10 +299,15 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
  *  floating over its top corner, the resize edge under it, the caption
  *  below. Folded (`collapsed`), it is the title row alone. All spans, so it
  *  stays valid wherever markdown puts it. */
-export function FramelessPage({ title, href, actions, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, children }: {
+export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, children }: {
   title: string;
   href: string;
   actions: ReactNode;
+  /** A quiet status beside the title in the toolbar. */
+  status?: ReactNode;
+  /** Also hold the status on the page's top edge while the toolbar is away:
+   *  for a state worth seeing without reaching for the page. */
+  statusPinned?: boolean;
   caption?: string;
   height: number | string;
   stageRef?: RefObject<HTMLSpanElement | null>;
@@ -360,6 +389,7 @@ export function FramelessPage({ title, href, actions, caption, height, stageRef,
         <TooltipProvider delayDuration={350} skipDelayDuration={150}>
           <span className="page-embed__bar" role="toolbar" aria-label={`${title} actions`}>
             {titleLink}
+            {status}
             <span className="mx-0.5 h-3.5 w-px flex-shrink-0 bg-sol-border/50" aria-hidden />
             {actions}
             {onToggleCollapsed && (
@@ -369,6 +399,7 @@ export function FramelessPage({ title, href, actions, caption, height, stageRef,
             )}
           </span>
         </TooltipProvider>
+        {statusPinned && status && <span className="page-embed__status" aria-hidden>{status}</span>}
         {grip}
       </span>
       {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
@@ -450,7 +481,14 @@ export function PublishedPageEmbed({ slug, caption, height }: {
   // later changes arrive as messages, because a new src would reload the page.
   // embed=1 tells the page this window carries its chrome.
   const [mountTheme] = useState(theme);
-  const src = `${pageFrameSrc(slug)}?theme=${mountTheme}&embed=1`;
+  // A newer version reloads the frame by itself: the version the frame first
+  // showed stays the base, and each version above it is a new address (which
+  // also busts the 60s cache in front of the page).
+  const version = meta?.version ?? 0;
+  const [baseVersion, setBaseVersion] = useState(0);
+  if (!baseVersion && version) setBaseVersion(version);
+  const src = `${pageFrameSrc(slug)}?theme=${mountTheme}&embed=1${baseVersion && version > baseVersion ? `&r=v${version}` : ""}`;
+  const agent = usePageAgent(slug, !collapsed && !!meta && !meta.gated);
 
   // Deleted or never existed: a full-height frame of a 404 reads as breakage.
   // Degrade to a compact note carrying the link.
@@ -480,6 +518,8 @@ export function PublishedPageEmbed({ slug, caption, height }: {
       stageRef={stageRef}
       loaded={loaded}
       pinning={notes?.pinMode}
+      status={agent ? <PageAgentStatus agent={agent} /> : undefined}
+      statusPinned={!!agent && agent.chip !== "idle"}
       collapsed={collapsed}
       onToggleCollapsed={() => {
         setLoaded(false);

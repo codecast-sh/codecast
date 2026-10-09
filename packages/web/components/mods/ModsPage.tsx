@@ -48,6 +48,48 @@ function InstallButton({ row }: { row: ModRow }) {
   );
 }
 
+/**
+ * Where an author's local half runs: every machine whose daemon has reported
+ * on it, with a switch each. A daemon starts an enabled half on its own within
+ * 30s of a push; this is the one place to keep it off a machine.
+ */
+function LocalHalf({ row }: { row: ModRow }) {
+  const off = new Set(row.local_off ?? []);
+  const devices = [...new Set([...(row.local_devices ?? []).map((d) => d.device), ...off])].sort();
+  const report = (device: string) => row.local_devices?.find((d) => d.device === device);
+  return (
+    <div className="mx-4 mt-3 rounded-lg border border-sol-border bg-sol-bg-alt/40 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-sol-text-dim">
+        <DynamicIcon name="cpu" size={11} />
+        Local half
+        <span className="ml-auto normal-case tracking-normal">{row.manifest?.local?.description ?? "runs on your machines"}</span>
+      </div>
+      {devices.length ? (
+        <ul className="mt-1.5 space-y-1">
+          {devices.map((device) => {
+            const r = report(device);
+            const on = !off.has(device);
+            const state = !row.enabled || !on ? "off" : r?.state === "running" ? "running" : r?.state === "failed" ? "failed" : "starting";
+            const tone = { off: "var(--sol-text-dim)", running: "var(--sol-green)", failed: "var(--sol-red)", starting: "var(--sol-yellow)" }[state];
+            return (
+              <li key={device} className="flex items-center gap-2 text-[12.5px]">
+                <span className="size-1.5 shrink-0 rounded-full" style={{ background: tone }} />
+                <span className="truncate text-sol-text">{device}</span>
+                <span className="shrink-0 text-[11px]" style={{ color: tone }}>{state}</span>
+                {state === "failed" && r?.error ? <span className="min-w-0 truncate text-[11px] text-sol-text-dim" title={r.error}>{r.error}</span> : null}
+                {r ? <span className="ml-auto shrink-0 text-[11px] text-sol-text-dim">{formatRelativeTime(r.at)}</span> : <span className="ml-auto" />}
+                <Switch checked={on} disabled={!row.enabled} onCheckedChange={(v: boolean) => useInboxStore.getState().setModLocalDevice(row._id, device, v)} />
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="mt-1 text-[12px] text-sol-text-muted">{row.enabled ? "Each of your machines starts it within 30 seconds." : "Turn the mod on and each of your machines starts it within 30 seconds."}</div>
+      )}
+    </div>
+  );
+}
+
 function ModCard({ row }: { row: ModRow }) {
   useModHostVersion();
   const runtime = modHost.get(row._id);
@@ -93,11 +135,13 @@ function ModCard({ row }: { row: ModRow }) {
       <div className="flex flex-wrap gap-1.5 px-4 pt-3">
         {(m.panes ?? []).map((p) => <Chip key={`p${p.id}`} icon="panel-right">{p.title}</Chip>)}
         {(m.commands ?? []).map((c) => <Chip key={`c${c.id}`} icon="command">{c.title}</Chip>)}
+        {(m.objects ?? []).map((o) => <Chip key={`o${o.prefix}`} icon={o.icon ?? "box"}>{o.plural ?? `${o.title}s`} · {o.prefix}-N</Chip>)}
         {(m.fences ?? []).map((f) => <Chip key={`f${f.lang}`} icon="code">```{f.lang}</Chip>)}
         {m.permissions?.read ? <Chip icon="eye">reads {m.permissions.read === "*" ? "everything" : m.permissions.read.join(", ")}</Chip> : null}
         {m.permissions?.write ? <Chip icon="pen-line">writes {m.permissions.write === "*" ? "everything" : m.permissions.write.join(", ")}</Chip> : null}
         {m.permissions?.fetch ? <Chip icon="globe">fetches {m.permissions.fetch === "*" ? "anywhere" : m.permissions.fetch.map((o) => o.replace(/^https?:\/\//, "")).join(", ")}</Chip> : null}
       </div>
+      {row.is_mine !== false && row.has_local ? <LocalHalf row={row} /> : null}
       <div className="mt-3 flex items-center gap-3 border-t border-sol-border px-4 py-2">
         <button onClick={() => setOpen((v) => !v)} className="text-[12px] text-sol-text-muted hover:text-sol-text">
           {open ? "Hide logs" : "Logs"}{errors.length ? <span className="ml-1 text-sol-red tabular-nums">{errors.length} error{errors.length === 1 ? "" : "s"}</span> : null}
