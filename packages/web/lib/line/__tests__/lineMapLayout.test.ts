@@ -11,8 +11,9 @@ const cy = (id: string) => box(id).y + box(id).h / 2;
 
 describe("layoutLineMap", () => {
   test("the main row sits close under the stage names, and the sources rise into the room the arcs leave", () => {
-    // The stage names take the canvas's top 22px; the main row starts about 48px under them, a little more when loops arc over it (LX2).
-    expect(box("causes").y - 22).toBeLessThanOrEqual(64);
+    // The stage names take the canvas's top 22px; the main row starts about 48px under them, a little more when loops arc over it (LX2):
+    // rebase back to implement is the widest arc.
+    expect(box("causes").y - 22).toBeLessThanOrEqual(72);
     // Many sources: the column starts no lower than the highest arc over the path, so the last pill stays inside the stage.
     const many = buildLineMap({ ...F.rows, finders: [...F.finders, ...["a", "b", "c", "d", "e"].map((x) => ({ id: x, source: x, kind: "any" as const, fingerprint: `${x}:{id}` }))], now: F.NOW, windowMs: 7 * F.DAY });
     const l = layoutLineMap(many);
@@ -38,10 +39,32 @@ describe("layoutLineMap", () => {
     }
   });
 
-  test("the path every cause takes runs along one lane, left to right", () => {
-    const main = ["signals", "causes", "ground", "analyze", "prove", "red", "implement", "verify", "eval", "review", "decide", "ship", "merge", "watch", "end:held"];
-    for (const id of main) expect(cy(id)).toBe(cy("causes"));
-    for (let i = 1; i < main.length; i++) expect(box(main[i]).x).toBeGreaterThan(box(main[i - 1]).x);
+  test("the path every cause takes runs along one lane of each row, left to right, the rows by phase", () => {
+    const main = ["signals", "causes", "ground", "analyze", "prove", "red", "implement", "verify", "eval", "review", "decide", "rebase", "ship", "watch", "end:held"];
+    // The shipped line is wider than a screen, so it folds onto three rows.
+    expect(layout.bands).toBe(3);
+    expect(["signals", "causes", "ground", "analyze"].map((id) => box(id).band)).toEqual([0, 0, 0, 0]);
+    expect(["prove", "implement", "verify", "review"].map((id) => box(id).band)).toEqual([1, 1, 1, 1]);
+    expect(["decide", "ship", "watch", "end:held"].map((id) => box(id).band)).toEqual([2, 2, 2, 2]);
+    for (let i = 1; i < main.length; i++) {
+      const [a, b] = [box(main[i - 1]), box(main[i])];
+      if (a.band === b.band) { expect(cy(main[i])).toBe(cy(main[i - 1])); expect(b.x).toBeGreaterThan(a.x); }
+      else { expect(b.band).toBe(a.band + 1); expect(b.y).toBeGreaterThan(a.y + a.h); }
+    }
+    // The path wraps from one row into the next; it never drops a stub.
+    expect(layout.paths.get("analyze->prove")?.note).toBeUndefined();
+    // No row is wider than a screen and a half, so a reader never pans four screens.
+    expect(layout.width).toBeLessThan(1800);
+  });
+
+  test("an edge between rows that is not the path is a short stub naming where it goes", () => {
+    const stubs = [...layout.paths.values()].filter((p) => p.note);
+    expect(stubs.length).toBeGreaterThan(0);
+    for (const p of stubs) {
+      expect(p.note).toMatch(/^(to|back to) /);
+      const ys = p.d.match(/-?\d+(\.\d+)?/g)!.map(Number).filter((_, i) => i % 2 === 1);
+      expect(Math.max(...ys) - Math.min(...ys)).toBeLessThanOrEqual(30);
+    }
   });
 
   test("the path runs on top; a branch that comes back sits just under it, one that leaves under that", () => {
@@ -69,8 +92,13 @@ describe("layoutLineMap", () => {
   test("arrow keys move to the nearest node that way", () => {
     expect(neighbor(layout, "ground", "right")).toBe("analyze");
     expect(neighbor(layout, "analyze", "left")).toBe("ground");
-    expect(neighbor(layout, "prove", "down")).toBe("dissolve");
+    // A line cause's own prove and build stations sit right under the ones they stand in for.
+    expect(neighbor(layout, "prove", "down")).toBe("prove_line");
+    expect(box("implement_line").col).toBe(box("implement").col);
+    expect(map.edges.find((e) => e.id === "red->prove_line")?.kind).toBe("loop");
     expect(neighbor(layout, "causes", "left")).toBe("signals");
+    // Past a row's end the cursor reads on into the next row; the last row's end goes nowhere.
+    expect(box(neighbor(layout, "analyze", "right")!).band).toBe(1);
     expect(neighbor(layout, "end:held", "right")).toBeNull();
   });
 
@@ -84,7 +112,7 @@ describe("layoutLineMap", () => {
 describe("the map's URL", () => {
   const q = (s: string) => new URLSearchParams(s);
   test("reads a panel, a window and a trace; an edge wins over a node; an unknown window is the default", () => {
-    expect(readLineMapState(q("node=prove&window=30d&trace=ct-1"))).toEqual({ node: "prove", edge: null, window: "30d", trace: "ct-1", section: null });
+    expect(readLineMapState(q("node=prove&window=30d&trace=ct-1"))).toEqual({ node: "prove", edge: null, window: "30d", trace: "ct-1", section: null, graph: null });
     expect(readLineMapState(q("node=prove&edge=a->b&window=1y"))).toMatchObject({ node: null, edge: "a->b", window: "7d" });
   });
   test("writes in place: opening a node drops the edge and a stale section, the default window is left out", () => {

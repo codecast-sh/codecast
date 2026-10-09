@@ -23,6 +23,7 @@ export const CODECAST_HOOK_SCRIPTS = [
   "session-register.sh",
   "thread-state.sh",
   "task-pulse.sh",
+  "task-context.sh",
   "stable-feed.sh",
   "codecast-session-trailer.sh",
 ] as const;

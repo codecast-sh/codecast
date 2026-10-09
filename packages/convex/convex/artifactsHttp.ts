@@ -27,7 +27,8 @@ import {
 import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
 import { mediaBucketFromEnv, r2Presign } from "./lib/r2";
 import { CAST_PLAYER_JS } from "./lib/castPlayer";
-import { pageUsesPlayer } from "@codecast/shared/contracts";
+import { CAST_MOTION_JS } from "./lib/castMotion";
+import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageUsesPlayer } from "@codecast/shared/contracts";
 import { injectPageTheme } from "@codecast/shared/render";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
@@ -253,6 +254,16 @@ function isOwnMediaUrl(url: unknown): url is string {
   return url.startsWith(prefix) && /^[a-f0-9]{64}\.[a-z0-9]{2,4}$/.test(url.slice(prefix.length));
 }
 
+/** The filename a ?download= request saves a media asset as: the asked name
+ * reduced to safe characters, keeping the asset's own extension, or null when
+ * nothing was asked. Safe to put inside a quoted Content-Disposition. */
+export function mediaDownloadName(asked: string | null, assetPath: string): string | null {
+  if (asked === null) return null;
+  const ext = assetPath.match(/\.([a-z0-9]{2,4})$/i)?.[1]?.toLowerCase() ?? "bin";
+  const base = asked.replace(/\.[a-z0-9]{2,4}$/i, "").replace(/[^\w.-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 80);
+  return `${base || assetPath.split("/").pop()!.replace(/\.[^.]+$/, "") || "download"}.${ext}`;
+}
+
 export const mediaSign = httpAction(async (ctx, request) => {
   try {
     const { api_token, sha256, size, ext } = await request.json();
@@ -281,6 +292,28 @@ export const playerJs = httpAction(async () =>
     headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" },
   }),
 );
+
+export const motionJs = httpAction(async () =>
+  new Response(CAST_MOTION_JS, {
+    status: 200,
+    headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" },
+  }),
+);
+
+/** A HyperFrames composition gets the pinned runtime and the motion player.
+ * The runtime goes first in <head>, so window.__timelines exists before the
+ * composition's own scripts register into it; the player is deferred. */
+export function injectMotion(html: string, apiBase: string): string {
+  if (!pageIsMotion(html) || /\/cli\/motion\.js/.test(html)) return html;
+  const runtime = pageHasHyperframesRuntime(html)
+    ? ""
+    : `<script src="${HYPERFRAMES_RUNTIME.url}" integrity="${HYPERFRAMES_RUNTIME.integrity}" crossorigin="anonymous"></script>`;
+  const tags = `${runtime}<script src="${apiBase}/cli/motion.js" defer></script>`;
+  const head = html.match(/<head[^>]*>/i);
+  if (!head) return tags + html;
+  const at = html.indexOf(head[0]) + head[0].length;
+  return html.slice(0, at) + tags + html.slice(at);
+}
 
 /** Pages with <cast-player> or a <video> get the player script, from the host that served them. */
 function injectPlayer(html: string, apiBase: string): string {
@@ -801,16 +834,18 @@ export const comment = httpAction(async (ctx, request) => {
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
-      // deliver:false = discussion only. Delivery additionally needs the
-      // owner_key — without it the mutation stores the comments as discussion.
-      deliver: body.deliver === false ? false : undefined,
+      // "Send to agent", per batch and per comment. The mutation honors it
+      // only for the owner and verified teammates; anyone else's comments
+      // are stored as discussion whatever the request says.
+      deliver: typeof body.deliver === "boolean" ? body.deliver : undefined,
       owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
       identity_token: typeof body.identity_token === "string" ? body.identity_token : undefined,
       parent_id: typeof body.parent_id === "string" ? body.parent_id : undefined,
       comments: Array.isArray(body.comments)
-        ? body.comments.map((c: { text?: unknown; anchor?: unknown }) => ({
+        ? body.comments.map((c: { text?: unknown; anchor?: unknown; deliver?: unknown }) => ({
             text: String(c?.text ?? ""),
             anchor: typeof c?.anchor === "string" ? c.anchor : undefined,
+            deliver: typeof c?.deliver === "boolean" ? c.deliver : undefined,
           }))
         : [],
     });
@@ -964,6 +999,7 @@ export const serve = httpAction(async (ctx, request) => {
   if (q.get("meta") === "1") {
     const art = await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
     if (!art) return notFound("Page not found");
+    const agent = await ctx.runQuery(internal.artifacts.agentStateBySlug, { slug });
     return new Response(
       JSON.stringify({
         version: art.version,
@@ -973,6 +1009,11 @@ export const serve = httpAction(async (ctx, request) => {
         comment_count: art.comments_disabled ? 0 : artifact.comment_count,
         comments: art.comments_disabled ? [] : artifact.open_comments,
         session: art.session_short_id && !art.hide_session ? { short_id: art.session_short_id, title: artifact.session_title } : null,
+        // The publishing session's live state for the agent chip: state is a
+        // work state (working / needs_input / done / dormant / idle), since
+        // when it last moved, awaiting_since when a comment sent to the agent
+        // has not been answered by a newer version yet.
+        agent,
         gated: { password: !!art.password_hash, email: !!art.email_gate },
         versions: (art.versions as HistoryVersion[]).map((x) => ({
           version: x.version,
@@ -1026,6 +1067,18 @@ export const serve = httpAction(async (ctx, request) => {
     if (asset.content_type === MEDIA_POINTER_TYPE) {
       const { url: mediaUrl } = JSON.parse(await blob.text()) as { url: string };
       if (!isOwnMediaUrl(mediaUrl)) return notFound("Not found");
+      // ?download=<name> saves the file instead of playing it: a short-lived
+      // signed URL that asks R2 to answer as an attachment. (A download
+      // attribute does nothing on a link to another origin.)
+      const download = mediaDownloadName(q.get("download"), path);
+      const cfg = download ? mediaBucketFromEnv() : null;
+      if (download && cfg) {
+        const key = mediaUrl.slice(`${cfg.publicBase}/`.length);
+        const signed = await r2Presign(cfg, "GET", key, 3600, undefined, {
+          "response-content-disposition": `attachment; filename="${download}"`,
+        });
+        return new Response(null, { status: 302, headers: { Location: signed, "Cache-Control": "private, no-store", "Access-Control-Allow-Origin": "*" } });
+      }
       return new Response(null, { status: 302, headers: { Location: mediaUrl, "Cache-Control": cachePolicy(artifact), "Access-Control-Allow-Origin": "*" } });
     }
     return new Response(blob, {
@@ -1159,6 +1212,7 @@ export const serve = httpAction(async (ctx, request) => {
   }
   if (kind !== "markdown") html = injectPageTheme(html);
   html = injectPlayer(html, apiBase);
+  html = injectMotion(html, apiBase);
   // A card's live thumbnail: the page alone. No bar means no view beacon and
   // no comment polling, so a gallery of previews counts nothing as a view.
   if (q.get("preview") === "1") return htmlResponse(html, 200, cachePolicy(artifact));
@@ -1186,6 +1240,7 @@ export const serve = httpAction(async (ctx, request) => {
     editMode: artifact.edit_mode ?? "owner",
     live: q.get("live") === "1",
     hasThumb: !!artifact.thumb_storage_id,
+    hasAgent: !!artifact.session_conversation_id,
   });
   return htmlResponse(branded, 200, cachePolicy(artifact));
 });

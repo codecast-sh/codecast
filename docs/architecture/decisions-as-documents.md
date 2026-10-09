@@ -63,12 +63,17 @@ the category to the protected one).
 - Ladder (`buildLadder`): the roles from the asker up to the first person; a
   role that is not `active` is recorded as a skipped hop with a note. A
   standing session's ladder starts at its parent role. Only the first role
-  hears, through its needs-input trigger (`tellHearingRole`); while it can be
-  told, the decision enters no person's queue (it answers, recommends, or
-  raises it in its own thread). With no role to tell, it lands in the
-  people's queue. A role on the ladder attaches a recommendation with `cast
-  decide recommend <sd> <n> [--note -]`; past the hop deadline of 5 minutes
-  (`HOP_DEADLINE_MS`) it still lands and is reported late.
+  hears, through its needs-input trigger (`tellHearingRole`), and the
+  decision waits for it before entering any person's queue. The role answers
+  under a grant, or hands the same card up (`handUp`): `cast decide recommend
+  <sd> <n> [--note -]` favours an option, `cast decide pass <sd> [--note -]`
+  favours none (the hop records `passed_at` and the role gives up any hold),
+  and either note shows on the role's ladder line. A role that does neither
+  within the hop deadline of 5 minutes (`HOP_DEADLINE_MS`) hands it up by
+  lapse (`handUpLapsed`, scheduled when the role is told), so the card always
+  reaches its people; a later recommendation still lands on it and is
+  reported late. With no role to tell, it lands in the people's queue at
+  once.
 - Holder: the people, unless a role on the ladder holds a `decision_grants`
   row for (category, scope) that has not expired, in which case that role may
   answer first with `cast decide answer <sd> <n>`. A human answer always wins
@@ -129,6 +134,7 @@ the category to the protected one).
 ```
 cast decide "<q>" -o .. -o .. [--task ct-x] [--station s] [--stack ds-N] [--category c] [--kind single|multi|rank|form] [--line <label>] [--to <who>] [--doc f] [--spec f] [--report f] [--card f] [--advisory --default n]
 cast decide recommend <sd> <n> [--note -]
+cast decide pass <sd> [--note -]
 cast decide answer <sd> <n|"1,3"|"2>1>3"|--form key=value...>
 cast decide show <sd> | edit | cancel
 cast decide ls [--stack ds-N] [--task ct-x] [--mine]

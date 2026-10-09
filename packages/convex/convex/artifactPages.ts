@@ -75,6 +75,9 @@ export interface BrandOpts {
   editMode?: string;
   live?: boolean;
   hasThumb?: boolean;
+  // A publishing session exists: comments can be sent to its agent, and the
+  // bar shows the agent's state.
+  hasAgent?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +130,7 @@ function barHtml(o: BrandOpts): string {
     live: !!o.live,
     editMode: o.editMode ?? "owner",
     gated: o.gated ?? { password: false, email: false },
+    hasAgent: !!o.hasAgent,
   };
   return `
 <style id="__cc_style">
@@ -196,6 +200,18 @@ function barHtml(o: BrandOpts): string {
   #__cc_bar #__cc_latest { color: var(--cc-blue); text-decoration: none; padding: 5px 8px; border-radius: 7px; white-space: nowrap;
     display: inline-flex; align-items: center; gap: 3px; }
   #__cc_bar #__cc_latest:hover { background: var(--cc-hov); }
+  /* The page's agent: a quiet status chip (idle / working / needs input /
+     updating after a comment was sent to it). */
+  #__cc_bar #__cc_agent { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; margin: 0 4px;
+    border-radius: 999px; color: var(--cc-dim); font-weight: 500; white-space: nowrap; cursor: default; }
+  #__cc_bar #__cc_agent[hidden] { display: none; }
+  #__cc_bar #__cc_agent .__cc_adot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .7; flex: none; }
+  #__cc_bar #__cc_agent.__cc_aw { color: var(--cc-blue); }
+  #__cc_bar #__cc_agent.__cc_au { color: var(--cc-coral); background: rgba(232,108,93,.1); }
+  #__cc_bar #__cc_agent.__cc_an { color: #c07a28; background: rgba(192,122,40,.1); }
+  #__cc_bar #__cc_agent.__cc_aw .__cc_adot, #__cc_bar #__cc_agent.__cc_au .__cc_adot { opacity: 1; animation: __cc_abreathe 1.6s ease-in-out infinite; }
+  @keyframes __cc_abreathe { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { #__cc_bar #__cc_agent .__cc_adot { animation: none !important; } }
   #__cc_bar #__cc_ccount { color: var(--cc-dim); font-size: 10px; font-weight: 600; }
   #__cc_bar #__cc_ccount:empty { display: none; }
   .__cc_panel { position: fixed; top: 46px; right: 10px; z-index: 2147483647; min-width: 272px; max-width: min(92vw, 400px);
@@ -276,6 +292,22 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_stag { font-size: 10px; font-weight: 600; white-space: nowrap; }
   .__cc_panel .__cc_stag.__cc_pend { color: #c07a28; }
   .__cc_panel .__cc_stag.__cc_sent { color: var(--cc-dim); }
+  .__cc_panel .__cc_stag.__cc_done { color: var(--cc-green); }
+  /* "at 0:14": a comment's moment on the page's timeline; clicking seeks. */
+  .__cc_tat { all: unset; cursor: pointer; font-size: 10px; font-weight: 600; color: var(--cc-blue); padding: 1px 5px;
+    border-radius: 5px; white-space: nowrap; flex: none; font-variant-numeric: tabular-nums; }
+  .__cc_tat:hover { background: var(--cc-hov); }
+  /* Per-comment "Send to agent" switch in the composer. */
+  #__cc_cpanel .__cc_toagent { display: flex; align-items: center; gap: 7px; padding: 6px 1px 0; color: var(--cc-mut);
+    font-size: 11px; cursor: pointer; user-select: none; width: fit-content; }
+  #__cc_cpanel .__cc_toagent input { appearance: none; -webkit-appearance: none; margin: 0; flex: none; cursor: pointer;
+    width: 24px; height: 14px; border-radius: 999px; background: var(--cc-inbd); position: relative; transition: background .15s ease; }
+  #__cc_cpanel .__cc_toagent input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px;
+    border-radius: 50%; background: #ffffff; transition: transform .15s ease; }
+  #__cc_cpanel .__cc_toagent input:checked { background: var(--cc-coral); }
+  #__cc_cpanel .__cc_toagent input:checked::after { transform: translateX(10px); }
+  #__cc_cpanel .__cc_toagent input:focus-visible { outline: 2px solid var(--cc-blue); outline-offset: 2px; }
+  #__cc_cpanel .__cc_toagent.__cc_on { color: var(--cc-ink); }
   /* Avatars (shared by the panel and the fixed mention layer). */
   .__cc_panel .__cc_av, #__cc_mlist .__cc_av { width: 20px; height: 20px; border-radius: 50%; flex: none; object-fit: cover; display: block; }
   .__cc_panel .__cc_avi, #__cc_mlist .__cc_avi { width: 20px; height: 20px; border-radius: 50%; flex: none; background: var(--cc-hov); color: var(--cc-mut);
@@ -474,6 +506,7 @@ function barHtml(o: BrandOpts): string {
   @media (max-width: 480px) {
     #__cc_bar { gap: 0; }
     #__cc_bar .__cc_sess { display: none; }
+    #__cc_bar #__cc_agent:not(.__cc_au):not(.__cc_an) #__cc_alabel { display: none; }
   }
 </style>
 <div id="__cc_bar">
@@ -482,6 +515,7 @@ function barHtml(o: BrandOpts): string {
   ${sessionLink}
   ${latestLink}<button id="__cc_new" type="button" hidden></button>
   <span class="__cc_when" id="__cc_when" data-ts="${o.updatedAt}">updated ${escAttr(when)}</span>
+  ${interactive && o.hasAgent ? `<span id="__cc_agent" role="status" hidden><span class="__cc_adot"></span><span id="__cc_alabel"></span></span>` : ""}
   ${verChip}
   ${commentsBtn}
   ${menuBtn}
@@ -580,6 +614,20 @@ function barHtml(o: BrandOpts): string {
   // A codecast conversation frames the page frameless (?embed=1) and carries
   // every verb in its own toolbar, so neither the bar nor its pill shows.
   if(framed&&/[?&]embed=1(&|$)/.test(location.search))document.documentElement.classList.add("__cc_embed");
+  // --- the page's timeline ---
+  // window.__castTimeline, provided by <cast-player> and motion pages (it
+  // dispatches "cast:timeline-ready" once assigned). A comment made while one
+  // exists records its moment (anchor.t, seconds); the panel and the note
+  // editor seek back to it, and the open comments become timeline markers.
+  var TL={
+    get:function(){var t=window.__castTimeline;return t&&typeof t.time==="function"&&typeof t.seek==="function"?t:null;},
+    has:function(){return !!TL.get();},
+    now:function(){var t=TL.get();if(!t)return null;try{var v=+t.time();return isFinite(v)?Math.round(v*10)/10:null;}catch(e){return null;}},
+    seek:function(s){var t=TL.get();if(t)try{t.seek(s);}catch(e){}},
+    fmt:function(s){s=Math.max(0,Math.round(s));var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
+      return (h?h+":"+(m<10?"0":""):"")+m+":"+(x<10?"0":"")+x;},
+    markers:function(list){var t=TL.get();if(t&&typeof t.setMarkers==="function")try{t.setMarkers(list);}catch(e){}}
+  };
   // --- notes layer ---
   // The codecast gallery's way of commenting on a picture, on a page: pin
   // mode turns a click into a numbered dot, its note opens beside the dot, and
@@ -605,6 +653,12 @@ function barHtml(o: BrandOpts): string {
       box.addEventListener("mousedown",function(e){e.stopPropagation();});
       var hd=el("div","__cc_neh");
       hd.appendChild(el("span",null,src.label(nt)));
+      if(nt.t!=null&&TL.has()){
+        var tb=el("button","__cc_tat","at "+TL.fmt(nt.t));tb.type="button";tb.title="Seek the page's timeline here";
+        tb.addEventListener("mousedown",function(e){e.preventDefault();});
+        tb.addEventListener("click",function(e){e.stopPropagation();TL.seek(nt.t);});
+        hd.appendChild(tb);
+      }
       hd.appendChild(el("span","__cc_sp"));
       var x=el("button","__cc_nx","×");x.type="button";x.title="Remove this note";
       x.addEventListener("mousedown",function(e){e.preventDefault();});
@@ -757,6 +811,10 @@ function barHtml(o: BrandOpts): string {
       if(typeof renderC==="function"&&cpanel&&!cpanel.hidden)renderC();
     },function(){meLoaded=true;});
   }
+  // Who may send comments to the page's agent: the owner (the #o= key, or the
+  // owning account) and verified teammates who can see the page. The server
+  // decides the same thing again on every post.
+  var steerRole=function(){if(!CC.hasAgent)return null;if(ownerKey)return "owner";return me&&me.steer?me.steer:null;};
   var signinUrl=function(){
     var origin="https://codecast.sh";
     try{origin=new URL(CC.shareUrl).origin;}catch(e){}
@@ -777,6 +835,7 @@ function barHtml(o: BrandOpts): string {
   var keepHash=location.hash||"";
   var withQ=function(extra){var q=new URLSearchParams(location.search);var out=new URLSearchParams();
     ["k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
+    if(CC.live)out.set("live","1");
     Object.keys(extra).forEach(function(p){out.set(p,String(extra[p]));});
     return location.pathname+"?"+out.toString()+keepHash;};
   var verUrl=function(n,current){return withQ(current?{r:n}:{v:n});};
@@ -803,6 +862,34 @@ function barHtml(o: BrandOpts): string {
   panels.forEach(function(p){if(p)p.addEventListener("click",function(e){e.stopPropagation();});});
   var fetchMeta=function(cb){fetch(CC.metaUrl,{cache:"no-store"}).then(function(r){return r.json();}).then(cb,function(){});};
   var setCount=function(){var cc=document.getElementById("__cc_ccount");if(cc)cc.textContent=CC.comments?String(CC.comments):"";};
+  // --- the page's agent ---
+  // The session that made the page, as a quiet chip: idle, working, needs
+  // input, and "updating" from a send to the agent until a newer version
+  // lands (meta's awaiting_since, or this viewer's own send a moment ago).
+  var agentEl=document.getElementById("__cc_agent"),agentLab=document.getElementById("__cc_alabel");
+  var lastAgent=null,sentAt=0;
+  var renderAgent=function(){
+    if(!agentEl)return;
+    var a=lastAgent;
+    if(!a){agentEl.hidden=true;return;}
+    var waiting=!!a.awaiting_since||!!sentAt;
+    var fresh=Date.now()-Math.max(a.awaiting_since||0,sentAt)<9e4;
+    var k=a.state==="needs_input"?"n":waiting&&(a.state==="working"||fresh)?"u":a.state==="working"?"w":"";
+    agentEl.className=k?"__cc_a"+k:"";
+    agentLab.textContent=k==="n"?"Agent needs input":k==="u"?"Agent is updating":k==="w"?"Agent working":"Agent idle";
+    agentEl.title=(k==="u"?"A comment was sent to the session that made this page; the page reloads when it publishes a new version. ":"The session that made this page. ")
+      +(a.since?"Last moved "+rel(a.since)+".":"");
+    agentEl.hidden=false;
+  };
+  var applyMeta=function(m){
+    if(m.versions)metaVersions=m.versions;
+    if(m.version>CC.version)sentAt=0;
+    lastAgent=m.agent||null;renderAgent();
+  };
+  // After sending to the agent, the page follows it: live mode polls fast and
+  // loads the new version by itself the moment it is published.
+  var goLive=function(){};
+  var awaitAgent=function(){sentAt=Date.now();renderAgent();goLive();};
   // --- history panel (restore appears with the owner key) ---
   var chip=document.getElementById("__cc_ver");
   var hist=document.getElementById("__cc_hist");
@@ -857,7 +944,16 @@ function barHtml(o: BrandOpts): string {
   // Inline reply composers: which thread is open, and per-thread draft text
   // (kept out of the DOM so meta refreshes don't eat what's being typed).
   var replyState={open:null,text:{}};
-  var pendingCount=function(){return saved.filter(function(c){return !c.delivered;}).length;};
+  // The version that answered a comment sent to the agent: the first one
+  // published after it went, newer than the version it was made on.
+  var metaVersions=[];
+  var answeredIn=function(c){
+    var at=c.delivered_at||c.created_at,best=0;
+    metaVersions.forEach(function(v){if(v.version>c.version&&v.published_at>at&&(!best||v.version<best))best=v.version;});
+    return best;
+  };
+  // Unsent comments "Send all" can carry: anonymous ones never reach the agent.
+  var pendingCount=function(){return saved.filter(function(c){return !c.delivered&&!!c.role;}).length;};
   // @mention autocomplete on a textarea — teammates only (me.roster is empty
   // for everyone else, which disables this entirely).
   var wireMentions=function(ta){
@@ -929,16 +1025,23 @@ function barHtml(o: BrandOpts): string {
     window.addEventListener("resize",close);
   };
   var parseAnchor=function(c){if(c.__a!==undefined)return c.__a;try{c.__a=c.anchor?JSON.parse(c.anchor):null;}catch(e){c.__a=null;}return c.__a;};
-  // Where a saved comment's pin goes. Prefer the recorded page-fraction point
-  // (exact if the content hasn't changed), then the element selector, then a
-  // right-edge rail marker when only a vertical fraction survives.
+  // Where a saved comment's pin goes. Prefer the element it was made on (it
+  // follows the element when the page reflows or a new version moves it),
+  // at the recorded spot inside its box; then the page-fraction point; then
+  // a right-edge rail marker when only a vertical fraction survives.
+  var elFor=function(an){if(!an||!an.sel)return null;try{return document.querySelector(an.sel);}catch(e){return null;}};
   var posFor=function(an){
     if(!an)return null;
     var docEl=document.documentElement;
     var docH=Math.max(docEl.scrollHeight,1),docW=Math.max(docEl.scrollWidth,1);
+    var n=elFor(an);
+    if(n){var r=n.getBoundingClientRect();
+      if(r.width||r.height){
+        var inBox=typeof an.ox==="number"&&typeof an.oy==="number";
+        return{x:r.left+window.pageXOffset+(inBox?an.ox*r.width:Math.min(r.width/2,300)),
+          y:r.top+window.pageYOffset+(inBox?an.oy*r.height:10)};
+      }}
     if(typeof an.y==="number"&&typeof an.x==="number")return{x:an.x*docW,y:an.y*docH};
-    if(an.sel){try{var n=document.querySelector(an.sel);if(n){var r=n.getBoundingClientRect();
-      if(r.width||r.height)return{x:r.left+window.pageXOffset+Math.min(r.width/2,300),y:r.top+window.pageYOffset+10};}}catch(e){}}
     if(typeof an.y==="number")return{x:docW-26,y:an.y*docH};
     return null;
   };
@@ -947,6 +1050,10 @@ function barHtml(o: BrandOpts): string {
   var renderPins=function(){
     var savedPos=saved.map(function(c){return{c:c,p:posFor(parseAnchor(c))};}).filter(function(s){return !!s.p;});
     NL.draw();
+    var marks=[];
+    saved.forEach(function(c){var an=parseAnchor(c);
+      if(an&&typeof an.t==="number"&&!c.parent_id)marks.push({t:an.t,n:marks.length+1,label:c.author_name+": "+c.text.slice(0,80),avatar:c.author_avatar||undefined,id:c.id});});
+    TL.markers(marks);
     if(!pinLayer&&!savedPos.length)return;
     pinsOn().innerHTML="";
     savedPos.forEach(function(s){
@@ -954,15 +1061,19 @@ function barHtml(o: BrandOpts): string {
       p.style.left=s.p.x+"px";p.style.top=s.p.y+"px";
       p.title=s.c.author_name+": "+s.c.text.slice(0,80);
       p.setAttribute("data-cid",s.c.id);
-      p.addEventListener("click",function(e){e.stopPropagation();openC(null,s.c.id,true);});
+      p.addEventListener("click",function(e){e.stopPropagation();seekTo(s.c);openC(null,s.c.id,true);});
       pinLayer.appendChild(p);
     });
   };
+  var seekTo=function(c){var an=parseAnchor(c);if(an&&typeof an.t==="number")TL.seek(an.t);};
+  // A timeline that arrives after the bar: hand it the markers, and give the
+  // open panel its seek buttons.
+  window.addEventListener("cast:timeline-ready",function(){renderPins();if(cpanel&&!cpanel.hidden&&!drafts.length)renderC();});
   var refreshSaved=function(cb){fetchMeta(function(m){
     if(!m)return;
     saved=m.comments||[];savedLoaded=true;
     if(typeof m.comment_count==="number")CC.comments=m.comment_count;
-    setCount();renderPins();
+    applyMeta(m);setCount();renderPins();
     if(cb)cb();
   });};
   // ?c=<comment id> — a notification deep link: open the discussion with that
@@ -985,31 +1096,54 @@ function barHtml(o: BrandOpts): string {
   // Fraction-based pin positions depend on the laid-out document size.
   var rszT=null;
   window.addEventListener("resize",function(){clearTimeout(rszT);rszT=setTimeout(renderPins,150);});
-  var selPath=function(n){try{
-    var parts=[],d=0;
-    while(n&&n.nodeType===1&&d<4&&n!==document.body&&n!==document.documentElement){
-      if(n.id){parts.unshift("#"+n.id);return parts.join(">");}
+  // A stable path to an element: up to the nearest unique id or data-cast-id
+  // (an author's own handle for a spot), else nth-of-type steps from <body>.
+  // Kept only if it resolves back to the same element.
+  var selPath=function(start){try{
+    var parts=[],n=start,d=0;
+    while(n&&n.nodeType===1&&n!==document.body&&n!==document.documentElement&&d<12){
+      var cid=n.getAttribute("data-cast-id");
+      if(cid){parts.unshift("[data-cast-id="+JSON.stringify(cid)+"]");break;}
+      if(n.id&&document.querySelectorAll("#"+CSS.escape(n.id)).length===1){parts.unshift("#"+CSS.escape(n.id));break;}
       var tag=n.tagName.toLowerCase(),ix=1,s=n;
       while((s=s.previousElementSibling))if(s.tagName===n.tagName)ix++;
       parts.unshift(tag+":nth-of-type("+ix+")");
       n=n.parentElement;d++;
     }
-    return parts.join(">");
+    if(!parts.length)return "";
+    if(n===document.body)parts.unshift("body");
+    var path=parts.join(">");
+    return document.querySelector(path)===start?path:"";
   }catch(e){return "";}};
+  // The anchor for a new comment: the point, the element under it (with the
+  // point's place inside its box), and the timeline moment when there is one.
+  var anchorAt=function(pt,snip,t){
+    var a={x:pt.x,y:pt.y};if(snip)a.snippet=snip.slice(0,120);
+    var sp=t&&t!==document.body&&t!==document.documentElement?selPath(t):"";
+    if(sp){
+      a.sel=sp;
+      try{var r=t.getBoundingClientRect(),sz=document.documentElement;
+        if(r.width&&r.height){
+          var px=pt.x*Math.max(sz.scrollWidth,1)-(r.left+window.pageXOffset),py=pt.y*Math.max(sz.scrollHeight,1)-(r.top+window.pageYOffset);
+          a.ox=Math.round(Math.min(1,Math.max(0,px/r.width))*1000)/1000;a.oy=Math.round(Math.min(1,Math.max(0,py/r.height))*1000)/1000;
+        }}catch(e){}
+    }
+    var tt=TL.now();if(tt!=null)a.t=tt;
+    return a;
+  };
   // Drafts with a spot on the page draw through the notes layer: a numbered
   // dot with the draft's editor at it. Posting stays the discussion panel's
   // job, where the name and the send live, so the editor links there.
   var dSeq=0,draftEd=null;
-  var newDraft=function(a){var d={id:"d"+(++dSeq),text:"",anchor:a};drafts.push(d);return d;};
+  // A draft's "Send to agent" starts on for the owner and off for a teammate.
+  var newDraft=function(a){var d={id:"d"+(++dSeq),text:"",anchor:a,agent:steerRole()==="owner"};drafts.push(d);return d;};
   var hasSpot=function(d){return !!(d.anchor&&typeof d.anchor.x==="number"&&typeof d.anchor.y==="number");};
   var draftSrc={sticky:false,hint:"Click anywhere to pin your comment · Esc cancels",
-    notes:function(){var out=[];drafts.forEach(function(d,i){if(hasSpot(d))out.push({key:d.id,n:i+1,x:d.anchor.x,y:d.anchor.y,body:d.text,snippet:d.anchor.snippet||""});});return out;},
+    notes:function(){var out=[];drafts.forEach(function(d,i){if(hasSpot(d))out.push({key:d.id,n:i+1,x:d.anchor.x,y:d.anchor.y,t:d.anchor.t,body:d.text,snippet:d.anchor.snippet||""});});return out;},
     editing:function(){return draftEd;},
     label:function(nt){return "Draft "+nt.n+" · not posted yet";},
     add:function(pt,snip,t){
-      var a={x:pt.x,y:pt.y};if(snip)a.snippet=snip.slice(0,120);
-      var sp=t?selPath(t):"";if(sp)a.sel=sp;
-      closeAll();draftEd=newDraft(a).id;NL.draw();syncSend();
+      closeAll();draftEd=newDraft(anchorAt(pt,snip,t)).id;NL.draw();syncSend();
     },
     body:function(k,b){drafts.forEach(function(d){if(d.id===k)d.text=b;});syncSend();},
     edit:function(k){draftEd=k;NL.draw();},
@@ -1025,43 +1159,44 @@ function barHtml(o: BrandOpts): string {
   NL.use(draftSrc);
   var enterPin=function(){closeAll();if(!NL.is(draftSrc))NL.use(draftSrc);NL.pin(true,false);};
   document.addEventListener("keydown",function(e){if(e.key==="Escape")closeAll();});
+  var toAgent=function(d){return !!steerRole()&&!!d.agent;};
   var syncSend=function(){
-    var n=drafts.filter(function(d){return d.text.trim();}).length;
+    var ready=drafts.filter(function(d){return d.text.trim();});
+    var n=ready.length,na=ready.filter(toAgent).length;
     var b=document.getElementById("__cc_sendbtn");
-    if(b){b.disabled=!n;b.textContent=ownerKey?(n>1?"Send "+n+" to session":"Send to session"):(n>1?"Post "+n+" comments":"Comment");}
-    var g=document.getElementById("__cc_savebtn");
-    if(g){g.disabled=!n;}
+    if(b){b.disabled=!n;
+      b.textContent=!n?"Comment":na===n?(n>1?"Send "+n+" to agent":"Send to agent"):na?"Post "+n+" \\u00B7 "+na+" to agent":(n>1?"Post "+n+" comments":"Comment");}
   };
-  // deliver=false → post into the page's discussion. deliver=true is the
-  // owner's gesture (needs the #o= key; the server enforces it too): the
-  // batch goes into the publishing session as one message.
-  var doSend=function(name,deliver){
+  // One post per batch; each comment says for itself whether it goes to the
+  // agent. The batch's deliver:false means an unmarked comment never does.
+  var doSend=function(name){
     var ready=drafts.filter(function(d){return d.text.trim();});
     if(!ready.length)return;
+    var na=ready.filter(toAgent).length;
     var b=document.getElementById("__cc_sendbtn");
-    var g=document.getElementById("__cc_savebtn");
     var errBox=cpanel.querySelector(".__cc_cerr");
-    if(b){b.disabled=true;if(deliver)b.textContent="Sending…";}
-    if(g){g.disabled=true;if(!deliver)g.textContent="Saving…";}
+    if(b){b.disabled=true;b.textContent=na?"Sending…":"Posting…";}
     sSet("__cc_name",name||"");
     api("/cli/artifacts/comment",{slug:CC.slug,author_name:me?me.name:((name||"").trim()||"anonymous"),
       author_email:gateEmail||undefined,version:CC.version,
       k:gateK||undefined,e:gateE||undefined,
-      deliver:deliver?undefined:false,
+      deliver:false,
       owner_key:ownerKey||undefined,
       identity_token:idTok||undefined,
-      comments:ready.map(function(d){var c={text:d.text.trim()};if(d.anchor)c.anchor=JSON.stringify(d.anchor);return c;})})
+      comments:ready.map(function(d){var c={text:d.text.trim(),deliver:toAgent(d)};if(d.anchor)c.anchor=JSON.stringify(d.anchor);return c;})})
     .then(function(r){
       if(!r||r.error){if(errBox)errBox.textContent=(r&&r.error)||"Send failed — try again";syncSend();return;}
       drafts=[];renderPins();
       cpanel.innerHTML="";
       var ok=el("div","__cc_okwrap");
       ok.appendChild(el("div","__cc_okmark","✓"));
-      ok.appendChild(el("div","__cc_okt",(deliver?"Sent ":"Posted ")+ready.length+(ready.length===1?" comment":" comments")));
-      ok.appendChild(el("div","__cc_oks",deliver
-        ?(r.delivered?"Delivered to your session.":"Posted — the session could not be reached, use \\u201CSend all\\u201D later.")
+      ok.appendChild(el("div","__cc_okt",(na?"Sent ":"Posted ")+ready.length+(ready.length===1?" comment":" comments")));
+      ok.appendChild(el("div","__cc_oks",na
+        ?(r.delivered?"The agent has it. This page reloads when it publishes a new version."
+          :"Posted, but the agent's session could not be reached. "+(ownerKey?"Use \\u201CSend all\\u201D later.":"The owner can send it later."))
         :"Now part of this page's discussion."));
       cpanel.appendChild(ok);
+      if(na&&r.delivered){awaitAgent();}
       refreshSaved(function(){setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
     },function(){if(errBox)errBox.textContent="Network error — your drafts are kept";syncSend();});
   };
@@ -1072,6 +1207,7 @@ function barHtml(o: BrandOpts): string {
     api("/cli/artifacts/comment",{slug:CC.slug,deliver_pending:true,owner_key:ownerKey})
     .then(function(r){
       if(!r||r.error){btn.textContent="Failed";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);return;}
+      if(r.delivered)awaitAgent();
       refreshSaved(function(){if(!cpanel.hidden)renderC();});
     },function(){btn.textContent="Network error";setTimeout(function(){if(!cpanel.hidden)renderC();},1600);});
   };
@@ -1126,10 +1262,24 @@ function barHtml(o: BrandOpts): string {
       rm.addEventListener("click",function(){drafts.splice(i,1);renderPins();renderC();});
       top.appendChild(rm);
       card.appendChild(top);
+      if(d.anchor&&d.anchor.t!=null&&TL.has()){
+        var tb=el("button","__cc_tat","at "+TL.fmt(d.anchor.t));tb.type="button";tb.title="Seek the page's timeline here";
+        tb.addEventListener("click",function(e){e.stopPropagation();TL.seek(d.anchor.t);});
+        top.insertBefore(tb,top.lastChild.previousSibling);
+      }
       var ta=document.createElement("textarea");ta.className="__cc_ta";ta.placeholder="Write your comment…";ta.value=d.text;ta.rows=2;
       ta.addEventListener("input",function(){d.text=ta.value;syncSend();});
       wireMentions(ta);
       card.appendChild(ta);
+      if(steerRole()){
+        var lab=el("label","__cc_toagent"+(d.agent?" __cc_on":""));
+        var cb=document.createElement("input");cb.type="checkbox";cb.checked=!!d.agent;
+        cb.addEventListener("change",function(){d.agent=cb.checked;lab.classList.toggle("__cc_on",cb.checked);syncSend();});
+        lab.appendChild(cb);lab.appendChild(document.createTextNode("Send to agent"));
+        lab.title=steerRole()==="owner"?"Deliver this comment to the session that made the page"
+          :"Deliver this comment to the owner's agent, marked as your request as their teammate";
+        card.appendChild(lab);
+      }
       body.appendChild(card);
     });
     var addrow=el("div","__cc_addrow");
@@ -1138,7 +1288,7 @@ function barHtml(o: BrandOpts): string {
     pinB.addEventListener("click",function(){enterPin();});
     var genB=iconBtn("__cc_btn",noteSvg,"General note");
     genB.title="A comment about the whole page";
-    genB.addEventListener("click",function(){newDraft(null);renderC(drafts.length-1);});
+    genB.addEventListener("click",function(){var tt=TL.now();newDraft(tt!=null?{t:tt}:null);renderC(drafts.length-1);});
     addrow.appendChild(pinB);addrow.appendChild(genB);
     body.appendChild(addrow);
     if(drafts.length){
@@ -1157,36 +1307,25 @@ function barHtml(o: BrandOpts): string {
         who.appendChild(nmi);body.appendChild(who);
       }
       body.appendChild(el("div","__cc_cerr",""));
+      // Every comment posts to the page's discussion; the ones marked "Send
+      // to agent" also go to the publishing session as one message.
       var actions=el("div","__cc_actions");
-      if(ownerKey){
-        // Owner: the primary gesture is pushing the batch into the session;
-        // posting to the discussion only is the quiet alternative.
-        var save=el("button","__cc_ghost","Post without sending");save.type="button";save.id="__cc_savebtn";
-        save.title="Add to the discussion without messaging your session";
-        save.addEventListener("click",function(){doSend(nm.value,false);});
-        var send=el("button","__cc_send","Send to session");send.type="button";send.id="__cc_sendbtn";
-        send.title="Deliver to your session now";
-        send.addEventListener("click",function(){doSend(nm.value,true);});
-        actions.appendChild(save);actions.appendChild(send);
-      }else{
-        // Viewers post into the discussion; only the owner can message the
-        // session (the server enforces this regardless of the request).
-        var post=el("button","__cc_send","Comment");post.type="button";post.id="__cc_sendbtn";
-        post.title="Post to this page's discussion";
-        post.addEventListener("click",function(){doSend(nm.value,false);});
-        actions.appendChild(post);
-      }
+      var post=el("button","__cc_send","Comment");post.type="button";post.id="__cc_sendbtn";
+      post.title=steerRole()?"Post to the discussion; the marked comments also go to the agent":"Post to this page's discussion";
+      post.addEventListener("click",function(){doSend(nm.value);});
+      actions.appendChild(post);
       body.appendChild(actions);
     }
-    // Owner call to action: comments not yet flushed into the session.
+    // Owner call to action: comments from people who may steer the agent
+    // (the owner, teammates) that have not reached it yet.
     var pend=pendingCount();
-    if(pend>0&&ownerKey){
+    if(pend>0&&ownerKey&&CC.hasAgent){
       var pr=el("div","__cc_pendrow");
       pr.style.display="flex";pr.style.alignItems="center";pr.style.gap="8px";pr.style.color="var(--cc-dim)";
-      pr.appendChild(el("span",null,pend+" not in your session yet"));
+      pr.appendChild(el("span",null,pend+" not sent to the agent"));
       pr.appendChild(el("span","__cc_sp"));
       var sa2=el("button","__cc_sendall","Send all");sa2.type="button";
-      sa2.title="Deliver every unsent comment to your session as one batch";
+      sa2.title="Deliver yours and your teammates' unsent comments to the agent as one batch";
       sa2.addEventListener("click",function(){sendAll(sa2);});
       pr.appendChild(sa2);
       body.appendChild(pr);
@@ -1203,6 +1342,7 @@ function barHtml(o: BrandOpts): string {
         else tops.push(c);
       });
       var jumpTo=function(c){
+        seekTo(c);
         var p=posFor(parseAnchor(c));
         if(p)window.scrollTo({top:Math.max(0,p.y-140),behavior:"smooth"});
         var pin=pinLayer&&pinLayer.querySelector('[data-cid="'+c.id+'"]');
@@ -1216,9 +1356,21 @@ function barHtml(o: BrandOpts): string {
         hd.appendChild(el("span","__cc_cname",c.author_name));
         if(c.verified){var ck=el("span","__cc_vck","\\u2713");ck.title="Signed-in codecast user";hd.appendChild(ck);}
         hd.appendChild(el("span","__cc_ctime",rel(c.created_at)));
-        // Delivery state is session bookkeeping — meaningful to the owner,
-        // noise to everyone else.
-        if(ownerKey&&!c.delivered)hd.appendChild(el("span","__cc_stag __cc_pend","unsent"));
+        var an0=parseAnchor(c);
+        if(an0&&typeof an0.t==="number"&&TL.has()){
+          var tb=el("button","__cc_tat","at "+TL.fmt(an0.t));tb.type="button";tb.title="Seek the page's timeline here";
+          tb.addEventListener("click",function(e){e.stopPropagation();TL.seek(an0.t);});
+          hd.appendChild(tb);
+        }
+        // A comment the agent got says so, and once a version newer than the
+        // one it was made on exists, which version answered it. Unsent is
+        // the owner's bookkeeping, shown only where "Send all" can carry it.
+        if(c.delivered){
+          var fixedIn=answeredIn(c);
+          var st=el("span","__cc_stag "+(fixedIn?"__cc_done":"__cc_sent"),fixedIn?"addressed in v"+fixedIn:"sent to agent");
+          st.title=fixedIn?"Sent to the agent on v"+c.version+"; v"+fixedIn+" was published after it":"Sent to the agent that made this page";
+          hd.appendChild(st);
+        }else if(ownerKey&&CC.hasAgent&&c.role){hd.appendChild(el("span","__cc_stag __cc_pend","unsent"));}
         row.appendChild(hd);
         if(!isReply&&posFor(parseAnchor(c))){
           var jb=el("button","__cc_jump");jb.type="button";jb.innerHTML=jumpSvg;
@@ -1318,6 +1470,7 @@ function barHtml(o: BrandOpts): string {
       var s="";try{s=String(window.getSelection()||"").trim();}catch(x){}
       if(s){
         var a={snippet:s.slice(0,120)};
+        var tt=TL.now();if(tt!=null)a.t=tt;
         try{
           var r0=window.getSelection().getRangeAt(0).getBoundingClientRect();
           var docH=Math.max(document.documentElement.scrollHeight,1);
@@ -1520,6 +1673,7 @@ function barHtml(o: BrandOpts): string {
           var sig=function(list){return list.map(function(c){return c.id+(c.delivered?"+":"-");}).join(",");};
           if(sig(m.comments)!==sig(saved)){saved=m.comments;savedLoaded=true;renderPins();}
         }
+        applyMeta(m);
         if(m.version>CC.version){
           if(CC.live){location.href=verUrl(m.version,true);return;}
           if(badge){
@@ -1530,7 +1684,12 @@ function barHtml(o: BrandOpts): string {
         }
       });
     };
-    setInterval(poll,CC.live?5e3:3e4);
+    var pollT=null;
+    var schedule=function(){clearInterval(pollT);pollT=setInterval(poll,CC.live?5e3:3e4);};
+    schedule();
+    goLive=function(){if(CC.live)return;CC.live=true;schedule();};
+    // The agent chip's first state, when no comment fetch is already coming.
+    if(CC.hasAgent&&!focusCid&&!(CC.comments>0))poll();
   }
 })();</script>`;
 }

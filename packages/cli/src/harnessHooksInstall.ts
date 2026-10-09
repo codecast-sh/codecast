@@ -16,6 +16,7 @@ import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { SESSION_REGISTER_HOOK } from "./sessionRegisterHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { TASK_PULSE_HOOK } from "./taskPulseHook.js";
+import { TASK_CONTEXT_HOOK, TASK_CONTEXT_HOOK_FILE, installTaskContextHookCodex, removeTaskContextHookCodex } from "./taskContextHook.js";
 import { USER_PROMPT_HOOK, USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
 import { SESSION_TRAILER_HOOK, SESSION_TRAILER_HOOK_FILE } from "./sessionTrailerHook.js";
@@ -25,9 +26,16 @@ const SCRIPTS: Record<string, string> = {
   "session-register.sh": SESSION_REGISTER_HOOK,
   "thread-state.sh": THREAD_STATE_HOOK,
   "task-pulse.sh": TASK_PULSE_HOOK,
+  [TASK_CONTEXT_HOOK_FILE]: TASK_CONTEXT_HOOK,
   [USER_PROMPT_HOOK_FILE]: USER_PROMPT_HOOK,
   [STATUSLINE_HOOK_FILE]: CODECAST_STATUSLINE_HOOK,
   [SESSION_TRAILER_HOOK_FILE]: SESSION_TRAILER_HOOK,
+};
+
+// Hooks Codex runs too, from ~/.codex/hooks.json: installed and removed with
+// the Claude hook they mirror, and only where Codex hooks are already on.
+const CODEX_TWINS: Record<string, { install: () => void; remove: () => void }> = {
+  [TASK_CONTEXT_HOOK_FILE]: { install: installTaskContextHookCodex, remove: removeTaskContextHookCodex },
 };
 
 // Retired: its Bash edit capture moved into the daemon. The entries come out
@@ -113,6 +121,7 @@ export function installHarnessHooks(config: HookConfig = {}, opts: { featuresOnl
     } else if (hook.events.length > 0) {
       installOwnedHook(hook.events, file, { timeout: HOOK_TIMEOUT_S, settingsPath: settings });
     }
+    CODEX_TWINS[hook.file]?.install();
   }
   if (opts.featuresOnly) return;
   // The prompt hook runs the other jobs itself; an older install registered
@@ -144,4 +153,5 @@ function removeHook(hook: HarnessHook, dir: string, settings: string): void {
   if (hook.kind === "statusLine") removeOwnedStatusLine({ settingsPath: settings });
   else removeOwnedHook(file, { settingsPath: settings });
   removeHarnessFile(file, "hooks");
+  CODEX_TWINS[hook.file]?.remove();
 }

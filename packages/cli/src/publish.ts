@@ -38,8 +38,9 @@ import {
   type ArtifactLsRow,
 } from "./publishCommand.js";
 import { apiPost, missingRouteError, type PublishDeps } from "./castApi.js";
-import { CAST_PLAYER_GUIDE, pageUsesPlayer } from "@codecast/shared/contracts";
+import { CAST_PLAYER_GUIDE, describePageAnchor, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
+import { renderMotion, staleRenderNote } from "./publishMotion.js";
 
 const WATCH_DEBOUNCE_MS = 400;
 const THUMB_TIMEOUT_MS = 10_000;
@@ -467,16 +468,14 @@ async function runComments(
   console.log(`${fmt.highlight(row.title)} ${fmt.muted(`(${row.slug})`)} — ${open_.length} open`);
   for (const c of open_) {
     const who = c.author_email ? `${c.author_name} <${c.author_email}>` : c.author_name;
-    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(`${who} · v${c.version} · ${ago(c.created_at)}`)}`);
+    // role: "owner" | "teammate" may steer the agent; anyone else is a viewer.
+    const meta = [who, c.role ?? "viewer", `v${c.version}`, ago(c.created_at)];
+    if (c.delivered) meta.push("sent to agent");
+    else if (c.role) meta.push("not sent to agent");
+    console.log(`  ${fmt.accent(c.id)}  ${fmt.muted(meta.join(" · "))}`);
     for (const line of String(c.text).split("\n")) console.log(`    ${line}`);
-    if (c.anchor) {
-      try {
-        const snippet = JSON.parse(c.anchor)?.snippet;
-        if (snippet) console.log(fmt.muted(`    ↳ on: "${String(snippet).slice(0, 100)}"`));
-      } catch {
-        /* opaque anchor */
-      }
-    }
+    const where = describePageAnchor(parsePageAnchor(c.anchor));
+    if (where.length) console.log(fmt.muted(`    ↳ ${where.join(", ")}`));
   }
   console.log(fmt.muted(`  resolve: cast publish comments ${row.slug} --resolve <id>  |  --resolve-all`));
 }
@@ -533,6 +532,8 @@ interface PublishOptions {
   /** Evidence (the-line.md L6): the task (ct-N) or plan (pl-N) this page is for. */
   task?: string;
   plan?: string;
+  /** Render a HyperFrames composition directory to MP4 before publishing. */
+  render?: boolean;
 }
 
 /** The /cli/artifacts/publish body: the payload plus the flags of this publish. */
@@ -616,6 +617,25 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   }
   const access = accessFromOptions(options);
   const sessionRef = deps.detectCurrentSessionId() ?? undefined;
+  const isDir = fs.statSync(absPath).isDirectory();
+
+  if (options.render) {
+    if (!isDir) {
+      console.error(fmt.error("--render publishes a directory: put the composition in its own folder as index.html"));
+      process.exit(1);
+    }
+    try {
+      process.stderr.write(fmt.muted("rendering MP4 (hyperframes render)…\n"));
+      const manifest = renderMotion(absPath, walkBundleDir(absPath));
+      process.stderr.write(fmt.muted(`rendered ${manifest.mp4} (${formatBytes(manifest.bytes)})\n`));
+    } catch (err) {
+      console.error(fmt.error(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  } else if (isDir) {
+    const note = staleRenderNote(absPath, walkBundleDir(absPath));
+    if (note) process.stderr.write(fmt.muted(`note: ${note}\n`));
+  }
 
   let result: any;
   let title: string;
@@ -645,7 +665,6 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   console.log(fmt.muted(`\nwatching ${target} — Ctrl+C to stop`));
   console.log(fmt.muted(`live view: ${result.url}?live=1`));
 
-  const isDir = fs.statSync(absPath).isDirectory();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let publishing = false;
   let dirty = false;
@@ -726,6 +745,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .option("--task <ct-N>", "Attach the page to a task as evidence at its current station (default: the session's active task)")
     .option("--plan <pl-N>", "Attach the page to a plan")
     .option("--open", "Open the published URL in the browser")
+    .option("--render", "Render a HyperFrames composition directory to MP4 and offer it on the page (slow; only when an MP4 is wanted)")
     .option("--resolve <id>", "comments: mark one comment resolved")
     .option("--resolve-all", "comments: mark every open comment resolved")
     .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
