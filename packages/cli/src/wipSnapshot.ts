@@ -131,7 +131,9 @@ export function parseSnapshotTrailer(message: string, key: string): string | und
  * .git/info/exclude (only the host's reserveInputs does). Pathspec excludes
  * keep tracked content under .codecast as HEAD has it and keep the untracked
  * state out. The worktree GC snapshots with the same list, so a setup log on
- * the host never counts as host-made work.
+ * the host never counts as host-made work, and so does every snapshot a move
+ * takes on either side: a checkout's own worktrees sit inside it on both
+ * machines and travel on their own.
  */
 export const CLOUD_SEED_EXCLUDES = [".codecast/workspaces", ".codecast/worktrees", ".codecast/logs"];
 
@@ -230,9 +232,9 @@ export async function snapshotTree(cwd: string, exclude: string[] = []): Promise
  * null (the caller keeps the plain clone). See createWipSnapshotStrict for
  * the recipe and its properties.
  */
-export async function createWipSnapshot(cwd: string): Promise<WipSnapshot | null> {
+export async function createWipSnapshot(cwd: string, opts: { exclude?: string[] } = {}): Promise<WipSnapshot | null> {
   try {
-    return await createWipSnapshotStrict(cwd);
+    return await createWipSnapshotStrict(cwd, opts);
   } catch {
     return null;
   }
@@ -397,13 +399,14 @@ export async function defaultRemote(cwd: string): Promise<string | null> {
  * exactly (commit-tree joins paragraphs with a blank line). The identity is passed
  * inline because a bundle-cloned remote may have no user.* config.
  */
-export function remoteSnapshotScript(opts: { cwd: string; ref: string }): string {
+export function remoteSnapshotScript(opts: { cwd: string; ref: string; exclude?: string[] }): string {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
   return [
     `cd ${q(opts.cwd)}`,
     `IDX=$(mktemp)`,
     `GIT_INDEX_FILE="$IDX" git read-tree HEAD`,
-    `GIT_INDEX_FILE="$IDX" git add -A`, // respects .gitignore, same as here
+    // respects .gitignore, same as here; the whole checkout, whatever folder of it cwd is
+    `GIT_INDEX_FILE="$IDX" git add -A -- :/${(opts.exclude ?? []).map((p) => ` ${q(`:(top,exclude)${p}`)}`).join("")}`,
     `TREE=$(GIT_INDEX_FILE="$IDX" git write-tree)`,
     `BR=$(git rev-parse --abbrev-ref HEAD)`,
     // Same date pinning as createWipSnapshot, for the same reason: the commit
@@ -422,7 +425,7 @@ export type ApplyResult =
   | { ok: true; base: string; branch?: string; appliedWork: boolean; conflicts: string[] }
   | { ok: false; reason: string };
 
-const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
+export const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
 
 /**
  * Bring a session's work home from an already-fetched snapshot of the host
