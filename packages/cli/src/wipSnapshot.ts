@@ -422,7 +422,7 @@ export type ApplyResult =
   | { ok: true; base: string; branch?: string; appliedWork: boolean; conflicts: string[] }
   | { ok: false; reason: string };
 
-const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
+export const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
 
 /**
  * Bring a session's work home from an already-fetched snapshot of the host

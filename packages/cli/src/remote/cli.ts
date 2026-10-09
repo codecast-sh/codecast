@@ -103,9 +103,9 @@ export function describeVerification(v: SyncVerification | undefined): string {
   if (!v.headsMatch) {
     return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
   }
-  const tree = v.remoteDirty === 0 ? "clean working tree"
+  const tree = v.remoteDirty === 0 ? "working tree identical to the source's"
     : v.remoteDirty == null ? "working-tree state unknown"
-    : `WARNING: ${v.remoteDirty} uncommitted change(s) already in the destination tree`;
+    : `WARNING: ${v.remoteDirty} file(s) in the destination tree differ from the source's`;
   return `branch ${v.branch} at ${v.localHead.slice(0, 8)}, destination HEAD matches, ${tree}`;
 }
 
@@ -311,15 +311,15 @@ export function registerRemoteCommand(program: Command): void {
         process.exit(1);
       }
 
-      // The move lands in the host's main checkout of this repo. A shared
-      // cloud session there would be re-pointed at the moved snapshot by the
-      // push, so ask first (the server's ownership flip re-checks).
+      // The move merges into the host's main checkout of this repo. A shared
+      // cloud session holds that checkout on a branch of its own, so ask first
+      // (the server's ownership flip re-checks).
       {
-        const { remoteRepoPath, resolveLocalSession } = await import("./session-move.js");
+        const { gitRootOf, remoteRepoPath, resolveLocalSession } = await import("./session-move.js");
         const { fetchRootOccupant } = await import("../cloud/prepare.js");
         const { checkoutInUseMessage } = await import("@codecast/shared/contracts");
-        const remoteCwd = remoteRepoPath(host, resolveLocalSession(sessionId).cwd);
-        const occupant = await fetchRootOccupant(client, api, token, macDevice.device_id, remoteCwd, conv._id);
+        const remoteCwd = remoteRepoPath(host, gitRootOf(resolveLocalSession(sessionId).cwd));
+        const occupant = await fetchRootOccupant(client, api, token, macDevice.device_id, remoteCwd, conv._id, { merging: true });
         if (occupant) {
           console.error(checkoutInUseMessage(remoteCwd, occupant));
           process.exit(1);
