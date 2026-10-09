@@ -4,11 +4,13 @@ import type { CSSProperties } from "react";
 import { SOL } from "../../blog/blogChrome";
 import { KeyCap } from "@/components/KeyboardShortcutsHelp";
 import { Layer, Pane, Run, C, t, Note, VIOLET } from "./kit";
+import { ForScripts } from "../agents/parts";
+import { Shot } from "../kit";
 
 const FULL_ID = "jx7k2qa8m3v0d1y6h4t9rbc2wqe5fn7s";
 
 /**
- * Layer 04: `cast blame` and the trailer that makes it exact. The commit is
+ * Layer 04: session blame, in the repo view and as `cast blame`, and the trailer that makes it exact. The commit is
  * drawn as the seam between git and the session record: the trailer is the
  * one line that belongs to both.
  */
@@ -19,19 +21,28 @@ export function BlameLayer() {
       id="blame"
       tint
       wide
-      title={<>git blame, with the session in the author column</>}
+      title={<>Blame that names the session, not just the committer</>}
       lede={
         <>
           <p>
-            When agents write the code, <C>git blame</C> names whoever committed it, which tells you nothing about why. <C>cast blame</C> is a drop-in replacement: same output, but the author column shows the session that wrote each line, with its id and title.
+            When agents write the code, git blame names whoever committed it, which tells you nothing about why. Open a file in codecast&apos;s repo view and set <b>Blame</b> to <b>Sessions</b> (<KeyCap size="xs">b</KeyCap>): each line is marked with the session that wrote it, a strip above the file reads how much of it traces to sessions (&ldquo;84% by 3 sessions&rdquo;), and a click opens the conversation.
           </p>
           <p>
-            The output matches git blame&apos;s default and porcelain formats, so an editor integration that shells out to <C>git blame</C> can call <C>cast blame</C> instead. Lines no session wrote keep their git author.
+            In your terminal and editor, <C>cast blame</C> is a drop-in for <C>git blame</C>: same output, with the session&apos;s id and title in the author column. Lines no session wrote keep their git author.
           </p>
         </>
       }
     >
-      <Pane label="~/src/payments">
+      <Shot
+        className="mb-8"
+        src="/features/memory/session-blame.webp"
+        alt="A file in codecast's repo view with Blame set to Sessions: a strip reading 32% by 2 sessions with chips for the sessions Deploy messaging and CLI release and Desktop app crash fix, and a gutter naming the session or git author beside each line"
+        width={1630}
+        height={870}
+        caption="A file in codecast's own repo. The gutter names the session behind each line, and lines written by hand keep their git author."
+      />
+      <ForScripts note="The same answer in a terminal, in git blame's own format.">
+      <Pane label="cast blame">
         <Run>cast blame -L 3,9 src/webhooks/retry.ts</Run>
         {t.dim("a91f03e2c")} ({t.v("jx7f9de lee  Stripe webhook ingest        ")} {t.dim("2026-08-30 11:20:04 -0400")} 3) {t.ink('import { queue } from "../queue";')}{"\n"}
         {t.dim("a91f03e2c")} ({t.v("jx7f9de lee  Stripe webhook ingest        ")} {t.dim("2026-08-30 11:20:04 -0400")} 4) {t.ink('import type { WebhookEvent } from "./types";')}{"\n"}
@@ -42,6 +53,7 @@ export function BlameLayer() {
         {t.dim("e5520aa31")} ({"Dana Okafor                               "} {t.dim("2026-10-02 16:05:12 -0400")} 9) {t.ink("  return BASE_DELAY_MS * 2 ** attempt * (1 + jitter);")}
       </Pane>
       <p className="font-mono text-[11.5px] mt-2 mb-6" style={{ color: SOL.base1 }}>Line 9 was a hand edit outside any session, so it keeps its git author.</p>
+      </ForScripts>
 
       <Seam />
       <div className="grid md:grid-cols-3 gap-3 mt-4">
@@ -71,7 +83,7 @@ export function BlameLayer() {
       </div>
 
       <div className="mt-6 rounded-xl px-5 py-4" style={{ backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}` }}>
-        <div className="font-mono text-[12.5px] font-semibold mb-3" style={{ color: SOL.base02 }}>In your editor</div>
+        <div className="font-mono text-[12.5px] font-semibold mb-3" style={{ color: SOL.base02 }}>In your editor and scripts</div>
         <ul className="space-y-2.5 text-[14px] leading-6" style={{ color: SOL.base01 }}>
           <li><C>cast blame --install-fugitive</C> installs a shim so vim-fugitive&apos;s <C>:Gblame</C> shows sessions.</li>
           <li><C>cast blame --log --quickfix</C> feeds a quickfix list: <KeyCap>Enter</KeyCap> opens the conversation, <KeyCap>O</KeyCap> opens the file at that session&apos;s commit.</li>
@@ -110,7 +122,7 @@ function Seam() {
   );
 }
 
-/** Layer 05: `cast diff` and `cast summary`, the check before you attribute work. */
+/** Layer 05: a session's changes, in the conversation and as `cast diff` / `cast summary`. */
 export function ImpactLayer() {
   return (
     <Layer
@@ -123,11 +135,12 @@ export function ImpactLayer() {
             A session&apos;s state tells you who is paying attention to it now, not what it did. Before you credit a change to a session, or message it about its work, read the evidence.
           </p>
           <p>
-            <C>cast diff</C> lists the files a session changed, the commits it made and the tools it used. <C>cast summary</C> gives its goal, approach, outcome and files. Without an id, <C>cast diff --today</C> and <C>--week</C> roll up every session from the day or the week, and <C>cast summary --today</C> summarizes your latest one.
+            In a session, <b>Show git diff</b> in the overflow menu (<KeyCap size="xs">d</KeyCap>) opens its changes beside the conversation. Agents check the same evidence from the CLI before they credit or message a session: <C>cast diff</C> lists the files it changed, the commits it made and the tools it used, and <C>cast summary</C> gives its goal, approach, outcome and files. <C>cast diff --today</C> and <C>--week</C> roll up every session from the day or the week.
           </p>
         </>
       }
     >
+      <ForScripts>
       <div className="grid gap-4 md:grid-cols-2">
         <Pane label="cast diff">
           <Run>cast diff jx7k2qa</Run>
@@ -159,6 +172,7 @@ export function ImpactLayer() {
       <div className="mt-5">
         <Note label="--full · --patch">Add the full file diffs, or print only the unified patch to pipe somewhere else.</Note>
       </div>
+      </ForScripts>
     </Layer>
   );
 }

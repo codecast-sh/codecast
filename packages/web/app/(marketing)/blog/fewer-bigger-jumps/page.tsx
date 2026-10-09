@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, SOL, H2, P, Code, Figure } from "../blogChrome";
+import { BlogNav, SOL, H2, P, Figure } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 import { AttentionFigure, FigureStyles, JumpsFigure, PromptFigure, TraceFigure } from "./figures";
@@ -163,9 +163,9 @@ export default function FewerBiggerJumpsPost() {
           Running like this needs a place to see who is waiting on you. That is what
           codecast&apos;s <Link href="/blog/an-inbox-for-your-agents" style={{ color: SOL.blue }}>inbox</Link>{" "}
           is for: every session on every machine, sorted by who acts next, so the next jump
-          you make is always the one that is ready for it. Long leaps can be given to{" "}
-          <Code>cast spawn --subagent</Code> workers, and a session can be woken later with a
-          trigger instead of a reminder in your head.
+          you make is always the one that is ready for it. An agent on a long leap can hand
+          pieces of it to worker sessions that nest under its own card, and a trigger on the
+          Triggers page can wake a session later instead of a reminder in your head.
         </P>
 
         <H2>The rule</H2>
