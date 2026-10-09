@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { openBlockerLabels } from "@codecast/shared/tasks";
-import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness";
+import { outOfReachNote, parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness";
 
 const t = (short_id: string, over: Record<string, unknown> = {}) => ({ _id: `id_${short_id}`, short_id, status: "open", ...over });
 const ids = (rows: { short_id: string }[]) => rows.map((r) => r.short_id);
@@ -91,7 +91,7 @@ describe("planReadiness", () => {
     ]);
     expect(ids(r.waiting)).toEqual([]);
     expect(ids(r.stuck)).toEqual(["ct-2", "ct-3", "ct-4", "ct-6", "ct-7"]);
-    expect(stuckNote(r)).toBe("ct-2: blocked by ct-1, PR #6 merges (failed: closed without merging); ct-3: blocked by ct-99 (status unknown); ct-4: its parent could not be read; ct-6: blocked by ct-5; ct-7: blocked by ct-3");
+    expect(stuckNote(r)).toBe("ct-2: blocked by ct-1, PR #6 to merge (failed: closed without merging); ct-3: blocked by ct-99 (status unknown); ct-4: its parent could not be read; ct-6: blocked by ct-5; ct-7: blocked by ct-3");
     expect(stuckAdvice(r)).toEqual([
       "ct-2: remove it (cast task dep ct-2 --remove-blocked-by o/r#6) or replace it (add the new wait with cast task dep ct-2 --blocked-by; a wait on the same target takes the failed one's place), or change the approach, and say on the task what you decided.",
       "ct-3: a blocker this workspace cannot read; cast task show ct-3 names it",
@@ -113,6 +113,36 @@ describe("openBlockerLabels", () => {
     const pr42 = { kind: "pr_merged", repository: "o/r", pr_number: 42, id: "w1", state: "waiting", created_at: 1 };
     const tasks = [t("ct-1", { status: "done" }), t("ct-2"), t("ct-3", { blocked_by: ["ct-1", "ct-2"], waits: [pr42] })];
     const { statusOf } = planReadiness<any>(tasks);
-    expect(openBlockerLabels(tasks[2] as any, statusOf)).toEqual(["ct-2", "PR #42 merges"]);
+    expect(openBlockerLabels(tasks[2] as any, statusOf)).toEqual(["ct-2", "PR #42 to merge"]);
+  });
+});
+
+describe("outOfReachNote", () => {
+  // The plan the migration left behind: its steps carry another checkout's
+  // project_path, so every read from here answers nothing in every workspace.
+  const tasks = [t("ct-1", { status: "done" }), t("ct-2"), t("ct-3", { blocked_by: ["ct-2"] })];
+  const r = planReadiness<any>(tasks);
+
+  test("a list names the plan's open work and where to read it", () => {
+    expect(outOfReachNote("pl-851", tasks, r)).toBe(
+      "pl-851 has 2 open tasks (1 ready) this read did not reach: a --plan read is narrowed by this directory as well as by the workspace. cast plan status pl-851 lists them.",
+    );
+  });
+
+  test("ready counts only the frontier, and leaves the command to the line above it", () => {
+    expect(outOfReachNote("pl-851", tasks, r, { readyOnly: true })).toBe(
+      "pl-851 has 1 ready step this read did not reach: a --plan read is narrowed by this directory as well as by the workspace.",
+    );
+  });
+
+  test("nothing to say about a finished plan, or a held one with no ready step", () => {
+    const done = [t("ct-1", { status: "done" }), t("ct-2", { status: "dropped" })];
+    expect(outOfReachNote("pl-851", done, planReadiness<any>(done))).toBeNull();
+    expect(outOfReachNote("pl-851", [], { ready: [] })).toBeNull();
+    const held = [t("ct-1", { status: "in_progress" })];
+    expect(outOfReachNote("pl-851", held, planReadiness<any>(held), { readyOnly: true })).toBeNull();
+    expect(outOfReachNote("pl-851", held, planReadiness<any>(held))).toBe(
+      "pl-851 has 1 open task this read did not reach: a --plan read is narrowed by this directory as well as by the workspace. cast plan status pl-851 lists them.",
+    );
   });
 });

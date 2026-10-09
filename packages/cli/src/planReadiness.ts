@@ -6,7 +6,7 @@
 //
 // Backlog counts as `open` (work not started) but is never ready: TG1 readies
 // only `open` tasks, so parked work waits until someone moves it to open.
-import { blockerGatesPickup, failedWaitAdvice, isFailedWait, notReadyLabel, planVerdicts, UNKNOWN_BLOCKER_STATUS, type Blocker, type GraphOutside, type GraphTask, type Readiness, type StatusOf, type WaitLabelOptions } from "@codecast/shared/tasks";
+import { blockerGatesPickup, failedWaitAdvice, isFailedWait, isTerminalTaskStatus, notReadyLabel, planVerdicts, UNKNOWN_BLOCKER_STATUS, type Blocker, type GraphOutside, type GraphTask, type Readiness, type StatusOf, type WaitLabelOptions } from "@codecast/shared/tasks";
 
 export interface PlanReadiness<T> {
   statusOf: StatusOf;
@@ -67,6 +67,37 @@ export function planReadiness<T extends GraphTask & { _id?: unknown; short_id?: 
     parked: tasks.filter((t) => t.status === "backlog"),
     ephemeral: tasks.filter((t) => notReady(t) === "ephemeral"),
   };
+}
+
+/**
+ * What an empty `--plan` read adds when the plan itself holds work the read
+ * should have shown. The workspace is only one of the two filters: every
+ * `cast task ls`/`ready` sends this directory's `project_path`, and the server
+ * narrows the scoped query by it (`wrapProjectQuery`), so a plan whose steps
+ * were filed from another checkout — or from a worktree, which has a path of
+ * its own — answers nothing here in EVERY workspace. Without this the two
+ * commands point at each other and disagree: "No ready tasks" beside a plan
+ * status that counts one ready, with nothing naming the cause.
+ *
+ * `readyOnly` is `cast task ready`, which counts only the frontier and whose
+ * own line already names `cast plan status`, so the note does not repeat it.
+ * Null when the plan holds nothing this read should have reached, which is
+ * when the empty answer is the honest one.
+ */
+export function outOfReachNote<T extends GraphTask>(
+  planId: string,
+  tasks: readonly T[],
+  r: Pick<PlanReadiness<T>, "ready">,
+  opts: { readyOnly?: boolean } = {},
+): string | null {
+  const active = tasks.filter((t) => !isTerminalTaskStatus(t.status)).length;
+  const ready = r.ready.length;
+  if (opts.readyOnly ? !ready : !active) return null;
+  const what = opts.readyOnly
+    ? `${ready} ready step${ready === 1 ? "" : "s"}`
+    : `${active} open task${active === 1 ? "" : "s"}${ready ? ` (${ready} ready)` : ""}`;
+  const where = opts.readyOnly ? "" : ` cast plan status ${planId} lists them.`;
+  return `${planId} has ${what} this read did not reach: a --plan read is narrowed by this directory as well as by the workspace.${where}`;
 }
 
 /** The line a plan surface prints for work it will not schedule: backlog,

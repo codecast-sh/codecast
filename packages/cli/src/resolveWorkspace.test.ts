@@ -1,7 +1,11 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import {
+  filedElsewhereLine,
   loadWorkspaceRoster,
   clearWorkspaceCache,
+  teamFlagFor,
+  workspaceFromKey,
+  workspaceOfScope,
   matchTeam,
   resolveWorkspaceForRead,
   resolveWorkspaceForWrite,
@@ -171,5 +175,49 @@ describe("--team personal", () => {
 
   test("an unknown team's message offers personal as a choice", () => {
     expect(unknownTeamMessage(roster(), "ghost")).toContain("personal  your own workspace");
+  });
+});
+
+// A write takes an explicit workspace or the session's team; a read defaults
+// to the directory's mapping. On a checkout mapped elsewhere the two differ,
+// and a next step printed by the write ("cast task ready --plan pl-857") then
+// reads the wrong workspace and answers nothing, which is read as "no work".
+describe("naming the workspace a row was filed in", () => {
+  const personal = { kind: "personal" } as const;
+  const codecast = { kind: "team", teamId: CODECAST, name: "Codecast Labs" } as const;
+
+  test("a stored access key becomes a workspace, named from the roster", () => {
+    expect(workspaceFromKey(roster(), `team:${UNION}`)).toEqual({ kind: "team", teamId: UNION, name: "Union" });
+    expect(workspaceFromKey(roster(), "user:u1")).toEqual({ kind: "personal" });
+    // A team outside the roster keeps its id; an unreadable key names nothing.
+    expect(workspaceFromKey(roster(), "team:t_ghost")).toEqual({ kind: "team", teamId: "t_ghost" });
+    expect(workspaceFromKey(roster(), "restricted:x")).toBeNull();
+    expect(workspaceFromKey(roster(), undefined)).toBeNull();
+  });
+
+  test("one wording for every printed --team, whatever command prints it", () => {
+    expect(teamFlagFor(personal)).toBe(" --team personal");
+    expect(teamFlagFor(codecast)).toBe(" --team 'Codecast Labs'");
+    expect(teamFlagFor({ kind: "team", teamId: "t_ghost" })).toBe(" --team t_ghost");
+    expect(teamFlagFor(null)).toBe("");
+    // A printed create keeps the flag wherever the next shell would file: a
+    // write names its workspace (workspaceOfScope reads a create's own args).
+    expect(teamFlagFor(workspaceOfScope({ workspace: "team", team_id: "t_a" }))).toBe(" --team t_a");
+    expect(teamFlagFor(workspaceOfScope({ workspace: "personal" }))).toBe(" --team personal");
+    expect(workspaceOfScope({ project_path: "/x" } as any)).toBeNull();
+    expect(workspaceOfScope(null)).toBeNull();
+  });
+
+  test("an empty answer names where the plan is filed, once a read there has answered", () => {
+    expect(filedElsewhereLine("pl-857", codecast, 3, "cast task ready --plan pl-857")).toBe(
+      "pl-857 is filed in the Codecast Labs workspace, where 3 tasks answer: cast task ready --plan pl-857 --team 'Codecast Labs'",
+    );
+    expect(filedElsewhereLine("pl-857", personal, 1, "cast task ls --plan pl-857")).toBe(
+      "pl-857 is filed in the personal workspace, where 1 task answers: cast task ls --plan pl-857 --team personal",
+    );
+    // Nothing shown, nothing claimed: an empty list has causes besides the
+    // workspace, so a read that found nothing there says nothing.
+    expect(filedElsewhereLine("pl-857", codecast, 0, "cast task ls --plan pl-857")).toBeNull();
+    expect(filedElsewhereLine("pl-857", null, 2, "cast task ls --plan pl-857")).toBeNull();
   });
 });

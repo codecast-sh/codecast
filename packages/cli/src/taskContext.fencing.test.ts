@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
-import { foreignProse, referenceGuidance, renderFencedTaskRecord } from "@codecast/shared/tasks";
+import { foreignProse, isTaskBeingWorked, referenceGuidance, renderFencedTaskRecord } from "@codecast/shared/tasks";
+import { checkoutWords } from "./checkoutWords";
+import { holdingBlockers, offFrontierLines, parkHeldLine, supersededLine, taskGraphSections } from "./taskGraphCommands";
 import { blockAt } from "./test-helpers/sourceRegion";
 
 const source = fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8");
@@ -20,7 +22,15 @@ test("task context executes the shared fence at the CLI action and leaves JSON i
   };
   const lines: string[] = [];
   let json: unknown;
-  const deps = { console: { log: (text = "") => lines.push(text) }, cliPost: async () => result, printJson: (v: unknown) => { json = v; }, ASSIGNEE_MEANS: "owner", inlineForeignText, renderFencedTaskRecord, fenceForeignText, referenceGuidance, foreignProse, FOREIGN_TEXT_CAPS };
+  // The action's own helpers, real rather than stubbed, so the block it prints
+  // is the one a terminal sees; only the shell's cwd and the session's pulse
+  // are stood in for.
+  const deps = {
+    console: { log: (text = "") => lines.push(text) }, cliPost: async () => result, printJson: (v: unknown) => { json = v; },
+    readTaskPulse: () => null, getRealCwd: () => "/", checkoutWords, ASSIGNEE_MEANS: "owner",
+    inlineForeignText, renderFencedTaskRecord, fenceForeignText, referenceGuidance, foreignProse, FOREIGN_TEXT_CAPS,
+    supersededLine, taskGraphSections, offFrontierLines, holdingBlockers, parkHeldLine, isTaskBeingWorked,
+  };
   const run = new Function(...Object.keys(deps), code + ";return action;")(...Object.values(deps));
   await run("ct-1", {});
   const text = lines.join("\n");
@@ -35,4 +45,23 @@ test("task context executes the shared fence at the CLI action and leaves JSON i
   await run("ct-1", { json: true });
   expect(json).toBe(result);
   expect(lines).toEqual([]);
+});
+
+test("a task whose only prose is its title gets the heading and no fence", async () => {
+  const lines: string[] = [];
+  const bare = { task: { short_id: "ct-7", title: "Wire the frontier", status: "open", priority: "medium", task_type: "task" } };
+  const deps = {
+    console: { log: (text = "") => lines.push(text) }, cliPost: async () => bare, printJson: () => {},
+    readTaskPulse: () => null, getRealCwd: () => "/", checkoutWords, ASSIGNEE_MEANS: "owner",
+    inlineForeignText, renderFencedTaskRecord, fenceForeignText, referenceGuidance, foreignProse, FOREIGN_TEXT_CAPS,
+    supersededLine, taskGraphSections, offFrontierLines, holdingBlockers, parkHeldLine, isTaskBeingWorked,
+  };
+  const run = new Function(...Object.keys(deps), code + ";return action;")(...Object.values(deps));
+  await run("ct-7", {});
+  const text = lines.join("\n");
+  expect(text).toContain("# Wire the frontier");
+  // The fence would carry nothing but a restatement of the heading, and a
+  // fence whose contents are redundant teaches the reader to skip fences.
+  expect(text).not.toContain("<untrusted-");
+  expect(text).not.toContain("Title: Wire the frontier");
 });
