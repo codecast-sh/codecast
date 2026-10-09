@@ -41,9 +41,12 @@ export type EdgePath = { id: string; d: string; kind: MapEdge["kind"]; labelAt: 
 export type PhaseSpan = { key: string; label: string; x: number; w: number };
 export type MapLayout = { width: number; height: number; boxes: Map<string, NodeBox>; paths: Map<string, EdgePath>; phases: PhaseSpan[] };
 
+/** A line cause's own stations (line-map.md LX6) stand in for main ones, so they draw as wide. */
+const STANDS_IN = new Set(["prove_line", "implement_line"]);
+
 /** Narrow nodes: a branch, and the card's routine assembly steps. */
 export const isSmallNode = (n: Pick<MapNode, "id" | "kind" | "main">) =>
-  n.kind === "end" ? !n.main : n.kind === "station" && (!n.main || !isMainStation(n.id));
+  n.kind === "end" ? !n.main : n.kind === "station" && !STANDS_IN.has(n.id) && (!n.main || !isMainStation(n.id));
 
 const PHASE_LABEL: Record<string, string> = {
   sense: "Sense", admit: "Admit", understand: "Understand", prove: "Prove", build: "Build", check: "Check", decide: "Decide", ship: "Ship", end: "Ends",
@@ -97,7 +100,12 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   for (const [id, l] of lane) lane.set(id, used.indexOf(l));
 
   // ── columns, left to right, each as wide as its widest node ──
-  const widthOf = (n: MapNode) => (n.kind === "source" || n.kind === "expectations" ? NODE_W_SOURCE : isSmallNode(n) ? NODE_W_SMALL : NODE_W);
+  // A step where you decide carries a "you" tag beside its name, so it is wider.
+  // A node is as wide as its whole name needs, never cut to "Investig...".
+  const widthOf = (n: MapNode) => Math.max(
+    n.kind === "source" || n.kind === "expectations" ? NODE_W_SOURCE : n.who === "person" ? NODE_W + 18 : isSmallNode(n) ? NODE_W_SMALL : NODE_W,
+    nameWidth(n),
+  );
   const colW = new Map<number, number>();
   for (const n of map.nodes) colW.set(n.col, Math.max(colW.get(n.col) ?? 0, widthOf(n)));
   const colX = new Map<number, number>();
@@ -126,8 +134,13 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
 
   // ── edges ──
   const paths = new Map<string, EdgePath>();
+  // Edges into an end ride one line under every node and its mark (a bus),
+  // so a run stopping at any station never cuts across the rows to reach it.
+  const busEdges = new Set<string>();
+  let busY = 0;
   const routeEdges = () => {
     const all = [...boxes.values()];
+    busY = Math.max(...all.map((o) => o.y + o.h)) + MARK_ROOM + ARC_CLEAR;
     const arcsOver = new Map<string, number>();
     // Short loops first, so a long one rides over them.
     const ordered = [...map.edges].sort((a, b) => span(a, boxes) - span(b, boxes));
@@ -144,10 +157,29 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
         const nth = arcsOver.get(key) ?? 0;
         arcsOver.set(key, nth + 1);
         const bottom = Math.max(a.y + a.h, b.y + b.h, ...span.map((o) => o.y + o.h)) + ARC_CLEAR + MARK_ROOM + nth * ARC_STEP;
-        const x1 = a.x + a.w * 0.5;
-        const x2 = b.x + b.w * 0.5;
-        const d = `M ${x1} ${a.y + a.h} C ${x1} ${bottom}, ${x2} ${bottom}, ${x2} ${b.y + b.h}`;
+        // It leaves and lands on the sides facing each other, low on the node,
+        // so it never strikes through the mark under either end.
+        const back = b.x + b.w / 2 < a.x + a.w / 2;
+        const x1 = back ? a.x : a.x + a.w;
+        const x2 = back ? b.x + b.w : b.x;
+        const s1 = back ? -1 : 1;
+        const d = `M ${x1} ${a.y + a.h * 0.72} C ${x1 + s1 * 28} ${bottom}, ${x2 - s1 * 28} ${bottom}, ${x2} ${b.y + b.h * 0.72}`;
         paths.set(e.id, { id: e.id, d, kind: e.kind, labelAt: { x: (x1 + x2) / 2, y: bottom - 4 } });
+        continue;
+      }
+      if (byId.get(e.to)?.kind === "end" && (b.col - a.col > 1 || b.lane !== a.lane)) {
+        // Out of the node's right side, down the gap after its column, along
+        // the bus, and up into the end's dot from below.
+        const x1 = a.x + a.w;
+        const y1 = a.y + a.h / 2;
+        const gx = x1 + COL_GAP / 2;
+        // An end draws as a ringed dot at its top left (lineMap.css): the line lands under it.
+        const bx = b.x + END_DOT.x;
+        const r = 10;
+        const dir = bx >= gx ? 1 : -1;
+        const d = `M ${x1} ${y1} Q ${gx} ${y1}, ${gx} ${y1 + r} L ${gx} ${busY - r} Q ${gx} ${busY}, ${gx + dir * r} ${busY} L ${bx - dir * r} ${busY} Q ${bx} ${busY}, ${bx} ${busY - r} L ${bx} ${b.y + END_DOT.y}`;
+        busEdges.add(e.id);
+        paths.set(e.id, { id: e.id, d, kind: e.kind, labelAt: { x: gx, y: (y1 + busY) / 2 } });
         continue;
       }
       if (e.kind === "loop") {
@@ -203,6 +235,8 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   for (const b of boxes.values()) { minY = Math.min(minY, b.y); maxY = Math.max(maxY, b.y + b.h); }
   // A loop's count label sits on its arc's peak, its glyphs above it.
   for (const p of paths.values()) if (p.kind === "loop") { minY = Math.min(minY, arcTop(p.d), (p.labelAt?.y ?? Infinity) - 10); maxY = Math.max(maxY, arcBottom(p.d)); }
+  if (busEdges.size) maxY = Math.max(maxY, busY);
+  placeLabels(map.edges, paths, [...boxes.values()]);
   if (!Number.isFinite(minY)) { minY = 0; maxY = 0; }
   // Marks under the lowest node, then the phase names along the top.
   const shift = PAD_TOP + 22 - minY;
@@ -229,6 +263,50 @@ export function layoutLineMap(map: Pick<LineMap, "nodes" | "edges">): MapLayout 
   }
 
   return { width, height, boxes, paths, phases };
+}
+
+/** A node's name at the map's 11.5px mono (about 7px a glyph), with its
+ *  padding, lamp, and the "you" tag a step where you decide carries. */
+const NAME_CH = 7;
+export const nameWidth = (n: Pick<MapNode, "label" | "who" | "kind">) =>
+  n.kind === "end" ? 0 : Math.ceil(n.label.length * NAME_CH) + 36 + (n.who === "person" ? 30 : 0);
+
+/** Where an end's dot sits in its box, and the ring's edge under it. */
+const END_DOT = { x: 9.5, y: 27 };
+
+/** An edge label's half width at the map's 10px mono, as the map paints it (its words and the count). */
+const LABEL_CH = 6.1;
+const labelText = (e: MapEdge) => [e.label, e.count > 0 ? String(e.count) : null].filter(Boolean).join("  ");
+
+/** Each edge label moved off any node or the mark under it: tried where it
+ *  sits, then at other points along its curve, then nudged above or below. A
+ *  label that fits nowhere stays where it was. */
+function placeLabels(edges: MapEdge[], paths: Map<string, EdgePath>, boxes: NodeBox[]) {
+  const taken: Array<{ x0: number; x1: number; y0: number; y1: number }> = [];
+  const hits = (x: number, y: number, half: number) => {
+    const r = { x0: x - half, x1: x + half, y0: y - 10, y1: y + 3 };
+    return boxes.some((b) => r.x1 > b.x && r.x0 < b.x + b.w && r.y1 > b.y && r.y0 < b.y + b.h + MARK_ROOM)
+      || taken.some((t) => r.x1 > t.x0 && r.x0 < t.x1 && r.y1 > t.y0 && r.y0 < t.y1);
+  };
+  for (const e of edges) {
+    const p = paths.get(e.id);
+    if (!p?.labelAt || !e.label) continue;
+    const half = (labelText(e).length * LABEL_CH) / 2 + 3;
+    const along = curvePoints(p.d);
+    const tries = [p.labelAt, ...along, ...[-14, 14, -28, 28].map((dy) => ({ x: p.labelAt!.x, y: p.labelAt!.y + dy }))];
+    const at = tries.find((q) => !hits(q.x, q.y, half)) ?? p.labelAt;
+    p.labelAt = at;
+    taken.push({ x0: at.x - half, x1: at.x + half, y0: at.y - 10, y1: at.y + 3 });
+  }
+}
+
+/** Points along a single cubic ("M x y C ..."), middle first; none for any other path. */
+function curvePoints(d: string): Array<{ x: number; y: number }> {
+  if (!/^M [^A-Z]+ C [^A-Z]+$/.test(d)) return [];
+  const n = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+  if (n.length < 8) return [];
+  const at = (t: number, i: number) => (1 - t) ** 3 * n[i] + 3 * (1 - t) ** 2 * t * n[i + 2] + 3 * (1 - t) * t ** 2 * n[i + 4] + t ** 3 * n[i + 6];
+  return [0.4, 0.6, 0.3, 0.7, 0.2, 0.8].map((t) => ({ x: at(t, 0), y: at(t, 1) + 4 }));
 }
 
 function span(e: MapEdge, boxes: Map<string, NodeBox>): number {

@@ -60,6 +60,14 @@
         var hostedLook = localStorage.getItem('codecast-hosted-look');
         if (hostedLook === '1' || (hostedLook === null && localStorage.getItem('codecast-lane') === 'simple')) {
           document.documentElement.classList.add('minimal-style', 'hosted-mode');
+        } else {
+          // A mod's color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts).
+          try {
+            var themeVars = (JSON.parse(localStorage.getItem('codecast-color-theme') || 'null') || {})[theme] || {};
+            var names = Object.keys(themeVars);
+            for (var i = 0; i < names.length; i++) document.documentElement.style.setProperty(names[i], themeVars[names[i]]);
+            if (names.length) document.documentElement.setAttribute('data-theme-vars', names.join(' '));
+          } catch (e) {}
         }
       })();
     </script>
