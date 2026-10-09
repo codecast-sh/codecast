@@ -38,7 +38,7 @@ export function HostSetupSection() {
 }
 
 /** The browser watch beside a cloud conversation: the agent's tab, its cursor, the wheel. */
-function WatchMock() {
+export function WatchMock() {
   return (
     <Pane
       machine="host"
