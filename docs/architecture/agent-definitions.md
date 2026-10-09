@@ -104,7 +104,7 @@ concurrently (four at once) and continues at the `tripleoctagon` fanin, whose
 ## D6. The subagent fleet and merge back
 
 A `cast spawn --subagent` worker takes a slot. Two limits bound the fleet:
-workers per session (default 10) and per machine (default 24), read from the
+workers per session and per machine (no limit until configured; 0 means no limit), read from the
 spawning machine's config (`cast config set subagents.per_session 6`) and
 stamped on each row, so a queued row is judged by the limits it was spawned
 under. A spawn past either limit is not refused: the row is created queued,
