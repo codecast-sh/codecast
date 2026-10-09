@@ -35,6 +35,8 @@ import { docSourceForPlanSource } from "@codecast/shared/docs";
 import { renderFencedPlanRecord, renderFencedPlanTasks } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
+import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
+import { patchDepMirror } from "./tasks";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 export { canAccessPlan };
@@ -300,6 +302,8 @@ export const createFromTemplate = mutation({
         updated_at: now,
       } as any);
       taskIds.push(taskId);
+      const self = { short_id: taskShortId, workspace: workspaceForResource({ user_id: auth.userId, team_id: template.team_id }) };
+      for (const dep of blockedBy) await patchDepMirror(ctx, auth.userId, self, dep, "blocks", "add");
     }
 
     await ctx.db.patch(planId, { task_ids: taskIds });
@@ -353,15 +357,21 @@ export const fork = mutation({
 
     const oldToNew = new Map<string, string>();
     const taskIds: Id<"tasks">[] = [];
+    const edges: [string, string[]][] = [];
 
+    // Keyed by both ids: older plan rows name a sibling blocker by its `_id`,
+    // which must map to the fork's copy, not wait on the original.
     for (const st of sourceTasks) {
       const newShortId = await nextShortId(ctx.db, "ct");
       oldToNew.set(st.short_id, newShortId);
+      oldToNew.set(String(st._id), newShortId);
     }
 
     for (const st of sourceTasks) {
       const newShortId = oldToNew.get(st.short_id)!;
-      const blockedBy = (st.blocked_by || []).map((bid: string) => oldToNew.get(bid) || bid);
+      // Stored canonical (sortGraphRefs). A source ref that is no task ref
+      // at all (#42, a title) blocked nothing there, so the copy drops it.
+      const blockedBy = sortGraphRefs(ctx, (st.blocked_by || []).map((bid: string) => oldToNew.get(bid) || bid)).tasks;
 
       const tid = await ctx.db.insert("tasks", {
         user_id: auth.userId,
@@ -380,6 +390,12 @@ export const fork = mutation({
         updated_at: now,
       } as any);
       taskIds.push(tid);
+      edges.push([newShortId, blockedBy]);
+    }
+    // Every fork task is in place first: a blocker may come later in the list.
+    const workspace = workspaceForResource({ user_id: auth.userId, team_id: source.team_id });
+    for (const [shortId, blockedBy] of edges) {
+      for (const dep of blockedBy) await patchDepMirror(ctx, auth.userId, { short_id: shortId, workspace }, dep, "blocks", "add");
     }
 
     await ctx.db.patch(planId, { task_ids: taskIds });
@@ -946,7 +962,15 @@ export const get = query({
     // Merge legacy arrays + new entries into unified comments timeline
     const comments = mergePlanEntries(plan);
 
-    return { ...plan, tasks, doc_content, comments };
+    // The blockers and parents the plan's tasks name outside it, so the CLI's
+    // planReadiness resolves them instead of holding them unknown (TG1).
+    const outside = await graphOutside(ctx, tasks);
+    const graph_outside = {
+      tasks: outside.tasks.map((t) => ({ _id: t._id, short_id: t.short_id, status: t.status })),
+      searched: outside.searched,
+    };
+
+    return { ...plan, tasks, doc_content, comments, graph_outside };
   },
 });
 
@@ -1396,6 +1420,9 @@ export const webGet = query({
         }
       }
     }
+    // The store does not hold every blocker these rows name: stamp what each
+    // is, as the tasks list does, so the row marks agree with /tasks (TG1).
+    await stampGraphStatus(ctx, tasks);
 
     let doc_content: string | undefined;
     if (plan.doc_id) {

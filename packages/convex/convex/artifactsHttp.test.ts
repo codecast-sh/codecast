@@ -202,7 +202,9 @@ describe("publish route evidence binding", () => {
     expect(res.status).toBe(200);
     const ev = queries.find((q) => q.name === "artifacts:resolveEvidence")!;
     expect(ev.args).toEqual({ user_id: "users_owner", task: "ct-1", plan: undefined, session_conversation_id: "conversations_s1" });
-    expect(mutations).toHaveLength(1);
+    // The upsert, then the page's live query set (none declared: an empty set clears any old one).
+    expect(mutations.map((m) => m.name)).toEqual(["artifacts:upsertFromPublish", "pageData:replaceQueries"]);
+    expect(mutations[1].args).toMatchObject({ queries: [] });
     expect(mutations[0].args).toMatchObject({ task_id: "tasks_t1", plan_id: "plans_p1", station: "in_progress", session_conversation_id: "conversations_s1" });
     expect(stored).toHaveLength(1);
     expect(await res.json()).toMatchObject({ url: "https://codecast.sh/a/fresh", evidence: { task: "ct-1", plan: null, station: "in_progress" } });
@@ -274,5 +276,48 @@ describe("cachePolicy", () => {
       const total = [...policy.matchAll(/=(\d+)/g)].reduce((n, m) => n + Number(m[1]), 0);
       expect(total * 1000).toBeLessThanOrEqual(REVOCATION_BOUND_MS);
     }
+  });
+});
+
+// Living pages: the bar reads the publishing session's state from ?meta=1,
+// and the comment route carries each comment's "Send to agent" choice to the
+// mutation, which alone decides whether it is honored.
+import { comment as commentRoute, serve } from "./artifactsHttp";
+
+describe("living pages over HTTP", () => {
+  const artifact = {
+    _id: "a1", slug: "s1", title: "T", version: 4, updated_at: 100, kind: "html", views: 2,
+    comment_count: 1, open_comments: [{ id: "c1", text: "x", delivered: true, delivered_at: 150, role: "owner" }],
+    session_short_id: "jx1", session_title: "Session", owner_key: "ok",
+  };
+  const agent = { state: "working", since: 140, awaiting_since: 150 };
+
+  test("?meta=1 carries the session's agent state next to the comments", async () => {
+    const ctx = {
+      runQuery: async (fn: unknown) => {
+        const name = getFunctionName(fn as never);
+        if (name === "artifacts:bySlug") return artifact;
+        if (name === "artifacts:historyBySlug") return { ...artifact, versions: [{ version: 4, title: "T", size: 1, published_at: 100 }] };
+        if (name === "artifacts:agentStateBySlug") return agent;
+        throw new Error(`unexpected query ${name}`);
+      },
+    };
+    const res = await (serve as any)._handler(ctx, new Request("https://x/cli/a/s1?meta=1"));
+    const body = await res.json();
+    expect(body.agent).toEqual(agent);
+    expect(body.comments[0]).toMatchObject({ delivered: true, role: "owner" });
+  });
+
+  test("the comment route passes the batch and per-comment deliver flags through", async () => {
+    const calls: Array<Record<string, any>> = [];
+    const ctx = { runMutation: async (_fn: unknown, args: Record<string, any>) => { calls.push(args); return { delivered: true, count: 2 }; } };
+    await (commentRoute as any)._handler(ctx, new Request("https://x/cli/artifacts/comment", {
+      method: "POST",
+      body: JSON.stringify({ slug: "s1", author_name: "A", deliver: false, identity_token: "tok", comments: [
+        { text: "one", deliver: true }, { text: "two", deliver: "yes" }, { text: "three" },
+      ] }),
+    }));
+    expect(calls[0].deliver).toBe(false);
+    expect(calls[0].comments.map((c: any) => c.deliver)).toEqual([true, undefined, undefined]);
   });
 });
