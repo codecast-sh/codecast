@@ -52,7 +52,7 @@ export function stripInjectionNoise(text: string): string {
 }
 
 const WIRE_TAG_JUNK_PREFIX =
-  /^[^<\s]{1,2}(?=<(?:session-message|agent-message|user-message|task-comment|teammate-message|scheduled-task|session-escalation)[\s>])/;
+  /^[^<\s]{1,2}(?=<(?:session-message|agent-message|user-message|task-comment|decision-discussion|teammate-message|scheduled-task|session-escalation)[\s>])/;
 
 // A user-role row that carries tool results is the harness answering the agent's
 // tool calls, never something a person typed (typed input always lands as its own
@@ -236,6 +236,34 @@ export function parseTaskCommentMessage(rawContent: string | null | undefined): 
   const head = body.match(/^(About \S+ \("[^\n]*"\):)\s*\n+/);
   if (head) { about = head[1]; body = body.slice(head[0].length).trim(); }
   return { task: attr("task"), from: attr("from").trim(), about, body };
+}
+
+// A person discussing a decision with the session that owns it (the session
+// that presents it, convex decisionDiscussion.ts), from the decision's own
+// surface: <decision-discussion decision="sd-N" from="Name">. Same shape as a
+// task comment: an "About sd-N ("question"):" header, the words, and a reply
+// note for the agent, which the transcript leaves out of the bubble. The
+// owner's next reply is what the decision surface shows under the question.
+export const DECISION_DISCUSSION_TAG = "decision-discussion";
+
+export function formatDecisionDiscussion(o: { decision: string; question: string; from: string; body: string }): string {
+  const q = (x: string) => x.replace(/"/g, "'").replace(/\s*\r?\n\s*/g, " ");
+  const tail = `(A question about ${o.decision}, which you present; ${q(o.from)} reads your reply under it. Answer from the decision and its record. A change they ask for goes through the decision itself, never around it.)`;
+  return `<${DECISION_DISCUSSION_TAG} decision="${o.decision}" from="${q(o.from)}">\nAbout ${o.decision} ("${q(o.question).slice(0, 160)}"):\n\n${o.body}\n\n${tail}\n</${DECISION_DISCUSSION_TAG}>`;
+}
+
+export function parseDecisionDiscussion(rawContent: string | null | undefined): { decision: string; from: string; about: string | null; body: string } | null {
+  if (!rawContent) return null;
+  const text = stripInjectionNoise(rawContent);
+  const m = text.match(/^<decision-discussion\s+([^>]*)>([\s\S]*?)(?:<\/decision-discussion>\s*$|$)/);
+  if (!m) return null;
+  const attr = (k: string) => { const a = m[1].match(new RegExp(`${k}="([^"]*)"`)); return a ? a[1] : ""; };
+  let body = m[2].trim();
+  body = body.replace(/\n*\(A question about [\s\S]*\)\s*$/, "").trim();
+  let about: string | null = null;
+  const head = body.match(/^(About \S+ \("[^\n]*"\):)\s*\n+/);
+  if (head) { about = head[1]; body = body.slice(head[0].length).trim(); }
+  return { decision: attr("decision"), from: attr("from").trim(), about, body };
 }
 
 // The multi-agent harness wraps a message from another agent in

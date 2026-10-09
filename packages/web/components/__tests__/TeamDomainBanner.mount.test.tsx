@@ -24,6 +24,8 @@ const convex = await import("convex/react");
 mock.module("convex/react", () => ({
   ...convex,
   useMutation: (ref: any) => async (args: any) => { const name = getFunctionName(ref); calls.push([name, args]); return answers[`${name}:result`] ?? {}; },
+  // The admin section asks for its coworkers line once, as a one-shot query.
+  useConvex: () => ({ query: async (ref: any) => answers[getFunctionName(ref)] ?? null }),
 }));
 
 const { TeamDomainBanner } = await import("../TeamDomainBanner");
