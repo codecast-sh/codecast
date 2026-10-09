@@ -91,7 +91,7 @@ describe("isCodecastOwnedHomePath", () => {
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".codecast");
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".claude/hooks/codecast-statusline.sh");
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".claude/hooks/codecast-shell-changes.sh");
-    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(9);
+    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(10);
     expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/agents/"))).toHaveLength(3);
   });
 });
