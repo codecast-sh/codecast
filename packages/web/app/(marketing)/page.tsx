@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { EveryoneFooter, ForEveryone } from "../../components/marketing/ForEveryone";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useConvexAuth } from "convex/react";
@@ -139,17 +140,23 @@ export default function LandingPage() {
   const localAuthed = useLocalAuth();
   const router = useRouter();
   const [desktop, setDesktop] = useState(false);
+  // A visitor from a non-developer link (/everyone, a campaign's
+  // ?for=assistant) meets the For everyone section as its whole page; the
+  // developer home page never shows it. Read once, as pricing's door is (cameForAssistant).
+  const [assistantFirst] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("for") === "assistant");
 
   // The root is the marketing site for every browser, signed in or not (the
   // nav offers "Open app"). Only the desktop shell never shows it: a build
   // that boots at the site root is routed on to the app or the sign-in here.
   // Signed in again after a moment that only looked signed out: back to the
   // page AuthGuard left (lib/authReturn), never the marketing page.
+  // A campaign link (?for=assistant) shows the page it promises even to a
+  // signed-in browser; Open app is one click away in the nav.
   useWatchEffect(() => {
-    if (!localAuthed) return;
+    if (!localAuthed || assistantFirst) return;
     const back = takeAuthReturn();
     if (back) router.replace(back);
-  }, [localAuthed, router]);
+  }, [localAuthed, router, assistantFirst]);
 
   useWatchEffect(() => {
     if (!isDesktopShell()) return;
@@ -160,6 +167,19 @@ export default function LandingPage() {
   if (desktop) {
     return (
       <AppLoader className="bg-[#fdf6e3] text-[#93a1a1]" />
+    );
+  }
+
+  // The assistant's door is a page of its own: the For everyone section and
+  // a short foot. The developer hero (an install command, the agent fleet)
+  // never follows the promise that nothing needs installing.
+  if (assistantFirst) {
+    return (
+      <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: "var(--pd-bg, #f6f1e7)" }}>
+        <MarketingNav active="/" door="assistant" />
+        <ForEveryone />
+        <EveryoneFooter />
+      </main>
     );
   }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { partitionSessionRetention, expireExcludeTombstones } from "../idbCache";
+import { admitUnheldSessions, MAX_CACHED_SESSIONS } from "../cacheRetention";
 
 // Hydration-time retention for the persisted sessions collection. The
 // in-memory map is never-prune by design, so boot is the only moment the
@@ -95,5 +96,33 @@ describe("expireExcludeTombstones", () => {
     };
     const cleaned = expireExcludeTombstones(pending, NOW);
     expect(Object.keys(cleaned).sort()).toEqual(["sessions:a", "sessions:b:title"]);
+  });
+});
+
+// What a change stream may add in-session. The map never prunes, so the rule
+// is the hydration policy asked ahead of time (admitUnheldSessions).
+describe("admitUnheldSessions", () => {
+  const stale = row({ _id: cid(9001), updated_at: NOW - 60 * DAY, inbox_dismissed_at: NOW - 40 * DAY });
+  const fresh = row({ _id: cid(9002), updated_at: NOW - 2 * DAY });
+
+  it("leaves out a session hydration would drop for age", () => {
+    expect(admitUnheldSessions([stale, fresh], [], [], null, NOW)).toEqual([fresh]);
+  });
+
+  it("admits an old session the server lists in the live inbox, or that is pinned", () => {
+    const pinned = { ...stale, _id: cid(9003), is_pinned: true };
+    expect(admitUnheldSessions([stale, pinned], [], [stale._id], null, NOW)).toEqual([stale, pinned]);
+  });
+
+  it("leaves out a session inside the TTL once the replica already holds the cap of newer ones", () => {
+    const held = Array.from({ length: MAX_CACHED_SESSIONS }, (_, i) => row({ _id: cid(i + 1), updated_at: NOW - DAY }));
+    const weekOld = row({ _id: cid(9004), updated_at: NOW - 7 * DAY });
+    const brandNew = row({ _id: cid(9005), updated_at: NOW });
+    expect(admitUnheldSessions([weekOld, brandNew], held, [], null, NOW)).toEqual([brandNew]);
+  });
+
+  it("admits a row with no stamps: it cannot be judged old", () => {
+    const bare = { _id: cid(9006) };
+    expect(admitUnheldSessions([bare], [], [], null, NOW)).toEqual([bare]);
   });
 });

@@ -1,0 +1,162 @@
+/* The Org canvas (essence spec §4): one scrolling page, no pan or zoom.
+ * Waits on you, the mission and its goals, then a band per person. Every
+ * grid answers to the scroller's width, never the window, so the cards
+ * reflow live while the panel beside it is dragged. Colour means two things
+ * only: goal health (green, yellow, red) and Waits on you (orange). */
+
+.oc-scroll {
+  height: 100%;
+  overflow: auto;
+  container: oc / inline-size;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--sol-border) 30%, transparent) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    var(--sol-bg);
+  --oc-line: color-mix(in srgb, var(--sol-border) 32%, transparent);
+  --oc-line-soft: color-mix(in srgb, var(--sol-border) 18%, transparent);
+  --oc-spine: color-mix(in srgb, var(--sol-border) 45%, transparent);
+  --oc-shadow: 0 1px 0 color-mix(in srgb, var(--sol-text) 3%, transparent), 0 10px 28px -18px color-mix(in srgb, var(--sol-text) 28%, transparent);
+}
+.oc-in { padding: 20px 28px 80px; max-width: 1700px; }
+.oc-waits { margin-bottom: 24px; }
+
+/* The mission and the goals */
+.oc-mission { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; margin: 0 2px 12px; }
+.oc-mission-lead { color: var(--sol-text-muted0); font-size: 11.5px; }
+.oc-mission-text {
+  font: 500 22px/1.2 var(--font-serif); font-variation-settings: "opsz" 60; letter-spacing: -0.01em; color: var(--sol-text);
+  border-radius: 6px; margin: 0 -4px; padding: 0 4px; cursor: text; background: none; border: 0; text-align: left;
+}
+.oc-mission-text:hover { background: color-mix(in srgb, var(--sol-bg-highlight) 45%, transparent); }
+.oc-mission-input {
+  font: 500 22px/1.2 var(--font-serif); letter-spacing: -0.01em; color: var(--sol-text);
+  min-width: min(560px, 100%); flex: 1; background: var(--sol-card); border: 1px solid var(--oc-line); border-radius: 6px; padding: 0 6px; outline: none;
+}
+.oc-mission-input:focus { border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent); }
+
+.oc-goals { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-bottom: 34px; }
+
+.oc-card {
+  position: relative; display: block; width: 100%; min-width: 0; text-align: left;
+  background: var(--sol-card); border: 1px solid var(--oc-line); border-radius: 12px; box-shadow: var(--oc-shadow);
+  padding: 14px 16px; color: var(--sol-text); cursor: pointer; outline: none;
+  transition: border-color 150ms ease;
+}
+.oc-card:hover { border-color: color-mix(in srgb, var(--sol-border) 70%, transparent); }
+.oc-card:focus-visible { box-shadow: var(--oc-shadow), 0 0 0 2px color-mix(in srgb, var(--sol-blue) 45%, transparent); }
+.oc-card[data-open] { outline: 2px solid var(--sol-blue); outline-offset: 1px; }
+
+.oc-goal { display: flex; flex-direction: column; min-height: 132px; padding: 11px 14px 12px; }
+.oc-goal-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; min-height: 18px; }
+.oc-goal-row > :last-child { margin-left: auto; }
+.oc-goal-title { font: 500 17px/1.25 var(--font-serif); font-variation-settings: "opsz" 30; margin-top: 4px; color: var(--sol-text); }
+.oc-goal-update { margin-top: 5px; color: var(--sol-text-muted); font-size: 11.5px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.oc-goal-serving { margin-top: auto; padding-top: 10px; display: flex; flex-direction: column; gap: 3px; }
+.oc-serve { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--sol-text-secondary); white-space: nowrap; overflow: hidden; min-width: 0; }
+.oc-serve b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0; }
+.oc-serve .oc-serve-lead { color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; flex-shrink: 2; min-width: 0; }
+.oc-none { font-size: 11.5px; color: var(--sol-text-muted0); }
+.oc-drafts {
+  display: flex; align-items: center; justify-content: center; min-height: 0; padding: 14px;
+  border: 1px dashed var(--oc-line); border-radius: 12px; color: var(--sol-text-muted); font-size: 12px; text-decoration: none;
+  transition: border-color 150ms ease, color 150ms ease;
+}
+.oc-drafts:hover { border-color: color-mix(in srgb, var(--sol-border) 70%, transparent); color: var(--sol-text); }
+
+.oc-health { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; }
+.oc-health i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.oc-health[data-health="on_track"] { color: var(--sol-green); }
+.oc-health[data-health="at_risk"] { color: var(--sol-yellow); }
+.oc-health[data-health="off_track"] { color: var(--sol-red); }
+
+/* Bands: a person, then the roles that answer to them */
+.oc-band { margin-bottom: 30px; }
+.oc-phead { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; min-width: 0; }
+.oc-phead-open { display: inline-flex; align-items: center; gap: 12px; min-width: 0; background: none; border: 0; padding: 0; border-radius: 999px; cursor: pointer; color: inherit; text-align: left; }
+.oc-phead-open[data-open] { outline: 2px solid var(--sol-blue); outline-offset: 3px; }
+.oc-pname { font: 500 20px/1.2 var(--font-serif); color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oc-band[data-unled] .oc-pname { color: var(--sol-text-muted); }
+.oc-psub { color: var(--sol-text-muted0); font-size: 11.5px; white-space: nowrap; }
+.oc-you { font-size: 11px; color: var(--sol-text-muted0); border: 1px solid var(--oc-line); border-radius: 99px; padding: 0 7px; white-space: nowrap; }
+.oc-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; align-items: start;
+  margin-left: 19px; padding-left: 22px; border-left: 1px solid var(--oc-spine);
+}
+.oc-grid > :first-child::before { content: ""; position: absolute; left: -23px; top: 24px; width: 22px; border-top: 1px solid var(--oc-spine); }
+
+/* Faces */
+.oc-face { position: relative; flex: none; border-radius: 50%; display: inline-grid; place-items: center; overflow: visible; font-weight: 700; color: var(--sol-text-muted); background: var(--sol-bg-highlight); }
+.oc-face img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+.oc-face[data-presence]::after { content: ""; position: absolute; right: -1px; bottom: 0; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--sol-bg); background: var(--sol-text-muted0); }
+.oc-face[data-presence="online"]::after { background: var(--sol-green); }
+
+/* A role's card */
+.oc-chead { display: flex; gap: 11px; align-items: center; min-width: 0; }
+.oc-title { font: 500 18px/1.22 var(--font-serif); letter-spacing: -0.005em; font-variation-settings: "opsz" 36; color: var(--sol-text); overflow-wrap: anywhere; }
+.oc-sub { color: var(--sol-text-muted0); font-size: 11.5px; margin-top: 1px; overflow-wrap: anywhere; }
+.oc-state-row { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.oc-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--sol-text-muted0); white-space: nowrap; }
+.oc-state i { width: 7px; height: 7px; border-radius: 50%; flex: none; border: 1.5px solid var(--sol-text-muted0); }
+.oc-state[data-state="waiting"] { color: var(--sol-orange); font-weight: 600; }
+.oc-state[data-state="waiting"] i { border: 0; background: var(--sol-orange); }
+.oc-state[data-state="working"] { color: var(--sol-green); font-weight: 600; }
+.oc-state[data-state="working"] i { border: 0; background: var(--sol-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-green) 18%, transparent); }
+.oc-state[data-state="paused"] i,
+.oc-state[data-state="not_started"] i { border-style: dashed; }
+.oc-latest {
+  margin-top: 5px; color: var(--sol-text-secondary); font-size: 12.4px; line-height: 1.55;
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+}
+.oc-latest a, .oc-latest [role="link"] { vertical-align: 1px; }
+.oc-area { font-size: 11.5px; color: var(--sol-text-muted); border-top: 1px solid var(--oc-line-soft); padding-top: 10px; margin-top: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* A project or plan block */
+.oc-pj { border-top: 1px solid var(--oc-line-soft); padding: 10px 0 0; margin-top: 11px; }
+.oc-pj-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 12.5px; min-width: 0; }
+.oc-pj-title { font-weight: 600; color: var(--sol-text); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; min-width: 0; overflow-wrap: anywhere; }
+.oc-pj-title:hover { text-decoration: underline; text-decoration-color: var(--oc-line); text-underline-offset: 3px; }
+.oc-pj-kind { color: var(--sol-text-muted0); font-weight: 400; font-size: 11.5px; white-space: nowrap; }
+.oc-pj-count { margin-left: auto; color: var(--sol-text-muted); font-size: 11.5px; white-space: nowrap; text-decoration: none; }
+.oc-pj-count:hover { color: var(--sol-text); }
+.oc-pj-count[data-counting] { opacity: 0.55; }
+.oc-bar { height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--sol-border) 22%, transparent); margin: 7px 0 6px; overflow: hidden; }
+.oc-bar span { display: block; height: 100%; background: var(--sol-cyan); border-radius: 2px; }
+.oc-pj-for { font-size: 11.5px; color: var(--sol-text-muted); margin-top: 4px; }
+.oc-pj-for button { font-weight: 500; color: var(--sol-text-secondary); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.oc-pj-for button:hover { text-decoration: underline; text-decoration-color: var(--oc-line); text-underline-offset: 3px; }
+.oc-pick { color: var(--sol-link); background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.oc-pick:hover { text-decoration: underline; text-underline-offset: 3px; }
+.oc-unled { padding-top: 4px; }
+.oc-unled .oc-pj { border-top: 0; margin-top: 0; }
+
+/* Sessions working now */
+.oc-sessions { border-top: 1px solid var(--oc-line-soft); margin-top: 10px; padding-top: 7px; }
+.oc-sess { display: flex; align-items: center; gap: 8px; width: 100%; padding: 3px 0; font-size: 12px; color: var(--sol-text-secondary); background: none; border: 0; text-align: left; cursor: pointer; min-width: 0; }
+.oc-sess span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.oc-sess:hover span { color: var(--sol-text); }
+.oc-sess i { width: 6px; height: 6px; border-radius: 50%; background: var(--sol-green); flex: none; }
+.oc-sess i[data-input] { background: transparent; border: 1.5px solid var(--sol-green); }
+.oc-sess small { margin-left: auto; color: var(--sol-text-muted0); font-size: 11px; white-space: nowrap; flex: none; }
+
+/* An open proposal's changes, drawn in place */
+.oc-card[data-ghost="new"] { border: 1.5px dashed color-mix(in srgb, var(--sol-violet) 60%, transparent); background: color-mix(in srgb, var(--sol-violet) 5%, var(--sol-card)); cursor: default; }
+.oc-card[data-ghost="new"][data-solid] { border-style: solid; }
+.oc-card[data-ghost="retires"] > :not(.oc-ghost) { opacity: 0.45; }
+.oc-ghost { margin-top: 8px; font-size: 11.5px; color: var(--sol-violet); font-weight: 600; }
+
+/* Skeleton: only while the cache is cold */
+.oc-skel { border-radius: 12px; background: color-mix(in srgb, var(--sol-bg-alt) 70%, transparent); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .oc-in > * { animation: oc-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+  .oc-in > :nth-child(2) { animation-delay: 0.04s; }
+  .oc-in > :nth-child(3) { animation-delay: 0.08s; }
+  .oc-in > :nth-child(n + 4) { animation-delay: 0.12s; }
+  @keyframes oc-rise { from { opacity: 0; transform: translateY(6px); } }
+}
+
+@container oc (max-width: 520px) {
+  .oc-in { padding: 16px 14px 60px; }
+  .oc-grid { margin-left: 0; padding-left: 12px; }
+  .oc-grid > :first-child::before { left: -13px; width: 12px; }
+  .oc-goals, .oc-grid { grid-template-columns: minmax(0, 1fr); }
+}
