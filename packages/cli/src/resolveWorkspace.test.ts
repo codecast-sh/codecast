@@ -1,7 +1,10 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import {
+  filedElsewhereLine,
   loadWorkspaceRoster,
   clearWorkspaceCache,
+  scopeFlagFor,
+  workspaceFromKey,
   matchTeam,
   resolveWorkspaceForRead,
   resolveWorkspaceForWrite,
@@ -171,5 +174,43 @@ describe("--team personal", () => {
 
   test("an unknown team's message offers personal as a choice", () => {
     expect(unknownTeamMessage(roster(), "ghost")).toContain("personal  your own workspace");
+  });
+});
+
+// A write takes an explicit workspace or the session's team; a read defaults
+// to the directory's mapping. On a checkout mapped elsewhere the two differ,
+// and a next step printed by the write ("cast task ready --plan pl-857") then
+// reads the wrong workspace and answers nothing, which is read as "no work".
+describe("naming the workspace a row was filed in", () => {
+  const personal = { kind: "personal" } as const;
+  const codecast = { kind: "team", teamId: CODECAST, name: "Codecast Labs" } as const;
+
+  test("a stored access key becomes a workspace, named from the roster", () => {
+    expect(workspaceFromKey(roster(), `team:${UNION}`)).toEqual({ kind: "team", teamId: UNION, name: "Union" });
+    expect(workspaceFromKey(roster(), "user:u1")).toEqual({ kind: "personal" });
+    // A team outside the roster keeps its id; an unreadable key names nothing.
+    expect(workspaceFromKey(roster(), "team:t_ghost")).toEqual({ kind: "team", teamId: "t_ghost" });
+    expect(workspaceFromKey(roster(), "restricted:x")).toBeNull();
+    expect(workspaceFromKey(roster(), undefined)).toBeNull();
+  });
+
+  test("the flag is empty when the read already lands there, and names the gap when it does not", () => {
+    expect(scopeFlagFor(personal, personal)).toBe("");
+    expect(scopeFlagFor(codecast, { kind: "team", teamId: CODECAST })).toBe("");
+    expect(scopeFlagFor(personal, codecast)).toBe(" --team personal");
+    expect(scopeFlagFor(codecast, personal)).toBe(" --team 'Codecast Labs'");
+    expect(scopeFlagFor({ kind: "team", teamId: UNION, name: "Union" }, codecast)).toBe(" --team Union");
+    // A team the roster does not hold falls back to its id, which needs no quoting.
+    expect(scopeFlagFor({ kind: "team", teamId: "t_ghost" }, personal)).toBe(" --team t_ghost");
+    // Nothing known about the workspace: no flag beats a wrong one.
+    expect(scopeFlagFor(null, personal)).toBe("");
+  });
+
+  test("an empty answer says the plan is read elsewhere, and stays quiet when it is not", () => {
+    expect(filedElsewhereLine("pl-857", codecast, personal)).toBe(
+      "pl-857 is in the Codecast Labs workspace, and this directory reads personal: add --team 'Codecast Labs' to read it.",
+    );
+    expect(filedElsewhereLine("pl-857", personal, personal)).toBeNull();
+    expect(filedElsewhereLine("pl-857", null, personal)).toBeNull();
   });
 });
