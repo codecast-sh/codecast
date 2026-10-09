@@ -130,6 +130,7 @@ export type OpsReplay = {
   has_timeline: boolean;
   imported_at: number | null;
   converter_version?: number | null;
+  vendor_refresh_after?: number | null;
   updated_at: number;
 };
 

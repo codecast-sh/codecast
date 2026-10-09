@@ -10,7 +10,6 @@ import { useLocalAuth } from "@/lib/localAuth";
 import { RepoPulseChip } from "@/components/marketing/RepoPulseChip";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { visitorPlatform } from "@/lib/visitorPlatform";
-import { AssistantMark } from "@/components/simple/AssistantMark";
 import { HostedWordmark } from "@/components/HostedWordmark";
 import { LANE_PATHS } from "@/components/simple/lanePaths";
 
@@ -26,11 +25,6 @@ import { LANE_PATHS } from "@/components/simple/lanePaths";
  * signed-out state while the server confirms.
  */
 const MARKETING_NAV_LINKS = [
-  // The path for someone who does not write code: the hosted assistant's
-  // own door (/welcome), first so it is not lost among the developer pages.
-  // It lands on the home page's section in the assistant's own look, which
-  // leads on to /welcome.
-  { href: "/#everyone", label: "For everyone" },
   { href: "/documentation", label: "Docs" },
   { href: "/features", label: "CLI" },
   { href: "/pricing", label: "Pricing" },
@@ -40,9 +34,9 @@ const MARKETING_NAV_LINKS = [
   // the bar room for "Open app" at a laptop's width.
 ] as const;
 
-/** The everyone link's own look: the family's interface face beside the
- *  assistant's mark, so it reads as a different door from the mono links. */
-const EVERYONE_HREF = "/#everyone";
+/** The assistant's own page: the campaign door (/everyone redirects here),
+ *  set in the family's interface face. The developer bar does not link it. */
+const EVERYONE_HREF = "/?for=assistant";
 const WAY_FONT = { fontFamily: "var(--pd-font-ui, ui-sans-serif, system-ui, sans-serif)" } as const;
 
 const INK = "#002b36";
@@ -54,7 +48,9 @@ const MUTED = "#657b83";
  *  wordmark. The developer links (Docs, CLI, Changelog, stars, Download)
  *  stay on the developer bar. */
 const DOOR_LINKS = [
-  { href: EVERYONE_HREF, label: "For everyone" },
+  // The door's landing is the For everyone page itself, so the link reads as
+  // where the visitor already is.
+  { href: EVERYONE_HREF, label: "For everyone", active: "/" },
   { href: "/pricing?for=assistant", label: "Pricing", active: "/pricing" },
 ] as const;
 const DOOR = {
@@ -110,8 +106,9 @@ export function MarketingNav({
               <Link
                 key={link.href}
                 href={link.href}
+                aria-current={link.active === active ? "page" : undefined}
                 className="hidden sm:flex items-center px-2.5 py-1.5 text-[14px] font-medium transition-colors"
-                style={{ color: "active" in link && link.active === active ? DOOR.ink : DOOR.muted }}
+                style={{ color: link.active === active ? DOOR.ink : DOOR.muted }}
               >
                 {link.label}
               </Link>
@@ -119,7 +116,9 @@ export function MarketingNav({
             {!mounted ? (
               <span aria-hidden className="block h-9 w-[7.5rem] shrink-0" />
             ) : signedIn ? (
-              <Link href="/inbox" className="inline-flex h-9 items-center gap-1.5 rounded-[10px] px-4 text-[14px] font-semibold" style={{ background: DOOR.accent, color: DOOR.accentInk }}>
+              // A quiet link: the page's own Get started is the one filled
+              // button on this door.
+              <Link href="/inbox" className="inline-flex h-9 items-center gap-1.5 px-2.5 text-[14px] font-medium underline-offset-4 hover:underline" style={{ color: DOOR.ink }}>
                 Open app <ArrowRight className="w-4 h-4" />
               </Link>
             ) : (
@@ -161,9 +160,8 @@ export function MarketingNav({
               href={href}
               // Changelog steps out below 1500px, so "Open app" always fits.
               className={`hidden ${href === "/changelog" ? "min-[1500px]:flex" : "md:flex"} items-center gap-1.5 font-medium text-sm px-2.5 py-1.5 transition-colors hover:text-[#002b36]`}
-              style={{ color: href === active ? INK : MUTED, ...(href === EVERYONE_HREF ? WAY_FONT : null) }}
+              style={{ color: href === active ? INK : MUTED }}
             >
-              {href === EVERYONE_HREF && <AssistantMark size={14} />}
               {label}
             </Link>
           ))}
