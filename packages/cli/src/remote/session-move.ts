@@ -29,7 +29,7 @@ import { laptopHome, trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.j
 import { AGENT_AUTH_RECEIVER } from "./agentAuthReceiver.py.js";
 import { deviceId as localDeviceId } from "./device.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
-import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
+import { applySnapshotFastForward, createWipSnapshot, isWipSnapshotMessage, remoteSnapshotScript } from "../wipSnapshot.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { readLocalCredential, readLocalCredentialAsync } from "../ccKeychain.js";
 import { remapContextPaths } from "../cloud/mirror/transform.js";
@@ -104,24 +104,31 @@ export function slugToCwd(slug: string): string | null {
  * the project-dir slug (CC collapses both "/" and "." to "-", which is not
  * losslessly reversible).
  */
-function cwdFromTranscript(jsonlPath: string): string | null {
+export function cwdFromTranscript(jsonlPath: string, slug = path.basename(path.dirname(jsonlPath))): string | null {
   // The LAST cwd, not the first: a session that has travelled between
   // machines carries entries stamped with every home it has had, and after a
   // round trip the file can even BEGIN with the remote's path (observed live:
   // first line /home/ubuntu/work/…, last line /Users/…). The newest entry is
   // the only one that reflects where the session runs now.
+  // A record's cwd also follows the agent's own `cd`, so the newest entry whose
+  // slug is the transcript's project folder wins: that is where the agent was
+  // launched and resumes. A `cd packages/web` otherwise moved the session into
+  // a host checkout named "web" (2026-10-09).
   let last: string | null = null;
+  let launch: string | null = null;
   try {
     const text = fs.readFileSync(jsonlPath, "utf-8");
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
         const rec = JSON.parse(line) as { cwd?: string };
-        if (rec.cwd) last = rec.cwd;
+        if (!rec.cwd) continue;
+        last = rec.cwd;
+        if (cwdToSlug(rec.cwd) === slug) launch = rec.cwd;
       } catch { /* skip non-JSON line */ }
     }
   } catch { /* unreadable */ }
-  return last;
+  return launch ?? last;
 }
 
 /** Locate a session's JSONL + cwd on this machine by session id. */
@@ -403,7 +410,13 @@ export async function gitPushWorktree(
   // clone may be on a different default branch).
   // refs/codecast/landed marks what this machine handed over, so the host's
   // disk sweep can tell work made there from work the laptop still holds.
-  ssh(host, `cd ${shq(remotePath)} && git checkout -q ${shq(branch)} 2>/dev/null || true; git reset -q --hard ${shq(branch)} && git update-ref ${LANDED_REF} ${shq(head)}`);
+  // Then the snapshot becomes uncommitted work again: the branch steps back to
+  // this folder's HEAD with the snapshot's files left in the tree, so `git
+  // status` there reads as it did here. Left committed, the agent met a "wip
+  // snapshot" commit it never made, ahead of origin (2026-10-09); the way home
+  // (gitPullWorktree) and the cloud seed (finishSeededWorktree) do the same.
+  const unfold = snap ? ` && git reset -q --mixed ${shq(`${head}^`)}` : "";
+  ssh(host, `cd ${shq(remotePath)} && git checkout -q ${shq(branch)} 2>/dev/null || true; git reset -q --hard ${shq(branch)} && git update-ref ${LANDED_REF} ${shq(head)}${unfold}`);
   return { branch, head };
 }
 
@@ -694,29 +707,28 @@ export function ensureRemoteCodexTrust(host: RemoteHost, remoteCwd: string, orig
 
 export interface SyncVerification {
   branch: string;
-  /** The sha the remote is expected to be at: the pushed snapshot when there was
-   * uncommitted work, else the local tip. NOT necessarily local HEAD — the
-   * snapshot is deliberately not committed locally (see gitPushWorktree). */
+  /** The commit the remote's branch is expected to be at: this folder's HEAD
+   * (a pushed snapshot is unfolded back to its parent, see gitPushWorktree). */
   localHead: string;
   remoteHead: string | null;
   headsMatch: boolean;
-  /** Tracked-file entries in the remote's `git status --porcelain` (0 = tracked files exactly
-   * at the pushed tip); null when the check itself failed. */
+  /** Changes in the remote's tree beyond what was handed over (0 = exactly the
+   * handed-over tree); null when the check itself failed. */
   remoteDirty: number | null;
 }
 
 /**
- * Prove the transfer landed: the remote checkout must sit at the same commit
- * as the local worktree with nothing uncommitted. updateInstead + the
- * checkout/reset in gitPushWorktree should guarantee this — this check is what
- * turns "should" into a fact the move can report (and the moved agent can be
- * told) instead of a silent assumption. Best-effort: an unreachable remote
- * reads as heads-unknown, never as a throw that aborts the move.
+ * Prove the transfer landed: the remote checkout must sit at this folder's
+ * commit with this folder's working tree. updateInstead + the checkout/reset
+ * in gitPushWorktree should guarantee this — this check is what turns
+ * "should" into a fact the move can report (and the moved agent can be told)
+ * instead of a silent assumption. Best-effort: an unreachable remote reads as
+ * heads-unknown, never as a throw that aborts the move.
  *
  * `expectedHead` is what the push actually sent. Pass it whenever a snapshot was
- * pushed: the snapshot is deliberately NOT committed locally, so comparing the
- * remote against local HEAD would report a phantom mismatch on every dirty move.
- * Omitted (e.g. `cast remote back`), it falls back to the local tip.
+ * pushed: the remote then sits at the snapshot's parent with the snapshot's tree
+ * uncommitted in its folder. Omitted (e.g. `cast remote back`), it falls back to
+ * the local tip and a clean remote tree.
  */
 export function verifyRemoteSync(
   host: RemoteHost,
@@ -725,17 +737,22 @@ export function verifyRemoteSync(
   expectedHead?: string,
 ): SyncVerification {
   const branch = currentBranch(localCwd);
-  const localHead = expectedHead ?? git(localCwd, ["rev-parse", "HEAD"]);
+  const sent = expectedHead ?? git(localCwd, ["rev-parse", "HEAD"]);
+  const unfolded = !!expectedHead && isWipSnapshotMessage(gitSafe(localCwd, ["show", "-s", "--format=%B", sent]).out);
+  const localHead = unfolded ? git(localCwd, ["rev-parse", `${sent}^`]) : sent;
+  const tree = git(localCwd, ["rev-parse", `${sent}^{tree}`]);
   let remoteHead: string | null = null;
   let remoteDirty: number | null = null;
   try {
+    // The remote's working tree as a tree id, through a throwaway index (the
+    // same recipe as snapshotTree), so uncommitted and untracked work count.
     const lines = ssh(
       host,
-      `cd ${shq(remoteCwd)} && git rev-parse HEAD && git status --porcelain --untracked-files=no | wc -l`,
+      `cd ${shq(remoteCwd)} && git rev-parse HEAD && t=$(mktemp -d) && (export GIT_INDEX_FILE="$t/index"; git read-tree HEAD && git add -A -- :/ && git write-tree && git diff-index --cached --name-only ${shq(tree)} | wc -l); s=$?; rm -rf "$t"; exit $s`,
     ).trim().split("\n");
     remoteHead = lines[0]?.trim() || null;
-    const dirty = parseInt(lines[lines.length - 1]?.trim() ?? "", 10);
-    remoteDirty = Number.isNaN(dirty) ? null : dirty;
+    const dirty = parseInt(lines[2]?.trim() ?? "", 10);
+    remoteDirty = lines[1]?.trim() === tree ? 0 : Number.isNaN(dirty) ? null : dirty;
   } catch { /* verification unavailable — report unknown, don't block the move */ }
   return { branch, localHead, remoteHead, headsMatch: remoteHead === localHead, remoteDirty };
 }
@@ -760,6 +777,26 @@ export interface MoveResult {
  */
 export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
   return path.posix.join(host.remoteBaseDir, path.basename(localGitRoot));
+}
+
+/**
+ * When the host's checkout of a repository is busy, a move lands in its own
+ * clone beside it (`<checkout>-mv-<batch>`, migrate/io.ts). The clone stands in
+ * for that checkout the way a worktree does: the session belongs to the same
+ * repository, so its root (and the project the app names it by) is the
+ * checkout's, not the clone folder's.
+ */
+export const MOVE_CLONE_RE = /-mv-[a-z0-9]+$/;
+
+export function moveClonePath(main: string, batchId: string): string {
+  return `${main}-mv-${batchId.replace(/^mg-/, "").slice(0, 8)}`;
+}
+
+/** The checkout a move clone stands in for, or `root` itself when it is not one (or that checkout is gone). */
+export function checkoutOfMoveClone(root: string, exists: (p: string) => boolean = (p) => fs.existsSync(path.join(p, ".git"))): string {
+  if (!MOVE_CLONE_RE.test(root)) return root;
+  const main = root.replace(MOVE_CLONE_RE, "");
+  return exists(main) ? main : root;
 }
 
 /**

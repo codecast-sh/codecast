@@ -202,6 +202,36 @@ describe("signals.ingest", () => {
     expect(none.signals).toEqual([]);
   });
 
+  test("move: a fingerprint leaves a cause for a new one of its own, and later signals follow it", async () => {
+    // Union 2026-10-07: held call cards (C117) had been attached to a cause
+    // about message openings; a cause is one mechanism, so it gets its own.
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "union:cluster:a", title: "Messages narrate effort" });
+    const from = (await task(first.task_id)).short_id;
+    stub.state.reply = `{"answer": "${from}"}`;
+    await add({ fingerprint: "union:cluster:b", title: "Messages narrate Union's effort" });
+    stub.state.reply = '{"answer":"none"}';
+    const moved = await t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:b", from, title: "Held call cards dial outside calling hours" });
+    expect(moved.moved).toBe(1);
+    expect(moved.created).toBe(true);
+    const target = await t.run(async (ctx) => await ctx.db.query("tasks").withIndex("by_short_id", (q) => q.eq("short_id", moved.to)).first()) as any;
+    expect(target.title).toBe("Held call cards dial outside calling hours");
+    expect(target.cause.fingerprints).toEqual(["union:cluster:b"]);
+    const source = (await task(first.task_id)) as any;
+    expect(source.cause.fingerprints).toEqual(["union:cluster:a"]);
+    expect(source.cause.signal_count).toBe(1);
+    const later = await add({ fingerprint: "union:cluster:b", title: "Held call cards dial outside calling hours" });
+    expect(later.attach).toBe("fingerprint");
+    expect((await task(later.task_id)).short_id).toBe(moved.to);
+  });
+
+  test("move refuses a fingerprint the cause does not hold", async () => {
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "union:cluster:a", title: "Messages narrate effort" });
+    const from = (await task(first.task_id)).short_id;
+    await expect(t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:zz", from })).rejects.toThrow();
+  });
+
   test("the web feed carries the fingerprint, the evidence link and the head of the detail (line-map.md LX7)", async () => {
     const { add, t, userId } = await setup();
     const quote = "> Book a time here: http://localhost:3000/book";
