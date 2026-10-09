@@ -720,6 +720,34 @@ describe("receipt-backed create side effects", () => {
     }
   });
 
+  test("a project created under a goal is attached in the create's own command, once", async () => {
+    const userId = "users_owner";
+    const db = makeFakeDb({ local_command_receipts: [], local_view_heads: [] });
+    const calls: any[] = [];
+    const ctx = {
+      auth: { getUserIdentity: async () => ({ subject: `${userId}|session` }) },
+      db,
+      runMutation: async (_mutation: unknown, args: any) => {
+        calls.push(args);
+        return calls.length === 1 ? { id: "projects_created", short_id: "pj-created" } : { ok: true };
+      },
+    };
+    const continuation = { version: 1, kind: "attachToInitiative", initiativeId: "initiatives_goal" };
+    const input = {
+      action: "createProject",
+      args: [{ title: "Launch", client_key: "projstub-1" }, continuation],
+      result: { receiptActionVersion: 1, commandId: "create-project-under-goal", localResult: { stubId: "projstub-1", continuation } },
+    };
+    const first = await (dispatch as any)._handler(ctx, input);
+    const replay = await (dispatch as any)._handler(ctx, input);
+    expect(calls).toEqual([
+      { title: "Launch", client_key: "projstub-1" },
+      { id: "initiatives_goal", project_id: "projects_created" },
+    ]);
+    expect(first).toMatchObject({ status: "acknowledged", result: { id: "projects_created" } });
+    expect(replay).toEqual(first);
+  });
+
   test("createBucket delegates to the existing V2 receipt surface and preserves its canonical id", async () => {
     const userId = "users_owner";
     const db = makeFakeDb({});
