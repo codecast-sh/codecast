@@ -126,7 +126,7 @@ export function Related() {
           >
             <span className="font-mono text-[15px] font-bold" style={{ color: SOL.base03 }}>{f.name}</span>
             <span className="mt-2 flex-1 text-[13.5px] leading-6" style={{ color: SOL.base01 }}>{f.dek}</span>
-            <span className="mt-3 font-mono text-[12px] transition-colors" style={{ color: f.color }}>{f.command} <span className="inline-block transition-transform group-hover:translate-x-1">→</span></span>
+            <span className="mt-3 font-mono text-[12px] transition-colors" style={{ color: f.color }}>Read the page <span className="inline-block transition-transform group-hover:translate-x-1">→</span></span>
           </Link>
         ))}
       </div>

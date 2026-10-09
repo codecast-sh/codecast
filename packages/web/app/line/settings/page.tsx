@@ -1,7 +1,7 @@
 "use client";
-import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { settingsOnMap } from "../../../lib/line/lineMapUrl";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 
 // /line/settings: the line's settings live on its map now (line-map.md LX1).
 // Every link in (lineSettingsHref) lands on the map with the matching panel
@@ -11,6 +11,6 @@ export default function LineSettingsRoute() {
   const router = useRouter();
   const search = useSearchParams();
   const to = settingsOnMap(search);
-  useEffect(() => { router.replace(to); }, [router, to]);
+  useWatchEffect(() => { router.replace(to); }, [router, to]);
   return null;
 }

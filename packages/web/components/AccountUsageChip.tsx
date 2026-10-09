@@ -457,8 +457,8 @@ export function AccountUsageChip() {
       </TopbarChip>
       {panelOpen && (
         <div data-flyout className="absolute right-0 top-full z-50 pt-1.5">
-          <div className="w-[320px] rounded-md border bg-popover text-popover-foreground shadow-md">
-        <div className="border-b border-sol-border/60 px-3 py-2">
+          <div className="flex max-h-[calc(100dvh-4rem)] w-[320px] flex-col rounded-md border bg-popover text-popover-foreground shadow-md">
+        <div className="shrink-0 border-b border-sol-border/60 px-3 py-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-sol-text">
             <KeyRound className="h-3.5 w-3.5 text-sol-cyan" />
             Model usage
@@ -469,7 +469,7 @@ export function AccountUsageChip() {
 
         {(sw.switching || sw.outcome) && (
           <div
-            className={`border-b px-3 py-2 text-[10px] leading-snug ${
+            className={`shrink-0 border-b px-3 py-2 text-[10px] leading-snug ${
               sw.outcome?.kind === "error"
                 ? "border-sol-red/30 bg-sol-red/10 text-sol-red"
                 : sw.outcome?.kind === "success"
@@ -494,7 +494,7 @@ export function AccountUsageChip() {
           </div>
         )}
 
-        <div className="max-h-[min(60rem,calc(100dvh-13rem))] space-y-2 overflow-y-auto px-3 py-2">
+        <div className="max-h-[60rem] min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
           {activeGroups.length > 0 && (
             <>
               <div className="px-0.5 text-[9px] font-semibold uppercase tracking-wider text-sol-green">
@@ -535,12 +535,12 @@ export function AccountUsageChip() {
           )}
         </div>
 
-        <div className="border-t border-sol-border/60 px-3 py-2.5">
+        <div className="shrink-0 border-t border-sol-border/60 px-3 py-2.5">
           {/* Device-level mode — shown even when the current login isn't a
               saved profile, so it is always reachable from here. */}
           <div className="flex items-center gap-2 px-2">
             <Zap className={`h-3.5 w-3.5 ${recovery.recovery.mode === "off" ? "text-sol-text-dim" : "text-sol-cyan"}`} />
-            <div className="text-xs font-medium text-sol-text">On a usage limit</div>
+            <div className="text-xs font-medium text-sol-text">When a session stops on its own</div>
           </div>
           <div className="mt-1">
             <RecoveryModeSelect control={recovery.recovery} compact />

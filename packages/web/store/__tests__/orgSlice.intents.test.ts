@@ -17,7 +17,7 @@ import {
 // The store module binds its optimistic bubble writer into the slice when it
 // evaluates (bindOptimisticMessageWriter), so a reply's `say` bubble here is
 // the real row inboxStore writes, not a stub.
-import "../inboxStore";
+import { useInboxStore } from "../inboxStore";
 import { ORG_FIXTURE, ORG_FIXTURE_ALL_SESSIONS } from "../../components/org/orgFixture";
 import { sortOrgSessions, type OrgTree } from "../../components/org/orgTypes";
 
@@ -564,5 +564,50 @@ describe("org intents", () => {
     // 7 drawn rows (the fixture role holds 7 of 8) re-home by owner, the
     // remaining 23 land on the parent person: the header total is unchanged.
     expect(st.orgTree!.people[0].total).toBe(meTotal + 30);
+  });
+
+  // A pushed collection lands on the store draft as a plain frozen table, so a
+  // replay that wrote an intent's stamp straight into its rows left a draft
+  // proxy there; the commit revoked it, and the next org push threw
+  // "Cannot perform 'getPrototypeOf' on a proxy that has been revoked".
+  it("a stale push replays and reverts through the real store with plain rows, leaving earlier state untouched", () => {
+    const store = () => useInboxStore.getState() as any;
+    const revoked = (v: any, path: string, seen = new Set<any>()): string | null => {
+      if (!v || typeof v !== "object" || seen.has(v)) return null;
+      seen.add(v);
+      try { Object.getPrototypeOf(v); } catch { return path; }
+      for (const k of Object.keys(v)) { const hit = revoked(v[k], `${path}.${k}`, seen); if (hit) return hit; }
+      return null;
+    };
+    const fields = ["orgProposalChanges", "orgProposals", "orgLog", "orgIntents"];
+    const clean = () => { for (const f of fields) expect(revoked(store()[f], f)).toBeNull(); };
+    const row = { _id: "c1", proposal_id: "p", seq: 1, change: { kind: "retire", handle: "x" }, rationale: "r", evidence: [], status: "proposed" };
+    const aged = Date.now() - ORG_INTENT_TTL_MS - 1;
+
+    // A note replayed onto a change push that predates it.
+    store().syncTable("orgProposalChanges", [row]);
+    store().replyOnOrgProposal("p", [{ verdict: "note", change_ids: ["c1"], seqs: [1], text: "hi" }], { revised_at: 0, seqs: [1] });
+    const before = store().orgProposalChanges;
+    store().syncTable("orgProposalChanges", [{ ...row }]);
+    expect(store().orgProposalChanges.c1.reply).toMatchObject({ verdict: "note", text: "hi" });
+    expect(before.c1.reply).toMatchObject({ verdict: "note", text: "hi" });
+    clean();
+    // The next push on another channel reads that row through a draft.
+    store().syncTable("orgProposals", [{ _id: "p", short_id: "op-1", status: "open", created_at: 1 }]);
+    clean();
+
+    // An aged verdict reverts onto the pushed rows: its old stamp goes back as a plain value.
+    useInboxStore.setState({ orgIntents: [{ kind: "decideChange", id: "d1", change_id: "c1", proposal_id: "p", from: "proposed", to: "skipped", line: "x", reply: { verdict: "reject", at: 2 }, reply_from: { verdict: "note", text: "earlier", at: 1 }, at: aged }] } as any);
+    store().syncTable("orgProposalChanges", [{ ...row, status: "skipped", reply: { verdict: "reject", at: 2 } }]);
+    expect(store().orgProposalChanges.c1).toMatchObject({ status: "proposed", reply: { verdict: "note", text: "earlier" } });
+    expect(store().orgIntents).toEqual([]);
+    clean();
+
+    // An undo's mark replayed onto a log push.
+    useInboxStore.setState({ orgIntents: [{ kind: "undoChange", id: "u1", batch: "b1", with: [], redo: false, by: { user_id: "u", name: "n" }, from: { b1: null }, line: "x", at: Date.now() }] } as any);
+    store().syncTable("orgLog", [{ _id: "b1", batch: "b1" }]);
+    expect(store().orgLog.b1.undone_by).toMatchObject({ batch: "", user_id: "u" });
+    store().syncTable("orgProposals", [{ _id: "p", short_id: "op-1", status: "open", created_at: 2 }]);
+    clean();
   });
 });
