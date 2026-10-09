@@ -12,6 +12,11 @@ export interface ProcessInfo {
    *  process GENERATION: a restarted agent keeps its session id and often its
    *  place in the tree, but never its start time. */
   startedAt?: number;
+  /** Process group, and the controlling terminal (`??`/`?` for none). Together
+   *  they say whether a process detached into a session of its own, which is
+   *  what processLineage.ts reads. */
+  pgid?: number;
+  tty?: string;
 }
 
 /** ps `etime` — elapsed wall time as `[[dd-]hh:]mm:ss` — in seconds. One
@@ -319,13 +324,20 @@ export class AwakeIdleClock {
 export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>> {
   if (process.platform !== "darwin" && process.platform !== "linux") return new Map();
 
-  const captured = await resourceProbe("processes", () => execFileAsync("ps", ["-eo", "pid=,ppid=,pcpu=,rss=,etime=,comm="], {
+  // The terminal as a device number on macOS: `tty` names it by searching
+  // /dev, which made this ps 3 to 10 times slower under load (2026-10-09).
+  const terminal = process.platform === "darwin" ? "tdev" : "tty";
+  const captured = await resourceProbe("processes", () => execFileAsync("ps", ["-eo", `pid=,ppid=,pcpu=,rss=,etime=,pgid=,${terminal}=,comm=`], {
     timeout: 5000,
     killSignal: "SIGKILL",
   }), 5000);
   if (!captured) throw new Error("Process snapshot unavailable within its time budget");
   return parseProcessSnapshot(captured.stdout);
 }
+
+/** A ps terminal value: none (`??` on macOS, `?` on Linux), a name, or a
+ *  macOS `tdev` major/minor. */
+const TTY_TOKEN = /^(\?\??|-|console|tty\S*|pts\/\d+|\d+\/\d+)$/;
 
 export function parseProcessSnapshot(stdout: string, collectedAt = Date.now()): Map<number, ProcessInfo> {
   const result = new Map<number, ProcessInfo>();
@@ -342,13 +354,16 @@ export function parseProcessSnapshot(stdout: string, collectedAt = Date.now()): 
     // etime joined the column list after the other four, so an older daemon's
     // parse of a 4-column line still works and simply carries no start time.
     const elapsedSec = parts.length > 4 ? parseEtimeSeconds(parts[4]) : undefined;
+    // pgid and tty joined later still, so a line without them reads as before.
+    const group = parts.length > 7 && /^\d+$/.test(parts[5]) && TTY_TOKEN.test(parts[6]);
     result.set(pid, {
       pid,
       ppid,
       cpu,
       rss: rss * 1024,
-      command: parts.slice(5).join(" "),
+      command: parts.slice(group ? 7 : 5).join(" "),
       ...(elapsedSec !== undefined ? { startedAt: collectedAt - elapsedSec * 1000 } : {}),
+      ...(group ? { pgid: Number(parts[5]), tty: parts[6] } : {}),
     });
   }
   return result;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { endsWithQuestion, hasCanvas, hasLocalHtmlPath, hasPublishedPage, hasTextChart, momentForMessage, pickFeatureMoment } from "./featureMoments";
+import { asksForChoice, endsWithQuestion, hasCanvas, hasLocalHtmlPath, hasPublishedPage, hasTextChart, momentForMessage, pickFeatureMoment } from "./featureMoments";
 
 describe("hasTextChart", () => {
   test("a bar chart drawn in block glyphs", () => {
@@ -44,9 +44,35 @@ describe("endsWithQuestion", () => {
   test("a question mark inside closing code is ignored", () => expect(endsWithQuestion("Done.\n```\nif (a?) b\n```")).toBe(false));
 });
 
+describe("asksForChoice", () => {
+  test.each([
+    "Which one should ship first, Redis or in memory?",
+    "Should I fix it now or file a task for later?",
+    "Two ways to go:\n\n(a) Keep the old table and backfill.\n(b) Migrate in place.\n\nWhich do you prefer?",
+    "1. Ship behind a flag\n2. Ship to everyone\n\nWhat's your call?",
+    "**Option A**: rewrite.\n**Option B**: patch.\n\nWhich one?",
+  ])("a choice: %s", (text) => expect(asksForChoice(text)).toBe(true));
+
+  test.each([
+    "Done with the API. Want me to proceed with the UI?",
+    "Should I proceed?",
+    "Should I also migrate the old rows?",
+    "Does this look right to you?",
+    "Shall I commit this?",
+    "Want me to keep going or stop here?",
+    "Is the new layout okay, or something else?",
+    "Ready to ship?",
+    "All tests pass. Anything else?",
+    "Should I deploy or not?",
+  ])("not a choice: %s", (text) => expect(asksForChoice(text)).toBe(false));
+});
+
 describe("momentForMessage", () => {
-  test("a closing question on a waiting session asks for Decision queue", () => {
+  test("a closing choice on a waiting session asks for Decision queue", () => {
     expect(momentForMessage("Redis or memory?", { isLast: true, needsInput: true })?.slug).toBe("decide");
+  });
+  test("a closing check-in on a waiting session is no moment", () => {
+    expect(momentForMessage("All green. Want me to proceed?", { isLast: true, needsInput: true })).toBeNull();
   });
   test("the same question while the agent is still working is no moment", () => {
     expect(momentForMessage("Redis or memory?", { isLast: true, needsInput: false })).toBeNull();
