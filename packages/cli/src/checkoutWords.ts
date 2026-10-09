@@ -4,7 +4,7 @@
 
 import { execFileSync } from "./proc.js";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
-import { prWords, type WaitLabelOptions } from "@codecast/shared/tasks";
+import { AGENT_WAIT_WORDS, prWords, type WaitLabelOptions } from "@codecast/shared/tasks";
 
 /** This checkout's repository (`owner/name`), or null outside one. */
 export function checkoutRepository(cwd: string): string | null {
@@ -23,4 +23,18 @@ export function checkoutWords(cwd: string = process.cwd()): WaitLabelOptions {
   let words = wordsByCwd.get(cwd);
   if (!words) wordsByCwd.set(cwd, (words = prWords(checkoutRepository(cwd))));
   return words;
+}
+
+/** The words an agent-read surface uses: the moment named absolutely, in UTC
+ *  (AGENT_WAIT_WORDS, TG11), and PRs as this checkout reads them. An agent
+ *  copies such a line into a `cast state` pin another session reads later, in
+ *  another zone, so a bare local "14:00" there means nothing. */
+export function agentWords(cwd: string = process.cwd()): WaitLabelOptions {
+  return { ...AGENT_WAIT_WORDS, ...checkoutWords(cwd) };
+}
+
+/** The words for a surface either party reads: an agent's when a session is
+ *  reading, else the checkout's plain local ones for a person at a terminal. */
+export function readerWords(sessionId: string | null | undefined, cwd: string = process.cwd()): WaitLabelOptions {
+  return sessionId ? agentWords(cwd) : checkoutWords(cwd);
 }

@@ -340,3 +340,23 @@ describe("company objects in the palette", () => {
     expect(role).toBeLessThan(paletteItemScore(paletteValue("Private mode", "incognito"), q));
   });
 });
+
+describe("the relation acts (task-graph.md TG12)", () => {
+  test("a relation's palette row, its field and its icon all come from the one record", async () => {
+    const { RELATION_ACT, RELATION_MODES, relationPlaceholder } = await import("../relationActs");
+    const rows = paletteActions("task", [{ _id: "t1", short_id: "ct-1" }], "me", true);
+    for (const mode of [...RELATION_MODES, "parent" as const]) {
+      const row = rows.find((r) => r.key === mode);
+      // `found_during` is left to the task page (it corrects a link the server
+      // guessed), so it has no palette row of its own; its words still have
+      // to match the field, which is what the test below checks.
+      if (row) expect(row.label).toBe(RELATION_ACT[mode]);
+      // The field says the act, so a gesture is never renamed mid-way.
+      expect(relationPlaceholder(mode).startsWith(RELATION_ACT[mode].replace(/…$/, " —"))).toBe(true);
+    }
+    // The two DIRECTIONS of one edge are the pair readers invert, so the icon
+    // column has to tell them apart without being read.
+    const icon = (key: string) => rows.find((r) => r.key === key)!.icon;
+    expect(icon("blocks")).not.toBe(icon("blocker"));
+  });
+});
