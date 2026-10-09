@@ -21,6 +21,11 @@ describe("cast card build inputs", () => {
 describe("taskWorkspaceScope", () => {
   test("reads the goal from the task's own workspace, not the shell's", () => {
     expect(taskWorkspaceScope({ workspace: "team:abc", project_id: "p1" })).toEqual({ workspace: "team", team_id: "abc", project: "p1" });
-    expect(taskWorkspaceScope({ workspace: "user:u1" })).toEqual({ workspace: "personal" });
+    expect(taskWorkspaceScope({ workspace: "user:u1" }, "u1")).toEqual({ workspace: "personal" });
+    // A task filed in a teammate's personal workspace is readable here (its
+    // assignee is an access grant), and "personal" on the wire would name the
+    // READER's own workspace, so it names none and the route's default stands.
+    expect(taskWorkspaceScope({ workspace: "user:u2", project_id: "p1" }, "u1")).toEqual({ project: "p1" });
+    expect(taskWorkspaceScope({ workspace: "user:u1" })).toEqual({});
   });
 });

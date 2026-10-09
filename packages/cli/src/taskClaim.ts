@@ -14,8 +14,12 @@ import { STALE_TASK_WORDS, TASK_EFFORTS } from "@codecast/shared/tasks";
 // hand's verdict is refused as its own role's), so a person at a plain
 // terminal handed "the one transcript active in the last five minutes" would
 // give a task to a hand's role or be refused as a hand. The task verbs read
-// `ownSessionId` (the agent's own exported id, then the process walk), which
-// is the same witness that stamps source:"agent" on create.
+// `ownSessionId` (the agent's own exported id, then the process walk), and so
+// does every surface that WORDS a wait or offers a park line, since that text
+// is addressed to whoever is reading. `cast task create`'s origin stamp is the
+// one deliberate exception: a missed session there costs a row on the human
+// shelf, not a task handed to the wrong role, so it still takes the looser
+// guess (detectCurrentSessionId).
 
 export function buildTaskStartBody(shortId: string, sessionId: string | null, opts: { take?: boolean } = {}): Record<string, any> {
   const body: Record<string, any> = { short_id: shortId, status: "in_progress", ...taskClaimant(sessionId) };
@@ -40,14 +44,22 @@ export function buildTaskClaimBody(filters: Record<string, any>, sessionId: stri
 /** What a claim that took nothing says, naming `--stale` when stale work was
  *  passed over and counting the ready tasks it may not take, so an agent told
  *  there is nothing left does not stop early or read `cast task ready` as a
- *  contradiction. */
-export function unclaimedLine(claim: { skipped?: unknown[]; more?: boolean; stale_passed?: number; others_passed?: number } | null | undefined): string {
+ *  contradiction.
+ *
+ *  `scope` is the flags this read was narrowed by (`readScopeFlags`), kept on
+ *  the `cast task ready` it points at: the count is of rows THIS scope
+ *  returned, and an unscoped command pasted in a shell mapped elsewhere would
+ *  not list them. */
+export function unclaimedLine(claim: { skipped?: unknown[]; more?: boolean; stale_passed?: number; others_passed?: number } | null | undefined, scope = ""): string {
   const stale = claim?.stale_passed ? ` ${claim.stale_passed} ${STALE_TASK_WORDS} passed over (claim with --stale).` : "";
   const n = claim?.others_passed ?? 0;
-  const others = n ? ` ${n} ready task${n === 1 ? " is" : "s are"} assigned to others or held by a decision (cast task ready lists them).` : "";
+  const others = n ? ` ${n} ready task${n === 1 ? " is" : "s are"} assigned to others or held by a decision (cast task ready${scope} lists them).` : "";
   if (!claim?.more) return `No ready tasks to claim.${stale}${others}`;
   const passed = claim.skipped?.length ? `, passed over ${claim.skipped.length}` : "";
-  return `No task claimed${passed}. More ready tasks exist past those tried: narrow with --plan, --project or -q.${stale}`;
+  // Both counts ride on both wordings: a queue the autopilot has to judge
+  // workable is told how much of it belongs to someone else whether or not
+  // candidates were left untried.
+  return `No task claimed${passed}. More ready tasks exist past those tried: narrow with --plan, --project or -q.${stale}${others}`;
 }
 
 // `--model`, `--effort` and `--ephemeral` on create and update (task-graph.md
@@ -79,9 +91,28 @@ export function foldStaleTasks<T extends { stale?: boolean }>(tasks: T[], showSt
 export const READY_LIST_LIMIT = 300;
 
 /** The frontier's closing count. A list that filled `READY_LIST_LIMIT` was cut
- *  short, stale rows first since they sort last, so both counts are floors. */
-export function readyCountLine(shown: number, folded: number, listed: number): string {
+ *  short, stale rows first since they sort last, so both counts are floors.
+ *
+ *  When every ready task was folded away the count is the whole output — no
+ *  rows above it — so it becomes a sentence with somewhere to go, the way the
+ *  genuinely empty frontier gets one. `scope` is the flags this read was
+ *  narrowed by (`readScopeFlags`), kept on that command so it lists the rows
+ *  this count is of. A bare "0 ready, 182 more untouched 30+
+ *  days" is the least guidance on the screen with the MOST available work, and
+ *  reads as a contradiction besides: those 182 ARE ready, just untouched, so
+ *  they are worded as ready rather than as "more", and the staleness window is
+ *  named once, in the words the rows themselves carry. */
+export function readyCountLine(shown: number, folded: number, listed: number, scope = ""): string {
   const floor = listed >= READY_LIST_LIMIT ? "+" : "";
+  if (!shown && folded) {
+    // The window is named ONCE, in the words every other surface uses
+    // (STALE_TASK_WORDS): "no ready task anyone has touched in 30 days" also
+    // parses as "nothing here is ready", which the count then contradicts by
+    // calling all of them ready.
+    return folded === 1
+      ? `The one ready task here is ${STALE_TASK_WORDS}: cast task ready${scope} --stale lists it, --stale --claim takes it.`
+      : `All ${folded}${floor} ready tasks here are ${STALE_TASK_WORDS}: cast task ready${scope} --stale lists them, --stale --claim takes one.`;
+  }
   const foldNote = folded ? `, ${folded}${floor} more ${STALE_TASK_WORDS} (--stale lists them)` : "";
   return `${shown}${floor} ready${foldNote}`;
 }
