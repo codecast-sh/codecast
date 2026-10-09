@@ -79,8 +79,8 @@ export function parkedNote({ parked, ephemeral }: Pick<PlanReadiness<unknown>, "
   return parts.length ? parts.join("; ") : null;
 }
 
-/** Why each stuck task will not move ("ct-4: blocked by PR #42 merges (failed:
- *  closed without merging)"), for a plan that stalled on them. */
+/** Why each stuck task will not move ("ct-4: blocked by PR #42 to merge
+ *  (failed: closed without merging)"), for a plan that stalled on them. */
 export function stuckNote<T extends GraphTask & { short_id?: string }>(r: Pick<PlanReadiness<T>, "stuck" | "verdicts">, words: WaitLabelOptions = {}): string | null {
   const lines = r.stuck.map((t) => {
     const v = r.verdicts.get(t)!;

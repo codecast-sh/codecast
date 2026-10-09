@@ -7,7 +7,10 @@
 
 import { waitLineParts } from "./graph";
 
-export type GraphTone = "blocked" | "met" | "failed" | "link";
+/** `withdrawn` is an edge someone deleted: a surface draws it dim, never with
+ *  `met`'s green check, because "removed blocker ct-12" and "ct-12 finished"
+ *  say opposite things about whether the work got done. */
+export type GraphTone = "blocked" | "met" | "failed" | "link" | "withdrawn";
 
 /** One clause of a change: words, then the tasks it names, then any text. */
 export type GraphClause = { verb: string; refs?: string[]; text?: string };
@@ -41,13 +44,15 @@ export function graphChange(row: { field?: string; old_value?: string; new_value
       const blocking = row.field === "blocked_by";
       const clauses: GraphClause[] = [];
       if (added.length) clauses.push({ verb: blocking ? "made it wait on" : "marked it related to", refs: added });
-      if (removed.length) clauses.push({ verb: blocking ? (added.length ? "and removed" : "removed blocker") : added.length ? "and unmarked" : "unmarked related", refs: removed });
-      return clauses.length ? { tone: blocking ? (added.length ? "blocked" : "met") : "link", clauses } : null;
+      // A removed link reads as the button that removes it ("Unlink ct-6"), so
+      // the clause after the actor parses: "Ashot unlinked ct-6".
+      if (removed.length) clauses.push({ verb: blocking ? (added.length ? "and removed" : "removed blocker") : added.length ? "and unlinked" : "unlinked", refs: removed });
+      return clauses.length ? { tone: blocking ? (added.length ? "blocked" : "withdrawn") : "link", clauses } : null;
     }
     case "found_during":
       return to
         ? { tone: "link", clauses: [{ verb: "found it while working on", refs: [to] }] }
-        : { tone: "link", clauses: [{ verb: "cleared found during", refs: [from] }] };
+        : { tone: "link", clauses: [{ verb: "no longer counts it as found while working on", refs: [from] }] };
     case "superseded_by":
       return to
         ? { tone: "link", clauses: [{ verb: "superseded it with", refs: [to] }] }
@@ -60,9 +65,10 @@ export function graphChange(row: { field?: string; old_value?: string; new_value
         return { tone: "met", clauses: [clause ? { verb: "made it wait", text: `${clause}, ${note}` } : { verb: "made it wait, already met:", text: to }] };
       }
       if (!to) {
+        // The wait was deleted, whatever state it had reached: withdrawn, not met.
         const { state, clause } = waitLineParts(from);
-        if (!clause) return { tone: "met", clauses: [{ verb: "removed the wait:", text: from }] };
-        return { tone: "met", clauses: [{ verb: state === "waiting" ? "stopped waiting" : "removed the wait", text: clause }] };
+        if (!clause) return { tone: "withdrawn", clauses: [{ verb: "removed the wait:", text: from }] };
+        return { tone: "withdrawn", clauses: [{ verb: state === "waiting" ? "stopped waiting" : "removed the wait", text: clause }] };
       }
       const { state, clause, note } = waitLineParts(to);
       if (state === "waiting") return { tone: "blocked", clauses: [{ verb: "reopened the wait", text: clause }] };

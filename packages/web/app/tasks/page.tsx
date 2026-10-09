@@ -446,7 +446,7 @@ function normalizeTaskSort(rawGroup: string, rawSort: string, rawDir: string) {
  *  grouping by who holds it would only file most of them under
  *  "Unassigned"; on a team it put a person's header over each handful. A
  *  link's own view and any grouping other than by person still win. */
-export function hostedPersonalView(view: { group: string; sort: string; dir: "asc" | "desc" }, rawGroup: string): { group: string; sort: string; dir: "asc" | "desc" } {
+function hostedPersonalView(view: { group: string; sort: string; dir: "asc" | "desc" }, rawGroup: string): { group: string; sort: string; dir: "asc" | "desc" } {
   if (rawGroup && !/\b(assignee|chain)\b/.test(view.group)) return view;
   return { group: "none", sort: "created", dir: "desc" };
 }
@@ -672,9 +672,16 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // which on a default team are the category names. Older links and saved views
   // carried a separate multi `statuses` filter, and named categories; both are
   // read as the same thing and rewritten the moment either control writes.
-  // Hosted mode has no Unblocked pill, so a link carrying it opens the default.
+  // Unblocked is offered neither in hosted mode (no dependency graph to read)
+  // nor on the board, so a link carrying it opens the default there. It is a
+  // frontier QUEUE, not a pipeline: readiness is open work only, so the board
+  // it filtered held cards in the open column alone and every other column was
+  // permanently empty — and since a drop changes a card's status, every drag
+  // took the card out of the view. The selection survives in the URL, so
+  // switching back to the list brings it back.
   const rawStatus = urlStatus || statusesFilter || (completedFilter ? "done" : "");
-  const statusFilter = hostedMode && rawStatus === UNBLOCKED_VIEW ? "" : rawStatus;
+  const unblockedOffered = !hostedMode && viewMode !== "kanban";
+  const statusFilter = !unblockedOffered && rawStatus === UNBLOCKED_VIEW ? "" : rawStatus;
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
   // The prefs a view should store: what is on screen now, minus bookkeeping.
   const livePrefs = useMemo(
@@ -1252,9 +1259,13 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
             // status until the header could not hold them.
             { key: "", label: "Active", count: taskCounts.active, icon: Activity,
               title: "Live work: " + statusOptionList.filter((st) => ACTIVE.includes(st.category as TaskStatus)).map((st) => st.name).join(", ") },
-            // A hosted to-do list has no dependency graph to read.
-            ...(hostedMode ? [] : [{ key: UNBLOCKED_VIEW, label: "Unblocked", count: taskCounts[UNBLOCKED_VIEW], icon: CirclePlay,
-              title: "Open work that can start now: nothing blocking it, triaged, its parent not being worked" }]),
+            // A hosted to-do list has no dependency graph to read, and the
+            // board is a pipeline this queue has no honest layout in
+            // (`unblockedOffered`). Said in the board's own words:
+            // READY_MEANS is the whole definition, which reads as CLI help in
+            // a tooltip.
+            ...(!unblockedOffered ? [] : [{ key: UNBLOCKED_VIEW, label: "Unblocked", count: taskCounts[UNBLOCKED_VIEW], icon: CirclePlay,
+              title: "Open work nothing is holding: no unfinished blockers and no parent being worked" }]),
             { key: "all", label: "All", count: taskCounts.all, icon: Layers, title: "Every status, Backlog and Done and Dropped included" },
             { key: doneValue || "done", label: "Done", count: taskCounts.done || 0, icon: STATUS_CONFIG.done.icon,
               title: "Finished work" },
@@ -1373,14 +1384,20 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           emptyMessage={
             hostedMode ? "No to-dos yet"
             // An empty Unblocked view is an answer, not a broken filter, unless
-            // a narrower filter emptied it. Readiness turns tasks away for more
-            // than blockers (superseded, a parent being worked), so the words
-            // name what holds them without claiming every one waits.
-            : statusFilter === UNBLOCKED_VIEW && !(priorityFilter || labelFilter || assigneeFilter || sessionFilter) ? (
+            // a narrower filter emptied it. Said in the board's own words, and
+            // in the board's word for it ("unblocked", TG1): READY_MEANS is the
+            // whole definition, which belongs in `cast --help`, not on a board.
+            // Source=Suggested and =Dismissed select on the `triage_status`
+            // readiness itself turns away, so there the view says nothing about
+            // what holds the rows and falls through to "No tasks found".
+            : statusFilter === UNBLOCKED_VIEW && sourceFilter !== "triage" && sourceFilter !== "dismissed"
+              && !(priorityFilter || labelFilter || assigneeFilter || sessionFilter) ? (
               taskCounts.open ? (
                 <>
-                  Nothing can start right now
-                  <span className="block mt-1 text-xs text-sol-text-dim">Open tasks here are waiting on another task, a PR, a decision, a time or their parent</span>
+                  {/* Both lines centre inside the <p>, which the sentence below
+                      makes wider than the headline. */}
+                  <span className="block text-center">Nothing can start right now</span>
+                  <span className="block mt-1 max-w-md text-center text-xs text-sol-text-dim">Every open task is waiting on another task, a PR, a decision, a time, or a parent being worked</span>
                 </>
               ) : "No open tasks"
             )

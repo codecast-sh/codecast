@@ -9,7 +9,15 @@ import { blockerLabel, type Blocker, type WaitLabelOptions } from "@codecast/sha
 
 type ListedTask = { status?: string; blocked_by?: string[] | null; open_blockers?: (Blocker | string)[]; ready?: boolean };
 
-/** What still holds the task back, one label each ("ct-12", "PR #42 merges").
+/** The structured entries of `open_blockers`, for a caller that needs the
+ *  blockers themselves (the parking line, which reads a wait's kind and state)
+ *  rather than their labels. A string entry is a label from a server that
+ *  labelled in UTC itself, so it carries no fields to read and is dropped. */
+export function listedBlockerEntries(t: ListedTask): Blocker[] {
+  return (t.open_blockers ?? []).filter((b): b is Blocker => typeof b === "object" && b !== null);
+}
+
+/** What still holds the task back, one label each ("ct-12", "PR #42 to merge").
  *  `words` names PRs as the checkout reads them (checkoutWords). */
 export function listedBlockers(t: ListedTask, words: WaitLabelOptions = {}): string[] {
   // A string entry is a label from a server that labelled in UTC itself.
