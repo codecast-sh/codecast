@@ -5,7 +5,8 @@
 // buildLineFlow), so both pages say the same thing about a finder.
 import { useState } from "react";
 import { splitFinderKind, type LineFinderInput, type LineProfileEdit, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
-import { ageShort, isBuiltInSource, silentText, type SenseSource } from "../../../lib/lineFlow";
+import { isBuiltInSource, type SenseSource } from "../../../lib/lineFlow";
+import { groupingWords, sourceCounts, sourceHealth, sourceSentence } from "../../../lib/line/lineSources";
 import { finderInput, suggestFinder } from "../../../lib/lineSettings";
 import { ConfirmButton } from "../../integrations/parts";
 import { EditStatus, InlineEdit, SourceTag } from "./LineValueRow";
@@ -15,25 +16,15 @@ type Finder = PublishedLineProfile["finders"][number];
 
 const kindText = (k: Finder["kind"]) => (k === "any" ? "any" : k.join(", "));
 
-/** The parts of a finder, what each is, and an example. The add form asks
- *  for the first four (the loader needs them); an existing finder edits the
- *  rest in place, its id being its name in the file. */
-/** A finder's grouping in plain words: `union:<key>` groups signals that
- *  share a Union key. Anything else reads as its own pattern. */
-export function groupingWords(fingerprint: string): string {
-  const m = fingerprint.match(/^([\w.-]+):<([\w ]+)>$/);
-  if (!m) return `groups signals by ${fingerprint}`;
-  const [, prefix, key] = m;
-  const name = prefix.charAt(0).toUpperCase() + prefix.slice(1);
-  return `groups signals that share ${/^[aeio]/i.test(name) ? "an" : "a"} ${name} ${key}`;
-}
-
+/** The parts of a source's settings, what each is, and an example. The add
+ *  form asks for the first four (the loader needs them); an existing source
+ *  edits the rest in place, its id being its name in the file. */
 const FINDER_FIELDS: Array<{ key: "id" | "source" | "kind" | "fingerprint" | "runs"; what: string; placeholder: string; required: boolean }> = [
-  { key: "id", what: "its name in the file", placeholder: "sentry-web", required: true },
+  { key: "id", what: "its name in the settings file", placeholder: "sentry-web", required: true },
   { key: "source", what: "the tool its reports come from", placeholder: "sentry", required: true },
   { key: "kind", what: "what it reports: bug, regression and so on, or any", placeholder: "bug, regression", required: true },
-  { key: "fingerprint", what: "how its reports group into one problem", placeholder: "sentry:<issue>", required: true },
-  { key: "runs", what: "what runs it, if anything here does", placeholder: "cast trigger tr-N", required: false },
+  { key: "fingerprint", what: "the key that groups its reports into one problem", placeholder: "sentry:<issue>", required: true },
+  { key: "runs", what: "the scheduled job that runs it, if one does", placeholder: "the trigger's id", required: false },
 ];
 const EDITED_IN_PLACE = FINDER_FIELDS.filter((f) => f.key !== "id");
 const ASKED_ON_ADD = FINDER_FIELDS.filter((f) => f.required);
@@ -61,51 +52,48 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
   return (
     <div className="lset-finders" data-lset-finders>
       {/* An undeclared finder's own box below says it once, with the action; no sentence repeats it. */}
-      {lp.finders.length === 0 && undeclared.length === 0 && <p className="lset-empty" data-lset-finders-empty>Nothing files into this line on its own yet. A person can still file with <code>cast signal add</code>; a finder files for you.</p>}
-      {lp.finders.map((f, i) => {
+      {lp.finders.length === 0 && undeclared.length === 0 && <p className="lset-empty" data-lset-finders-empty>No source reports into this line yet. Add one below, such as Sentry, PostHog or an eval, and it reports what it sees on its own.</p>}
+      {lp.finders.map((f) => {
         const health = bySource.get(f.source.toLowerCase());
         const key = `finders.${f.id}`;
-        const last = health?.newest ? `${ageShort(now - health.newest.created_at)} ago` : null;
+        const state = sourceHealth(health ?? { newest: null, silent: false, day: 0 }, now);
         return (
           <div key={f.id} className="lset-finder" data-silent={health?.silent ? "true" : undefined} data-lset-finder={f.id}>
             <div className="lset-finder-head">
               <span className="lset-finder-source">{f.source}</span>
-              <span className="lset-finder-id">{f.id}</span>
-              <span className="lset-finder-health" data-lset-finder-health>
-                {health?.silent
-                  ? <span className="lset-silent">{silentText(health, now)}</span>
-                  : !health?.newest
-                    ? <span className="lset-dim">nothing filed yet</span>
-                    : <><b>{health.day}</b> today{last && <span className="lset-dim"> · last {last}</span>}</>}
-              </span>
-              {canEdit && <ConfirmButton label="remove" confirmLabel="Remove from the file" className="lset-remove" onConfirm={() => send([{ op: "remove_finder", id: f.id }])} />}
+              <span className="lset-source-state" data-tone={state.tone} data-lset-finder-health>{state.words}</span>
+              {canEdit && <ConfirmButton label="remove" confirmLabel="Remove this source" className="lset-remove" onConfirm={() => send([{ op: "remove_finder", id: f.id }])} />}
             </div>
+            <p className="lset-source-says">{sourceSentence(f.source, f)}</p>
+            <p className="lset-source-count">{sourceCounts(health ?? { week: 0, newest: null }, now)}{health?.newest ? ":" : "."}</p>
             {health?.newest && <p className="lset-finder-latest" title={health.newest.title}>{health.newest.title}</p>}
-            <dl className="lset-finder-fields">
-              {EDITED_IN_PLACE.map((ff) => {
-                const key = ff.key as Exclude<typeof ff.key, "id">;
-                const text = key === "kind" ? kindText(f.kind) : (f[key] ?? "");
-                return (
-                  <div key={ff.key} className="lset-finder-field">
-                    {/* The first card explains each part; the rest just name it. */}
-                    <dt title={ff.what}>{ff.key}{i === 0 && <span className="lset-what">{ff.what}</span>}</dt>
-                    <dd>
-                      <InlineEdit
-                        text={text}
-                        label={`${f.id} ${ff.key}`}
-                        placeholder={ff.placeholder}
-                        disabled={!canEdit}
-                        onCommit={(t) => {
-                          const v = t.trim();
-                          if (!v && ff.required) return `A finder needs a ${ff.key}`;
-                          update(f, key === "kind" ? { kind: splitFinderKind(v) } : key === "runs" ? { runs: v || undefined } : { [key]: v });
-                        }}
-                      />
-                    </dd>
-                  </div>
-                );
-              })}
-            </dl>
+            <details className="lset-source-more">
+              <summary>Its settings</summary>
+              <dl className="lset-finder-fields">
+                {EDITED_IN_PLACE.map((ff) => {
+                  const key = ff.key as Exclude<typeof ff.key, "id">;
+                  const text = key === "kind" ? kindText(f.kind) : (f[key] ?? "");
+                  return (
+                    <div key={ff.key} className="lset-finder-field">
+                      <dt title={ff.what}>{ff.key}<span className="lset-what">{ff.what}</span></dt>
+                      <dd>
+                        <InlineEdit
+                          text={text}
+                          label={`${f.id} ${ff.key}`}
+                          placeholder={ff.placeholder}
+                          disabled={!canEdit}
+                          onCommit={(t) => {
+                            const v = t.trim();
+                            if (!v && ff.required) return `A source needs a ${ff.key}`;
+                            update(f, key === "kind" ? { kind: splitFinderKind(v) } : key === "runs" ? { runs: v || undefined } : { [key]: v });
+                          }}
+                        />
+                      </dd>
+                    </div>
+                  );
+                })}
+              </dl>
+            </details>
             <EditStatus s={states[key]} device={device} now={now} onDismiss={() => clear(key)} />
           </div>
         );
@@ -114,8 +102,8 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
         const f = suggestFinder(s);
         return (
           <div key={s.source} className="lset-declare" data-lset-undeclared={s.source}>
-            <span className="lset-declare-words"><b>{s.source}</b> filed {s.week} in 7d without a finder{canEdit ? `; declaring it ${groupingWords(f.fingerprint)}, which you can change after` : ""}.</span>
-            {canEdit && <button type="button" className="lset-add" onClick={() => send([{ op: "set_finder", finder: f }])} data-lset-declare={s.source}>Declare {s.source} as a finder</button>}
+            <span className="lset-declare-words"><b>{s.source}</b> reported {s.week} in the last 7 days but is not in this line's settings, so nobody is told if it goes quiet.{canEdit ? ` Adding it ${groupingWords(f.fingerprint)}; you can change that after.` : ""}</span>
+            {canEdit && <button type="button" className="lset-add" onClick={() => send([{ op: "set_finder", finder: f }])} data-lset-declare={s.source}>Add {s.source} to the settings</button>}
           </div>
         );
       })}
@@ -123,7 +111,7 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
       {!(lp.finders.length === 0 && undeclared.length > 0 && !adding) && <div className="lset-finders-foot">
         <SourceTag source={lp.sources?.finders ?? null} />
         {readOnlyWhy && <span className="lset-dim">{readOnlyWhy}</span>}
-        {canEdit && !adding && <button type="button" className="lset-add" onClick={() => setAdding(true)} data-lset-focus>add a finder</button>}
+        {canEdit && !adding && <button type="button" className="lset-add" onClick={() => setAdding(true)} data-lset-focus>add a source</button>}
       </div>}
       {canEdit && adding && <AddFinder taken={lp.finders.map((f) => f.id)} onCancel={() => setAdding(false)} onAdd={(finder) => { setAdding(false); send([{ op: "set_finder", finder }]); }} />}
     </div>
@@ -138,7 +126,7 @@ function AddFinder({ taken, onAdd, onCancel }: { taken: string[]; onAdd: (f: Lin
     const v = { id: f.id.trim(), source: f.source.trim(), kind: f.kind.trim(), fingerprint: f.fingerprint.trim() };
     const missing = (Object.keys(v) as Array<keyof typeof v>).filter((k) => !v[k]);
     if (missing.length) return setError(`Needs ${missing.join(", ")}`);
-    if (taken.includes(v.id)) return setError(`A finder named ${v.id} exists`);
+    if (taken.includes(v.id)) return setError(`A source named ${v.id} exists`);
     onAdd({ ...v, kind: splitFinderKind(v.kind) });
   };
   return (
@@ -161,7 +149,7 @@ function AddFinder({ taken, onAdd, onCancel }: { taken: string[]; onAdd: (f: Lin
       <div className="lset-add-actions">
         {error && <span className="lset-field-error" role="alert">{error}</span>}
         <button type="button" className="lset-ghost" onClick={onCancel}>cancel</button>
-        <button type="submit" className="lset-primary">add to the file</button>
+        <button type="submit" className="lset-primary">add the source</button>
       </div>
     </form>
   );

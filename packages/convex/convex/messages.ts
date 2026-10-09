@@ -38,6 +38,7 @@ import {
   unauthenticatedView,
 } from "./smallViewContracts";
 import { onFreshApiErrorPark } from "./accountSwitch";
+import { isCurrentBlock } from "./ccAccountsShared";
 import { safetyBlockPatch } from "./conversationSafety";
 import { stripContextTags } from "./userMessagesFilter";
 import { dropMirroredMessage } from "./searchMirror";
@@ -1636,10 +1637,13 @@ export const addMessage = mutation({
     // the auto-switch check (limit only) and the aggregated incident
     // notification (any blocked kind). Kind "error" (marked client errors)
     // is informational and never notifies.
+    // A banner synced long after it was written (a transcript uploaded
+    // again) is history, not an incident: it keeps its flag but wakes nothing.
     if (
       msgIsBanner &&
       nextBannerKind && nextBannerKind !== "error" &&
-      (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
+      (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind) &&
+      isCurrentBlock({ pending_api_error_at: nextBannerAt }, now)
     ) {
       await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
     }
@@ -2329,7 +2333,8 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       (newestIsBanner || safetyPatch) &&
       nextBannerKind &&
       nextBannerKind !== "error" &&
-      (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
+      (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind) &&
+      isCurrentBlock({ pending_api_error_at: nextBannerAt }, Date.now())
     ) {
       await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
     }
