@@ -233,12 +233,15 @@ export function fallbackProfiles<
     email?: string;
     usage?: CcUsage | null;
     login_expired_at?: number | null;
+    access_refused_at?: number | null;
     setup_token?: { expires_at: number } | null;
   },
 >(profiles: readonly P[], activeEmail: string | undefined, now: number, models?: readonly string[]): P[] {
   // A dead saved login is still a target when a minted setup-token is live:
-  // the switch lands sessions on the token and never touches the login.
-  const reachable = (p: P) => !p.login_expired_at || (!!p.setup_token && p.setup_token.expires_at > now);
+  // the switch lands sessions on the token and never touches the login. An
+  // account whose organization refuses subscription access takes neither.
+  const reachable = (p: P) =>
+    !p.access_refused_at && (!p.login_expired_at || (!!p.setup_token && p.setup_token.expires_at > now));
   return rankByHeadroom(
     profiles.filter((p) => p.email && p.email !== activeEmail && reachable(p) && !isUsageExhausted(p.usage, now, models)),
     now,
@@ -295,21 +298,23 @@ export function describeDecision(d: RecoveryDecision | undefined | null): string
   }
 }
 
-/** The four ways a machine can recover when a session parks on a usage limit.
- * "ask" recommends a switch and waits for approval; "auto" switches without
- * asking; "resume" never changes accounts and waits for the window to reset;
- * "off" leaves sessions parked. */
+/** The four ways a machine can recover a session that stopped on its own (a
+ * usage limit, an API or connection error, an agent process that died
+ * mid-turn). "ask" recommends an account switch and waits for approval; "auto"
+ * switches without asking; "resume" never changes accounts; in all three
+ * codecast sends the session a "continue" once it can run again. "off" sends
+ * nothing: the session waits for its person. */
 export type RecoveryMode = "ask" | "auto" | "resume" | "off";
 
 /** The one recovery mode a machine is in, derived from the stored flags so the
  * web selector, the CLI and the decision all read it the same way.
  *
- * Ask-first is the DEFAULT: a machine that has never chosen recommends a
- * switch and waits, rather than either moving its login unannounced or sitting
- * on a limit it could recover from. Every other mode is an explicit choice, so
- * a machine that opted into auto-switch keeps it. Ask-first also wins over a
- * stray auto-switch flag (setRecoveryMode keeps the two exclusive, but a
- * legacy row could carry both). */
+ * "off" is the DEFAULT: codecast types into someone's session only after they
+ * chose a mode that does. Every other mode is an explicit choice: ask-first
+ * and auto-switch are their own flags, and "resume" is an explicit
+ * cc_auto_continue. Ask-first wins over a stray auto-switch flag
+ * (setRecoveryMode keeps the two exclusive, but a legacy row could carry
+ * both). */
 export function recoveryModeOf(device: {
   cc_auto_switch?: boolean | null;
   cc_recovery_ask?: boolean | null;
@@ -317,12 +322,7 @@ export function recoveryModeOf(device: {
 }): RecoveryMode {
   if (device.cc_recovery_ask === true) return "ask";
   if (device.cc_auto_switch === true) return "auto";
-  // An explicit "recover nothing" stands on its own, whether or not the ask
-  // flag was ever written.
-  if (device.cc_auto_continue === false) return "off";
-  // Never chosen: the default. An explicit `false` is someone turning asking
-  // off, and that means same-account resume only.
-  return device.cc_recovery_ask === false ? "resume" : "ask";
+  return device.cc_auto_continue === true ? "resume" : "off";
 }
 
 /** A window this full is worth naming: `cast usage` colours it and the

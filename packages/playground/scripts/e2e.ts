@@ -44,7 +44,7 @@ const at = <T extends { after: number }>(p: Promise<T>) => p.then((r) => ({ ...r
 // ---- 1. A makes an app; B opens it ---------------------------------------------------
 
 const sent1 = performance.now();
-const made = await A.client.mutation(api.apps.create, { ...A.creds, prompt: PROMPT });
+const made = await A.client.mutation(api.apps.create, { ...A.creds, prompt: PROMPT, unlisted: true });
 const appId = made.app_id as Id<"apps">;
 console.log(`app ${made.slug} (${appId})`);
 check("a prompt queues the first build", !!made.request_message_id);
@@ -62,15 +62,14 @@ reportBuild(first);
 check("the first build goes live as v1", first.build.status === "live" && first.build.result_version === 1, first.build.error_detail);
 if (first.build.status !== "live") finish("e2e (stopped: the first build did not go live)");
 within("first build, prompt to live for B", first.total, FIRST_BUILD_MS);
-const appB = await B.client.query(api.apps.get, { ...B.creds, slug: made.slug });
+const appB = await B.client.query(api.apps.get, { slug: made.slug });
 check("B's app link is on v1", appB?.live_version === 1 && appB.live?.summary === first.build.summary, appB?.live);
 await checkServed(made.slug, 1);
-const card = (await B.client.query(api.apps.gallery, { ...B.creds })).apps.find((a) => a.id === appId);
-check("the gallery shows it as made by A", card?.latest?.said === "made it" && card.latest.by?.id === A.creds.visitor_id, card?.latest);
+check("a harness app stays off the home gallery", !(await B.client.query(api.apps.gallery, {})).apps.some((a) => a.id === appId));
 
 // ---- 2. A asks for a change; B watches it land ----------------------------------------------
 
-const liveForB = at(B.until("v2 live for B", api.apps.get, { ...B.creds, slug: made.slug }, (app) => app?.live_version === 2 && app, CHANGE_MS + 30_000));
+const liveForB = at(B.until("v2 live for B", api.apps.get, { slug: made.slug }, (app) => app?.live_version === 2 && app, CHANGE_MS + 30_000));
 const sent2 = performance.now();
 const change = await A.client.mutation(api.messages.send, { ...A.creds, app_id: appId, mode: "change", body: CHANGE });
 check("a forced change is a request", change.kind === "request");
@@ -132,7 +131,7 @@ const pastWrite = await B.client.mutation(api.runtime.insert, { ...past, collect
 check("a past version reads the shared data", pastTaps.length === taps.value.length, pastTaps);
 check("a past version cannot write it", /Looking only/.test(pastWrite), pastWrite);
 
-const restoredForB = at(B.until("v3 live for B", api.apps.get, { ...B.creds, slug: made.slug }, (app) => app?.live_version === 3 && app));
+const restoredForB = at(B.until("v3 live for B", api.apps.get, { slug: made.slug }, (app) => app?.live_version === 3 && app));
 const restoreNote = roomB.until("the restore note for B", () => roomB.latest().find((m) => m.note?.type === "restore"));
 const sent5 = performance.now();
 const restored = await A.client.mutation(api.versions.restore, { ...A.creds, app_id: appId, number: 1, expected_live: 2 });
@@ -147,7 +146,7 @@ check("v3 is a restore of v1, after v2", v3?.kind === "restore" && v3.source?.ve
 await checkServed(made.slug, 3);
 const again = await B.client.mutation(api.versions.restore, { ...B.creds, app_id: appId, number: 1, expected_live: 2 }).then(() => "restored", (e) => e.data?.message ?? String(e));
 check("a restore chosen against an old live version is refused", /changed/.test(again), again);
-check("so nothing was appended", (await B.client.query(api.apps.get, { ...B.creds, slug: made.slug }))?.version_count === 3);
+check("so nothing was appended", (await B.client.query(api.apps.get, { slug: made.slug }))?.version_count === 3);
 
 // ---- 6. A restore while a build runs ----------------------------------------------------------------
 
@@ -177,7 +176,7 @@ check(
   noteA.note?.type === "fork" && noteA.note.version === 2 && noteA.note.fork?.slug === fork.slug && noteA.note.by?.id === B.creds.visitor_id,
   noteA.note,
 );
-const forked = await A.client.query(api.apps.get, { ...A.creds, slug: fork.slug });
+const forked = await A.client.query(api.apps.get, { slug: fork.slug });
 check("the fork links back to the source's v2", forked?.forked_from?.app_id === appId && forked.forked_from.version === 2 && forked.forked_from.slug === made.slug, forked?.forked_from);
 check("the fork is its own app at v1", forked?.id === forkId && forked.live_version === 1 && forked.name === "Tally, take two", forked);
 const [src2, fork1] = await Promise.all([
