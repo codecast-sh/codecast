@@ -29,6 +29,7 @@ import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 import { printPublishResult, publishOnce } from "./publish.js";
+import { loadWorkspaceRoster, parseWorkspaceKey, rowWorkspaceScope } from "./resolveWorkspace.js";
 import { runGit } from "./repoMirror.js";
 import { stdinText } from "./sendBody.js";
 
@@ -108,12 +109,26 @@ export function runCost(runs: Array<{ created_at?: number; updated_at: number; t
 // A card names the goal from the task's own workspace, never the shell's
 // active one: a codecast cause built from a shell pointed at Union still
 // finds its codecast project.
-export function taskWorkspaceScope(task: { workspace?: string; project_id?: string }) {
+//
+// `caller` is the reader's own user id (the roster's), which decides a personal
+// key: "personal" on the wire is the CALLER's workspace, so a task filed in a
+// teammate's personal one — readable here, since its assignee is an access
+// grant — names no workspace at all and the route's default stands
+// (`rowWorkspaceScope`). Without a caller the two cannot be told apart.
+export function taskWorkspaceScope(task: { workspace?: string; project_id?: string }, caller?: string) {
   const project = task.project_id ? { project: String(task.project_id) } : {};
-  const key = task.workspace ?? "";
-  if (key.startsWith("team:")) return { workspace: "team" as const, team_id: key.slice(5), ...project };
-  if (key.startsWith("user:")) return { workspace: "personal" as const, ...project };
-  return { project_path: process.cwd(), ...project };
+  const ws = parseWorkspaceKey(task.workspace);
+  // A row from an older server carries no key: the directory decides, as it
+  // does for any read that names no workspace.
+  return ws ? { ...rowWorkspaceScope(ws, caller), ...project } : { project_path: process.cwd(), ...project };
+}
+
+/** The reader's own user id, for a row key that names a person
+ *  (`taskWorkspaceScope`). One cached read per process (loadWorkspaceRoster),
+ *  and undefined when it cannot be had, which names no personal workspace. */
+export async function callerUserId(deps: PublishDeps): Promise<string | undefined> {
+  const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true })).catch(() => null);
+  return roster?.userId;
 }
 
 async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void> {
@@ -121,13 +136,16 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   if (!task?.short_id) fail(`Task not found: ${options.task}`);
   const optional = (p: Promise<any>) => p.catch(() => null);
   const goalRef: string | undefined = task.goal_ref && task.goal_ref !== "none" ? task.goal_ref : undefined;
+  // Whose personal workspace a `user:` key names is decided against the reader
+  // (taskWorkspaceScope), so the roster is read before the fan-out below.
+  const caller = goalRef ? await callerUserId(deps) : undefined;
   const [evidence, runs, signals, brief] = await Promise.all([
     optional(apiPost(deps, "/cli/work/evidence", { task_id: task.short_id }, { read: true, exitOnError: false })),
     optional(apiPost(deps, "/cli/workflow-runs/list", { task_id: task.short_id }, { read: true, exitOnError: false })),
     // The finders behind the cause, and the goal its ref names: the task
     // carries the ref and the signal count, the card says them in words.
     optional(apiPost(deps, "/cli/signal/ls", { task: task.short_id, limit: 200 }, { read: true, exitOnError: false })),
-    goalRef ? optional(apiPost(deps, "/cli/goals/brief", taskWorkspaceScope(task), { read: true, exitOnError: false })) : null,
+    goalRef ? optional(apiPost(deps, "/cli/goals/brief", taskWorkspaceScope(task, caller), { read: true, exitOnError: false })) : null,
   ]);
   const goal = goalRef && brief?.projects ? goalRefLabel(brief as GoalsBrief, goalRef) : null;
   const sources = [...new Set<string>((signals?.signals ?? []).map((sg: { source: string }) => sg.source))];

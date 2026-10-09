@@ -168,6 +168,27 @@ describe("the task verbs never guess the session", () => {
       expect(action.includes("ownSessionId(getRealCwd())"), `${verb} reads the caller's own session`).toBe(true);
     }
   });
+
+  // `cast task create` keeps the looser detector for its ORIGIN stamp (a miss
+  // there costs a row on the human shelf, not a task handed to the wrong
+  // role), but what it PRINTS is addressed to whoever is reading: the TG11
+  // wait words and the park line must come from the same strict witness
+  // `cast task ls` and `cast task dep` word their rows with, or one run calls
+  // a session the reader and a person the claimant.
+  test("create words its waits and its park line from ownSessionId, not the guess", () => {
+    const src = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
+    const at = src.indexOf(`work\n  .command("create")`);
+    expect(at, `work.command("create") is defined`).toBeGreaterThan(-1);
+    const action = src.slice(at, src.indexOf("\nwork\n", at + 1));
+    expect(action.includes("const readerSession = ownSessionId(getRealCwd())"), "create reads the caller's own session for its output").toBe(true);
+    expect(action.includes("const words = readerWordsHere()"), "create words waits as the list surfaces do").toBe(true);
+    expect(/readerWords\(\s*sessionId/.test(action), "create must not word waits from the guessed session").toBe(false);
+    for (const call of ["parkAfterBlocking(", "readTaskPulseFor("]) {
+      const call_at = action.indexOf(call);
+      expect(call_at, `create calls ${call}`).toBeGreaterThan(-1);
+      expect(action.slice(call_at + call.length).startsWith("readerSession"), `${call} takes the caller's own session`).toBe(true);
+    }
+  });
 });
 
 describe("cast task ready --claim and the execution hints (task-graph.md TG7-TG9)", () => {
@@ -183,6 +204,17 @@ describe("cast task ready --claim and the execution hints (task-graph.md TG7-TG9
     expect(unclaimedLine({ skipped: [{}, {}], more: true })).toMatch(/^No task claimed, passed over 2\. More ready tasks exist/);
     expect(unclaimedLine({ skipped: [], stale_passed: 3 })).toBe("No ready tasks to claim. 3 untouched 30+ days passed over (claim with --stale).");
     expect(unclaimedLine({ skipped: [], others_passed: 2 })).toBe("No ready tasks to claim. 2 ready tasks are assigned to others or held by a decision (cast task ready lists them).");
+    // Both counts on both wordings: the path where candidates were left
+    // untried is exactly where an autopilot judges whether the queue is
+    // workable, so withholding whose the rest are there would be the worst
+    // place to withhold it.
+    expect(unclaimedLine({ skipped: [{}], more: true, stale_passed: 1, others_passed: 2 }))
+      .toBe("No task claimed, passed over 1. More ready tasks exist past those tried: narrow with --plan, --project or -q. 1 untouched 30+ days passed over (claim with --stale). 2 ready tasks are assigned to others or held by a decision (cast task ready lists them).");
+    // The count is of rows THIS scope returned, so the command that lists them
+    // keeps the scope (readScopeFlags): bare, run from a checkout mapped
+    // elsewhere, it answers about other work entirely.
+    expect(unclaimedLine({ skipped: [], others_passed: 1 }, " --team Codecast -q graph"))
+      .toBe("No ready tasks to claim. 1 ready task is assigned to others or held by a decision (cast task ready --team Codecast -q graph lists them).");
   });
 
   test("a start records the pulse and binds the plan whatever the output mode", async () => {
@@ -235,6 +267,17 @@ describe("cast task ready --claim and the execution hints (task-graph.md TG7-TG9
     expect(readyCountLine(2, 1, 3)).toBe("2 ready, 1 more untouched 30+ days (--stale lists them)");
     expect(readyCountLine(4, 0, 4)).toBe("4 ready");
     expect(readyCountLine(290, 10, READY_LIST_LIMIT)).toBe("290+ ready, 10+ more untouched 30+ days (--stale lists them)");
+    // Every ready task folded away: the count IS the whole output (no rows
+    // above it), so it says where to go, and words the folded rows as ready
+    // rather than as "more" than a zero count.
+    expect(readyCountLine(0, 182, 182)).toBe("All 182 ready tasks here are untouched 30+ days: cast task ready --stale lists them, --stale --claim takes one.");
+    expect(readyCountLine(0, 1, 1)).toBe("The one ready task here is untouched 30+ days: cast task ready --stale lists it, --stale --claim takes it.");
+    expect(readyCountLine(0, 300, READY_LIST_LIMIT)).toBe("All 300+ ready tasks here are untouched 30+ days: cast task ready --stale lists them, --stale --claim takes one.");
+    expect(readyCountLine(0, 0, 0)).toBe("0 ready");
+    // The pointer keeps the read's own filters, for the reason every other
+    // printed read does (readScopeFlags).
+    expect(readyCountLine(0, 2, 2, " -p 'Codecast: Product'"))
+      .toBe("All 2 ready tasks here are untouched 30+ days: cast task ready -p 'Codecast: Product' --stale lists them, --stale --claim takes one.");
   });
 
   test("a task's own effort wins over the plan stylesheet's; a model alone keeps none", () => {

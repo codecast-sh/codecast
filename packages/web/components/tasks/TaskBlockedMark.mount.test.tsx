@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
@@ -12,6 +12,14 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+// The mark's clock, driven by the test: the only words on it that move with
+// time are a time wait's moment and the suffix that marks it overdue, and the
+// component has to read them off the shared coarse clock rather than off the
+// wall, or a board left open freezes at the moment it painted.
+let now = Date.UTC(2026, 0, 5, 12, 0);
+const realClock = { ...(await import("../../hooks/useCoarseNow")) };
+mock.module("../../hooks/useCoarseNow", () => ({ ...realClock, useCoarseNow: () => now }));
+
 const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { TaskBlockedMark } = await import("./TaskBlockedMark");
@@ -71,5 +79,28 @@ test("a failed wait draws a red no-entry sign, not urgent priority's triangle; n
   // A done task that still lists an open wait is held by nothing.
   await act(async () => { root.render(<TaskBlockedMark task={{ ...task, status: "done" }} />); });
   expect(container.innerHTML).toBe("");
+  root.unmount();
+});
+
+test("a time wait whose moment goes by while the board is open marks itself overdue", async () => {
+  useInboxStore.setState({ tasks: {} } as any);
+  const DAY = 24 * 3_600_000;
+  // Three days past the mark's clock: the whole tooltip is the mark's title
+  // and accessible name and carries no state glyph, so the phrase itself has
+  // to say the settle never came (`blockerWaitingLabel`).
+  const late = { status: "open", waits: [{ id: "w9", kind: "time", at: now - 3 * DAY, state: "waiting", created_at: 0 }] } as any;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => { root.render(<TaskBlockedMark task={late} />); });
+  const tip = () => container.querySelector("[role=img]")!.getAttribute("title")!;
+  expect(tip()).toStartWith("Waiting until ");
+  expect(tip()).toEndWith(" (overdue by 3d)");
+
+  // Two days on, the same row and the same store: nothing in the mark's wake
+  // signature moved (it carries ids, states and titles only), so the clock is
+  // the one thing that can keep this phrase true.
+  now += 2 * DAY;
+  await act(async () => { root.render(<TaskBlockedMark task={late} />); });
+  expect(tip()).toEndWith(" (overdue by 5d)");
   root.unmount();
 });
