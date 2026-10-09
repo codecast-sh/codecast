@@ -32,6 +32,12 @@
   width: 100%; min-height: 21px; border: 0; background: none; resize: none; font: var(--t-body); color: var(--ink);
   caret-color: var(--accent); max-height: calc(1.45em * 6 + 4px);
 }
+/* One line: the field's items sit on its middle, not its floor. */
+.single { align-items: center; }
+.single .chip { margin: 0; }
+.text textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.count { align-self: flex-end; font: var(--t-meta); font-feature-settings: "tnum" 1; color: var(--ink-3); }
+.over { color: var(--ink); font-weight: 600; }
 .send {
   width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 9px;
   transition: background var(--t-quick), opacity var(--t-quick), transform var(--t-press);

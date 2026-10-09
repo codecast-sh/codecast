@@ -464,7 +464,7 @@ function WorkflowsContent() {
         <div>
           <p className="text-sm text-sol-text-muted">No routines yet</p>
           <p className="text-xs text-sol-text-dim mt-1">
-            Push a routine with <code className="font-mono text-sol-text-muted">cast workflow push</code>
+            Ask an agent to write one for a process you repeat.
           </p>
         </div>
       </div>
@@ -671,7 +671,7 @@ export function RunsTab() {
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No runs yet</p>
-            <p className="text-xs text-sol-text-dim max-w-xs">A run starts when a role's sweep picks up a task, or with <code className="font-mono text-sol-text-muted">cast workflow run</code>.</p>
+            <p className="text-xs text-sol-text-dim max-w-xs">A run starts when a role's sweep picks up a task, or when you ask an agent to run a routine on one.</p>
           </div>
         ) : (
           <ul className="space-y-1">
