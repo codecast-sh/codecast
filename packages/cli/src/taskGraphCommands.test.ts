@@ -140,7 +140,7 @@ describe("taskGraphSections", () => {
       {
         label: "Blocked by",
         holds: true,
-        items: ["ct-1 Design [done]", "ct-2 (not found)", "ct-3 (status unknown)", "PR #42 to merge · id w42", "PR #7 closed without merging · id w7"],
+        items: ["ct-1 Design [done]", "ct-2 (not found)", "ct-3 (status unknown)", "PR #42 to merge [waiting] · id w42", "PR #7 closed without merging [failed] · id w7"],
       },
       { label: "Blocks", items: ["ct-9 Ship [open]"] },
       { label: "Found during", items: ["ct-4 Audit [in_progress]"] },
@@ -152,14 +152,31 @@ describe("taskGraphSections", () => {
     const [s] = taskGraphSections({ waits: [prWait("met", "merged")] }, { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "dropped" }] });
     expect(s.holds).toBe(false);
     expect(s.label).toBe("Blocked by (cleared)");
-    expect(s.items).toEqual(["ct-1 A [dropped]", "PR #42 merged · id w42"]);
+    expect(s.items).toEqual(["ct-1 A [dropped]", "PR #42 merged [met] · id w42"]);
   });
 
   test("a missing task holds nothing; the wait id takes the reader's style", () => {
     const [s] = taskGraphSections({ waits: [prWait("waiting")] }, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] }, { waitId: (x) => `<${x}>` });
     expect(s.holds).toBe(true);
-    expect(s.items[1]).toBe("PR #42 to merge< · id w42>");
+    expect(s.items[1]).toBe("PR #42 to merge [waiting]< · id w42>");
     expect(taskGraphSections({}, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] })[0].holds).toBe(false);
+  });
+
+  test("a mixed list marks every entry, so a met or failed wait is not read as holding", () => {
+    const [s] = taskGraphSections(
+      { waits: [prWait("waiting", undefined, 8), { ...prWait("met", "checks green", 8), kind: "pr_checks_green", id: "w8c" }, prWait("failed", "closed without merging", 9)] },
+      { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "open" }] },
+    );
+    // Every line ends in a bracketed state, the way a task blocker does: the
+    // two #8 waits differ only by tense otherwise ("to merge" / "checks green").
+    expect(s.items).toEqual([
+      "ct-1 A [open]",
+      "PR #8 to merge [waiting] · id w8",
+      "PR #8 checks green [met] · id w8c",
+      "PR #9 closed without merging [failed] · id w9",
+    ]);
+    expect(s.items.every((i) => /\[(open|done|dropped|waiting|met|failed)\]/.test(i))).toBe(true);
+    expect(s.label).toBe("Blocked by");
   });
 
   test("the replacement is its own line, never a section after the rest", () => {
