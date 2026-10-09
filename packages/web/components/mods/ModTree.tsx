@@ -94,15 +94,21 @@ function keyOf(n: ModNode, i: number): string {
   return String(i);
 }
 
-function Card({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
+/**
+ * A Card. As the whole of a framed surface (a fence) it is the frame's panel:
+ * the frame draws the border and shows its title, so the card keeps only its
+ * body, subtitle and actions.
+ */
+function Card({ p, c, panel }: { p: Record<string, any>; c: ModNode[]; panel?: boolean }) {
   const accent = tone(p.tone);
   const onPress = useHandler(p.onPress);
-  const hasHead = p.title || p.subtitle || p.actions;
+  const title = panel ? null : p.title;
+  const hasHead = title || p.subtitle || p.actions;
   return (
     <section
       onClick={onPress ? () => onPress() : undefined}
-      className="rounded-lg border min-w-0"
-      style={{
+      className={panel ? "min-w-0" : "rounded-lg border min-w-0"}
+      style={panel ? { cursor: onPress ? "pointer" : undefined } : {
         borderColor: accent ? `color-mix(in srgb, ${accent} 35%, var(--sol-border))` : "var(--sol-border)",
         background: accent ? `color-mix(in srgb, ${accent} 6%, var(--sol-card))` : "var(--sol-card)",
         cursor: onPress ? "pointer" : undefined,
@@ -112,13 +118,15 @@ function Card({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
       {hasHead ? (
         <header className="flex items-center gap-2 px-3.5 pt-3 pb-1">
           <div className="min-w-0 flex-1">
-            {p.title ? <div className="text-[13px] font-semibold text-sol-text truncate">{str(p.title)}</div> : null}
+            {title ? <div className="text-[13px] font-semibold text-sol-text truncate">{str(title)}</div> : null}
             {p.subtitle ? <div className="text-[11.5px] text-sol-text-dim truncate">{str(p.subtitle)}</div> : null}
           </div>
           {p.actions ? <Node n={p.actions as ModNode} /> : null}
         </header>
       ) : null}
-      <div style={{ ...layoutStyle({ gap: 2, ...p, pad: p.pad ?? 3.5 }, "column"), border: undefined, background: undefined, color: undefined, cursor: undefined, paddingTop: hasHead ? space(1.5) : undefined, width: undefined }}>
+      {/* Only a card with a header narrows its body's top: an undefined
+          paddingTop would still clear the shorthand's top side. */}
+      <div style={{ ...layoutStyle({ gap: 2, ...p, pad: p.pad ?? 3.5 }, "column"), border: undefined, background: undefined, color: undefined, cursor: undefined, width: undefined, ...(hasHead ? { paddingTop: space(1.5) } : {}) }}>
         <Children c={c} />
       </div>
     </section>
@@ -445,7 +453,7 @@ function ModLink({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
       rel={external ? "noopener noreferrer" : undefined}
       onClick={internal ? (e) => { e.preventDefault(); navigate(href); } : undefined}
       style={{ color: tone(p.tone) ?? "var(--sol-blue)" }}
-      className="hover:underline underline-offset-2"
+      className="no-underline hover:underline decoration-current/40 underline-offset-2"
     >
       <Children c={c} />
     </a>
@@ -527,7 +535,9 @@ const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
         {p.hint ? <div className="text-[12px] text-sol-text-dim max-w-[340px]">{str(p.hint)}</div> : null}
       </div>
     );
-    case "List": return <div className={`flex flex-col min-w-0 ${p.divided ? "divide-y divide-sol-border" : ""}`}><Children c={c} /></div>;
+    // A divided list's rows meet at straight rules: an item's rounded hover
+    // shape would bend the rule at both ends.
+    case "List": return <div className={`flex flex-col min-w-0 ${p.divided ? "divide-y divide-[color-mix(in_srgb,var(--sol-border)_70%,transparent)] [&>*]:rounded-none" : ""}`}><Children c={c} /></div>;
     case "Item": return <Item p={p} c={c} />;
     case "Time": return <TimeText at={p.at} format={p.format} />;
     case "Avatar": return <Avatar p={p} />;
@@ -536,8 +546,18 @@ const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
   }
 });
 
-export function ModTree({ tree, invoke, navigate }: { tree: ModNode | undefined; invoke: Invoke; navigate: Navigate }) {
+/** The Card a framed surface's tree is, when it is one: it becomes the frame's panel. */
+export function rootCard(tree: ModNode | undefined): { t: string; p?: Record<string, unknown>; c?: ModNode[] } | null {
+  return tree && typeof tree === "object" && tree.t === "Card" ? tree : null;
+}
+
+export function ModTree({ tree, invoke, navigate, framed }: { tree: ModNode | undefined; invoke: Invoke; navigate: Navigate; framed?: boolean }) {
   const value = useMemo(() => ({ invoke, navigate }), [invoke, navigate]);
   if (tree === undefined) return null;
-  return <Ctx.Provider value={value}><Node n={tree} /></Ctx.Provider>;
+  const card = framed ? rootCard(tree) : null;
+  return (
+    <Ctx.Provider value={value}>
+      {card ? <Card p={(card.p ?? {}) as Record<string, any>} c={card.c ?? []} panel /> : <Node n={tree} />}
+    </Ctx.Provider>
+  );
 }

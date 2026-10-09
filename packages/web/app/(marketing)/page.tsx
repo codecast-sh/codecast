@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { EveryoneFooter, ForEveryone } from "../../components/marketing/ForEveryone";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useConvexAuth } from "convex/react";
@@ -139,17 +140,23 @@ export default function LandingPage() {
   const localAuthed = useLocalAuth();
   const router = useRouter();
   const [desktop, setDesktop] = useState(false);
+  // A visitor from a non-developer link (/everyone, a campaign's
+  // ?for=assistant) meets the For everyone section as its whole page; the
+  // developer home page never shows it. Read once, as pricing's door is (cameForAssistant).
+  const [assistantFirst] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("for") === "assistant");
 
   // The root is the marketing site for every browser, signed in or not (the
   // nav offers "Open app"). Only the desktop shell never shows it: a build
   // that boots at the site root is routed on to the app or the sign-in here.
   // Signed in again after a moment that only looked signed out: back to the
   // page AuthGuard left (lib/authReturn), never the marketing page.
+  // A campaign link (?for=assistant) shows the page it promises even to a
+  // signed-in browser; Open app is one click away in the nav.
   useWatchEffect(() => {
-    if (!localAuthed) return;
+    if (!localAuthed || assistantFirst) return;
     const back = takeAuthReturn();
     if (back) router.replace(back);
-  }, [localAuthed, router]);
+  }, [localAuthed, router, assistantFirst]);
 
   useWatchEffect(() => {
     if (!isDesktopShell()) return;
@@ -160,6 +167,19 @@ export default function LandingPage() {
   if (desktop) {
     return (
       <AppLoader className="bg-[#fdf6e3] text-[#93a1a1]" />
+    );
+  }
+
+  // The assistant's door is a page of its own: the For everyone section and
+  // a short foot. The developer hero (an install command, the agent fleet)
+  // never follows the promise that nothing needs installing.
+  if (assistantFirst) {
+    return (
+      <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: "var(--pd-bg, #f6f1e7)" }}>
+        <MarketingNav active="/" door="assistant" />
+        <ForEveryone />
+        <EveryoneFooter />
+      </main>
     );
   }
 
@@ -358,68 +378,39 @@ export default function LandingPage() {
             <div className="-mt-1 mb-6"><WatchChapter title="Memory" /></div>
             <div className="space-y-3 mb-6">
               {[
-                ["Search every session", 'cast search "auth"'],
-                ["Ask the team's history", 'cast ask "how did we do auth?"'],
-                ["Line to conversation", "cast blame src/auth.ts"],
-              ].map(([label, cmd]) => (
-                <div key={cmd} className="flex items-center gap-3 text-[#657b83]">
-                  <svg className="w-5 h-5 text-[#6c71c4] shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <>Search every session from the command palette, with <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">file:</code> and <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">pr:</code> filters</>,
+                <>Open any file in the repo view and set Blame to Sessions: each line names the session that wrote it</>,
+                <>Agents read the same history before they start, so they begin from what the team already decided</>,
+              ].map((item, i) => (
+                <div key={i} className="flex items-start gap-3 text-[#657b83]">
+                  <svg className="w-5 h-5 text-[#6c71c4] shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                   </svg>
-                  <span>{label}: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">{cmd}</code></span>
+                  <span>{item}</span>
                 </div>
               ))}
             </div>
-            <Link href="/features" className="text-[#b58900] hover:text-[#cb4b16] font-medium flex items-center gap-1">
-              Explore the CLI
+            <Link href="/features/memory" className="text-[#b58900] hover:text-[#cb4b16] font-medium flex items-center gap-1">
+              How team memory works
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
               </svg>
             </Link>
           </div>
 
-          <div className="bg-[#002b36] rounded-xl border border-[#094959] shadow-xl overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-2.5 bg-[#073642] border-b border-[#094959]">
-              <div className="flex gap-1.5">
-                <div className="w-3 h-3 rounded-full bg-[#dc322f]"></div>
-                <div className="w-3 h-3 rounded-full bg-[#b58900]"></div>
-                <div className="w-3 h-3 rounded-full bg-[#859900]"></div>
-              </div>
-              <span className="text-xs font-mono text-[#586e75] ml-2">Terminal</span>
-            </div>
-            <div className="p-4 font-mono text-sm space-y-3">
-              <div>
-                <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> cast ask &quot;how did we implement auth?&quot;</span>
-              </div>
-              <div className="text-[#586e75] text-xs">
-                Searching 3 relevant sessions...
-              </div>
-              <div className="border-l-2 border-[#6c71c4] pl-3 py-1">
-                <div className="text-[#93a1a1] text-xs">
-                  Found in <span className="text-[#b58900]">OAuth implementation</span> (3 days ago, sarah, codex):
-                </div>
-                <div className="text-[#657b83] text-xs mt-1">
-                  We use NextAuth with GitHub provider, storing sessions in Convex...
-                </div>
-              </div>
-              <div className="mt-3">
-                <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> cast blame src/auth/callback.ts:42</span>
-              </div>
-              <div className="space-y-1 text-xs">
-                <div className="text-[#93a1a1]">
-                  <span className="text-[#b58900]">abc123</span> Fixed OAuth callback &bull; <span className="text-[#586e75]">codex &middot; sarah &middot; 2d ago</span>
-                </div>
-                <div className="text-[#586e75]">
-                  &rarr; decided in message 41: &quot;refresh before the redirect, not after&quot;
-                </div>
-                <div className="text-[#586e75]">
-                  &rarr; PR #377 &middot; task ct-212 &middot; doc &quot;Auth flow&quot;
-                </div>
-              </div>
-            </div>
-          </div>
+          <figure>
+            <img
+              src="/landing/session-blame.webp"
+              alt="A file in codecast's repo view with Blame set to Sessions: a strip names the three sessions behind the file, and the gutter labels each line with its session and age"
+              width={1848}
+              height={700}
+              loading="lazy"
+              className="w-full h-auto rounded-xl border border-[#094959] shadow-xl"
+            />
+            <figcaption className="mt-3 text-sm text-[#93a1a1]">
+              Blame, set to Sessions: the strip lists the sessions behind this file, and each line names the one that wrote it.
+            </figcaption>
+          </figure>
         </div>
       </section>
 

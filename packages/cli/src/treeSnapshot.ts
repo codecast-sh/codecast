@@ -121,15 +121,36 @@ export async function chainHead(cwd: string): Promise<ChainHead | null> {
 async function ensureIndex(cwd: string, stateDir: string): Promise<string> {
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const idx = path.join(stateDir, "wip.index");
+  clearStaleLock(`${idx}.lock`);
   if (fs.existsSync(idx)) return idx;
   const gitDir = path.dirname(stateDir);
   const real = path.join(gitDir, "index");
   if (fs.existsSync(real)) {
     fs.copyFileSync(real, idx);
+    // Keep the original's mtime: git re-hashes an entry whose mtime is not
+    // older than the index file ("racily clean"), and a copy stamped now would
+    // vouch for a same-size edit made in the same second as the real index.
+    const st = fs.statSync(real);
+    fs.utimesSync(idx, st.atime, st.mtime);
   } else {
     await git(cwd, ["read-tree", "HEAD"], { ...process.env, GIT_INDEX_FILE: idx });
   }
   return idx;
+}
+
+/** Longer than any pass takes: a full `add -A` measured 170 to 198 s at a load of 250. */
+export const STALE_INDEX_LOCK_MS = 10 * 60_000;
+
+/**
+ * The persistent index is ours alone, so a lock on it older than any pass is
+ * a git killed mid-write (an overloaded machine's restarts did it on
+ * 2026-10-07), and left in place it fails every snapshot of the checkout
+ * from then on.
+ */
+function clearStaleLock(lock: string): void {
+  try {
+    if (Date.now() - fs.statSync(lock).mtimeMs > STALE_INDEX_LOCK_MS) fs.unlinkSync(lock);
+  } catch {}
 }
 
 // One snapshot at a time per checkout: two turn ends landing together must
