@@ -6,7 +6,7 @@
 // resolved.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { addDepCore, context, create, get, moveTaskStatus, update, updateTaskAs } from "./tasks";
+import { addDepCore, adminDeleteTask, context, create, get, moveTaskStatus, update, updateTaskAs } from "./tasks";
 import { cutCrossedEdges, relate, supersede, unrelate } from "./taskLinks";
 import { hashToken } from "./apiTokens";
 import { dispatch } from "./dispatch";
@@ -95,6 +95,42 @@ describe("found_during (TG5)", () => {
     await expect(call(create, ctx, { title: "A", found_during: "ct-9" })).rejects.toThrow(/another workspace|not found/i);
     const auto = await call(create, ctx, { title: "B", conversation_id: SESSION });
     expect(row(tables, auto.short_id).found_during).toBeUndefined();
+  });
+
+  // The server fills the link by itself, so a wrong one must be correctable:
+  // update takes the same ref grammar and workspace rule as create.
+  test("update rewrites the link the filing session set, and none clears it", async () => {
+    const { ctx, tables } = await makeCtx([task("ct-1"), task("ct-5")], { active_task_id: "task_ct-1" });
+    const { short_id } = await call(create, ctx, { title: "Found bug", conversation_id: SESSION });
+    expect(row(tables, short_id).found_during).toBe("ct-1");
+
+    await call(update, ctx, { short_id, found_during: "CT-5" });
+    expect(row(tables, short_id).found_during).toBe("ct-5");
+    await call(update, ctx, { short_id, found_during: "none" });
+    expect(row(tables, short_id).found_during).toBeUndefined();
+    expect(tables.task_history.filter((h: any) => h.field === "found_during").map((h: any) => [h.old_value, h.new_value]))
+      .toEqual([["", "ct-1"], ["ct-1", "ct-5"], ["ct-5", ""]]);
+
+    await expect(call(update, ctx, { short_id, found_during: short_id })).rejects.toThrow("cannot be found during itself");
+    await expect(call(update, ctx, { short_id, found_during: "ct-404" })).rejects.toThrow("not found");
+  });
+
+  // The web is where a person notices a wrong provenance link, so the board
+  // repoints it through the same rule and records the same history ("" is the
+  // CLI's "none"); a self link and a ref naming no task are refused there too.
+  test("the board repoints and clears the link, exactly as the CLI does", async () => {
+    const { ctx, tables } = await makeCtx([task("ct-1"), task("ct-5")], { active_task_id: "task_ct-1" });
+    const { short_id } = await call(create, ctx, { title: "Found bug", conversation_id: SESSION });
+
+    await updateTaskAs(ctx, USER as any, { short_id, found_during: "CT-5" });
+    expect(row(tables, short_id).found_during).toBe("ct-5");
+    await updateTaskAs(ctx, USER as any, { short_id, found_during: "" });
+    expect(row(tables, short_id).found_during).toBeUndefined();
+    expect(tables.task_history.filter((h: any) => h.field === "found_during").map((h: any) => [h.old_value, h.new_value]))
+      .toEqual([["", "ct-1"], ["ct-1", "ct-5"], ["ct-5", ""]]);
+
+    await expect(updateTaskAs(ctx, USER as any, { short_id, found_during: short_id })).rejects.toThrow("cannot be found during itself");
+    await expect(updateTaskAs(ctx, USER as any, { short_id, found_during: "ct-404" })).rejects.toThrow("not found");
   });
 
   test("the source lists what was found there; show and context resolve every link", async () => {
@@ -639,6 +675,74 @@ describe("status moves outside tasks.ts (TG5)", () => {
   });
 });
 
+// A loop can be STORED while one of its tasks is closed: the loop check walks
+// open tasks only, because a closed one holds nothing back. The reopen is the
+// moment it would hold both ends for good, so it is re-checked there (TG4).
+describe("a loop stored through a closed task (TG4)", () => {
+  test("an edge accepted onto a done blocker is cut when that blocker reopens, and the newer edge stays", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-1", { status: "done", blocked_by: ["ct-2"], closed_at: 2 }),
+      task("ct-2", { blocks: ["ct-1"] }),
+    ]);
+    // Accepted: ct-1 is done, so nothing waits behind it and no loop is live.
+    await addDepCore(ctx, USER as any, { short_id: "ct-2", blocked_by: "ct-1" });
+    expect([row(tables, "ct-1").blocked_by, row(tables, "ct-2").blocked_by]).toEqual([["ct-2"], ["ct-1"]]);
+
+    await moveTaskStatus(ctx, row(tables, "ct-1"), "open", { actorUserId: USER as any });
+    expect(row(tables, "ct-1").blocked_by).toEqual([]);
+    expect(row(tables, "ct-2").blocked_by).toEqual(["ct-1"]);
+    expect(row(tables, "ct-2").blocks).toEqual([]);
+    expect(commentsOn(tables, "ct-1")[0]).toMatch(/^No longer waits on ct-2: ct-1 is open again, and the edge closes a loop\./);
+    expect(historyOf(tables, "ct-1", "blocked_by")).toEqual([["ct-2", ""]]);
+  });
+
+  test("a dependent moved onto a done replacement is left waiting on it; the replacement's own edge gives way", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-A", { blocked_by: ["ct-B"] }),
+      task("ct-B", { blocks: ["ct-A"] }),
+      task("ct-C", { status: "done", blocked_by: ["ct-A"], closed_at: 2 }),
+    ]);
+    await call(supersede, ctx, { short_id: "ct-B", by: "ct-C" });
+    expect(row(tables, "ct-A").blocked_by).toEqual(["ct-C"]);
+
+    await moveTaskStatus(ctx, row(tables, "ct-C"), "open", { actorUserId: USER as any });
+    expect(row(tables, "ct-C").blocked_by).toEqual([]);
+    expect(row(tables, "ct-A").blocked_by).toEqual(["ct-C"]);
+    expect(commentsOn(tables, "ct-C").some((t: string) => t.startsWith("No longer waits on ct-A:"))).toBe(true);
+  });
+
+  test("a blocker edge that closes no loop survives a reopen", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-1", { status: "done", blocked_by: ["ct-2"], closed_at: 2 }),
+      task("ct-2", { blocks: ["ct-1"] }),
+    ]);
+    await moveTaskStatus(ctx, row(tables, "ct-1"), "open", { actorUserId: USER as any });
+    expect(row(tables, "ct-1").blocked_by).toEqual(["ct-2"]);
+    expect(commentsOn(tables, "ct-1")).toEqual([]);
+  });
+});
+
+describe("deleting a task outright (the support path)", () => {
+  test("every edge naming the row goes, and the dependent it held is released", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-1", { blocks: ["ct-2"], blocked_by: ["ct-3"], related: ["ct-4"] }),
+      task("ct-2", { blocked_by: ["ct-1"] }),
+      task("ct-3", { blocks: ["ct-1"] }),
+      task("ct-4", { related: ["ct-1"] }),
+      task("ct-5", { found_during: "ct-1" }),
+    ]);
+    await (adminDeleteTask as any)._handler(ctx, { short_id: "ct-1" });
+    expect(tables.tasks.find((t: any) => t.short_id === "ct-1")).toBeUndefined();
+    expect(row(tables, "ct-2").blocked_by).toEqual([]);
+    expect(row(tables, "ct-3").blocks).toEqual([]);
+    expect(row(tables, "ct-4").related).toEqual([]);
+    expect(row(tables, "ct-5").found_during).toBeUndefined();
+    // Told, as a removed blocker tells it: a silent release leaves a parked
+    // session asleep on a blocker that no longer exists.
+    expect(commentsOn(tables, "ct-2")).toEqual(["No longer waits on ct-1: ct-1 was deleted.", "Unblocked: the blocker ct-1 was removed"]);
+  });
+});
+
 describe("related (TG5)", () => {
   test("relate and unrelate write both rows and their history", async () => {
     const { ctx, tables } = await makeCtx([task("ct-1"), task("ct-2")]);
@@ -679,6 +783,20 @@ describe("related (TG5)", () => {
 describe("web side effects (dispatch)", () => {
   const run = (ctx: any, action: string, args: unknown[]) => (dispatch as any)._handler(ctx, { action, args });
 
+  // The allowlist is what reaches webUpdate, so a field left out of it is a
+  // write that silently does nothing — which is what found_during was.
+  test("updateTask carries found_during from the store's draft to the server", async () => {
+    const { ctx, tables } = await makeCtx([task("ct-1"), task("ct-5")]);
+    // The fake ctx stubs runMutation away, and what is under test is the
+    // ALLOWLIST the side effect passes on, so webUpdate's handler is wired
+    // back here for this one call.
+    ctx.runMutation = (_ref: unknown, args: any) => updateTaskAs(ctx, USER as any, args);
+    await run(ctx, "updateTask", ["ct-1", { found_during: "ct-5" }]);
+    expect(row(tables, "ct-1").found_during).toBe("ct-5");
+    await run(ctx, "updateTask", ["ct-1", { found_during: "" }]);
+    expect(row(tables, "ct-1").found_during).toBeUndefined();
+  });
+
   test("relateTasks and unrelateTasks take the tuples the store sends", async () => {
     const { ctx, tables } = await makeCtx([task("ct-5"), task("ct-6")]);
     await run(ctx, "relateTasks", ["ct-5", "ct-6"]);
@@ -686,6 +804,33 @@ describe("web side effects (dispatch)", () => {
     await run(ctx, "unrelateTasks", ["ct-6", "ct-5"]);
     expect([row(tables, "ct-5").related, row(tables, "ct-6").related]).toEqual([[], []]);
     expect(tables.task_history.filter((h: any) => h.field === "related").map((h: any) => h.actor_type)).toEqual(["user", "user", "user", "user"]);
+  });
+
+  // The durable outbox replays an entry whose ack never arrived (a tab closed
+  // mid-flight). A removal that COMMITTED must not fail on the replay: the
+  // attempt would count against the give-up cap, the draft would roll back so
+  // the removed line reappeared, and the person would be shown "no such
+  // dependency" for a write that succeeded. The adds are idempotent already.
+  test("every removal is idempotent, so a replayed entry does not fail", async () => {
+    const { ctx, tables } = await makeCtx([
+      task("ct-5", { related: ["ct-6"], blocked_by: ["ct-6"] }),
+      task("ct-6", { related: ["ct-5"], blocks: ["ct-5"], blocked_by: ["ct-7"] }),
+      task("ct-7", { blocks: ["ct-6"] }),
+    ]);
+    const replay = async (action: string, args: unknown[]) => {
+      await run(ctx, action, args);
+      await run(ctx, action, args);
+    };
+    await replay("unrelateTasks", ["ct-5", "ct-6"]);
+    await replay("removeBlocker", ["ct-5", "ct-6"]);
+    await replay("removeBlocks", ["ct-7", "ct-6"]);
+
+    expect([row(tables, "ct-5").related, row(tables, "ct-6").related]).toEqual([[], []]);
+    expect([row(tables, "ct-5").blocked_by, row(tables, "ct-6").blocks]).toEqual([[], []]);
+    expect([row(tables, "ct-7").blocks, row(tables, "ct-6").blocked_by]).toEqual([[], []]);
+    // One write each, not one per replay.
+    expect(tables.task_history.filter((h: any) => h.field === "related")).toHaveLength(2);
+    expect(tables.task_history.filter((h: any) => h.field === "blocked_by")).toHaveLength(2);
   });
 });
 
