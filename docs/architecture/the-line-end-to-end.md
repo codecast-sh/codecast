@@ -81,11 +81,11 @@ signals {
                 breaks (`ex-<project>-<n>`, the-line-model.md LM5)
   goal_hint     optional: the initiative metric key the finder believes it threatens
   observed_at, created_at
-  task_id       the cause it attached to (LE4)
+  task_id       the cause it attached to (LE4); absent while held
   project_id    the cause's project, else the one it was filed for (LP1)
   filed_for_project_id  set when the finder filed it for a project other
                 than its cause's (LE4)
-  attach        "fingerprint" | "judge" | "new" | "person"
+  attach        "fingerprint" | "judge" | "new" | "person" | "held"
 }
 ```
 
@@ -105,9 +105,20 @@ line: the line starts at attach.
 2. **Judge.** Otherwise the five closest open causes (text match on title and
    subject) go to one small call: "same cause as one of these, or none?". It
    answers with a task id, `none`, or `unsure`. `unsure` is `none`.
-3. **New.** Otherwise a new cause: a task with `source: "signal"`,
+3. **New, only by an explicit step.** Otherwise a new cause opens only when
+   something decided the signal is work: a person filed it (`person`, which
+   includes a cause filed from the line page), the line's learn station filed
+   it from a person's card answer (`lesson`, LE12), or a line profile in the
+   workspace declares its finder with `opens_causes = true` (line-profile.md
+   LP3). The cause is a task with `source: "signal"`,
    `triage_status: "suggested"`, the signal's title, and `cause` fields
-   (`signal_count`, `first_seen`, `last_seen`, `fingerprints[]`).
+   (`signal_count`, `first_seen`, `last_seen`, `fingerprints[]`), and the
+   signals held under its key before it opened join it.
+4. **Held.** Anything else stays a signal: no task, `attach: "held"`. An
+   automated finder (an error tracker, a nightly eval, a cluster judge) can
+   report far more than anyone works, so its observations count as evidence
+   until a line converts them, and a fingerprint an open cause already holds
+   still attaches to it in step 1.
 
 A cause that receives a signal while in `watch` (LE12) reopens.
 
@@ -123,10 +134,11 @@ project's when it has one, else its workspace's, never the repo profile's
 default project; the same brief `cast task update` checks the goal_ref
 against), and the cause with its signals, and writes four fields:
 
-- `goal_ref`: the initiative metric or project goal the cause threatens, or
-  `none`. A cause with `none` parks as `suggested` and never reaches a person
-  unless its signal count crosses the workspace threshold.
-- `category`: `code` | `prompt` | `ux` | `infra` | `data`.
+- `goal_ref`: the initiative metric or project goal the cause threatens,
+  `line` for a change to the line itself, or `none`. A cause with `none` parks
+  as `suggested` and never reaches a person unless its signal count crosses
+  the workspace threshold.
+- `category`: `code` | `prompt` | `ux` | `infra` | `data` | `line`.
 - `risk`: `low` | `review` | `plan`. `plan` means architecture, cross cutting
   design, schema, billing or anything in the protected decision categories:
   the run stops at a plan gate before build.
@@ -134,6 +146,13 @@ against), and the cause with its signals, and writes four fields:
 
 Priority is computed, not judged: goal priority × severity × signal count,
 in `lib/linePriority.ts`.
+
+The line is a goal of its own. Every brief offers `line`, the line's own
+health: its three numbers (the-line-model.md LM8) moving the right way and
+every station doing its job. Only a change to the line itself (category
+`line`, line-map.md LX6) serves it; a product goal never stretches to cover
+line plumbing, and line plumbing never parks as serving nothing. It carries no
+priority of its own, so it ranks as an unranked goal.
 
 A fresh cause is grounded before admission, so admission can rank it and
 spends a hand only on causes worth one. `lineGround.sweep` takes the oldest

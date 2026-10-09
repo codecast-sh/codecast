@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { SOL, Terminal } from "../../blog/blogChrome";
-import { CopyCommand } from "../kit";
+import { SOL } from "../../blog/blogChrome";
 import { BrowserFrame, CYAN, PageBar, SITE, delay } from "./kit";
 
 const SLUG = "k3Vd9QpLm2Xa";
@@ -99,37 +98,13 @@ function CommentPopover() {
   );
 }
 
-function WatchTerminal() {
-  const line = (d: number, children: React.ReactNode) => <span className="pb-anim pb-rise block" style={delay(d)}>{children}</span>;
-  return (
-    <div className="[&>div]:my-0 [&_pre]:text-[11px] sm:[&_pre]:text-[11.5px]">
-      <Terminal label="~/work/churn">
-        <span className="pb-anim pb-type inline-block" style={delay(0.2)}>
-          <span style={{ color: SOL.green }}>$</span>
-          <span style={{ color: SOL.base1 }}> cast publish churn-audit.md --watch</span>
-        </span>
-        {"\n"}
-        {line(1.1, <><span style={{ color: SOL.green }}>✓</span> <span style={{ color: SOL.base2 }}>Q3 churn audit</span>  <span style={{ color: SOL.yellow }}>v1</span> → published</>)}
-        {line(1.2, <>  <span style={{ color: CYAN }}>https://{URL}</span></>)}
-        {line(1.3, <>  <span style={{ color: SOL.base01 }}>manage (owner link — keep private):</span> …</>)}
-        {"\n"}
-        {line(1.55, <span style={{ color: SOL.base01 }}>watching churn-audit.md — Ctrl+C to stop</span>)}
-        {line(1.65, <span style={{ color: SOL.base01 }}>live view: …/{SLUG}?live=1</span>)}
-        {line(2.15, <>  10:42:07  <span style={{ color: SOL.yellow }}>v2</span> → updated</>)}
-        {line(3.15, <>  10:44:31  <span style={{ color: SOL.yellow }}>v3</span> → updated</>)}
-        <span className="pb-caret" />
-      </Terminal>
-    </div>
-  );
-}
-
 export function Hero() {
   return (
     <header className="pb-paper relative overflow-hidden border-b" style={{ borderColor: SOL.base2 }}>
-      <div className="max-w-6xl mx-auto px-5 sm:px-8 pt-16 sm:pt-24 pb-20 sm:pb-36 lg:pb-52 grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] gap-14 lg:gap-14 items-center">
+      <div className="max-w-6xl mx-auto px-5 sm:px-8 pt-16 sm:pt-24 pb-24 sm:pb-32 grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] gap-14 lg:gap-14 items-center">
         <div>
           <Link href="/features" className="pb-anim pb-rise inline-flex items-center gap-2 font-mono text-[13px]" style={{ color: CYAN }}>
-            <span aria-hidden>←</span> Features <span style={{ color: SOL.base1 }}>/</span> <span style={{ color: SOL.base01 }}>cast publish</span>
+            <span aria-hidden>←</span> Features <span style={{ color: SOL.base1 }}>/</span> <span style={{ color: SOL.base01 }}>Publish</span>
           </Link>
           <h1
             className="pb-anim pb-rise mt-6 font-mono font-bold text-[34px] sm:text-[44px] xl:text-[48px] leading-[1.06] tracking-[-0.045em] [text-wrap:balance]"
@@ -138,15 +113,17 @@ export function Hero() {
             Your agent&apos;s work, at a link that stays current.
           </h1>
           <p className="pb-anim pb-rise mt-6 text-[18px] sm:text-[19px] leading-8 max-w-xl" style={delay(0.16, { color: SOL.base01 })}>
-            <code className="font-mono text-[0.9em]" style={{ color: SOL.base02 }}>cast publish</code> turns an HTML file, a markdown file or a
-            folder into a page at <span className="font-mono text-[0.9em] whitespace-nowrap" style={{ color: SOL.base02 }}>codecast.sh/a/&lt;slug&gt;</span>.
-            Publish the same file again and the same link shows the new version. Old versions stay viewable, diffable and restorable,
+            When an agent makes a report, a dashboard or a mockup, it publishes it as a page at{" "}
+            <span className="font-mono text-[0.9em] whitespace-nowrap" style={{ color: SOL.base02 }}>codecast.sh/a/&lt;slug&gt;</span> and the page
+            opens right in the conversation. Each revision lands at the same link. Old versions stay viewable, diffable and restorable,
             and reader comments go back to the session that made the page when you send them.
           </p>
           <div className="pb-anim pb-rise mt-8 flex flex-wrap items-center gap-x-6 gap-y-4" style={delay(0.24)}>
-            <CopyCommand cmd="cast publish report.html" className="h-12 text-[14px]" />
+            <a href="#conversation" className="inline-flex h-12 items-center rounded-lg px-5 font-mono text-[14px] font-semibold text-white" style={{ backgroundColor: CYAN }}>
+              See it in a conversation
+            </a>
             <a href="#reference" className="font-mono text-[13px] underline underline-offset-4 decoration-1" style={{ color: SOL.base01, textDecorationColor: "rgba(42,161,152,.6)" }}>
-              Every flag and subcommand
+              For scripts: every command
             </a>
           </div>
         </div>
@@ -157,9 +134,6 @@ export function Hero() {
             <Sheet v={2} offset={14} d={2.15} />
             <Sheet v={3} offset={0} d={3.15} front />
             <CommentPopover />
-          </div>
-          <div className="relative z-20 mt-10 lg:mt-0 lg:absolute lg:-left-10 lg:-bottom-48 lg:w-[60%]">
-            <WatchTerminal />
           </div>
         </div>
       </div>

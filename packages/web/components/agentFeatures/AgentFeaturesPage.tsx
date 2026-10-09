@@ -1,13 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowUpRight, Blocks, Search } from "lucide-react";
+import { ArrowUpRight, Blocks, Check, Search } from "lucide-react";
 import {
   FEATURE_EXPLAINERS,
   SNIPPET_CATALOG,
   SNIPPET_CATEGORIES,
   STABLE_MODES,
+  isAgentSetupTool,
   snippetAvailableForTeams,
+  type AgentSetupTool,
   type SnippetDescriptor,
   type StableMode,
 } from "@codecast/shared/contracts";
@@ -24,6 +26,8 @@ import { isRecentlyShipped, snippetEnabledOn } from "../../lib/newSnippets";
 import { FeatureVignette } from "./FeatureVignette";
 import { FeatureDialog, NewPill, STABLE_NAME } from "./FeatureDetail";
 import { featureIcon, featureTone, TONE } from "./featureLook";
+import { AgentToolSetupPanel } from "../conversation/blocks/AgentToolSetupCard";
+import { useAgentToolSetup } from "../../lib/useAgentToolSetup";
 
 /**
  * /agent-features: what codecast can teach your agents. The web twin of
@@ -70,9 +74,7 @@ function AgentFeaturesContent() {
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-sol-text-muted">
               Codecast teaches your coding agents to work as a team: to remember, delegate, track work,
-              show results and drive your machine. Each feature is a short set of instructions and{" "}
-              <code className="font-mono text-[12.5px] text-sol-text-secondary">cast</code> commands written
-              into a machine&apos;s agent setup. Switch on what you want your agents to know.
+              show results and use your machine. Switch on what you want your agents to know, one computer at a time.
             </p>
           </div>
           <button
@@ -98,8 +100,8 @@ function AgentFeaturesContent() {
 function HowItWorks() {
   const steps = [
     { n: "1", title: "Switch a feature on", body: "for one machine. Each machine keeps its own setup, so pick it above the list." },
-    { n: "2", title: "Its daemon writes it in", body: "a section of CLAUDE.md and AGENTS.md, plus any skill or hook the feature needs." },
-    { n: "3", title: "New sessions pick it up", body: "and use the commands when the work calls for them. Nothing runs until they do." },
+    { n: "2", title: "Your agents learn it", body: "Codecast adds it to that machine's agent instructions, with any skill or hook it needs." },
+    { n: "3", title: "New sessions pick it up", body: "and use it when the work calls for it. Nothing runs until they do." },
   ];
   return (
     <ol className="my-7 grid gap-px overflow-hidden rounded-lg border border-sol-border/60 bg-sol-border/40 sm:grid-cols-3">
@@ -131,12 +133,16 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
 
   const stableMode: StableMode = d.settings?.stable_mode ?? "off";
   const isOn = (s: SnippetDescriptor) => snippetEnabledOn(d.settings ?? undefined, s);
-  const toggle = (s: SnippetDescriptor, next: boolean) =>
-    run(s.slug, () =>
+  const toggle = (s: SnippetDescriptor, next: boolean) => {
+    // A feature with a one-time step on the machine opens on its steps the
+    // moment it is switched on, so the next thing to do is in front of you.
+    if (next && isAgentSetupTool(s.slug) && d.online) setOpen(s.slug);
+    return run(s.slug, () =>
       // Send the pre-rename slug when one exists: old daemons only match their
       // exact slug, new daemons resolve it as an alias.
       setSnippet({ device_id: d.device_id, snippet: s.wireSlug ?? s.slug, enabled: next }),
     );
+  };
 
   const q = query.trim().toLowerCase();
   const searchText = (slug: string, ...parts: string[]) => {
@@ -252,6 +258,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
                     <FeatureCard
                       key={s.slug}
                       s={s}
+                      d={d}
                       on={isOn(s)}
                       disabled={!d.online || pending.has(s.slug)}
                       onToggle={(next) => toggle(s, next)}
@@ -276,6 +283,11 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
       <FeatureDialog
         slug={openFeature ? openFeature.slug : open === STABLE_KEY ? STABLE_KEY : null}
         feature={openFeature}
+        setup={
+          openFeature && isAgentSetupTool(openFeature.slug) && isOn(openFeature) && d.online ? (
+            <AgentToolSetupPanel tool={openFeature.slug} target={{ deviceId: d.device_id }} machineName={deviceDisplayName(d)} />
+          ) : null
+        }
         onClose={() => setOpen(null)}
         control={
           openFeature ? (
@@ -375,12 +387,14 @@ function CardFooter({ left, mono = true }: { left: React.ReactNode; mono?: boole
 
 function FeatureCard({
   s,
+  d,
   on,
   disabled,
   onToggle,
   onOpen,
 }: {
   s: SnippetDescriptor;
+  d: Device;
   on: boolean;
   disabled: boolean;
   onToggle: (next: boolean) => void;
@@ -399,8 +413,38 @@ function FeatureCard({
         </>
       }
       control={<Switch checked={on} disabled={disabled} onCheckedChange={onToggle} aria-label={s.name} />}
-      footer={<CardFooter left={`cast install ${s.slug}`} />}
+      footer={
+        isAgentSetupTool(s.slug) && on && d.online
+          ? <SetupFooter tool={s.slug} d={d} />
+          : <CardFooter left={null} />
+      }
     />
+  );
+}
+
+/**
+ * A feature that also needs a one-time step on the machine (the Chrome
+ * extension, the macOS grants): done, it is a green line; not done, it is the
+ * next step and its buttons, right on the card.
+ */
+function SetupFooter({ tool, d }: { tool: AgentSetupTool; d: Device }) {
+  const { status } = useAgentToolSetup({ deviceId: d.device_id }, tool, true);
+  if (status?.ready) {
+    return (
+      <CardFooter
+        mono={false}
+        left={
+          <span className="inline-flex items-center gap-1 text-sol-green">
+            <Check className="h-3 w-3" strokeWidth={2.5} /> {tool === "browser" ? "Chrome connected" : "Permissions granted"}
+          </span>
+        }
+      />
+    );
+  }
+  return (
+    <div className="space-y-2 border-t border-sol-yellow/25 pt-3">
+      <AgentToolSetupPanel tool={tool} target={{ deviceId: d.device_id }} machineName={deviceDisplayName(d)} compact />
+    </div>
   );
 }
 

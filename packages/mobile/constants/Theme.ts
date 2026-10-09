@@ -2,6 +2,7 @@ import { StyleSheet } from 'react-native';
 import { useSyncExternalStore } from 'react';
 import { MOBILE_TAB_BAR_STYLE } from '@codecast/shared/render/mobileTabsStyle';
 import { MOBILE_CHIP_HEIGHT, MOBILE_CHIP_STYLE } from '@codecast/shared/render/mobileSessionStyle';
+import { PALETTE as FAMILY, type Palette as FamilyTokens } from '@platform/design';
 
 export const SolarizedLight = {
   bg: '#FBF5E2',
@@ -119,20 +120,112 @@ export const Palettes: Record<ColorScheme, Palette> = {
   dark: SolarizedDark,
 };
 
+/** Which palette and faces the app wears. `classic` is codecast's Solarized
+ *  and JetBrains Mono; `family` is hosted mode's, the @platform/design paper,
+ *  ink and faces the web's `html.hosted-mode.minimal-style` and Whisk wear
+ *  (docs/architecture/hosted-assistant.md "The mode"). */
+export type Look = 'classic' | 'family';
+
+/** `a` mixed with `b`, `pct` percent of `a`, as hex: CSS color-mix in srgb. */
+function mixHex(a: string, pct: number, b: string): string {
+  const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [rgb(a), rgb(b)];
+  return '#' + x.map((v, i) => Math.round((v * pct + y[i] * (100 - pct)) / 100).toString(16).padStart(2, '0')).join('');
+}
+
+// The family's tokens under the app's palette names, the same mapping the
+// web's hosted-mode block in globals.css makes over its --sol-* variables:
+// the accent classes collapse to one rust accent for what wants attention,
+// ok and danger for outcomes, the star's gold, and the cool hues to muted ink.
+function familyPalette(f: FamilyTokens, scheme: ColorScheme): Palette {
+  const dark = scheme === 'dark';
+  const bgAlt = dark ? f.bgSunken : mixHex(f.bgSunken, 55, f.bg);
+  return {
+    bg: f.bg,
+    bgAlt,
+    bgInset: f.bgSunken,
+    bgHighlight: f.bgHover,
+    card: f.bgRaised,
+    cardHover: f.bgHover,
+    border: f.ruleStrong,
+    borderLight: f.rule,
+    text: f.ink,
+    textSecondary: mixHex(f.ink, dark ? 82 : 78, f.inkMuted),
+    textMuted: f.inkMuted,
+    textDim: f.inkFaint,
+    textMuted0: mixHex(f.inkFaint, 70, f.bg),
+    accent: f.accent,
+    accentAmber: f.accent,
+    // Your own words read as a quiet note, the way Whisk sets quoted text.
+    userBubble: mixHex(f.ink, dark ? 9 : 7, f.bg),
+    userBubbleText: f.ink,
+    assistantBubble: f.bgSunken,
+    assistantBubbleText: f.ink,
+    green: f.ok,
+    greenBright: f.ok,
+    yellow: f.star,
+    cyan: f.ok,
+    magenta: f.danger,
+    violet: f.inkMuted,
+    orange: f.accent,
+    red: f.danger,
+    blue: f.inkMuted,
+    activeBadge: f.ok,
+    activeBadgeText: f.accentInk,
+    tabActive: f.ink,
+    tabInactive: f.inkFaint,
+    cardBg: bgAlt,
+    cardBorder: f.rule,
+    inputBg: f.bgRaised,
+    inputBorder: f.ruleStrong,
+    inputPlaceholder: f.inkFaint,
+    headerBg: bgAlt,
+    footerBg: bgAlt,
+  };
+}
+
+const FamilyPalettes: Record<ColorScheme, Palette> = {
+  light: familyPalette(FAMILY.light, 'light'),
+  dark: familyPalette(FAMILY.dark, 'dark'),
+};
+
+/** The palette a scheme and a look resolve to. */
+export function paletteFor(scheme: ColorScheme, look: Look): Palette {
+  return look === 'family' ? FamilyPalettes[scheme] : Palettes[scheme];
+}
+
 // The active scheme is a tiny external store. The root layout publishes the
 // resolved preference (Settings choice, else the OS setting) into it, and
 // every screen subscribes through useTheme() so a flip re-renders the tree.
+// The look rides the same store: the root publishes it from the mode
+// (`useHostedMode`), and a flip repaints the tree the way a scheme flip does.
 let activeScheme: ColorScheme = 'light';
+let activeLook: Look = 'classic';
 const listeners = new Set<() => void>();
 
 export function getActiveScheme(): ColorScheme {
   return activeScheme;
 }
 
+export function getActiveLook(): Look {
+  return activeLook;
+}
+
 export function setActiveScheme(next: ColorScheme) {
   if (next === activeScheme) return;
   activeScheme = next;
   listeners.forEach((listener) => listener());
+}
+
+export function setActiveLook(next: Look) {
+  if (next === activeLook) return;
+  activeLook = next;
+  listeners.forEach((listener) => listener());
+}
+
+/** Scheme and look as one value, so a subscriber re-renders on either. */
+function appearanceKey(): string {
+  return `${activeLook}:${activeScheme}`;
 }
 
 function subscribeScheme(listener: () => void) {
@@ -160,7 +253,7 @@ function liveView<T extends object>(resolve: () => T, keys: (keyof T)[]): T {
 // the expression runs. Reads inside a render body follow the scheme as long as
 // the component re-renders on a flip — call useTheme() for that.
 export const Theme: Palette = liveView(
-  () => Palettes[activeScheme],
+  () => paletteFor(activeScheme, activeLook),
   Object.keys(SolarizedLight) as (keyof Palette)[],
 );
 
@@ -169,8 +262,13 @@ export const Theme: Palette = liveView(
 // palette forever. themedStyles builds one sheet per scheme (lazily) and hands
 // back a live view, so `styles.row` read during render is the active scheme's
 // row style. Name the factory parameter `Theme` to keep the body unchanged.
-export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme: Palette) => T): T {
-  return schemedStyles((scheme) => build(Palettes[scheme]));
+// The builder also gets the look, for a style whose shape (not only its
+// colour) differs in the family look, such as a page title set in the
+// reading face.
+export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme: Palette, look: Look) => T): T {
+  const sheets: Record<string, T> = {};
+  const sheetFor = (scheme: ColorScheme, look: Look): T => (sheets[`${look}:${scheme}`] ??= build(paletteFor(scheme, look), look));
+  return liveView(() => sheetFor(activeScheme, activeLook), Object.keys(sheetFor('light', 'classic')) as (keyof T)[]);
 }
 
 // The same live sheet, built from the scheme's name rather than its palette,
@@ -181,8 +279,16 @@ export function schemedStyles<T extends StyleSheet.NamedStyles<T>>(build: (schem
   return liveView(() => sheetFor(activeScheme), Object.keys(sheetFor('light')) as (keyof T)[]);
 }
 
+// Re-renders on a look flip too: every themed read (Theme, themedStyles)
+// changes with it, and this is the hook those readers already call.
 export function useActiveScheme(): ColorScheme {
-  return useSyncExternalStore(subscribeScheme, getActiveScheme, getActiveScheme);
+  useSyncExternalStore(subscribeScheme, appearanceKey, appearanceKey);
+  return activeScheme;
+}
+
+export function useActiveLook(): Look {
+  useSyncExternalStore(subscribeScheme, appearanceKey, appearanceKey);
+  return activeLook;
 }
 
 // Subscribes the calling component to scheme flips and returns the live
