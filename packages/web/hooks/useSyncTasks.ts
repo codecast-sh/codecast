@@ -260,9 +260,10 @@ export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): 
   useInboxStore.getState().syncRecord("tasks", String(rest._id), rest);
   // The detail ships the task's direct children (taskMining.directSubtasks)
   // so a surface without the list feeder draws the same checklist, and the
-  // tasks its graph names (lib/taskGraph graphNeighbors) so Blocked by reads
-  // their live state. Each joins the one tasks collection, merged over any
-  // row the list already holds so its enriched fields survive.
+  // tasks its graph names (lib/taskGraph graphNeighbors, plus what was found
+  // here, which only the server's index answers) so Blocked by, Blocks and
+  // Found here read their live state. Each joins the one tasks collection,
+  // merged over any row the list already holds so its enriched fields survive.
   const linked = [...(Array.isArray(subtasks) ? subtasks : []), ...(Array.isArray(graph_tasks) ? graph_tasks : [])];
   if (linked.length) {
     const tasks = useInboxStore.getState().tasks as Record<string, any>;

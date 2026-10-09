@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PrWaitTarget, TaskWait } from "@codecast/shared/tasks";
+import { namedWorkspace, teamFlagFor, workspaceOfScope } from "./resolveWorkspace";
+import { recordTaskStart } from "./taskPulse";
 import {
+  applyBlockers,
   createPlanSteps,
   depAddedLine,
+  holdingBlockers,
+  noWaitRemovedLine,
   offFrontierLines,
   parkAfterBlocking,
   planStepBase,
@@ -15,6 +23,7 @@ import {
   stepsFromTitles,
   supersededLine,
   taskGraphSections,
+  unappliedRefsAdvice,
   waitAddedLine,
   waitBody,
   type GraphDeps,
@@ -41,7 +50,7 @@ describe("routeBlockerRef", () => {
     expect(() => routeBlockerRef("whenever", { removing: true })).toThrow(/\. A wait can also be removed by its id/);
     // A met time wait stays as history, so removing it may name a past time.
     expect(routeBlockerRef("2026-01-01T09:00Z", { removing: true }).kind).toBe("wait");
-    expect(() => routeBlockerRef("2026-01-01T09:00Z")).toThrow(/in the past/);
+    expect(() => routeBlockerRef("2026-01-01T09:00Z")).toThrow(/already past/);
     expect(() => routeBlockerRef("wmg3k2p1x4")).toThrow();
   });
 
@@ -54,6 +63,23 @@ describe("routeBlockerRef", () => {
 test("splitRefs trims and drops blanks", () => {
   expect(splitRefs(" ct-1, #42:checks ,,sd-3 ")).toEqual(["ct-1", "#42:checks", "sd-3"]);
   expect(splitRefs(undefined)).toEqual([]);
+});
+
+describe("the spelling an agent surface prints a time wait in, pasted back", () => {
+  // `cast task context` prints "Oct 9, 2026 07:00 UTC" and its help invites
+  // pasting that into --remove-blocked-by. The comma in it used to split the
+  // value into two refs, and the run died naming only "Oct 9".
+  test("is one ref, not two, and routes as the moment it names", () => {
+    expect(splitRefs("Oct 9, 2026 07:00 UTC")).toEqual(["Oct 9, 2026 07:00 UTC"]);
+    expect(routeBlockerRef("Oct 9, 2026 07:00 UTC", { removing: true })).toEqual({ kind: "wait", ref: "2026-10-09T07:00Z", barePr: false });
+    // Only when that IS the whole value: a list of refs still splits.
+    expect(splitRefs("ct-1,Oct 9, 2026 07:00 UTC")).toEqual(["ct-1", "Oct 9", "2026 07:00 UTC"]);
+  });
+
+  test("names the ref form when the zone it was printed in fixes no instant", () => {
+    expect(() => routeBlockerRef("Oct 9, 2026 07:00 BST", { removing: true }))
+      .toThrow(/"Oct 9, 2026 07:00 BST" names a moment but not its instant: write it as a ref \(2026-10-14T09:00Z\), or remove the wait by the `id w…`/);
+  });
 });
 
 describe("waitBody", () => {
@@ -100,10 +126,23 @@ test("depAddedLine: a finished blocker blocks nothing", () => {
   expect(depAddedLine("ct-9", "ct-5", { success: true } as any)).toBe("ct-9 is blocked by ct-5");
 });
 
+describe("noWaitRemovedLine", () => {
+  test("a removal that matched nothing names the handle given and where the real ones are", () => {
+    expect(noWaitRemovedLine("ct-5", { kind: "wait_id", id: "wzzzzzzzzzz" }))
+      .toBe("ct-5 has no wait with id wzzzzzzzzzz; cast task show ct-5 lists its waits");
+    expect(noWaitRemovedLine("ct-5", { kind: "wait", ref: "#42", barePr: true }))
+      .toBe("ct-5 has no wait on #42; cast task show ct-5 lists its waits");
+  });
+});
+
 describe("parkAfterBlocking", () => {
   const open = [prWait("waiting")];
   test("a session holding the task is told how to park on it", () => {
-    expect(parkAfterBlocking("s1", "ct-5", open, { task: "CT-005", started: true })).toMatch(/^Until it clears, run cast state --status dormant "Waiting on PR #42"/);
+    // The work is underway: this session started the task and got far enough
+    // to find a new blocker, so parking is its call — the same words the
+    // compaction block gives the same task in the same state.
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "CT-005", started: true }))
+      .toMatch(/^If the work cannot go on until it clears, run cast state --status dormant "Waiting on PR #42"/);
   });
 
   test("a session that filed or never held the task is told nothing wakes it", () => {
@@ -113,9 +152,124 @@ describe("parkAfterBlocking", () => {
     expect(parkAfterBlocking("s1", "ct-5", [...open, { kind: "task", ref: "ct-2", status: "open" }], null)).toMatch(/when these clear/);
   });
 
+  test("who holds the task is the server's answer when it gave one, not the pulse", () => {
+    // The pulse is cleared only when THIS session closes the task, so after
+    // another session took it over (`cast task start --take`, a board handoff)
+    // it still names a task this session no longer holds — and a clearing wakes
+    // the new owner alone (TG2), so the park would wait on a wake that never
+    // comes.
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-5", started: true }, {}, false))
+      .toBe("This session does not hold ct-5, so nothing wakes it when this clears (cast task start ct-5 to hold it).");
+    // And the other way: a session the server says holds it is told how to park
+    // even where no pulse file was written (a session the server spawned).
+    expect(parkAfterBlocking("s1", "ct-5", open, null, {}, true))
+      .toMatch(/^If the work cannot go on until it clears, run cast state --status dormant "Waiting on PR #42"/);
+  });
+
   test("nothing to say outside a session or when nothing holds the task", () => {
     expect(parkAfterBlocking(null, "ct-5", open, null)).toBeNull();
     expect(parkAfterBlocking("s1", "ct-5", [], { task: "ct-5", started: true })).toBeNull();
+  });
+});
+
+describe("unappliedRefsAdvice", () => {
+  test("a refused ref names the refs after it, with the command that applies them", () => {
+    // The refused ref is named by the error itself; what nothing else says is
+    // that the rest were never attempted.
+    expect(unappliedRefsAdvice("ct-9", ["2h", "#42", "ct-5"], 1, "add"))
+      .toBe("ct-5 was not added; retry it with cast task dep ct-9 --blocked-by ct-5");
+    expect(unappliedRefsAdvice("ct-9", ["#42", "ct-5", "sd-4"], 0, "remove"))
+      .toBe("ct-5; sd-4 were not removed; retry them with cast task dep ct-9 --remove-blocked-by 'ct-5,sd-4'");
+    // A time wait's absolute spelling carries a comma of its own, which
+    // --blocked-by would read as two refs beside another, so each gets a line.
+    expect(unappliedRefsAdvice("ct-9", ["#42", "Oct 9, 2026 07:00 UTC", "ct-5"], 0, "add"))
+      .toBe("Oct 9, 2026 07:00 UTC; ct-5 were not added; retry them with:\n  cast task dep ct-9 --blocked-by 'Oct 9, 2026 07:00 UTC'\n  cast task dep ct-9 --blocked-by ct-5");
+    // Nothing followed the refusal: the error already says everything.
+    expect(unappliedRefsAdvice("ct-9", ["#42", "ct-5"], 1, "add")).toBeNull();
+  });
+});
+
+describe("applyBlockers", () => {
+  /** A shell with its own pulse directory, so the session can hold the task. */
+  function heldDeps(answer: (path: string, body: any) => any) {
+    const dir = mkdtempSync(join(tmpdir(), "apply-blockers-"));
+    process.env.CODECAST_DIR = dir;
+    const said: string[] = [];
+    const log = console.log;
+    console.log = (text = "") => { said.push(String(text)); };
+    const deps: GraphDeps = {
+      cliPost: async (path, body) => answer(path, body),
+      sessionId: () => "s1",
+      cwd: () => "/repo",
+      printJson: () => {},
+      workspace: async () => ({ workspace: "personal" }),
+      namedScope: async () => null,
+    };
+    return { deps, said, restore: () => { console.log = log; } };
+  }
+
+  test("the parking line names everything that holds the task, not only what this call added", async () => {
+    const prev = process.env.CODECAST_DIR;
+    // The task was already blocked by ct-1 before this call added the wait.
+    const { deps, said, restore } = heldDeps((path) =>
+      path === "/cli/work/wait" ? { wait: prWait("waiting"), met: false }
+      : path === "/cli/work/get" ? { short_id: "ct-5", status: "open", waits: [prWait("waiting")], links: { blocked_by: [{ kind: "task", ref: "ct-1", status: "open" }] } }
+      : {});
+    try {
+      await recordTaskStart("s1", "ct-5", undefined, async () => {});
+      await applyBlockers(deps, "ct-5", ["#42"], "add");
+      // `cast task context` builds the same sentence from the same whole set,
+      // so the two surfaces pin one reason rather than two.
+      expect(said.join("\n")).toContain('cast state --status dormant "Waiting on ct-1 and 1 more"');
+    } finally {
+      restore();
+      process.env.CODECAST_DIR = prev;
+    }
+  });
+
+  test("the server decides who holds the task, so a pulse for a task since taken over does not park", async () => {
+    const prev = process.env.CODECAST_DIR;
+    // The pulse still names ct-5 — nothing clears it when another session
+    // takes the task over — but only the holder is woken when a blocker
+    // clears (TG2), so parking here would wait on a wake that never comes.
+    const asked: any[] = [];
+    const { deps, said, restore } = heldDeps((path, body) => {
+      if (path === "/cli/work/wait") return { wait: prWait("waiting"), met: false };
+      if (path === "/cli/work/get") {
+        asked.push(body);
+        return { short_id: "ct-5", status: "open", waits: [prWait("waiting")], held: false };
+      }
+      return {};
+    });
+    try {
+      await recordTaskStart("s1", "ct-5", undefined, async () => {});
+      await applyBlockers(deps, "ct-5", ["#42"], "add");
+      expect(asked[0]).toMatchObject({ short_id: "ct-5", conversation_id: "s1" });
+      expect(said.join("\n")).toContain("This session does not hold ct-5, so nothing wakes it");
+      expect(said.join("\n")).not.toContain("--status dormant");
+    } finally {
+      restore();
+      process.env.CODECAST_DIR = prev;
+    }
+  });
+
+  test("a read-back that fails leaves the blockers this call added: a partial pin beats none", async () => {
+    const prev = process.env.CODECAST_DIR;
+    const { deps, said, restore } = heldDeps((path) => {
+      if (path === "/cli/work/wait") return { wait: prWait("waiting"), met: false };
+      if (path === "/cli/work/get") throw new Error("no such route");
+      return {};
+    });
+    try {
+      await recordTaskStart("s1", "ct-5", undefined, async () => {});
+      await applyBlockers(deps, "ct-5", ["#42"], "add");
+      // The PR is named as this checkout reads it (checkoutWords), as every
+      // line above the pin is.
+      expect(said.join("\n")).toContain('cast state --status dormant "Waiting on PR acme/api#42"');
+    } finally {
+      restore();
+      process.env.CODECAST_DIR = prev;
+    }
   });
 });
 
@@ -140,7 +294,7 @@ describe("taskGraphSections", () => {
       {
         label: "Blocked by",
         holds: true,
-        items: ["ct-1 Design [done]", "ct-2 (not found)", "ct-3 (status unknown)", "PR #42 to merge · id w42", "PR #7 closed without merging · id w7"],
+        items: ["ct-1 Design [done]", "ct-2 (not found)", "ct-3 (status unknown)", "PR #42 to merge [waiting]", "PR #7 closed without merging [failed]"],
       },
       { label: "Blocks", items: ["ct-9 Ship [open]"] },
       { label: "Found during", items: ["ct-4 Audit [in_progress]"] },
@@ -152,14 +306,79 @@ describe("taskGraphSections", () => {
     const [s] = taskGraphSections({ waits: [prWait("met", "merged")] }, { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "dropped" }] });
     expect(s.holds).toBe(false);
     expect(s.label).toBe("Blocked by (cleared)");
-    expect(s.items).toEqual(["ct-1 A [dropped]", "PR #42 merged · id w42"]);
+    expect(s.items).toEqual(["ct-1 A [dropped]", "PR #42 merged [met]"]);
   });
 
-  test("a missing task holds nothing; the wait id takes the reader's style", () => {
-    const [s] = taskGraphSections({ waits: [prWait("waiting")] }, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] }, { waitId: (x) => `<${x}>` });
+  test("a missing task holds nothing; only a time wait carries its id, in the reader's style", () => {
+    const words = { waitId: (x: string) => `<${x}>`, now: NOW };
+    const [s] = taskGraphSections({ waits: [prWait("waiting")] }, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] }, words);
     expect(s.holds).toBe(true);
-    expect(s.items[1]).toBe("PR #42 to merge< · id w42>");
+    // A PR or decision wait is removed by its target (waitRemoveRef), so its
+    // internal id is noise on the line; a time wait's id is the handle.
+    expect(s.items[1]).toBe("PR #42 to merge [waiting]");
+    expect(taskGraphSections({ waits: [{ kind: "decision", decision: "sd-4", id: "wq7z", state: "waiting", created_at: NOW }] }, null, words)[0].items)
+      .toEqual(["sd-4 to be answered [waiting]"]);
+    expect(taskGraphSections({ waits: [{ kind: "time", at: NOW + 7_200_000, id: "wt1", state: "waiting", created_at: NOW }] }, null, words)[0].items)
+      .toEqual(["14:00 (in 2h) [waiting]< · id wt1>"]);
     expect(taskGraphSections({}, { blocked_by: [{ kind: "task", ref: "ct-2", missing: true }] })[0].holds).toBe(false);
+  });
+
+  test("a mixed list marks every entry, so a met or failed wait is not read as holding", () => {
+    const [s] = taskGraphSections(
+      { waits: [prWait("waiting", undefined, 8), { ...prWait("met", "checks green", 8), kind: "pr_checks_green", id: "w8c" }, prWait("failed", "closed without merging", 9)] },
+      { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "open" }] },
+    );
+    // Every line ends in a bracketed state, the way a task blocker does: the
+    // two #8 waits differ only by tense otherwise ("to merge" / "checks green").
+    expect(s.items).toEqual([
+      "ct-1 A [open]",
+      "PR #8 to merge [waiting]",
+      "PR #8 checks green [met]",
+      "PR #9 closed without merging [failed]",
+    ]);
+    expect(s.label).toBe("Blocked by");
+  });
+
+  test("a checks wait reads by its PR's checks, so red CI is as visible here as on the page", () => {
+    const checks = { ...prWait("waiting", undefined, 42), kind: "pr_checks_green" as const, id: "w42c" };
+    const row = { waits: [checks, prWait("waiting", undefined, 42)] };
+    const links = { blocked_by: [], wait_checks: { w42c: "failure" } };
+    // Red checks keep the wait waiting forever (TG2), so the agent told to
+    // park on it reads the same word the task page and the phone show.
+    expect(taskGraphSections(row, links)[0].items).toEqual(["PR #42 checks failing [waiting]", "PR #42 to merge [waiting]"]);
+    expect(taskGraphSections(row, { blocked_by: [], wait_checks: { w42c: "pending" } })[0].items[0]).toBe("PR #42 checks running [waiting]");
+    // Nothing read, or green: the wait says what it waits for.
+    expect(taskGraphSections(row, { blocked_by: [] })[0].items[0]).toBe("PR #42 checks to go green [waiting]");
+  });
+
+  test("a closed task waits on nothing, whatever its rows still say", () => {
+    // Nothing clears a wait on close (settleWaits returns early for a terminal
+    // task), so a done task routinely keeps a `waiting` one. Every other
+    // surface drops it: tasks.list returns no open_blockers for a terminal row,
+    // the web offers no adds and the phone drops the word. The text list says
+    // the same — the bare subject marked as history, no "to merge", and "cleared".
+    const row = { status: "done", waits: [prWait("waiting")] };
+    const [s] = taskGraphSections(row, { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "open" }] });
+    expect(s.label).toBe("Blocked by (cleared)");
+    expect(s.holds).toBe(false);
+    // The task blocker's bracket is the one that looks identical to a live
+    // hold, so it carries the same marker the waits do.
+    expect(s.items).toEqual(["ct-1 A [open, history]", "PR #42 [history]"]);
+    // Two waits on one PR would otherwise print the same line, with no way to
+    // tell which handle clears which: the checks one keeps its `:checks`.
+    expect(taskGraphSections({ status: "done", waits: [prWait("waiting"), { ...prWait("waiting"), id: "w42c", kind: "pr_checks_green" }] }, null)[0].items)
+      .toEqual(["PR #42 [history]", "PR #42:checks [history]"]);
+    // So the parking line `cast task context` closes its Graph with is not armed.
+    expect(holdingBlockers(row, null)).toEqual([]);
+    expect(parkAfterBlocking("s1", "ct-5", holdingBlockers(row, null), { task: "ct-5", started: true })).toBeNull();
+    // A time wait's countdown goes with it; its removal handle stays.
+    expect(taskGraphSections({ status: "dropped", waits: [{ kind: "time", at: NOW + 7_200_000, id: "wt1", state: "waiting", created_at: NOW }] }, null, { now: NOW })[0].items)
+      .toEqual(["14:00 [history] · id wt1"]);
+    // A blocker that holds nothing by its own status is already history.
+    expect(taskGraphSections({ status: "done" }, { blocked_by: [{ kind: "task", ref: "ct-1", title: "A", status: "done" }] })[0].items)
+      .toEqual(["ct-1 A [done]"]);
+    // An open task is unchanged.
+    expect(taskGraphSections({ status: "open", waits: [prWait("waiting")] }, null)[0]).toEqual({ label: "Blocked by", holds: true, items: ["PR #42 to merge [waiting]"] });
   });
 
   test("the replacement is its own line, never a section after the rest", () => {
@@ -204,6 +423,8 @@ describe("plan steps", () => {
       cwd: () => "/repo",
       printJson: () => {},
       workspace: async () => here,
+      // The real resolver over a one-team roster, the way index.ts wires it.
+      namedScope: async (scope) => namedWorkspace({ teams: [{ _id: "team_a", name: "Acme" }], activeTeamId: null }, workspaceOfScope(scope)),
     };
     return { deps, calls };
   }
@@ -247,11 +468,17 @@ describe("plan steps", () => {
     await expect(stepsOf(fakeDeps(saved, { workspace: "team", team_id: "team_b" }).deps, "release")).rejects.toThrow(/none of them this one/);
   });
 
-  test("planStepBase stamps steps with the plan's origin and workspace", () => {
+  test("planStepBase stamps steps with the plan's origin and workspace", async () => {
     const { deps } = fakeDeps();
     expect(planStepBase(deps, { human: true })).toEqual({ project_path: "/repo", source: "human" });
     expect(planStepBase({ ...deps, sessionId: () => "sess" })).toEqual({ project_path: "/repo", source: "agent", conversation_id: "sess" });
     expect(planStepBase(deps, { human: true, plan: { workspace: "team:t1", team_id: "t1" } })).toMatchObject({ workspace: "team", team_id: "t1" });
+    // `cast plan steps` closes with `cast task ready --plan … --team <name>`,
+    // scoped from this same base: the base is route-arg form (namedScope's
+    // input), not the plan's stored key, and a bare Convex id in a pasted
+    // command reads as a blob.
+    expect(teamFlagFor(await deps.namedScope(planStepBase(deps, { plan: { workspace: "team:team_a", team_id: "team_a" } }))))
+      .toBe(" --team Acme");
   });
 
   test("planStepBase files steps in the plan's project, under the session the plan was stamped with", () => {
@@ -267,6 +494,9 @@ describe("plan steps", () => {
     expect(planWorkspace({ workspace: "user:u1", team_id: "t1" })).toEqual({ workspace: "personal" });
     expect(planWorkspace({ team_id: "t2" })).toEqual({ workspace: "team", team_id: "t2" });
     expect(planWorkspace(undefined)).toEqual({});
+    // A key this CLI cannot read names nothing, the way it grants nothing: it
+    // never falls through to the routing team, which is not access.
+    expect(planWorkspace({ workspace: "restricted:r1", team_id: "t1" })).toEqual({});
   });
 
   test("createPlanSteps: a refused step names what was filed and how to add the rest", async () => {
@@ -301,7 +531,10 @@ describe("plan steps", () => {
     n = 0;
     const base = { source: "human", project_id: "proj1", workspace: "team", team_id: "team_a" };
     const advice = await createPlanSteps(failing, "pl-1", stepsFromText("A\nB\nC\n\nD :: it ships\nE"), { base }).catch((e) => e.message);
-    expect(advice).toContain("  cast task create 'C' --plan pl-1 --found-during none --human --project 'proj1' --team 'team_a'\n");
+    // The team is named from the roster, never printed as its Convex id, and
+    // one helper words every printed flag value (flagArg): a bare id carries no
+    // quotes, a value that is not one bare word does.
+    expect(advice).toContain("  cast task create 'C' --plan pl-1 --found-during none --human --project proj1 --team Acme\n");
     expect(advice).toContain("cast plan steps pl-1 --human - <<'STEPS'\nD :: it ships\nE\nSTEPS");
   });
 
@@ -340,8 +573,16 @@ describe("plan steps", () => {
 
   test("offFrontierLines: why ready leaves an open task out, and whose an ephemeral task is", () => {
     expect(offFrontierLines({ status: "open" }, "parent_active")).toEqual(["Not ready: its parent is being worked"]);
+    // The one verdict with no fix in its own words gets the command that clears it.
+    expect(offFrontierLines({ short_id: "ct-9", status: "open", triage_status: "suggested" }, "triage"))
+      .toEqual(["Not ready: not triaged", "cast task promote ct-9 puts it on the frontier"]);
     expect(offFrontierLines({ status: "open", ephemeral: true, created_from_conversation: "c1" }, null)).toEqual(["Ephemeral: only the session that filed it gets it from cast task ready"]);
     expect(offFrontierLines({ status: "done", ephemeral: true }, undefined)).toEqual([]);
+    // The Ephemeral line is for the OWNER, whose verdict is `ready`. When
+    // "ephemeral" IS the verdict the reader is someone else, and the first line
+    // already says whose bookkeeping it is: saying it twice says nothing more.
+    expect(offFrontierLines({ status: "open", ephemeral: true, created_from_conversation: "c1" }, "ephemeral"))
+      .toEqual(["Not ready: bookkeeping of the session that filed it"]);
   });
 
   test("planTemplate: your own copy wins; several others' copies are refused by name", async () => {

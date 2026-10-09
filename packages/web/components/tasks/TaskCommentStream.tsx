@@ -16,6 +16,8 @@ import { Badge } from "../ui/badge";
 import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { hasStoredWaitTime } from "@codecast/shared/tasks";
+import { useLocalWaitTimes } from "../../hooks/useLocalWaitTimes";
 import { EarlierButton } from "../threads/readerFold";
 import { useReaderFold } from "../../hooks/useReaderFold";
 import { objectHref } from "../../lib/entityLinks";
@@ -145,6 +147,21 @@ export function Clamp({ children, className = "" }: { children: ReactNode; class
   );
 }
 
+const COMMENT_BODY = "text-sm text-sol-text prose-sm prose-invert max-w-none";
+
+function CommentBody({ text, title }: { text: string; title?: string }) {
+  const rendered = <MarkdownRenderer content={text} className={COMMENT_BODY} />;
+  return title ? <div title={title}>{rendered}</div> : rendered;
+}
+
+/** A comment naming a stored UTC wait moment, shown in the reader's clock with
+ *  the stored spelling on hover. Its own component so the coarse clock it
+ *  subscribes to re-renders this comment alone. */
+function LocalWaitBody({ text }: { text: string }) {
+  const local = useLocalWaitTimes(text);
+  return <CommentBody text={local.text} title={local.title} />;
+}
+
 export function TaskCommentItem({
   comment,
   openLinkedSession,
@@ -155,7 +172,20 @@ export function TaskCommentItem({
   /** Fold a long body (the Threads reader). */
   clamp?: boolean;
 }) {
-  const body = <MarkdownRenderer content={comment.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />;
+  // A stored absolute wait moment (the system "Unblocked" comment is written
+  // with one on purpose) reads in the viewer's clock, as the Blocked by row's
+  // pill and the timeline's history line do (TG11), the stored spelling on
+  // hover. One screen, one spelling of one moment.
+  //
+  // Asked of the text before anything subscribes to a clock: nearly every
+  // comment names no stored moment and comes back byte-identical, and this
+  // stream is always mounted, so subscribing them all turned a static list
+  // into one that re-renders every minute (hooks/useCoarseNow's own warning).
+  // The rewrite lives in its own small component, as the timeline's GraphText
+  // does, so only the rows that name a moment follow the clock.
+  const body = hasStoredWaitTime(comment.text)
+    ? <LocalWaitBody text={comment.text} />
+    : <CommentBody text={comment.text} />;
   return (
     <div className="py-2.5 relative">
       <div className="flex items-center gap-2 mb-1.5">
