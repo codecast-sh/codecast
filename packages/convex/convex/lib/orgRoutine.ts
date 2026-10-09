@@ -57,6 +57,20 @@ export const ROLE_NEEDS_INPUT_PROMPT = [
   `When something else needs a person, raise it here in your own thread. \`cast brief\` lists every session waiting under you.`,
 ].join("\n");
 
+// A role hears on the machine its standing session runs on. A machine that
+// sleeps through lunch still hears: the wake waits a little and the role
+// answers. One silent for longer than this is away, and a wake queued for it
+// sits unread while the session it names waits on nobody: 18 waits piled up
+// behind a laptop that was off for five days (2026-10-09). Such a role does
+// not hear, so the wait goes to the person (notifications `unheard`).
+export const ROLE_MACHINE_AWAY_MS = 30 * 60 * 1000;
+
+/** Whether a role's machine is away. A session that names no machine (a
+ *  hosted one) has nothing to be away from. */
+export function roleMachineAway(device: { last_seen?: number } | null | undefined, now: number): boolean {
+  return device?.last_seen != null && now - device.last_seen >= ROLE_MACHINE_AWAY_MS;
+}
+
 /** An event trigger of a role: what fires it, and the words it carries. The
  *  needs-input one every role has (S28), and the area change one only the
  *  Head of People has (S29). */

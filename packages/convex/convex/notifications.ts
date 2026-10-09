@@ -866,7 +866,7 @@ export async function performNeedsInputCheck(
   // placeInboxRow), so it tells nobody. What it tells is the role's
   // needs-input trigger, fired once per ask (agentTasks.routeUpWaitingSession).
   // A role that cannot be told (its trigger paused or cancelled, no standing
-  // session, the org off) is no reader at all: `unheard` sends the settle on
+  // session, the org off, its machine away) is no reader at all: `unheard` sends the settle on
   // to the person's own notify below, so the wait is never swallowed.
   let unheard = false;
   if ((conv.org_role_id || conv.standing_role_id) && state === "needs_input") {
