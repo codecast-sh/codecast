@@ -280,7 +280,13 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       {internals && task.execution_status && (
         <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0 cq-hide-compact" />
       )}
-      <TaskBlockedMark task={task} className="cq-hide-compact" />
+      {/* Kept at every WIDTH: "can I pick this up" is the row's own question,
+          and a narrow list pane is where triage happens (TG12). Not in hosted
+          mode, though: a hosted to-do list has no dependency graph to read
+          (the board drops the Unblocked pill for the same reason), and the
+          mark's tooltip names blockers by ct- id, the vocabulary this row
+          strips everywhere else. */}
+      {internals && <TaskBlockedMark task={task} />}
       {internals && task.labels && task.labels.length > 0 && (
         <LabelChips labels={task.labels} onLabelClick={onFilterLabel} className="cq-hide-compact" />
       )}
