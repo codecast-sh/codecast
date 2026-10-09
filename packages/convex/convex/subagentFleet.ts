@@ -7,19 +7,23 @@
 //   spawn    spawn.createSessionFromCli files the row queued, then drains the
 //            queue, which starts it at once when its limits have room
 //   end      a done or blocked declaration (cast state, cast task done,
-//            cast task handoff) or a kill frees the slot and drains again
+//            cast task handoff) or a kill frees the slot and drains again;
+//            so does a turn that settles without one (atRest), because a
+//            stopped worker waiting on its parent runs nothing
 //   drain    starts every queued row the limits now admit, first in first out
 // The merge rides the same end: a done worker with merge_back_on_done and a
 // worktree gets a merge_back command on the machine that holds the worktree,
 // which reports back here; blocked and killed workers keep their worktree, and
 // the parent is told either way.
 import { v } from "convex/values";
-import { mutation } from "./functions";
+import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage, formatSessionMessage } from "./pendingMessages";
+import { NEEDS_INPUT_IDLE_CHECK_DELAY_MS } from "./inboxFilters";
 import {
+  ACTIVE_AGENT_STATUSES,
   drainQueue,
   mergeBackNote,
   normalizeSubagentCaps,
@@ -100,9 +104,51 @@ export async function fleetRowsOf(ctx: { db: any }, userId: Id<"users">): Promis
   return [...(await read("running")), ...(await read("queued"))];
 }
 
+/**
+ * The caller's running and queued workers, for `cast queue`: queued ones in
+ * the order the drain will start them, each with the caps it was queued under.
+ */
+export const queueStatus = query({
+  args: { api_token: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Authentication required");
+    const docs = await fleetRowsOf(ctx, auth.userId);
+    return docs
+      .map((doc) => ({ ...slotRowOf(doc), title: typeof doc.title === "string" ? doc.title : null }))
+      .sort((a, b) => (a.slot === b.slot ? a.at - b.at : a.slot === "running" ? -1 : 1));
+  },
+});
+
+/**
+ * Whether a running worker's turn has settled for good: its session left the
+ * active statuses one idle grace ago, after it took the slot, and it is not
+ * parked on a wake of its own (dormant, waiting). A worker that stops without
+ * declaring done or blocked costs the machine nothing while it waits, so it
+ * gives its slot back; one that wakes again later runs without re-queueing.
+ */
+async function atRest(ctx: any, doc: any, now: number): Promise<boolean> {
+  const session = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", doc._id))
+    .first();
+  const status = session?.agent_status;
+  if (!status || ACTIVE_AGENT_STATUSES.has(status) || status === "dormant" || status === "waiting") return false;
+  const since = session.agent_status_updated_at ?? 0;
+  return since > (doc.subagent_slot_at ?? 0) && now - since >= NEEDS_INPUT_IDLE_CHECK_DELAY_MS;
+}
+
 /** Start every queued worker the limits now admit. Returns the started ids. */
 export async function drainFleet(ctx: any, userId: Id<"users">): Promise<string[]> {
-  const docs = await fleetRowsOf(ctx, userId);
+  const now = Date.now();
+  const docs: any[] = [];
+  for (const doc of await fleetRowsOf(ctx, userId)) {
+    if (doc.subagent_slot === "running" && (await atRest(ctx, doc, now))) {
+      await ctx.db.patch(doc._id, { subagent_slot: undefined });
+      continue;
+    }
+    docs.push(doc);
+  }
   const byId = new Map(docs.map((d) => [String(d._id), d]));
   const started = drainQueue(docs.map(slotRowOf));
   for (const id of started) {
