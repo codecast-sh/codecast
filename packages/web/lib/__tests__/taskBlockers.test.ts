@@ -146,6 +146,25 @@ describe("readySig", () => {
     expect(readySig(rows, { ...store, d: { ...store.d, status: "open" } })).toBe(before);
     expect(readySig(rows, { ...store, z: row("z", "ct-9", "open") })).toBe(before);
   });
+  test("a graph write on a row the board holds moves it, read from the store's live copy", () => {
+    // The board's array is the snapshot useWorkspaceCollection last handed
+    // back; a graph draft leaves updated_at to the echo, so the signature has
+    // to read the row's own fields out of the store (store/taskGraphDraft).
+    const live = { r1: row("r1", "ct-10", "open"), r2: row("r2", "ct-11", "open") };
+    const board = [live.r1, live.r2] as BoardTask[];
+    const base = readySig(board, { ...store, ...live });
+    const after = (patch: Record<string, unknown>) => readySig(board, { ...store, ...live, r1: { ...live.r1, ...patch } });
+    expect(after({ blocked_by: ["ct-1"] })).not.toBe(base);
+    expect(after({ waits: [wait("waiting")] })).not.toBe(base);
+    expect(after({ parent_id: "c" })).not.toBe(base);
+    expect(after({ superseded_by: "ct-12" })).not.toBe(base);
+    expect(after({ triage_status: "held" })).not.toBe(base);
+    expect(after({ ephemeral: true })).not.toBe(base);
+    expect(after({ status: "in_progress" })).not.toBe(base);
+    // A field readiness does not read still costs nothing.
+    expect(after({ title: "Renamed" })).toBe(base);
+  });
+
   test("every ref isReadyInStore reads is in it: the board's verdict never changes while it holds", () => {
     const variants = [store, { ...store, a: { ...store.a, status: "done" } }, { ...store, c: { ...store.c, status: "open" } }];
     for (const v of variants) {
