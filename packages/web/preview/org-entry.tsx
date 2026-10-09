@@ -1,9 +1,8 @@
 // Preview entry: the REAL org role cards over a fixture world, for eyeballing
 // the staffing 2 surfaces without a backend (docs/architecture/org-staffing.md
-// S10 tenure chips, S13 faces, S5 ghost seats, S16 the seat dialog). The cards
-// are the shipped components in a real React Flow context, so what renders here
-// is what the org page renders. `?theme=light` flips the theme; default dark.
-// `?view=seat` shows the seat dialog instead of the cards.
+// S10 tenure chips, S13 faces, S5 ghost seats). The cards are the shipped
+// components in a real React Flow context, so what renders here is what the
+// org page renders. `?theme=light` flips the theme; default dark.
 import "../app/globals.css";
 import "@xyflow/react/dist/style.css";
 import React from "react";
@@ -11,7 +10,6 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { ReactFlow, ReactFlowProvider, type Node } from "@xyflow/react";
 import { RoleCard, type RoleNodeData } from "../components/org/OrgNodeCards";
-import { HeadSeatDialog } from "../components/org/HeadSeatDialog";
 import { ORG_SIZES } from "../components/org/orgLayout";
 import { roleTenureChip } from "../components/org/orgMeta";
 import { EMPTY_COUNTS, type OrgRole } from "../components/org/orgTypes";
@@ -95,25 +93,10 @@ function Cards() {
   );
 }
 
-function Seat() {
-  return (
-    <div className="min-h-screen bg-sol-bg text-sol-text">
-      <HeadSeatDialog
-        open
-        onClose={() => {}}
-        agentName="Anchor"
-        threadShortId="jx7abcd"
-        messageCount={412}
-        onConfirm={() => {}}
-      />
-    </div>
-  );
-}
-
 // The cards link to scope pages through the next/link compat shim, which uses
 // react-router's navigate — so the preview needs a router in the tree.
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <MemoryRouter>{params.get("view") === "seat" ? <Seat /> : <Cards />}</MemoryRouter>
+    <MemoryRouter><Cards /></MemoryRouter>
   </React.StrictMode>,
 );

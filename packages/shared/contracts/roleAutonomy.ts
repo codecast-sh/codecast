@@ -14,6 +14,16 @@ export function autonomyOn(trust: string | null | undefined): boolean {
   return trust === "direct" || trust === "decide";
 }
 
+/** The line's start switch (learning-loop.md LL5): whether the line of the
+ *  project a role leads starts problems on its own, up to caps.cards at a
+ *  time. Stored in the role's caps beside those slots and off when unset, so
+ *  a line starts nothing until a person turns it on. It only holds while the
+ *  role's own switch is on: a role that starts no work on its own starts no
+ *  line either. The sweep, the queue and every line surface read this. */
+export function lineStartsOn(role: { trust?: string | null; caps?: { line_on?: boolean } | null }): boolean {
+  return autonomyOn(role.trust) && role.caps?.line_on === true;
+}
+
 /** The value to store for a switch position. */
 export function trustForSwitch(on: boolean): StoredTrust {
   return on ? "direct" : "understand";
