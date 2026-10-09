@@ -38,6 +38,6 @@ cast mod logs <name>           # what it printed and threw while drawing
 cast mod publish -m "<note>"   # once it is right: a numbered version with its source
 ```
 
-Put the pane's link alone on its own line in your reply: it renders as the running pane and redraws on every push. Before saying something works, look at it or read its logs. Grant only what the mod reads and writes; a local half runs only after the person approves it in their own terminal (`! cast mod approve <name>`). When work produces something a person tracks and a kind for it exists, file it there: `cast mod guide` prints what running mods ask of agents, and `cast obj kinds` the objects they track.
+Put the pane's link alone on its own line in your reply: it renders as the running pane and redraws on every push. Before saying something works, look at it or read its logs. Grant only what the mod reads and writes; a local half runs on each of the person's machines within 30s of a push. When work produces something a person tracks and a kind for it exists, file it there: `cast mod guide` prints what running mods ask of agents, and `cast obj kinds` the objects they track.
 <!-- cast @VERSION@ -->
 <!-- /codecast-mods -->
