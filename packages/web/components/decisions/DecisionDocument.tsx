@@ -1,5 +1,6 @@
 "use client";
 
+import { EntityIdPill } from "../EntityIdPill";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { advisoryAnswerOpen } from "@codecast/shared/contracts";
 import { useCallback, useState } from "react";
@@ -7,27 +8,33 @@ import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Layers, ShieldCheck, Undo2, User } from "lucide-react";
-import { mayAnswerFromDocument, useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
+import { AlertTriangle, ArrowLeft, Check, MessageSquare, ShieldCheck, Undo2 } from "lucide-react";
+import { answersForOthers, mayAnswerFromDocument, useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useSyncDecisionDetail, useDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { useWorkflowRun } from "../../hooks/useSyncWorkflows";
+import { useDecisionDiscussion } from "../../hooks/useDecisionDiscussion";
+import { approvalScope, closedDecisionWords, type ReportRun } from "../../lib/line/runReport";
+import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
+import { AskAgain } from "../line/AskAgain";
+import { lineTraceHref } from "../../lib/line/lineMapUrl";
+import { causeDoubt } from "../../lib/line/lineTrace";
+import { DoubtChip } from "../line/DoubtChip";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatTimeAgo } from "../../lib/messageNavigator";
-import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
 import { DecisionOptionList } from "./DecisionOptionList";
-import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
+import { PersonChip } from "./DecisionParties";
+import { DecisionDiscussion } from "./DecisionDiscussion";
+import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./DecisionSections";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView, answererNameOf, cardAnswerIndexes, cardOutcome } from "./ChangeCardView";
+import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView, answererNameOf, cardAnswerIndexes, cardOutcome, settledAgo } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
 import { chosenOptions, decisionWaitLabel, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
-import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
-import { proposalRefInContext } from "../org/staffingModel";
 
 const api = _api as any;
 
@@ -45,13 +52,37 @@ export function DecisionDocument({ id }: { id: string }) {
     if (missing && ready) return <Empty text="This decision does not exist, or it is not yours to read." />;
     return <AppLoader />;
   }
-  // The store row is the queue's; the detail's copy is the server's read. A
-  // person the decision was asked of answers either way: a role on the
-  // ladder that heard it first keeps it out of their queue, not out of
-  // their hands (onAnswer adopts the detail's copy first).
+  // The store row is the queue's; the detail's copy is the server's read.
+  // Any signed-in reader answers either way: a role on the ladder that heard
+  // it first, or a decision asked of somebody else, keeps it out of their
+  // queue, not out of their hands (onAnswer adopts the detail's copy first).
   const decision: SessionDecisionItem = liveRow ?? detail.decision;
   return <DocumentBody decision={decision} detail={detail} answerable={!!liveRow || mayAnswerFromDocument(detail, meId)} />;
 }
+
+/** Whether a card's attached doc only says the card's own fields again (the
+ *  line's decide step writes "What is wrong: ... What this changes: ..."). */
+function restatesCard(doc: string | undefined, card: { wrong?: string; change?: string }): boolean {
+  const flat = (t: string | undefined) => (t ?? "").replace(/\s+/g, " ").trim();
+  const d = flat(doc);
+  const wrong = flat(card.wrong).slice(0, 80);
+  const change = flat(card.change).slice(0, 80);
+  return !!d && ((!!wrong && d.includes(wrong)) || (!!change && d.includes(change)));
+}
+
+type CauseRow = Parameters<typeof causeDoubt>[0] & { short_id?: string };
+/** One scan per change of the tasks collection, cached by ref: the selector runs on every store change. */
+const causeCache = new WeakMap<object, Map<string, CauseRow | null>>();
+const causeByShortId = (tasks: Record<string, CauseRow> | undefined, ref: string): CauseRow | null => {
+  if (!tasks) return null;
+  let byRef = causeCache.get(tasks);
+  if (!byRef) { byRef = new Map(); causeCache.set(tasks, byRef); }
+  if (byRef.has(ref)) return byRef.get(ref)!;
+  let hit: CauseRow | null = null;
+  for (const id in tasks) if (tasks[id]?.short_id === ref) { hit = tasks[id]; break; }
+  byRef.set(ref, hit);
+  return hit;
+};
 
 function Empty({ text }: { text: string }) {
   return (
@@ -75,6 +106,12 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const cardTask = decision.card?.cause.task ?? null;
   useSyncTaskEvidence(cardTask);
   const guide = useTaskEvidenceByShortId(cardTask)?.change_guide ?? null;
+  const run = useWorkflowRun(decision.workflow_run_id) as ReportRun | null | undefined;
+  const discussion = useDecisionDiscussion(decision._id);
+  // The card's cause, as the store holds it, for a doubt its grounding or review raised.
+  const causeRow = useInboxStore((st) => (cardTask ? causeByShortId(st.tasks as unknown as Record<string, CauseRow>, cardTask) : null));
+  const doubt = causeRow ? causeDoubt(causeRow) : null;
+  const [discussOpen, setDiscussOpen] = useState(false);
   const pending = decision.status === "pending";
   const rec = ladderRecommendation(decision);
   // Single, multi and rank answer on the option rows themselves; a form
@@ -107,6 +144,16 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
     : detail.asked_users.length
       ? `held by ${detail.asked_users.map((u) => u.name).join(", ")}`
       : "held by its people";
+  // Answering for somebody else is allowed; the page says so where the
+  // answer is given, and the server tells the people who answered for them.
+  const heldNote = pending && answerable && answersForOthers(detail, meId) ? (
+    <div className="mb-3 flex items-start gap-2 rounded-lg border border-sol-yellow/40 bg-sol-yellow/5 px-3 py-2 text-[12px] text-sol-text-muted">
+      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-sol-yellow" />
+      <span>
+        {holderLine[0].toUpperCase() + holderLine.slice(1)}. You can still answer it; {detail.asked_users.map((u) => u.name).join(", ") || "its people"} will be told you answered for them.
+      </span>
+    </div>
+  ) : null;
 
   const answeredBy = decision.answered_by;
   const answeredPerson = answeredBy?.kind === "user" ? detail.asked_users.find((u) => u._id === answeredBy.id) : undefined;
@@ -116,11 +163,13 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
       ? <>answered by policy: stack {detail.stack?.short_id ?? answeredBy.id.replace(/^stack:/, "")} default</>
       : answeredBy.kind === "role"
         ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
-        : <span className="inline-flex items-center gap-1.5">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} /></span>;
+        : <span className="inline-flex items-center gap-1.5 flex-wrap">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} />{answeredBy.via && <>through their agent in <EntityIdPill id={answeredBy.via} type="session" compact /></>}</span>;
 
   // A settled change card says what happened once: the verdict, who gave it
   // and when, as the card's last line.
   const answererName = answererNameOf(detail, meId);
+  // An approval names what it covered: a proposal's approval approved building the fix, never a ship.
+  const scope = decision.status === "answered" ? approvalScope(decision.gate_node_id, decision.options?.[chosenOptions(decision)[0] ?? -1]?.label) : null;
   const outcome = decision.card ? cardOutcome(decision, answererName, now) : null;
 
   // Reopen is the people's (asked_users): gate on the detail's people set, not
@@ -130,60 +179,26 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
 
   // Who asked, who may answer, who holds it. A change card leads with the
   // change and its proof, so for one these facts follow the card.
-  const meta = (
-    <dl className="mt-4 decision-meta text-[12px]">
-      <dt>asked by</dt>
-      <dd><AskingSession decision={decision} /></dd>
-      {proposalRefInContext(decision.context_md) && (
-        <>
-          <dt>proposal</dt>
-          <dd><DecisionProposalOrigin contextMd={decision.context_md} size="md" /></dd>
-        </>
-      )}
-      {(detail.task || decision.task_id) && (
-        <>
-          <dt>task</dt>
-          <dd>
-            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 max-w-full min-w-0 align-bottom px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10 [overflow-wrap:normal]">
-              <span className="whitespace-nowrap shrink-0">{detail.task?.short_id ?? "task"}</span><span className="text-sol-text truncate min-w-0 max-w-[20rem]">{detail.task?.title}</span>
-            </Link>
-            {decision.station && <span className="text-sol-text-dim"> held at <span className="text-sol-text">{decision.station}</span></span>}
-          </dd>
-        </>
-      )}
-      <dt title="A category decides who may answer a question like this one">who may answer</dt>
-      <dd><CategoryNote category={decision.category} proposed={decision.category_proposed} /></dd>
-      {detail.stack && (
-        <>
-          <dt>stack</dt>
-          <dd>
-            <Link href={`/decisions/stacks/${detail.stack.short_id ?? detail.stack._id}`} className="inline-flex items-center gap-1 text-sol-cyan hover:underline">
-              <Layers className="w-3 h-3" />{detail.stack.title}
-            </Link>
-            <span className="text-sol-text-dim"> · {detail.stack.decision_ids.indexOf(decision._id) + 1} of {detail.stack.decision_ids.length}</span>
-          </dd>
-        </>
-      )}
-      <dt>holder</dt>
-      <dd><HolderLine people={detail.asked_users} roleName={decision.holder?.kind === "role" ? (detail.holder_role?.name ?? "a role") : undefined} /></dd>
-    </dl>
-  );
+  const meta = <DecisionFacts decision={decision} detail={detail} ladder={detail.ladder.length ? <DecisionLadder decision={decision} detail={detail} now={now} /> : undefined} />;
 
-  const body = (detail.doc?.content || decision.context_md || (decision.report_slug && !decision.card)) ? (
+  // A card's attached doc that only restates the card ("What is wrong: ...")
+  // is said once, by the card.
+  const restated = !!decision.card && restatesCard(detail.doc?.content, decision.card);
+  const body = hasDecisionBody(decision, detail) && !restated ? <DecisionBody decision={decision} detail={detail} /> : null;
+  // Settled without an answer: the banner at the top names what happened in
+  // plain words, then what it means for the work (runReport
+  // closedDecisionWords), the same words the trace uses for the card's run.
+  const closed = decision.status === "withdrawn" || decision.status === "dismissed";
+  const closedWords = closed ? closedDecisionWords(decision.status as "withdrawn" | "dismissed", run) : null;
+  // A card whose run went on without it can be asked again while it is still the cause's newest run.
+  const cause = causeRow as (CauseRow & { _id?: string; status?: string; project_id?: string; workflow_run_id?: string }) | null;
+  const askAgain = !!closedWords?.askAgain && !!cause?._id && (cause.status === "open" || cause.status === "backlog") && (!cause.workflow_run_id || cause.workflow_run_id === decision.workflow_run_id);
+  const banner = closedWords ? (
     <>
-      {detail.doc?.content && (
-        <div className="decision-body text-sol-text-muted"><MarkdownRenderer content={detail.doc.content} /></div>
-      )}
-      {!detail.doc?.content && decision.context_md && (
-        <div className="decision-body text-sol-text-muted border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
-      )}
-      {detail.doc?.content && decision.context_md && (
-        <details className="mt-3 text-sm text-sol-text-dim">
-          <summary className="cursor-pointer hover:text-sol-text">The short context</summary>
-          <div className="mt-2 border-l-2 border-sol-border pl-4"><MarkdownRenderer content={decision.context_md} /></div>
-        </details>
-      )}
-      {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} /></div>}
+      <b className="font-semibold text-sol-text">{closedWords.headline}{!closedWords.askAgain && decision.resolved_at ? ` ${settledAgo(decision.resolved_at, now)}` : ""}.</b>{" "}
+      {closedWords.detail}
+      {cardTask && closedWords.askAgain && <> <Link href={lineTraceHref(cardTask)} className="underline decoration-dotted underline-offset-2 hover:text-sol-text" data-banner-trace>See the trace</Link>.</>}
+      {askAgain && <div className="mt-2"><AskAgain taskId={cause!._id!} projectId={cause!.project_id ?? null} /></div>}
     </>
   ) : null;
 
@@ -197,18 +212,19 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
 
         {/* ── Header ── */}
         <header className="mt-4">
+          {banner && <div className="decision-status-banner mb-3" role="status" data-decision-banner={decision.status}>{banner}</div>}
           <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
             {/* The wait leads, as its consequence for the reader; a settled
                 card says its verdict once, as the card's last line with who
                 and when, so the header keeps only the age. */}
-            {!outcome && (
+            {!outcome && !banner && (
               // Words in the wait's tone, not a box: the headline under it is the thing to read.
               <span className={pending ? (decision.blocking ? "text-sol-yellow" : "text-sol-blue") : "text-sol-text-dim"}>
                 {decisionWaitLabel(decision)}
               </span>
             )}
-            <span>{!outcome && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
-            {decision.resolved_at && !outcome && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
+            <span>{!outcome && !banner && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
+            {decision.resolved_at && !outcome && !banner && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A gate on the line (the-line.md L4): the run this question pauses. */}
             {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
             {/* The id is for citing, so it trails the line. */}
@@ -217,7 +233,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           </div>
           {/* A change card leads with what changed, and its cause and goal under
               it, so the first line says what and the second says why. */}
-          {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} className="mt-3" /> : (
+          {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} questionFirst className="mt-3" /> : (
             <>
               <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
               {meta}
@@ -225,7 +241,26 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           )}
         </header>
 
+        {/* The doubt the record raised about the cause, where a reviewer cannot miss it. */}
+        {doubt && <DoubtChip doubt={doubt} className="mt-3" />}
+
+        {/* Discuss sits by the status as a real button, saying where it goes. */}
+        {(discussion.owner || discussion.thread.length > 0) && (
+          <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
+            <button
+              type="button"
+              onClick={() => { setDiscussOpen(true); requestAnimationFrame(() => document.getElementById("discuss")?.scrollIntoView({ block: "nearest", behavior: "smooth" })); }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors"
+              data-decision-discuss-button
+            >
+              <MessageSquare className="w-3.5 h-3.5" />{discussion.thread.length ? "Reply in the discussion" : "Discuss"}
+            </button>
+            {discussion.owner && <span className="text-[12px] text-sol-text-dim">Opens a thread with {discussion.owner.name ?? "the session that asked"} about this {decision.card ? "card" : "decision"}.</span>}
+          </div>
+        )}
+
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
+        {verdictBar && decision.card && heldNote && <div className="mt-4">{heldNote}</div>}
         {verdictBar && decision.card && (
           <ChangeCardVerdictBar card={decision.card}>
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={pending ? onDismiss : undefined} keys recommendation={rec} record={outcome?.pill} />
@@ -236,7 +271,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* The agent's own context reads right under the card, before the facts. */}
         {decision.card && (
           <section className="mt-6">
-            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} summarized={verdictBar} guide={guide} />
+            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={closed ? undefined : outcome?.line} summarized={verdictBar} guide={guide} />
             {body && <div className="mt-6">{body}</div>}
             {meta}
           </section>
@@ -266,7 +301,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               footer; a settled or held decision reads its rows plainly. */}
           <div className="mt-3">
             {answerInOptions ? (
-              <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
+              <>
+                {heldNote}
+                <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
+              </>
             ) : (
               <DecisionOptionList
                 options={decision.options}
@@ -290,68 +328,34 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           )}
         </section>}
 
-        {/* ── Ladder ── */}
-        <section className="mt-8">
-          <h2 className="decision-kicker">The ladder</h2>
-          <ol className="mt-3 decision-ladder">
-            {detail.ladder.length === 0 && (
-              <li className="text-sm text-sol-text-dim">No roles between the asker and its people. It went straight to {detail.asked_users.map((u) => u.name).join(", ") || "its people"}.</li>
-            )}
-            {detail.ladder.map((hop, i) => {
-              const skipped = hop.note?.startsWith("skipped");
-              const holds = decision.holder?.kind === "role" && decision.holder.id === hop.role_id;
-              return (
-                <li key={i} className={`decision-hop ${skipped ? "opacity-60" : ""}`}>
-                  <span className={`decision-hop-dot ${holds ? "bg-sol-green" : hop.recommendation !== undefined ? "bg-sol-cyan" : skipped ? "bg-sol-text-dim" : "bg-sol-yellow"}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap text-sm">
-                      {hop.role ? (
-                        <Link href={`/org/${hop.role.short_id ?? hop.role._id}`} className="text-sol-text hover:text-sol-blue">{hop.role.name}</Link>
-                      ) : (
-                        <span className="text-sol-text-dim">a retired role</span>
-                      )}
-                      {holds && <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green"><ShieldCheck className="w-3 h-3" />holds it</span>}
-                      <span className="text-[11px] text-sol-text-dim">{formatTimeAgo(hop.at, now)}</span>
-                    </div>
-                    <div className="text-[12px] text-sol-text-muted mt-0.5">
-                      {hop.recommendation !== undefined
-                        ? <>recommends <span className="text-sol-cyan">{decision.options[hop.recommendation]?.label ?? `option ${hop.recommendation + 1}`}</span></>
-                        : skipped ? "skipped" : pending && now - hop.at < 5 * 60_000 ? "recommendation pending" : "passed it up without a recommendation"}
-                      {hop.note && !skipped && <span className="text-sol-text-dim"> — {hop.note}</span>}
-                      {skipped && hop.note && <span className="text-sol-text-dim"> ({hop.note.replace(/^skipped:?\s*/, "")})</span>}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-            <li className="decision-hop">
-              <span className={`decision-hop-dot ${decision.holder?.kind !== "role" ? "bg-sol-green" : "bg-sol-text-dim"}`} />
-              <div className="flex items-center gap-2 flex-wrap text-sm">
-                <User className="w-3.5 h-3.5 text-sol-text-dim" />
-                <span className="text-sol-text">{detail.asked_users.map((u) => u.name).join(", ") || "its people"}</span>
-                {decision.holder?.kind !== "role" && pending && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green">holds it</span>}
-              </div>
-            </li>
-          </ol>
-        </section>
+        {/* ── Discuss: with the session that owns the decision (ct-58330);
+            the button by the status opens it, so it shows once in use ── */}
+        {(discussOpen || discussion.thread.length > 0) && (
+          <section className="mt-8" id="discuss" data-decision-discuss-section>
+            <h2 className="decision-kicker mb-3">Discussion</h2>
+            <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare />
+          </section>
+        )}
 
         {/* ── Answer ── */}
-        {(!pending || !answerInOptions) && (!outcome || canReopen || !!detail.grant_offer) && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
+        {(!pending || !answerInOptions) && (!outcome || canReopen || !!detail.grant_offer) && !(closed && !canReopen && !detail.grant_offer) && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
           {pending ? (
             answerable ? (
               <>
                 <h2 className="decision-kicker mb-3">Your answer</h2>
+                {heldNote}
                 <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
               </>
             ) : (
-              <div className="text-sm text-sol-text-dim">{holderLine[0].toUpperCase() + holderLine.slice(1)}. You can read it, not answer it.</div>
+              <div className="text-sm text-sol-text-dim">{holderLine[0].toUpperCase() + holderLine.slice(1)}. Sign in to answer it.</div>
             )
           ) : (
             <>
               {!outcome && (
                 <>
-                  <h2 className="decision-kicker mb-2">{decision.status === "answered" ? "The answer" : decision.status === "dismissed" ? "Dismissed without an answer" : "Withdrawn by the agent"}</h2>
+                  <h2 className="decision-kicker mb-2">{decision.status === "answered" ? "The answer" : closedWords?.headline ?? "Closed without an answer"}</h2>
                   <DecisionRecordedAnswer decision={decision} />
+                  {scope && <div className="mt-2 text-[12.5px] text-sol-text-muted" data-decision-approval-scope>{scope}{decision.gate_node_id !== CARD_GATE_NODE_ID ? ", not shipping it. Shipping asks again on its own card." : "."}</div>}
                   {answeredByLine && <div className="mt-2 text-[12px] text-sol-text-dim">{answeredByLine}</div>}
                 </>
               )}
