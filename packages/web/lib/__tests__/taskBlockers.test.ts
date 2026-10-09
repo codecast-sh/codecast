@@ -42,9 +42,11 @@ describe("openBlockers", () => {
     expect(openBlockers({ status: "open", blocked_by: ["c"] }, store)).toEqual([{ kind: "task", ref: "ct-3", status: "in_progress" }]);
   });
 
-  test("waiting and failed waits hold the task, a met one does not", () => {
+  test("waiting and failed waits hold the task, a met one does not; the failed one leads", () => {
+    // Band order (`blockerBand`): a failed wait needs a re-plan, so it heads
+    // every list, and the row mark's tooltip names it first.
     const waits = [wait("waiting"), wait("met"), wait("failed")];
-    expect(openBlockers({ status: "open", waits }, store).map((b) => (b as TaskWait).state)).toEqual(["waiting", "failed"]);
+    expect(openBlockers({ status: "open", waits }, store).map((b) => (b as TaskWait).state)).toEqual(["failed", "waiting"]);
   });
 
   test("a live row in another workspace is no answer: the ref stays unknown, as on the server", () => {
@@ -106,24 +108,69 @@ describe("blockedMark", () => {
     expect(storeBlockedMark(task, store)).toBeNull();
     expect(storeBlockedMark({ ...task, graph_status: [] }, store)?.tip).toBe("Waiting on ct-50 (status unknown)");
   });
-  test("a failed wait is flagged and says why", () => {
+  test("a time wait whose moment went by says so: the tooltip carries no state marker", () => {
+    // The whole tooltip is this phrase, so without the suffix a settle job
+    // that never fired reads exactly like a wait still to come — the marker
+    // the CLI's lists and the plan graph's node already carry.
+    const now = Date.UTC(2026, 9, 8, 12);
+    const late = { id: "wt", kind: "time", at: now - 3 * 86_400_000, state: "waiting", created_at: 0 } as TaskWait;
+    expect(blockedMark([late], { now })?.tip).toMatch(/^Waiting until Oct 5 .* \(overdue by 3d\)$/);
+    const ahead = { ...late, at: now + 3 * 3_600_000 } as TaskWait;
+    expect(blockedMark([ahead], { now })?.tip).not.toContain("overdue");
+  });
+  test("a failed wait is flagged and says why, in the words of its cause", () => {
+    // Not "Waiting on …": the glyph beside this text is the red Ban, which
+    // says re-plan rather than wait, so the words say what happened.
     const mark = blockedMark([wait("failed", { note: "closed without merging" })]);
-    expect(mark).toEqual({ count: 1, failed: true, tip: "Waiting on PR #42 (failed: closed without merging)" });
+    expect(mark).toEqual({ count: 1, failed: true, tip: "PR #42 closed without merging" });
+    // A mixed list keeps "Waiting on …" for everything still waiting.
+    expect(blockedMark([wait("waiting"), wait("failed", { note: "closed without merging" })])?.tip)
+      .toBe("Waiting on PR #42 · PR #42 closed without merging");
   });
 });
 
 describe("blockerStatusSig", () => {
   test("names what the store says of each task blocker, and nothing for a closed task", () => {
     const task = { status: "open", blocked_by: ["ct-1", "ct-2", "ct-60", "ct-61"], graph_status: [{ ref: "ct-60", status: null }] };
-    expect(blockerStatusSig(task, store)).toBe("open,done,-,?");
+    expect(blockerStatusSig(task, store)).toEndWith("open,done,-,?");
     expect(blockerStatusSig({ ...task, status: "done" }, store)).toBe("");
-    expect(blockerStatusSig({ status: "open" }, store)).toBe("");
   });
+  test("a row's own graph fields are in it, so a wait added or removed moves it", () => {
+    const bare: BoardTask = { status: "open" };
+    const before = blockerStatusSig(bare, store);
+    expect(before).not.toBe("");
+    expect(blockerStatusSig({ ...bare, waits: [wait("waiting")] }, store)).not.toBe(before);
+    expect(blockerStatusSig({ ...bare, blocked_by: ["ct-1"] }, store)).not.toBe(before);
+  });
+  test("both the signature and the mark read the row's live copy, not the prop row", () => {
+    // The board's row is the snapshot its collection handed back; a graph draft
+    // leaves updated_at to the echo, so removing the only wait in the page's
+    // peek has to move the signature and clear the mark at once.
+    const held = row("r1", "ct-10", "open", { waits: [wait("waiting")] }) as BoardTask;
+    const cleared = { ...held, waits: [] };
+    expect(blockerStatusSig(held, { ...store, r1: cleared })).not.toBe(blockerStatusSig(held, { ...store, r1: held }));
+    expect(storeBlockedMark(held, { ...store, r1: held })?.count).toBe(1);
+    expect(storeBlockedMark(held, { ...store, r1: cleared })).toBeNull();
+    expect(storeBlockedMark(held, { ...store, r1: { ...held, status: "done" } })).toBeNull();
+  });
+  test("its empty answer is the shared rule's: every status the rule calls terminal, and no other", () => {
+    // The signature short-cuts the case `blockersHoldingBack` already decides
+    // (a closed task is held by nothing) to keep a board of done rows off the
+    // blocker lookups. This holds the two to each other: were the shared rule
+    // to stop calling a status terminal, the sig would freeze at "" and the
+    // row's glyph would never update for such a task.
+    const task = (status: string) => ({ status, blocked_by: ["ct-1"] });
+    for (const status of ["open", "in_progress", "done", "dropped"]) {
+      const holds = blockersHoldingBack(task(status) as any, storeStatusOf(store, task(status) as any)).length > 0;
+      expect(blockerStatusSig(task(status), store) === "").toBe(!holds);
+    }
+  });
+
   test("a blocker's rename changes it, so the tooltip's title follows", () => {
     const task = { status: "open", blocked_by: ["ct-1"] };
     const titled = { ...store, a: row("a", "ct-1", "open", { title: "Old" }) };
-    expect(blockerStatusSig(task, titled)).toBe("open|Old");
-    expect(blockerStatusSig(task, { ...titled, a: { ...titled.a, title: "New" } })).toBe("open|New");
+    expect(blockerStatusSig(task, titled)).toEndWith("open|Old");
+    expect(blockerStatusSig(task, { ...titled, a: { ...titled.a, title: "New" } })).toEndWith("open|New");
   });
 });
 
@@ -146,12 +193,67 @@ describe("readySig", () => {
     expect(readySig(rows, { ...store, d: { ...store.d, status: "open" } })).toBe(before);
     expect(readySig(rows, { ...store, z: row("z", "ct-9", "open") })).toBe(before);
   });
+  test("a graph write on a row the board holds moves it, read from the store's live copy", () => {
+    // The board's array is the snapshot useWorkspaceCollection last handed
+    // back; a graph draft leaves updated_at to the echo, so the signature has
+    // to read the row's own fields out of the store (store/taskGraphDraft).
+    const live = { r1: row("r1", "ct-10", "open"), r2: row("r2", "ct-11", "open") };
+    const board = [live.r1, live.r2] as BoardTask[];
+    const base = readySig(board, { ...store, ...live });
+    const after = (patch: Record<string, unknown>) => readySig(board, { ...store, ...live, r1: { ...live.r1, ...patch } });
+    expect(after({ blocked_by: ["ct-1"] })).not.toBe(base);
+    expect(after({ waits: [wait("waiting")] })).not.toBe(base);
+    expect(after({ parent_id: "c" })).not.toBe(base);
+    expect(after({ superseded_by: "ct-12" })).not.toBe(base);
+    expect(after({ triage_status: "held" })).not.toBe(base);
+    expect(after({ ephemeral: true })).not.toBe(base);
+    expect(after({ status: "in_progress" })).not.toBe(base);
+    // A field readiness does not read still costs nothing.
+    expect(after({ title: "Renamed" })).toBe(base);
+  });
+
   test("every ref isReadyInStore reads is in it: the board's verdict never changes while it holds", () => {
     const variants = [store, { ...store, a: { ...store.a, status: "done" } }, { ...store, c: { ...store.c, status: "open" } }];
     for (const v of variants) {
       const same = variants.filter((w) => readySig(rows, w) === readySig(rows, v));
       for (const w of same) for (const r of rows) expect(isReadyInStore(r, w, "u1")).toBe(isReadyInStore(r, v, "u1"));
     }
+  });
+
+  test("the verdict reads the row's OWN live graph fields, so it moves with the signature and the glyph", () => {
+    // A graph draft write patches the store's row and leaves `updated_at` to
+    // the echo, so the board's array still holds the pre-write row object.
+    // The signature moves (readySig reads the live copy), so the board
+    // repaints — and the verdict has to be judged on the same live copy, or
+    // the Unblocked view keeps a task the row's own glyph already marks held.
+    const open = row("r1", "ct-10", "open") as BoardTask;
+    const board = [open];
+    for (const patch of [
+      { blocked_by: ["ct-1"] },
+      { waits: [wait("waiting")] },
+      { waits: [wait("failed")] },
+      { parent_id: "c" },
+      { superseded_by: "ct-12" },
+      { triage_status: "held" },
+      { status: "in_progress" },
+    ]) {
+      const held = { ...store, r1: { ...open, ...patch } };
+      expect(readySig(board, held)).not.toBe(readySig(board, { ...store, r1: open }));
+      expect(isReadyInStore(open, held, "u1")).toBe(false);
+    }
+    // And the other way: the live copy's cleared graph unblocks a prop row
+    // that still names a blocker.
+    const stale = { ...open, blocked_by: ["ct-1"] } as BoardTask;
+    expect(isReadyInStore(stale, { ...store, r1: stale }, "u1")).toBe(false);
+    expect(isReadyInStore(stale, { ...store, r1: open }, "u1")).toBe(true);
+  });
+
+  test("the glyph and the verdict agree on one store state", () => {
+    // The probe that found the bug: one store, one row object, two readers.
+    const open = row("r1", "ct-10", "open") as BoardTask;
+    const held = { ...store, r1: { ...open, waits: [wait("waiting")] } };
+    expect(storeBlockedMark(open, held)?.count).toBe(1);
+    expect(isReadyInStore(open, held, "u1")).toBe(false);
   });
 });
 

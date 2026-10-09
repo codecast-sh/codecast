@@ -6,7 +6,7 @@
 //
 // Backlog counts as `open` (work not started) but is never ready: TG1 readies
 // only `open` tasks, so parked work waits until someone moves it to open.
-import { blockerGatesPickup, failedWaitAdvice, isFailedWait, notReadyLabel, planVerdicts, UNKNOWN_BLOCKER_STATUS, type Blocker, type GraphOutside, type GraphTask, type Readiness, type StatusOf, type WaitLabelOptions } from "@codecast/shared/tasks";
+import { blockerGatesPickup, failedWaitAdvice, isFailedWait, isStalledTimeWait, notReadyLabel, planVerdicts, stalledWaitAdvice, stalledWaitDiagnosis, UNKNOWN_BLOCKER_STATUS, type Blocker, type GraphOutside, type GraphTask, type Readiness, type ReadinessViewer, type StatusOf, type WaitLabelOptions } from "@codecast/shared/tasks";
 
 export interface PlanReadiness<T> {
   statusOf: StatusOf;
@@ -18,13 +18,14 @@ export interface PlanReadiness<T> {
   blocked: T[];
   /** Open tasks that will become ready without anyone touching them: a
    *  subtask whose parent is being worked, or a task whose every blocker can
-   *  still clear by itself (a task being worked or due to be, a wait still
-   *  waiting). */
+   *  still clear by itself (a task being worked or due to be, a wait that is
+   *  waiting and can still settle). */
   waiting: T[];
-  /** Open tasks nothing will release by itself: held by a failed wait, a
-   *  blocker that could not be read (another workspace), parked backlog or a
-   *  blocker that is stuck itself, or a subtask whose parent could not be
-   *  read. Someone has to re-plan them. */
+  /** Open tasks nothing will release by itself: held by a failed wait or by a
+   *  time wait whose moment went by unsettled, a blocker that could not be
+   *  read (another workspace), parked backlog or a blocker that is stuck
+   *  itself, or a subtask whose parent could not be read. Someone has to
+   *  re-plan them. */
   stuck: T[];
   /** Backlog: never scheduled until someone moves it to open. */
   parked: T[];
@@ -33,8 +34,17 @@ export interface PlanReadiness<T> {
   ephemeral: T[];
 }
 
-export function planReadiness<T extends GraphTask & { _id?: unknown; short_id?: string }>(tasks: T[], outside?: GraphOutside | null): PlanReadiness<T> {
-  const { statusOf, verdicts } = planVerdicts(tasks, outside);
+export function planReadiness<T extends GraphTask & { _id?: unknown; short_id?: string }>(tasks: T[], outside?: GraphOutside | null, opts: { now?: number; viewer?: ReadinessViewer | null } = {}): PlanReadiness<T> {
+  // `viewer` is the caller a readiness question is asked on behalf of
+  // (ReadinessViewer, TG9): `status` and `wave` report to that caller and pass
+  // it, so their own ephemeral steps read as ready, exactly as `cast task
+  // ready --plan` hands them out. `orchestrate`, `autopilot` and the workflow
+  // runner ask what a FRESH session could be spawned for and pass none, so
+  // every ephemeral step stays its owner's.
+  const { statusOf, verdicts } = planVerdicts(tasks, outside, opts.viewer);
+  // The clock a wait is judged against: whether a time wait can still settle
+  // is a fact about now, not about the row (isStalledTimeWait).
+  const now = opts.now ?? Date.now();
   const inPlan = new Set<unknown>(tasks);
   // Whether a task gets to ready with nobody touching it. A plan blocker
   // moves only if it does; one outside the plan moves while open, since
@@ -42,6 +52,11 @@ export function planReadiness<T extends GraphTask & { _id?: unknown; short_id?: 
   const moves = new Map<T, boolean>();
   const willMove = (t: T): boolean => {
     if (moves.has(t)) return moves.get(t)!;
+    // The cycle guard, not a redundant write: a blocker chain can loop back
+    // onto `t` (TG4 rejects an edge that closes a loop, but one stored through
+    // a task that has since closed survives), and `clears` recurses along it.
+    // The provisional `false` makes that recursion read "this one does not
+    // move by itself" and stop; the real answer replaces it below.
     moves.set(t, false);
     const v = verdicts.get(t)!;
     const result = v.ready || v.reason === "parent_active" || v.reason === "ephemeral" || (v.reason === "blocked" && (v.blockers ?? []).every(clears));
@@ -49,7 +64,12 @@ export function planReadiness<T extends GraphTask & { _id?: unknown; short_id?: 
     return result;
   };
   const clears = (b: Blocker): boolean => {
-    if (b.kind !== "task") return b.state === "waiting";
+    // A wait clears by itself only while it still CAN: a time wait whose
+    // moment went by long enough ago that neither its settle nor the sweep
+    // behind it landed is the same trap as a failed one, and the same
+    // predicate every other surface judges it by (isStalledTimeWait, which
+    // sends the holding session to remove or replace the wait, resume.ts).
+    if (b.kind !== "task") return b.state === "waiting" && !isStalledTimeWait(b, { now });
     if (!("status" in b) || !blockerGatesPickup(b.status)) return true;
     if (b.status !== "open") return false;
     const row = statusOf(b.ref);
@@ -69,18 +89,21 @@ export function planReadiness<T extends GraphTask & { _id?: unknown; short_id?: 
   };
 }
 
-/** The line a plan surface prints for work it will not schedule: backlog,
- *  and ephemeral steps left to whoever filed them. */
+/** The line a plan surface prints for work it will not schedule: backlog, and
+ *  ephemeral steps left to the session that filed them. A surface that passed
+ *  a `viewer` has already counted the caller's own ephemeral steps as ready,
+ *  so this clause is about other sessions' bookkeeping there; on a spawn
+ *  surface it is about every ephemeral step, the caller's included. */
 export function parkedNote({ parked, ephemeral }: Pick<PlanReadiness<unknown>, "parked" | "ephemeral">): string | null {
   const parts = [
     parked.length ? `${parked.length} in backlog: move to open to schedule` : "",
-    ephemeral.length ? `${ephemeral.length} ephemeral: left to whoever filed ${ephemeral.length === 1 ? "it" : "them"}` : "",
+    ephemeral.length ? `${ephemeral.length} ephemeral: left to the session that filed ${ephemeral.length === 1 ? "it" : "them"}, not spawned for` : "",
   ].filter(Boolean);
   return parts.length ? parts.join("; ") : null;
 }
 
-/** Why each stuck task will not move ("ct-4: blocked by PR #42 merges (failed:
- *  closed without merging)"), for a plan that stalled on them. */
+/** Why each stuck task will not move ("ct-4: blocked by PR #42 to merge
+ *  (failed: closed without merging)"), for a plan that stalled on them. */
 export function stuckNote<T extends GraphTask & { short_id?: string }>(r: Pick<PlanReadiness<T>, "stuck" | "verdicts">, words: WaitLabelOptions = {}): string | null {
   const lines = r.stuck.map((t) => {
     const v = r.verdicts.get(t)!;
@@ -90,15 +113,28 @@ export function stuckNote<T extends GraphTask & { short_id?: string }>(r: Pick<P
 }
 
 /** What to do about each stuck task: remove or replace its failed waits
- *  (failedWaitAdvice, the words the wake and the compaction block use), or
- *  read the blocker it cannot see where its graph is. */
-export function stuckAdvice<T extends GraphTask & { short_id?: string }>(r: Pick<PlanReadiness<T>, "stuck" | "verdicts">): string[] {
+ *  (failedWaitAdvice, the words the wake and the compaction block use) or a
+ *  time wait whose wake is never coming (stalledWaitAdvice, the words the
+ *  compaction block gives the session holding it, so the plan's Stuck line and
+ *  that block say one thing about one wait), read the blocker it cannot see
+ *  where its graph is, or lift a task whose parent this workspace cannot read.
+ *  Every stuck cause names a next action: a plan that says only "stuck" leaves
+ *  the reader to diagnose the one thing the graph already knows. */
+export function stuckAdvice<T extends GraphTask & { short_id?: string }>(r: Pick<PlanReadiness<T>, "stuck" | "verdicts">, opts: { now?: number } = {}): string[] {
   return r.stuck.flatMap((t) => {
     const v = r.verdicts.get(t)!;
     const blockers = v.ready ? [] : v.blockers ?? [];
     const id = t.short_id ?? "";
+    // A parent read as `undefined` (another workspace, or a row the page left
+    // out) blocks by design (TG1) and carries no blocker to act on, so the
+    // action is about the parent link itself.
+    if (!v.ready && v.reason === "parent_unknown") {
+      return [`${id}: its parent is in another workspace or could not be read; cast task show ${id} names it, and cast task update ${id} --parent '' lifts it to the top level`];
+    }
     const failed = blockers.filter(isFailedWait);
     if (failed.length) return [`${id}: ${failedWaitAdvice(id, failed)}`];
+    const stalled = blockers.filter((b) => isStalledTimeWait(b, { now: opts.now }));
+    if (stalled.length) return [`${id}: ${stalledWaitDiagnosis({ count: stalled.length, lower: true })}: ${stalledWaitAdvice(id, stalled)}`];
     const unread = blockers.some((b) => b.kind === "task" && "status" in b && b.status === UNKNOWN_BLOCKER_STATUS);
     return unread ? [`${id}: a blocker this workspace cannot read; cast task show ${id} names it`] : [];
   });
