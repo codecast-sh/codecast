@@ -289,6 +289,15 @@ describe("propagation — the stored key follows the linked conversation", () =>
     expect(await canAccessTask({ db } as any, MATE as any, db._tables.tasks[0])).toBe(true);
   });
 
+  test("a task that moved is handed to the job that cuts its edges across workspaces", async () => {
+    const db = seed();
+    db._tables.tasks[0].short_id = "ct-1";
+    const runs: any[] = [];
+    const scheduler = { runAfter: async (_delay: number, _fn: unknown, args: unknown) => void runs.push(args) };
+    await patchConversationVisibility({ db, scheduler } as any, db._tables.conversations[0], { is_private: false });
+    expect(runs).toEqual([{ task_ids: ["t1"] }]);
+  });
+
   test("UNSHARE / LOCK PRIVATE: revokes already-derived access — the bug this field exists to close", async () => {
     const db = seed();
     await patchConversationVisibility({ db } as any, db._tables.conversations[0], { is_private: false });

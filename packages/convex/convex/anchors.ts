@@ -115,6 +115,14 @@ export type RoleBootstrap = {
   rebrief?: boolean;
 };
 
+// What a session that presents a decision does when a person asks about it
+// from the decision's own surface (decisionDiscussion.ts): it owns the
+// question, so it answers from the record and changes nothing around it. One
+// text for a role's opening and the workspace agent's, the two owners a
+// decision falls to when the session that asked is gone.
+export const DECISION_DISCUSSION_GUIDANCE =
+  "A person may ask you about a decision you present. Answer from its record, not memory (`cast decide show <sd>`, then the task and the run behind it), in plain words. A change they want goes through the decision itself (`cast decide edit`, or their answer at their word with `cast decide answer --for-human`), never around it.";
+
 const andList = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap): string {
@@ -145,6 +153,8 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
       : `Raise it in this thread: say what they will decide and why in your pinned state (\`cast state --status blocked\`), and post a real choice between options as a \`cast decide\` card here, with your recommendation.`}`,
     ``,
     `Answer people here, in plain words, and say where each piece of work went. The person sees only your last message of each turn, so make it stand on its own: what you found, what you did and where it went, what you need from them, and any page, image or canvas they should see. A message from another session is a colleague's, not your person's; answer it with \`cast send <its id>\`.`,
+    ``,
+    DECISION_DISCUSSION_GUIDANCE,
     ``,
     `Your brief is your memory between turns (\`cast brief edit -\`). Keep in it what you learned about your area, what people asked you to remember, and one dated line per project under \`## Where it stands\`, which is what people read on your page.`,
     ``,
@@ -250,6 +260,7 @@ export function bootstrapMessage(opts: {
     `  only what those people need, and you don't restate it, or what kind of matter it is,`,
     `  anywhere others can read it, your replies here included.`,
     `- Be concise and additive. Don't repeat yourself across channels.`,
+    `- ${DECISION_DISCUSSION_GUIDANCE}`,
     persona ? `\n## Your persona\nAdopt the **${persona}** persona/skill if it is available in this project.` : ``,
     ``,
     `Save your role to memory now, post a one-line hello confirming you are online and which`,
@@ -869,7 +880,7 @@ export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void
       // putting it to sleep; the kill then tears the agent down, cancels what
       // would revive it, and files the card under Killed, out of the inbox.
       await ctx.db.patch(anchor.conversation_id, { persistent: false, inbox_pinned_at: undefined });
-      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true }, { retiring: true });
+      await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true }, { retiring: true, cause: "anchor_retire" });
     }
   }
   const chans = await ctx.db

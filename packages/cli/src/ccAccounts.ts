@@ -61,6 +61,11 @@ export interface CcProfileMeta {
   // daemon's usage refresh, cleared by any re-save of the profile (a fresh
   // /login re-snapshots it). Readers treat it as "not a switch target".
   login_expired_at?: number;
+  // Anthropic refused the ACCOUNT, not a token: its organization disallows
+  // subscription OAuth (403 oauth_not_allowed_for_organization), so neither
+  // the login nor a setup token can carry a session and signing in again does
+  // not help. Set by the daemon's usage refresh, cleared by its next good probe.
+  access_refused_at?: number;
   active: boolean;
 }
 
@@ -1641,6 +1646,12 @@ export async function maintainFleetStore(now = Date.now()): Promise<string | nul
       if (refreshed.refreshed) return `refreshed "${name}" and ${describeFleetWrite(await putFleetOn(name, now))}`;
     }
   }
+  // A refused account mints a good-looking store whose every session dies on
+  // its first turn, so putFleetOn succeeding says nothing about it.
+  if (readProfileIndex().profiles[name]?.access_refused_at) {
+    const moved = await failFleetOver(name, login, now);
+    if (moved) return moved;
+  }
   const before = readFleetState();
   try {
     const state = await putFleetOn(name, now);
@@ -1658,6 +1669,7 @@ export async function maintainFleetStore(now = Date.now()): Promise<string | nul
  *  A login that is merely about to lapse is not dead; the next tick refreshes it. */
 export function fleetLoginDead(name: string, login: string | null, now = Date.now()): boolean {
   const meta = readProfileIndex().profiles[name];
+  if (meta?.access_refused_at) return true;
   if (!meta || readAccountTokenValue(name)) return false;
   return !!meta.login_expired_at || !credentialHealth(login, now).usable;
 }
@@ -1682,7 +1694,10 @@ async function failFleetOver(dead: string, login: string | null, now: number): P
   for (const candidate of candidates) {
     try {
       const state = await putFleetOn(candidate.name, now);
-      return `"${dead}" is signed out (cast accounts signin ${dead}); moved the ${describeFleetWrite(state)}`;
+      const why = readProfileIndex().profiles[dead]?.access_refused_at
+        ? `"${dead}"'s organization refuses subscription access`
+        : `"${dead}" is signed out (cast accounts signin ${dead})`;
+      return `${why}; moved the ${describeFleetWrite(state)}`;
     } catch {
       // This one cannot carry either (its login lapsed since the last probe): try the next.
     }
@@ -1820,6 +1835,8 @@ export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: num
 }
 
 const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
+// Haiku 4.5, not 5.5: on a subscription token claude-haiku-5-5 answers a bare
+// call 429 with no window headers (three accounts, 2026-10-07).
 const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-20251001";
 
 /** One-token model call whose only purpose is the rate-limit headers. Costs a
@@ -2278,6 +2295,33 @@ export async function rotateOauthCredential(
       },
     },
   };
+}
+
+/** The account's organization refuses subscription OAuth: the 403 Claude
+ *  Code shows as "Your organization has disabled Claude subscription access".
+ *  The usage endpoint throws it as a CloudApiError, the model probe as a
+ *  CcAccountError quoting the body; both carry the provider's wording. */
+export function isOrgAccessRefusal(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /oauth_not_allowed_for_organization|not allowed for this organization/i.test(message);
+}
+
+/** Stamp (or clear, with `at` null) an account's org refusal on every profile
+ *  covering it. Returns the profile names whose stamp changed. */
+export function setAccessRefused(key: string, at: number | null): string[] {
+  const index = readProfileIndex();
+  const changed: string[] = [];
+  for (const [name, meta] of Object.entries(index.profiles)) {
+    if ((meta.uuid || meta.email) !== key || !!meta.access_refused_at === (at !== null)) continue;
+    const { access_refused_at: _prev, ...rest } = meta;
+    index.profiles[name] = at === null ? rest : { ...rest, access_refused_at: at };
+    changed.push(name);
+  }
+  if (changed.length) {
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+  }
+  return changed;
 }
 
 /** Stamp a profile dead in the index (see CcProfileMeta.login_expired_at). */
@@ -3046,9 +3090,13 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
       ? launch.since
       : stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
     const usage = readUsageCache().accounts;
-    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at }]) => {
-      const tok = accountLaunchInfo(name);
-      const setup = accountTokenInfo(name);
+    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at }]) => {
+      // The server's validator has no field for an org refusal, and its
+      // auto-switch already reads a dead login with no credential behind it as
+      // "never a target, its parks are dead". A refused account is exactly that.
+      const login_expired_at = expired ?? access_refused_at;
+      const tok = access_refused_at ? null : accountLaunchInfo(name);
+      const setup = access_refused_at ? null : accountTokenInfo(name);
       return {
         name,
         email,
