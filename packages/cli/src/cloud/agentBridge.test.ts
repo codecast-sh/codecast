@@ -10,6 +10,8 @@ import {
   AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv, nextBridgeBackoff, shouldRunBridge,
 } from "./agentBridge";
 import { sshBase } from "../remote/session-move";
+import { resetRemoteDeviceForTests } from "../remote/device.js";
+import { isolateCodecastDir, type IsolatedCodecastDir } from "../test-helpers/codecastDir.js";
 
 const host = { address: "1.2.3.4", user: "ubuntu", keyPath: "/k", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu" };
 const cloud: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k", address: "1.2.3.4", forwardAgent: true, watchdogVersion: 2 };
@@ -86,13 +88,22 @@ describe("nextBridgeBackoff — a broken bridge cannot keep a box awake", () => 
 
 describe("hostAgentSocketEnv — the launch-prefix token on the host", () => {
   let dir: string, server: net.Server | null, saved: string | undefined;
+  let isolatedConfigDir: IsolatedCodecastDir;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-bridge-"));
     server = null;
     saved = process.env.CODECAST_REMOTE_DEVICE;
+    // Clearing the variable is not enough to make this process a laptop:
+    // `isRemoteDevice()` also reads a marker file under the config dir, and a
+    // cloud host really has one. Give the test its own config dir and drop the
+    // cached verdict, so the variable below is the only thing that decides.
+    isolatedConfigDir = isolateCodecastDir("cast-bridge-config-");
+    resetRemoteDeviceForTests();
   });
   afterEach(async () => {
     if (saved === undefined) delete process.env.CODECAST_REMOTE_DEVICE; else process.env.CODECAST_REMOTE_DEVICE = saved;
+    isolatedConfigDir.restore();
+    resetRemoteDeviceForTests();
     if (server) await new Promise<void>((r) => server!.close(() => r()));
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -114,8 +125,12 @@ describe("hostAgentSocketEnv — the launch-prefix token on the host", () => {
     expect(hostAgentSocketEnv(link)).toBe(`SSH_AUTH_SOCK='${link}'`);
     expect(hostAgentSocketEnv(real)).toBe(`SSH_AUTH_SOCK='${real}'`);
     // Dangling (the bridge closed and sshd removed its socket): nothing exported.
+    // Closing the server does not remove the socket file under bun, so remove
+    // it the way sshd does — otherwise the symlink still resolves to a socket
+    // and this is not the dangling case at all.
     await new Promise<void>((r) => server!.close(() => r()));
     server = null;
+    fs.rmSync(real, { force: true });
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
     expect(hostAgentSocketEnv(link)).toBe("");
     expect(hostAgentSocketEnv(path.join(dir, "missing"))).toBe("");

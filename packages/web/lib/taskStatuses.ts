@@ -20,17 +20,19 @@ import {
   type TeamTaskStatus,
 } from "@codecast/shared/tasks";
 
-// Accent classes spelled out literally so Tailwind's scanner keeps them.
-export const STATUS_COLOR_CLASSES: Record<string, { color: string; bg: string; border: string }> = {
-  blue: { color: "text-sol-blue", bg: "bg-sol-blue/10", border: "border-sol-blue/30" },
-  green: { color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30" },
-  yellow: { color: "text-sol-yellow", bg: "bg-sol-yellow/10", border: "border-sol-yellow/30" },
-  red: { color: "text-sol-red", bg: "bg-sol-red/10", border: "border-sol-red/30" },
-  magenta: { color: "text-sol-magenta", bg: "bg-sol-magenta/10", border: "border-sol-magenta/30" },
-  cyan: { color: "text-sol-cyan", bg: "bg-sol-cyan/10", border: "border-sol-cyan/30" },
-  orange: { color: "text-sol-orange", bg: "bg-sol-orange/10", border: "border-sol-orange/30" },
-  violet: { color: "text-sol-violet", bg: "bg-sol-violet/10", border: "border-sol-violet/30" },
-  dim: { color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
+// Accent classes spelled out literally so Tailwind's scanner keeps them, and
+// the accent's own token beside them for a surface that needs the CSS variable
+// rather than a class (the plan graph's SVG).
+export const STATUS_COLOR_CLASSES: Record<string, { color: string; bg: string; border: string; token: string }> = {
+  blue: { color: "text-sol-blue", bg: "bg-sol-blue/10", border: "border-sol-blue/30", token: "--sol-blue" },
+  green: { color: "text-sol-green", bg: "bg-sol-green/10", border: "border-sol-green/30", token: "--sol-green" },
+  yellow: { color: "text-sol-yellow", bg: "bg-sol-yellow/10", border: "border-sol-yellow/30", token: "--sol-yellow" },
+  red: { color: "text-sol-red", bg: "bg-sol-red/10", border: "border-sol-red/30", token: "--sol-red" },
+  magenta: { color: "text-sol-magenta", bg: "bg-sol-magenta/10", border: "border-sol-magenta/30", token: "--sol-magenta" },
+  cyan: { color: "text-sol-cyan", bg: "bg-sol-cyan/10", border: "border-sol-cyan/30", token: "--sol-cyan" },
+  orange: { color: "text-sol-orange", bg: "bg-sol-orange/10", border: "border-sol-orange/30", token: "--sol-orange" },
+  violet: { color: "text-sol-violet", bg: "bg-sol-violet/10", border: "border-sol-violet/30", token: "--sol-violet" },
+  dim: { color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30", token: "--sol-text-dim" },
 };
 
 export type StatusVisual = {

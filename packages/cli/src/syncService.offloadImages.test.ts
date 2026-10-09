@@ -91,6 +91,32 @@ describe("SyncService.offloadImages", () => {
     }
   });
 
+  // An agent takes a screenshot, the picture is uploaded, and the agent then
+  // tidies its scratch file away. The same path is re-materialized later in the
+  // turn, and without this the human loses a picture codecast already holds.
+  it("keeps an image whose file went away after it was uploaded", async () => {
+    const sync = makeService();
+    let uploads = 0;
+    (sync as any).uploadImage = async () => `sid-${++uploads}`;
+    const dir = await mkdtemp(join(tmpdir(), "offload-gone-"));
+    const imagePath = join(dir, "shot.png");
+    await writeFile(imagePath, Buffer.from(pngBase64(64), "base64"));
+
+    const first = [{ images: [{ mediaType: "image/png", localPath: imagePath }] }];
+    await sync.offloadImages(first);
+    expect(first[0].images).toEqual([{ mediaType: "image/png", storageId: "sid-1" }] as any);
+
+    await rm(dir, { recursive: true, force: true });
+    const second = [{ images: [{ mediaType: "image/png", localPath: imagePath, toolUseId: "t9" }] }];
+    await sync.offloadImages(second);
+
+    // The same storage object, not a re-upload and not a drop.
+    expect(second[0].images).toEqual([
+      { mediaType: "image/png", storageId: "sid-1", toolUseId: "t9" },
+    ] as any);
+    expect(uploads).toBe(1);
+  });
+
   it("drops an invalid local image instead of uploading its path or bytes", async () => {
     const sync = makeService();
     const dir = await mkdtemp(join(tmpdir(), "codecast-image-"));

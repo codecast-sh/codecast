@@ -281,6 +281,7 @@ import type * as lib_triggerMatch from "../lib/triggerMatch.js";
 import type * as lib_usageDaily from "../lib/usageDaily.js";
 import type * as lib_userSend from "../lib/userSend.js";
 import type * as lib_viewWriters from "../lib/viewWriters.js";
+import type * as lib_waitChecks from "../lib/waitChecks.js";
 import type * as lib_wallet from "../lib/wallet.js";
 import type * as lib_whisk from "../lib/whisk.js";
 import type * as lib_workDomain from "../lib/workDomain.js";
@@ -729,6 +730,7 @@ declare const fullApi: ApiFromModules<{
   "lib/usageDaily": typeof lib_usageDaily;
   "lib/userSend": typeof lib_userSend;
   "lib/viewWriters": typeof lib_viewWriters;
+  "lib/waitChecks": typeof lib_waitChecks;
   "lib/wallet": typeof lib_wallet;
   "lib/whisk": typeof lib_whisk;
   "lib/workDomain": typeof lib_workDomain;

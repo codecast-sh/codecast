@@ -287,29 +287,29 @@ export const WORK_SNIPPET_END = "<!-- /codecast-work -->";
 export const WORK_SNIPPET = `
 ## Tasks & Plans
 
-A human tracks your work through a dashboard: report status through tasks and plans, not chat. Your harness's todo list is for steps inside this session; anything that should outlive the session or show on the board is a task.
+A human tracks your work through a dashboard: report status through tasks and plans, not chat. Your harness's todo list is for steps inside this session; anything meant to outlive it or show on the board is a task.
 
-**Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default; add \`--human\` only when the human must see and manage it themselves (a decision only they can make, a manual step, follow-up that outlives you). \`--from-meeting\` is only for tasks people decided in a meeting or conversation, never your own work; \`--from-call cl-42\` also links the task to that call, so it shows on the call's page.
+**Tasks are selective.** Self-contained work you finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default: \`--human\` only when the human must see and manage it (a decision only they can make, a manual step, follow-up that outlives you), \`--ephemeral\` for your own bookkeeping (a checklist, a probe) the board never carries. \`--from-meeting\` is only for tasks people decided in a meeting or conversation, never your own work; \`--from-call cl-42\` links it to that call too, so it shows on the call's page.
 
-**Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with \`--parent\`, shallow and small, and never mirror a plan as a subtask tree. Check for existing work before creating (\`cast task ls -q "<topic>"\`, \`cast plan ls -q\`, \`cast task ready\`), and file under a project when one fits (\`cast project ls\`).
+**Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with \`--parent\`, shallow and small; never mirror a plan as a subtask tree. Check for existing work first (\`cast task ls -q "<topic>"\`, \`cast plan ls -q\`, \`cast task ready\`), and file under a project when one fits (\`cast project ls\`).
 
-**Record what work waits on.** Work waiting on a task, a PR to merge (\`#42:checks\`: green CI), a decision or time gets a blocker, not a comment: \`cast task dep ct-200 --blocked-by "#42"\` keeps it off the ready list. To park, block the task you hold, go \`dormant\` naming the blocker, end your turn: its clearing wakes you.
+**Record what work waits on.** Work waiting on a task (\`ct-5\`), a PR to merge (\`"#42"\`, quoted or the shell eats it; \`"#42:checks"\` for its CI going green), a decision (\`sd-4\`) or a time (\`2h\`) gets a blocker, not a comment: \`cast task dep ct-200 --blocked-by "#42"\` keeps it off the ready list. To park, block the task you hold, then copy the printed \`cast state --status dormant\` line and end your turn: the last blocker clearing wakes you.
 
-**Bind before you build.** \`cast task start <id>\` (or \`cast plan bind <id>\`) claims the work and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with \`update\` and \`done\`; never \`task start\` your own subtask. A task has one owning session: starting one another session is still working on is refused until you settle with it who continues (\`--take\` once agreed).
+**Bind before you build.** \`cast task start <id>\` (or \`cast plan bind <id>\`) claims it and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with \`update\` and \`done\`; never \`task start\` your own subtask.
 
 **Keep the bound item true.** When scope or approach shifts, rewrite the title and description, comment at milestones and changes of direction, move status the moment it changes, and mark done only what you verified. Progress comments (\`-t progress\`) reach nobody's inbox; \`-t blocker\`, \`-t review\` or an \`@handle\` reach followers. A choice only a human can make is a \`cast decide\`, never a comment. ${ASSIGNEE_MEANS} Another name on a task is never a reason to stop.
 
-**Hand a code change off with a guide.** The reviewer sees only a diff. With \`--guide -\` on \`cast task handoff\`, walk them through the change in the order that explains it best (not file order): one heading per step with its \`file:start-end\` on the heading line, and why that piece exists under it. The guide reaches the review, the pull request and the Changes story.
+**Hand a code change off with a guide.** The reviewer sees only a diff. With \`--guide -\` on \`cast task handoff\`, walk them through the change in the order that explains it (not file order): one heading per step with its \`file:start-end\`, and why that piece exists under it. It reaches the review, the PR and the Changes story.
 
 If bound to a plan, post progress and directional decisions there (\`cast plan comment <plan_id> "…"\`, \`-d -r "why"\` for a decision). If blocked, say so: **BLOCKED: <reason>** (needs a human), **NEEDS_CONTEXT: <what>** (escalates to the user), **DONE_WITH_CONCERNS: <concern>** (finished, flagged for review). After compaction, reground with \`cast task context --current\` / \`cast plan context --current\`, not memory.
 
 \`\`\`bash
-cast task create "Title" -p high               # --plan <id>, --parent <id>, --project "<name>", --human
+cast task create "Title" -p high   # --plan <id>, --parent <id>, --project "<name>", --human
 cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>
 cast task handoff <id> --status done --evidence "<what you verified>" [--guide -]
-cast plan create "Title" -g "goal" --steps -  # "Step :: done means" per line; a blank line starts a wave needing the one before
+cast plan create "Title" -g "goal" --steps -  # "Step :: done means" per line; a blank line starts a wave needing the one before; order by need: Review needs Build, not what comes first
 cast doc create "Title" -c - | show <id> | search "<title>"
 \`\`\`
 
@@ -321,6 +321,8 @@ ${WORK_SNIPPET_END}
 export const WORK_REFERENCE = `
 **Nesting.** File steps you will actually do with \`--parent <task_id>\` (in bulk: \`cast task create --parent <task_id> -\`, one title per line on stdin). Depth is capped at two below the top. Open subtasks of an active parent are hidden from \`cast task ready\`. \`cast task done\` refuses a parent with open subtasks unless you pass \`--cascade\` (close them too) or \`--only-parent\` (leave them open).
 
+**One owner.** A task has one owning session: \`cast task start\` on a task another session is still working on is refused until you settle with it who continues (\`--take\` once agreed).
+
 **Projects.** Projects group an effort's tasks, plans and docs, and are how the human triages the board. Every \`--project\` flag takes an ID, a short ID or a title substring, so plain words work. Don't invent a project for one task.
 
 If bound to a plan: suggest splitting a task that grew, flag dependencies you create, and ask when acceptance criteria are ambiguous.
@@ -329,7 +331,8 @@ Filter on the server, not with grep: \`--assignee me\`, \`--label <name>\`, \`-p
 
 \`\`\`bash
 cast task ready [-q "<topic>"]              # unclaimed work, highest priority first; --claim starts the first one for you
-cast task dep <id> --blocked-by <refs>      # <id> waits on what it needs; --remove-blocked-by undoes one
+cast task dep <id> --blocked-by <refs>      # <id> waits on what it needs: ct-12, "#42" (":checks" for green CI), sd-4, 2h, 2026-10-14T09:00; --remove-blocked-by undoes one
+cast task dep <id> --blocks <other>         # the same edge from the other end: <other> waits on <id>, without opening <other> (--remove-blocks undoes it)
 cast task supersede <old> --with <new>      # drops <old>; what waited on it now waits on <new>
 cast task relate <a> <b>                    # see-also link that never blocks (--remove)
 cast task ls -q "<topic>"                   # search active tasks (filters above)
@@ -337,13 +340,18 @@ cast task show ct-1 ct-2 --json             # several ids; .sessions = linked se
 cast task context <id>                      # full context (--current for this session's task)
 cast task start|done|comment <id>           # lifecycle
 cast task start <id> --spawn                # claim it AND hand it to a fresh agent session
-cast task create "Title" -t task -p high    # also --human, --plan <plan_id>, --parent <task_id>, --project "<name>", --from-meeting
+cast task create "Title" -t task -p high    # also --human, --plan <plan_id>, --parent <task_id>, --project "<name>", --from-meeting, --model <id>, --effort <level>
+cast task create "Title" --ephemeral        # your own bookkeeping (a checklist, a probe): off the board, the feed and notifications, and only yours from cast task ready
+cast task keep <id>                         # the opposite: an ephemeral task that turned out to matter goes back on the board
+cast task create "Title" --found-during ct-7  # the task this was found while working on; 'none' files it unlinked (default: the task this session holds)
+cast task create "Title" --from-call cl-42  # pulled from that call: implies --from-meeting, and the task shows on the call's page
 cast task create --parent <task_id> - <<'EOF'   # bulk subtasks, one per line
 First step
 Second step
 EOF
 cast task update <id> -t "..." -d "..." -s <status>
-cast task update <id> --plan <plan_id>      # also --human, --parent <task_id>, --project "<name>" ('' clears parent or project)
+cast task update <id> --plan <plan_id>      # also --human, --parent <task_id>, --project "<name>" ('' clears parent or project), --model, --effort
+cast task update <id> --found-during <task|none>   # correct the link the filing session set (cast task create names this command when it fills it in)
 cast task done <id> --cascade               # close a parent and its open subtasks
 cast task handoff <id> --status done --evidence - --page <slug|url>   # hand off with evidence; the page attaches to the task
 cast task handoff <id> --status done --evidence "<what you verified>" --guide -   # plus a change guide from stdin (heredoc)
@@ -352,7 +360,7 @@ cast integrations ls|sources|import <provider> <ref>   # Linear teams/projects a
 cast plan ls -q "<topic>"                   # search active plans by title/goal
 cast plan show|status|context <plan_id>     # context --current for this session's plan
 cast plan create "Title" -g "goal" -b "body"   # or --body-file plan.md ('-' reads stdin)
-cast plan steps <plan_id> -                 # append steps (waves as in --steps) after the plan's last open wave
+cast plan steps <plan_id> -                 # append steps (waves as in --steps, ordered by what each needs) after the plan's last open wave
 cast plan template save <plan_id>           # keep its steps and order; cast plan create --template "<name>" reuses them
 cast plan bind|unbind|done|drop <plan_id>
 cast plan comment <plan_id> "note"          # progress; -d -r "why" records a decision
@@ -691,7 +699,7 @@ EOF
 
 A flow stops at the first failing step and reports what ran and what never did (\`--keep-going\` continues past it). Scope reads on big apps (\`snapshot -i -s\`, \`get text <sel>\`, \`text <sel>\`); \`diff snapshot\` prints only what changed since your last one. \`cast browser help <cmd>\` prints a verb's flags.
 
-- **Evidence flows to the thread.** A failing step prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation (\`--annotate\` numbers elements with their refs, \`--share\` uploads a pasteable link, \`-s <sel>\` captures one element). \`cast browser shots on\` adds a small capture after page-changing commands (off by default for agents; a \`do\` flow captures once, at the end).
+- **Evidence flows to the thread.** A failing step prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation (\`--annotate\` numbers elements with their refs, \`--share\` also prints ready \`![alt](url)\` markdown, which is what to paste when the picture must survive outside this machine, \`-s <sel>\` captures one element). \`cast browser shots on\` adds a small capture after page-changing commands (off by default for agents; a \`do\` flow captures once, at the end).
 - **One Chrome, many agents.** Each session owns one background tab in the \`Cast\` tab group, created only when you open a URL; \`open\` reuses it, or an abandoned Cast tab already on that URL. Connection checks and tab lists create nothing; page actions need an existing page, and \`about:blank\` is never setup or a connection test. \`tabs\` lists yours, \`tabs --all\` every agent's. \`--new-tab\` only for a second page. \`tab switch <id>\` deliberately shares another agent's tab. Read a session with \`cast read\`, never by opening its conversation page. Modal dialogs are dismissed automatically.
 - **Closing tabs.** \`cast browser tabs\`, \`cast browser tab close <id>\` for extras, then \`cast browser stop\` for this session's tab. Leave nothing for a later session to clean up. Never \`stop --all\` for routine cleanup. On the desktop app's pane, \`stop\` releases control and leaves their pane open.
 - **Connection recovery.** \`cast browser target\` reports the browser without checking the connection; \`cast browser extension status\` checks the bridge. Commands start the bridge host if needed and wait for reconnection, and old session selections cannot move ordinary commands off the human's Chrome. If the extension is not installed, give the human its [Chrome Web Store listing](${BROWSER_EXTENSION_STORE_URL}): they install it in their chosen Chrome profile, run \`cast browser extension setup\` in a terminal on the same computer, and click Pair in Chrome. Still disconnected: check Chrome is running and the extension enabled. A missing pairing, failed command or unavailable verb is not permission to launch another browser.

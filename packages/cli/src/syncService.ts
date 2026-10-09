@@ -861,7 +861,21 @@ export class SyncService {
             mtimeMs: fileStat.mtimeMs,
           };
         } catch (err) {
-          console.warn(`[SyncService] Failed to read local image ${img.localPath}: ${err instanceof Error ? err.message : String(err)}`);
+          // Unreadable NOW is not the same as never uploaded. One local path is
+          // re-materialized several times per turn, and the agent that took the
+          // picture often deletes its scratch file between those passes, so a
+          // later pass would drop a screenshot this process already has in
+          // storage and the thread would keep or lose it depending on which
+          // pass won the race.
+          const uploaded = this.localUploads.get(img.localPath);
+          if (uploaded) {
+            return { mediaType: uploaded.mediaType, storageId: uploaded.storageId, toolUseId: img.toolUseId };
+          }
+          // Nothing to fall back on: say so in full. A dropped image is
+          // invisible at both ends — the agent is told nothing and the human
+          // simply never sees the picture — so this line is the only place the
+          // loss is recorded.
+          console.warn(`[SyncService] Image dropped, never reached the conversation: cannot read ${img.localPath}: ${err instanceof Error ? err.message : String(err)}`);
           return null;
         }
       }

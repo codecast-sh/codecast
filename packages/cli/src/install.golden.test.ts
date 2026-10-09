@@ -70,6 +70,12 @@
  *      fixtures still say a stamp was written and in which line, without
  *      churning on every release. The check below that no live fixture carries
  *      the package version is what keeps this normalization honest.
+ *
+ * Normalization is the last resort, not the first: the run's inputs are
+ * declared instead. The CLI subprocess gets a scratch HOME and an allowlisted
+ * environment (CHILD_ENV_KEYS below), so the fixtures describe the installer
+ * rather than the shell the suite started in.
+ *
  * The snippet BODIES carry no version number or timestamp of their own: the
  * version lives in config.json and in that one stamp line, and manifest.json
  * records its exact value, so a body edit that forgets its version bump shows
@@ -153,6 +159,41 @@ afterEach(() => {
   }
 });
 
+/**
+ * Everything the CLI subprocess is allowed to learn about the machine running
+ * this test. A golden only describes the installer if the installer's inputs
+ * are declared, and the child's environment is one of its inputs: inheriting
+ * `process.env` made the fixtures depend on the shell the suite happened to
+ * start in.
+ *
+ * It failed on a cloud Mac. Such a box carries `CODECAST_REMOTE_DEVICE=1`, and
+ * the first thing `isRemoteDevice()` does with that variable is persist it as a
+ * marker file under the config directory (remote/device.ts:179) — which, HOME
+ * being the scratch directory, landed `.codecast/remote-device` in the
+ * `otherFiles` hash set and failed the manifest comparison with a file no
+ * installer ever wrote.
+ *
+ * An allowlist rather than a denylist, because the failure mode of a denylist
+ * is a variable nobody thought of: `CODECAST_DIR` alone would have moved the
+ * whole state tree out of the scratch HOME and broken the run differently. Keep
+ * it to what a process genuinely needs to start and to find its tools, and add
+ * to it only with a reason written down.
+ */
+const CHILD_ENV_KEYS = ["PATH", "TMPDIR", "LANG", "LC_ALL", "SHELL", "USER", "LOGNAME"] as const;
+
+function childEnv(home: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of CHILD_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  // HOME is the sandbox every writer resolves through (config/configDir.ts),
+  // and NO_COLOR keeps ANSI escapes out of the recorded stdout.
+  env.HOME = home;
+  env.NO_COLOR = "1";
+  return env;
+}
+
 interface InstallRun {
   stdout: string;
   claudeMd: string;
@@ -165,7 +206,7 @@ interface InstallRun {
 /** One `cast …` run against a scratch HOME. Throws on any non-zero exit. */
 function runCli(home: string, args: string[], attempt = ""): string {
   const proc = spawnSync(process.execPath, [cliEntry, ...args], {
-    env: { ...process.env, HOME: home, NO_COLOR: "1" },
+    env: childEnv(home),
     encoding: "utf8",
     timeout: 60_000,
   });

@@ -2,7 +2,7 @@ import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { redactSecrets } from "./redact";
-import { normalizeRepository } from "./lib/gitRefs";
+import { normalizeRepository, prByNumber } from "./lib/gitRefs";
 import { commitRecordedBy } from "./githubWebhooks";
 import { repositoryOfCheckout } from "./users";
 import { standingReportsToFields } from "./lib/standingSeat";
@@ -19,6 +19,7 @@ import { isHandBriefing } from "./spawn";
 import { seatTitlePatch } from "./anchors";
 import { findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf } from "./lib/orgRoutine";
 import { applyCancel, applyReactivate } from "./agentTasks";
+import { isPrWaitTarget } from "@codecast/shared/tasks";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
