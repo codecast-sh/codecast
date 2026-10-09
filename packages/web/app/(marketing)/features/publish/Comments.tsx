@@ -97,6 +97,23 @@ function SessionMessage() {
   );
 }
 
+/** The three steps from a reader's note to the agent: pin, send, deliver. */
+export function CommentFlow() {
+  return (
+    <div className="grid md:grid-cols-3 gap-8 md:gap-6">
+      <Stage n="1" label="A reader pins a note" foot={<>The comment remembers the passage it was left on and the version it was read at. A teammate signed in to codecast comments as themselves; anyone else types a name.</>}>
+        <ReaderPin />
+      </Stage>
+      <Stage n="2" label="You choose what to send" foot={<>From the owner link, <strong style={{ color: SOL.base02 }}>Send all</strong> delivers every unsent comment as one message. Your own comments can go straight to the session, or post to the page without sending.</>}>
+        <OwnerQueue />
+      </Stage>
+      <Stage n="3" label="The agent gets one fenced message" foot={<>Reader text is marked as untrusted feedback, never as instructions. A comment that tries to fake the fence has its marker stripped before delivery.</>}>
+        <SessionMessage />
+      </Stage>
+    </div>
+  );
+}
+
 export function Comments() {
   return (
     <Section
@@ -106,17 +123,7 @@ export function Comments() {
       title="Readers comment on the page. You decide what reaches the agent."
       lede={<>Anyone with the link can pin a comment to a sentence. Comments collect on the page as a discussion. Only the page&apos;s owner can send them into the session that published it, where the agent reads them, revises the file and publishes the next version to the same link.</>}
     >
-      <div className="grid md:grid-cols-3 gap-8 md:gap-6">
-        <Stage n="1" label="A reader pins a note" foot={<>The comment remembers the passage it was left on and the version it was read at. A teammate signed in to codecast comments as themselves; anyone else types a name.</>}>
-          <ReaderPin />
-        </Stage>
-        <Stage n="2" label="You choose what to send" foot={<>From the owner link, <strong style={{ color: SOL.base02 }}>Send all</strong> delivers every unsent comment as one message. Your own comments can go straight to the session, or post to the page without sending.</>}>
-          <OwnerQueue />
-        </Stage>
-        <Stage n="3" label="The agent gets one fenced message" foot={<>Reader text is marked as untrusted feedback, never as instructions. A comment that tries to fake the fence has its marker stripped before delivery.</>}>
-          <SessionMessage />
-        </Stage>
-      </div>
+      <CommentFlow />
 
       <div className="mt-14 grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] gap-8 items-start">
         <div className="min-w-0 [&>div]:my-0">

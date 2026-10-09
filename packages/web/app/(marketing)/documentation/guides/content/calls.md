@@ -1,154 +1,106 @@
-A call is the one team artifact an agent could not read. Code is in the repository, tasks are on the board, chat is searchable, and every session leaves a transcript. A decision made out loud leaves nothing behind. A task that says "as we discussed on the call" then points at something no agent can open, so the agent guesses or asks again.
+A huddle is a voice call with your team, started from a channel, a DM, a teammate's face or a session. While it runs it is transcribed with the speaker's name on every line, and when it ends it gets a title, a summary and action items. Your agents can read all of it, so "as we discussed on the call" points at words an agent can open and quote, not at a memory.
 
-Codecast calls close that gap with a transcript that names its speakers. Every huddle transcribes while it runs, and each line carries the person who said it. When the huddle ends it gets a title, a summary and a list of action items. `cast calls` lets a session read all of it without having been in the room, so "what we discussed on the call" becomes a line an agent can quote with the speaker's name on it.
+You can also bring an agent into the huddle itself. A session hears the room as people talk, answers in the huddle's chat, and picks up the work when the call ends.
 
-Codecast owns everything except the media. Rooms, rings, authorization and access tokens live in Convex, and audio and video flow between the clients and a LiveKit server. The calls [snippet](/documentation/agent-snippets) teaches agents the commands below.
+![A call's page with its participants, the Send to agent button and the call's thread](/documentation/calls/call-page.webp "A finished call's page. The thread under the title holds what happened in the room (who was let in, who was removed) and every transcript line under its speaker. Click a line, click another to extend the selection, and send the excerpt to an agent.")
 
-```bash
-cast calls                        # calls across your teams, live ones first (-n 50 for more)
-cast call <id>                    # one call: title, participants, summary, action items
-cast call <id> --transcript       # the full transcript, a speaker on every line
-cast call <id> 15:25              # just lines 15 to 25
-cast call <id> --json             # the same as data; always includes the segments, and whether the call is shared (never its link)
-cast call snap cl-42:15           # a frame of the recorded call when line 15 was said
-```
+## Turn it on
 
-`<id>` is a call's short id (`cl-42`) from `cast calls`, its full id, or a unique prefix of one.
+Calls are a team feature, off until a team admin turns them on.
 
-A call is a referenceable object like a task or a session. `cl-42` written in a message renders as a live pill with the call's title, length and speakers. Add a range of the line numbers the transcript prints and it names the words themselves: `cl-42:15-25` on its own line embeds those lines with their speakers, and inline it reads as a pill that shows them on hover. Either form links to the call page with those lines selected. A segment in the JSON carries `seq`, `speaker_id`, `speaker_name`, `text`, and its start and end times. You can read a call you took part in, and a call whose room you may enter. A voice note (Record a voice note on the Calls page), one person's microphone recorded on its own, shows in the same list, and it belongs to its creator until they share it with a team. It is not a recording of a huddle: to film the huddle you are in, press Record in its controls, or the Record this huddle button the Calls page shows while you are seated in one.
+1. Open **Settings**, then **Team**, and find **Features**.
+2. Switch on **Calls**. Everyone on the team now sees the huddle buttons and a **Calls** page.
+3. Your own preferences (camera, microphone, devices, walkie) live in **Settings** under **Calls**.
 
-## Rooms and presence
+Turning calls on also teaches the agents on every member's computers to read the team's calls. It shows as the **Calls** card under *Working together* in **Agent features**.
 
-Starting a huddle from a channel buzzes every other member: the whole team for a public channel, or that channel's members for a private channel. Channels with more than seven people ask for confirmation first. Joining an existing huddle does not buzz the channel again. Busy and quiet-hours settings still apply.
+## Start a huddle
 
-A room is a string key and never a stored row, so every client derives the same key without coordination.
+| Where | What happens |
+|-------|--------------|
+| **Huddle** in a channel's header | Starts the channel's huddle and buzzes its members. In a channel of more than seven people it asks first: *Buzz everyone in …?* |
+| A DM, or a teammate's face | Rings them. Their screen shows *Incoming huddle* with **Join** and **Decline** |
+| The team bar at the top | *Start a huddle with several teammates* |
+| A session's header | Talk to that session: what you say reaches its agent as you speak |
 
-| Key | What it is | Who the key admits |
-|-----|------------|--------------------|
-| `dm:<id>:<id>` | A set of 2 to 9 people, ids sorted. A DM and the huddle of its members are the same room | The people it names |
-| `channel:<channelId>` | A chat channel's standing room | Whoever may access the channel |
-| `session:<convId>` | A huddle about one session | The session's owner, and teammates when the session is visible to the team |
+Once someone is in a room, its button turns into a chip with their faces and **join**. **Live now** on the Calls page lists every huddle running in your team.
 
-A seat is a lease. A client in a room sends a heartbeat every 15 seconds, and every reader ignores a seat older than 45 seconds, so a closed laptop leaves the room without a cleanup step. A person joins muted, and unmuting is the deliberate act. An occupied room admits any member of its team, the way a meeting room with people in it admits whoever walks up. A channel room is the exception and keeps the channel's own membership. A huddle that wants privacy locks the room. A teammate can knock at a locked room, and anyone inside admits them by ringing them in. A person from outside the team comes in only as a guest, on a link, and only when somebody inside lets them in (see Guests below). The server checks these rules in every call mutation and when it mints a media token, because the media server trusts that token.
+In the call, the bottom row has **Mute**, the camera, **Share your screen**, the **+** button to ring a teammate or bring in a role or an agent, and **End call**. The top row shows whether the room is **open** (any teammate can walk in) or **locked** (teammates knock and someone inside lets them in), **invite** for guests, and the call's **thread**.
 
-```figure
-SeatLeaseFigure
-A seat lives on its heartbeat. Close the laptop and the seat stops counting 45 seconds after its last beat.
-```
+## Transcripts and the digest
 
-Presence comes from two facts about a person's machine: how recently the app checked in, and how recently somebody touched the keyboard or mouse. A person reads as active when the app checked in within 150 seconds and there was input within 3 minutes. The states are active, idle, away and offline. A person can declare busy or away, and a declaration wins over what the machine reports. The people wall draws the whole team at once and sizes each face by how present the person is. Click a face and three labeled actions appear under it: Talk, Ring and Message.
+Every huddle is transcribed unless someone in it turns that off: the **transcribing · on** switch belongs to the room, and anyone in it can flip it. The speaker on each line is never guessed. Each person's microphone is transcribed on its own, so a line belongs to whoever spoke it.
 
-## Guests
-
-Press **invite** on the call stage and send the link. The guest opens it in any browser, with no account and nothing to install. Anyone inside lets them in from the door.
-
-The **invite** button sits beside the lock on the stage; a live call's page has **Invite guest**, and a channel or session header has **Guest** beside the huddle button, to send a link before the meeting starts. A link stays open for seven days unless you pick one hour, one day or thirty days. **replace** swaps it for a new one with the length you picked, and **turn off** closes it. Pressing invite again copies the same link instead of making a second one. The panel says what guests will see the call called: a channel by its name, anything else as a call with whoever invited them, since a session's title is the team's own label. Only people who may invite into the room see these controls. On a phone, the call screen has an **Invite a guest** row that makes the link and opens the share sheet, and turns the link off. Guests see and hear the call but not its chat, and the invite panel says so.
-
-Before they ask to join they see which meeting it is, who invited them, their own camera and microphone with a choice of devices, and a plain notice when the call is transcribed or recorded. Asking to join is their agreement to that notice. They wait at the door until somebody inside lets them in. If nobody is in the room yet, whoever made the link is told wherever they are: in the app, a notification with **Join** on it that stays until the guest is answered or gives up, a system notification when the app is in the background, a row under Live now in the sidebar and a count on the room's Guest chip; and on their phone, a push. The guest's page says "we let them know" only once one of those was actually shown or sent. Being let in sounds a chime, so a guest who went to another tab hears it; one let in while their tab was hidden joins with the microphone and camera off and is told so when they look. If the room starts recording or transcribing while they wait, the door says so, and the lobby then offers two choices: join under the new notice, or leave, which tells the room they left.
-
-A browser that cannot hold a call (the small built-in browser of a mail or chat app, usually) is told so instead of being offered a knock, with the link to copy into Safari, Chrome, Firefox or Edge. A guest who refuses the camera and microphone can still join and listen, is asked once rather than once per device, and the lobby says whether a device was refused or is missing. A guest who opens a standing link again for the next meeting starts at the lobby, not at how the last meeting ended.
-
-Their knock appears at the door beside a teammate's, marked as a guest and saying whose link brought them, with **Admit** and **Deny**. When the call stage is closed it also arrives as a notification with the same two answers, which stays until the knock is answered, and as a system notification when the app is in the background. On a phone, the call screen shows the guest at the door with the same answers. A guest who was turned away can ask again after a minute, and when a link keeps bringing people the room turned away, the door offers to deny and turn the link off in one press.
-
-Inside, a guest is marked as a guest on every face, tile and transcript line, so a typed name never passes for a teammate's. They can talk, show their camera and share their screen. They see the call and nothing else: not the team, its sessions, the thread or the transcript. A guest who was let in and is still on the way in (answering the browser's prompt, reading a notice) shows on the stage as joining, the way a teammate being rung does. Anyone inside can remove a guest from beside their name, from their face in the header, or by tapping them on a phone, and they are disconnected at once; the same press can turn off the link they came in on, so they cannot knock again from a fresh window. Letting a guest in and removing one each leave a line in the call's thread naming who did it. An agent's face in the call is marked as an agent on every surface, guests' included, so nobody takes it for a person. An agent in the room treats what a guest says as conversation rather than instructions.
-
-An admission lasts for one huddle. When the last teammate leaves, the guests are let go with them, so a link from Tuesday's meeting cannot open Wednesday's on its own; a guest left alone is told the call ends shortly unless someone comes back. The guest's page keeps a phone's screen awake while they are in the call. A guest whose page goes quiet is let go too, but only once the media server confirms they have dropped out of the call: a phone guest who switches apps stays in while the call still has them. A guest let go that way can walk back in without knocking for ten minutes while the same huddle runs, and the page does it for them when they come back to it. A guest who reloads the page is still let in, and rejoins with one press. A guest who loses the connection is reconnected on the spot, a few times, before the page asks them to press, and comes back with their microphone and camera as they left them. If transcription or recording starts while a guest is inside, they are told in words, with a way to mute or turn their camera off. Turning on a call's public link is told the same way, because the transcript then reaches anyone with the link as it is written: guests get the line, and teammates see a **public** mark beside the room's name on the stage. The server keeps the notice each guest agreed to and refuses a connection into a call that now keeps more, so a guest who drops out after a change comes back to the lobby's new notice and joins with one press. If it started while they were being let in, the lobby holds their place for five minutes and shows the time left while they decide.
-
-## Transcription with exact speakers
-
-Attribution is structural and never inferred. One client in the room is the scribe. It holds every audio track in the room, which is its own microphone plus each remote track, and it streams each track to speech recognition on its own connection. A track belongs to one participant, so each segment is stamped with that participant. The server stores the segments and mints the short lived recognition credentials.
-
-```figure
-ScribeFigure
-Three people, three tracks, three recognizer connections. The speaker on a line is the owner of the track it came from.
-```
-
-Every huddle transcribes unless somebody inside says otherwise. A client starts a run when it joined on purpose and the room has two or more people, and the server decides which client is the scribe. If the scribe's seat lapses, another client adopts the same run, and the old one lets go so no word lands twice.
-
-Transcription is a switch the room owns. It is a field on the room's state row, and anyone seated may flip it either way. It has to live on the room: a flag held by one client would be overruled by the next client that looked. Turning it off ends the run wherever it lives, and the digest of what was already said still posts.
-
-![A channel with a live huddle being transcribed](/documentation/shots/team-chat.webp "The #eng huddle on the right: three faces and a transcribing chip. Alex has added the session Retry failed webhooks, so it hears the room, and Sarah's line arrives under her name at 0:02.")
-
-## Video and frames
-
-Press **Record** on the call's card in the header (beside Mute and the camera) or on the open call, and everyone in the call, guests included, is told. Press the red REC mark to stop. The video then appears on the call's page in Calls, where calls with video show a camera icon.
-
-Someone who joins while it runs is told as they arrive. The red REC mark shows wherever the call does (the stage, the call's card in the header and in the floating faces, the live room list), a short double beep sounds when recording starts and a single one when it stops, and someone working in another app gets the notice as a system banner. Stop on the stage works too; either way it asks once more, because it stops for everyone. It stops by itself when the huddle ends, or once no teammate is left in the call (a guest alone does not keep it going), and the thread says which. A teammate who reloads or briefly drops out does not cut it: an empty call keeps recording for about two minutes after the last person leaves. If a recording stops by itself while people are still in the call (it failed, reached its time limit, or the room stood empty), the notice stays up until someone dismisses it and offers **Record again**. Push to talk and the faster connect on hover stay out of a call that is being recorded: walk into the call, past its notice, to talk in it. The thread's "started recording" line jumps to the saved video. If the server cannot record right now, for example because its LiveKit plan has used its recording minutes, the Record button is shown dimmed with the reason rather than starting a recording that would fail in front of everyone. The recording runs on the LiveKit server, not in anyone's browser, so it does not depend on whose tab stayed open. Each run keeps two kinds of file: the room as people saw it, with every face, the screen share and everyone's audio, and each screen share on its own at full resolution, where text on the shared screen stays legible. The files live in a private bucket. Whoever may open the room's calls can watch the video: the people a huddle is between, everyone in a channel, everyone who can open a session. So can a teammate who sat in any part of a recorded huddle, for the whole call. A reader gets a link that lasts minutes, minted after the same access check as the call itself.
-
-On the call page the video plays above the thread (beside it on a wide screen) and stays in step with it, and the time under the picture is the call's own clock, the one every transcript line and reference uses. Click a line to see that moment, hold Shift and click to select lines to send (on a touch screen, press and hold a line, then tap another to extend), and the line being said lights up as it plays, with the thread following it until you scroll away to read something else (Back to the moment brings it back). When someone shared a screen, switch the view to that screen at full size and the room's sound keeps playing underneath. A link with `?t=754` opens the page paused at that second, and `&view=screen` opens it on the screen shared at that moment rather than the room. The toolbar shows the moment's reference (`cl-42@12:34`): press it to copy, or press Link to copy a link to that second on the view being watched. The thread's lines for a recording starting or stopping jump to that moment of the video. A call recorded twice plays on from one recording into the next. Whoever pressed Record, or an admin of the team, can delete a recording, and the thread says who did. Opening a call's public link to anyone is for someone who was in the call or a team admin, since it puts every word on the open web, guests' included (the share control names the guests first); anyone who can read the call can close it. A deleted team's call links stop serving at once, and pictures shared from its calls are deleted then. A public share link shows the video only when someone turns on "Include the video recording" for that link, and then only the room's view, never a single person's screen file. Only whoever recorded the call, or a team admin, can turn it on (anyone who can read the call can turn it off), and it covers the recordings made up to then: one recorded later stays off the link until someone adds it, and while a recording that will be on the link is running, the room is told. Turning the link off and on again starts without the video.
-
-A recorded call answers "what was on screen when they said that". `cast calls` marks the calls that have video, `cast call cl-42` lists the stretches that were filmed, and `cast call snap` turns a call reference into a picture an agent can open:
-
-```bash
-cast call snap cl-42:15           # the moment line 15 was said (cast call snap cl-42 15 works too)
-cast call snap cl-42@12:34        # 12 minutes 34 seconds into the call (also 754s, 754, 12m34s, 1:02:03)
-cast call snap cl-42:15-25        # frames across lines 15 to 25
-cast call snap cl-42              # the call as it is right now, while it records
-cast call cl-42@12:34             # the words around that moment, without the picture
-```
-
-Each frame is written as a PNG and printed under its citation, with what it shows and the line being said at that moment. A line's frame is taken a beat after its first word, on a whole second, so the citation names the exact frame the agent saw; a line too short to span a whole second is taken at the next one, never before its first word, and the frame is always reported against the line asked for. A line that began a moment before Record was pressed is shown from its first recorded second, and the output says so. Across a line range, a screen share yields frames where the screen changed: new slides and windows first, then, with frames to spare, the gradual changes (code typed or scrolled), each spread across the range, so a deck with more slides than frames is shown along its whole length and a walkthrough of code is followed through it rather than shown once at its start. When the screen changed more often than there are frames, the output says how many times (`changes_found` in JSON) and how to see them all. A screen that never changed yields one frame. The stretches with no share yield evenly spaced frames of the room, eight in all unless `--max` says otherwise (up to 50); the room view is not scanned for changes, so a call whose share was filmed only inside it says that its frames may step over the share's changes. A frame taken while nobody was speaking is placed between the lines either side. Moments that land on one unchanged picture are written once, and the output says how many moments that frame stands for. A line that falls outside what was filmed is refused by its line ("Line 3 was said at 0:14, before cl-42 was being recorded"), with the nearest recorded moment, the nearest filmed line, and the line's own words as the way back.
-
-A frame shows the shared screen from its own full resolution file whenever one covers the moment, and the room otherwise. `--composite` prefers the room view instead, and where only a share's file reaches the moment (the room was not filmed then, or its video is still saving) it gives the share and says which. `--screen` asks for the shared screen only, and refuses a moment no share covers, naming the screens that were recorded and the same snap without `--screen` where the room was filmed. `-o` takes a .png or .jpg file, or a directory. Without it, frames go to a private scratch directory that is cleared after a day, because a frame of a private call is as private as the call. A wide screen is shrunk before a model reads it, so for small text `--crop` writes part of each frame at full resolution (a named part such as `top-left`, or x,y,w,h in pixels or percent) as its own file named by the part (`cl-42_12m34s_screen_top-left.png`), leaving the whole frame of that moment as it was, and `--tiles 2x2` writes the frame again as a grid beside it, each tile reaching a little past its neighbours so a line of text on a seam is whole in one of them. A wide frame names the grid that keeps every tile at full size (`2x1` for 1080p, `3x3` for 4K) in its hint and as `suggested_tiles`. `--json` prints the same as data. Each frame carries its `kind`, what it `shows`, `requested_kind` (the view `--screen` or `--composite` asked for, so a fallback is `kind` differing from it), `shown_at` and `shown_at_ms` (when the picture written was put on screen, on the call's clock, which is earlier than `at` for a screen left unchanged), its own `notes`, `citation_matches`, which says whether its citation renders as this very picture, `cite_instead` when another second does (a share stalled at the moment asked for), and `between`, the lines either side when nothing was being said. A refusal in JSON is `{"error", "code"}` plus what the sentence offers, as data: `try`, every command the sentence names; `nearest`, the recorded moment closest to the one asked for; `nearest_line`, the filmed transcript line closest to it; `recorded`, the stretches that were filmed (the same shape as `video` in `cast call <id> --json`); and `retry_after_s` when the answer is "not yet". `cast call snap --help` prints this part of the help alone. A moment is written with `@` and lines with a colon, so `cl-42:12:34` (or `cast call snap cl-42 12:34`) could be either, and is refused with both spellings rather than guessed.
-
-The moment comes from the shared clock: a transcript line carries its time since the call started, each file knows the wall clock of its first frame, and one function maps a moment to the file and offset that show it. The command and a frame embedded in a message use that function with the same choice of view, so a citation renders as the very picture the agent read, unless the snap asked for another view (the output says so). A screen share writes a frame only when the screen changes, so a frame is always the picture on screen at the moment, the last one written at or before it, which is also what a video seeked there shows; when that picture is more than a second older than the moment, the output says from when. When a share stalled, LiveKit writes black frames in its place; a snap skips them and writes the last real picture, says so, and marks the citation as not matching, since a video seeked to that moment shows the black. It names the second that does render the picture, and a range frame, whose moment the snap chose, moves to that second. The call page's player uses it too, starting from the room's view because that is the file with everyone's sound. The seek itself runs on your machine with ffmpeg: a single frame reads a couple of megabytes around that moment, and a range on a shared screen reads the stretch once to find where it changed (a stretch too long to read is sampled evenly, and the output says so). ffmpeg reads through a short-lived proxy on your own machine, so the signed link never appears on a command line and is signed again when it is about to lapse. The command needs `ffmpeg` installed and says how to install it when it is missing.
-
-`cl-42@12:34` on its own line in a message renders as that frame of the call, captioned with the line being said then (or the last one said, with when), linked to the call page at that time on the same picture (`?t=754&view=screen:<identity>`, the screen of the person who shared it; a bare `view=screen` opens whichever screen was shared then, and either falls back to the room where none was), for anyone who may read the call; inside a sentence it reads as a pill with the frame on hover, in team chat as in a session. When an agent reads a frame it snapped, the session keeps the citation rather than the picture, so the frame shows only to the call's readers and goes when the recording does. That citation is how to show a frame to anyone in codecast. `--share` is different: it uploads each frame as a public image anyone with its link can open, so it is only for showing a frame to someone outside codecast, and if an upload fails the command exits non-zero with the reason on that frame (`image_error`). A picture on a public link reaches as far as the video on one does, so only whoever recorded the call or a team admin can share one, and anyone can share a picture of their own screen; anyone else is refused and pointed at the citation. The call's thread says who shared a picture and of which moment, and the call page lists every shared picture under its share control, where anyone who can read the call can take one down. Each shared image is tied to the recording it came from, and deleting the recording deletes the images too. LiveKit uploads a recording's video when Record is stopped or the huddle ends, so while a call is recording, the stretch still being recorded has only its live picture (`cast call snap cl-42`), and only for someone in the call or the owner of a session the call is feeding live: anyone else who can read the call waits for the saved video, so nobody watches the room as it is without the room seeing them; a stretch already saved (an earlier run, a share that ended) can be snapped at once. That picture is the room's view, with any share as everyone sees it; a share's full resolution file can be read once it is saved. When a snap cannot give a picture it says why and what to try: the call was not recorded, the moment falls outside what was recorded (with the recorded stretches and the nearest moment that works), or the recording is still being made.
-
-## The digest
-
-Every finished huddle that has any words leaves a digest where it was held, and so does every huddle that was recorded, even one where nobody spoke. A recorded huddle's digest names the stretches that were filmed (`Recorded on video: 4:40-7:20.`), and its card links each stretch to that moment of the call page. A session's agent is also told that `cast call snap` shows a frame from it.
-
-| Room | What appears |
-|------|--------------|
-| A channel or a DM | A chat message from the scribe with the title, the length, the speakers, the summary and the action items. A reader can open the transcript under it. The write is keyed on the transcript, so a retry cannot post a second one |
-| A session room | The session's agent wakes with a `<huddle-summary>` message that holds the digest and the command `cast call <id> --transcript`. The words themselves stay on the server, so a long huddle does not arrive as thousands of tokens the agent did not ask for |
+When the huddle ends, a digest lands where it was held: a message in the channel or DM with the title, the length, who spoke, a summary and the action items, with the transcript a click away. A very short huddle keeps its words instead of a summary.
 
 ```figure
 DigestFigure
-Where a finished huddle's digest goes: into the room's chat, or into the session's agent as one message. Under 40 words it is the words themselves.
+A finished channel huddle leaves one digest in the channel, with the full transcript under it.
 ```
 
-A huddle of fewer than 40 words gets no generated summary, and its digest is the words themselves. When the summary cannot be generated, the call is marked `failed`, and the transcript is still readable. Huddle digests do not cross the [Slack mirror](/documentation/team-chat).
+The **Calls** page lists every huddle and voice note you can open, live ones first, with a **with video** filter. Click one to open its page: the summary, the action items and the whole transcript, plus the video if it was recorded. **Record a voice note** at the top records just your microphone; a voice note starts private to you, and you can share it into a team from its page.
 
-## Agents as participants
+## Agents and calls
 
-A session's own room feeds that session live. The server adds the route when the transcript starts, so it holds for every client and for whoever ends up as the scribe. One person alone in a session room is enough to start transcription, because the second party is the agent, and the agent never takes a seat. The words reach the session each time the room goes quiet, on the same delivery path as [`cast send`](/documentation/messaging). Each batch opens with a note that speech arrives in pieces and that the agent should wait for a complete thought. When that huddle ends, the digest tells the agent it already heard the conversation live, so it does not do the work twice.
+Agents read calls the way you would read a page. Ask in plain words:
 
-A participant can also point a huddle at another session, at a doc, or at a linked Slack channel. Each route is either `live` or `after`, which delivers once at the end. Delivery acts as the person who added the route. The server stamps that person itself and never accepts the value from a client, so a scribe cannot write into sessions and docs that only somebody else can reach.
+- "What did we agree on yesterday's call about the webhook retries?"
+- "Turn the action items from this morning's huddle into tasks, each quoting who took it on."
+- "What was on screen when Theo talked about the retry delay?" (for a recorded call)
+- "Summarize every call this week where billing came up."
 
-A fed session takes part in the huddle's text chat. The reply it ends a turn with is mirrored into that chat as its own line, cut at 1800 characters with a link to the session. A line a person types there is relayed into the session.
+When an agent quotes a call, the quote shows the speaker and links to those lines on the call's page.
+
+```figure
+CitationFigure
+An agent citing the call: a pill for the call, and the exact lines embedded under their speakers.
+```
+
+**Bring a session into the huddle.** Start a huddle from a session's header, or click **+** in any huddle and pick **A new agent session** (*Hears the room and answers here*). The session hears what is said each time the room goes quiet, waits for a complete thought, and answers in the huddle's chat. A line you type in that chat goes straight to it. When the call ends it already knows what happened, so the digest doesn't make it start over.
+
+```figure
+HuddleAgentFigure
+A session in the huddle. A person's typed line is relayed to it, and its answer lands in the huddle's chat, marked as an agent.
+```
+
+After a call, **Send to agent** on its page hands the whole call (or the lines you selected) to a session, with an optional note telling it what to do.
+
+## Record the video
+
+Press **Record this huddle** on the call, or on its card at the top of the window beside **Mute**. Everyone in the call is told, guests included, and a red **REC** mark shows wherever the call does. Stopping asks once more, because it stops for everyone, and recording stops by itself when the huddle ends.
+
+On the call's page the video plays beside the transcript and stays in step with it. Click a line to jump to that moment; the line being said lights up as it plays, and **Back to the moment** returns to it after you scroll away. **Link** copies a link to that second. A screen share is kept at full resolution, so code or a slide on a shared screen stays legible, and you can switch the view to it.
+
+Whoever can open the call's room can watch its video. Whoever pressed Record, or a team admin, can delete the recording. A call can also get a public link; the video joins it only if someone turns on **Include the video recording**.
+
+## Guests
+
+Click **invite** in the call (or **Invite guest** on a live call's page) and send the link. A guest opens it in any browser with no account, sees who invited them and whether the call is transcribed or recorded, and waits at the door. Anyone inside clicks **Admit** or **Deny**. If nobody is in the room yet, whoever made the link is told.
+
+A link lasts 1 hour, 1 day, 7 days (the default) or 30 days, and **turn off** closes it. Inside, a guest is marked as a guest on every face and line. They see and hear the call, and nothing else: not the team, its sessions, the transcript or the call's chat. When the last teammate leaves, the guests are let go too.
 
 ## Walkie
 
-Walkie is push to talk into a DM. Click Talk on a face, in the DM composer or with the keyboard chord, talk, and click again to stop. Talk is a click toggle and not a hold: a press that opened a microphone felt like an accident, so the hold gesture was removed.
+Walkie is push to talk into a DM, for a quick word without a call. Click **Talk** on someone's face or in the DM, or press `Ctrl` `Shift` `Space`, say it, and click again to stop. A teammate at their desk hears you live, the words appear in the DM while you talk, and the message lands with the recording for anyone who wasn't there. Nobody hears you back unless they click **Join live**, which turns it into a call.
 
-One microphone track does three things at once. It goes live into the DM's call room, so a teammate at their desk hears it as it is spoken. It is kept as a voice recording, so everyone else can play it later. It feeds one recognizer, so the DM shows the words while they are still being said. A chat message is the spine of all three: it opens live when the talk starts, the text streams into it every 2.5 seconds, and it lands with the voice recording when the talk stops. The microphone opens first and the room joins last, so nothing a person says waits on a connection.
+```figure
+WalkieFigure
+The people wall, sized by who is around, and a walkie message landing in a DM while it is spoken.
+```
 
-| Behavior | Rule |
-|----------|------|
-| Shortest burst kept | 700 ms. Anything shorter is discarded |
-| Longest burst | 5 minutes, then it lands as a message |
-| After a burst | The room stays open 30 seconds in case somebody answers |
-| While you are in another huddle | Walkie is unavailable, and the key says so |
-| The recognizer is down | The audio still records, and the server transcribes it afterwards |
+The people wall (`Cmd` `Shift` `P`) shows your team's faces, larger for whoever is at their desk. Click a face for **Talk**, **Ring** and **Message**. Set yourself **busy** or **away** from your own face: when you are busy, rings arrive without sound and walkie messages wait in the DM. Switch off **Let teammates talk to me** in your Calls settings and their voice no longer plays out loud; it still arrives in the DM with its words, waiting to be read.
 
-A burst is one way. The listener hears the talker, and the talker hears nobody back. A burst becomes a call only when somebody steps in on purpose with Join live. That step stamps `walkie_joined_at` on the listener's seat, every client in the room reads the stamp, and the room is a call for as long as it lasts.
+## On your phone
 
-A burst plays out loud only when somebody is there to hear it: calls are on, the machine saw input in the last 3 minutes, the person is not busy and has not snoozed or turned the setting off, and the window is the one that speaks for the app. A closed door never blocks delivery. The burst still lands in the DM with its unread count and its notification.
+On the iPhone app a ring shows on the lock screen like a phone call, even when the app is closed. The call screen has mute, camera, speaker, **record**, and **Invite a guest**, which makes a link and opens the share sheet. Guests knocking show at the door with **Admit** and **Deny**.
 
-Rooms are prewarmed ahead of a burst. The media connection is the slow part: about 1.0 second into a room the client had already touched, and up to 12.7 seconds into a cold one. So the client connects early, when you open a DM or rest the pointer on a face for 400 ms. It publishes a muted microphone, which makes the later press an unmute and not a new publish. A prewarm proceeds only where microphone permission is already granted, so it can never raise a permission prompt. Its row is marked `prewarm` and no reader counts it as a seat. It holds one room at a time and lets go after 90 seconds.
+## When something is off
 
-## Rings on phones
-
-A ring is an invite row that lives 45 seconds. A phone that registered a VoIP token gets the ring as an APNs VoIP push sent straight to Apple. The app's native layer reports it to CallKit before any JavaScript runs, so an app that was killed still shows the lock screen call screen. Every other phone gets a notification ring. A phone never gets both. The push expires with the invite, so a phone that comes back online does not ring for a call that died. At 45 seconds an unanswered invite becomes a quiet missed call notification. When Apple reports a VoIP token as dead, the server clears it and stops trying.
-
-An answered ring is a grant: the person may join that huddle while it still runs, whether or not the room's key names them. The grant does not carry into the next huddle held in that room: the server cancels it when the room next starts from empty.
-
-## The desktop call window
-
-In the desktop app a running call can move to a window of its own, and it never opens as a browser popup. The microphone, camera and scribe state travel with the room. The first window stops hosting the media once the new one joins and does not leave the room, because both windows share one seat. The same window shows, in priority order: an incoming ring, a walkie burst, the call, and then the people wall or the floating faces when nothing is happening.
-
-## Turning it on
-
-Calls are a team feature, off until a team admin turns them on, under the same mechanism as [team chat](/documentation/team-chat). The deployment must also have LiveKit configured. When either is missing, the queries still answer and the clients hide every call control.
+| What you notice | What to do |
+|-----------------|------------|
+| No huddle buttons anywhere | Calls are off for this team. Ask a team admin to switch on **Calls** under Settings, Team |
+| The call has no summary | It was too short to summarize, or the summary failed. The transcript is still on its page |
+| Nothing was transcribed | Someone turned **transcribing** off. Turn it back on for the rest of the call |
+| **Record** is dimmed | Recording isn't available right now; the button says why |
+| A guest's link doesn't open the call | It expired or was turned off. Make a new one from **invite** |
+| Walkie messages don't play out loud | You are set to busy, or **Let teammates talk to me** is off. They are waiting in the DM |

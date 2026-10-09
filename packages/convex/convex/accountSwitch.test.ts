@@ -10,6 +10,8 @@ import {
   isDeviceOnline,
   isValidProfileName,
   shouldSweepStaleFlag,
+  isCurrentBlock,
+  BLOCKED_WINDOW_MS,
   decideAutoSwitch,
   resetCreditAttemptKey,
   splitAuthParks,
@@ -31,7 +33,6 @@ import {
   AUTO_SWITCH_PROBE_RETRY_MS,
   AUTO_SWITCH_SESSION_WINDOW_MS,
   DEVICE_ONLINE_MS,
-  STALE_FLAG_AFTER_MS,
   type CcUsage,
   pickThrottleContinueBatch,
   throttleContinueAttemptKey,
@@ -142,18 +143,24 @@ describe("isSubagentConversation", () => {
 describe("shouldSweepStaleFlag", () => {
   const now = 1_000_000_000_000;
 
-  test("sweeps flagged conversations older than the revive window", () => {
+  test("sweeps flagged conversations whose block landed before the revive window", () => {
     expect(
-      shouldSweepStaleFlag({ pending_api_error: true, updated_at: now - STALE_FLAG_AFTER_MS - 1 }, now),
+      shouldSweepStaleFlag({ pending_api_error: true, pending_api_error_at: now - BLOCKED_WINDOW_MS - 1, updated_at: now }, now),
     ).toBe(true);
   });
 
   test("leaves fresh incidents and unflagged conversations alone", () => {
     // Inside the window = still the current incident; the banner should act on it.
     expect(
-      shouldSweepStaleFlag({ pending_api_error: true, updated_at: now - STALE_FLAG_AFTER_MS + 60_000 }, now),
+      shouldSweepStaleFlag({ pending_api_error: true, pending_api_error_at: now - BLOCKED_WINDOW_MS + 60_000 }, now),
     ).toBe(false);
     expect(shouldSweepStaleFlag({ pending_api_error: false, updated_at: 0 }, now)).toBe(false);
+  });
+
+  test("a weekly-limit park waiting out its reset is still current", () => {
+    expect(
+      shouldSweepStaleFlag({ pending_api_error: true, pending_api_error_at: now - 7 * 24 * 60 * 60 * 1000 }, now),
+    ).toBe(false);
   });
 });
 
@@ -1176,6 +1183,46 @@ describe("automatic passes dismiss the workers they skip (ct-51132)", () => {
     const result = await (throttleContinueCheck as any)._handler(ctx(db), { user_id: userId });
     expect(result).toEqual({ acted: "nothing_throttled", dismissed: 0 });
     expect(stillBlocked(db)).toEqual(["w1"]);
+  });
+});
+
+describe("an old park synced again is history, not an incident (2026-10-07)", () => {
+  // 27 union-mobile workflow agents parked on a limit on Aug 20 had their
+  // transcripts uploaded again 48 days later. The insert set updated_at to
+  // now and the flag to the Aug 20 banner, and every window read updated_at:
+  // the fleet banner showed "27 sessions blocked, latest 47d ago" and the
+  // auto-switch pass sent "continue" to dead workflow agents.
+  const userId = "users_1" as any;
+  const now = Date.now();
+  const resynced = {
+    _id: "old",
+    user_id: userId,
+    agent_type: "claude_code",
+    owner_device_id: "dev-1",
+    updated_at: now - 60_000,
+    pending_api_error: true,
+    pending_api_error_kind: "limit",
+    pending_api_error_at: now - 47 * 24 * 60 * 60 * 1000,
+  };
+
+  test("the window is judged on when the block landed", () => {
+    expect(isCurrentBlock(resynced, now)).toBe(false);
+    expect(isCurrentBlock({ ...resynced, pending_api_error_at: now - BLOCKED_WINDOW_MS + 60_000 }, now)).toBe(true);
+    // Rows flagged before the stamp existed fall back to updated_at.
+    expect(isCurrentBlock({ updated_at: now - 60_000 }, now)).toBe(true);
+  });
+
+  test("the auto-switch pass does not revive it", async () => {
+    const db = makeFakeDb({
+      devices: [{ _id: "devices_1", user_id: userId, device_id: "dev-1", last_seen: now, is_remote: false, cc_auto_switch: true, cc_auto_switch_state: {} }],
+      conversations: [resynced],
+      daemon_commands: [],
+      pending_messages: [],
+    });
+    const ctx = { db, scheduler: { runAt: async () => {}, runAfter: async () => {} } };
+    const result = await (autoSwitchCheck as any)._handler(ctx, { user_id: userId });
+    expect(result.acted).toBe("nothing_blocked");
+    expect(db._tables.pending_messages).toEqual([]);
   });
 });
 

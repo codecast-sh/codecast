@@ -181,6 +181,14 @@ export const DAEMON_COMMANDS = [
   // as an unknown edit op. Result: LineProfileEditReply. Old daemons:
   // "Unknown command".
   "line_profile_edit",
+  // The setup card under a `cast browser`/`cast computer` command that failed
+  // for want of the Chrome extension or the macOS grants (agentToolSetup.ts).
+  // Targeted at the session's device. args: AgentToolSetupArgs — check answers
+  // AgentToolSetupStatus; start runs `cast browser extension setup` or `cast
+  // computer setup --yes` there in a detached child and answers at once, and
+  // the card checks until it lands. Old daemons: "Unknown command" (the card
+  // says to update codecast there).
+  "agent_tool_setup",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
