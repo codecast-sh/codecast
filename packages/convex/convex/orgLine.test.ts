@@ -74,8 +74,8 @@ function fixtures(o: Overrides = {}) {
         ...(o.role ?? {}),
       },
     ],
-    anchors: [{ _id: ANCHOR, team_id: TEAM, bot_user_id: "users_bot", host_user_id: HOST, conversation_id: STANDING, project_path: "/srv/growth" }],
-    conversations: [{ _id: STANDING, session_id: "standing", user_id: HOST, team_id: TEAM, status: "active", title: "Growth lead", agent_type: "claude_code", message_count: 1, standing_role_id: ROLE, anchor_id: ANCHOR, updated_at: NOW }],
+    anchors: [{ _id: ANCHOR, team_id: TEAM, bot_user_id: "users_bot", host_user_id: HOST, conversation_id: STANDING }],
+    conversations: [{ _id: STANDING, session_id: "standing", user_id: HOST, team_id: TEAM, status: "active", title: "Growth lead", agent_type: "claude_code", message_count: 1, standing_role_id: ROLE, anchor_id: ANCHOR, updated_at: NOW, project_path: "/srv/growth" }],
     workflows: [],
     workflow_runs: [],
     daemon_commands: [],
@@ -132,6 +132,19 @@ describe("orgLine.sweep (L9)", () => {
     expect(tables.org_roles[0].counters.hands).toBe(1);
   });
 
+  test("a role whose standing session was pulled to another person's machine runs there, in that session's folder", async () => {
+    const { ctx, tables } = fixtures();
+    // cast pull / cast role move: the session runs under Mate now, and Mate's
+    // daemon recorded its own checkout. The role and anchor rows still name Host.
+    Object.assign(tables.conversations.find((c) => c._id === STANDING)!, { user_id: MATE, project_path: "/Users/mate/src/growth" });
+    await sweepCore(ctx, NOW);
+    const run = tables.workflow_runs[0];
+    expect(run.user_id).toBe(MATE);
+    expect(run.project_path).toBe("/Users/mate/src/growth");
+    expect(tables.daemon_commands[0].user_id).toBe(MATE);
+    expect(tables.org_roles[0].host_user_id).toBe(HOST);
+  });
+
   test("uses the host's pushed workflow row when one carries the line's slug", async () => {
     const { ctx, tables } = fixtures({
       role: { line_workflow_slug: "feature" },
@@ -182,7 +195,7 @@ describe("orgLine.sweep (L9)", () => {
     }
   });
 
-  test("candidates: only open tasks assigned to agent:<handle> with no run and no open blocker", async () => {
+  test("candidates: only open tasks assigned to agent:<handle> with no run and no open blocker or wait", async () => {
     const role = () => fixtures().tables.org_roles[0];
     const cases: Array<[Record<string, any>, number]> = [
       [{}, 1],
@@ -194,6 +207,8 @@ describe("orgLine.sweep (L9)", () => {
       [{ blocked_by: ["ct-9"] }, 0],
       [{ blocked_by: ["ct-8"] }, 1],
       [{ blocked_by: ["ct-404"] }, 1],
+      [{ waits: [{ kind: "time", at: NOW + 3_600_000, state: "waiting", created_at: NOW }] }, 0],
+      [{ waits: [{ kind: "time", at: NOW - 1, state: "met", created_at: NOW - 2 }] }, 1],
       [{ project_id: "projects_elsewhere" }, 0],
     ];
     for (const [over, expected] of cases) {
