@@ -121,9 +121,10 @@ export function handoffBriefInput(
   };
 }
 
-/** The brief request prod posts, and the evals replay. */
+/** The brief request prod posts, and the evals replay. Haiku 5.5 writes the
+ *  longest briefs in about 1,800 tokens (2026-10-07), so the cap leaves room. */
 export function handoffBriefRequest(input: HandoffBriefInput): SurfaceRequest {
-  return { model: HANDOFF_MODEL, max_tokens: 1200, temperature: 0, prompt: buildHandoffBriefPrompt(input) };
+  return { model: HANDOFF_MODEL, max_tokens: 2400, prompt: buildHandoffBriefPrompt(input) };
 }
 
 /** The brief used when the model is unavailable: state plus the last word. */

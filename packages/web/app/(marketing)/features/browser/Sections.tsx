@@ -25,41 +25,7 @@ export function TabGroupSection() {
       title="Your Chrome, your logins. Agents get one tab group."
       lede={<>The codecast extension lets agent sessions open tabs in the Chrome you already use. Every agent tab opens in the background, inside a red <strong style={{ color: CAST_RED }}>Cast</strong> group. Your own tabs, windows and focus stay where you left them.</>}
     >
-      <div className="rounded-2xl p-4 sm:p-7" style={{ background: "linear-gradient(180deg, #e9ecf0, #dfe3e8)" }}>
-        {/* The strip, drawn large. */}
-        <div className="overflow-x-auto -mx-1 px-1 pb-1">
-          <div className="flex items-end sm:min-w-[760px]">
-            {HUMAN_TABS.map((t, i) => (
-              <span key={t.title} className={i === 1 ? "flex min-w-0" : "hidden sm:flex min-w-0"}>
-                <ChromeTab title={t.title} fav={t.fav} active={i === 1} width={170} />
-              </span>
-            ))}
-            <span className="self-center mx-1.5"><GroupChip label="Cast" /></span>
-            {AGENT_TABS.map((t) => (
-              <ChromeTab key={t.title} title={t.title} fav={t.fav} groupColor={CAST_RED} badge width={170} />
-            ))}
-          </div>
-        </div>
-        {/* Who is in each tab. */}
-        <div className="mt-5 grid sm:grid-cols-[1fr_1.55fr] gap-4 sm:gap-6 font-mono text-[12px]">
-          <div className="rounded-lg bg-white/70 px-4 py-3">
-            <div className="text-[11px] mb-2" style={{ color: MUTED }}>yours</div>
-            <div style={{ color: INK }}>Mail, a doc, a pull request. Never touched, never closed, never brought forward by an agent.</div>
-          </div>
-          <div className="rounded-lg bg-white/70 px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${CAST_RED}` }}>
-            <div className="text-[11px] mb-2" style={{ color: CAST_RED }}>the Cast group · one tab per session</div>
-            <div className="space-y-1.5">
-              {AGENT_TABS.map((t) => (
-                <div key={t.title} className="flex items-center gap-2 min-w-0">
-                  <span className="shrink-0 font-medium" style={{ color: t.agentColor }}>{t.agent}</span>
-                  <span className="truncate" style={{ color: INK }}>{t.task}</span>
-                  <span className="ml-auto shrink-0 hidden sm:inline" style={{ color: DIM }}>{t.title}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+      <CastTabStrip />
 
       <div className="mt-12 grid md:grid-cols-2 gap-x-14 gap-y-9">
         <Fact title="No clone, no copied cookies">
@@ -76,6 +42,47 @@ export function TabGroupSection() {
         </Fact>
       </div>
     </Section>
+  );
+}
+
+/** Chrome's tab strip: the person's tabs, then the red Cast group holding one tab per agent session. */
+export function CastTabStrip() {
+  return (
+    <div className="rounded-2xl p-4 sm:p-7" style={{ background: "linear-gradient(180deg, #e9ecf0, #dfe3e8)" }}>
+      {/* The strip, drawn large. */}
+      <div className="overflow-x-auto -mx-1 px-1 pb-1">
+        <div className="flex items-end sm:min-w-[760px]">
+          {HUMAN_TABS.map((t, i) => (
+            <span key={t.title} className={i === 1 ? "flex min-w-0" : "hidden sm:flex min-w-0"}>
+              <ChromeTab title={t.title} fav={t.fav} active={i === 1} width={170} />
+            </span>
+          ))}
+          <span className="self-center mx-1.5"><GroupChip label="Cast" /></span>
+          {AGENT_TABS.map((t) => (
+            <ChromeTab key={t.title} title={t.title} fav={t.fav} groupColor={CAST_RED} badge width={170} />
+          ))}
+        </div>
+      </div>
+      {/* Who is in each tab. */}
+      <div className="mt-5 grid sm:grid-cols-[1fr_1.55fr] gap-4 sm:gap-6 font-mono text-[12px]">
+        <div className="rounded-lg bg-white/70 px-4 py-3">
+          <div className="text-[11px] mb-2" style={{ color: MUTED }}>yours</div>
+          <div style={{ color: INK }}>Mail, a doc, a pull request. Never touched, never closed, never brought forward by an agent.</div>
+        </div>
+        <div className="rounded-lg bg-white/70 px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${CAST_RED}` }}>
+          <div className="text-[11px] mb-2" style={{ color: CAST_RED }}>the Cast group · one tab per session</div>
+          <div className="space-y-1.5">
+            {AGENT_TABS.map((t) => (
+              <div key={t.title} className="flex items-center gap-2 min-w-0">
+                <span className="shrink-0 font-medium" style={{ color: t.agentColor }}>{t.agent}</span>
+                <span className="truncate" style={{ color: INK }}>{t.task}</span>
+                <span className="ml-auto shrink-0 hidden sm:inline" style={{ color: DIM }}>{t.title}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

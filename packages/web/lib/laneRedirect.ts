@@ -10,7 +10,7 @@
 import { HOSTED_HOME, LANE_CONVERSATION_ROUTE, LANE_PATHS, hostedConversationPath } from "../components/simple/lanePaths";
 import { LANE_ROOT, isUnderRoot } from "../components/simple/laneBoot";
 import { settingsPathFor } from "./settingsSections";
-import { RENAMED_PAGE_ROOTS, currentPagePath } from "./renamedPages";
+import { RENAMED_PAGES, RENAMED_PAGE_ROOTS, currentPagePath } from "./renamedPages";
 
 const PAGES: Record<string, string> = {
   [LANE_PATHS.home]: HOSTED_HOME,
@@ -35,11 +35,14 @@ export const PAGE_ALIASES: Readonly<Record<string, string>> = {
   ),
   "/integrations": settingsPathFor("integrations"),
   "/mail": settingsPathFor("integrations"),
+  // The non-developer funnel's address: the landing page with its For
+  // everyone section first (app/(marketing)/page.tsx assistantFirst).
+  "/everyone": "/?for=assistant",
 };
 
 /** The root segments the aliases and renamed pages take, which no public profile may claim
  *  (convex/users.ts RESERVED_USERNAMES lists them too). */
-export const PAGE_ALIAS_SEGMENTS = [...Object.keys(PAGE_ALIASES), ...Object.keys(RENAMED_PAGE_ROOTS)].map((p) => p.slice(1));
+export const PAGE_ALIAS_SEGMENTS = [...Object.keys(PAGE_ALIASES), ...Object.keys(RENAMED_PAGE_ROOTS), ...Object.keys(RENAMED_PAGES)].map((p) => p.slice(1));
 
 function trimmed(pathname: string): string {
   return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
@@ -55,10 +58,13 @@ export function laneRedirectTarget(pathname: string, search = "", hash = ""): st
 }
 
 /** The page a hosted page name or a renamed page's address stands for
- *  (/approvals is /questions, /initiatives/in-7 is /goals/in-7), or null. */
+ *  (/approvals is /questions, /goals/in-7 is /org/in-7), or null. */
 export function pageAliasTarget(pathname: string, search = "", hash = ""): string | null {
   const path = trimmed(pathname);
   const renamed = currentPagePath(path);
   const to = PAGE_ALIASES[path] ?? (renamed !== path ? renamed : undefined);
-  return to ? `${to}${search}${hash}` : null;
+  if (!to) return null;
+  // An alias that carries its own query keeps the visitor's too (?utm_...).
+  const query = to.includes("?") && search.startsWith("?") ? `&${search.slice(1)}` : search;
+  return `${to}${query}${hash}`;
 }

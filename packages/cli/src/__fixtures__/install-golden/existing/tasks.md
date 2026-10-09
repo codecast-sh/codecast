@@ -42,7 +42,11 @@ A human tracks your work through a dashboard: report status through tasks and pl
 
 **Tasks are selective.** Self-contained work you will finish in this session needs no task, even when it changes code or fixes a bug. File one when the work needs tracking, coordination or a handoff, will outlive this session, or the user asks. Tasks are internal by default; add `--human` only when the human must see and manage it themselves (a decision only they can make, a manual step, follow-up that outlives you). `--from-meeting` is only for tasks people decided in a meeting or conversation, never your own work; `--from-call cl-42` also links the task to that call, so it shows on the call's page.
 
+**End by filing what remains.** Before you finish, do the follow-up you can do yourself rather than filing it. Leftover work that is concrete enough for another session to pick up and implement becomes a task, written so it can start cold. Ideas, options and possible directions are not tasks: suggest them as next steps in your reply.
+
 **Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with `--parent`, shallow and small, and never mirror a plan as a subtask tree. Check for existing work before creating (`cast task ls -q "<topic>"`, `cast plan ls -q`, `cast task ready`), and file under a project when one fits (`cast project ls`).
+
+**Record what work waits on.** Work waiting on a task, a PR to merge (`#42:checks`: green CI), a decision or time gets a blocker, not a comment: `cast task dep ct-200 --blocked-by "#42"` keeps it off the ready list. To park, block the task you hold, go `dormant` naming the blocker, end your turn: its clearing wakes you.
 
 **Bind before you build.** `cast task start <id>` (or `cast plan bind <id>`) claims the work and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with `update` and `done`; never `task start` your own subtask. A task has one owning session: starting one another session is still working on is refused until you settle with it who continues (`--take` once agreed).
 
@@ -58,7 +62,7 @@ cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>
 cast task handoff <id> --status done --evidence "<what you verified>" [--guide -]
-cast plan create "Title" -g "goal"; cast task create "Step" --plan <plan_id>
+cast plan create "Title" -g "goal" --steps -  # "Step :: done means" per line; a blank line starts a wave needing the one before
 cast doc create "Title" -c - | show <id> | search "<title>"
 ```
 

@@ -118,7 +118,9 @@ function Card({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
           {p.actions ? <Node n={p.actions as ModNode} /> : null}
         </header>
       ) : null}
-      <div style={{ ...layoutStyle({ gap: 2, ...p, pad: p.pad ?? 3.5 }, "column"), border: undefined, background: undefined, color: undefined, cursor: undefined, paddingTop: hasHead ? space(1.5) : undefined, width: undefined }}>
+      {/* Only a card with a header narrows its body's top: an undefined
+          paddingTop would still clear the shorthand's top side. */}
+      <div style={{ ...layoutStyle({ gap: 2, ...p, pad: p.pad ?? 3.5 }, "column"), border: undefined, background: undefined, color: undefined, cursor: undefined, width: undefined, ...(hasHead ? { paddingTop: space(1.5) } : {}) }}>
         <Children c={c} />
       </div>
     </section>
@@ -445,7 +447,7 @@ function ModLink({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
       rel={external ? "noopener noreferrer" : undefined}
       onClick={internal ? (e) => { e.preventDefault(); navigate(href); } : undefined}
       style={{ color: tone(p.tone) ?? "var(--sol-blue)" }}
-      className="hover:underline underline-offset-2"
+      className="no-underline hover:underline decoration-current/40 underline-offset-2"
     >
       <Children c={c} />
     </a>

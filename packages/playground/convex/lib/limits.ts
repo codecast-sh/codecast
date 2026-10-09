@@ -13,6 +13,8 @@ export const MESSAGE_BODY_MAX = 2_000;
 export const ELEMENT_FIELD_MAX = { selector: 300, tag: 40, text: 200, snippet: 600 } as const;
 export const VERSION_SUMMARY_MAX = 160;
 export const MESSAGE_PAGE_MAX = 100;
+/** The newest messages the app's link follows while its room is closed. */
+export const LATEST_MESSAGES = 6;
 export const TIMELINE_MAX = 500;
 export const GALLERY_MAX = 48;
 
