@@ -29,7 +29,7 @@ import { laptopHome, trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.j
 import { AGENT_AUTH_RECEIVER } from "./agentAuthReceiver.py.js";
 import { deviceId as localDeviceId } from "./device.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
-import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
+import { applySnapshotFastForward, buildSnapshotMessage, CLOUD_SEED_EXCLUDES, createWipSnapshot, isWipSnapshotMessage, remoteSnapshotScript, SNAPSHOT_IDENTITY, snapshotTreeShell } from "../wipSnapshot.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { readLocalCredential, readLocalCredentialAsync } from "../ccKeychain.js";
 import { remapContextPaths } from "../cloud/mirror/transform.js";
@@ -104,24 +104,31 @@ export function slugToCwd(slug: string): string | null {
  * the project-dir slug (CC collapses both "/" and "." to "-", which is not
  * losslessly reversible).
  */
-function cwdFromTranscript(jsonlPath: string): string | null {
+export function cwdFromTranscript(jsonlPath: string, slug = path.basename(path.dirname(jsonlPath))): string | null {
   // The LAST cwd, not the first: a session that has travelled between
   // machines carries entries stamped with every home it has had, and after a
   // round trip the file can even BEGIN with the remote's path (observed live:
   // first line /home/ubuntu/work/…, last line /Users/…). The newest entry is
   // the only one that reflects where the session runs now.
+  // A record's cwd also follows the agent's own `cd`, so the newest entry whose
+  // slug is the transcript's project folder wins: that is where the agent was
+  // launched and resumes. A `cd packages/web` otherwise moved the session into
+  // a host checkout named "web" (2026-10-09).
   let last: string | null = null;
+  let launch: string | null = null;
   try {
     const text = fs.readFileSync(jsonlPath, "utf-8");
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
         const rec = JSON.parse(line) as { cwd?: string };
-        if (rec.cwd) last = rec.cwd;
+        if (!rec.cwd) continue;
+        last = rec.cwd;
+        if (cwdToSlug(rec.cwd) === slug) launch = rec.cwd;
       } catch { /* skip non-JSON line */ }
     }
   } catch { /* unreadable */ }
-  return last;
+  return launch ?? last;
 }
 
 /** Locate a session's JSONL + cwd on this machine by session id. */
@@ -183,9 +190,9 @@ export function ssh(host: RemoteHost, command: string, timeoutMs?: number): stri
   });
 }
 
-function rsyncUp(host: RemoteHost, localDir: string, remoteDir: string, opts: { delete?: boolean } = {}) {
+function rsyncUp(host: RemoteHost, localDir: string, remoteDir: string) {
   const args = [
-    "-az", ...(opts.delete ? ["--delete"] : []),
+    "-az", "--update",
     "-e", `ssh ${sshBase(host).join(" ")}`,
     "--exclude", "node_modules", "--exclude", ".git", "--exclude", ".conductor",
     "--exclude", "dist", "--exclude", ".next", "--exclude", ".DS_Store",
@@ -234,8 +241,8 @@ export function shq(s: string): string {
 // Git-over-SSH transport
 // --------------------------------------------------------------------------
 
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 }).trim();
+function git(cwd: string, args: string[], env?: Record<string, string>): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, ...(env ? { env: { ...process.env, ...env } } : {}) }).trim();
 }
 
 function gitSafe(cwd: string, args: string[]): { ok: boolean; out: string } {
@@ -274,14 +281,6 @@ function remoteRepoExists(host: RemoteHost, remotePath: string): boolean {
   } catch { return false; }
 }
 
-/** Uncommitted edits to tracked files in a host checkout (a push into it is refused); false when it is no repo yet. */
-export function hostCheckoutDirty(host: RemoteHost, remotePath: string): boolean {
-  if (!remoteRepoExists(host, remotePath)) return false;
-  try {
-    return ssh(host, `git -C ${shq(remotePath)} status --porcelain --untracked-files=no | head -1`).trim() !== "";
-  } catch { return false; }
-}
-
 /**
  * Bootstrap a remote clone when absent. In production the Mac would clone from
  * the repo's origin (fast, full history); for environments without remote
@@ -295,10 +294,11 @@ export function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath:
     repairRemoteOrigin(host, localCwd, remotePath);
     return;
   }
-  // A second landing beside a checkout the host already has: a local clone
-  // shares its objects, so only the session's snapshot crosses the network.
+  // A linked worktree of a repository the host already has a checkout of: a
+  // local clone shares its objects, so only the session's snapshot crosses
+  // the network.
   if (seedFrom && remoteRepoExists(host, seedFrom)) {
-    ssh(host, `rm -rf ${shq(remotePath)} && git clone -q ${shq(seedFrom)} ${shq(remotePath)} && cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead`);
+    ssh(host, `${cloneInto(seedFrom, remotePath)} && cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead`);
     repairRemoteOrigin(host, localCwd, remotePath);
     return;
   }
@@ -311,11 +311,23 @@ export function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath:
   // laptop identity or the global codecast placeholder (cloud/hostGit.ts,
   // run by pushSession before this), and a repo-local one would shadow it.
   ssh(host,
-    `rm -rf ${shq(remotePath)} && git clone -q ${shq(remoteBundle)} ${shq(remotePath)} && ` +
+    `${cloneInto(remoteBundle, remotePath)} && ` +
     `cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead && rm -f ${shq(remoteBundle)}`,
   );
   fs.rmSync(bundle, { force: true });
   repairRemoteOrigin(host, localCwd, remotePath);
+}
+
+/**
+ * Shell that clones `src` into `dest`. A folder already there becomes the
+ * checkout rather than being replaced: the host's path mirrors this machine's,
+ * so it can already hold files (ones the config mirror placed where the agent
+ * config names them). Git's files land over them and the rest stay.
+ */
+export function cloneInto(src: string, dest: string): string {
+  const d = shq(dest);
+  return `mkdir -p ${d} && if [ -z "$(ls -A ${d})" ]; then git clone -q ${shq(src)} ${d}; ` +
+    `else t=$(mktemp -d ${shq(`${dest}.clone-`)}XXXXXX) && git clone -q --no-checkout ${shq(src)} "$t" && mv "$t/.git" ${d}/.git && rmdir "$t" && git -C ${d} reset -q --hard; fi`;
 }
 
 /**
@@ -357,54 +369,127 @@ function repairRemoteOrigin(host: RemoteHost, localCwd: string, remotePath: stri
 }
 
 /**
- * Push a worktree's branch to the remote over SSH. The remote working tree
- * (updateInstead) lands on the pushed tip. Returns the branch and the sha the
- * remote should now be at (the snapshot, NOT local HEAD — see below).
+ * Bring this folder's work into the host's checkout of the repository, which
+ * is shared the way this folder is: other sessions may be working in it, and
+ * their uncommitted edits must survive. So the work arrives as a CHANGE, never
+ * as a replacement tree, the mirror image of the way home
+ * (applySnapshotFastForward):
  *
- * The uncommitted work is captured with createWipSnapshot: a dangling commit
- * built through a temp index, so the SOURCE keeps its branch, index and working
- * tree exactly as they were. This used to call session-move's own wipSnapshot(),
- * which ran `git add -A && git commit` on your real branch and left that junk
- * commit behind forever — moving a session to the Mac silently rewrote the
- * history you were working on. The remote is unaffected by the switch: its
- * branch tip is the snapshot either way, with the same ancestry and tree.
+ *  - The change is everything this folder did since the host last took its
+ *    work: the snapshot LANDED_REF names to this folder's snapshot now
+ *    (createWipSnapshot: a dangling commit through a temp index, so this
+ *    folder's branch, index and tree stay exactly as they were).
+ *  - It is merged three-way, here (git merge-tree), with the host's working
+ *    tree as it is now. Edits to the same lines on both sides refuse the move,
+ *    naming the files; nothing on the host changes.
+ *  - The host applies the merged tree in one read-tree that refuses any file a
+ *    host session changed in the meantime (the move then starts over), steps
+ *    its branch to the newer of the two heads, and leaves the work uncommitted,
+ *    so `git status` there reads like a shared folder here.
  *
- * Must never run against a main checkout a shared cloud session occupies:
- * the `git checkout; git reset --hard` below would re-point that session at
- * the moved session's snapshot. The callers check (cast remote move's
- * fetchRootOccupant pre-flight; devices.performMoveSessionToDevice
- * authoritatively).
+ * Returns the branch and the commit the host now matches: the merged tree,
+ * parented on the head the host's branch is at, as a wip snapshot
+ * (verifyRemoteSync unfolds it; the way home starts from it).
+ *
+ * Must never run against a main checkout a shared cloud session holds on a
+ * branch of its own. The callers check (cast remote move's fetchRootOccupant
+ * pre-flight; devices.performMoveSessionToDevice authoritatively).
  */
 export const LANDED_REF = "refs/codecast/landed";
+/** Where a move parks this folder's snapshot, and then the merged commit, for the host to read. */
+const INCOMING_REF = "refs/codecast/incoming";
+/** The rules a host keeps in a checkout's exclude list: where its workspaces and worktrees live inside the checkout. */
+export const HOST_EXCLUDES = ["/.codecast/workspaces/", "/.codecast/worktrees/"];
+/** Where the host parks a snapshot of its own tree for the laptop to merge against. */
+const HOST_TREE_REF = "refs/codecast/host-tree";
 
 export async function gitPushWorktree(
   host: RemoteHost,
-  localCwd: string,
+  localRoot: string,
   remotePath: string,
   seedFrom?: string,
 ): Promise<{ branch: string; head: string }> {
-  const branch = currentBranch(localCwd);
-  const snap = await createWipSnapshot(localCwd);
-  // No snapshot (not a repo / no commits) — fall back to the real tip so a
-  // history-only push still works.
-  const head = snap?.sha ?? git(localCwd, ["rev-parse", "HEAD"]);
-  ensureRemoteRepo(host, localCwd, remotePath, seedFrom);
+  const branch = currentBranch(localRoot);
+  const snap = await createWipSnapshot(localRoot, { exclude: CLOUD_SEED_EXCLUDES });
+  if (!snap) throw new Error(`${localRoot} has no commit to move`);
+  ensureRemoteRepo(host, localRoot, remotePath, seedFrom);
   // The repo's own ignore list (.git/info/exclude) is not something a push
   // carries; without it the host snapshots files this folder never would, and
-  // bringing the session home then trips over them.
-  const exclude = git(localCwd, ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]);
+  // bringing the session home then trips over them. The host's own rules for
+  // the folders its workspaces and worktrees live in are kept on top.
+  const exclude = git(localRoot, ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]);
   if (fs.existsSync(exclude)) rsyncFileInto(host, exclude, `${remotePath}/.git/info`);
-  execFileSync(
-    "git",
-    ["-C", localCwd, "push", "--force", gitSshUrl(host, remotePath), `${head}:refs/heads/${branch}`],
-    { env: gitEnv(host), stdio: "pipe", encoding: "utf-8" },
-  );
-  // Make sure the remote has the branch checked out (first push to a fresh
-  // clone may be on a different default branch).
-  // refs/codecast/landed marks what this machine handed over, so the host's
-  // disk sweep can tell work made there from work the laptop still holds.
-  ssh(host, `cd ${shq(remotePath)} && git checkout -q ${shq(branch)} 2>/dev/null || true; git reset -q --hard ${shq(branch)} && git update-ref ${LANDED_REF} ${shq(head)}`);
-  return { branch, head };
+  ssh(host, `cd ${shq(remotePath)} && f=$(git rev-parse --git-path info/exclude) && mkdir -p "$(dirname "$f")" && for r in ${HOST_EXCLUDES.map(shq).join(" ")}; do grep -qxF "$r" "$f" 2>/dev/null || echo "$r" >> "$f"; done`);
+  const url = gitSshUrl(host, remotePath);
+  const push = (sha: string) => execFileSync("git", ["-C", localRoot, "push", "--force", url, `${sha}:${INCOMING_REF}`], { env: gitEnv(host), stdio: "pipe", encoding: "utf-8" });
+  push(snap.sha);
+  // A host session that writes a file the merge also changes, between the
+  // host's snapshot and the apply, refuses the apply; the next attempt merges
+  // against the tree as it is then.
+  for (let attempt = 1; ; attempt++) {
+    const landing = planLanding(host, localRoot, remotePath, url, branch, snap.sha);
+    if (landing.commit !== snap.sha) push(landing.commit);
+    try {
+      ssh(host, landing.apply);
+      return { branch, head: landing.commit };
+    } catch (e) {
+      if (attempt >= 3) throw new Error(`the host checkout ${remotePath} kept changing under the move: ${((e as { stderr?: string }).stderr ?? String(e)).trim().slice(0, 300)}`);
+    }
+  }
+}
+
+/** The host's side of a landing, read and merged here; `apply` is the script that lands it there. */
+function planLanding(host: RemoteHost, localRoot: string, remotePath: string, url: string, branch: string, sent: string): { commit: string; apply: string } {
+  const q = shq(remotePath);
+  const [hostSnap, hostBranch, branchTip, landed] = ssh(host, [
+    remoteSnapshotScript({ cwd: remotePath, ref: HOST_TREE_REF, exclude: CLOUD_SEED_EXCLUDES }),
+    `git rev-parse --abbrev-ref HEAD`,
+    `{ git rev-parse -q --verify ${shq(`refs/heads/${branch}`)} || echo -; }`,
+    `{ git rev-parse -q --verify ${LANDED_REF} || echo -; }`,
+  ].join(" && ")).trim().split("\n").map((l) => l.trim());
+  const refs = [HOST_TREE_REF, ...(landed !== "-" ? [LANDED_REF] : []), ...(branchTip !== "-" ? [`refs/heads/${branch}`] : [])];
+  execFileSync("git", ["-C", localRoot, "fetch", "-q", "--no-write-fetch-head", url, ...refs], { env: gitEnv(host), stdio: "pipe" });
+
+  const tree = (c: string) => git(localRoot, ["rev-parse", `${c}^{tree}`]);
+  const isAncestor = (a: string, b: string) => gitSafe(localRoot, ["merge-base", "--is-ancestor", a, b]).ok;
+  const hostHead = git(localRoot, ["rev-parse", `${hostSnap}^`]);
+  const local = git(localRoot, ["rev-parse", `${sent}^`]);
+  const hostDirty = tree(hostSnap) !== tree(hostHead);
+  const sameBranch = hostBranch === branch;
+  if (!sameBranch && hostDirty) {
+    throw new Error(`the host checkout ${remotePath} is on ${hostBranch} with uncommitted work, and this session is on ${branch}; nothing was moved`);
+  }
+  // The commit the host's checkout starts from for this branch: where it is,
+  // or (clean, on another branch) where its copy of this branch is.
+  const start = sameBranch ? hostHead : branchTip !== "-" ? branchTip : local;
+  const head = isAncestor(start, local) ? local : isAncestor(local, start) ? start : null;
+  if (!head) throw new Error(`${branch} has commits on the host that this folder lacks and the other way round; nothing was moved`);
+  const ours = sameBranch && hostDirty ? hostSnap : start;
+  const common = gitSafe(localRoot, ["merge-base", start, local]);
+  const base = sameBranch && landed !== "-" ? landed : common.ok && common.out ? common.out : start;
+
+  const merge = spawnSync("git", ["-C", localRoot, "merge-tree", "--write-tree", "--name-only", "--no-messages", `--merge-base=${base}`, ours, sent], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  const [merged, ...conflicts] = (merge.stdout ?? "").trim().split("\n").filter(Boolean);
+  if (merge.status === 1) {
+    throw new Error(`this folder and the host checkout ${remotePath} both changed ${[...new Set(conflicts)].join(", ")}; nothing was moved`);
+  }
+  if (merge.status !== 0 || !merged) throw new Error(`could not merge with the host checkout: ${(merge.stderr ?? "").trim().slice(0, 300)}`);
+  const date = git(localRoot, ["log", "-1", "--format=%cI", head]);
+  const commit = merged === tree(sent) && head === local ? sent : git(localRoot, ["commit-tree", merged, "-p", head, "-m", buildSnapshotMessage({ branch })], { ...SNAPSHOT_IDENTITY, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+
+  // The work tree goes from `ours` to the merged tree through a throwaway
+  // index refreshed against the disk, so read-tree refuses any file that is
+  // no longer what `ours` says, instead of overwriting it.
+  const apply = [
+    `cd ${q}`,
+    `[ "$(git rev-parse HEAD)" = ${shq(hostHead)} ]`,
+    ...(sameBranch ? [] : [`git checkout -q -B ${shq(branch)} ${shq(start)}`]),
+    `t=$(mktemp -d)`,
+    `(export GIT_INDEX_FILE="$t/index"; git read-tree ${shq(tree(ours))} && { git update-index -q --refresh >/dev/null; git read-tree -m -u ${shq(tree(ours))} ${shq(merged)}; }); s=$?; rm -rf "$t"; [ $s = 0 ]`,
+    `git reset -q ${shq(head)}`,
+    `git update-ref ${LANDED_REF} ${shq(sent)}`,
+  ].join(" && ");
+  return { commit, apply };
 }
 
 /** Ref the remote parks its snapshot on for us to fetch. Per-branch so two
@@ -440,7 +525,7 @@ export async function gitPullWorktree(
     skip = ssh(host, `python3 -c ${shq(mirrorUntouchedInCheckoutScript())} ${shq(remotePath)} 2>/dev/null || true`).split("\n").filter(Boolean);
   } catch { /* no stamp read: every change comes home */ }
   try {
-    ssh(host, remoteSnapshotScript({ cwd: remotePath, ref }));
+    ssh(host, remoteSnapshotScript({ cwd: remotePath, ref, exclude: CLOUD_SEED_EXCLUDES }));
   } catch (e) {
     const err = e as { stderr?: Buffer; message?: string };
     return { ff: false, reason: `could not snapshot the remote worktree: ${(err.stderr?.toString() || err.message || String(e)).slice(0, 200)}` };
@@ -694,29 +779,28 @@ export function ensureRemoteCodexTrust(host: RemoteHost, remoteCwd: string, orig
 
 export interface SyncVerification {
   branch: string;
-  /** The sha the remote is expected to be at: the pushed snapshot when there was
-   * uncommitted work, else the local tip. NOT necessarily local HEAD — the
-   * snapshot is deliberately not committed locally (see gitPushWorktree). */
+  /** The commit the remote's branch is expected to be at: this folder's HEAD
+   * (a pushed snapshot is unfolded back to its parent, see gitPushWorktree). */
   localHead: string;
   remoteHead: string | null;
   headsMatch: boolean;
-  /** Tracked-file entries in the remote's `git status --porcelain` (0 = tracked files exactly
-   * at the pushed tip); null when the check itself failed. */
+  /** Changes in the remote's tree beyond what was handed over (0 = exactly the
+   * handed-over tree); null when the check itself failed. */
   remoteDirty: number | null;
 }
 
 /**
- * Prove the transfer landed: the remote checkout must sit at the same commit
- * as the local worktree with nothing uncommitted. updateInstead + the
- * checkout/reset in gitPushWorktree should guarantee this — this check is what
- * turns "should" into a fact the move can report (and the moved agent can be
- * told) instead of a silent assumption. Best-effort: an unreachable remote
- * reads as heads-unknown, never as a throw that aborts the move.
+ * Prove the transfer landed: the remote checkout must sit at this folder's
+ * commit with this folder's working tree. updateInstead + the checkout/reset
+ * in gitPushWorktree should guarantee this — this check is what turns
+ * "should" into a fact the move can report (and the moved agent can be told)
+ * instead of a silent assumption. Best-effort: an unreachable remote reads as
+ * heads-unknown, never as a throw that aborts the move.
  *
  * `expectedHead` is what the push actually sent. Pass it whenever a snapshot was
- * pushed: the snapshot is deliberately NOT committed locally, so comparing the
- * remote against local HEAD would report a phantom mismatch on every dirty move.
- * Omitted (e.g. `cast remote back`), it falls back to the local tip.
+ * pushed: the remote then sits at the snapshot's parent with the snapshot's tree
+ * uncommitted in its folder. Omitted (e.g. `cast remote back`), it falls back to
+ * the local tip and a clean remote tree.
  */
 export function verifyRemoteSync(
   host: RemoteHost,
@@ -725,17 +809,22 @@ export function verifyRemoteSync(
   expectedHead?: string,
 ): SyncVerification {
   const branch = currentBranch(localCwd);
-  const localHead = expectedHead ?? git(localCwd, ["rev-parse", "HEAD"]);
+  const sent = expectedHead ?? git(localCwd, ["rev-parse", "HEAD"]);
+  const unfolded = !!expectedHead && isWipSnapshotMessage(gitSafe(localCwd, ["show", "-s", "--format=%B", sent]).out);
+  const localHead = unfolded ? git(localCwd, ["rev-parse", `${sent}^`]) : sent;
+  const tree = git(localCwd, ["rev-parse", `${sent}^{tree}`]);
   let remoteHead: string | null = null;
   let remoteDirty: number | null = null;
   try {
+    // The remote's working tree as a tree id, through a throwaway index (the
+    // same recipe as snapshotTree), so uncommitted and untracked work count.
     const lines = ssh(
       host,
-      `cd ${shq(remoteCwd)} && git rev-parse HEAD && git status --porcelain --untracked-files=no | wc -l`,
+      `cd ${shq(remoteCwd)} && git rev-parse HEAD && t=$(mktemp -d) && (${snapshotTreeShell("$t/index", CLOUD_SEED_EXCLUDES)} && GIT_INDEX_FILE="$t/index" git diff-index --cached --name-only ${shq(tree)} | wc -l); s=$?; rm -rf "$t"; exit $s`,
     ).trim().split("\n");
     remoteHead = lines[0]?.trim() || null;
-    const dirty = parseInt(lines[lines.length - 1]?.trim() ?? "", 10);
-    remoteDirty = Number.isNaN(dirty) ? null : dirty;
+    const dirty = parseInt(lines[2]?.trim() ?? "", 10);
+    remoteDirty = lines[1]?.trim() === tree ? 0 : Number.isNaN(dirty) ? null : dirty;
   } catch { /* verification unavailable — report unknown, don't block the move */ }
   return { branch, localHead, remoteHead, headsMatch: remoteHead === localHead, remoteDirty };
 }
@@ -744,6 +833,8 @@ export interface MoveResult {
   sessionId: string;
   localCwd: string;
   remoteCwd: string;
+  /** The host checkout the session's folder is in (repositories only). */
+  remoteRoot?: string;
   remoteProjectDir: string;
   /** Present for git worktrees; rsync'd plain directories have no cheap
    * content proof. */
@@ -753,13 +844,35 @@ export interface MoveResult {
 }
 
 /**
- * Where a repo lives on the host: `<remoteBaseDir>/<basename of the local
- * checkout>`. It is the repo's MAIN checkout there: where a moved session
- * lands, the path a shared cloud session holds, and where cloud prepare
- * clones. `cast remote move` asks who occupies it before pushing anything.
+ * Where a folder of this machine lives on the host: the same place under the
+ * host's home (`~/src/codecast` here is `~/src/codecast` there), so a path
+ * reads the same on both. The home itself and folders outside it have no such
+ * place and go under `remoteBaseDir` by name. For a repository it is the MAIN
+ * checkout there: where every moved session lands (merged in, see
+ * gitPushWorktree), the path a shared cloud session holds, and where cloud
+ * prepare clones.
  */
 export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
+  const rel = path.relative(laptopHome(), localGitRoot);
+  if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return path.posix.join(remoteHome(host), ...rel.split(path.sep));
   return path.posix.join(host.remoteBaseDir, path.basename(localGitRoot));
+}
+
+/**
+ * Moves once landed beside a busy host checkout in a clone of their own
+ * (`<checkout>-mv-<batch>`); they merge into the checkout now, and the clones
+ * left on hosts are swept once nothing holds them (hostDiskSweep). A clone
+ * stands in for its checkout the way a worktree does: the session belongs to
+ * the same repository, so its root (and the project the app names it by) is
+ * the checkout's, not the clone folder's.
+ */
+export const MOVE_CLONE_RE = /-mv-[a-z0-9]+$/;
+
+/** The checkout a move clone stands in for, or `root` itself when it is not one (or that checkout is gone). */
+export function checkoutOfMoveClone(root: string, exists: (p: string) => boolean = (p) => fs.existsSync(path.join(p, ".git"))): string {
+  if (!MOVE_CLONE_RE.test(root)) return root;
+  const main = root.replace(MOVE_CLONE_RE, "");
+  return exists(main) ? main : root;
 }
 
 /**
@@ -771,10 +884,14 @@ export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
  * tree push is idempotent for git worktrees, but a plain directory rsyncs
  * with --delete, and two sessions in one directory must not race that.
  */
-export async function pushSession(sessionId: string, host: RemoteHost, opts: { skipTree?: boolean; pushedHead?: string; landing?: (main: string) => Promise<string> } = {}): Promise<MoveResult> {
+export async function pushSession(sessionId: string, host: RemoteHost, opts: { skipTree?: boolean; pushedHead?: string } = {}): Promise<MoveResult> {
   const s = resolveLocalSession(sessionId);
-  const main = remoteRepoPath(host, s.cwd);
-  const remoteCwd = opts.landing ? await opts.landing(main) : main;
+  // The checkout moves whole, and the session lands in the same folder of it
+  // it ran in here (a session in packages/web resumes in packages/web).
+  const repo = isWorktree(s.cwd);
+  const root = repo ? gitRootOf(s.cwd) : s.cwd;
+  const remoteRoot = remoteRepoPath(host, root);
+  const remoteCwd = path.posix.join(remoteRoot, ...path.relative(root, s.cwd).split(path.sep).filter(Boolean));
   const remoteProjectDir = path.posix.join(
     remoteHome(host), ".claude", "projects",
     cwdToSlug(remoteCwd),
@@ -790,10 +907,10 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
   // 2. host git readiness BEFORE the first commit lands there: known_hosts,
   //    the device key, and the mirrored identity (or the global placeholder)
   //    in the host's ~/.gitconfig. Non-fatal: a move must not be lost to it.
-  if (isWorktree(s.cwd)) {
+  if (repo) {
     try {
       const { ensureHostGitReady } = await import("../cloud/hostGit.js");
-      ensureHostGitReady(host, { localGitRoot: gitRootOf(s.cwd), repoPath: remoteCwd, onProgress: (m) => console.error(`  ${m}`) });
+      ensureHostGitReady(host, { localGitRoot: root, repoPath: remoteRoot, onProgress: (m) => console.error(`  ${m}`) });
     } catch (err) {
       console.error(`WARNING: host git setup skipped: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -804,17 +921,20 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
   if (opts.skipTree) {
     // Nothing to push; prove the tree is still there and at the tip the
     // sibling pushed (its snapshot, never this folder's plain HEAD).
-    if (isWorktree(s.cwd)) verification = verifyRemoteSync(host, s.cwd, remoteCwd, opts.pushedHead);
-  } else if (isWorktree(s.cwd)) {
-    const { head } = await gitPushWorktree(host, s.cwd, remoteCwd, remoteCwd === main ? undefined : main);
+    if (repo) verification = verifyRemoteSync(host, root, remoteRoot, opts.pushedHead);
+  } else if (repo) {
+    // A linked worktree seeds from the host's checkout of its main repository.
+    const main = path.dirname(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+    const { head } = await gitPushWorktree(host, root, remoteRoot, main !== root ? remoteRepoPath(host, main) : undefined);
     pushedHead = head;
-    copyGitignoredFiles(host, s.cwd, remoteCwd); // .env etc, not carried by git
-    // Verify against what we PUSHED (the snapshot), not local HEAD — the
-    // snapshot is intentionally never committed locally.
-    verification = verifyRemoteSync(host, s.cwd, remoteCwd, head);
+    copyGitignoredFiles(host, root, remoteRoot); // .env etc, not carried by git
+    // Verify against what landed (the merged commit), not local HEAD.
+    verification = verifyRemoteSync(host, root, remoteRoot, head);
   } else {
+    // Other sessions may share the host's copy of this folder too: nothing
+    // there is deleted, and a file changed there more recently than here stays.
     ssh(host, `mkdir -p ${shq(remoteCwd)}`);
-    rsyncUp(host, s.cwd, remoteCwd, { delete: true });
+    rsyncUp(host, s.cwd, remoteCwd);
   }
   // 4. transcript, its laptop paths rewritten to the host's
   const relocated = relocatedTranscriptCopy(s.jsonlPath, { home: laptopHome(), cwd: s.cwd }, { home: remoteHome(host), cwd: remoteCwd });
@@ -824,7 +944,7 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
     fs.rmSync(relocated.dir, { recursive: true, force: true });
   }
 
-  return { sessionId, localCwd: s.cwd, remoteCwd, remoteProjectDir, verification, pushedHead };
+  return { sessionId, localCwd: s.cwd, remoteCwd, ...(repo ? { remoteRoot } : {}), remoteProjectDir, verification, pushedHead };
 }
 
 /**
@@ -852,7 +972,7 @@ function relocatedTranscriptCopy(jsonlPath: string, from: { home: string; cwd: s
 }
 
 /** The top level of the checkout a session runs in — a linked worktree's OWN root, not the main repository's. */
-function gitRootOf(cwd: string): string {
+export function gitRootOf(cwd: string): string {
   return gitSafe(cwd, ["rev-parse", "--show-toplevel"]).out.trim() || cwd;
 }
 
@@ -874,7 +994,8 @@ export async function pullSession(sessionId: string, host: RemoteHost, move: Mov
   // working tree back
   if (isWorktree(move.localCwd)) {
     // Where the host's work began: the commit this move pushed, else the one the host was at when the session landed.
-    return await gitPullWorktree(host, move.localCwd, move.remoteCwd, move.pushedHead ?? move.verification?.remoteHead ?? undefined);
+    // Whole checkout to whole checkout: the session's own folder in it is only where it runs.
+    return await gitPullWorktree(host, gitRootOf(move.localCwd), move.remoteRoot ?? move.remoteCwd, move.pushedHead ?? move.verification?.remoteHead ?? undefined);
   }
   rsyncDown(host, move.remoteCwd, move.localCwd, { delete: true });
   return { ff: true };

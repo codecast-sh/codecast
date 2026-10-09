@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { FolderGit2, Globe, Radar, Waypoints, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Newspaper } from "lucide-react";
+import { FolderGit2, Globe, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -171,33 +171,53 @@ export function ChatNavSectionView({
   );
 }
 
-/** A section that nests rows under it: the projects under Projects, the saved views under Tasks and Docs. */
+/** A section that nests rows under it: the saved views under Tasks and Docs. */
 export type NavSectionList = { items: SectionRowSpec[]; expanded: boolean; onToggle: () => void };
 
 export type SidebarNavActive = {
-  initiatives: boolean;
-  projects: boolean;
   tasks: boolean;
   docs: boolean;
   code: boolean;
   files: boolean;
   pages: boolean;
   sessions: boolean;
-  workflows: boolean;
   line: boolean;
   triggers: boolean;
   ops: boolean;
+  /** The Org canvas (/org and an object opened on it). */
   org: boolean;
+  /** Org's read views (/org/goals…, /org/projects…). */
+  orgGoals?: boolean;
+  orgProjects?: boolean;
   /** Absent where the rail never shows Changes (the marketing hero). */
   changes?: boolean;
   rootAgent: boolean;
   windows: boolean;
 };
 
+/** Which Org row a pathname lights. Org is the canvas (/org, and an object
+ *  opened on it); /org/goals and /org/projects are its read views, each its own
+ *  row. A project's board (/projects/pj-…) opens from the Projects view, so
+ *  that row stays lit there. */
+export function orgRowsActive(pathname: string | null | undefined): Pick<SidebarNavActive, "org" | "orgGoals" | "orgProjects"> {
+  const p = pathname ?? "";
+  const under = (base: string) => p === base || p.startsWith(`${base}/`);
+  const orgGoals = under("/org/goals");
+  const orgProjects = under("/org/projects") || p.startsWith("/projects/");
+  return { org: under("/org") && !orgGoals && !orgProjects, orgGoals, orgProjects };
+}
+
+/** Org's two read views, always listed under it. */
+const ORG_VIEWS = [
+  { id: "org-goals", name: "Goals", path: "/org/goals", active: "orgGoals" },
+  { id: "org-projects", name: "Projects", path: "/org/projects", active: "orgProjects" },
+] as const;
+
 /**
  * The rail's groups in order. Conversations takes its rows as rendered
  * elements (each reads its own live count); Work and Agents are the app's
- * fixed sections, with the lists that nest under Projects, Tasks and Docs.
+ * fixed sections, with Org's read views and the saved views under Tasks and
+ * Docs.
  */
 export function SidebarNavView({
   isNarrow,
@@ -211,10 +231,11 @@ export function SidebarNavView({
   calls,
   workAction,
   active,
-  projects,
+  openPath,
   tasks,
   docs,
   orgOn,
+  orgBadge,
   changesOn,
   agent,
   mode = DEVELOPER_MODE,
@@ -231,10 +252,13 @@ export function SidebarNavView({
   calls?: ReactNode;
   workAction?: ReactNode;
   active: SidebarNavActive;
-  projects: NavSectionList;
+  /** Opens a nested row's page (Org's Goals and Projects). */
+  openPath: (path: string) => void;
   tasks: NavSectionList;
   docs: NavSectionList;
   orgOn: boolean;
+  /** The Org row's count of what waits on you; renders nothing at zero. */
+  orgBadge?: ReactNode;
   /** The active team has Changes on (teams.features.changes): its row sits under Feed. */
   changesOn?: boolean;
   /** The workspace's agent: its name, its hover title and its face. */
@@ -279,33 +303,30 @@ export function SidebarNavView({
       </div>
 
       </>)}
-      {/* What you are working on. Projects leads: it is the container the rest
-          of this group files into, so the rail reads top-down as project →
-          its tasks → the docs and files around them. */}
+      {/* What you are working on. Org leads: the company the rest of this
+          group files into, then its tasks and the docs and files around them. */}
       <RailHeading label="Work" isNarrow={isNarrow} action={workAction} />
       <div className="text-sm">
-        {/* The goals above the projects (initiatives-projects-role-page.md I1). */}
-        {shows("nav.initiatives") && <NavSection
-          label={page("/goals", "Goals")}
-          href="/goals"
-          isActive={active.initiatives}
+        {/* The company on one canvas: what waits on you, its goals, and its
+            people and roles. Its two read views always show under it. */}
+        {shows("nav.org") && <NavSection
+          label={page("/org", "Org")}
+          href="/org"
+          isActive={active.org}
           popped="work"
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          title="Goals: what the company is trying to reach"
-          icon={<Flag className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
-        {showsPage("/projects") && <NavSection
-          label={page("/projects", "Projects")}
-          href="/projects"
-          isActive={active.projects}
-          popped="work"
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          items={projects.items}
-          expanded={projects.expanded}
-          onToggle={projects.onToggle}
-          icon={<FolderKanban className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          title="Org: what waits on you, the goals, and who carries the work"
+          badge={orgBadge}
+          alwaysOpen
+          items={ORG_VIEWS.map((view): SectionRowSpec => ({
+            id: view.id,
+            name: view.name,
+            path: view.path,
+            active: !!active[view.active],
+            onSelect: () => openPath(view.path),
+          }))}
+          icon={<Network className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         <NavSection
           label={page("/tasks", "Tasks")}
@@ -372,14 +393,6 @@ export function SidebarNavView({
           standing things that set it running. */}
       <RailHeading label={words.agentsGroup} isNarrow={isNarrow} />
       <div data-rail-group="agents" className="text-sm">
-        {showsPage("/routines") && <NavSection
-          label={page("/routines", "Workflows")}
-          href="/routines"
-          isActive={active.workflows}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          icon={<Workflow className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
         {showsPage("/line") && <NavSection
           label={page("/line", "Line")}
           href="/line"
@@ -399,23 +412,7 @@ export function SidebarNavView({
           title="Ops: your product's errors, checks, replays and metrics"
           icon={<Radar className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {orgOn && (<>
-        <NavSection
-          label={page("/org", "Org")}
-          href="/org"
-          isActive={active.org}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          title="Org — who reports to whom"
-          icon={
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="9" y="3" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-              <rect x="3" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-              <rect x="15" y="16.5" width="6" height="4.5" rx="1" strokeWidth={1.5} />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V12M12 12H6v4.5M12 12h6v4.5" />
-            </svg>
-          }
-        />
+        {orgOn && (
         <NavSection
           label={agent.label}
           href="/anchor"
@@ -425,7 +422,7 @@ export function SidebarNavView({
           title={agent.title}
           icon={agent.icon}
         />
-        </>)}
+        )}
         {showsPage("/windows") && <NavSection
           label={page("/windows", "Windows")}
           href="/windows"
