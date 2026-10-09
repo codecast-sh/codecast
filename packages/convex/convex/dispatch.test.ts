@@ -127,6 +127,30 @@ describe("applyPatches conversation owner gate", () => {
   });
 });
 
+// A gesture on a lead patches its whole group; 175 rows of hide teardown in
+// one transaction passed Convex's 4096-read cap (2026-10-08).
+describe("applyPatches batches a big patch set", () => {
+  test("the first rows land now and the rest are scheduled with the same intent", async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `conversations_${i}`);
+    const db = makeFakeDb({
+      conversations: ids.map((_id) => ({ _id, user_id: "users_me", status: "active", message_count: 5 })),
+      session_owners: [],
+      messages: [],
+      pending_messages: [],
+    });
+    const scheduled: any[] = [];
+    const scheduler = { runAfter: async (_ms: number, _fn: any, args: any) => { scheduled.push(args); } };
+    const patches = { conversations: Object.fromEntries(ids.map((id) => [id, { inbox_stashed_at: 555 }])) };
+
+    await applyPatches({ db, scheduler } as any, "users_me" as any, patches, { forceKill: true });
+
+    expect(db._tables.conversations.filter((r: any) => r.inbox_stashed_at === 555)).toHaveLength(25);
+    expect(scheduled).toHaveLength(1);
+    expect(Object.keys(scheduled[0].patches.conversations)).toEqual(ids.slice(25));
+    expect(scheduled[0]).toMatchObject({ user_id: "users_me", force_kill: true });
+  });
+});
+
 // Kill is a DESIRED STATE, not an event. A kill patch is indistinguishable at
 // the FIELD level from a quiet re-assert of the same flag (a stub-rekey flush,
 // an undo replay), so the dispatched ACTION NAME is the only signal of intent

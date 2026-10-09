@@ -1,6 +1,7 @@
 import { refuseSeatKill } from "./lib/seatKill";
 import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./agentTasks";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
@@ -436,21 +437,67 @@ export async function cascadeHideToNestedChildren(
       .take(200),
   ]);
   const seen = new Set<string>();
-  let cascaded = 0;
+  const childIds: string[] = [];
   for (const child of [...taskSubs, ...spawned]) {
     const idStr = child._id.toString();
     if (idStr === leadId || seen.has(idStr)) continue;
     seen.add(idStr);
     if (nestParentIdOf(child) !== leadId) continue;
+    if (child[field] && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    childIds.push(idStr);
+  }
+  await hideNestedChildren(ctx, lead._id, field, stamp, childIds, opts);
+  return childIds.length;
+}
+
+// Each child's teardown costs tens of reads, so a lead with 175 subagents
+// passed Convex's 4096-read cap inside the gesture's own transaction and the
+// lead could not be hidden at all (2026-10-08). The first batch goes now; the
+// rest follow in scheduled batches, which stop if the lead was un-hidden since.
+const CASCADE_BATCH = 20;
+
+async function hideNestedChildren(
+  ctx: { db: any; scheduler?: any },
+  leadId: any,
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+  stamp: number,
+  childIds: string[],
+  opts?: { forceKill?: boolean },
+): Promise<void> {
+  const now = ctx.scheduler ? childIds.slice(0, CASCADE_BATCH) : childIds;
+  for (const id of now) {
+    // A copy: applyHideTransition classifies on the PRE-patch row.
+    const found = await ctx.db.get(id);
+    if (!found) continue;
+    const child = { ...found };
     const alreadyHidden = !!child[field];
-    if (alreadyHidden && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    if (alreadyHidden && !opts?.forceKill) continue;
     const childPatch = { [field]: alreadyHidden ? child[field] : stamp };
     if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
     await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill });
-    cascaded++;
   }
-  return cascaded;
+  const rest = childIds.slice(now.length);
+  if (rest.length) {
+    await ctx.scheduler.runAfter(0, internal.cleanup.continueCascadeHide, {
+      lead_id: leadId, field, stamp, child_ids: rest, force_kill: opts?.forceKill,
+    });
+  }
 }
+
+export const continueCascadeHide = internalMutation({
+  args: {
+    lead_id: v.id("conversations"),
+    field: v.union(v.literal("inbox_dismissed_at"), v.literal("inbox_stashed_at")),
+    stamp: v.number(),
+    child_ids: v.array(v.string()),
+    force_kill: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { lead_id, field, stamp, child_ids, force_kill }) => {
+    const lead = await ctx.db.get(lead_id);
+    if (!lead || !(lead as any)[field]) return;
+    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill });
+  },
+});
 
 export const gcEmptyConversations = internalMutation({
   args: {

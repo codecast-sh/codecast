@@ -1,4 +1,4 @@
-import { mutation, syncAckPositions, syncAckReceipts } from "./functions";
+import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
@@ -385,6 +385,21 @@ async function hideForViewerByClientId(ctx: any, userId: Id<"users">, convId: st
 // inbox_dismissed_at stays transition-gated.
 const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
 
+// Rows one applyPatches transaction applies before it schedules the rest.
+const PATCH_ROWS_INLINE = 25;
+
+// The rows applyPatches deferred, with the caller's user and intent.
+export const applyDeferredPatches = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    patches: v.any(),
+    force_kill: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { user_id, patches, force_kill }) => {
+    await applyPatches(ctx, user_id, patches, { forceKill: force_kill });
+  },
+});
+
 // Exported for tests (the dispatch mutation is the only runtime caller).
 export async function applyPatches(
   ctx: HandlerCtx,
@@ -393,11 +408,24 @@ export async function applyPatches(
   opts?: { forceKill?: boolean }
 ) {
   let bucketViewChanged = false;
+  // A gesture on a lead patches every row of its group, and each conversation
+  // row runs its hide or un-kill teardown here. A lead with 175 subagents did
+  // all of that in one transaction and passed Convex's 4096-read cap, so it
+  // could be neither stashed, killed nor restored (2026-10-08). The first rows
+  // land in the caller's transaction; the rest continue through this same
+  // function in scheduled batches.
+  const scheduler = (ctx as any).scheduler;
+  let inline = PATCH_ROWS_INLINE;
+  let deferred: Record<string, Record<string, Record<string, any>>> | null = null;
   for (const [table, docs] of Object.entries(patches)) {
     const config = Object.prototype.hasOwnProperty.call(TABLE_CONFIG, table) ? TABLE_CONFIG[table] : undefined;
     if (!config) continue;
 
     for (const [docKey, fields] of Object.entries(docs)) {
+      if (inline-- <= 0 && scheduler) {
+        ((deferred ??= {})[table] ??= {})[docKey] = fields;
+        continue;
+      }
       const safe: Record<string, any> = {};
       for (const [k, val] of Object.entries(fields)) {
         if (config.editable.has(k)) safe[k] = val === null ? undefined : val;
@@ -575,6 +603,11 @@ export async function applyPatches(
         }
       }
     }
+  }
+  if (deferred) {
+    await scheduler.runAfter(0, internal.dispatch.applyDeferredPatches, {
+      user_id: userId, patches: deferred, force_kill: opts?.forceKill,
+    });
   }
   if (bucketViewChanged) {
     await advanceLocalViewRevision(
