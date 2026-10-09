@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import { targetSession, withTmuxSession } from "./tmuxRoute.js";
 
 /**
  * Literal text as the argument of `send-keys -l`.
@@ -218,6 +219,16 @@ export async function pasteTextIntoPane(
   text: string,
   bracketed = true,
 ): Promise<void> {
+  // Buffers live on one tmux server, and load-buffer and delete-buffer name
+  // no target to route by: outside the target session's scope they reached
+  // the shared server while paste-buffer reached the session's own, and every
+  // paste failed with "no buffer" (2026-10-07).
+  const session = targetSession(target);
+  if (session) return withTmuxSession(session, () => pasteThroughBuffer(exec, target, text, bracketed));
+  return pasteThroughBuffer(exec, target, text, bracketed);
+}
+
+async function pasteThroughBuffer(exec: TmuxExec, target: string, text: string, bracketed: boolean): Promise<void> {
   const payload = prepareInjectedContent(text, { bracketed });
   const id = `cc-${process.pid}-${randomUUID()}`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-paste-"));

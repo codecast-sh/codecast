@@ -175,6 +175,26 @@ export function firstRunWords(runAt: number, now: number): string {
   return `${at.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} at ${time}`;
 }
 
+/** Whether a routine's schedule line already says its time of day (a
+ *  cadence, every day, every week), so its next run need only say the day. */
+function saysItsClock(task: ScheduleFields): boolean {
+  return task.schedule_type === "recurring" && (!!task.cadence || task.interval_ms === DAY_MS || task.interval_ms === WEEK_MS);
+}
+
+/** The day of a run whose time the schedule already says: "today",
+ *  "tomorrow", a weekday within the week, else the date. Within the hour it
+ *  says how soon, as firstRunWords does. */
+function nextDayWords(runAt: number, now: number): string {
+  if (runAt - now < 60 * 60 * 1000) return firstRunWords(runAt, now);
+  const at = new Date(runAt);
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOf(at) - startOf(new Date(now))) / DAY_MS);
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days < 7) return WEEKDAYS[at.getDay()];
+  return at.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+
 /** When a plain (hosted) routine runs next, labelled so it never reads as
  *  the last run: "Next: today at 8:00 AM", in the words the form and the card
  *  use for a first run. With no run ahead, the state word ("Paused").
@@ -184,7 +204,7 @@ export function plainNextRun(task: ScheduleFields & { status: string; run_count?
   const ended = plainEndedWords(task);
   if (ended) return ended;
   const next = task.status === "scheduled" && task.run_at !== undefined && task.run_at > now
-    ? `Next: ${firstRunWords(task.run_at, now)}`
+    ? `Next: ${saysItsClock(task) ? nextDayWords(task.run_at, now) : firstRunWords(task.run_at, now)}`
     : taskStateLabel(task, now);
   return next.charAt(0).toUpperCase() + next.slice(1);
 }

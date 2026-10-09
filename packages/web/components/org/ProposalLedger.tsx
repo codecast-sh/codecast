@@ -10,7 +10,7 @@
 // Not named after its main export: `ProposalSubjects.tsx` and the model's
 // `proposalSubjects.ts` are one path on a disk that ignores case, and a
 // resolver then picks between them by extension.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Check } from "lucide-react";
 import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
 import { isOrgChangeDecidable, ORG_REPLY_WORDS, orgProposalWork, type OrgAskNames } from "@codecast/shared/contracts/orgProposal";
@@ -26,6 +26,7 @@ import { proposalProgressWords, proposalSubjects, recordGroupCards, type RecordG
 import { askNames } from "./staffingAsks";
 import { RecordGroupRow } from "./RecordGroupRow";
 import { LEDGER_HAIR, LEDGER_INKS, LEDGER_STOP, LedgerClosingRow, LedgerWord, ProposalSubjectCard, type SubjectAnswer } from "./ProposalSubjectCard";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply">;
 /** What a ref of the batch names a proposal by. */
@@ -114,8 +115,8 @@ function useEntryAnswer(key: string | null, comments: readonly PendingComment[] 
   const stale = !!key && !!pending && revisedAt(members) > pending.createdAt;
   // Withdrawn under the reader: the entry says so until they answer again.
   const [revised, setRevised] = useState(false);
-  useEffect(() => { if (stale) { answerProposalCard(key!, ref, null); setRevised(true); } }, [stale]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (pending && !stale) setRevised(false); }, [pending, stale]);
+  useWatchEffect(() => { if (stale) { answerProposalCard(key!, ref, null); setRevised(true); } }, [stale]); // eslint-disable-line react-hooks/exhaustive-deps
+  useWatchEffect(() => { if (pending && !stale) setRevised(false); }, [pending, stale]);
   return { answer: stale ? null : answer, revised, ...(key ? { onAnswer: (a: SubjectAnswer | null) => answerProposalCard(key, ref, a) } : {}) };
 }
 
@@ -305,11 +306,15 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
         className={cn("mt-2", className)}
         above={takeover && answerable && (rest.length > 0 || pressed) && list.length > 1 ? <TakeoverEdit phrase={takeover.phrase} leave={leave} onLeave={onLeave} /> : undefined}
         left={onMap ? <LedgerWord onClick={onMap} aria-label="Show this proposal on the map" title="Open the org map beside this conversation" data-open-map={proposal.short_id}>Map</LedgerWord> : undefined}
-        right={answerable && list.length > 1 && (rest.length > 0 || pressed) ? (
-          <LedgerWord className={cn("-mr-2", pressed && "text-[color:var(--ink-violet)]")} aria-pressed={pressed} onClick={approveRest} data-approve-rest={rest.length}>
+        right={answerable && (answers.length === 0 || (list.length > 1 && (rest.length > 0 || pressed))) ? (
+          <>
+          {/* Before anything is staged: an answer collects in the reply, it does not act on its own. */}
+          {answers.length === 0 && <span className="mr-2 text-[11px] leading-7 text-[color:var(--ink-quiet)]" data-proposal-send-hint>Nothing changes until you send your reply</span>}
+          {list.length > 1 && (rest.length > 0 || pressed) && <LedgerWord className={cn("-mr-2", pressed && "text-[color:var(--ink-violet)]")} aria-pressed={pressed} onClick={approveRest} data-approve-rest={rest.length}>
             {pressed && <Check className="-ml-0.5 mr-1 h-3 w-3" aria-hidden />}
             {restLabel}
-          </LedgerWord>
+          </LedgerWord>}
+          </>
         ) : undefined}
         outcome={outcome}
       />
