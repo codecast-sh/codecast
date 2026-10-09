@@ -45,6 +45,12 @@ describe("sharedCheckoutOccupant", () => {
     expect(sharedCheckoutOccupant([row({ session_error: "crashed" })], { projectPath: ROOT })).not.toBeNull();
   });
 
+  test("a merging claimer shares the checkout with moved sessions, never with a shared row on its own branch", () => {
+    const moved = row({ conversation_id: "conv_m", cloud_workspace: null, cloud_checkout_path: null, project_path: ROOT });
+    expect(sharedCheckoutOccupant([moved], { projectPath: ROOT, merging: true })).toBeNull();
+    expect(sharedCheckoutOccupant([row()], { projectPath: ROOT, merging: true })?.conversation_id).toBe("conv_a");
+  });
+
   test("legacy: any alive row whose project_path is the root (a moved session) occupies it", () => {
     const moved = row({ conversation_id: "conv_m", cloud_workspace: null, cloud_checkout_path: null, project_path: ROOT });
     expect(sharedCheckoutOccupant([moved], { projectPath: ROOT })?.conversation_id).toBe("conv_m");

@@ -1,15 +1,12 @@
-// The org screen's pure helpers (docs/architecture/org-staffing.md S41): the
-// URL, the message a proposal's card sits in, which proposals to feed, the
-// strip's rows, the mission, and the path the split opens. No React, so the
-// rules test without a DOM.
-
-import { proposalTotals } from "@codecast/shared/contracts/orgChangeWords";
-import { agoOf } from "../../lib/threadState";
-import { proposalAnswersOf } from "../../lib/reviewActions";
-import type { PendingComment } from "../../lib/quoteFormat";
-import { composeParam, openProposals, proposalParam, proposalProgress } from "./staffingModel";
-import type { OrgProposalAuthor, OrgProposalRow } from "./orgStaffingTypes";
-import type { MapFilter } from "./OrgMap";
+// The Org screen's pure helpers (essence spec §3.2, §5): the URL, the panel's
+// size, which conversation a proposal opens in, the message a proposal's card
+// sits in, and which proposals to feed. No React, so the rules test without a
+// DOM.
+import type { Layout } from "react-resizable-panels";
+import { composeParam, openProposals, proposalParam } from "./staffingModel";
+import type { OrgProposalRow } from "./orgStaffingTypes";
+import type { OrgTree } from "./orgTypes";
+import type { ClientLayouts } from "../../store/clientPrefsTypes";
 
 /** A host's scroll-to request for an embedded conversation: the message to
  *  land on, or the time to centre on while the message is not loaded, with
@@ -20,27 +17,14 @@ import type { MapFilter } from "./OrgMap";
  *  the focused entry), and the thread's own settle yields to that scroll. */
 export type JumpRequest = { messageId?: string; timestamp?: number; find?: string; nonce: number; onSettled?: () => void };
 
-export type OrgScreenShow = "conversation" | "map";
-
-/** Under this width the two columns stack behind a Conversation | Map
- *  switch: the conversation's 560px floor and the map's 360px floor, with
- *  room for the cards' wide layout (ProposalSubjectCard flips at 561px). */
-export const ORG_STACK_BELOW = 980;
-
 export type OrgScreenParams = {
-  /** `op-N`, lower case: the card to scroll to, or the foreign row to expand. */
+  /** `op-N`, lower case: the proposal the panel holds. */
   proposal: string | null;
   /** The change seq to light. */
   focus: number | null;
-  /** The stacked layout's column; ignored when wide. */
-  show: OrgScreenShow | null;
-  /** The conversation this pane sits beside, set by the split opener. */
-  beside: string | null;
-  /** The map's filter; absent reads as everything. */
-  lens: MapFilter;
-  /** "As proposed" on the map; `proposed=0` turns it off. */
-  proposed: boolean;
-  /** Text to seed the head's draft with. */
+  /** The conversation the panel holds. */
+  session: string | null;
+  /** Text to seed the Head of People's draft with. */
   compose: string | null;
   /** `panel=history`: open the history sheet. */
   history: boolean;
@@ -49,46 +33,83 @@ export type OrgScreenParams = {
 const paramsOf = (search: string | URLSearchParams | null | undefined): URLSearchParams =>
   typeof search === "string" ? new URLSearchParams(search.startsWith("?") ? search.slice(1) : search) : search ?? new URLSearchParams();
 
-/** Every URL parameter the screen reads, from one parse. `s` and `follow` are
- *  not read: the pane never follows a thread. */
+/** Every URL parameter the screen reads, from one parse. */
 export function orgScreenParams(search: string | URLSearchParams | null | undefined): OrgScreenParams {
   const q = paramsOf(search);
   const s = q.toString();
   const focus = q.get("focus");
-  const show = q.get("show");
-  const lens = q.get("lens");
   return {
     proposal: proposalParam(s),
     focus: focus && /^\d+$/.test(focus) ? Number(focus) : null,
-    show: show === "conversation" || show === "map" ? show : null,
-    beside: q.get("beside") || null,
-    lens: lens === "goals" || lens === "people" ? lens : "everything",
-    proposed: q.get("proposed") !== "0",
+    session: q.get("session")?.trim() || null,
     compose: composeParam(s),
     history: q.get("panel") === "history",
   };
 }
 
-/** `/org?` with `proposal`, `focus`, `lens`, `show`, `beside`, in that order
- *  and only those set; `everything` is the absent lens. The split opener and
- *  the chip build their links here. */
-export function orgScreenPath(p: { proposal?: string | null; focus?: string | number | null; lens?: string | null; show?: OrgScreenShow | null; beside?: string | null }): string {
-  const q = new URLSearchParams();
-  if (p.proposal) q.set("proposal", p.proposal);
-  if (p.focus !== undefined && p.focus !== null && p.focus !== "") q.set("focus", String(p.focus));
-  if (p.lens && p.lens !== "everything") q.set("lens", p.lens);
-  if (p.show) q.set("show", p.show);
-  if (p.beside) q.set("beside", p.beside);
+/** Where the retired health page's address lands: `/org?view=health` is the
+ *  Org screen, every other parameter kept. Null for any other address, so the
+ *  route renders the screen as it is. */
+export function healthRedirect(search: string | URLSearchParams | null | undefined): string | null {
+  const q = paramsOf(search);
+  if (q.get("view") !== "health") return null;
+  q.delete("view");
   const s = q.toString();
   return s ? `/org?${s}` : "/org";
 }
 
+// -------- the panel beside the canvas
+
+/** Under this screen width an open panel takes the whole content area. */
+export const ORG_PANEL_FILLS_BELOW = 900;
+/** The panel's first width and its double-click reset, in percent. */
+export const ORG_DETAIL_DEFAULT = 44;
+export const ORG_DETAIL_MIN_PX = 380;
+/** What the panel always leaves the canvas. */
+export const ORG_CANVAS_MIN_PX = 420;
+export const ORG_CANVAS_ID = "org-canvas";
+export const ORG_DETAIL_ID = "org-detail";
+
+/** A stored size counts only when it leaves both sides room. */
+export function detailSizeOf(stored: ClientLayouts["org_detail"] | undefined): number {
+  const d = stored?.detail;
+  return typeof d === "number" && d >= 5 && d <= 95 ? d : ORG_DETAIL_DEFAULT;
+}
+
+/** The Group's layout: closed, the canvas alone; open, the person's size;
+ *  filling (a narrow screen), the panel alone. */
+export function detailLayout(open: boolean, fills: boolean, detail: number): Layout {
+  if (!open) return { [ORG_CANVAS_ID]: 100, [ORG_DETAIL_ID]: 0 };
+  if (fills) return { [ORG_CANVAS_ID]: 0, [ORG_DETAIL_ID]: 100 };
+  return { [ORG_CANVAS_ID]: 100 - detail, [ORG_DETAIL_ID]: detail };
+}
+
+// -------- proposals
+
+/** Where a proposal opens (§3.2): its own thread, scrolled to the card; for a
+ *  row from before `thread` existed, the author's conversation; for one a
+ *  person posted (`thread: null`), the card alone. */
+export type ProposalPanel = { kind: "thread"; conversationId: string } | { kind: "card" };
+
+export function proposalPanelOf(p: Pick<OrgProposalRow, "thread" | "author">, tree: Pick<OrgTree, "roles"> | null): ProposalPanel {
+  if (p.thread) return { kind: "thread", conversationId: p.thread.conversation_id };
+  if (p.thread === null) return { kind: "card" };
+  const a = p.author;
+  if (a.kind === "session" && a.id) return { kind: "thread", conversationId: a.id };
+  if (a.kind === "role") {
+    const role = tree?.roles.find((r) => r._id === a.id || (!!a.handle && r.handle === a.handle) || (!!a.short_id && r.short_id === a.short_id));
+    const conv = role?.standing?.conversation_id;
+    if (conv) return { kind: "thread", conversationId: String(conv) };
+  }
+  return { kind: "card" };
+}
+
 /** The message that draws a proposal's card: the first one from the START
  *  whose text has `op-N` alone on a line (the same line CARD_RE in
- *  orgChartPointer.ts reads, which also takes `#seq`; fold the two together
- *  once that file settles) and that a person did not write. The author posts
- *  the card once; later turns write `op-N#3` in sentences and the person's
- *  reply block writes `op-N#seq` followed by words, so neither matches. */
+ *  orgChartPointer.ts reads, which also takes `#seq`) and that a person did
+ *  not write. The author posts the card once; later turns write `op-N#3` in
+ *  sentences and the person's reply block writes `op-N#seq` followed by
+ *  words, so neither matches. */
 export function findProposalCardMessage(messages: readonly { _id: string; role?: string; content?: string }[] | undefined, shortId: string): string | null {
   const re = new RegExp(`^[ \\t]*${shortId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`, "im");
   return messages?.find((m) => m.role !== "user" && typeof m.content === "string" && re.test(m.content))?._id ?? null;
@@ -104,81 +125,4 @@ export function openProposalsToFeed(rows: OrgProposalRow[], linkedRef: string | 
   const refs = openProposals(rows).reverse().slice(0, OPEN_PROPOSAL_FEED_CAP).map((p) => p.short_id);
   if (linkedRef && !refs.includes(linkedRef)) refs.push(linkedRef);
   return refs;
-}
-
-/** The strip row's count: the one helper's ("64 records", "11 changes to
- *  goals"), or the list row's while the change rows load. */
-export function stripCount(p: Pick<OrgProposalRow, "changes" | "counts">): string {
-  if (p.changes.length === 0) return p.counts?.total ? `${p.counts.total} changes` : "";
-  return proposalTotals(p.changes).count;
-}
-
-/** The strip row's totals sentence (its hover): the one helper's line without
- *  the stop, else the count. */
-export function stripTotals(p: Pick<OrgProposalRow, "changes" | "counts">): string {
-  const line = p.changes.length ? proposalTotals(p.changes).line : null;
-  return (line ?? stripCount(p)).replace(/\.$/, "");
-}
-
-export type StripRow = {
-  proposal: OrgProposalRow;
-  /** The proposal's thread is not the conversation on screen (or it has
-   *  none): nothing to scroll to, so the strip expands its card instead. */
-  foreign: boolean;
-  /** The short count drawn on the row. */
-  count: string;
-  /** The totals sentence, for the row's hover. */
-  totals: string;
-  /** Answers staged in this conversation's batch for this proposal. */
-  answered: number;
-  decided: number;
-  total: number;
-  age: string;
-  author: OrgProposalAuthor;
-};
-
-/** The strip's rows: the open proposals OLDEST first, so the rows match the
- *  order of the cards in the thread and the oldest, which has waited longest,
- *  leads. `everyRowHere` is the dev preview, whose column draws every
- *  fixture itself: no row is foreign, whatever thread it names. */
-export function stripRows(open: OrgProposalRow[], headConv: string | null, comments: readonly PendingComment[] | undefined, now: number, everyRowHere = false): StripRow[] {
-  return openProposals(open).reverse().map((proposal) => {
-    const { decided, total } = proposalProgress(proposal);
-    return {
-      proposal,
-      foreign: !everyRowHere && proposal.thread?.conversation_id !== headConv,
-      count: stripCount(proposal),
-      totals: stripTotals(proposal),
-      answered: proposalAnswersOf(comments, proposal._id).length,
-      decided,
-      total,
-      age: agoOf(now - proposal.created_at),
-      author: proposal.author,
-    };
-  });
-}
-
-/** The strip's one line: how many wait, the changes they hold in all (when
- *  every row's count is known), and the staged answers across them. */
-export function stripLine(rows: readonly Pick<StripRow, "proposal" | "answered">[]): { wait: string; changes: string | null; answered: string | null } {
-  // The list row's count, or the fed change rows when the list row has none
-  // (the dev preview's fixtures); a row with neither leaves the changes off.
-  const totals = rows.map((r) => r.proposal.counts?.total ?? (r.proposal.changes.length || undefined));
-  const changes = totals.every((t): t is number => typeof t === "number") ? totals.reduce((n, t) => n + t, 0) : null;
-  const answered = rows.reduce((n, r) => n + r.answered, 0);
-  return {
-    wait: rows.length === 1 ? "1 proposal waits on you" : `${rows.length} proposals wait on you`,
-    changes: changes === null ? null : changes === 1 ? "1 change" : `${changes} changes`,
-    answered: answered > 0 ? `${answered} answered, waiting for your send` : null,
-  };
-}
-
-/** The mission, by goalsLayout's rule: roots are rows with no parent; a root
- *  with a child among the rows is a mission; exactly one mission and exactly
- *  one root is that goal, else none. */
-export function missionOf(rows: readonly { _id: string; short_id: string; title: string; parent_initiative_id?: string }[]): { title: string; shortId: string } | null {
-  const roots = rows.filter((r) => !r.parent_initiative_id);
-  if (roots.length !== 1) return null;
-  const root = roots[0];
-  return rows.some((r) => r.parent_initiative_id === root._id) ? { title: root.title, shortId: root.short_id } : null;
 }

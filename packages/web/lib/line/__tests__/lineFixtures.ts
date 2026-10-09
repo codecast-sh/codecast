@@ -35,11 +35,16 @@ export const signalsA: MapSignal[] = [
   sig({ _id: "sig_a2", task_id: "task_a", created_at: A0 + HOUR, fingerprint: "aw:c-42", subject: "ex-union-3" }),
   sig({ _id: "sig_a3", task_id: "task_a", created_at: A0 + 2 * HOUR, attach: "judge", source: "chat", kind: "bug", fingerprint: "chat:t-9", title: "Agent ignored my question again" }),
 ];
+// The stations of the line these runs ran on, before the rebase station was
+// added (the run row's graph_nodes): a run is never drawn through a station
+// its own line did not have.
+const RAN_ON = ["start", "ground", "park", "plan", "plan_gate", "analyze", "prove", "red", "dissolve", "implement", "verify", "green", "eval", "unscored", "review",
+  "card_draft", "card_write", "card", "decide", "reopen", "drop", "ship", "merge", "watch", "exit"].map((id) => ({ id, h: id }));
 // The run row keeps each station's newest visit: the first round through
 // implement..decide survives only as the reopen between red and implement.
 const r = A0 + HOUR;
 export const runA: MapRun = {
-  _id: "run_a", status: "completed", task_id: "task_a", workflow_name: "line", current_node_id: "exit", graph_hash: "h1",
+  _id: "run_a", status: "completed", task_id: "task_a", workflow_name: "line", current_node_id: "exit", graph_hash: "h1", graph_nodes: RAN_ON,
   gate_node_id: "decide", gate_response: "S", gate_answer: "Ship", gate_decision_short_id: "sd-2",
   gate_choices: [{ key: "S", label: "[S] Ship", target: "ship" }, { key: "R", label: "[R] Revise", target: "reopen" }, { key: "D", label: "[D] Drop", target: "drop" }],
   node_statuses: [
@@ -94,7 +99,7 @@ export const signalsF: MapSignal[] = [
   sig({ _id: "sig_f2", task_id: "task_f", created_at: NOW - DAY, source: "ci", kind: "regression", fingerprint: "ci:tz", title: "Timezone test fails again", reopened: true }),
 ];
 export const runF: MapRun = {
-  _id: "run_f", status: "completed", task_id: "task_f", workflow_name: "line", current_node_id: "exit", gate_node_id: "decide", gate_answer: "Ship",
+  _id: "run_f", status: "completed", task_id: "task_f", workflow_name: "line", current_node_id: "exit", gate_node_id: "decide", gate_answer: "Ship", graph_nodes: RAN_ON,
   node_statuses: [
     n("ground", F0 + MIN, 3), n("analyze", F0 + 5 * MIN), n("prove", F0 + 10 * MIN, 20), n("red", F0 + 31 * MIN), n("implement", F0 + 35 * MIN, 40), n("verify", F0 + 76 * MIN),
     n("green", F0 + 82 * MIN), n("eval", F0 + 88 * MIN), n("review", F0 + 95 * MIN, 10), n("card_draft", F0 + 2 * HOUR, 1), n("card_write", F0 + 2 * HOUR + 2 * MIN), n("card", F0 + 2 * HOUR + 8 * MIN, 1),

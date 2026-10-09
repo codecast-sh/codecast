@@ -42,7 +42,7 @@ import { spawnSync } from "node:child_process";
 import { buildComputerHelper, COMPUTER_HELPER_PAYLOAD } from "./build-with-native.js";
 import {
   HELPER_APP_BASENAME,
-  HELPER_SIGNING_TEAM,
+  keychainSigningIdentity,
   computerHome,
   helperAppPath,
   helperExecutablePath,
@@ -331,8 +331,7 @@ switch (verb) {
     // revokes both grants until a signed build replaces it. The team identity
     // comes from the keychain when the environment does not name one.
     if (!process.env.CODECAST_SIGN_IDENTITY) {
-      const found = spawnSync("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" }).stdout ?? "";
-      const identity = new RegExp(`"(Developer ID Application: [^"]*\\(${HELPER_SIGNING_TEAM}\\))"`).exec(found)?.[1];
+      const identity = keychainSigningIdentity();
       if (!identity) fail("dev needs the Developer ID signing identity (set CODECAST_SIGN_IDENTITY); an ad hoc build would revoke the helper's grants");
       process.env.CODECAST_SIGN_IDENTITY = identity;
     }
