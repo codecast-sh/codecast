@@ -9,6 +9,7 @@ const importers = [
   "sessionRegisterHook.ts",
   "threadStateHook.ts",
   "taskPulseHook.ts",
+  "taskContextHook.ts",
   "userPromptHook.ts",
 ];
 

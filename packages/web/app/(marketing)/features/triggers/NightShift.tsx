@@ -85,7 +85,7 @@ function LaneRow({ lane, i }: { lane: Lane; i: number }) {
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11.5px] leading-tight">
         <span className="font-semibold" style={{ color: lane.color }}>{lane.id}</span>
         <span className="min-w-0 truncate" style={{ color: SOL.base02 }}>{lane.title}</span>
-        <span style={{ color: SOL.base1 }}>{lane.flags}</span>
+        <span style={{ color: SOL.base1 }}>{lane.schedule}</span>
       </div>
       <div className="relative h-7">
         <div className="absolute inset-x-0 top-1/2 h-px" style={{ backgroundColor: `color-mix(in srgb, ${lane.color} 22%, ${SOL.base2})` }} />

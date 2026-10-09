@@ -7,7 +7,7 @@ import { C as SharedC } from "../kit";
 export const BLUE = SOL.blue;
 /** The two machines every diagram on the page names. */
 export const LAPTOP = "MacBook-Pro";
-export const HOST = "ip-172-31-40-243";
+export const HOST = "shop-host";
 export const SESSION = "jx7k2pd";
 
 /** Inline style that sets an animation delay (seconds) on a `.cl-anim` element. */
@@ -108,6 +108,21 @@ export function Pane({ machine, title, right, children, className = "", bodyClas
       </div>
       <div className={bodyClassName}>{children}</div>
     </div>
+  );
+}
+
+/** A real screenshot of the app, framed like the page's host panes. */
+export function Shot({ src, alt, width, height, className = "", eager = false }: { src: string; alt: string; width: number; height: number; className?: string; eager?: boolean }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={width}
+      height={height}
+      loading={eager ? "eager" : "lazy"}
+      className={`block w-full h-auto rounded-xl border ${className}`}
+      style={{ borderColor: "#0b4a5a", backgroundColor: "#0f2a33", boxShadow: "0 24px 60px -28px rgba(0,0,0,.6)" }}
+    />
   );
 }
 

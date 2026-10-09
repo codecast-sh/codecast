@@ -6,6 +6,7 @@
 //   cast signal add --source <s> --kind <k> --title <t> [--fingerprint <f>] [--project <ref>] [--detail -] [--url] [--subject] [--goal-hint] [--json]
 //   cast signal ls [--task ct-N | --fingerprint <f>] [--project <ref>] [--source <s>] [--json]
 //   cast signal show sg-N [--json]
+//   cast signal move --fingerprint <f> --from ct-N [--to ct-M | --title <t> --project <ref>] [--json]
 //
 // Routes: /cli/signal/{add,ls,show} in http.ts (signals.ts). A signal lands in
 // a project (line-profile.md LP1): --project, else the repo profile's
@@ -49,7 +50,7 @@ export interface SignalRow {
   role_handle?: string;
   observed_at: number;
   created_at: number;
-  attach: "fingerprint" | "judge" | "new" | "person";
+  attach: "fingerprint" | "judge" | "new" | "person" | "held";
   reopened: boolean;
   task_short_id?: string;
   task_title?: string;
@@ -85,12 +86,13 @@ const ATTACH_WORDS: Record<SignalRow["attach"], string> = {
   judge: "judged the same problem",
   new: "new cause",
   person: "attached by a person",
+  held: "held: no cause holds its key and no finder opens one",
 };
 
 export function formatSignalList(rows: SignalRow[], now: number = Date.now()): string {
   if (rows.length === 0) return "No signals. File one: cast signal add --source person --kind bug --title \"...\"";
   return rows
-    .map((s) => `${s.short_id}  ${s.source}/${s.kind}  ${s.title}  → ${s.task_short_id ?? "?"} (${ATTACH_WORDS[s.attach]}${s.reopened ? ", reopened it" : ""}; ${formatAge(now - s.created_at)})`)
+    .map((s) => `${s.short_id}  ${s.source}/${s.kind}  ${s.title}  → ${s.task_short_id ?? "no cause"} (${ATTACH_WORDS[s.attach]}${s.reopened ? ", reopened it" : ""}; ${formatAge(now - s.created_at)})`)
     .join("\n");
 }
 
@@ -172,7 +174,9 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
         return;
       }
       const how = ATTACH_WORDS[result.attach as SignalRow["attach"]] ?? result.attach;
-      console.log(`${fmt.success(result.short_id)} → ${result.task_short_id} (${how}; ${result.signal_count} signal${result.signal_count === 1 ? "" : "s"})`);
+      console.log(result.task_short_id
+        ? `${fmt.success(result.short_id)} → ${result.task_short_id} (${how}; ${result.signal_count} signal${result.signal_count === 1 ? "" : "s"})`
+        : `${fmt.success(result.short_id)} (${how})`);
       if (result.reopened) console.log(fmt.muted(`  ${result.task_short_id} was in watch and is open again`));
     });
 
@@ -197,6 +201,28 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
       }, { read: true });
       const rows: SignalRow[] = result.signals ?? [];
       console.log(options.json ? JSON.stringify(rows, null, 2) : formatSignalList(rows));
+    });
+
+  signal
+    .command("move")
+    .description("Move one fingerprint's signals off a cause: to another cause, or to a new cause of their own")
+    .requiredOption("--fingerprint <key>", "The fingerprint whose signals move")
+    .requiredOption("--from <ct>", "The cause they are attached to now")
+    .option("--to <ct>", "The cause they move to (default: a new cause)")
+    .option("--title <text>", "A new cause's title (default: the newest signal's)")
+    .option("--project <ref>", "A new cause's project: id, short id or title")
+    .option("--team <name|id|personal>", "Workspace (default: the active one)")
+    .option("--json", "Machine-readable output")
+    .action(async (options: { fingerprint: string; from: string; to?: string; title?: string; project?: string; team?: string; json?: boolean }) => {
+      const result = await apiPost(deps, "/cli/signal/move", {
+        fingerprint: options.fingerprint,
+        from: options.from,
+        to: options.to,
+        title: options.title,
+        ...(await scopeFor(deps, options.team, true, options.project)),
+      });
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`${fmt.success(String(result.moved))} signal${result.moved === 1 ? "" : "s"} moved ${result.from} → ${result.to}${result.created ? " (new cause)" : ""}`);
     });
 
   signal

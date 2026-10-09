@@ -2,7 +2,8 @@
 
 import { useState, type ReactNode } from "react";
 import { SOL } from "../../blog/blogChrome";
-import { Added, Body, C, Section, Shell } from "./ui";
+import { Body, C, Section } from "./ui";
+import { Shot } from "../decisions/kit";
 
 /** A tiny strip that draws the shape of a schedule: one mark, a cadence, or marks at irregular events. */
 function Shape({ kind, color }: { kind: "in" | "every" | "on"; color: string }) {
@@ -23,23 +24,23 @@ function Shape({ kind, color }: { kind: "in" | "every" | "on"; color: string }) 
   );
 }
 
-type Mode = { key: "in" | "every" | "on"; flag: string; color: string; name: string; body: ReactNode; cmd: string; when: string; title: string; extra?: string };
+type Mode = { key: "in" | "every" | "on"; label: string; color: string; name: string; body: ReactNode; example: string };
 
 const MODES: Mode[] = [
   {
-    key: "in", flag: "--in", color: SOL.blue, name: "Once, after a delay",
-    body: <>Follow-through on work that just shipped: check CI, look at a deploy again, see whether a reviewer answered. Durations read like <C>30m</C>, <C>2h</C>, <C>1d</C>. Armed inside a session, the run comes back to that thread with everything it already knew.</>,
-    cmd: 'cast trigger add "Check if CI is green on main" --in 30m', when: "in 30m", title: "Check if CI is green on main",
+    key: "in", label: "in…", color: SOL.blue, name: "Once, after a delay",
+    body: <>Follow-through on work that just shipped: check CI, look at a deploy again, see whether a reviewer answered. Durations read like <C>30m</C>, <C>2h</C>, <C>1d</C>, and the form shows the clock time it will run. Set by an agent inside a session, the run comes back to that thread with everything it already knew.</>,
+    example: "Check if CI is green on main · in 30m",
   },
   {
-    key: "every", flag: "--every", color: SOL.cyan, name: "On a cadence",
-    body: <>A standing duty. Pair it with <C>--in</C> to set the first run, which fixes the time of day. Each run re-arms on its slot, so a daily check never drifts later by its own runtime.</>,
-    cmd: 'cast trigger add "Review open PRs and summarize findings" --every 4h --spawn', when: "every 4h", title: "Review open PRs and summarize findings",
+    key: "every", label: "every…", color: SOL.cyan, name: "On a cadence",
+    body: <>A standing duty: a digest, a sweep, a watcher. Each run re-arms on its slot, so a daily check never drifts later by its own runtime. The trigger&apos;s page shows the next fire and how far through the cycle it is.</>,
+    example: "Review open PRs and summarize findings · every 4h",
   },
   {
-    key: "on", flag: "--on", color: SOL.magenta, name: "When something happens",
-    body: <>A webhook event from GitHub, Linear, or your running product. Narrow it with <C>--repo</C>, <C>--pr</C> or <C>--source</C>. Events that arrive while a run is working are kept for the next run, not dropped.</>,
-    cmd: "cast trigger add \"Respond to new PR review comments\" --on pr_comment --pr 482", when: "on pr_comment in acme/web#482", title: "Respond to new PR review comments",
+    key: "on", label: "on event", color: SOL.magenta, name: "When something happens",
+    body: <>An event from GitHub, Linear, or your running product, picked from a list. An agent can narrow it to one repository, pull request or source. Events that arrive while a run is working are kept for the next run, not dropped.</>,
+    example: "Respond to new PR review comments · on a PR comment in #482",
   },
 ];
 
@@ -53,7 +54,7 @@ const EVENT_GROUPS: { name: string; note: ReactNode; color: string; events: stri
     events: ["issue_opened", "issue_assigned", "issue_labeled", "issue_commented", "issue_closed"],
   },
   {
-    name: "Your running product", color: SOL.red, note: <>From a source: Sentry, PostHog, an SDK or HTTP feed (<C>cast sources</C>).</>,
+    name: "Your running product", color: SOL.red, note: <>From a connected source: Sentry, PostHog, an SDK or an HTTP feed.</>,
     events: ["error_new", "error_regressed", "error_spike", "job_failed", "check_failed", "check_recovered", "metric_alert", "metric_recovered", "deploy"],
   },
 ];
@@ -64,8 +65,16 @@ export function Clocks() {
     <Section
       id="fire"
       title="Three ways to fire"
-      lede={<>Every trigger is the same object: a prompt, a title, a short ID like <C>tr-42</C>, and one of three clocks. Pass <C>-</C> as the prompt to read a longer brief from a heredoc.</>}
+      lede={<>Every trigger is the same thing: a prompt, a title, a short ID like <C>tr-42</C>, and a <b>When</b>. On the Triggers page, <b>New trigger</b> opens the form below. The agent in a conversation sets the same thing when you ask it to follow up later.</>}
     >
+      <Shot
+        className="mb-10 max-w-4xl"
+        src="/features/triggers/new-trigger.webp"
+        alt="The New trigger form on the Triggers page: Prompt, Title, When (now, in…, every…, on event) set to 30m, Agent claude with a read-only box, an optional Project, and a Set trigger button"
+        w={1500}
+        h={660}
+        caption={<>The form: what to do, when (<b>now</b>, <b>in…</b>, <b>every…</b> or <b>on event</b>), which agent runs it, and whether it may change anything. A trigger set here runs on your machine&apos;s codecast daemon.</>}
+      />
       <div className="grid gap-5 lg:grid-cols-3">
         {MODES.map((m, i) => (
           <article
@@ -74,20 +83,20 @@ export function Clocks() {
             style={{ backgroundColor: "#fffbf0", border: `1px solid ${SOL.base2}`, animationDelay: `${i * 0.08}s` }}
           >
             <div className="flex items-baseline justify-between gap-3">
-              <span className="font-mono text-[22px] font-bold" style={{ color: m.color }}>{m.flag}</span>
+              <span className="font-mono text-[22px] font-bold" style={{ color: m.color }}>{m.label}</span>
               <span className="text-[13px] font-medium" style={{ color: SOL.base01 }}>{m.name}</span>
             </div>
             <div className="mt-3"><Shape kind={m.key} color={m.color} /></div>
             <Body className="mt-3 flex-1">{m.body}</Body>
-            <Shell className="mt-4" lines={[m.cmd]} out={<Added id={["tr-41", "tr-43", "tr-45"][i]} when={m.when} title={m.title} />} />
+            <p className="mt-4 rounded-lg px-3 py-2 text-[13px] leading-5" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>{m.example}</p>
           </article>
         ))}
       </div>
 
       <div className="mt-12 rounded-2xl p-5 sm:p-6" style={{ backgroundColor: SOL.base03 }}>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="font-mono text-[17px] font-bold" style={{ color: SOL.base2 }}>29 events <C>--on</C> understands</h3>
-          <span className="font-mono text-[12px]" style={{ color: SOL.base01 }}>cast trigger add --help prints the same list</span>
+          <h3 className="font-mono text-[17px] font-bold" style={{ color: SOL.base2 }}>29 events a trigger can wait for</h3>
+          <span className="text-[12.5px]" style={{ color: SOL.base0 }}>the same list the form&apos;s <b>on event</b> picker offers</span>
         </div>
         <div className="mt-5 grid gap-6 md:grid-cols-3">
           {EVENT_GROUPS.map((g) => (
@@ -116,10 +125,6 @@ export function Clocks() {
             </div>
           ))}
         </div>
-        <p className="mt-5 font-mono text-[12px] overflow-x-auto whitespace-nowrap" style={{ color: SOL.base0 }}>
-          <span style={{ color: SOL.green }}>$</span> cast trigger add &quot;Triage the new error&quot; --on {hover ?? "error_new"}
-          {(hover ?? "error_new").startsWith("pr_") || hover === "push" ? " --repo acme/web" : hover?.startsWith("issue_") ? "" : " --source sentry"} --spawn
-        </p>
       </div>
     </Section>
   );

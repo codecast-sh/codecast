@@ -48,6 +48,12 @@ async function setup() {
   const userId = await t.run(async (ctx) => {
     const id = await ctx.db.insert("users", { name: "Finder" } as any);
     await ctx.db.insert("api_tokens", { user_id: id, token_hash: await hashToken(TOKEN), name: "cli", created_at: T0, last_used_at: T0 } as any);
+    // The explicit conversion step (LE4): a line profile declares sentry's
+    // signals as opening causes. Any other automated source is held.
+    await ctx.db.insert("projects", {
+      user_id: id, workspace: `user:${id}`, short_id: "pr-1", title: "Web", status: "active", created_at: T0, updated_at: T0,
+      line_profile: { finders: [{ id: "errors", source: "sentry", kind: ["bug"], fingerprint: "<group>", opens_causes: true }], changed_at: T0 },
+    } as any);
     return id;
   });
   const add = (fields: Record<string, any>) =>
@@ -72,6 +78,44 @@ describe("signals.ingest", () => {
     expect(cause.cause).toMatchObject({ signal_count: 1, fingerprints: ["err-1"] });
     const signal = await t.run(async (ctx) => await ctx.db.get(out.signal_id));
     expect(signal).toMatchObject({ workspace: `user:${userId}`, task_id: out.task_id, attach: "new", source: "sentry" });
+  });
+
+  test("held: a source no finder converts files a signal and opens no cause", async () => {
+    const { add, t } = await setup();
+    const out = await add({ source: "union.eval", kind: "prompt_miss", fingerprint: "eval:route:1", title: "Route misses a frozen moment" });
+    expect(out.attach).toBe("held");
+    expect(out.task_id).toBeUndefined();
+    expect(stub.state.calls).toHaveLength(0);
+    const tasks = await t.run(async (ctx) => await ctx.db.query("tasks").collect());
+    expect(tasks).toHaveLength(0);
+    const shown = await t.query(api.signals.showForCli, { api_token: TOKEN, signal: out.short_id });
+    expect(shown.signal).toMatchObject({ attach: "held" });
+    expect(shown.signal.task_short_id).toBeUndefined();
+    expect(shown.cause).toBeNull();
+  });
+
+  test("person: a signal a person files opens a cause whatever the profiles declare", async () => {
+    const { add, task } = await setup();
+    const out = await add({ source: "person", kind: "ux", fingerprint: "person:1", title: "The settings sheet hides Save" });
+    expect(out.attach).toBe("new");
+    expect((await task(out.task_id)).source).toBe("signal");
+  });
+
+  test("conversion: once a finder declares opens_causes, its key's held signals join the cause it opens", async () => {
+    const { add, t, task, userId } = await setup();
+    const a = await add({ source: "agentwatch", fingerprint: "cluster:7", title: "Replies quote the wrong price", observed_at: T0 });
+    const b = await add({ source: "agentwatch", fingerprint: "cluster:7", title: "Replies quote the wrong price", observed_at: T0 + 1000 });
+    expect([a.attach, b.attach]).toEqual(["held", "held"]);
+    await t.run(async (ctx) => {
+      const project = await ctx.db.query("projects").withIndex("by_workspace", (q) => q.eq("workspace", `user:${userId}`)).first();
+      await ctx.db.patch(project!._id, { line_profile: { ...project!.line_profile!, finders: [...project!.line_profile!.finders, { id: "clusters", source: "agentwatch", kind: ["bug"], fingerprint: "cluster:<id>", opens_causes: true }] } });
+    });
+    const c = await add({ source: "agentwatch", fingerprint: "cluster:7", title: "Replies quote the wrong price", observed_at: T0 + 2000 });
+    expect(c.attach).toBe("new");
+    const cause = await task(c.task_id);
+    expect(cause.cause).toMatchObject({ signal_count: 3, first_seen: T0, last_seen: T0 + 2000, fingerprints: ["cluster:7"] });
+    const rows = await t.run(async (ctx) => await ctx.db.query("signals").collect());
+    expect(rows.map((r) => r.task_id)).toEqual([c.task_id, c.task_id, c.task_id]);
   });
 
   test("fingerprint: the same fingerprint attaches to the open cause without asking the judge", async () => {
@@ -200,6 +244,36 @@ describe("signals.ingest", () => {
     expect(hit.signals[0].task_short_id).toBe((await task(first.task_id)).short_id);
     const none = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:missing" });
     expect(none.signals).toEqual([]);
+  });
+
+  test("move: a fingerprint leaves a cause for a new one of its own, and later signals follow it", async () => {
+    // Union 2026-10-07: held call cards (C117) had been attached to a cause
+    // about message openings; a cause is one mechanism, so it gets its own.
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "union:cluster:a", title: "Messages narrate effort" });
+    const from = (await task(first.task_id)).short_id;
+    stub.state.reply = `{"answer": "${from}"}`;
+    await add({ fingerprint: "union:cluster:b", title: "Messages narrate Union's effort" });
+    stub.state.reply = '{"answer":"none"}';
+    const moved = await t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:b", from, title: "Held call cards dial outside calling hours" });
+    expect(moved.moved).toBe(1);
+    expect(moved.created).toBe(true);
+    const target = await t.run(async (ctx) => await ctx.db.query("tasks").withIndex("by_short_id", (q) => q.eq("short_id", moved.to)).first()) as any;
+    expect(target.title).toBe("Held call cards dial outside calling hours");
+    expect(target.cause.fingerprints).toEqual(["union:cluster:b"]);
+    const source = (await task(first.task_id)) as any;
+    expect(source.cause.fingerprints).toEqual(["union:cluster:a"]);
+    expect(source.cause.signal_count).toBe(1);
+    const later = await add({ fingerprint: "union:cluster:b", title: "Held call cards dial outside calling hours" });
+    expect(later.attach).toBe("fingerprint");
+    expect((await task(later.task_id)).short_id).toBe(moved.to);
+  });
+
+  test("move refuses a fingerprint the cause does not hold", async () => {
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "union:cluster:a", title: "Messages narrate effort" });
+    const from = (await task(first.task_id)).short_id;
+    await expect(t.mutation(api.signals.moveForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:zz", from })).rejects.toThrow();
   });
 
   test("the web feed carries the fingerprint, the evidence link and the head of the detail (line-map.md LX7)", async () => {
