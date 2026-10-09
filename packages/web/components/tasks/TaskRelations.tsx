@@ -2,31 +2,30 @@
 /**
  * The task page's relations (docs/architecture/task-graph.md TG12), rows of
  * its property grid: one editable Blocked by row listing task blockers and
- * waits together, then Blocks, Found during, Found here, Related and Parent,
+ * waits together, then Blocks, Found during, Found during this and Related,
  * each shown once it has something in it. Each line carries its live pill, its
  * state and a remove control; "Add blocker…" opens the palette, which takes a
- * task search or any blocker ref (TG3), and one last line offers whichever of
- * "Link related…" and "Set parent…" has no row yet.
+ * task search or any blocker ref (TG3). Blocks edits the same edge from the
+ * other side ("Add blocked task…"), and one last line offers whichever adds
+ * have no row of their own yet. The parent is stated once, by the page's
+ * breadcrumb, which carries its own remove.
  *
  * Everything reads the store's task rows and writes through store actions
- * (addBlocker, removeBlocker, removeBlocks, removeWait, unrelateTasks,
- * setTaskParent), so a change paints
- * at once and the side effect makes the real write.
+ * (addBlocker, removeBlocker, removeBlocks, removeWait, unrelateTasks, and
+ * updateTask for found_during), so a change paints at once and the side effect
+ * makes the real write. Found during this is the mirror, derived from other
+ * rows' found_during, so it is the one read-only row.
  */
 import { useMemo, type ReactNode } from "react";
-import { toast } from "sonner";
 import { CircleDashed, Clock, GitPullRequest, Plus, Replace, X } from "lucide-react";
-import { waitStateStyle } from "./TaskBlockedMark";
-import { BLOCKER_NOT_FOUND_WORDS, BLOCKER_UNKNOWN_WORDS, formatWaitTime, isTerminalTaskStatus, waitStateWord, waitWordFails, type TaskWait } from "@codecast/shared/tasks";
+import { BLOCKER_NOT_FOUND_WORDS, BLOCKER_UNKNOWN_WORDS, checksWaitPr, formatWaitTime, isTerminalTaskStatus, isUnblocked, waitStateWord, waitWordFails, type TaskWait } from "@codecast/shared/tasks";
 import { EntityIdPill } from "../EntityIdPill";
 import { useInboxStore, type TaskItem } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useEntityResolution } from "../../lib/entityDisplay";
-import { blockerForms, clauseOf, foundHereOf, parseRelationQuery, storeBlockerLines, type BlockerLine, type RelationMode } from "../../lib/taskRelations";
-import { storeStatusOf } from "../../lib/taskBlockers";
-import { lookup } from "../../lib/liveEntities";
+import { blockerForms, blocksOf, clauseOf, foundHereOf, lineStateLabel, relatedOf, relationQueryError, storeBlockerLines, type BlockerLine, type RelationMode } from "../../lib/taskRelations";
+import { storeStatusOf, waitStateStyle, WAIT_STATE_STYLE } from "../../lib/taskBlockers";
 import { workspaceKeyOfRow } from "../../lib/workspaceScope";
-import { setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undo/labels";
 import { withoutUndo } from "../../store/undoStack";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -37,6 +36,8 @@ const ROW = "grid grid-cols-[7rem_1fr] items-start px-4 py-1 hover:bg-sol-bg-alt
 const LABEL = "h-5 flex items-center text-xs text-sol-text-dim";
 const LINE_H = "min-h-5";
 const DIM = "text-xs text-sol-text-dim";
+/** The gutter a line's state glyph sits in, kept by lines that have none. */
+const GLYPH = "flex-shrink-0 w-3 flex justify-center";
 
 function RelationRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -47,15 +48,21 @@ function RelationRow({ label, children }: { label: string; children: ReactNode }
   );
 }
 
-function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
+/** A line's remove control: quiet until the line is hovered or focused, and
+ *  focusable with the same ring as the row's other buttons. `offer` is for a
+ *  line whose only purpose is to be cleaned up (a blocker that names no task):
+ *  it stays at full strength and says the word, since a hidden X would hide
+ *  the one action the line affords. */
+export function RemoveButton({ label, onClick, offer }: { label: string; onClick: () => void; offer?: boolean }) {
+  const quiet = "opacity-0 group-hover/line:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-60";
   return (
     <button
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="p-1.5 -m-1 rounded text-sol-text-dim hover:text-sol-red opacity-0 group-hover/line:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-60 transition-opacity flex-shrink-0"
+      className={`rounded text-sol-text-dim hover:text-sol-red focus-visible:text-sol-red transition-opacity flex-shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan focus-visible:outline-offset-2 ${offer ? "px-1 -mx-0.5 text-xs" : `p-1.5 -m-1 ${quiet}`}`}
     >
-      <X className="w-3 h-3" />
+      {offer ? "Remove" : <X className="w-3 h-3" />}
     </button>
   );
 }
@@ -67,20 +74,25 @@ type LineState = "waiting" | "met" | "failed" | "missing";
  *  being worked, because this page is where a person asks why it is not
  *  moving; only on a closed task, which nothing holds, does a waiting or
  *  failed line draw dim, as met ones do. `status` is the task's own. */
-function Line({ state, status, children, detail, onRemove, removeLabel }: { state: LineState; status: string; children: ReactNode; detail?: ReactNode; onRemove: () => void; removeLabel: string }) {
+function Line({ state, subject, status, children, detail, onRemove, removeLabel }: { state: LineState; subject: "blocker" | "wait"; status: string; children: ReactNode; detail?: ReactNode; onRemove: () => void; removeLabel: string }) {
   const style = state === "missing" ? null : waitStateStyle(state, status, { untilClosed: true });
-  const glyph = style
-    ? <style.icon className={`w-3 h-3 ${style.text}`} role="img" aria-label={state} />
-    : <CircleDashed className="w-3 h-3 text-sol-text-dim" role="img" aria-label={BLOCKER_NOT_FOUND_WORDS} />;
-  const dim = state === "met" || (isTerminalTaskStatus(status) && state !== "missing");
+  // The glyph is the only thing a met line carries, so its accessible name
+  // says what is met (`lineStateLabel`), never the bare state value.
+  let glyph = <CircleDashed className="w-3 h-3 text-sol-text-dim" role="img" aria-label={BLOCKER_NOT_FOUND_WORDS} />;
+  if (state !== "missing" && style) {
+    glyph = <style.icon className={`w-3 h-3 ${style.text}`} role="img" aria-label={lineStateLabel(state, subject)} />;
+  }
+  // One dimming rule: the tone `waitStateStyle` already decided (dim once the
+  // line holds nothing), plus a met line, which keeps its green glyph.
+  const dim = state === "met" || style?.tone === "dim";
   return (
     <div className={`group/line flex items-center gap-1.5 min-w-0 ${LINE_H} ${dim ? "opacity-60" : ""}`} data-blocker-state={state}>
-      <span className="flex-shrink-0 w-3 flex justify-center">{glyph}</span>
+      <span className={GLYPH}>{glyph}</span>
       <span className="min-w-0 flex items-center gap-1.5 text-xs">
         {children}
         {detail && <span className="flex-shrink-0 max-w-[45%] truncate">{detail}</span>}
       </span>
-      <RemoveButton label={removeLabel} onClick={onRemove} />
+      <RemoveButton label={removeLabel} onClick={onRemove} offer={state === "missing"} />
     </div>
   );
 }
@@ -99,7 +111,7 @@ function TaskBlockerLine({ line, task, onRemove }: TaskLineProps) {
 /** A task blocker whose status is known: its pill, met once it closed. */
 function HeldTaskLine({ line, met, task, onRemove }: TaskLineProps & { met: boolean }) {
   return (
-    <Line state={met ? "met" : "waiting"} status={task.status} onRemove={onRemove} removeLabel={`Remove blocker ${line.ref}`}>
+    <Line state={met ? "met" : "waiting"} subject="blocker" status={task.status} onRemove={onRemove} removeLabel={`Remove blocker ${line.ref}`}>
       <EntityIdPill type="task" shortId={line.ref} wide />
     </Line>
   );
@@ -113,8 +125,8 @@ function UnheldTaskBlockerLine({ line, task, onRemove }: TaskLineProps) {
   const missing = served && !entity;
   const word = entity ? BLOCKER_UNKNOWN_WORDS : missing ? BLOCKER_NOT_FOUND_WORDS : undefined;
   return (
-    <Line state={missing ? "missing" : "waiting"} status={task.status} onRemove={onRemove} removeLabel={`Remove blocker ${line.ref}`}
-      detail={word ? <span className={DIM}>{word}</span> : undefined}>
+    <Line state={missing ? "missing" : "waiting"} subject="blocker" status={task.status} onRemove={onRemove} removeLabel={`Remove blocker ${line.ref}`}
+      detail={word ? <span title={word} className={DIM}>{word}</span> : undefined}>
       <span className="text-xs font-mono text-sol-text-muted">{line.ref}</span>
     </Line>
   );
@@ -134,13 +146,18 @@ function PlainPill({ title, children }: { title?: string; children: ReactNode })
  *  they fail, which keeps it waiting (TG2), so the page says why it is not moving. */
 function ChecksWord({ wait, repository, pr_number }: { wait: TaskWait; repository: string; pr_number: number }) {
   const checks = useEntityResolution(`${repository}#${pr_number}`, "pr").entity?.checks_state;
-  return <WaitWord wait={wait} checks={checks} />;
+  const word = waitStateWord(wait, { checks });
+  return word ? <WaitWord word={word} fails={waitWordFails(wait, { checks })} /> : null;
 }
 
-/** A wait's word, red when it reads as a failure (`waitWordFails`), dim otherwise. */
-function WaitWord({ wait, closed, checks, now }: { wait: TaskWait; closed?: boolean; checks?: string; now?: number }) {
-  const word = waitStateWord(wait, { now, closed, checks });
-  return word ? <span className={waitWordFails(wait, { closed, checks }) ? "text-xs text-sol-red" : DIM}>{word}</span> : null;
+/** A wait's word, red when it reads as a failure (`waitWordFails`), dim
+ *  otherwise. `Line` truncates a detail at 45% of a column that is ~250px wide
+ *  in the inline peek, and a word like `answered: <the answer>` is the most
+ *  informative thing on the line, so it carries its full text as its title the
+ *  way the time pill does. The word is worked out by whoever has the inputs
+ *  for it (a checks wait reads the PR's checks), and passed in. */
+function WaitWord({ word, fails }: { word: string; fails: boolean }) {
+  return <span title={word} className={fails ? "text-xs text-sol-red" : DIM}>{word}</span>;
 }
 
 function WaitLine({ wait: w, now, status, onRemove }: { wait: TaskWait; now: number; status: string; onRemove: () => void }) {
@@ -150,11 +167,15 @@ function WaitLine({ wait: w, now, status, onRemove }: { wait: TaskWait; now: num
     : w.kind === "decision" ? <EntityIdPill type="decision" shortId={w.decision} wide />
     : w.repository ? <EntityIdPill type="pr" id={`${w.repository}#${w.pr_number}`} certain wide />
     : <PlainPill><GitPullRequest className="w-[1em] h-[1em]" />#{w.pr_number}</PlainPill>;
-  const detail = w.kind === "pr_checks_green" && w.state === "waiting" && !closed && w.repository
-    ? <ChecksWord wait={w} repository={w.repository} pr_number={w.pr_number} />
-    : waitStateWord(w, { now, closed }) ? <WaitWord wait={w} closed={closed} now={now} /> : undefined;
+  const word = waitStateWord(w, { now, closed });
+  // Whether this line's word needs the PR's checks is the shared rule
+  // (`checksWaitPr`), so this page and the phone fetch for the same waits.
+  const checksPr = checksWaitPr(w, { closed });
+  const detail = checksPr
+    ? <ChecksWord wait={w} repository={checksPr.repository} pr_number={checksPr.pr_number} />
+    : word ? <WaitWord word={word} fails={waitWordFails(w, { closed })} /> : undefined;
   return (
-    <Line state={w.state} status={status} onRemove={onRemove} removeLabel={`Remove the wait ${clauseOf(w, { now })}`} detail={detail}>
+    <Line state={w.state} subject="wait" status={status} onRemove={onRemove} removeLabel={`Remove the wait ${clauseOf(w, { now })}`} detail={detail}>
       {pill}
     </Line>
   );
@@ -163,23 +184,43 @@ function WaitLine({ wait: w, now, status, onRemove }: { wait: TaskWait; now: num
 type IsClosed = (ref: string) => boolean;
 
 /** Task links, one titled pill per line as Blocked by lists them, a closed
- *  one dim like a met blocker, each removable when `onRemove` is given. */
+ *  one dim like a met blocker, each removable when `onRemove` is given. The
+ *  empty leading box is `Line`'s state glyph: every value in the grid starts
+ *  at one left edge, so Blocks reads as a continuation of Blocked by. */
 function TaskLinks({ refs, isClosed, onRemove, removeLabel }: { refs: string[]; isClosed: IsClosed; onRemove?: (ref: string) => void; removeLabel?: (ref: string) => string }) {
   return refs.map((ref) => (
     <div key={ref} className={`group/line flex items-center gap-1.5 min-w-0 ${LINE_H} text-xs ${isClosed(ref) ? "opacity-60" : ""}`}>
+      <span className={GLYPH} />
       <EntityIdPill type="task" shortId={ref} wide />
       {onRemove && <RemoveButton label={removeLabel?.(ref) ?? `Remove ${ref}`} onClick={() => onRemove(ref)} />}
     </div>
   ));
 }
 
-/** The quiet add control closing a row, with its palette key (if it has one) on hover. */
+/** What the Blocks add says, in both the places it can sit. */
+const BLOCKS_ADD = "Add blocked task…";
+/** The same for Related, which also sits either on its own row or the closing one. */
+const RELATED_ADD = { label: "Link related…", hotkey: "k" };
+/** What Found during offers. The link is the server's GUESS from the filing
+ *  session's bound task (TG5), and this page is where a person notices it is
+ *  wrong, so it is set and repointed here as well as from the CLI. Set on the
+ *  closing line when there is none, repointed on its own row when there is. */
+const FOUND_DURING_ADD = "Found during…";
+const FOUND_DURING_REPOINT = "Found during something else…";
+
+/** The quiet add control closing a row, with its palette key beside it.
+ *  Muted rather than dim at rest: on a fresh task the Blocked by row holds
+ *  nothing but its label and this button, and an action in the label's own
+ *  colour does not read as one. The cap is drawn at rest rather than revealed
+ *  on hover: these are actions a person has never used, so the key is worth
+ *  discovering, and a hidden cap still reserves its width — which on the
+ *  closing row made the gap after a keyless button read as a typo. */
 function AddButton({ label, hotkey, plus, onClick }: { label: string; hotkey?: string; plus: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} className="group/add h-5 flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-text text-left transition-colors w-fit">
+    <button onClick={onClick} className="group/add h-5 flex items-center gap-1.5 text-xs text-sol-text-muted hover:text-sol-text focus-visible:text-sol-text text-left transition-colors w-fit rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan focus-visible:outline-offset-2">
       {plus && <Plus className="w-3 h-3" />}
       {label}
-      {hotkey && <span className="opacity-0 group-hover/add:opacity-100 group-focus-visible/add:opacity-100 transition-opacity"><KeyCap size="xs">{hotkey}</KeyCap></span>}
+      {hotkey && <KeyCap size="xs">{hotkey}</KeyCap>}
     </button>
   );
 }
@@ -194,72 +235,102 @@ function removeBlocker(id: string, line: Extract<BlockerLine, { kind: "task" }>)
   else undoAsOne(`Removed blocker ${line.ref} from ${id}`, write);
 }
 
-/** Detach the parent; the store refuses only a task it cannot find. */
-function removeParent(id: string) {
-  const r = setTaskParent(id, "");
-  if (!r.ok) toast.error(r.reason);
-}
-
 export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: Record<string, TaskItem>; onAdd: (mode: RelationMode | "parent") => void }) {
   const now = useCoarseNow(60_000);
   const lines = useMemo(() => storeBlockerLines(task, tasks), [task, tasks]);
   const foundHere = useMemo(() => foundHereOf(task, tasks).map((t) => t.short_id), [task, tasks]);
-  const isClosed = useMemo<IsClosed>(() => {
-    const statusOf = storeStatusOf(tasks, task);
-    return (ref) => {
-      const found = statusOf(ref);
-      return isTerminalTaskStatus(found?.status);
-    };
-  }, [task, tasks]);
-  // `parent_id` holds the parent's _id; its pill reads best by short id.
-  const parentId = task.parent_id ? String(task.parent_id) : null;
-  const parent = parentId ? (lookup(tasks, parentId)?.short_id ?? parentId) : null;
+  // Both mirrors as the server's reader prints them, so this page and `cast
+  // task show` name the same tasks (TG12).
+  const blocks = useMemo(() => blocksOf(task, tasks), [task, tasks]);
+  const related = relatedOf(task);
+  const statusOf = useMemo(() => storeStatusOf(tasks, task), [task, tasks]);
+  const isClosed = useMemo<IsClosed>(() => (ref) => isTerminalTaskStatus(statusOf(ref)?.status), [statusOf]);
+  // The positive verdict, in the shared words the phone uses (`isUnblocked`):
+  // a task whose Blocked by row has lines, none of which still holds it. A
+  // closed task is held by nothing by definition, so it says nothing.
+  const terminal = isTerminalTaskStatus(task.status);
+  const unblocked = lines.length > 0 && !terminal && isUnblocked(task, statusOf);
+  // The parent itself is stated by the page's breadcrumb (one home per fact);
+  // here it only decides whether "Set parent…" is on offer.
+  const hasParent = !!task.parent_id;
+  // Every add whose own row is not there to hold it, on one closing line in
+  // the rows' order, so no row is drawn empty just to carry its button.
+  const closing = useMemo(() => [
+    ...(blocks.length === 0 && !terminal ? [{ mode: "blocks" as const, label: BLOCKS_ADD }] : []),
+    ...(related.length === 0 ? [{ mode: "related" as const, ...RELATED_ADD }] : []),
+    ...(task.found_during ? [] : [{ mode: "found_during" as const, label: FOUND_DURING_ADD }]),
+    ...(hasParent ? [] : [{ mode: "parent" as const, label: "Set parent…", hotkey: "t" }]),
+  ], [related.length, blocks.length, terminal, hasParent, task.found_during]);
   const store = useInboxStore.getState;
   const id = task.short_id;
 
   return (
     <>
-      <RelationRow label="Blocked by">
-        {lines.map((line) =>
-          line.kind === "task" ? (
-            <TaskBlockerLine key={line.key} line={line} task={task} onRemove={() => removeBlocker(id, line)} />
-          ) : (
-            <WaitLine key={line.key} wait={line.wait} now={now} status={task.status} onRemove={() => store().removeWait(id, line.wait.id)} />
-          ),
-        )}
-        <AddButton label="Add blocker…" hotkey="b" plus={lines.length > 0} onClick={() => onAdd("blocker")} />
-      </RelationRow>
-      {!!task.blocks?.length && (
+      {(lines.length > 0 || !terminal) && (
+        <RelationRow label="Blocked by">
+          {/* The verdict leads, level with the label, and its lines below say
+              who cleared: a reader never has to read every glyph to learn
+              that nothing is holding this task. */}
+          {unblocked && (
+            <div className={`flex items-center gap-1.5 ${LINE_H} text-xs text-sol-green`} data-unblocked>
+              {/* The met glyph, so the verdict scans as a state like the lines
+                  below it rather than as a stray label in a marked column.
+                  The word stays "unblocked" (TG12). */}
+              <span className={GLYPH}><WAIT_STATE_STYLE.met.icon className="w-3 h-3 text-sol-green" aria-hidden /></span>
+              unblocked
+            </div>
+          )}
+          {lines.map((line) =>
+            line.kind === "task" ? (
+              <TaskBlockerLine key={line.key} line={line} task={task} onRemove={() => removeBlocker(id, line)} />
+            ) : (
+              <WaitLine key={line.key} wait={line.wait} now={now} status={task.status} onRemove={() => store().removeWait(id, line.wait.id)} />
+            ),
+          )}
+          {/* Nothing holds a closed task, so its page keeps the history and
+              offers no add; with no lines left the row drops out entirely. */}
+          {!terminal && <AddButton label="Add blocker…" hotkey="b" plus={lines.length > 0} onClick={() => onAdd("blocker")} />}
+        </RelationRow>
+      )}
+      {blocks.length > 0 && (
         <RelationRow label="Blocks">
-          <TaskLinks refs={task.blocks} isClosed={isClosed} onRemove={(ref) => store().removeBlocks(id, ref)} removeLabel={(ref) => `${ref} stops waiting on ${id}`} />
+          <TaskLinks refs={blocks} isClosed={isClosed} onRemove={(ref) => store().removeBlocks(id, ref)} removeLabel={(ref) => `Stop ${ref} waiting on this`} />
+          {/* The row edits from this side both ways: the palette writes the
+              same edge with its ends swapped, so "make ct-9 wait on this"
+              never means opening ct-9. */}
+          {!terminal && <AddButton label={BLOCKS_ADD} plus onClick={() => onAdd("blocks")} />}
         </RelationRow>
       )}
       {task.found_during && (
         <RelationRow label="Found during">
-          <TaskLinks refs={[task.found_during]} isClosed={isClosed} />
+          {/* Removable and repointable: the server fills this from whatever
+              task the creating session was bound to, so the one it filled in
+              can be wrong, and the board is where that is noticed. */}
+          <TaskLinks refs={[task.found_during]} isClosed={isClosed}
+            onRemove={() => undoAsOne(`Cleared what ${id} was found during`, () => store().updateTask(id, { found_during: "" }))}
+            removeLabel={(ref) => `Clear ${ref} as where this was found`} />
+          <AddButton label={FOUND_DURING_REPOINT} plus={false} onClick={() => onAdd("found_during")} />
         </RelationRow>
       )}
       {foundHere.length > 0 && (
-        <RelationRow label="Found here">
+        <RelationRow label="Found during this">
           <TaskLinks refs={foundHere} isClosed={isClosed} />
         </RelationRow>
       )}
-      {!!task.related?.length && (
+      {related.length > 0 && (
         <RelationRow label="Related">
-          <TaskLinks refs={task.related} isClosed={isClosed} onRemove={(ref) => store().unrelateTasks(id, ref)} removeLabel={(ref) => `Unlink ${ref}`} />
-          <AddButton label="Link related…" hotkey="k" plus onClick={() => onAdd("related")} />
+          <TaskLinks refs={related} isClosed={isClosed} onRemove={(ref) => store().unrelateTasks(id, ref)} removeLabel={(ref) => `Unlink ${ref}`} />
+          {/* The row only renders with lines above it, so its add indents into
+              the glyph gutter like every other add on a row that has lines. */}
+          <AddButton {...RELATED_ADD} plus onClick={() => onAdd("related")} />
         </RelationRow>
       )}
-      {parent && (
-        <RelationRow label="Parent">
-          <TaskLinks refs={[parent]} isClosed={isClosed} onRemove={() => removeParent(id)} removeLabel={() => "Remove parent"} />
-        </RelationRow>
-      )}
-      {(!task.related?.length || !parent) && (
+      {closing.length > 0 && (
         <RelationRow label="">
-          <div className="flex items-center gap-4">
-            {!task.related?.length && <AddButton label="Link related…" hotkey="k" plus={false} onClick={() => onAdd("related")} />}
-            {!parent && <AddButton label="Set parent…" hotkey="t" plus={false} onClick={() => onAdd("parent")} />}
+          <div className="flex items-center gap-4 flex-wrap">
+            {closing.map((o) => (
+              <AddButton key={o.mode} label={o.label} hotkey={o.hotkey} plus={false} onClick={() => onAdd(o.mode)} />
+            ))}
           </div>
         </RelationRow>
       )}
@@ -271,19 +342,15 @@ export function TaskRelations({ task, tasks, onAdd }: { task: TaskItem; tasks: R
 export function SupersededBanner({ task }: { task: Pick<TaskItem, "superseded_by"> }) {
   if (!task.superseded_by) return null;
   return (
-    <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-md border border-sol-border/30 bg-sol-bg-alt/40 text-xs text-sol-text-muted" data-superseded>
+    <div className="flex items-center gap-2 min-w-0 mb-3 px-3 py-2 rounded-md border border-sol-border/30 bg-sol-bg-alt/40 text-xs text-sol-text-muted" data-superseded>
       <Replace className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
-      <span>Superseded by</span>
-      <EntityIdPill type="task" shortId={task.superseded_by} />
+      <span className="flex-shrink-0">Superseded by</span>
+      {/* `wide` gives the pill min-w-0/max-w-full/truncate, so a replacement
+          with a long title shrinks instead of pushing past the banner — the
+          inline peek's value column is only ~250px wide. */}
+      <EntityIdPill type="task" shortId={task.superseded_by} wide />
     </div>
   );
-}
-
-/** Why the palette's query is no relation: set once it matches no task and
- *  reads as no ref. The hint shows it, in place of the list's "No results". */
-export function relationQueryError(search: string, mode: RelationMode, matched: boolean) {
-  const parsed = matched ? null : parseRelationQuery(search, mode);
-  return parsed && "error" in parsed ? parsed : null;
 }
 
 /** Under the palette's field: the refs it reads (TG3). Once the query reads
