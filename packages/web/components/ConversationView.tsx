@@ -1,4 +1,5 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
+import { RunLogEndedBar, isEndedRunLog } from "./conversation/RunLogEndedBar";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
 import { familyHeading, firstUserPromptOf } from "../hooks/useForkTree";
@@ -29,7 +30,6 @@ import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
-import { OrgChartChip } from "./org/orgChartLink";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
@@ -50,7 +50,7 @@ import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useR
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
 import { toast } from "sonner";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle } from "./conversationScroll";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle, releaseScrollTarget } from "./conversationScroll";
 import { deriveHostedRunningPhrase, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
@@ -157,10 +157,10 @@ import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, Story
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
-import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SessionShipButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
-import { NewSessionView, NonOwnerMessageInput, ProjectSwitcher } from "./conversation/sessionControls";
+import { NewSessionView, NonOwnerMessageInput } from "./conversation/sessionControls";
 import type { Commit, CondensedReceipt, ConversationDensity, ConversationViewHandle, ConversationViewProps, ImageData, Message, MessageFeedDensity, PullRequest, ReceiptEntry, TaskRecord, TimelineItem, ToolCallChangeSelection, ToolResult, UserMessageKind } from "./conversation/types";
 import { useConversationFileDrop } from "../hooks/useConversationFileDrop";
 import { useWorkflowLaunch } from "../hooks/useWorkflowLaunch";
@@ -177,6 +177,7 @@ import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { FeatureUpsell } from "./agentFeatures/FeatureUpsell";
 import { useOfferedFeatures } from "./agentFeatures/useFeatureOffer";
 import { pickFeatureMoment, type MomentFeature } from "../lib/featureMoments";
+import { Button } from "./ui/button";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
 /** Agent states in which the session is waiting on its human, not working. */
@@ -454,8 +455,14 @@ const ConversationViewInner = (
   const stickyGapRef = useRef<{ prevIdx: number } | null>(null);
   const dismissedStickyIdsRef = useRef<Set<string>>(new Set());
   const stickyElRef = useRef<HTMLDivElement>(null);
+  // Last measured card height. The card unmounts while hidden, and the
+  // next-prompt test must keep using its height then, or hide/show alternate.
+  const stickyHeightRef = useRef(0);
   const stickyPrefDisabled = useInboxStore(s => s.clientState.ui?.sticky_headers_disabled ?? false);
-  const stickyDisabled = stickyPrefDisabled || !stickyPrompt;
+  // Hosted conversations are short chats whose header already names them, so
+  // a pinned first ask over the reply only reads as a rendering glitch.
+  const stickyShown = useSurface("conversation.stickyPrompt");
+  const stickyDisabled = stickyPrefDisabled || !stickyPrompt || !stickyShown;
   const updateUI = useInboxStore(s => s.updateClientUI);
   const headerRef = useRef<HTMLElement>(null);
   // Zen mode on desktop: the head ROW is the window titlebar (drag +
@@ -1193,7 +1200,10 @@ const ConversationViewInner = (
       header.style.setProperty("--conv-sticky-h", "0px");
       return;
     }
-    const update = () => header.style.setProperty("--conv-sticky-h", `${el.offsetHeight}px`);
+    const update = () => {
+      stickyHeightRef.current = el.offsetHeight;
+      header.style.setProperty("--conv-sticky-h", `${el.offsetHeight}px`);
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -1504,7 +1514,7 @@ const ConversationViewInner = (
       const hasTextContent = msg.content && msg.content.trim().length > 0;
       const receiptToolCount = turnAggregates.receiptOf.get(msg._id)?.reduce((n, e) => n + e.tools.length, 0) ?? 0;
       const groupHeight = receiptToolCount > 0 && expandedGroups.has(msg._id) ? Math.min(receiptToolCount * 36, 400) : 0;
-      if (msg.tool_calls?.some(isAlwaysVisibleToolCall)) return 200 + groupHeight;
+      if (msg.tool_calls?.some((tc) => isAlwaysVisibleToolCall(tc))) return 200 + groupHeight;
       // A tool-only receipt owner is just the one receipt row (plus its open group).
       if (!hasTextContent && receiptToolCount > 0) return 28 + groupHeight;
       if (groupHeight) return 200 + groupHeight;
@@ -2156,7 +2166,7 @@ const ConversationViewInner = (
           return;
         }
         let hideForNextMsg = false;
-        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? 0);
+        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? stickyHeightRef.current);
         const nextArrayIdx = stickyUserMsgIndices.indexOf(stickyResolved.index) + 1;
         if (nextArrayIdx > 0 && nextArrayIdx < stickyUserMsgIndices.length) {
           const nextTlIdx = stickyUserMsgIndices[nextArrayIdx];
@@ -2447,8 +2457,8 @@ const ConversationViewInner = (
   maybeLoadNewerRef.current = () => {
     const sc = containerRef.current;
     const pp = paginationPropsRef.current;
-    if (!sc || !pp.onLoadNewer) return;
-    if (!loadNewerArmedRef.current) return;
+    if (!sc || !pp.onLoadNewer || sc.clientHeight === 0) return;
+    if (!loadNewerArmedRef.current && sc.scrollHeight > sc.clientHeight) return;
     if (!shouldLoadNewer({
       nearBottom: sc.scrollHeight - sc.scrollTop - sc.clientHeight < BOTTOM_LOAD_TRIGGER_PX,
       hasMoreBelow: pp.hasMoreBelow,
@@ -2468,17 +2478,20 @@ const ConversationViewInner = (
     updateScrollProgress(virtualizer);
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize, virtualizer, updateScrollProgress]);
 
-  // A window shorter than the viewport fills itself: no scroll-up can arm a
-  // load on a list that cannot scroll. Re-checked as rows land and loads end.
-  // A landed page holds a short cooldown, so check again once it lapses.
+  // A window shorter than the viewport fills itself, in both directions: no
+  // wheel can arm a load on a list that cannot scroll (a share link opening on
+  // a first page of folded tool calls sat on "Later messages" until the reader
+  // wheeled again, one page per gesture). Re-checked as rows land and loads
+  // end. A landed page holds a short cooldown, so check again once it lapses.
   useWatchEffect(() => {
     if (!initialScrollDone) return;
-    maybeLoadOlderRef.current();
+    const fill = () => { maybeLoadOlderRef.current(); maybeLoadNewerRef.current(); };
+    fill();
     const wait = paginationCooldownRef.current - Date.now();
     if (wait <= 0) return;
-    const timer = setTimeout(() => maybeLoadOlderRef.current(), wait + 16);
+    const timer = setTimeout(fill, wait + 16);
     return () => clearTimeout(timer);
-  }, [initialScrollDone, timeline.length, totalSize, hasMoreAbove, isLoadingOlder]);
+  }, [initialScrollDone, timeline.length, totalSize, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer]);
 
   // Pixel-perfect page mount, both directions. The virtualizer's own
   // anchorTo:'end' is estimate-based and doesn't hold the scroll when a page
@@ -2610,10 +2623,16 @@ const ConversationViewInner = (
   // re-render or auto-correct effect can run. A real wheel-up is also the only
   // thing that arms an older-page load (consumed per load below) — the signal the
   // virtualizer can't forge, which is what keeps loading from running away.
+  // Any reader input also cancels the virtualizer's in-flight scroll target
+  // (releaseScrollTarget), which would otherwise pull them back to it.
   useWatchEffect(() => {
     const sc = containerRef.current;
     if (!sc) return;
+    const release = () => releaseScrollTarget(virtualizer);
+    const readerEvents = ["touchmove", "pointerdown", "keydown"] as const;
+    for (const ev of readerEvents) sc.addEventListener(ev, release, { passive: true });
     const onWheel = (e: WheelEvent) => {
+      release();
       if (e.deltaY < 0) {
         setUserScrolled(true);
         loadOlderArmedRef.current = true;
@@ -2624,8 +2643,11 @@ const ConversationViewInner = (
       }
     };
     sc.addEventListener('wheel', onWheel, { passive: true });
-    return () => sc.removeEventListener('wheel', onWheel);
-  }, [setUserScrolled]);
+    return () => {
+      sc.removeEventListener('wheel', onWheel);
+      for (const ev of readerEvents) sc.removeEventListener(ev, release);
+    };
+  }, [setUserScrolled, virtualizer]);
 
   // Bottom-pinning during streaming/new content is native now: anchorTo:'end'
   // re-pins on every item size change when within scrollEndThreshold of the
@@ -3765,7 +3787,9 @@ const ConversationViewInner = (
   // The pinned thread state (`cast state`) is one node with two homes: under
   // the owner composer's status line when that composer is mounted, else in
   // the feed/composer seam (see the render below).
-  const ownerComposerMounted = !!(showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && effectiveIsOwner);
+  // An ended run's log has nobody to read a message: the bar replaces the composer.
+  const runLogEnded = isEndedRunLog(conversation as any, workflowRun);
+  const ownerComposerMounted = !!(showMessageInput && conversation && !runLogEnded && !(pendingPermissions && pendingPermissions.length > 0) && effectiveIsOwner);
   const threadStatePanel = conversation ? (
     <div data-cc-thread-state>
       <ThreadStatePanel
@@ -3865,7 +3889,6 @@ const ConversationViewInner = (
             <AnchorHeaderPill conversationId={conversation._id.toString()} />
             <SessionCallPill conversationId={conversation._id.toString()} />
             <BrowserPaneOfferChip conversationId={conversation._id.toString()} />
-            <OrgChartChip conversationId={conversation._id.toString()} />
         </>}
 
         // A hosted conversation says its state once, in the composer's status
@@ -3927,7 +3950,6 @@ const ConversationViewInner = (
                 <ConversationAgeFacts startedAt={conversation.started_at} endedAt={cloudAgentActions.cloud ? conversation.messages?.at(-1)?.timestamp : undefined} messageCount={conversation.message_count} conversationId={conversation._id} />
         </>)}
         actions={conversation && (<>
-                {!guest && effectiveIsOwner && <SessionShipButton session={conversation as any} />}
 
                 {/* Lineage chips (parent, handoffs, branch map) open sessions a share guest cannot read. */}
                 {!guest && parentLinkId && (
@@ -4624,9 +4646,9 @@ const ConversationViewInner = (
                   }}
                 />
               ) : (
-                <ErrorBoundary name="ProjectSwitcher" level="inline">
-                  <ProjectSwitcher conversation={conversation} />
-                </ErrorBoundary>
+                // Starting a session is the owner's: a teammate or a share-link
+                // guest sees that nothing has happened yet, not the picker.
+                <p className="text-sm text-sol-text-dim">No messages yet.</p>
               )
             )}
           </div>
@@ -4841,7 +4863,9 @@ const ConversationViewInner = (
         <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} />
       )}
 
-      {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
+      {showMessageInput && conversation && runLogEnded && workflowRun && <RunLogEndedBar run={workflowRun as any} />}
+
+      {showMessageInput && conversation && !runLogEnded && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
           {/* The branch map is melded INTO the owner composer box (see the
               branchMapNode prop on MessageInput below), the same way the quote
@@ -5071,13 +5095,14 @@ const ConversationViewInner = (
               Send to chat
             </button>
           )}
-          <button
+          <Button
+            variant="cyan"
+            size="sm"
             onClick={() => handleConfirmShare()}
             disabled={selectedMessageIds.size === 0 || isCreatingShareLink}
-            className="sol-btn-solid px-4 py-1.5 text-sm bg-sol-cyan text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isCreatingShareLink ? "Creating..." : "Copy share link"}
-          </button>
+          </Button>
         </div>
       )}
       {/* The header face's picker (session-characters.md S2), one instance. */}

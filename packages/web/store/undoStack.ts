@@ -33,6 +33,9 @@ import { splitLabelNote } from "./undo/labels";
 export const UNDO_STATUS_TOAST_ID = "undo-status";
 /** The toast class that wears its action as a ghost button (components/ui/sonner.css). */
 export const UNDO_QUIET_ACTION_CLASS = "cc-toast-quiet-action";
+/** The toast class for undo receipts: one quiet line with a text Undo, not a
+ *  card. A change the person just made needs a way back, not attention. */
+export const UNDO_RECEIPT_CLASS = "cc-toast-receipt";
 
 /** The id of the toast announcing a recorded entry. */
 export function undoEntryToastId(entryId: string): string {
@@ -98,7 +101,7 @@ onUndoReset(() => {
 export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
   notify: (message) => {
     if (undoTimeline.isOpen()) return;
-    toast(message, { id: UNDO_STATUS_TOAST_ID, description: undefined, action: undefined });
+    toast(message, { id: UNDO_STATUS_TOAST_ID, description: undefined, action: undefined, className: UNDO_RECEIPT_CLASS });
   },
   notifyWithUndo: (label, entryId) => {
     // A newly recorded gesture is not a step the card narrates. The held
@@ -113,6 +116,7 @@ export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
       id: undoEntryToastId(entryId),
       description,
       action: { label: "Undo", onClick: () => undoEntry(entryId) },
+      className: UNDO_RECEIPT_CLASS,
       duration: 5000,
       onAutoClose: forget,
       onDismiss: forget,
@@ -137,7 +141,7 @@ export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
       description,
       action: more ? { label: "History", onClick: () => undoTimeline.open("interactive") } : undefined,
       // Quiet: a way into the history, not the toast's answer (sonner.css).
-      className: more ? UNDO_QUIET_ACTION_CLASS : undefined,
+      className: more ? `${UNDO_RECEIPT_CLASS} ${UNDO_QUIET_ACTION_CLASS}` : UNDO_RECEIPT_CLASS,
     });
   },
 };
