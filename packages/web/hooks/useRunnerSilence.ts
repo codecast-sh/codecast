@@ -19,7 +19,12 @@ const api = _typedApi as any;
 export function useRunnerSilence(conversationId: string, enabled: boolean): string | null {
   const runner = useQueryNoThrow(api.devices.getConversationMachine, enabled ? { conversation_id: conversationId } : "skip").data;
   const now = useCoarseNow(enabled ? 60_000 : 3_600_000);
-  if (!enabled || runner?.last_seen == null) return null;
+  return enabled ? runnerSilenceAt(runner, now) : null;
+}
+
+/** The wording for a machine as of `now`, or null while it counts as online or its last beat is unknown. */
+export function runnerSilenceAt(runner: { last_seen?: number; label?: string } | null | undefined, now: number): string | null {
+  if (runner?.last_seen == null) return null;
   const silentMs = now - runner.last_seen;
-  return silentMs >= DEVICE_ONLINE_MS ? `${deviceDisplayName(runner)}, offline ${formatDuration(silentMs)}` : null;
+  return silentMs >= DEVICE_ONLINE_MS ? `${deviceDisplayName(runner as any)}, offline ${formatDuration(silentMs)}` : null;
 }
