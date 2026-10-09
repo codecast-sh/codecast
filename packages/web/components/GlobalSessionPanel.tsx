@@ -13,7 +13,7 @@ import { labelSessions } from "../lib/labelSessions";
 import { selectionGesture, selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { useEventListener } from "../hooks/useEventListener";
 import { copyToClipboard, formatShortDate } from "../lib/utils";
-import { SessionErrorBanner, SessionResumeBanner, sessionLooksAbandoned } from "./SessionErrorBanner";
+import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
 import { LoginCodePaste } from "./LoginCodePaste";
 import type { ConversationData } from "./conversation/types";
@@ -24,13 +24,13 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { awaitingOkIds } from "../lib/decisionQueue";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, pendingSendIdsOf, freshReviveRequestIds, hostedStatusSections, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, hostedOnlyInbox, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated, HOSTED_UNFOLDABLE_SECTIONS } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
@@ -44,6 +44,7 @@ import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLab
 import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
 import { useOpenWatchMessage } from "../hooks/useOpenWatchMessage";
 import { partitionTriggerInbox, groupSessionsByTrigger, groupTriggerRowsByHome, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
+import { rowScrollDelta, scrollMarginTopOf } from "../lib/rowScroll";
 import { firstRunWords } from "./triggers/hostedSchedule";
 import { sameNameSuffixes } from "../lib/sameNameSuffix";
 import { sessionCardTitle } from "../lib/sessionCard";
@@ -79,6 +80,7 @@ import { bySessionAgent, isAssistantRoutine, withinScope } from "../lib/assistan
 import { hostedStopOf, hostedStopsSig, lastAskOf, lastNoticeKind, splitHostedStops } from "../lib/hostedNotice";
 import { actionFor } from "./conversation/HostedNotice";
 import { useThinkingAvailable } from "./simple/assistantPromise";
+import { LANE_COPY } from "./simple/lane";
 import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
@@ -87,6 +89,7 @@ import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { PaneControls } from "./stage/PaneControls";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useAssistantScope, useHostedMode, useModeWords, useSurface } from "../lib/surfaces";
+import type { ModeWords } from "../lib/surfaceRules";
 const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
 );
@@ -113,8 +116,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "reconstituting" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
   const reconstitutionAttemptedRef = useRef(false);
-
-  const looksAbandoned = sessionLooksAbandoned(conversation, isIdle);
 
   useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming" || resumeState === "reconstituting")) {
@@ -196,7 +197,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
     <div className="relative h-full flex flex-col">
       <SessionResumeBanner
         resumeState={resumeState}
-        looksAbandoned={looksAbandoned && !sessionError}
         onResume={handleManualResume}
       />
       {sessionError && resumeState === "idle" && (
@@ -502,11 +502,12 @@ function BlockedSessionsBanner({
   const skippedWorkers = skippedBlockedWorkers(blocked, includeSubs);
   const safetyBlocked = blocked.filter((sess) => sess.pending_api_error_kind === "safety");
   const safetyCount = safetyBlocked.length;
-  // Full context windows: parked until /compact or /clear reaches the session,
-  // so they sit beside the safety stops outside the continue set. The fleet
-  // action for them sends /compact to each — the same send the card's own
-  // button makes, once per session.
-  const contextBlocked = blocked.filter((sess) => sess.pending_api_error_kind === "context" && !isSubagentConversation(sess));
+  // Full context windows: a "continue" cannot reach them, only /compact or
+  // /clear can. They are still ticked and restarted by the same button as the
+  // rest; for these rows the restart is a /compact (the same send the card's
+  // own button makes), so the banner never asks for a second decision.
+  const isContextFull = (sess: InboxSession) => sess.pending_api_error_kind === "context";
+  const contextBlocked = blocked.filter((sess) => isContextFull(sess) && !isSubagentConversation(sess));
   const contextCount = contextBlocked.length;
   // Workers join the acted set only through the checkbox — never because they
   // are all that is blocked. Continuing an in-process worker cannot reach it;
@@ -538,6 +539,7 @@ function BlockedSessionsBanner({
     else next.add(id);
     setPicked(next);
   };
+  const setAllPicked = (on: boolean) => setPicked(new Set(on ? pickable.map((sess) => sess._id) : []));
 
   // The sign-in CTA's executor: the online primary (non-remote) machine — the
   // one whose keychain holds the login and whose browser the OAuth flow opens
@@ -627,7 +629,11 @@ function BlockedSessionsBanner({
   // continue will run on, which the picker may have changed.
   const shareOfRemaining = (contextTokens: number) =>
     restartShareOfRemaining(contextTokens, targetUsage, calibration, now);
-  const { chosenIds, chosen, scoped, reloadTokens, reloadShare, leftUnticked: olderUnticked } = restartPlan(acted, {
+  // Everything the one button can restart: the continue set plus the full
+  // context windows it compacts.
+  const pickable = [...acted, ...contextBlocked];
+  const pickableIds = new Set(pickable.map((sess) => sess._id));
+  const { chosenIds, chosen, reloadTokens, reloadShare, leftUnticked: olderUnticked } = restartPlan(pickable, {
     now,
     windowMs: AUTO_CONTINUE_WINDOW_MS,
     parkedAt: blockAt,
@@ -636,6 +642,12 @@ function BlockedSessionsBanner({
     rowFor: (sess) => sess,
     activeSinceFor: (sess) => executorFor(sess)?.active_since,
   });
+  const chosenCompact = chosen.filter(isContextFull);
+  const chosenContinue = chosen.filter((sess) => !isContextFull(sess));
+  // A partial pick of the continue set is a scoped revive: the server acts on
+  // exactly those ids and dismisses nothing.
+  const scoped = chosenContinue.length !== acted.length;
+  const allPicked = chosen.length === pickable.length;
   // The headline figure and the words after it. One place, because the fallback
   // has to change both: "18% of what is left in the 5h window" when the rate is
   // fitted, "2.1M tokens of context" when it is not.
@@ -708,7 +720,7 @@ function BlockedSessionsBanner({
   // unreachable, the stamps age out (BLOCKED_REVIVE_TTL_MS) and those sessions
   // honestly return to blocked.
   const runRevive = async (target: { email?: string; profile?: string } | undefined) => {
-    const ids = chosen.map((sess) => sess._id);
+    const ids = chosenContinue.map((sess) => sess._id);
     const store = useInboxStore.getState();
     const nonce = Math.random().toString(36).slice(2, 10);
     const clientIds: Record<string, string> = {};
@@ -737,7 +749,7 @@ function BlockedSessionsBanner({
       const unswitchable = (res as { unswitchable?: number; unswitchable_devices?: string[] }).unswitchable ?? 0;
       const unswitchableDevices = (res as { unswitchable_devices?: string[] }).unswitchable_devices ?? [];
       if (unswitchable > 0) {
-        const stranded = chosen
+        const stranded = chosenContinue
           .filter((sess) => unswitchableDevices.includes(executorFor(sess)?.label ?? ""))
           .map((sess) => sess._id);
         for (const id of stranded) store.removeOptimisticMessage(id, clientIds[id]);
@@ -773,21 +785,32 @@ function BlockedSessionsBanner({
   // machinery's problem, resolved here per click, never a menu the user picks
   // from. The button therefore always acts on the whole acted set and always
   // says the full count.
-  const handleContinue = () => void runRevive(selectedAccount ? switchTarget(selectedAccount) : undefined);
+  const handleContinue = () => {
+    if (chosenCompact.length > 0) {
+      const store = useInboxStore.getState();
+      for (const sess of chosenCompact) store.sendMessage(sess._id, "/compact");
+      store.markBlockedReviveRequested(chosenCompact.map((sess) => sess._id));
+    }
+    if (chosenContinue.length > 0) void runRevive(selectedAccount ? switchTarget(selectedAccount) : undefined);
+    else closeBanner();
+  };
   // "all" only when the button truly covers the headline count. When workers
   // are skipped the button says what happens to BOTH halves — the skipped
   // workers are dismissed by the same click, and a button that only said
   // "Continue 1" would hide that the other 37 rows are about to go.
   const dismissLabel = skippedWorkers.length > 0 && !scoped ? ` · dismiss ${skippedWorkers.length} worker${skippedWorkers.length === 1 ? "" : "s"}` : "";
-  const countLabel = scoped
-    ? `${chosen.length} of ${acted.length}`
-    : skippedWorkers.length > 0
-    ? `${acted.length}${dismissLabel}`
-    : acted.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : acted.length === blocked.length ? `all ${acted.length}` : `${acted.length}`;
+  const countLabel = !allPicked
+    ? `${chosen.length} of ${pickable.length}`
+    : skippedWorkers.length > 0 && !scoped
+    ? `${pickable.length}${dismissLabel}`
+    : pickable.length === 1 ? (blocked.length === 1 ? "it" : "1 eligible session") : pickable.length === blocked.length ? `all ${pickable.length}` : `${pickable.length}`;
   const dismissTitle = skippedWorkers.length > 0 && !scoped
     ? `; the ${skippedWorkers.length} skipped worker${skippedWorkers.length === 1 ? " is" : "s are"} dismissed from the blocked set, not continued (tick the box above to continue them instead)`
     : "";
-  const continueTitle = (selectedAccount
+  const compactTitle = chosenCompact.length > 0
+    ? `${chosenCompact.length === 1 ? "The full session gets" : `The ${chosenCompact.length} full sessions get`} /compact instead (it keeps a summary and continues). `
+    : "";
+  const continueTitle = compactTitle + (selectedAccount
     ? `Switch ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} to ${selectedAccount.email ?? selectedAccount.name}, restart the blocked sessions, and continue them on it`
     : `Send "continue" to each blocked session on the current account — ${authCount > 0 ? `${authCount === acted.length ? "they are" : `the ${authCount} signed out are`} restarted first (their processes hold an expired login); ` : ""}a session pinned to another account's token is restarted on this one${limitCount > 0 && authCount === 0 ? "; the rest resume once the limit resets" : ""}`) + dismissTitle;
 
@@ -831,7 +854,7 @@ function BlockedSessionsBanner({
               fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
               authCount > 0 ? `${authCount} signed out` : null,
               safetyCount > 0 ? `${safetyCount} need${safetyCount === 1 ? "s" : ""} safety review (excluded from automatic recovery)` : null,
-              contextCount > 0 ? `${contextCount} ran out of context (compact or clear, never continue)` : null,
+              contextCount > 0 ? `${contextCount} ran out of context (compacted on continue)` : null,
               // The suffix names a consequence of the continue button, so it
               // only appears while that button does (a fleet of nothing but
               // workers offers no continue, only "Dismiss all").
@@ -843,7 +866,7 @@ function BlockedSessionsBanner({
               .filter(Boolean)
               .join(" · ")}
           </div>
-          {acted.length > 0 && (
+          {pickable.length > 0 && (
             <div
               className="mt-0.5 text-[11px] leading-snug text-sol-text-muted"
               title={restartCostTip}
@@ -870,7 +893,12 @@ function BlockedSessionsBanner({
                   : `restarting ${chosen.length}`}
               {olderUnticked > 0 && ` · ${olderUnticked} parked over ${formatIdle(AUTO_CONTINUE_WINDOW_MS)} ago left unticked`}
               {" "}
-              {!expanded && acted.length > 1 && (
+              {!allPicked && (
+                <button onClick={() => setAllPicked(true)} className="ml-1.5 underline decoration-dotted hover:text-sol-text">
+                  tick all
+                </button>
+              )}
+              {!expanded && pickable.length > 1 && (
                 <button onClick={() => setExpanded(true)} className="ml-1.5 underline decoration-dotted hover:text-sol-text">
                   choose
                 </button>
@@ -957,6 +985,20 @@ function BlockedSessionsBanner({
       )}
       {expanded && (
         <div className="mt-2 max-h-56 overflow-y-auto scrollbar-auto rounded border border-amber-500/15 bg-sol-bg/40 divide-y divide-sol-border/30">
+          {pickable.length > 1 && (
+            <label className="sticky top-0 z-10 flex cursor-pointer items-center gap-2 bg-sol-bg/95 px-2 py-1 text-[10px] text-sol-text-dim hover:text-sol-text">
+              <input
+                type="checkbox"
+                checked={allPicked}
+                ref={(el) => { if (el) el.indeterminate = chosen.length > 0 && !allPicked; }}
+                disabled={busy !== null}
+                onChange={() => setAllPicked(!allPicked)}
+                className="h-3 w-3 shrink-0 accent-amber-500"
+                aria-label="Tick every session"
+              />
+              {allPicked ? `all ${pickable.length} ticked` : `${chosen.length} of ${pickable.length} ticked`}
+            </label>
+          )}
           {blockedSorted.map((sess) => (
             <div
               key={sess._id}
@@ -964,11 +1006,11 @@ function BlockedSessionsBanner({
             >
               <input
                 type="checkbox"
-                checked={chosenIds.has(sess._id) && acted.includes(sess)}
-                disabled={!acted.includes(sess) || busy !== null}
+                checked={chosenIds.has(sess._id) && pickableIds.has(sess._id)}
+                disabled={!pickableIds.has(sess._id) || busy !== null}
                 onChange={() => togglePick(sess._id)}
                 className="h-3 w-3 shrink-0 accent-amber-500 disabled:opacity-40"
-                title={acted.includes(sess) ? "Restart this session with the continue below" : "Not restartable from here (a skipped worker or a safety stop)"}
+                title={!pickableIds.has(sess._id) ? "Not restartable from here (a skipped worker or a safety stop)" : isContextFull(sess) ? "Compact this session with the continue below (its context is full)" : "Restart this session with the continue below"}
                 aria-label="Include this session in the restart"
               />
               <button
@@ -1031,24 +1073,11 @@ function BlockedSessionsBanner({
             Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
           </button>
         )}
-        {contextCount > 0 && (
-          <button
-            onClick={() => {
-              const store = useInboxStore.getState();
-              for (const sess of contextBlocked) store.sendMessage(sess._id, "/compact");
-              store.markBlockedReviveRequested(contextBlocked.map((sess) => sess._id));
-            }}
-            title="Send /compact to each session whose context window is full — it keeps a summary and continues"
-            className="rounded border border-amber-500/40 px-3 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10"
-          >
-            Compact {contextCount === 1 ? "the full session" : `${contextCount} full sessions`}
-          </button>
-        )}
-        {acted.length > 0 && <>
+        {pickable.length > 0 && <>
         <button
           onClick={handleContinue}
           disabled={busy !== null || chosen.length === 0}
-          title={acted.length === 0 ? "Only subagent workers are blocked — tick the box above to include them" : continueTitle}
+          title={continueTitle}
           className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
         >
           {busy !== null
@@ -1127,15 +1156,16 @@ function RunningBadge({ label }: { label: string }) {
   );
 }
 
-const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId, onOpen, onOpenSession }: {
+const CardBarStrip = memo(function CardBarStrip({ session, words, rows, activeSessionId, onOpen, onOpenSession }: {
   session: InboxSession;
+  /** The panel's mode words, passed down so a row holds no subscription for them. */
+  words: ModeWords;
   rows: TriggerRow[];
   activeSessionId?: string | null;
   onOpen: (row: TriggerRow) => void;
   onOpenSession: (session: InboxSession) => void;
 }) {
   const now = useCoarseNow(30_000);
-  const words = useModeWords();
   const watching = useLiveWatchRows(session, now);
   const workflow = workflowBarVisible(session);
   const openWorkflow = useOpenWorkflowRun(session);
@@ -1609,8 +1639,9 @@ function HostedInboxHead({ outOfScope }: { outOfScope: number }) {
   );
 }
 
-function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
+function CardBars({ session, words, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
   session: InboxSession;
+  words: ModeWords;
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
   activeSessionId?: string | null;
@@ -1638,7 +1669,7 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
   if (mode === "strip") {
     return (
       <>
-        <CardBarStrip session={session} rows={bound} activeSessionId={activeSessionId} onOpen={onOpenSchedule} onOpenSession={onOpen} />
+        <CardBarStrip session={session} words={words} rows={bound} activeSessionId={activeSessionId} onOpen={onOpenSchedule} onOpenSession={onOpen} />
         {dormantRow}
       </>
     );
@@ -1767,9 +1798,10 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
       <div data-sv-triggers-foot className="shrink-0 border-t border-sol-border/40">
         <Link href="/triggers" className="flex w-full items-center px-3 py-1.5 text-[11px] text-sol-text-dim no-underline transition-colors hover:text-sol-text-muted">
           {/* One wording with the routine's row and page (hostedSchedule
-              firstRunWords): "Next: Morning review, tomorrow at 8:00 AM". */}
+              firstRunWords) and the home's line: "Coming up: Morning review,
+              tomorrow at 8:00 AM". */}
           <span className="truncate">
-            {`Next: ${nextTask ? `${taskDisplayTitle(nextTask)}, ` : ""}${firstRunWords(nextRunAt, now)}`}
+            {`${LANE_COPY.home.comingUp}: ${nextTask ? `${taskDisplayTitle(nextTask)}, ` : ""}${firstRunWords(nextRunAt, now)}`}
           </span>
         </Link>
       </div>
@@ -1943,12 +1975,12 @@ const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
 // constantly (heartbeats, section resorts) and Chromium silently cancels native
 // smooth scrolls on any concurrent scroll/layout change. Re-measuring the
 // remaining distance every frame self-corrects through that churn.
+// The row's scroll-margin-top (the sticky section heading's height on rail
+// rows) stays clear at the top, so a followed row never lands under its own
+// heading (lib/rowScroll).
 function scrollRowIntoView(container: HTMLElement, el: Element) {
-  const remainingDelta = () => {
-    const c = container.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    return r.top < c.top ? r.top - c.top : r.bottom > c.bottom ? r.bottom - c.bottom : 0;
-  };
+  const marginTop = scrollMarginTopOf(el);
+  const remainingDelta = () => rowScrollDelta(container.getBoundingClientRect(), el.getBoundingClientRect(), marginTop);
   const delta = remainingDelta();
   if (delta === 0) return;
   // Hidden/occluded tabs get no animation frames — settle instantly so the
@@ -2010,6 +2042,12 @@ function SessionBeacon({
   const [dir, setDir] = useState<"up" | "down" | null>(null);
   const observedRef = useRef<Element | null>(null);
   const ioRef = useRef<IntersectionObserver | null>(null);
+  // Whether the target's row was in view, and whose row it was: when the row
+  // the person was looking at moves to another section (it started waiting on
+  // them, its result landed), the list follows it instead of leaving a pill
+  // where it was.
+  const inViewRef = useRef(false);
+  const observedIdRef = useRef<string | null | undefined>(null);
 
   // No dep array on purpose: the parent re-renders exactly when the list
   // restructures, which is when the active card's node can change identity.
@@ -2022,14 +2060,19 @@ function SessionBeacon({
       : null;
     if (el === observedRef.current) return;
     ioRef.current?.disconnect();
+    const follow = !!el && !!container && observedIdRef.current === activeSessionId && inViewRef.current;
     observedRef.current = el;
+    observedIdRef.current = activeSessionId;
     if (!el || !container) {
+      inViewRef.current = false;
       setDir(null);
       return;
     }
+    if (follow) scrollRowIntoView(container, el);
     const io = new IntersectionObserver(
       ([entry]) => {
         if (!entry) return;
+        inViewRef.current = entry.isIntersecting;
         if (entry.isIntersecting) {
           setDir(null);
           return;
@@ -2049,6 +2092,8 @@ function SessionBeacon({
     ioRef.current?.disconnect();
     ioRef.current = null;
     observedRef.current = null;
+    observedIdRef.current = null;
+    inViewRef.current = false;
   });
 
   const words = useModeWords();
@@ -2069,7 +2114,7 @@ function SessionBeacon({
       data-dir={dir}
       data-tone={tone}
       style={style}
-      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border bg-sol-bg/90 py-1 pl-2 pr-2.5 text-[10px] font-medium backdrop-blur-md ${dir === "up" ? "top-2" : "bottom-2"}`}
+      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border bg-sol-bg/90 py-1 pl-2 pr-2.5 text-[10px] font-medium backdrop-blur-md ${dir === "up" ? "top-9" : "bottom-2"}`}
       title={label}
       aria-label={label}
     >
@@ -2420,6 +2465,18 @@ function SessionListPanelImpl({
   const statusDone = filteredDone;
   const statusDormant = filteredDormant;
   const statusWorking = filteredWorking;
+  // A New row the person opens stays in New while it is open, so the list
+  // does not reflow under the pointer the moment it is read; it settles into
+  // Earlier once they move on. Whether it was unread is read from the render
+  // before the open, since opening is what marks it read.
+  const prevUnreadRef = useRef(unreadByConv);
+  const heldNewRef = useRef<{ openId: string | null; held: string | null }>({ openId: null, held: null });
+  if (heldNewRef.current.openId !== (focusedId ?? null)) {
+    const id = focusedId ?? null;
+    heldNewRef.current = { openId: id, held: id && (unreadByConv[id] || prevUnreadRef.current[id]) ? id : null };
+  }
+  prevUnreadRef.current = unreadByConv;
+  const heldNewId = heldNewRef.current.held;
   // The label / plan lenses dissolve the status sections back to one flat
   // active set; questions rows rejoin it so an asking session still shows
   // under its label.
@@ -2427,10 +2484,10 @@ function SessionListPanelImpl({
     () => {
       const awaiting = awaitingOkIds(s.sessionDecisions);
       const sending = pendingSendIdsOf(s);
-      return hostedStatusSections({ pinned: statusPinned, questions: statusQuestions, needsInput: filteredNeedsInput, newSessions: statusNew, working: statusWorking, done: statusDone, dormant: statusDormant }, (id) => awaiting.has(id), (id) => sending.has(id), (id) => !!unreadByConv[id]);
+      return hostedStatusSections({ pinned: statusPinned, questions: statusQuestions, needsInput: filteredNeedsInput, newSessions: statusNew, working: statusWorking, done: statusDone, dormant: statusDormant }, (id) => awaiting.has(id), (id) => sending.has(id), (id) => !!unreadByConv[id] || id === heldNewId);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [statusPinned, statusQuestions, filteredNeedsInput, statusNew, statusWorking, statusDone, statusDormant, s.sessionDecisions, s.pendingMessages, s.sessionsWithQueuedMessages, unreadByConv],
+    [statusPinned, statusQuestions, filteredNeedsInput, statusNew, statusWorking, statusDone, statusDormant, s.sessionDecisions, s.pendingMessages, s.sessionsWithQueuedMessages, unreadByConv, heldNewId],
   );
   // Two hosted rows that read the same name get a muted day (or time) after
   // the title, by the name the card draws (hostedRowTitle), so the suffix
@@ -2660,11 +2717,11 @@ function SessionListPanelImpl({
   // Sessions parked on a limit/auth/connection banner — the fleet-level revive
   // banner's input. isBlockedConversation is the SAME predicate the server
   // selection uses (limit/auth/connection/fatal kinds — self-retrying 429/5xx
-  // never count — claude only, dismissed excluded), plus the same 48h window,
-  // so the count shown always matches what a revive would act on.
+  // never count — claude only, dismissed excluded), plus the same window
+  // (isCurrentBlock, judged on when the block landed), so the count shown
+  // always matches what a revive would act on.
   const blockedSessions = useMemo(() => {
     const now = Date.now();
-    const since = now - 48 * 60 * 60 * 1000;
     // A session the user just told to continue/switch (fresh revive stamp) is
     // out of the blocked set immediately — the pill count drops and the banner
     // clears on the click, not on the daemon round trip. The server flag only
@@ -2675,7 +2732,7 @@ function SessionListPanelImpl({
       (sess) =>
         !isSessionHidden(sess) &&
         !reviving.has(sess._id) &&
-        (sess.updated_at ?? 0) > since,
+        isCurrentBlock(sess, now),
     ).map(withSafetyBlock).filter(
       (sess) => isBlockedConversation(sess.agent_type != null ? sess : { ...sess, agent_type: "claude_code" }),
     );
@@ -3221,6 +3278,7 @@ function SessionListPanelImpl({
                     them an expanded bucket hides that a card is a loop. */}
                 <CardBars
                   session={session}
+                  words={words}
                   mode={cardBars}
                   scheduleRows={scheduleBarRowsFor(session)}
                   activeSessionId={activeSessionId}
@@ -3296,12 +3354,15 @@ function SessionListPanelImpl({
       onSelect?: (session: InboxSession) => void;
       // One text action in the header (Couldn't finish's Try again).
       headerAction?: React.ReactNode;
+      // Never folds, whatever an old click stored (hosted mode's New: the
+      // rows the Inbox count counts are the one group that exists to be seen).
+      fixed?: boolean;
     },
   ) => {
     const isDropTarget = !!opts?.onDropSession;
     if (items.length === 0 && !(isDropTarget && sessionDragActive)) return null;
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
-    const collapsed = !!s.collapsedSections[key];
+    const collapsed = !opts?.fixed && !!s.collapsedSections[key];
     const isDragOverSection = dragOverSectionKey === key;
     const dropProps = isDropTarget
       ? {
@@ -3345,6 +3406,7 @@ function SessionListPanelImpl({
           landedColor={collapsed ? holdDestColor(items.find((i) => landedIds.has(i._id))) : undefined}
           onToggle={() => s.toggleCollapsedSection(key)}
           action={opts?.headerAction}
+          fixed={opts?.fixed}
         />
         {!collapsed && (() => {
           // The Assistant scope's Done shows its newest few and folds the rest
@@ -3458,6 +3520,7 @@ function SessionListPanelImpl({
                     is an explicit "hidden". */}
                 <CardBars
                   session={session}
+                  words={words}
                   mode={cardBars}
                   scheduleRows={viewMode !== "trigger" ? scheduleBarRowsFor(session) : []}
                   activeSessionId={activeSessionId}
@@ -3678,7 +3741,11 @@ function SessionListPanelImpl({
       {/* Relative wrapper so the out-of-view beacon can float over the list
           edges without joining the scroll flow. */}
       <div className="relative flex-1 min-h-0">
-      <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-auto">
+      {/* Rows keep the sticky section heading's height clear when scrolled
+          to. Hosted mode's short rail also turns off scroll anchoring, so a
+          row moving into a section above never scrolls a list that sat at
+          the top. */}
+      <div ref={scrollContainerRef} className={`h-full overflow-y-auto scrollbar-auto [&_[data-session-id]]:scroll-mt-8${hostedMode ? " [overflow-anchor:none]" : ""}`}>
         {favoritesView ? (
           favoriteGroups && favoriteGroups.count > 0 ? (
             <>
@@ -3889,7 +3956,7 @@ function SessionListPanelImpl({
                 {key === "working" && renderSection(words.sectionWorking, items, "text-sol-green", "working", undefined, { key })}
                 {/* Unread results lead, every row shown; what was read
                     folds under Earlier (or Done, when nothing is new). */}
-                {key === "new_results" && renderSection("New", items, "text-sol-cyan", undefined, undefined, { key })}
+                {key === "new_results" && renderSection("New", items, "text-sol-cyan", undefined, undefined, { key, fixed: HOSTED_UNFOLDABLE_SECTIONS.has(key) })}
                 {key === "done" && renderSection(hostedSections.some(([rows, k]) => k === "new_results" && rows.length > 0) ? "Earlier" : "Done", items, "text-sol-cyan", undefined, undefined, { key: "done", onDropSession: dropSessionOnRest.done })}
                 {key === "drafts" && renderSection("Drafts", items, "text-sol-text-dim", undefined, undefined, { key })}
               </Fragment>
@@ -3928,9 +3995,9 @@ function SessionListPanelImpl({
             {hostedOnly && <MoreInEverything hidden={outOfScope} centered />}
           </div>
         )}
-        {/* The scope's note closes the live list, above what was put away,
-            so it never reads as part of that list. */}
-        {hostedOnly && sortedSessions.length > 0 && <div className="px-3 pb-3"><MoreInEverything hidden={outOfScope} /></div>}
+        {/* A list with rows says nothing more about Everything: the rail's
+            header holds that tab one click away, and a second "more" line
+            under Earlier's own "Show N more" read as two different lists. */}
         {/* The Assistant scope keeps what was put away in one quiet place:
             snoozed, set aside and closed read alike to someone who only asks
             the assistant for things. Everything keeps the three buckets. */}
