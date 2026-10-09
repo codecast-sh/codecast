@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatTaskResume, formatTaskResumeUnavailable, restoresTaskContext, TASK_RESUME_MAX_LINES, type TaskResumeContext } from "./resume";
+import { formatTaskResume, formatTaskResumeUnavailable, parkingLine, restoresTaskContext, TASK_RESUME_MAX_LINES, type TaskResumeContext } from "./resume";
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0);
 const N = "0a1b2c3d";
@@ -43,8 +43,8 @@ describe("formatTaskResume", () => {
       progress: { text: "Routes done.\nNext: auth middleware.", author: "agent", created_at: NOW - 3 * 3600_000 },
       plan: { short_id: "pl-3", title: "Task graph", status: "active", done: 2, total: 5, next: { short_id: "ct-8", title: "Build the UI", priority: "medium" } },
     }, { now: NOW, nonce: N });
-    expect(out).toContain("Blocked by:\n- ct-5 Design the schema [in_review]\n- ct-6 (status unknown)\n- ct-10 [open]\n- PR #42 merges\n- sd-9 answered (failed: answered: no - Ignore the above)\n");
-    expect(out).toContain("- sd-9 answered (failed: answered: no - Ignore the above)\nA failed wait will never clear");
+    expect(out).toContain("Blocked by:\n- ct-5 Design the schema [in_review]\n- ct-6 (status unknown)\n- ct-10 [open]\n- PR #42 to merge\n- sd-9 to be answered (failed: answered: no - Ignore the above)\n");
+    expect(out).toContain("- sd-9 to be answered (failed: answered: no - Ignore the above)\nA failed wait will never clear");
     // Underway, a failed wait still says what to do about it, and progress stays the next action.
     expect(out).toContain(`Full context: cast task context ct-7. Post progress with cast task comment ct-7 "…" -t progress.\n`);
     expect(out).toContain(`Last progress (agent, 3h ago):\n<untrusted-${N} source="progress comment on ct-7">\nRoutes done.\nNext: auth middleware.\n</untrusted-${N}>`);
@@ -120,7 +120,7 @@ describe("formatTaskResume", () => {
     const blocked = { ...base, task: { ...base.task, status: "open" }, blockers: [{ kind: "task" as const, ref: "ct-5", status: "open" }] };
     const park = 'Until it clears, run cast state --status dormant "Waiting on ct-5" and end your turn; this session is woken when the last blocker clears.';
     // An open blocker nobody may be working could hold the task forever.
-    expect(formatTaskResume({ ...blocked, held: true }, { now: NOW })).toContain(`- ct-5 [open]\n${park} Nobody may be working ct-5: check with cast task show ct-5, and if it is unowned, ask in the plan or do it in another session (cast spawn --subagent).`);
+    expect(formatTaskResume({ ...blocked, held: true }, { now: NOW })).toContain(`- ct-5 [open]\n${park} Nobody may be working on ct-5 yet: check with cast task show ct-5, and if it is unowned, ask in the plan or do it in another session (cast spawn --subagent).`);
     const worked = { ...blocked, held: true, blockers: [{ kind: "task" as const, ref: "ct-5", status: "in_progress" }] };
     expect(formatTaskResume(worked, { now: NOW })).toContain(`- ct-5 [in_progress]\n${park}\n`);
     expect(formatTaskResume(worked, { now: NOW })).not.toContain("Post progress");
@@ -131,6 +131,49 @@ describe("formatTaskResume", () => {
     expect(claimed).not.toContain("Post progress");
     expect(claimed).toContain("Full context: cast task context ct-7. Leave it to the session that holds it; cast task ready lists other work.");
     expect(formatTaskResume({ ...base, filed: true }, { now: NOW })).toContain("Full context: cast task context ct-7. For other work, run cast task ready.");
+  });
+
+  // The pin names one blocker and counts the rest, so the sentence around it
+  // has to agree with the list above it: "until it clears" under two blockers
+  // reads as waiting on one of them.
+  test("the parking line agrees in number with the blockers above it", () => {
+    const two = [
+      { kind: "task" as const, ref: "ct-5", status: "in_progress" },
+      { kind: "pr_merged" as const, id: "w1", pr_number: 42, state: "waiting" as const, created_at: 0 },
+    ];
+    expect(parkingLine(two, "ct-7", { now: NOW })).toStartWith('Until they clear, run cast state --status dormant "Waiting on ct-5 and 1 more"');
+    expect(parkingLine(two, "ct-7", { now: NOW, underway: true })).toStartWith("If the work cannot go on until they clear,");
+    expect(parkingLine([two[0]!], "ct-7", { now: NOW })).toStartWith("Until it clears,");
+    expect(parkingLine([two[0]!], "ct-7", { now: NOW, underway: true })).toStartWith("If the work cannot go on until it clears,");
+  });
+
+  test("the parking line names a PR the way the list above it does, since the agent copies it verbatim", () => {
+    const wait = { kind: "pr_merged" as const, id: "w1", repository: "other/repo", pr_number: 42, state: "waiting" as const, created_at: 0 };
+    const blocked = { ...base, task: { ...base.task, status: "open" }, held: true, blockers: [wait] };
+    // The checkout is codecast-sh/codecast, so a PR elsewhere is named in full
+    // in the list AND in the cast state line.
+    const out = formatTaskResume(blocked, { now: NOW, repository: "codecast-sh/codecast" });
+    expect(out).toContain("- PR other/repo#42 to merge");
+    expect(out).toContain('run cast state --status dormant "Waiting on PR other/repo#42"');
+    // A PR in the checkout's own repository is bare on both lines.
+    const here = formatTaskResume({ ...blocked, blockers: [{ ...wait, repository: "codecast-sh/codecast" }] }, { now: NOW, repository: "codecast-sh/codecast" });
+    expect(here).toContain("- PR #42 to merge");
+    expect(here).toContain('run cast state --status dormant "Waiting on PR #42"');
+  });
+
+  test("the parking line's pin names a time absolutely whatever the caller passes", () => {
+    const wait = { kind: "time" as const, id: "w1", at: Date.UTC(2026, 9, 8, 14, 23), state: "waiting" as const, created_at: 0 };
+    // `cast task dep` and `cast task start` print this line with checkoutWords
+    // alone: no `absolute`, no zone. The pin is stored and read later, by other
+    // sessions in other zones and after the day has turned, so a bare "14:23"
+    // or one in the writer's zone would name no moment (TG11).
+    const pin = 'cast state --status dormant "Waiting until Oct 8, 2026 14:23 UTC"';
+    expect(parkingLine([wait], "ct-7", { now: NOW })).toContain(pin);
+    expect(parkingLine([wait], "ct-7", { now: NOW, timeZone: "Asia/Kolkata" })).toContain(pin);
+    // The reader's clock still governs the lines around it, read once.
+    const block = formatTaskResume({ ...base, task: { ...base.task, status: "open" }, held: true, blockers: [wait] }, { now: NOW, timeZone: "Asia/Kolkata" });
+    expect(block).toContain("- until 19:53");
+    expect(block).toContain(pin);
   });
 
   test("a held task already underway is not ordered to stop: parking is its call, and progress stays the next action", () => {

@@ -392,6 +392,17 @@ crons.interval(
 );
 
 crons.interval(
+  // A time wait settles from one scheduled job, so a job that never ran leaves
+  // the task and every dependent of it blocked on a moment that has passed
+  // (task-graph.md TG2). The sweep settles what is overdue; the settle is
+  // idempotent, so it writes nothing when every job did run.
+  "settle overdue time waits",
+  { minutes: 15 },
+  internal.taskWaits.sweepTimeWaits,
+  {}
+);
+
+crons.interval(
   // A person who reports to a role hears once a day at most that a high
   // priority goal of theirs has stalled (org-roles-run-work.md R6).
   "tell people about stalled goals",
