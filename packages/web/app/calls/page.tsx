@@ -1206,7 +1206,7 @@ export default function CallsPage() {
               </div>
               <p className="mt-0.5 text-[11px] text-sol-text-dim">
                 Huddles with their transcripts and video, and voice
-                notes, also via <code className="text-sol-cyan">cast calls</code>
+                notes. Your agents can read them too.
               </p>
               <SeatedHuddleRecord />
               <RecordMeetingButton />
