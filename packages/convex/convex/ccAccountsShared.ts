@@ -482,7 +482,7 @@ export function pickThrottleContinueBatch<
   // probe, so every row is due at once and only the batch size paces it.
   opts: { kinds?: ReadonlySet<string>; dueAt?: (c: T) => number } = {},
 ): { batch: T[]; remaining: number; waiting: number; nextDueAt: number | null } {
-  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const parkedAt = blockedAt;
   const dueAt = opts.dueAt ?? ((c: T): number => throttleContinueDueAt(parkedAt(c), c._id, attempts, now));
   const kinds = opts.kinds ?? PACED_CONTINUE_KINDS;
   const throttled = blocked
@@ -512,7 +512,7 @@ export function pickLimitProbe<
   T extends { _id: string; pending_api_error_kind?: string | null; pending_api_error_at?: number | null; updated_at?: number },
 >(blocked: T[], now: number): LimitProbe | null {
   if (blocked.length === 0) return null;
-  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const parkedAt = blockedAt;
   const probe = blocked.reduce((best, c) => (parkedAt(c) > parkedAt(best) ? c : best));
   return { conversation_id: probe._id, at: now, kind: probe.pending_api_error_kind ?? "limit", bucket: Math.floor(now / 60_000) };
 }
@@ -538,7 +538,7 @@ export function limitProbeStep<
   probe: LimitProbe,
   now: number,
 ): { step: "reparked" } | { step: "settling" } | { step: "release"; batch: T[]; remaining: number } {
-  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const parkedAt = blockedAt;
   const sameKind = blocked.filter((c) => (c.pending_api_error_kind ?? "") === probe.kind);
   if (sameKind.some((c) => parkedAt(c) > probe.at)) return { step: "reparked" };
   const probeRow = sameKind.find((c) => c._id === probe.conversation_id);
@@ -640,7 +640,7 @@ export function splitAuthParks<T extends { _id: string; updated_at?: number; pen
   const active = accounts?.profiles.find((p) => !!p.email && p.email === fleetEmail);
   if (active?.login_expired_at && active.login_expired_at >= activeSince) return { restart: [], dead: parks };
   if (!active?.usage || active.usage.fetched_at < activeSince) return { restart: [], dead: [] };
-  const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
+  const parkedAt = blockedAt;
   const lastRestart = (c: T): number => attempts.reduce(
     (latest, a) => a.profile === authRestartAttemptKey(c._id) && a.at >= activeSince ? Math.max(latest, a.at) : latest,
     0,
@@ -1044,6 +1044,23 @@ export function isBlockedConversation(conv: {
   );
 }
 
+// The revive window: a park older than this is the graveyard, not the current
+// incident. Measured from when the block landed (the banner's own timestamp),
+// never from updated_at: a transcript synced again weeks later bumps
+// updated_at and re-flags the row with its old banner, and an updated_at
+// window let 47-day-old parks back into the banner and the auto-continue.
+// Eight days: a weekly limit can hold a session parked for up to seven before
+// its reset, plus a day of slack for the wake-up after it.
+export const BLOCKED_WINDOW_MS = 8 * 24 * 60 * 60 * 1000;
+
+export function blockedAt(conv: { pending_api_error_at?: number | null; updated_at?: number }): number {
+  return conv.pending_api_error_at ?? conv.updated_at ?? 0;
+}
+
+export function isCurrentBlock(conv: { pending_api_error_at?: number | null; updated_at?: number }, now: number): boolean {
+  return blockedAt(conv) > now - BLOCKED_WINDOW_MS;
+}
+
 /** Target of the post-credential-push recovery nudge: an auth-parked
  * conversation owned by a remote device (remotes run a pushed COPY of the
  * primary's credential — a fresh push is what makes their recovery possible,
@@ -1221,14 +1238,10 @@ export function isAgentSpawnedConversation(conv: {
 }
 
 // Stale-flag sweep: past the revive window the flag stops meaning "current
-// incident" and just pollutes badges/selection — clear it. New activity on a
-// conversation bumps updated_at and supersedes the banner anyway, so for a
-// parked conversation updated_at ≈ when it hit the limit.
-export const STALE_FLAG_AFTER_MS = 48 * 60 * 60 * 1000;
-
+// incident" and just pollutes badges/selection — clear it.
 export function shouldSweepStaleFlag(
-  conv: { pending_api_error?: boolean; updated_at?: number },
+  conv: { pending_api_error?: boolean; pending_api_error_at?: number | null; updated_at?: number },
   now: number,
 ): boolean {
-  return conv.pending_api_error === true && (conv.updated_at ?? 0) < now - STALE_FLAG_AFTER_MS;
+  return conv.pending_api_error === true && !isCurrentBlock(conv, now);
 }
