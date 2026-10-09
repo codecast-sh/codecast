@@ -114,10 +114,6 @@ export function askOfChange(asks: AskView[], changeId: string | null | undefined
   return asks.find((a) => a.changes.some((c) => c._id === changeId)) ?? null;
 }
 
-// ---------------------------------------------------------------- the cost line
-
-
-
 // ---------------------------------------------------------------- the letter
 
 /** A letter this long or shorter is the author's first bubble whole. */
@@ -179,11 +175,10 @@ export function letterIntro(authorName: string, named: boolean): string {
   return `${who} You decide each one, and nothing changes until you approve it.`;
 }
 
-
 // ---------------------------------------------------------------- proposal (S19)
 
 /**
- * The asks column: one line of header, one card per ask, one line of cost.
+ * The asks column: one line of header, then one card per ask.
  * Who wrote the proposal, when, and why is the letter in the conversation
  * beside it; the 157 rows are inside the cards' folds. Nothing else is here
  * on purpose: every line added to this column is a line a person reads

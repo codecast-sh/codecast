@@ -20,20 +20,18 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, createWorkContext } from "./data";
-import { canAccessSignal, canAccessTask, computeWorkspaceKey } from "./lib/access";
+import { canAccessSignal, canAccessTask } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { nextShortId } from "./counters";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
 import { noticeCauseReopened } from "./lineNotices";
-import { DEDUP_SIMILARITY_THRESHOLD, titleSimilarity } from "./taskMining";
+import { titleSimilarity } from "./taskMining";
 import { callModel, parseJsonBlock, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { insightSignalFingerprint, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
+import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
 import { LINE_SIGNAL_WINDOW_MS, lineProfileContentKey, lineProfileUnchanged } from "@codecast/shared/contracts/lineProfile";
 import { lineFinderValidator, lineProfileFactsValidator } from "./lib/lineProfileValidator";
-import { teamVisibleConvTeam } from "./privacy";
 import { resolveWorkspaceProject } from "./lib/projectRef";
-import { projectContainingPath } from "./projectPaths";
 import { ownDevice } from "./devices";
 
 export { SIGNAL_KINDS, type SignalKind };
@@ -512,106 +510,6 @@ export const ingestAs = internalAction({
   },
 });
 
-// ── Finder: session insight blockers (LE3) ──
-
-/**
- * The blockers an insight newly recorded, as signals: one per blocker the
- * session's previous insight did not already carry, so a session that
- * regenerates its insight every few minutes files each blocker once. A
- * blocker the model merely reworded (word overlap at the task miner's dedup
- * line) counts as carried; one restated further gets a new fingerprint and
- * the attach judge folds it into the same cause.
- */
-export function insightBlockerSignals(
-  conversationShortId: string,
-  blockers: string[],
-  previous: string[] | undefined,
-  about: string | undefined,
-): SignalInput[] {
-  const seen = new Set((previous ?? []).map((b) => insightSignalFingerprint(conversationShortId, b)));
-  const out: SignalInput[] = [];
-  for (const blocker of blockers) {
-    if (!blocker.trim()) continue;
-    const fingerprint = insightSignalFingerprint(conversationShortId, blocker);
-    if (seen.has(fingerprint)) continue;
-    if ((previous ?? []).some((b) => titleSimilarity(b, blocker) >= DEDUP_SIMILARITY_THRESHOLD)) continue;
-    seen.add(fingerprint);
-    out.push({
-      source: "insight",
-      kind: "bug",
-      fingerprint,
-      title: blocker,
-      detail_md: `Session ${conversationShortId} recorded this blocker in its insight.${about ? `\n\nThe session was working on: ${about}` : ""}`,
-      subject: conversationShortId,
-    });
-  }
-  return out;
-}
-
-/**
- * The project an insight's blockers file into (line-profile.md LP1): the
- * project of the session's active task, else the project whose project_path
- * contains the session's directory, else none. Only a project of the workspace
- * the signal lands in can be named, so a task or path in another workspace
- * never routes a blocker there.
- */
-async function insightProject(ctx: any, conv: Doc<"conversations">, workspaceKey: string, dir: string | undefined): Promise<string | undefined> {
-  const task: Doc<"tasks"> | null = conv.active_task_id ? await ctx.db.get(conv.active_task_id) : null;
-  const taskProject: Doc<"projects"> | null = task?.project_id ? await ctx.db.get(task.project_id) : null;
-  if (taskProject && taskProject.workspace === workspaceKey) return String(taskProject._id);
-  if (!dir) return undefined;
-  const rows: Doc<"projects">[] = await ctx.db
-    .query("projects")
-    .withIndex("by_workspace", (q: any) => q.eq("workspace", workspaceKey))
-    .take(2000);
-  const byPath = projectContainingPath(rows, dir);
-  return byPath ? String(byPath._id) : undefined;
-}
-
-/** Who files an insight's signals and where: the session's owner, in the insight's workspace and project. */
-export const insightFiler = internalQuery({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args) => {
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv?.short_id) return null;
-    // The rule the insight row and its mined tasks follow: only a team-visible
-    // session hands its team over; anything else is the owner's own.
-    const team = teamVisibleConvTeam(conv);
-    const project_path = conv.project_path || conv.git_root || undefined;
-    const project = await insightProject(ctx, conv, computeWorkspaceKey({ user_id: conv.user_id }, conv), project_path);
-    const scope: Scope = {
-      ...(team ? { workspace: "team" as const, team_id: team } : { workspace: "personal" as const }),
-      project_path,
-      ...(project ? { project } : {}),
-    };
-    return { short_id: conv.short_id, user_id: conv.user_id, title: conv.title, scope };
-  },
-});
-
-/** Scheduled by the insight generator when an insight carries a new blocker. */
-export const ingestInsightBlockers = internalAction({
-  args: {
-    conversation_id: v.id("conversations"),
-    blockers: v.array(v.string()),
-    previous_blockers: v.optional(v.array(v.string())),
-    goal: v.optional(v.string()),
-  },
-  handler: async (ctx, args): Promise<{ filed: number }> => {
-    const filer: { short_id: string; user_id: Id<"users">; title?: string; scope: Scope } | null = await ctx.runQuery(internal.signals.insightFiler, { conversation_id: args.conversation_id });
-    if (!filer) return { filed: 0 };
-    let filed = 0;
-    for (const signal of insightBlockerSignals(filer.short_id, args.blockers, args.previous_blockers, args.goal || filer.title)) {
-      try {
-        await runIngest(ctx, { user_id: filer.user_id }, signal, filer.scope);
-        filed++;
-      } catch (err) {
-        console.error("insight blocker signal not filed", args.conversation_id, err);
-      }
-    }
-    return { filed };
-  },
-});
-
 // ── Reads ──
 
 function signalView(row: Doc<"signals">, task: Doc<"tasks"> | null) {
@@ -692,6 +590,95 @@ export const listForCli = query({
       if (!tasks.has(key)) tasks.set(key, await ctx.db.get(row.task_id));
     }
     return { signals: visible.map((row) => signalView(row, tasks.get(String(row.task_id)) ?? null)) };
+  },
+});
+
+/**
+ * `cast signal move`: one fingerprint's signals leave a cause for another, or
+ * for a new cause of their own. A cause is one mechanism; a key attached to
+ * the wrong one moves, with both causes' counts and keys kept true, and the
+ * door attaches its later signals where it now lives.
+ */
+export const moveForCli = mutation({
+  args: {
+    api_token: v.string(),
+    fingerprint: v.string(),
+    from: v.string(),
+    to: v.optional(v.string()),
+    title: v.optional(v.string()),
+    ...scopeArgs,
+  },
+  handler: async (ctx, args) => {
+    const userId = await authed(ctx, args.api_token);
+    const byShort = async (short: string) => {
+      const task = await ctx.db.query("tasks").withIndex("by_short_id", (q) => q.eq("short_id", short.trim())).first();
+      if (!task || !(await canAccessTask(ctx, userId, task))) notFound(`Task ${short} not found`);
+      return task!;
+    };
+    const source = await byShort(args.from);
+    const fingerprint = args.fingerprint.trim();
+    const rows = (await ctx.db.query("signals").withIndex("by_task", (q) => q.eq("task_id", source._id)).collect())
+      .filter((r) => r.fingerprint === fingerprint)
+      .sort((a, b) => b.created_at - a.created_at);
+    if (rows.length === 0) throw new Error(`${source.short_id} holds no signal with fingerprint ${fingerprint}`);
+    const now = Date.now();
+    const first = Math.min(...rows.map((r) => r.observed_at ?? r.created_at));
+    const last = Math.max(...rows.map((r) => r.observed_at ?? r.created_at));
+
+    let target: Doc<"tasks">;
+    let created = false;
+    if (args.to) {
+      target = await byShort(args.to);
+      if (target._id === source._id) throw new Error(`${source.short_id} already holds ${fingerprint}`);
+      const cause = target.cause;
+      const keys = cause?.fingerprints ?? [];
+      await ctx.db.patch(target._id, {
+        cause: {
+          signal_count: (cause?.signal_count ?? 0) + rows.length,
+          first_seen: Math.min(cause?.first_seen ?? first, first),
+          last_seen: Math.max(cause?.last_seen ?? last, last),
+          fingerprints: keys.includes(fingerprint) || keys.length >= FINGERPRINTS_MAX ? keys : [...keys, fingerprint],
+        },
+        updated_at: now,
+      });
+    } else {
+      const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
+      const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, args.project))?._id ?? rows[0].project_id ?? null;
+      const newest = rows[0];
+      const taskId = await db.insert("tasks", {
+        short_id: await nextShortId(ctx.db, "ct"),
+        title: args.title?.trim() || newest.title,
+        description: causeDescription(newest as unknown as SignalInput),
+        task_type: newest.kind === "request" ? "feature" : newest.kind === "bug" || newest.kind === "regression" ? "bug" : "task",
+        status: "open",
+        priority: "medium",
+        blocks: [],
+        source: "signal",
+        triage_status: "suggested",
+        ...(projectId ? { project_id: projectId } : {}),
+        attempt_count: 0,
+        retry_count: 0,
+        max_retries: 3,
+        cause: { signal_count: rows.length, first_seen: first, last_seen: last, fingerprints: [fingerprint] },
+      });
+      target = (await ctx.db.get(taskId as Id<"tasks">)) as Doc<"tasks">;
+      created = true;
+    }
+
+    for (const row of rows) {
+      await ctx.db.patch(row._id, { task_id: target._id, project_id: target.project_id ?? row.project_id, attach: "person" as SignalAttach });
+    }
+    const left = source.cause;
+    await ctx.db.patch(source._id, {
+      cause: left
+        ? { ...left, signal_count: Math.max(0, (left.signal_count ?? 0) - rows.length), fingerprints: (left.fingerprints ?? []).filter((k) => k !== fingerprint) }
+        : left,
+      updated_at: now,
+    });
+    const author = "line";
+    await insertTaskComment(ctx, source._id, { author, comment_type: "note", text: `Moved ${rows.length} signal${rows.length === 1 ? "" : "s"} (${fingerprint}) to ${target.short_id}: a different mechanism from this cause.` });
+    await insertTaskComment(ctx, target._id, { author, comment_type: "note", text: `Took ${rows.length} signal${rows.length === 1 ? "" : "s"} (${fingerprint}) from ${source.short_id}.` });
+    return { from: source.short_id, to: target.short_id, moved: rows.length, created };
   },
 });
 

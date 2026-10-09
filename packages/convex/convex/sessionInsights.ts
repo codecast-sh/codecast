@@ -8,8 +8,7 @@ import { canAccessConversation } from "./lib/access";
 import { markInsightDirty } from "./lib/changesDirty";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
-import { REDIRECT_PATTERN } from "@codecast/shared/contracts/projectMemory";
-import { consolidateProjectMemory } from "./projectMemory";
+import { REDIRECT_PATTERN } from "@codecast/shared/contracts/redirectWords";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -133,8 +132,8 @@ export type InsightMessageRow = {
  * chronological order: the user and assistant turns, each cut to 500
  * characters, sampled to the first 8 and the last 10, plus the tool names seen.
  * A user turn in the cut middle that reads as a redirect (REDIRECT_PATTERN,
- * the words cast-lessons searches for) is kept in place, so the corrections
- * the insight extracts are not lost to the sampling.
+ * the words cast-lessons searches for) is kept in place, so the narrative
+ * keeps the moments the user changed course.
  */
 export function selectInsightContext(rows: InsightMessageRow[]): Pick<ConversationInsightContext, "messages" | "tool_names"> {
   const turns = rows
@@ -207,9 +206,7 @@ Return ONLY valid JSON with this exact shape:
   "summary": "string (2-3 sentences, narrative context)",
   "outcome_type": "shipped|progress|blocked|unknown",
   "themes": ["string"],
-  "confidence": number (0..1),
-  "corrections": [ { "said": "string", "instead": "string" } ],
-  "decisions": [ { "title": "string", "why": "string" } ]
+  "confidence": number (0..1)
 }
 
 Rules:
@@ -221,8 +218,6 @@ Rules:
 - summary: Brief narrative context, 2-3 sentences, ending on what is in progress or next.
 - outcome_type: shipped = the excerpt shows the work deployed, merged or complete. progress = still working, including when its last step has not been shown finishing. blocked = stuck.
 - themes: 2-4 short tags, lowercase.
-- corrections: each place the user redirected the agent (stopped it, said no, asked for a different approach or undid its work). "said" is what they said, in their words; "instead" is what the agent should do in this project from now on, as one general line. Empty when the excerpt shows no redirect.
-- decisions: each choice the excerpt shows being made for this project (an approach, a tool, a rule, a scope cut) with the reason given. "title" is the choice in one line; "why" is the reason. Leave out a choice the excerpt gives no reason for. Empty when the excerpt shows none.
 - No markdown, no commentary, just JSON.
 
 Session metadata:
@@ -286,19 +281,10 @@ export function parseInsightReply(text: string | undefined) {
           did: t.did.filter((d: any) => typeof d === "string").slice(0, 6).map((d: any) => String(d).trim().slice(0, 200)),
         }))
     : undefined;
-  const pairs = (list: unknown, a: string, b: string): Array<Record<string, string>> | undefined =>
-    Array.isArray(list)
-      ? list
-          .filter((x: any) => x && typeof x[a] === "string" && typeof x[b] === "string" && x[a].trim() && x[b].trim())
-          .slice(0, 8)
-          .map((x: any) => ({ [a]: String(x[a]).trim().slice(0, 300), [b]: String(x[b]).trim().slice(0, 300) }))
-      : undefined;
   return {
     ok: true as const,
     summary: parsed.summary,
     headline: parsed.headline ? String(parsed.headline).trim().slice(0, 120) : undefined,
-    corrections: pairs(parsed.corrections, "said", "instead") as Array<{ said: string; instead: string }> | undefined,
-    decisions: pairs(parsed.decisions, "title", "why") as Array<{ title: string; why: string }> | undefined,
     keyChanges: uniqCompact(Array.isArray(parsed.key_changes) ? parsed.key_changes.map((c: any) => String(c)) : [], 6, 120),
     timeline,
     turns,
@@ -549,8 +535,6 @@ export const upsertSessionInsight = internalMutation({
     next_action: v.optional(v.string()),
     themes: v.array(v.string()),
     confidence: v.optional(v.number()),
-    corrections: v.optional(v.array(v.object({ said: v.string(), instead: v.string() }))),
-    decisions: v.optional(v.array(v.object({ title: v.string(), why: v.string() }))),
     metadata: v.optional(v.object({
       commit_shas: v.optional(v.array(v.string())),
       pr_numbers: v.optional(v.array(v.number())),
@@ -582,8 +566,6 @@ export const upsertSessionInsight = internalMutation({
         next_action: args.next_action,
         themes: args.themes,
         confidence: args.confidence,
-        corrections: args.corrections,
-        decisions: args.decisions,
         metadata: args.metadata,
       });
       insightId = existing._id;
@@ -606,22 +588,10 @@ export const upsertSessionInsight = internalMutation({
         next_action: args.next_action,
         themes: args.themes,
         confidence: args.confidence,
-        corrections: args.corrections,
-        decisions: args.decisions,
         metadata: args.metadata,
       });
     }
     await markInsightDirty(ctx, args.conversation_id, args.team_id);
-    // Zero-inference consolidation: every settle passes here, so this is where
-    // the session's corrections and decisions fold into the project's memory.
-    await consolidateProjectMemory(ctx, {
-      conversation_id: args.conversation_id,
-      team_id: args.team_id,
-      user_id: args.actor_user_id,
-      corrections: args.corrections ?? [],
-      decisions: args.decisions ?? [],
-      now: args.generated_at,
-    });
 
     return insightId;
   },
@@ -705,8 +675,6 @@ export const generateSessionInsight = internalAction({
         next_action: nextAction,
         themes: themes.length ? themes : ["general"],
         confidence,
-        corrections: reply.corrections?.length ? reply.corrections : undefined,
-        decisions: reply.decisions?.length ? reply.decisions : undefined,
         metadata: {
           commit_shas: context.commits.slice(0, 8).map((c) => c.sha),
           pr_numbers: context.prs.slice(0, 8).map((pr) => pr.number),
@@ -721,27 +689,6 @@ export const generateSessionInsight = internalAction({
         await ctx.runMutation(internal.idleSummary.setIdleSummary, {
           conversation_id: context.conversation._id,
           idle_summary: headline,
-        });
-      }
-
-      // Each blocker this insight newly records is a signal (LE3); the door
-      // attaches it to a cause in the insight's workspace.
-      if (blockers.length) {
-        await ctx.scheduler.runAfter(0, internal.signals.ingestInsightBlockers, {
-          conversation_id: context.conversation._id,
-          blockers,
-          previous_blockers: existing?.blockers,
-          goal,
-        });
-      }
-
-      // Auto-mine tasks and docs from this conversation after insight is saved
-      if (context.conversation.actor_user_id) {
-        await ctx.scheduler.runAfter(0, internal.taskMining.mineConversationAfterInsight, {
-          user_id: context.conversation.actor_user_id,
-          team_id: visibleTeam,
-          insight_id: insightId,
-          conversation_id: context.conversation._id,
         });
       }
 
