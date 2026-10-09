@@ -40,13 +40,24 @@ If the plan has no tasks, decompose it yourself:
 
 1. Read the plan goal and acceptance criteria
 2. Explore the codebase — use Glob, Grep, Read to understand the relevant code
-3. Create tasks with clear acceptance criteria, ordered by dependency:
+3. Write the steps in waves, one per line with what done means after `::`.
+   Steps in a wave run in parallel; a blank line starts a wave that needs
+   every step of the one before:
 
 ```bash
-cast task create "Add status field to tasks schema" -t feature -p high --plan <plan_id>
-cast task create "Update task API to filter by status" -t feature -p high --plan <plan_id>
-cast task dep <second_id> --blocked-by <first_id>
+cast plan steps <plan_id> - <<'STEPS'
+Add status field to tasks schema :: <acceptance criteria and owned files>
+
+Update task API to filter by status :: <...>
+Backfill status on existing tasks :: <...>
+
+Show the status filter on the board :: <...>
+STEPS
 ```
+
+Order by what a step needs, never by what comes first. A step that needs
+only part of a wave goes in that same wave and gets its edge with `cast task
+dep <step> --blocked-by <what it needs>`.
 
 Rules for decomposition:
 - Schema/data model first, then backend logic, then UI, then polish
