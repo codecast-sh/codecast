@@ -32,7 +32,7 @@ mockInboxStore(() => ({
   redoOrgChange: (...args: unknown[]) => writes.push(["redo", ...args]),
 }));
 const { createRoot } = await import("react-dom/client");
-const { OrgHistory, OrgHistoryPreview } = await import("./OrgHistory");
+const { OrgHistory } = await import("./OrgHistory");
 let root = createRoot(document.getElementById("root")!);
 const q = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector);
 const click = async (selector: string) => { await act(async () => q<HTMLButtonElement>(selector)!.click()); };
@@ -135,17 +135,5 @@ describe("Org History", () => {
     assert.ok(q('[data-org-history-empty="ready"]'));
     entries = fixture.entries;
     ready = false;
-  });
-
-  it("the preview fixture supports undo and redo without a store mutation", async () => {
-    writes.length = 0;
-    await mount(<OrgHistoryPreview />);
-    await click('[data-org-history-entry="b-budget"] [data-org-history-act="undo"]');
-    await click("[data-undo-confirm]");
-    assert.ok(q('[data-org-history-entry="b-budget"][data-undone]'));
-    await click('[data-org-history-entry="b-budget"] [data-org-history-act="redo"]');
-    await click("[data-undo-confirm]");
-    assert.equal(q('[data-org-history-entry="b-budget"][data-undone]'), null);
-    assert.deepEqual(writes, []);
   });
 });

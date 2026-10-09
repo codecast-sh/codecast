@@ -43,7 +43,7 @@ watches it. Domain: `clayground.fun` is available ($2.57 first year, renews
 $31.41, checked 2026-10-06 with the Porkbun checker). `clayground.app` is
 taken.
 
-- Wordmark: the blob (22px) followed by "Clayground" in the voice face
+- Wordmark: the blob (22px) followed by "Clayground" in Commissioner
   (4.2) at 20px/700, ink. Never write it "ClayGround" or "clayground" in
   prose.
 - **The builder is Clay.** The agent appears in the room as Clay, with the
@@ -64,7 +64,7 @@ not have to shout.
   Never "a user", "someone", "you have", except for the person reading:
   "You're viewing v12, nobody else is".
 - **Versions are `v14`.** Lowercase v, no space. Standing alone (card titles,
-  peek, collapsed rows) it is set in the voice face.
+  peek, collapsed rows) it is set bold, at heading weight.
 - **Sentence case everywhere.** No ALL CAPS strings, no letterspaced
   uppercase labels.
 - **No emdashes, no exclamation marks**, no trailing ellipses in labels.
@@ -78,7 +78,7 @@ Canonical strings (use these exactly):
 
 | Where | String |
 |---|---|
-| Home input placeholder | `Make something`, then after 1.2s idle an example every 3.2s, each fading in whole ("a guestbook where every visitor plants a tiny planet", "a frog choir, one note per person", ...), until the person taps or types in the field |
+| Home input placeholder | `Make something`, then after 1.2s idle an example every 3.2s, each fading in whole and short ("a guestbook of tiny planets", "a frog choir, one note per person", ...); an example that would not fit the field whole at its width is skipped, until the person taps or types in the field |
 | Home submit | `Make it` |
 | Home lede | `Describe an app and Clay builds it in seconds. Anyone with the link can change it by chatting, and everyone sees it change.` |
 | Starter row label | `Or start with` |
@@ -93,16 +93,25 @@ Canonical strings (use these exactly):
 | Sheet peek | `Building v15` · `0:06` · {current step} · `v15 going live` · then `v15 is live` · {summary} · `Undo` |
 | Capsule callout | {what was said}, then `Starting` / `2nd in line` / `Building v15` / `v15 going live` with the asker's face and name, then `v15 is live` · {summary} · `Try it {what to do}` · `Undo` · `Open` |
 | Opening narration line | `Thinking about {the request, verb first, six words}` ("Thinking about making the bass frog wobble whenever…") |
+| A version's summary (Clay writes it) | one present-tense sentence starting with a verb, under 70 characters, naming the most visible change: `Makes the count rounder and adds a warm glow`; detail goes in the step lines. A first build says what the app is |
 | What a version did (feed rows, gallery card meta) | `{name} {what it did}`: a first build `made it`, any other build its summary from its first word in lower case (`Tango turns the scoreboard gold`), a restore `undid v14: {summary}` or `brought back v12`, a fork `forked it from {app}`, a starter `started it`. Never a bare version number |
 | Feed row | `{name} {what it did}` over `{app} · 2 min ago`, or `{app} · live now` for the live version within 5 min |
 | Building card | `Building v15`; once live on the server and on its way to the screen, `v15 going live` |
 | Live card | `v15 is live` |
 | Live card meta | `Built in 0:24 · 2 files changed` |
-| Failed card | `Didn't make it` |
+| Failed card | `Didn't make it`; folded once a newer version lands: `! Didn't make it · {request} · 7:18` with Dusk's face |
+| Clay declines a request | the request as a chat row, then Clay's row with its reason and `Edit` (never a failed card); capsule title `Clay left it as is` |
+| Triage pending (Auto) | `Clay is reading this` under the message, with the 16px blob |
+| Triage could not decide | Clay replies `I couldn't tell if that was a change. Send it with Change it if it was.` |
+| A heard change can't be queued | Clay replies with the refusal plus ` Chat still works.`; past the build rate: `That's a lot of changes in a few minutes. Ask again in {N} min and I'll build it. Chat still works.` |
+| App failed to load | `v26 didn't load` + the app's own error, or `It may be the connection. Try again in a moment.`; `Try again` · `Show v25` · `Fix it` (Fix it only with an error) |
+| Boot can't reach the backend | after 5s: `Can't reach Clayground. Trying again` + dots, `Try again` |
+| Offline | room header `Reconnecting` + dots; capsule `Offline` with a muted ring, tooltip `Reconnecting. Messages send once it's back.`; a busy button past 8s offline `Waiting for connection` |
+| Composer near the cap | `1899/2000` from 1800 characters, send disabled past 2000 |
 | Live card actions | `See it` · `Undo`; on the maker's own first version, `Copy link` (then `Copied`) · `See it`, under the line `Anyone with the link can change it. Send it to a friend.` |
 | Room header while Clay makes the first version | `Making` (spinner); a first build that failed leaves `Not made yet` |
 | First build column | `{name} asked for` · {the request} · Clay's steps · `Clay is making it · 0:24`, then `Going live` |
-| Viewing pill / past bar | `v12` + its summary; under it `Looking only. Nobody else is looking. Make it live or fork it to use it.` (`Peak is looking too`, `Peak and Juniper are looking too`, `3 others are looking too`); then `Make v12 live` · `Fork from here` · `Back to live` |
+| Viewing pill / past bar | `v12` + its summary; under it `Only you see this. Make it live or fork it to use it.`, with company the first sentence is `Peak is here too` (`Peak and Juniper are here too`, `3 others are here too`); the buttons say the rest: `Make v12 live` · `Fork from here` · `Back to live` |
 | Sheet past row (phone) | `You're viewing v12, nobody else is` · `You and Peak are viewing v12` · `You, Peak and Juniper are viewing v12` · `You and 3 others are viewing v12` |
 | What making a version live does (peek line, Make live tooltip) | `Everyone sees v3. Takes out v4 to v6: {v6's summary}` (`Takes out v6: …` for one) |
 | Peek actions | `View` · `Make v12 live` · `Fork from here` |
@@ -177,38 +186,37 @@ Color laws:
 
 ### 4.2 Type
 
-Load from Google Fonts in `index.html` with `preconnect` and `display=swap`:
-`family=Commissioner:wght@400..700&family=Recursive:wght,CASL,MONO@400..800,0..1,0..1`.
+Both faces are served by the shell itself (`public/fonts`, declared in
+`src/styles/fonts.css`), cut to Latin, with the body face preloaded in
+`index.html` and `font-display: swap`: no third-party connection sits in front
+of first paint.
 
 ```css
 :root {
-  --ui: "Commissioner", system-ui, sans-serif;
-  --voice: "Recursive", var(--ui);              /* with .voice settings */
-  --mono: "Recursive", ui-monospace, monospace; /* with .mono settings */
+  --ui: "Commissioner", system-ui, sans-serif;     /* variable, 400 to 700 */
+  --mono: "Recursive Mono", ui-monospace, monospace; /* Recursive at MONO 1, CASL 0, weight 500 */
 }
-.voice { font-family: var(--voice); font-variation-settings: "CASL" 1, "MONO" 0; }
-.mono  { font-family: var(--mono);  font-variation-settings: "CASL" 0, "MONO" 1; }
 ```
 
-- **Commissioner** carries all interface text: chat, buttons, meta, inputs.
+- **Commissioner** carries every word: chat, buttons, meta, inputs, and the
+  headings too (the wordmark, app names, version labels, card titles), set
+  bolder and larger rather than in a second display face. The page should
+  read as a calm tool around a playful app, not as a toy itself.
   Body `font-feature-settings: "tnum" 0`; tabular figures (`"tnum" 1`) on
   timers, counts in the capsule and the timeline labels.
-- **Recursive, casual axis on** is the voice: the wordmark, app names,
-  version labels, card titles, ordinals and headings. It is never used for
-  chat, summaries or anything longer than six words.
-- **Recursive, mono axis on** is only for things that are literally code or
+- **Recursive Mono** is only for things that are literally code or
   addresses: file chips, element chips, URLs, the running timer, keycaps.
 
 | Token | Face | Size / line-height | Weight | Use |
 |---|---|---|---|---|
-| `--t-hero` | voice | 46 / 1.05, tracking -.02em | 700 | home headline (34 on mobile), the one display line on the page |
-| `--t-h1` | voice | 24 / 1.1 | 700 | home section heads, 404 title (32 there) |
-| `--t-h2` | voice | 20 / 1.1 | 700 | peek version number, fork modal title, picker title (24 there) |
-| `--t-h3` | voice | 18 / 1.2 | 700 | room header app name, wordmark (20) |
-| `--t-card` | voice | 14.5 / 1.2 | 650 | build card titles, collapsed version label (13), ordinals (12) |
+| `--t-hero` | ui | 46 / 1.05, tracking -.02em | 700 | home headline (34 on mobile), the one display line on the page |
+| `--t-h1` | ui | 24 / 1.1 | 700 | home section heads, 404 title (32 there) |
+| `--t-h2` | ui | 20 / 1.1 | 700 | peek version number, fork modal title, picker title (24 there) |
+| `--t-h3` | ui | 18 / 1.2 | 700 | room header app name, wordmark (20) |
+| `--t-card` | ui | 14.5 / 1.2 | 650 | build card titles, collapsed version label (13), ordinals (12) |
 | `--t-input-lg` | ui | 21 / 1.3 | 500 | home input |
 | `--t-lede` | ui | 18 / 1.5 | 400 | home lede |
-| `--t-body` | ui | 14 / 1.45 | 400 | chat text, summaries (550 on the live card), narration (13.5) |
+| `--t-body` | ui | 14 / 1.45 | 400 | chat text, summaries (500 on the live card), narration (13.5) |
 | `--t-name` | ui | 13.5 / 1.3 | 650 | names in chat, gallery card names (15) |
 | `--t-label` | ui | 13 / 1.2 | 600 | buttons, chips, mode switch (12.5), capsule |
 | `--t-meta` | ui | 12 / 1.35 | 400 | timestamps, counts, hints, `--ink-3` |
@@ -382,7 +390,9 @@ Build these once in `src/ui/` and use them everywhere.
   `quiet` (surface, `inset 0 0 0 1px --line-2`, hover sunk), `text` (no
   fill, ink-2, hover sunk and ink), `ink` (ink fill, surface text), `accent`
   (persimmon fill, white text, hover accent-hover). Icons sit 6px from the
-  label.
+  label. A `busy` button spins; still busy 8s into a dropped connection
+  (one that has not held for 1.5s since it dropped), its label reads
+  `Waiting for connection`.
 - **`<IconButton>`**: 30px square, radius 8, ink-2, hover sunk and ink.
 - **`<Segmented options>`**: sunk track, 2px padding, radius 8; options 24px
   tall, padding 0 10, 12.5px/600 ink-2; the selected option is surface with
@@ -533,7 +543,7 @@ one message through its whole life, as one element that changes in place
 rather than a new callout per state: what a friend said, then (once it is a
 request) its build, then the landing. Surface, `--r-lg`, `--shadow-md` plus
 ring, 268px, padding 11/12, the `BuildLine` along its top. Head row: the
-state glyph and title in the voice face 13.5/650 (spinner + `Starting`,
+state glyph and title in Commissioner 13.5/650 (spinner + `Starting`,
 blob + `2nd in line`, spinner + `Building v16`, green check + `v16 going
 live`), and on the right the asker's 16px face, their name (`You` for the
 reader) and while building the timer, 12 ink-3. Second line: the line Clay
@@ -636,7 +646,8 @@ with 18px side padding, cards inset 14px):
   they were said): chat messages (6.4), build cards (6.5), system
   notes, and the typing row at the end.
 - **Origin row**, first in the scroll once the room's beginning is loaded,
-  pinned to the top while everything else stays anchored to the bottom: the
+  and the first item of the bottom-anchored stack (a short room's whole
+  history sits together against the composer, never with a gap above): the
   maker's 28px face (or the blob), "{name} made {app}" 13.5/400 ink-2 with
   names 600 ink and the time 12 ink-3, then their first request quoted (or
   v1's summary) in 13/400 ink-2, two lines max. A fork says "{name} forked
@@ -670,6 +681,12 @@ typing", then three 4px ink-3 dots hopping 3px (1.2s, 150ms stagger).
   and **send** (32px, radius 9, an up arrow at stroke 2.1; ink in Auto,
   persimmon in Change it, quiet in Just chat; disabled at 40% opacity when
   empty). Focus: ring becomes ink-3 plus `0 0 0 3px rgba(196,73,31,.1)`.
+  The field's height is measured on the text alone after layout (a wrapping
+  placeholder never makes an empty field two lines), and while it is one
+  line its items center on it. From 1800 characters a counter
+  (`--t-meta` ink-3, tabular; ink 600 past the cap) sits at the bottom right
+  of the text, and past 2000 send is disabled; the server refuses rather
+  than clips.
 - **Hint row** (7px under, 12/400 ink-3): the mode's hint on the left; on the
   right the next mode's shortcut as a KeyCap pair and its name (in Auto:
   `⌘ 2 Change it`).
@@ -688,7 +705,8 @@ typing", then three 4px ink-3 dots hopping 3px (1.2s, 150ms stagger).
   "Slow down a little. Try again in 20s" with a live countdown, send
   disabled. Daily build budget spent: the Change it option is disabled with a
   tooltip "This app has used today's building budget. Chat still works, and
-  changes are back tomorrow." Auto still sends, as chat.
+  changes are back tomorrow." Auto still sends, as chat, and its hint reads
+  "Changes are off for now, so this goes as chat".
 
 **Point and talk (picking):** the pick button toggles picking. While on:
 
@@ -716,6 +734,13 @@ Messages are rows, not bubbles. A room scrolled for an hour reads like a log.
   messages are never right-aligned or filled.
 - **Grouping:** consecutive messages from the same person within 2 minutes
   drop the face and name line and sit 1px apart.
+- **Long messages** clamp to 8 lines with a "Show more" / "Show less" toggle
+  (12.5/600 ink-3) under them.
+- **Auto, while Clay decides:** a line under the text, the 16px blob and
+  "Clay is reading this" in `--t-meta` ink-3, fading in after 300ms so a
+  fast answer never flashes it. When triage can't decide, or a change it
+  heard can't be queued, the message stays chat and Clay replies under it
+  saying why (section 3).
 - **Same-name disambiguation:** when two people here share a name, the name
   is followed by their animal in ink-3 ("Pocket the otter"), and grouped
   runs keep the face.
@@ -768,11 +793,14 @@ live" while the live version is on its way to the screen); right: asker + the ti
 - The `BuildLine` carries progress; there is no other meter.
 
 **Live.** Ring `inset 0 0 0 1px --live-line`, the `BuildLine` full and
-green. Title: "v15" in ink then "is live" in green. Body: the asker's request
-as on building but clamped to two lines (tap to expand), 6px gap, so who
-asked for what stays in their words; the one-line summary in 14/550 ink, then
-actions 10px below, with the meta "Built in 0:24 · 2 files changed" (12 ink-3)
-at the right of the row beside the link button: `See it` (quiet sm: returns you to live if you are viewing
+green. Title: "v15" in ink then "is live" in green. Body: the summary in
+14/500 ink, two lines at most (its title holds the whole), and nothing
+else in words. The request was the building card's lede seconds earlier and
+the asker's face and name sit in the head, so repeating it would only say
+the same thing twice (with no summary yet, the request stands in). Then
+actions 10px below, with the meta "Built in 0:24 · 2 files changed" (12 ink-3;
+on a card narrower than 380px only "Built in 0:24", so the time never
+truncates) at the right of the row beside the link button: `See it` (quiet sm: returns you to live if you are viewing
 the past, and flashes a 3px green inset outline around the app column for
 600ms), `Undo` (quiet sm with a restore icon: restores the version before
 this one as a new version, which the room shows as a restore card; it shows a spinner and
@@ -792,8 +820,9 @@ older live card collapses (`--t-move`, `--ease-out`) to one row, margin 2/14,
 padding 7/10/7/12, radius `--r-md`, 13/400 ink-2, hover and focus sunk. The
 whole row is a button that opens that version in viewing mode: a 3x16
 `--live-fold` bar, "v14" in `--t-card` 13px ink, the summary truncated (it
-gets the width), the asker's 20px face, and trailing meta 12 ink-3 "Peak ·
-6m", which turns to "See it" (600) on hover or focus in the same cell, so
+gets the width), the asker's 20px face, and trailing meta 12 ink-3 "7:23"
+(the time only: the face says who, the name lives in the tooltip and the
+label), which turns to "See it" (600) on hover or focus in the same cell, so
 the row never reflows. The rows read as a log. Its tooltip is the summary, then "{name} asked: {request}". Undo is offered only on the current live version's card; older
 versions are restored from the timeline.
 
@@ -801,12 +830,26 @@ versions are restored from the timeline.
 a 14px ink-2 circle with an `!`, then "Didn't make it" in ink; right: asker +
 time. Body: the request (as on building), one plain line of why, written for
 people ("Clay ran out of time on a big change. Smaller steps usually land.",
-"The code it wrote didn't run, twice."), then `Try again` (accent sm,
-re-queues the same request), `Edit` (quiet sm, puts the request in the
-composer), and right-aligned a "Details" text toggle that reveals the raw
+"The code it wrote didn't run, twice."), then the actions the failure
+allows, and right-aligned a "Details" text toggle that reveals the raw
 error in `--t-mono` on sunk, radius `--r-sm`, padding 8/10, max 8 lines.
-When Clay has a useful follow-up, it posts it as a Clay message right after
-the card.
+Every failure has a kind (`builds.failure`). Where the same words can get
+through (the code didn't run, out of time, stopped early, the model
+unreachable, the app moved twice) the actions are `Try again` (accent sm,
+re-queues the same request; disabled with the paused reason as its tooltip
+while builds are paused) and `Edit` (quiet sm, puts the request in the
+composer). Where the request itself has to change (nothing changed, the
+spending limit for one change, building refused) the only action is `Edit`
+(ink sm), and the server refuses a retry. Once a newer version has landed,
+a failed card folds like a superseded live card into one row: the `!`
+glyph, "Didn't make it" (13/600 ink-2), the request truncated, the asker's
+face, and "Dusk · 7:18" that turns to "Show" on hover; the row opens the
+card again.
+
+**Declined.** A request Clay chose not to build is Clay's answer, not a
+failure: the request renders as the asker's chat row, and Clay's reply
+follows as a Clay row (blob, "Clay", time) with the reason and an `Edit`
+text button to put it another way. No build line, no Try again.
 
 **Restores are versions too.** While a restore is live it is a compact
 live card: the same shell and green line, "v8 is live" with the time on the
@@ -832,7 +875,7 @@ link (the app shrinks by 68px; close with its x or `Esc`). On mobile it lives
 inside the sheet (6.11).
 
 **Layout**, padding 0/16/0/20, gap 20: a 112px label ("15 versions" 13/650,
-"since Sunday" 12 ink-3), the track (flex 1), and the keys (KeyCaps ← → "to
+"since 5:49" today, "since Sunday" or "since Oct 2" before, 12 ink-3), the track (flex 1), and the keys (KeyCaps ← → "to
 step", and `esc` "back to live", which holds its place hidden while you are
 on live so viewing never moves the rail, 12 ink-3; then the x when
 opened alone).
@@ -903,16 +946,17 @@ Viewing is private to you. When you view v12:
   (`--past-frame`) inside it, so it reads on dark apps and light ones.
 - **The past is looking only.** The frame of any version that is not live
   holds a watch token: the app shows the data everyone shares and writes
-  none of it. A write it tries is refused softly (the SDK throws a
-  `LookingOnly` error the app may catch, never reported as an app error),
-  and the past bar's second line lights up once (a 16% light fill, fading
+  none of it. A write it tries is refused quietly: the SDK's promise never
+  settles, so the app has no error to print and no success to claim, and
+  the past bar's second line lights up once (a 16% light fill, fading
   over 600ms) to say why nothing happened.
 - **The past bar**, while the timeline dock is open: a 48px ink strip of its
   own on top of the dock, full width of the app column, which shrinks for
   it, so the past never covers the app's own controls. Padding 0/12/0/20.
-  Left, two lines: "v12" (voice 14/650) and the version's summary
-  (13.5/500, one line, ellipsis), then "Looking only. Nobody else is
-  looking. Make it live or fork it to use it." (12, surface at 68%), with
+  Left, two lines: "v12" (14/650) and the version's summary
+  (13.5/500, one line, ellipsis), then "Only you see this. Make it live or
+  fork it to use it." (12, surface at 68%; with company "Peak is here too"
+  leads instead, and a phone keeps only that first sentence), with
   the 16px faces of others viewing it first. Right: `Make v12 live` (accent
   sm; its tooltip says what it takes out), `Fork from here` (a ghost on ink:
   transparent, a 28% white ring) and a surface `Back to live`. `Esc` also
@@ -958,7 +1002,7 @@ scrim: 880px, surface, `--r-xl`, `--shadow-lg`, two columns.
 
 - "Who are you today?" in `--t-h2` at 24px.
 - The current face at 140px (radius 30%), `--shadow-md`.
-- **Name field:** surface, `--line-2` ring, radius 10, 44px tall, 18px voice
+- **Name field:** surface, `--line-2` ring, radius 10, 44px tall, 18px Commissioner
   700, with a counter "6 / 24" in `--t-mono` ink-3 at its right (24 is
   `CHARACTER_NAME_MAX`); next to it a 44px quiet **dice** icon button that
   picks a random name from this animal's six (`CHARACTER_NAMES[avatar]`).
@@ -1024,10 +1068,32 @@ with a `Change` text button that opens the picker.
 - **Unknown app** (404): the home page's paper and glows, a 64px blob with
   its eyes shifted down 3px, "No app lives here" (`--t-h1` at 32px), "Want to
   make one?" 15 ink-2, and the maker bar.
-- **Reconnecting:** an ink pill at the top center of the shell, 28px,
-  12.5/600 surface text, "Reconnecting" with the three dots; pending messages
-  stay at 60% opacity with a 12px clock glyph. Disappears on reconnect without
-  fanfare.
+- **Reconnecting** (the socket down for 500ms; a reconnect counts once it
+  holds 1.5s, so a flapping connection reads as one outage): said in the
+  chrome the person is already looking at, never floated over the app. With
+  the room open, the header's status line swaps "Live v14 · 7 here" for
+  "Reconnecting" (600 ink-2) and the three dots, since presence is unknown;
+  with the room closed, the capsule's count gives way to a 7px muted ring
+  and "Offline" in ink-3, with a tooltip. Pending messages stay at 60%
+  opacity with a 12px clock glyph on every row, grouped ones in the face
+  gutter. A busy button past 8s says `Waiting for connection` (5). Gone on
+  reconnect without fanfare.
+- **Booting stuck:** the shell renders from the last `me` and app it saw,
+  so a returning visitor's app frame starts on first paint. A new visitor
+  waits on registration, which retries with a growing wait (1s to 15s);
+  after 5s on the faint blob, one line under it, "Can't reach Clayground.
+  Trying again" with the dots (13 ink-2), and a quiet sm `Try again`.
+- **App failed to load:** a version whose page loaded without its SDK
+  saying ready (1.5s grace), or never loaded (20s), never comes on top. The
+  app column shows paper with the 28px blob, "{v26} didn't load"
+  (`--t-card`), the app's own error in `--t-mono` ink-3 (3 lines), or "It may
+  be the connection. Try again in a moment." (13 ink-2), then `Try again`
+  (reloads the frame), `Show v25` (views the version before), and `Fix it`
+  (text, only with an error) which fills the composer. Every served
+  index.html starts with a classic inline boot catcher that posts load and
+  evaluation errors to the shell until the SDK takes over, so import-time
+  failures reach the room's one-per-version error note; a page that never
+  arrived is this screen's network and tells the room nothing.
 - **Empty gallery:** a single tile with a dashed `--line-2` edge, "Nothing's
   busy yet. Make the first thing." 14 ink-2, centered.
 
@@ -1083,7 +1149,7 @@ live version's still itself (6.1), with `summary_large_image`.
 
 The OG image is 1200x630: paper with the home page's glows, the app's still
 (or a 120px blob on surface if none) in a surface frame with radius 20 and
-`--shadow-lg` on the left 60%, and on the right the app name in voice 700
+`--shadow-lg` on the left 60%, and on the right the app name in Commissioner 700
 56px ink, "38 people changed it · v14" in 24px ink-2, and up to five 56px
 faces of recent changers. Title: the app name. Description: the latest
 version summary. `theme-color` is `#f7f3ec`; the favicon is the blob.
@@ -1091,7 +1157,7 @@ version summary. `theme-color` is `#f7f3ec`; the favicon is the blob.
 ## 8. Building it in React
 
 - Plain CSS: `src/styles/tokens.css` (section 4), `src/styles/base.css`
-  (reset, body font and smoothing, `.voice` and `.mono`, focus ring,
+  (reset, body font and smoothing, focus ring,
   reduced-motion rules, `.keys`), and one CSS module per component. No
   Tailwind in the playground.
 - Motion: CSS transitions and keyframes for everything listed here; the only

@@ -33,6 +33,7 @@ import { followerPersistencePatches } from "./followerPersistence";
 import { syncTransaction } from "./syncTransaction";
 import type { GestureMessage } from "./gestureBridge";
 import {
+  isMutRowKey,
   isReplicatedCollectionKey,
   REPLICATED_STORE_KEYS,
 } from "./clientSyncRegistry";
@@ -103,7 +104,7 @@ export type MutUpdate = ReplicationUpdate & {
 };
 
 export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[] {
-  const updates: MutUpdate[] = extractReplicationUpdates(patches, state, isReplicated, isReplicatedCollectionKey);
+  const updates: MutUpdate[] = extractReplicationUpdates(patches, state, isReplicated, isMutRowKey);
   const ts = Date.now();
   const edited = new Map<string, Map<string, Record<string, unknown>>>();
   const whole = new Map<string, Set<string>>();
@@ -112,7 +113,7 @@ export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[
     const path = patch.path as (string | number)[];
     if (path.length < 2) continue;
     const key = String(path[0]);
-    if (!isReplicated(key) || !isReplicatedCollectionKey(key)) continue;
+    if (!isReplicated(key) || !isMutRowKey(key)) continue;
     const id = String(path[1]);
     if (path.length === 2) {
       // The row itself was set or removed: whole-row semantics for this id.
@@ -194,6 +195,47 @@ export function followerActionTee(channel: ReplicationChannel, selfId: string) {
   };
 }
 
+type FollowerTee = ReturnType<typeof followerActionTee>;
+
+// The tee each store offers its writes through while its window follows a
+// host, keyed by the store's own tee setter (one per store).
+const followerTees = new WeakMap<object, FollowerTee>();
+
+/** Wire `state`'s store to offer its writes through `tee`, or stop with null. */
+export function setFollowerTee(state: any, tee: FollowerTee | null): void {
+  if (tee) followerTees.set(state._setActionTee, tee);
+  else followerTees.delete(state._setActionTee);
+  state._setActionTee(tee);
+}
+
+const setActionTee = (tee: FollowerTee | null) => setFollowerTee(useInboxStore.getState(), tee);
+
+/**
+ * A refused write this window rolled back by hand: a sync() undo of a field
+ * no lock protects, which the engine's refused-lock tee never sees. Offer it
+ * to the host the same way, naming the value the server refused per row
+ * (`before`, the collection as it stood before the rollback), so the host
+ * releases the lock it mirrored on that value. A no-op unless this window
+ * follows a host; a host's own rollback reaches IDB and its followers
+ * through its write-through.
+ */
+export function offerRollbackToHost(actionName: string, key: string, field: string, before: Record<string, any>): void {
+  const state = useInboxStore.getState() as any;
+  const followerTee = followerTees.get(state._setActionTee);
+  if (!followerTee) return;
+  const after = state[key] ?? {};
+  const patches: any[] = [];
+  const refused: NonNullable<ActionTeeMeta["refused"]> = [];
+  for (const id in before) {
+    const row = after[id];
+    const value = before[id]?.[field];
+    if (!row || row[field] === value) continue;
+    patches.push({ op: "replace", path: [key, id, field], value: row[field] });
+    refused.push({ key: `${key}:${id}:${field}`, storeKey: key, recordId: id, field, ts: Date.now(), value, prior: row[field], hadPrior: true });
+  }
+  if (patches.length > 0) followerTee(actionName, patches, state, { refused });
+}
+
 /** The host runtime an elected window runs. A follower's mut lands as its optimistic rows, held under the same locks. */
 export function replicationHostFor(hostId: string, channel: ReplicationChannel, getState: () => any): ReplicationHost {
   return createReplicationHost({
@@ -250,7 +292,7 @@ export function replicationFollowerFor(selfId: string, channel: ReplicationChann
 export function promoteToHost(follower: ReplicationFollower | null, startHost: () => ReplicationHost): ReplicationHost {
   follower?.stop();
   setRole("host");
-  (useInboxStore.getState() as any)._setActionTee(null);
+  setActionTee(null);
   return startHost();
 }
 
@@ -448,7 +490,7 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
         // write-through, no mut tee). The follower runtime stays up: a later
         // snapshot demotes us again.
         const internals = useInboxStore.getState() as any;
-        internals._setActionTee(null);
+        setActionTee(null);
         internals._setIDBWrite(writePatchesToIDB);
         setRole("host");
       }
@@ -465,7 +507,7 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
           const local = followerPersistencePatches(patches);
           if (local.length) return writePatchesToIDB(local, state);
         });
-        (useInboxStore.getState() as any)._setActionTee(followerActionTee(channel, selfId));
+        setActionTee(followerActionTee(channel, selfId));
       } else {
         armSoloFallback();
       }
@@ -534,7 +576,7 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
     holdsLock = false;
     bc.close();
     const internals = useInboxStore.getState() as any;
-    internals._setActionTee(null);
+    setActionTee(null);
     // Whatever role we were in, leave the window as a self-sufficient host
     // (today's behavior): write-through restored, feeders gate open.
     internals._setIDBWrite(writePatchesToIDB);

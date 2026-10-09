@@ -323,8 +323,11 @@ for (const trigger of ["resume", "deadline", "injection"] as const) test.skipIf(
     expect(f.writes.some(w => typeof w[6] === "number")).toBe(false);
     const oldWork = internals.hibernationEvidenceJobs.get(f.id);
     expect(oldWork).toBeDefined();
+    // A cancelled job can never park, so it must not hold a fan-out slot while its read hangs.
+    expect(internals.abandonedEvidenceJobs.has(oldWork!)).toBe(true);
     evidence.resolve();
     await oldWork;
+    expect(internals.abandonedEvidenceJobs.size).toBe(0);
     expect(alive(f.h)).toBe(true);
     expect(sessionParkStateForTests(f.id)).toMatchObject({ parked: false, paneTracked: true });
     expect(f.writes.some(w => w[1] === "hibernated")).toBe(false);
