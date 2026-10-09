@@ -33,7 +33,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
   recordingPressStale,
   recordingPressStaleWords,
 } from "@codecast/shared/contracts";
-import { applyHideTransition } from "./cleanup";
+import { applyHideTransition } from "./hideTransition";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { writeObjectShareLink } from "./publicShare";
 import { deleteSessionAsOwner } from "./sessionDelete";
@@ -383,7 +383,7 @@ function deepMergeField(existing: any, incoming: any): any {
 // The hide-transition decision + side effects live in cleanup.ts
 // (classifyHideTransition / applyHideTransition), shared with the CLI
 // visibility mutation. Re-exported here for the existing tests.
-export { classifyHideTransition } from "./cleanup";
+export { classifyHideTransition } from "./hideTransition";
 
 // The hide gestures carry whatever id the web row has, and a draft session
 // that never reached the server has a local stub id. The store already deleted

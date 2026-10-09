@@ -93,6 +93,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // hosted row, so none moved.
   19: "842058368e90ebf4",
   20: "842058368e90ebf4",
+  // v21: a child's ask lifts its parent only until child_asking_until. No
+  // fixture holds a row with that stamp, so none moved.
+  21: "842058368e90ebf4",
 };
 
 type Expected = {

@@ -56,7 +56,23 @@ function pinnedSize(source: string): number {
 /** How many files are over the cap today. May only fall. */
 const PIN = 200;
 
-const result = checkRatchet({
+// TURNED OFF (2026-10-09, on Ashot's instruction). The repo carries ~162 files
+// of over-cap debt that predates this switch: 250 files over the cap against a
+// pin of 200, 107 listed files past their step, 55 newly over. Enforcing that
+// as a merge gate failed every branch for work no branch caused, so the gate is
+// off rather than silently re-baselined (raising PIN would have handed every
+// listed file room to grow, which is the one thing this file was built to stop).
+// The baseline, the pins and the policy above are kept as written, so turning it
+// back on measures against the same ground it always did.
+//
+// Run it on demand (the numbers stay honest while it is off):
+//   cd packages/shared && RATCHET_MAX_LINES=1 bun test ratchet/maxLines.ratchet.test.ts
+// Re-enable as a gate: delete ENABLED and the `gate` indirection below.
+const ENABLED = process.env.RATCHET_MAX_LINES === "1" || !!process.env.RATCHET_WRITE;
+
+// Lazy: the walk reads 1500+ files, and an off gate must not charge every
+// `bun test` in this package for a result nothing asserts on.
+const runCheck = () => checkRatchet({
   name: "max lines",
   root: REPO_ROOT,
   dirs: ["packages"],
@@ -72,8 +88,10 @@ const result = checkRatchet({
   shrinkFloor: 0.9,
 });
 
-describe("max lines ratchet", () => {
+const gate = ENABLED ? describe : describe.skip;
+
+gate("max lines ratchet", () => {
   test("no new oversized file, no listed file grew past its pin, and no shrink left unpruned", () => {
-    expect(result.problems).toEqual([]);
+    expect(runCheck().problems).toEqual([]);
   }, 120_000);
 });
