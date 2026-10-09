@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHostPlan, type CreateHostOptions } from "./create";
 import { macBaseScript, macDaemonScript } from "./provisionMac";
-import { macLoginScript } from "./macLogin";
+import { kcpassword, macDesktopScript, macLoginScript, parseMacDesktop } from "./macLogin";
 import { hostReleaseScript } from "./installRelease";
 import { spawnSync } from "node:child_process";
 import { toRemoteHost } from "../browser/cloudHost";
@@ -35,7 +35,7 @@ describe("remote machine launch", () => {
     expect(toRemoteHost({ ...host, provider: "scaleway-mac", user: "m1" }).homeDir).toBe("/Users/m1");
   });
   test("Mac setup scripts parse and start an unattended remote daemon without idle shutdown", () => {
-    for (const script of [macBaseScript(), macLoginScript("codecast"), macDaemonScript({ user: "ec2-user", homeDir: "/Users/ec2-user" }), hostReleaseScript("linux"), hostReleaseScript("darwin")]) {
+    for (const script of [macBaseScript(), macLoginScript("codecast"), macDesktopScript("codecast"), macDaemonScript({ user: "ec2-user", homeDir: "/Users/ec2-user" }), hostReleaseScript("linux"), hostReleaseScript("darwin")]) {
       const result = spawnSync("bash", ["-n"], { input: script, encoding: "utf8" });
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
@@ -48,5 +48,20 @@ describe("remote machine launch", () => {
     expect(() => macDaemonScript({ user: "bad'user" })).toThrow("unsupported");
     expect(() => macLoginScript("bad'user")).toThrow("username");
     expect(macLoginScript("codecast")).toContain("already exists and is not managed by Codecast");
+  });
+  test("the desktop login's kcpassword is the bytes loginwindow decodes", () => {
+    expect(kcpassword("password").toString("hex")).toBe("0de82150a5d3af8ea3b91f7d");
+    expect(kcpassword("exactly-twelv").length).toBe(24);
+    const script = macDesktopScript("codecast", "pw-1");
+    expect(script).toContain(`echo '${kcpassword("pw-1").toString("base64")}' | base64 -D`);
+    expect(script).toContain("autoLoginUser \"$user\"");
+    expect(() => macDesktopScript("codecast", "it's")).toThrow("password");
+    expect(() => macDesktopScript("bad'user")).toThrow("username");
+  });
+  test("desktop setup reports where the login stands", () => {
+    expect(parseMacDesktop("MAC-DESKTOP-PREVIOUS ec2-user\nMAC-DESKTOP-AT-BOOT")).toEqual({ desktop: "at-boot", previous: "ec2-user" });
+    expect(parseMacDesktop("MAC-DESKTOP-LIVE")).toEqual({ desktop: "live", previous: null });
+    expect(parseMacDesktop("MAC-DESKTOP-PASSWORD-UNKNOWN").desktop).toBe("password-unknown");
+    expect(() => parseMacDesktop("boom")).toThrow("did not finish");
   });
 });

@@ -47,6 +47,8 @@ export interface FileLockOptions {
   onWait?: (holderPid: number) => void;
   /** Names the lock in the timeout error, e.g. "cast browser start". */
   describe?: string;
+  /** What the holder is doing, stamped beside its pid so a listing can say. */
+  what?: string;
 }
 
 /** Take `lockFile` exclusively. Resolves to the release function. */
@@ -59,7 +61,7 @@ export async function acquireFileLock(lockFile: string, opts: FileLockOptions = 
   for (;;) {
     try {
       const fd = fs.openSync(lockFile, "wx", 0o600);
-      fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now(), ...(opts.what ? { what: opts.what } : {}) }));
       fs.closeSync(fd);
       const release = () => {
         try {
@@ -135,32 +137,66 @@ export async function acquireFileLock(lockFile: string, opts: FileLockOptions = 
   }
 }
 
+export type SlotEntry = { pid: number; at: number; what?: string };
+
+const liveEntries = (files: string[], read: (f: string) => unknown): SlotEntry[] =>
+  files.flatMap((f) => {
+    try {
+      const e = read(f) as Partial<SlotEntry>;
+      return typeof e.pid === "number" && isPidAlive(e.pid) ? [{ pid: e.pid, at: Number(e.at) || 0, ...(e.what ? { what: String(e.what) } : {}) }] : [];
+    } catch {
+      return [];
+    }
+  });
+
+/** Who holds the slots in `dir`, and who waits for one, oldest first. */
+export function listFileSlots(dir: string): { holding: SlotEntry[]; waiting: SlotEntry[] } {
+  const json = (f: string) => JSON.parse(fs.readFileSync(f, "utf-8"));
+  const files = (d: string, match: RegExp) => {
+    try { return fs.readdirSync(d).filter((f) => match.test(f)).map((f) => path.join(d, f)); } catch { return []; }
+  };
+  const byAge = (a: SlotEntry, b: SlotEntry) => a.at - b.at;
+  return {
+    holding: liveEntries(files(dir, /^slot-\d+\.lock$/), json).sort(byAge),
+    waiting: liveEntries(files(path.join(dir, "waiting"), /\.json$/), json).sort(byAge),
+  };
+}
+
 /**
  * Take one of `slots` interchangeable locks in `dir`, queueing until one frees:
  * a machine-wide cap on how many of something run at once. A slot is held for
  * as long as its holder lives (no staleness bound, since the work it guards
- * may run for an hour); a holder that died frees it on the next try.
+ * may run for an hour); a holder that died frees it on the next try. A caller
+ * that has to wait says so in `dir/waiting`, so a listing shows the queue.
  */
 export async function acquireFileSlot(
   dir: string,
   slots: number,
-  opts: { waitMs?: number; onWait?: () => void; describe?: string } = {},
+  opts: { waitMs?: number; onWait?: () => void; describe?: string; what?: string } = {},
 ): Promise<() => void> {
   const deadline = Date.now() + (opts.waitMs ?? Number.POSITIVE_INFINITY);
-  let announced = false;
-  for (;;) {
-    for (let i = 0; i < slots; i++) {
-      try {
-        return await acquireFileLock(path.join(dir, `slot-${i}.lock`), { waitMs: 0, staleMs: Number.POSITIVE_INFINITY, describe: opts.describe });
-      } catch {
-        /* held by a live process */
+  const ticket = path.join(dir, "waiting", `${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`);
+  const leave = () => fs.rmSync(ticket, { force: true });
+  try {
+    for (;;) {
+      for (let i = 0; i < slots; i++) {
+        try {
+          return await acquireFileLock(path.join(dir, `slot-${i}.lock`), { waitMs: 0, staleMs: Number.POSITIVE_INFINITY, describe: opts.describe, what: opts.what });
+        } catch {
+          /* held by a live process */
+        }
       }
+      if (Date.now() > deadline) throw new Error(`all ${slots} ${opts.describe ?? "slots"} are taken; try again later`);
+      if (!fs.existsSync(ticket)) {
+        fs.mkdirSync(path.dirname(ticket), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(ticket, JSON.stringify({ pid: process.pid, at: Date.now(), ...(opts.what ? { what: opts.what } : {}) }), { mode: 0o600 });
+        process.once("exit", leave);
+        opts.onWait?.();
+      }
+      await sleep(1_000);
     }
-    if (Date.now() > deadline) throw new Error(`all ${slots} ${opts.describe ?? "slots"} are taken; try again later`);
-    if (!announced) {
-      announced = true;
-      opts.onWait?.();
-    }
-    await sleep(1_000);
+  } finally {
+    leave();
+    (process as NodeJS.EventEmitter).removeListener("exit", leave);
   }
 }

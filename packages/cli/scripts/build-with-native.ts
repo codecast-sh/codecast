@@ -50,6 +50,15 @@ export const WORKER_ENTRIES = ["opencodeStorage.worker.ts"];
 export function workerBuildArgs(srcDir: string, entries: string[] = WORKER_ENTRIES): string[] {
   return [...entries.map((name) => path.join(srcDir, name)), "--root", srcDir];
 }
+/**
+ * `ws` stays a runtime import in a `--target=node` dist. Bun answers that
+ * import with its own WebSocket, the one every source run uses; node finds
+ * the package through the CLI's dependencies. Inlined, the package's client
+ * upgrades through bun's `node:http`, which before bun 1.4 never hands it the
+ * 101: every CDP connect failed "Unexpected server response: 101" on a host
+ * whose bun was older, and `cast browser` with it.
+ */
+const EXTERNAL_WS = target === "node" ? ["--external", "ws"] : [];
 const needsMac = needsMacHelper(target);
 /**
  * Whether this build embeds the macOS helpers (the browser icon and the
@@ -206,7 +215,7 @@ if (import.meta.main) {
     } else {
       fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
     }
-    run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
+    run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), ...EXTERNAL_WS, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
     if (SPLIT_COMPILED_BUILDS) dropChunkSourcemaps();
   } finally {
     // Leave the tracked placeholder empty again: the payload belongs in the
