@@ -15,14 +15,14 @@ describe("listed readiness", () => {
 
   test("a row still held lists what holds it, waits included", () => {
     const row = { status: "open", blocked_by: ["ct-1"], open_blockers: [ct1, pr42], ready: false };
-    expect(listedBlockers(row)).toEqual(["ct-1", "PR #42 merges"]);
+    expect(listedBlockers(row)).toEqual(["ct-1", "PR #42 to merge"]);
     expect(listedReady(row)).toBe(false);
   });
 
   test("a PR in another repository than the checkout's is named in full", () => {
     const row = { status: "open", open_blockers: [pr42, { ...pr42, repository: "o/other", pr_number: 6 }], ready: false };
-    expect(listedBlockers(row, prWords("o/r"))).toEqual(["PR #42 merges", "PR o/other#6 merges"]);
-    expect(listedBlockers(row, prWords(null))).toEqual(["PR o/r#42 merges", "PR o/other#6 merges"]);
+    expect(listedBlockers(row, prWords("o/r"))).toEqual(["PR #42 to merge", "PR o/other#6 to merge"]);
+    expect(listedBlockers(row, prWords(null))).toEqual(["PR o/r#42 to merge", "PR o/other#6 to merge"]);
   });
 
   // The server sends the wait, not words: Convex runs in UTC and would print
