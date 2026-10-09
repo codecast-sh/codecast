@@ -559,7 +559,7 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
     },
     risk: {
       class: risk,
-      reason: task.risk_reason?.trim() || (task.risk ? `Ground rated it ${risk}.` : "Not grounded yet, so it gets a careful look."),
+      reason: task.risk_reason?.trim() || (task.risk ? `An agent rated it ${risk === "review" ? "worth a human review" : `${risk} risk`}.` : "Not grounded yet, so it gets a careful look."),
     },
     recommend: input.recommend ?? ({ verdict: "", why: "" } as unknown as ChangeCard["recommend"]),
     cost: {

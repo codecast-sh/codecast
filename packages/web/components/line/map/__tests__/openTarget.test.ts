@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MapNode } from "../../../../lib/line/lineMap";
 import { openTarget } from "../LineMapView";
-import { groupingWords } from "../../settings/LineFinders";
+import { groupingWords } from "../../../../lib/line/lineSources";
 import { MORE_SOURCES, foldSources } from "../LineMap";
 import { groundWords } from "../../trace/TraceStory";
 
@@ -23,8 +23,8 @@ describe("openTarget", () => {
 });
 
 describe("groupingWords", () => {
-  test("a key pattern reads in plain words", () => expect(groupingWords("union:<key>")).toBe("groups signals that share a Union key"));
-  test("anything else reads as its pattern", () => expect(groupingWords("sentry-issue")).toBe("groups signals by sentry-issue"));
+  test("a key pattern reads in plain words", () => expect(groupingWords("union:<key>")).toBe("counts reports with the same Union key as one cause"));
+  test("anything else reads as its pattern", () => expect(groupingWords("sentry-issue")).toBe("counts reports with the same sentry-issue as one cause"));
 });
 
 describe("foldSources (LX2)", () => {
