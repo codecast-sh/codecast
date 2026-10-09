@@ -4,7 +4,11 @@
 // a reply to Dana" rather than a developer's count of tool names. A busy
 // segment says its first steps and how many more there are; open, the
 // header just counts them, since the steps themselves sit below it.
-import { stepCount, stepText, visibleSteps, type ToolCallLike, type ToolResultLike } from "@platform/assistant/steps";
+import { resultText, stepCount, stepText, visibleSteps, type ToolCallLike, type ToolResultLike } from "@platform/assistant/steps";
+import { parseSources, type Source } from "@platform/assistant/sources";
+
+/** How many sources the line under a search shows. */
+export const SOURCES_SHOWN = 4;
 
 /** How many steps a closed receipt names before "N more steps". */
 export const RECEIPT_STEPS = 3;
@@ -17,7 +21,7 @@ export function hostedReceipt<C extends ToolCallLike>(
   calls: C[],
   resultFor: (call: C) => ToolResultLike | undefined,
   opts: { asking?: boolean; cardShown?: boolean } = {},
-): { summary: string; counted: string; created: string[]; steps: number } {
+): { summary: string; counted: string; created: string[]; steps: number; sources: Source[] } {
   const said = opts.asking && opts.cardShown ? calls.filter((call) => resultFor(call) !== undefined) : calls;
   const lines = said.map((call) => stepText(call, resultFor(call), { asking: opts.asking }));
   const { shown, more } = visibleSteps(lines, false, RECEIPT_STEPS);
@@ -26,7 +30,34 @@ export function hostedReceipt<C extends ToolCallLike>(
     counted: stepCount(lines.length),
     created: createdRefs(calls, resultFor),
     steps: lines.length,
+    sources: searchedSources(calls, resultFor),
   };
+}
+
+/** The pages the segment's web searches drew on, one per site, in the order
+ *  the searches cited them, up to SOURCES_SHOWN: read from each search_web
+ *  result through the one parser of its list (@platform/assistant/sources). */
+export function searchedSources<C extends ToolCallLike>(calls: C[], resultFor: (call: C) => ToolResultLike | undefined): Source[] {
+  const bySite = new Map<string, Source>();
+  for (const call of calls) {
+    if (call.name !== "search_web") continue;
+    const result = resultFor(call);
+    if (!result || result.is_error) continue;
+    for (const source of parseSources(resultText(result.content))) {
+      const site = siteOf(source.url);
+      if (site && !bySite.has(site)) bySite.set(site, source);
+    }
+  }
+  return [...bySite.values()].slice(0, SOURCES_SHOWN);
+}
+
+/** A page's site as a person names it: the host without "www.". */
+export function siteOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
 }
 
 /** What a step that made or changed something names, read from its result

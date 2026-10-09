@@ -12,7 +12,6 @@ import { activitySig } from "../../lib/sessionActivity";
 import { LivePulseDot } from "../SessionActivityLine";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { HeaderModelControl } from "../SessionControlMenu";
-import { ShipControl } from "../ShipControl";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { OwnerAvatar, type HandoffInfo } from "../OwnersBadge";
@@ -910,15 +909,4 @@ export function WorkingStatusLineView({ startedAt, now, label, stopHint, labelNo
       {(showElapsed || labelNow) && label && <span className="text-sol-text-dim/60 truncate" title={label}>· {label}</span>}
     </span>
   );
-}
-
-/**
- * Ship in the session header (docs/architecture/ship.md): only for a session
- * with a branch and something on it (uncommitted changes or commits ahead of
- * upstream), and never on a ship session itself.
- */
-export function SessionShipButton({ session }: { session: { _id: string; git_branch?: string; worktree_branch?: string; git_dirty?: boolean; git_ahead?: number; ship_target_key?: string } }) {
-  const branch = session.worktree_branch || session.git_branch;
-  if (!branch || session.ship_target_key || !(session.git_dirty || (session.git_ahead ?? 0) > 0)) return null;
-  return <ShipControl target={{ kind: "conversation", id: String(session._id) }} size="compact" />;
 }

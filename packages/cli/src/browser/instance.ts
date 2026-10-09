@@ -23,6 +23,7 @@ import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "
 import { findChromeBinary, chromeBinaryProbes, isPidAlive, keychainArgs, ChromeNotFoundError } from "../workspace/chrome.js";
 import { acquireFileLock } from "../lockFile.js";
 import { linuxDisplayPlan } from "./hostScreen.js";
+import { desktopSession } from "../computer/desktopSession.js";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 export interface InstanceState {
@@ -266,11 +267,15 @@ export function chromeLogTail(file: string, lines = 6): string {
 
 export async function launchManagedChrome(opts: LaunchOptions): Promise<number> {
   const channel = opts.channel ?? "chrome";
-  const prepared = prepareBrowserApp(chromeBinaryFor(channel), !!opts.headless);
+  const linux = process.platform === "linux" ? linuxDisplayPlan(process.env, !!opts.headless) : null;
+  // A Mac login with no desktop session (a cloud Mac's service login before it
+  // is signed in) has no WindowServer to paint into, and a headed launch dies.
+  const headless = linux ? linux.headless : !!opts.headless || (process.platform === "darwin" && desktopSession() === "none");
+  opts = { ...opts, headless };
+  const prepared = prepareBrowserApp(chromeBinaryFor(channel), headless);
   const bin = prepared.binary;
   fs.mkdirSync(opts.userDataDir, { recursive: true, mode: 0o700 });
-  const linux = process.platform === "linux" ? linuxDisplayPlan(process.env, !!opts.headless) : null;
-  const args = chromeLaunchArgs({ ...opts, headless: linux ? linux.headless : opts.headless });
+  const args = chromeLaunchArgs(opts);
   if (prepared.branded) args.push("--disable-updater-scheduler");
   // /dev/shm is 64MB on a stock cloud image and Chrome dies silently when it fills.
   if (linux) args.splice(args.length - 1, 0, "--disable-dev-shm-usage");

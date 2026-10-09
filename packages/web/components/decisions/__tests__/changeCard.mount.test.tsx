@@ -178,7 +178,7 @@ test("a settled card says what happened in place of the recommendation", async (
 
 test("a withdrawn or dismissed card ends on that, muted, not on the recommendation", async () => {
   const withdrawn = cardOutcome({ ...decision, status: "withdrawn", resolved_at: Date.now() - 9 * 60_000 }, "Ashot", Date.now())!;
-  expect(withdrawn.pill).toBe("Withdrawn by the agent · 9m ago");
+  expect(withdrawn.pill).toBe("Withdrawn with no answer · 9m ago");
   expect(withdrawn.tone).toBe("dim");
   const { container, unmount } = await mount(<ChangeCardView card={card} outcome={withdrawn.line} />);
   expect(container.querySelector("article [data-cc-recommended]")).toBeNull();
