@@ -62,3 +62,50 @@ export async function apiPost(
   }
   return result;
 }
+
+/** A CLI POST, as index.ts's `cliPost` and the graph commands' `deps.cliPost`
+ *  both shape it. */
+export type CliPoster = (path: string, body: Record<string, any>, opts?: { throwOnError?: boolean }) => Promise<any>;
+
+/**
+ * A read whose extra arguments only ENRICH the answer, sent so that a
+ * deployment older than this CLI costs the enrichment and nothing else.
+ *
+ * A Convex validator is a closed object (contracts/convexErrors.ts,
+ * `unknownServerArg`), so an argument added to a call after the running
+ * deployment was pushed does not arrive unread: the whole call is rejected.
+ * For a read that is a bad trade. The viewer on `/cli/plans/get` only decides
+ * which ephemeral steps read as ready, so losing it costs a line of the
+ * answer — while losing the call costs `plan show`, `context`, `status` and
+ * `wave` outright, which is exactly what happened. So a refused enrichment is
+ * dropped and the read asked again, one argument per attempt because a
+ * validator names one extra field at a time.
+ *
+ * ONLY for reads, and only for arguments the answer is still honest without.
+ * An argument carrying the person's instruction — an effort, a label, a link,
+ * a wait, the session a write is attributed to — must never come here:
+ * dropping one writes something other than what was asked for. Those stay on
+ * the loud path, where `cliErrorMessage` names the argument the deployment
+ * cannot take yet. Failures are thrown, never printed: the caller decides
+ * whether a read it only wanted for decoration is worth a word.
+ */
+export async function enrichedRead(
+  post: CliPoster,
+  route: string,
+  base: Record<string, any>,
+  enriching: Record<string, any>,
+): Promise<any> {
+  const offered = Object.keys(enriching).filter((k) => enriching[k] !== undefined);
+  if (!offered.length) return await post(route, base, { throwOnError: true });
+  try {
+    return await post(route, { ...base, ...enriching }, { throwOnError: true });
+  } catch (err) {
+    // Only an argument THIS call offered as enrichment is droppable. A refusal
+    // naming anything else (a field of `base`, which the read needs to mean
+    // what it says) is the caller's to report.
+    const refused = (err as { unknownArg?: string }).unknownArg;
+    if (!refused || !offered.includes(refused)) throw err;
+    const { [refused]: _dropped, ...rest } = enriching;
+    return await enrichedRead(post, route, base, rest);
+  }
+}
