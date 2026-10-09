@@ -4,7 +4,28 @@ import { sameNameSuffixes } from "../sameNameSuffix";
 const NOW = new Date(2026, 9, 7, 12, 0).getTime();
 const DAY = 24 * 60 * 60 * 1000;
 
+// Each row's column reads the same ("Mon"), so namesakes need their suffix.
+const sameColumn = () => "Mon";
+
 describe("sameNameSuffixes", () => {
+  test("namesakes whose time columns differ need no suffix", () => {
+    const rows = [
+      { _id: "a", title: "Decline dinner invitation", updated_at: NOW - 60 * 60_000 },
+      { _id: "b", title: "Decline dinner invitation", updated_at: NOW - DAY },
+    ];
+    expect(sameNameSuffixes(rows, (r) => r.title, NOW).size).toBe(0);
+  });
+
+  test("a suffix never repeats the column it sits beside", () => {
+    const rows = [
+      { _id: "a", title: "Plan", started_at: NOW - 60_000, updated_at: NOW - 3 * 60 * 60_000 },
+      { _id: "b", title: "Plan", started_at: NOW - 120_000, updated_at: NOW - 3 * 60 * 60_000 },
+    ];
+    const out = sameNameSuffixes(rows, (r) => r.title, NOW);
+    expect(out.get("a")).not.toBe(out.get("b"));
+    expect(out.get("a")).not.toBe(new Date(NOW - 3 * 60 * 60_000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+  });
+
   test("only rows sharing a title get a suffix: the day each began, or the time on the same day", () => {
     const rows = [
       { _id: "a", title: "Decline dinner invitation", started_at: NOW - DAY },
@@ -13,7 +34,7 @@ describe("sameNameSuffixes", () => {
       { _id: "d", title: "Plan the week", started_at: NOW - 60_000 },
       { _id: "e", title: "Plan the week", started_at: NOW - 120_000 },
     ];
-    const out = sameNameSuffixes(rows, (r) => r.title, NOW);
+    const out = sameNameSuffixes(rows, (r) => r.title, NOW, sameColumn);
     expect(out.has("c")).toBe(false);
     expect(out.get("a")).not.toBe(out.get("b"));
     expect(out.get("d")).toMatch(/\d:\d\d/);
@@ -27,7 +48,7 @@ describe("sameNameSuffixes", () => {
       { _id: "w", title: "Weekend plan", started_at: NOW - 3 * DAY },
       { _id: "o", title: "Weekend plan", started_at: NOW - 20 * DAY },
     ];
-    const out = sameNameSuffixes(rows, (r) => r.title, NOW);
+    const out = sameNameSuffixes(rows, (r) => r.title, NOW, sameColumn);
     expect(out.get("t")).toMatch(/\d:\d\d/);
     expect(out.get("y")).toBe("Yesterday");
     expect(out.get("w")).toBe(new Date(NOW - 3 * DAY).toLocaleDateString([], { weekday: "short" }));

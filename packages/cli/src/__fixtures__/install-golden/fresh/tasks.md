@@ -7,6 +7,8 @@ A human tracks your work through a dashboard: report status through tasks and pl
 
 **Plans are for coordination** across several tasks or sessions; many steps alone do not warrant one. Split one task's real steps into subtasks with `--parent`, shallow and small, and never mirror a plan as a subtask tree. Check for existing work before creating (`cast task ls -q "<topic>"`, `cast plan ls -q`, `cast task ready`), and file under a project when one fits (`cast project ls`).
 
+**Record what work waits on.** Work waiting on a task, a PR to merge (`#42:checks`: green CI), a decision or time gets a blocker, not a comment: `cast task dep ct-200 --blocked-by "#42"` keeps it off the ready list. To park, block the task you hold, go `dormant` naming the blocker, end your turn: its clearing wakes you.
+
 **Bind before you build.** `cast task start <id>` (or `cast plan bind <id>`) claims the work and binds this session; unbound work is invisible to the human tracking it. Move the binding when your focus moves. Claim a parent once and advance its subtasks with `update` and `done`; never `task start` your own subtask. A task has one owning session: starting one another session is still working on is refused until you settle with it who continues (`--take` once agreed).
 
 **Keep the bound item true.** When scope or approach shifts, rewrite the title and description, comment at milestones and changes of direction, move status the moment it changes, and mark done only what you verified. Progress comments (`-t progress`) reach nobody's inbox; `-t blocker`, `-t review` or an `@handle` reach followers. A choice only a human can make is a `cast decide`, never a comment. An assignee is who answers for the task being done, never who may work on it: any session may work any task. Another name on a task is never a reason to stop.
@@ -21,7 +23,7 @@ cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>
 cast task handoff <id> --status done --evidence "<what you verified>" [--guide -]
-cast plan create "Title" -g "goal"; cast task create "Step" --plan <plan_id>
+cast plan create "Title" -g "goal" --steps -  # "Step :: done means" per line; a blank line starts a wave needing the one before
 cast doc create "Title" -c - | show <id> | search "<title>"
 ```
 
