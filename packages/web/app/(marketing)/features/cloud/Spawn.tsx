@@ -6,7 +6,7 @@ import { BLUE, C, Caption, Note, P$, Out, Term } from "./kit";
 /** The five things a cloud spawn does, in the order the CLI does them. */
 const STEPS: { title: string; body: React.ReactNode }[] = [
   { title: "Wake", body: <>The host boots if it is stopped. The CLI waits up to 3 minutes for Linux, 25 for a Mac.</> },
-  { title: "Fetch", body: <>The repo at <C>~/work/&lt;repo&gt;</C> is cloned if missing, fetched if present. A fetch only: the host checkout keeps its own HEAD and work.</> },
+  { title: "Fetch", body: <>The repo is cloned on the host where it sits on your laptop (<C>~/src/shop</C> there too) if missing, fetched if present. A fetch only: the host checkout keeps its own HEAD and work.</> },
   { title: "Copy secrets", body: <>Files under <C>setup.copy</C> in <C>.codecast/workspace.toml</C> go by rsync, one snapshot per worktree.</> },
   { title: "Worktree", body: <>The host runs its own <C>cast ws acquire</C> per task. Dependencies install there and ports are probed on the machine that binds them.</> },
   { title: "Start", body: <>The session row is created pointing at that worktree and routed to the host. Prep runs over SSH from your laptop; none of it passes through codecast&apos;s servers.</> },
@@ -37,7 +37,7 @@ function SnapshotDiagram() {
           <Note className="mt-3">Your index and branches do not change. The snapshot goes to <C>refs/codecast/cloud/&lt;worktree&gt;</C>, a ref <C>git ls-remote --heads</C> does not list.</Note>
         </div>
         <div className="cl-night p-5 sm:p-6">
-          <div className="font-mono text-[12px] mb-4" style={{ color: SOL.base1 }}>the host · ~/work/shop</div>
+          <div className="font-mono text-[12px] mb-4" style={{ color: SOL.base1 }}>the host · ~/src/shop</div>
           <svg viewBox="0 0 300 150" className="w-full h-auto" role="img" aria-label="Host branch reset to the laptop HEAD with changes uncommitted">
             <line x1="20" y1="40" x2="190" y2="40" stroke="#2f5b66" strokeWidth="2" />
             {node(30, 40, SOL.base03, "#4c7680")}

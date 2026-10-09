@@ -55,6 +55,12 @@ describe("useWorkspaceCollection wake signature", () => {
 // rule on the client, from the collection's registry entry, so every list
 // reader inherits it and an archived doc never comes back into a list.
 describe("rows the list channels would not deliver", () => {
+  it("does not scan cached rows before the viewer is known", async () => {
+    const { workspaceRows } = await import("../useWorkspaceCollection");
+    const coll = { get a() { throw new Error("unresolved viewer must not scan"); } };
+    expect(workspaceRows("tasks", coll, null)).toEqual([]);
+  });
+
   it("preserves workspace isolation, own keys, canonical ids and order", async () => {
     const { workspaceRows } = await import("../useWorkspaceCollection");
     const a = row("a", "open", 1);

@@ -35,8 +35,7 @@ export function SubtasksSection({ task, onNavigate }: {
   // A subtask can't be added below the depth cap — the server would refuse and
   // strand a ghost. Compute this task's depth from the store and hide the input.
   const atMaxDepth = useMemo(() => {
-    const byId = new Map((Object.values(allTasks) as TaskItem[]).map((t) => [String(t._id), t]));
-    const parentOf = (id: string) => { const p = byId.get(String(id))?.parent_id; return p ? String(p) : undefined; };
+    const parentOf = (id: string) => { const p = allTasks[id]?.parent_id; return p ? String(p) : undefined; };
     return taskDepth(String(task._id), parentOf) >= MAX_TASK_DEPTH;
   }, [allTasks, task._id]);
 

@@ -229,10 +229,11 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
           className={`mt-0.5 h-4 w-4 shrink-0 ${recovery.mode === "off" ? "text-sol-text-dim" : "text-sol-cyan"}`}
         />
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text">When a session hits a usage limit</div>
+          <div className="text-sm font-medium text-sol-text">When a session stops on its own</div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
-            This machine runs one Claude login at a time, so changing accounts moves every session on
-            it. Subagent workers are left out of a revive.
+            A usage limit, an API error or a crash can stop a session mid-turn. Choose whether
+            codecast continues it for you. Changing accounts moves every session on this machine;
+            subagent workers are never continued.
           </p>
           <div className="mt-2">
             <RecoveryModeSelect control={recovery} />
@@ -323,6 +324,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
           it back). Account switching needs it; the auto-switch setting below still saves.
         </p>
       )}
+
+      {!device.is_remote && <AutoSwitchToggle device={device} />}
 
       {orderedProfiles.map((p) => {
           // The lit row is the account sessions run on: the launch profile
@@ -482,7 +485,6 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
         </div>
       )}
 
-      {!device.is_remote && <AutoSwitchToggle device={device} />}
       {!device.is_remote && <SessionAccountsStatus device={device} />}
 
       {!device.is_remote && online && device.active_email && !activeProfile && (
