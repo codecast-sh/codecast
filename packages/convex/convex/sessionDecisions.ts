@@ -36,7 +36,7 @@ import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { settleExpectationCard } from "./lib/expectationsApply";
-import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
+import { scheduleDecisionReopen, scheduleDecisionSettle } from "./taskWaits";
 import { validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export const optionValidator = v.object({
@@ -66,7 +66,13 @@ export const kindValidator = v.union(v.literal("single"), v.literal("multi"), v.
 type DecisionKind = "single" | "multi" | "rank" | "form";
 type DecisionRow = Doc<"session_decisions">;
 // Resolve paths run in mutations, so the scheduler is there to wake a hosted
-// conversation (wakeHostedConversation); reads pass a bare { db }.
+// conversation (wakeHostedConversation) and to settle the task waits on the
+// row (task-graph.md TG2); reads pass a bare { db }. A settle or a reopen is
+// handed `{ scheduler: ctx.scheduler }` and needs nothing else, so the
+// narrowing scheduleDecisionSettle and scheduleDecisionReopen declare stays
+// live: neither has to be given a real mutation ctx this structural type
+// cannot satisfy, which would mean typing every module that reaches it
+// (dispatch, workflow_runs, org, orgInit) or casting here.
 type Ctx = { db: any; scheduler?: any };
 
 // Resolved rows stay in the subscription window briefly so an answer made on
@@ -714,7 +720,7 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
-  await scheduleDecisionSettle(ctx as any, row, by);
+  await scheduleDecisionSettle({ scheduler: ctx.scheduler }, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this
   // question is woken here to read the declined row and move on. An answer
   // wakes through its delivered message (deliverAnswer).
@@ -771,7 +777,7 @@ export async function settleClientResolution(
   if (row.status !== "pending") {
     if (patch.status === "answered" && advisoryAnswerOpen(row)) {
       await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
-      await scheduleDecisionSettle(ctx as any, row, { user_id: userId });
+      await scheduleDecisionSettle({ scheduler: ctx.scheduler }, row, { user_id: userId });
     }
     return;
   }
@@ -1661,7 +1667,7 @@ export async function reopenCore(ctx: Ctx, userId: Id<"users">, decisionId: Id<"
       updated_at: now,
     });
     await setInboxStatus(ctx, row._id, "pending");
-    await reopenTaskWaits(ctx as any, row);
+    await scheduleDecisionReopen({ scheduler: ctx.scheduler }, row);
     const stack = row.stack_id ? await ctx.db.get(row.stack_id) : null;
     if (stack && stack.status === "done") await ctx.db.patch(stack._id, { status: "open", updated_at: now });
     return { reopened: true };

@@ -11,6 +11,9 @@ import {
   altChordDirection,
   type ShortcutDef as PlatformShortcutDef,
 } from '@platform/keys';
+// The relation keys' one home (lib/relationActs): the palette row, the task
+// page's handler and the row's own KeyCap read the same record.
+import { RELATION_KEY } from '../lib/relationActs';
 
 export type ShortcutAction =
   | 'session.next'
@@ -489,9 +492,13 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
   { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
   { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },
-  { key: 'b', action: 'task.blocker', when: 'tasks', description: 'Add blocker (detail page)' },
-  { key: 't', action: 'task.parent', when: 'tasks', description: 'Set parent (detail page)' },
-  { key: 'k', action: 'task.related', when: 'tasks', description: 'Link related task (detail page)' },
+  // The three relation keys come from the one record the palette row, the
+  // task page's handler and the row's own KeyCap read (lib/relationActs
+  // RELATION_KEY), so the sheet can never advertise a letter that opens
+  // something else.
+  { key: RELATION_KEY.blocker, action: 'task.blocker', when: 'tasks', description: 'Add blocker (detail page)' },
+  { key: RELATION_KEY.parent, action: 'task.parent', when: 'tasks', description: 'Set parent (detail page)' },
+  { key: RELATION_KEY.related, action: 'task.related', when: 'tasks', description: 'Link related task (detail page)' },
   { key: 'a', action: 'task.assign', when: 'tasks', description: 'Assign (task list)' },
   { key: 'backspace', action: 'task.back', when: 'tasks', description: 'Back to task list (detail page)' },
   { key: 't', action: 'doc.type', when: 'docs', description: 'Set doc type' },
