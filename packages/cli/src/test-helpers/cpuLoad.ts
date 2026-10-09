@@ -10,7 +10,7 @@
 // SIGHUP, registered once per process for every caller. When no other
 // listener handles the signal, the process then exits as the signal would
 // have made it; a caller with its own handler (the soak) still runs it.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "../proc.js";
 import os from "node:os";
 
 export type CpuLoad = { on(n: number): void; off(): void };
