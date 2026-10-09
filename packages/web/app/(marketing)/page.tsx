@@ -1,8 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { AssistantWayIn } from "../../components/simple/AssistantWayIn";
-import { ForEveryone } from "../../components/marketing/ForEveryone";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useConvexAuth } from "convex/react";
@@ -181,12 +179,6 @@ export default function LandingPage() {
           <p className="text-[15px] leading-relaxed mb-4 lg:-mx-24" style={{ color: '#657b83' }}>
             Chat, calls, tasks, docs, pull requests and decisions, with <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight> as teammates in every one. Everything links back to the session that did it.
           </p>
-          {/* The second path, in the first screen and above the install
-              command: a visitor who does not write code meets their way in
-              before a terminal line that is not for them. */}
-          <div className="mb-4 flex justify-center">
-            <AssistantWayIn location="landing_top" tone="marketing" compact />
-          </div>
           <div className="max-w-xl mx-auto mb-2">
             <div className="relative">
               <div className="absolute -inset-2 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-60"></div>
@@ -197,8 +189,8 @@ export default function LandingPage() {
             <p className="mt-2 text-xs" style={{ color: '#93a1a1' }}>One command. Your agents join as they are.</p>
           </div>
         </div>
-        {/* The first screen goes to the film: its width follows the viewport's height (about 170px of headline, 48px of pitch and 152px of install strip and the assistant's line above; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
-        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 420px) * 1280 / 760), 1240px))" }}>
+        {/* The first screen goes to the film: its width follows the viewport's height (about 170px of headline, 48px of pitch and 152px of install strip; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
+        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 370px) * 1280 / 760), 1240px))" }}>
           <HeroFlythrough />
         </div>
         <div className="flex flex-wrap gap-3 justify-center items-center mt-8">
@@ -221,14 +213,6 @@ export default function LandingPage() {
           </Link>
         </div>
       </section>
-
-      <ForEveryone />
-
-      {/* The page turns to developers here, said plainly, so a reader from
-          the section above knows what follows is not for them. */}
-      <p className="text-center text-[15px] pt-4" style={{ color: '#586e75' }}>
-        For developers: one place for every coding agent you run.
-      </p>
 
       <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
         <div className="text-center max-w-3xl mx-auto">
