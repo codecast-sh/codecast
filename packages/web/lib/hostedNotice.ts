@@ -98,17 +98,68 @@ export const NOTICE_ROW_WORD: Record<NoticeKind, string> = {
   budget: "Stopped",
   time: "Paused",
   safety: "Stopped",
+  verify: "Confirm email",
+  limit: "Stopped",
 };
 
-/** The notice card's dot: a stop the person can fix reads warm, a wait
- *  reads calm. */
-export const NOTICE_DOT: Record<NoticeKind, string> = {
-  error: "bg-sol-red/70",
-  unavailable: "bg-sol-yellow",
-  budget: "bg-sol-orange",
-  time: "bg-sol-blue/70",
-  safety: "bg-sol-red/70",
+/** The notice card's tone: a stop the person can fix reads warm, a wait
+ *  reads calm. Named by palette colour so the web (NOTICE_DOT) and the phone
+ *  draw the same dot. */
+export const NOTICE_TONE: Record<NoticeKind, "red" | "yellow" | "orange" | "blue"> = {
+  error: "red",
+  unavailable: "yellow",
+  budget: "orange",
+  time: "blue",
+  safety: "red",
+  verify: "blue",
+  limit: "orange",
 };
+
+const TONE_DOT = { red: "bg-sol-red/70", yellow: "bg-sol-yellow", orange: "bg-sol-orange", blue: "bg-sol-blue/70" } as const;
+
+/** The notice card's dot on the web, from its tone. */
+export const NOTICE_DOT = Object.fromEntries(
+  Object.entries(NOTICE_TONE).map(([kind, tone]) => [kind, TONE_DOT[tone]]),
+) as Record<NoticeKind, string>;
+
+/** What the person types for them when they press a paused turn's action. */
+export const KEEP_GOING = "Keep going";
+
+/** The one thing a person can do about a stop, by its kind, as words: the
+ *  button's label, what it says while the sent turn lands, and either the
+ *  words it sends into the conversation or that it opens the plan. The web's
+ *  notice and bulk retry (HostedNotice actionFor) and the phone's notice
+ *  (components/hosted/Notice) both read it, so the three never disagree. */
+export type NoticeMove = { label: string; busy?: string; send?: string; opensPlan?: true };
+
+export function noticeMove(kind: NoticeKind, retryText: string | undefined, upgradesOpen: boolean): NoticeMove | null {
+  switch (kind) {
+    case "error":
+    case "unavailable":
+      return retryText ? { label: kind === "unavailable" ? "Try now" : "Try again", busy: "Trying again…", send: retryText } : null;
+    case "time":
+      return { label: KEEP_GOING, busy: "Going on…", send: KEEP_GOING };
+    case "budget":
+    case "limit":
+      // Until a plan can be bought, Plan has nothing to offer: the notice says
+      // when the allowance comes back instead.
+      return upgradesOpen ? { label: "Open Plan", opensPlan: true } : null;
+    case "safety":
+      return null;
+    case "verify":
+      // Its move is the code field under the words (EmailProofForm), not a button.
+      return null;
+  }
+}
+
+/** A notice's sentence as drawn. Beside a button, or on a stop later turns
+ *  moved past, the engine's closing invitation to ask again no longer says
+ *  anything (`dropInvite`), so it goes; a stop that repeated is one line
+ *  with the count. */
+export function noticeWords(content: string, retries: number, dropInvite: boolean): string {
+  if (retries > 0) return `Still can't get through after ${retries + 1} tries. The trouble is on our side, not yours.`;
+  return dropInvite ? content.replace(/\s*You can ask me to try again\.?\s*$/i, "") : content;
+}
 
 /** A transcript row as the retry fold reads it. `person` marks a user row
  *  that holds the person's own words; other user rows (tool results, slash
