@@ -145,6 +145,7 @@ import type * as handoff from "../handoff.js";
 import type * as harnessChanges from "../harnessChanges.js";
 import type * as health from "../health.js";
 import type * as heartbeatBacklog from "../heartbeatBacklog.js";
+import type * as hideTransition from "../hideTransition.js";
 import type * as hostedReplay from "../hostedReplay.js";
 import type * as htmlEscape from "../htmlEscape.js";
 import type * as http from "../http.js";
@@ -600,6 +601,7 @@ declare const fullApi: ApiFromModules<{
   harnessChanges: typeof harnessChanges;
   health: typeof health;
   heartbeatBacklog: typeof heartbeatBacklog;
+  hideTransition: typeof hideTransition;
   hostedReplay: typeof hostedReplay;
   htmlEscape: typeof htmlEscape;
   http: typeof http;
