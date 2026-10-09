@@ -1,8 +1,9 @@
 // Rows in one list that read the same name ("Decline dinner invitation" twice)
-// get a muted distinguisher after the title, computed where the list is built
-// and never stored: when each began, as a clock time for today, "Yesterday",
-// a weekday within the week, else a date ("Mar 26"); a clock time also when
-// two of them began on the same day. Rows with a unique name get nothing.
+// keep the time column every row has. Only when two of them would also show
+// the same column text (both "Yesterday") does a muted distinguisher follow
+// the title, computed where the list is built and never stored: when each
+// began, said in a form the column is not (the day, else the clock, else the
+// date and clock). Rows told apart by their column get nothing.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -26,30 +27,48 @@ export function dayWords(at: number, now: number): string {
   return new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-/** id -> suffix for every row whose title another row in `rows` shares. */
-export function sameNameSuffixes<T extends { _id: string; started_at?: number; _creationTime?: number; updated_at?: number }>(
+/** A hosted row's time column: "now" within the minute, else dayWords. The
+ *  rail, To-dos and Notes read it (lib/sessionCard formatRowTime). */
+export function hostedRowTime(at: number | null | undefined, now: number): string {
+  if (!at) return "";
+  if (now - at < 60_000) return "now";
+  return dayWords(at, now);
+}
+
+type SuffixRow = { _id: string; started_at?: number; _creationTime?: number; updated_at?: number };
+
+/** id -> suffix for every row whose title and time column another row in
+ *  `rows` shares. `columnOf` is the row's time column (hostedRowTime of its
+ *  updated_at by default). */
+export function sameNameSuffixes<T extends SuffixRow>(
   rows: readonly T[],
   titleOf: (row: T) => string,
   now = Date.now(),
+  columnOf: (row: T) => string = (row) => hostedRowTime(row.updated_at, now),
 ): Map<string, string> {
-  const byTitle = new Map<string, T[]>();
+  const groups = new Map<string, T[]>();
   for (const row of rows) {
-    const key = titleOf(row).trim().toLowerCase();
-    if (!key) continue;
-    const same = byTitle.get(key);
+    const title = titleOf(row).trim().toLowerCase();
+    if (!title) continue;
+    const key = `${title}\u0000${columnOf(row)}`;
+    const same = groups.get(key);
     if (same) same.push(row);
-    else byTitle.set(key, [row]);
+    else groups.set(key, [row]);
   }
   const out = new Map<string, string>();
-  for (const same of byTitle.values()) {
+  const startOf = (row: T) => row.started_at ?? row._creationTime ?? row.updated_at ?? 0;
+  for (const same of groups.values()) {
     if (same.length < 2) continue;
-    const startOf = (row: T) => row.started_at ?? row._creationTime ?? row.updated_at ?? 0;
-    const days = same.map((row) => dayWords(startOf(row), now));
-    const distinctDays = new Set(days).size === same.length;
-    same.forEach((row, i) => {
-      const at = startOf(row);
-      out.set(row._id, distinctDays ? days[i] : clockWords(at));
-    });
+    const column = columnOf(same[0]);
+    const forms = [
+      (at: number) => dayWords(at, now),
+      clockWords,
+      (at: number) => `${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}, ${clockWords(at)}`,
+    ];
+    // The first form that tells every namesake apart and never repeats the column.
+    const words = forms.map((form) => same.map((row) => form(startOf(row))));
+    const pick = words.find((w) => new Set(w).size === w.length && !w.includes(column)) ?? words[words.length - 1];
+    same.forEach((row, i) => out.set(row._id, pick[i]));
   }
   return out;
 }

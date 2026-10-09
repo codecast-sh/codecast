@@ -211,7 +211,9 @@ export function parseStableHookClient(value: string | undefined): StableHookClie
     : "claude";
 }
 
-function wrapForClient(client: StableHookClient, text: string): string {
+/** A SessionStart block in the envelope `client` reads it from (also the
+ *  task context after compaction, taskContextHook.ts). */
+export function wrapForClient(client: StableHookClient, text: string): string {
   switch (client) {
     case "codex":
       return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } })}\n`;
@@ -349,7 +351,7 @@ export function installStableHook(): void {
 // dot-dir is absent, so enabling stable mode on a machine without a client
 // touches nothing of that client's.
 
-function codecastHooksDir(): string {
+export function codecastHooksDir(): string {
   return path.join(defaultConfigDir(), "hooks");
 }
 
@@ -359,18 +361,23 @@ function writeStableHookScript(client: Exclude<StableHookClient, "claude">): str
   return file;
 }
 
+function readCodexConfig(codexDir: string): string {
+  const configFile = path.join(codexDir, "config.toml");
+  return fs.existsSync(configFile) ? fs.readFileSync(configFile, "utf-8") : "";
+}
+
 /** Codex reads hooks.json only when the `hooks` feature flag is on (off by
  * default as of 0.146). Turn it on unless the user has set `hooks =` at all —
  * an explicit false is an opt-out we must respect. Line-level TOML surgery,
- * same spirit as the marked-snippet installers. */
-function ensureCodexHooksFeature(codexDir: string): void {
-  const configFile = path.join(codexDir, "config.toml");
-  const existing = fs.existsSync(configFile) ? fs.readFileSync(configFile, "utf-8") : "";
+ * same spirit as the marked-snippet installers. `what` is the harness ledger's
+ * cause. */
+function ensureCodexHooksFeature(codexDir: string, what: string): void {
+  const existing = readCodexConfig(codexDir);
   if (/^\s*hooks\s*=/m.test(existing)) return;
   const updated = /^\s*\[features\]\s*$/m.test(existing)
     ? existing.replace(/^(\s*\[features\]\s*)$/m, "$1\nhooks = true")
     : `${existing.trimEnd()}\n\n[features]\nhooks = true\n`.replace(/^\n+/, "");
-  writeHarnessFile(configFile, updated, "stable-context");
+  writeHarnessFile(path.join(codexDir, "config.toml"), updated, what);
 }
 
 /** Codex: merge a SessionStart entry into ~/.codex/hooks.json. Codex's hook
@@ -378,14 +385,27 @@ function ensureCodexHooksFeature(codexDir: string): void {
  * additionalContextLimit 0 disables Codex's default 2,500-token spill-to-file
  * truncation — the feed must arrive whole or not at all. */
 export function installStableHookCodex(): void {
-  const home = process.env.HOME || "";
-  const codexDir = path.join(home, ".codex");
-  if (!fs.existsSync(codexDir)) return;
+  installCodexSessionStartHook(() => writeStableHookScript("codex"), "stable-context", 30, { enableHooks: true });
+}
 
+export function removeStableHookCodex(): void {
+  removeCodexSessionStartHook(path.join(codecastHooksDir(), "stable-feed-codex.sh"), "stable-context");
+}
+
+/** Register a SessionStart script in ~/.codex/hooks.json (written by
+ *  `writeScript`, which returns its path). The hooks flag is global and
+ *  wakes every hook in hooks.json, so only an explicit opt-in (stable mode)
+ *  turns it on (`enableHooks`); any other caller installs only where Codex
+ *  hooks are already on. A no-op without ~/.codex. Never throws: hooks are an
+ *  optional enhancement. */
+export function installCodexSessionStartHook(writeScript: () => string, what: string, timeout: number, opts: { enableHooks?: boolean } = {}): void {
+  const codexDir = path.join(process.env.HOME || "", ".codex");
+  if (!fs.existsSync(codexDir)) return;
   try {
-    ensureCodexHooksFeature(codexDir);
-    const hookFile = writeStableHookScript("codex");
-    editHarnessJson(path.join(codexDir, "hooks.json"), "stable-context", (config) => {
+    if (opts.enableHooks) ensureCodexHooksFeature(codexDir, what);
+    else if (!/^\s*hooks\s*=\s*true\b/m.test(readCodexConfig(codexDir))) return;
+    const hookFile = writeScript();
+    editHarnessJson(path.join(codexDir, "hooks.json"), what, (config) => {
       if (!config.hooks) config.hooks = {};
       if (!config.hooks.SessionStart) config.hooks.SessionStart = [];
       const present = (config.hooks.SessionStart as any[]).some((matcher: any) =>
@@ -393,21 +413,17 @@ export function installStableHookCodex(): void {
       );
       if (present) return;
       config.hooks.SessionStart.push({
-        hooks: [{ type: "command", command: hookFile, additionalContextLimit: 0, timeout: 30 }],
+        hooks: [{ type: "command", command: hookFile, additionalContextLimit: 0, timeout }],
       });
     });
-  } catch {
-    // Hook install is an optional enhancement — never break the caller.
-  }
+  } catch {}
 }
 
-export function removeStableHookCodex(): void {
-  const home = process.env.HOME || "";
-  const hookFile = path.join(codecastHooksDir(), "stable-feed-codex.sh");
-  try { removeHarnessFile(hookFile, "stable-context"); } catch {}
-
+/** Delete a SessionStart script and its ~/.codex/hooks.json entry. */
+export function removeCodexSessionStartHook(hookFile: string, what: string): void {
+  try { removeHarnessFile(hookFile, what); } catch {}
   try {
-    editHarnessJson(path.join(home, ".codex", "hooks.json"), "stable-context", (config) => {
+    editHarnessJson(path.join(process.env.HOME || "", ".codex", "hooks.json"), what, (config) => {
       if (!config.hooks?.SessionStart) return;
       for (const matcher of config.hooks.SessionStart) {
         if (matcher.hooks) {
