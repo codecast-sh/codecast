@@ -1,10 +1,11 @@
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { routineState } from "@codecast/shared/contracts/orgTemplateReadiness";
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { captureException } from "@sentry/react";
 import { ChevronRight, Loader2, Lock } from "lucide-react";
 import { Section } from "../identity/RoleScopeView";
+import { SheetSection } from "./company/SheetFrame";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { sealSecret, useInstanceLessons, useTemplateActions, useTemplateInstance, useTemplateLearning } from "../../hooks/useTemplateHire";
 import { buildUpgradeSpec } from "./orgTemplateSpec";
@@ -16,9 +17,26 @@ import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/share
 // each step's how-to guide under it, what it may do (trust, authority), the
 // routines with their trigger, what each still needs and one Activate per
 // ready routine, the scoreboard, and the release. Shown only when the role has
-// an instance; an ordinary role renders nothing.
+// an instance; an ordinary role renders nothing. Inside a role's sheet the
+// sections take the sheet's headings, and the routines are left to the
+// sheet's Triggers tab.
 
-export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; canEdit: boolean; teamId?: string }) {
+/** What the host step's failure says, in a person's words: the machine's own
+ *  errors are written for the CLI. */
+function hostErrorWords(error: string | undefined): string {
+  if (!error) return "The step failed.";
+  if (/instance is proposal/i.test(error)) return "The role and its routines are not set up yet. This step runs once they are.";
+  return error;
+}
+
+/** A section under the heading of the surface it sits in: a sheet's, or the role page's label. */
+function Part({ sheet, label, name, children }: { sheet?: boolean; label: string; name: string; children: ReactNode }) {
+  return sheet
+    ? <SheetSection title={label} data={name}><div className="-mx-2.5">{children}</div></SheetSection>
+    : <Section label={label} name={name}>{children}</Section>;
+}
+
+export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId: string; canEdit: boolean; teamId?: string; inSheet?: boolean }) {
   const { instance } = useTemplateInstance(roleId);
   const { markSetup, activate, propose } = useTemplateActions();
   const { lessons } = useInstanceLessons(instance?.instance_key);
@@ -44,12 +62,12 @@ export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; 
   return (
     <div data-scope-template={instance.instance}>
       {instance.phase === "awaiting_host" && (
-        <Section density="page" label="One step left" name="template-host">
+        <Part sheet={inSheet} label="One step left" name="template-host">
           <HostStep instance={instance} canEdit={canEdit} purpose="setup" />
-        </Section>
+        </Part>
       )}
       {setup.length > 0 && (
-        <Section density="page" label="Setup" name="template-setup">
+        <Part sheet={inSheet} label="Setup" name="template-setup">
           {instance.ask && <p className="px-2.5 pb-1 text-[12px] text-sol-yellow" data-template-ask={instance.ask.id}>Waiting on you: {instance.ask.title}{instance.ask.unlocks?.length ? ` (unlocks ${instance.ask.unlocks.join(", ")})` : ""}</p>}
           <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px]">
             {setup.map((s) => {
@@ -85,16 +103,16 @@ export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; 
             })}
           </ul>
           {open.length === 0 && <p className="px-2.5 pb-1 text-[12px] text-sol-text-dim">{setup.some((s) => s.status === "skipped") ? "Nothing is left open. A skipped step can be reopened." : "Every setup step is done."}</p>}
-        </Section>
+        </Part>
       )}
-      <Section density="page" label="What it may do" name="template-authority">
+      <Part sheet={inSheet} label="What it may do" name="template-authority">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
           <li>Starts work on its own: <span className="text-sol-text">{autonomyOn(instance.trust) ? "on" : "off"}</span>{autonomyOn(instance.trust) ? "" : "; it reads and recommends inside codecast"}</li>
           <li data-template-authority={authority.length}>Allowed outside codecast: {authority.length ? authority.map((g) => `${g.kind} (${g.label}${g.limit?.usd_per_month !== undefined ? `, up to $${g.limit.usd_per_month} a month` : g.limit?.usd_per_day !== undefined ? `, up to $${g.limit.usd_per_day} a day` : g.limit?.per_day !== undefined ? `, up to ${g.limit.per_day} a day` : ""}${g.expires_at ? `, until ${new Date(g.expires_at).toISOString().slice(0, 10)}` : ""})`).join("; ") : "none granted"}</li>
         </ul>
-      </Section>
-      {routines.length > 0 && (
-        <Section density="page" label="Triggers" name="template-routines">
+      </Part>
+      {routines.length > 0 && !inSheet && (
+        <Part sheet={inSheet} label="Triggers" name="template-routines">
           <ul className="space-y-1 px-2.5 pb-1.5 text-[12px]">
             {routines.map((r) => {
               const rd = readiness[r.id] ?? { ready: false, mode: "propose", missing: [] };
@@ -111,16 +129,16 @@ export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; 
               );
             })}
           </ul>
-        </Section>
+        </Part>
       )}
       {(instance.scoreboard ?? []).length > 0 && (
-        <Section density="page" label="Scoreboard" name="template-scoreboard">
+        <Part sheet={inSheet} label="Scoreboard" name="template-scoreboard">
           <ul className="grid grid-cols-2 gap-x-3 gap-y-0.5 px-2.5 pb-1.5 text-[12px]">
             {(instance.scoreboard as any[]).map((k) => <li key={k.key} className="flex justify-between gap-2"><span className="text-sol-text-muted">{k.label}</span><span className={k.value !== undefined ? "text-sol-text" : "text-sol-text-dim"} title={k.source ? `${k.source} · ${age(k.observed_at)}` : undefined}>{k.value ?? "—"}</span></li>)}
           </ul>
-        </Section>
+        </Part>
       )}
-      <Section density="page" label="Template" name="template-release">
+      <Part sheet={inSheet} label="Template" name="template-release">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
           <li>{instance.template?.name ?? instance.template_id} {instance.version}{behind && <span className="text-sol-yellow" data-template-behind={instance.releases_behind}> · {behind}</span>} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
           {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing</span>}</li>)}
@@ -138,7 +156,7 @@ export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; 
             {lessons.map((l: any) => <li key={l.id} className="flex items-start gap-2" data-template-lesson={l.status}><span className={`shrink-0 ${l.status === "released" ? "text-sol-green" : l.status === "declined" ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{l.status}{l.released_in ? ` in ${l.released_in}` : ""}</span><span className="text-sol-text-muted">{l.body}</span></li>)}
           </ul>
         )}
-      </Section>
+      </Part>
       {error && <p role="alert" className="px-2.5 text-[12px] text-sol-red">{error}</p>}
     </div>
   );
@@ -258,7 +276,7 @@ function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: bool
         <p className="mt-1 flex items-center gap-2 text-sol-text" role="status"><Loader2 className="h-3.5 w-3.5 animate-spin text-sol-violet" /> Setting up on {step.device_label ?? device?.label ?? "its machine"}…{device && !device.online ? <span className="text-sol-text-dim">it is offline, so this runs when it wakes.</span> : null}</p>
       ) : (
         <>
-          {step.state === "failed" && <p className="mt-1 text-sol-red" role="alert" data-host-error>{step.device_label ? `${step.device_label}: ` : ""}{step.error}</p>}
+          {step.state === "failed" && <p className="mt-1 text-sol-red" role="alert" data-host-error>{step.device_label ? `${step.device_label}: ` : ""}{hostErrorWords(step.error)}</p>}
           {step.state === "done" && purpose === "setup" && <p className="mt-1 text-sol-text-dim">The last run finished{step.result?.phase ? ` (${step.result.phase})` : ""}, but the record is still waiting; run it again.</p>}
           {!device && <p className="mt-1 text-sol-yellow" data-host-reason>{host?.reason ?? "No machine can run this yet."}</p>}
           {canEdit && device && secrets.length > 0 && (
