@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { blockerGatesPickup, isTerminalTaskStatus, topoLayers, waitLabel, waitLine, waitMetLabel, waitTone, type TaskWait } from "@codecast/shared/tasks";
 import { WAIT_TONE_STYLE } from "../lib/taskBlockers";
+import { taskVisual } from "./TaskStatusBadge";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 
 interface Task {
@@ -193,126 +194,155 @@ export function PlanGraphView({ tasks }: { tasks: Task[] }) {
   }
 
   return (
-    <div className="overflow-auto rounded-lg border border-sol-border/15 bg-sol-bg-alt/30">
-      <svg
-        width={Math.max(width, 400)}
-        height={Math.max(height, 200)}
-        className="block"
-      >
-        <defs>
-          {[["arrowhead", "--sol-text-dim"], ["arrowhead-holding", HOLDING]].map(([id, tone]) => (
-            <marker key={id} id={id} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-              <polygon points="0 0, 8 3, 0 6" style={{ fill: `var(${tone})` }} />
-            </marker>
-          ))}
-        </defs>
-
-        {/* An edge that still gates pickup draws as a waiting wait does; one
-            into a task being worked is grey, and a settled one fades. */}
-        {edges.map((edge) => (
-          <path
-            key={`${edge.from}>${edge.to}`}
-            d={edgePath(edge.points)}
-            fill="none"
-            style={{ stroke: `var(${edge.holding ? HOLDING : "--sol-text-dim"})` }}
-            strokeWidth={1.5}
-            strokeOpacity={edge.holding ? 0.7 : 0.5}
-            strokeDasharray={edge.holding ? HOLDING_DASH : undefined}
-            opacity={edge.settled ? 0.4 : 1}
-            markerEnd={`url(#${edge.holding ? "arrowhead-holding" : "arrowhead"})`}
-          />
+    <div className="rounded-lg border border-sol-border/15 bg-sol-bg-alt/30">
+      {/* A key for the lines, the one thing the graph says in colour alone; a
+          plan with nothing joined up has no vocabulary to explain. */}
+      {(edges.length > 0 || waitNodes.length > 0) && (
+      <div className="flex items-center gap-4 px-3 py-1.5 border-b border-sol-border/15 text-[10px] text-sol-text-dim" data-plan-graph-key>
+        {[{ word: "still blocking", tone: HOLDING, dashed: true }, { word: "cleared", tone: "--sol-text-dim", dashed: false }].map(({ word, tone, dashed }) => (
+          <span key={word} className="flex items-center gap-1.5">
+            <svg width="16" height="2" aria-hidden>
+              <line x1="0" y1="1" x2="16" y2="1" style={{ stroke: `var(${tone})` }} strokeWidth={1.5} strokeDasharray={dashed ? HOLDING_DASH : undefined} />
+            </svg>
+            {word}
+          </span>
         ))}
+      </div>
+      )}
+      <div className="overflow-auto">
+        <svg
+          width={Math.max(width, 400)}
+          height={Math.max(height, 200)}
+          className="block"
+        >
+          <defs>
+            {[["arrowhead", "--sol-text-dim"], ["arrowhead-holding", HOLDING]].map(([id, tone]) => (
+              <marker key={id} id={id} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" style={{ fill: `var(${tone})` }} />
+              </marker>
+            ))}
+          </defs>
 
-        {waitNodes.map((n) => {
-          const to = positions.get(n.task)!;
-          // Drawn as the task page and the row mark draw it: dim once it holds nothing.
-          const t = waitTone(n.wait.state, n.status);
-          const tone = WAIT_TONE_STYLE[t].token;
-          const holding = t === "waiting";
-          // The node says what happened once it settled; a failed one is struck through.
-          const label = n.wait.state === "met" ? waitMetLabel(n.wait, { now, withDay: true }) : waitLabel(n.wait, { now });
-          const x1 = n.x + WAIT_W;
-          const y1 = n.y + WAIT_H / 2;
-          const y2 = to.y + n.inY;
-          const title = waitLine(n.wait, { now });
-          return (
-            <g key={n.key}>
-              <title>{title}</title>
-              <path
-                d={`M ${x1} ${y1} C ${x1 + 14} ${y1}, ${to.x - 14} ${y2}, ${to.x} ${y2}`}
-                fill="none"
-                style={{ stroke: `var(${tone})` }}
-                strokeWidth={1.25}
-                strokeOpacity={0.7}
-                strokeDasharray={holding ? HOLDING_DASH : undefined}
-              />
-              <rect
-                x={n.x}
-                y={n.y}
-                width={WAIT_W}
-                height={WAIT_H}
-                rx={WAIT_H / 2}
-                style={{ fill: tint(tone, 14), stroke: `var(${tone})` }}
-                strokeWidth={1}
-              />
-              <text x={n.x + 8} y={n.y + 12.5} fontSize={WAIT_SIZE} style={{ fill: `var(${tone})` }} textDecoration={n.wait.state === "failed" ? "line-through" : undefined}>
-                {clip(label, fits(WAIT_W, WAIT_SIZE))}
-              </text>
-            </g>
-          );
-        })}
+          {/* An edge that still gates pickup draws as a waiting wait does; one
+              into a task being worked is grey, and a settled one fades. */}
+          {edges.map((edge) => (
+            <path
+              key={`${edge.from}>${edge.to}`}
+              d={edgePath(edge.points)}
+              fill="none"
+              style={{ stroke: `var(${edge.holding ? HOLDING : "--sol-text-dim"})` }}
+              strokeWidth={1.5}
+              strokeOpacity={edge.holding ? 0.7 : 0.5}
+              strokeDasharray={edge.holding ? HOLDING_DASH : undefined}
+              opacity={edge.settled ? 0.4 : 1}
+              markerEnd={`url(#${edge.holding ? "arrowhead-holding" : "arrowhead"})`}
+            />
+          ))}
 
-        {tasks.map(task => {
-          const p = positions.get(task.short_id);
-          if (!p) return null;
-          const tone = STATUS_TONE[task.status] ?? STATUS_TONE.open;
-          const text = task.status === "dropped" ? "var(--sol-text-dim)" : "var(--sol-text)";
-          const isBlocked = task.execution_status === "blocked" || task.execution_status === "needs_context";
-          const open = () => router.push(`/tasks/${task.short_id}`);
-          const width = fits(NODE_W, TITLE_SIZE);
-          const [line1, line2] = wrapTitle(task.title, width - task.short_id.length - 1, width);
-
-          return (
-            <g
-              key={task.short_id}
-              role="link"
-              tabIndex={0}
-              aria-label={`Open task ${task.short_id}: ${task.title}`}
-              onClick={open}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  open();
-                }
-              }}
-              className="group cursor-pointer focus:outline-none"
-            >
-              <title>{`${task.short_id} ${task.title}`}</title>
-              <rect
-                x={p.x}
-                y={p.y}
-                width={NODE_W}
-                height={NODE_H}
-                rx={6}
-                style={{ fill: tint(tone, 14), stroke: isBlocked ? "var(--sol-red)" : `var(${tone})` }}
-                strokeWidth={isBlocked ? 2 : 1.5}
-                strokeDasharray={isBlocked ? "4 2" : undefined}
-                className="transition-[stroke-width] group-hover:[stroke-width:2.5] group-focus-visible:[stroke-width:2.5]"
-              />
-              {/* The id and the title share a line; a long title goes on below. */}
-              <text x={p.x + 8} y={p.y + (line2 ? 18 : 26)} style={{ fill: text }} fontSize={TITLE_SIZE}>
-                <tspan opacity={0.6}>{task.short_id}</tspan>
-                <tspan dx={TITLE_SIZE * CHAR_EM} fontWeight={500}>{line1}</tspan>
-              </text>
-              {line2 && (
-                <text x={p.x + 8} y={p.y + 33} style={{ fill: text }} fontSize={TITLE_SIZE} fontWeight={500}>
-                  {line2}
+          {waitNodes.map((n) => {
+            const to = positions.get(n.task)!;
+            // Drawn as the task page and the row mark draw it: dim once it holds nothing.
+            const t = waitTone(n.wait.state, n.status);
+            const tone = WAIT_TONE_STYLE[t].token;
+            const holding = t === "waiting";
+            // The node says what happened once it settled; a failed one is struck through.
+            const label = n.wait.state === "met" ? waitMetLabel(n.wait, { now, withDay: true }) : waitLabel(n.wait, { now });
+            const x1 = n.x + WAIT_W;
+            const y1 = n.y + WAIT_H / 2;
+            const y2 = to.y + n.inY;
+            const title = waitLine(n.wait, { now });
+            return (
+              <g key={n.key}>
+                <title>{title}</title>
+                <path
+                  d={`M ${x1} ${y1} C ${x1 + 14} ${y1}, ${to.x - 14} ${y2}, ${to.x} ${y2}`}
+                  fill="none"
+                  style={{ stroke: `var(${tone})` }}
+                  strokeWidth={1.25}
+                  strokeOpacity={0.7}
+                  strokeDasharray={holding ? HOLDING_DASH : undefined}
+                />
+                <rect
+                  x={n.x}
+                  y={n.y}
+                  width={WAIT_W}
+                  height={WAIT_H}
+                  rx={WAIT_H / 2}
+                  style={{ fill: tint(tone, 14), stroke: `var(${tone})` }}
+                  strokeWidth={1}
+                />
+                <text x={n.x + 8} y={n.y + 12.5} fontSize={WAIT_SIZE} style={{ fill: `var(${tone})` }} textDecoration={n.wait.state === "failed" ? "line-through" : undefined}>
+                  {clip(label, fits(WAIT_W, WAIT_SIZE))}
                 </text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+              </g>
+            );
+          })}
+
+          {tasks.map(task => {
+            const p = positions.get(task.short_id);
+            if (!p) return null;
+            const tone = STATUS_TONE[task.status] ?? STATUS_TONE.open;
+            const text = task.status === "dropped" ? "var(--sol-text-dim)" : "var(--sol-text)";
+            const isBlocked = task.execution_status === "blocked" || task.execution_status === "needs_context";
+            const open = () => router.push(`/tasks/${task.short_id}`);
+            const width = fits(NODE_W, TITLE_SIZE);
+            const [line1, line2] = wrapTitle(task.title, width - task.short_id.length - 1, width);
+
+            return (
+              <g
+                key={task.short_id}
+                role="link"
+                tabIndex={0}
+                aria-label={`Open task ${task.short_id}: ${task.title}`}
+                onClick={open}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    open();
+                  }
+                }}
+                className="group cursor-pointer focus-visible:outline-none"
+              >
+                <title>{`${task.short_id} ${task.title} — ${taskVisual(task.status).label}${isBlocked ? ", blocked" : ""}`}</title>
+                <rect
+                  x={p.x}
+                  y={p.y}
+                  width={NODE_W}
+                  height={NODE_H}
+                  rx={6}
+                  style={{ fill: tint(tone, 14), stroke: isBlocked ? "var(--sol-red)" : `var(${tone})` }}
+                  strokeWidth={isBlocked ? 2 : 1.5}
+                  strokeDasharray={isBlocked ? "4 2" : undefined}
+                  className="transition-[stroke-width] group-hover:[stroke-width:2.5] group-focus-visible:[stroke-width:2.5]"
+                />
+                {/* Keyboard focus: a cyan halo outside the node, so hover reads
+                    as "pointable" and focus as "here you are". */}
+                <rect
+                  x={p.x - 3}
+                  y={p.y - 3}
+                  width={NODE_W + 6}
+                  height={NODE_H + 6}
+                  rx={9}
+                  fill="none"
+                  style={{ stroke: "var(--sol-cyan)" }}
+                  strokeWidth={1.5}
+                  className="opacity-0 group-focus-visible:opacity-100 transition-opacity pointer-events-none"
+                />
+                {/* The id and the title share a line; a long title goes on below. */}
+                <text x={p.x + 8} y={p.y + (line2 ? 18 : 26)} style={{ fill: text }} fontSize={TITLE_SIZE}>
+                  <tspan opacity={0.6}>{task.short_id}</tspan>
+                  <tspan dx={TITLE_SIZE * CHAR_EM} fontWeight={500}>{line1}</tspan>
+                </text>
+                {line2 && (
+                  <text x={p.x + 8} y={p.y + 33} style={{ fill: text }} fontSize={TITLE_SIZE} fontWeight={500}>
+                    {line2}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
     </div>
   );
 }

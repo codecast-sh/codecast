@@ -21,6 +21,7 @@ import { commandGroup } from "./commandGroups.js";
 import { JSON_OPTION, TEAM_OPTION, ago, csv, emit, fail, optionKey, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
 import { stdinText } from "./sendBody.js";
 import { codecastJsonPath, committedIngestKey, writeCodecastJson } from "./codecastJson.js";
+import { parseWorkspaceKey } from "./resolveWorkspace.js";
 import { lineProjectFor } from "./signalCommand.js";
 import { ADDABLE_SOURCE_PROVIDERS, GITHUB_CI_SOURCE_NAME, KEYED_SOURCE_PROVIDERS, SOURCE_CONFIG_FIELDS, SOURCE_PROVIDERS, SYSTEM_SOURCE_PROVIDERS, eventNameRows, type EventNameCounts, type SourceProvider } from "@codecast/shared/contracts/ingest";
 import { replayBackfillLine, type ReplayBackfill } from "@codecast/shared/contracts/replay";
@@ -229,7 +230,7 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
           return `${fmt.success(source.short_id)} ${source.name} (app, signed: no secret)${tail}\n${fmt.muted("  Deploy the app with codecast.json and verify the signature (@platform/analytics/codecast-verify), then: cast connector refresh " + source.name)}`;
         }
         // The connect command names the same workspace the source landed in.
-        const where = source.workspace?.startsWith("user:") ? "--personal" : `--team ${o.team && o.team !== "personal" ? o.team : "<name>"}`;
+        const where = parseWorkspaceKey(source.workspace)?.kind === "personal" ? "--personal" : `--team ${o.team && o.team !== "personal" ? o.team : "<name>"}`;
         const connect = KEYED_SOURCE_PROVIDERS.includes(source.provider)
           ? ""
           : `\n${fmt.muted(source.provider === "app" ? `  Reads through the workspace's app connection: pass --base-url, or cast integrations connect app ${where} --base-url <url> --signed` : `  Reads through the workspace's ${source.provider} connection: cast integrations connect ${source.provider} ${where}`)}`;
