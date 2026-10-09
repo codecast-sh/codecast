@@ -595,6 +595,14 @@ const ACTION_SURFACES: Record<string, DevSurface> = {
   // screen. A to-do's priority stays: the assistant sets it, so the person
   // sees it (a mark on high and urgent rows) and changes it with p.
   "task.labels": "inbox.labelStrip",
+  // The graph's two keys. Its rows, the row glyph and the Unblocked view all
+  // sit behind "tasks.internals", so the sheet and the palette leave the keys
+  // that WRITE a blocker or a see-also link out of hosted mode too — an add
+  // with nothing on screen to read it back is the one combination that cannot
+  // be right. The parent keeps its key: the page's breadcrumb states it in
+  // every mode.
+  "task.blocker": "tasks.internals",
+  "task.related": "tasks.internals",
   "doc.labels": "inbox.labelStrip",
   "list.select": "actions.fleet",
   "list.selectAll": "actions.fleet",

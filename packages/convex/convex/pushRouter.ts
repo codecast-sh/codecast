@@ -116,6 +116,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   task_completed: ["task completed", "tasks completed"],
   task_failed: ["task failed", "tasks failed"],
   task_unblocked: ["task unblocked", "tasks unblocked"],
+  task_blocked: ["task that needs a new plan", "tasks that need a new plan"],
   team_session_start: ["teammate session", "teammate sessions"],
   chat_mention: ["chat mention", "chat mentions"],
   chat_reply: ["thread reply", "thread replies"],
