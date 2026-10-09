@@ -1,0 +1,296 @@
+/* Chat from the face: the bubble that drops from a teammate's face in the
+ * header (FaceChatLayer), and their messages inside the card under the face
+ * (FaceMessages). The bubble wears the member card's
+ * material (faceRow.css .face-card): the same surface, border and notch, so
+ * everything that hangs under a face reads as one family. Red is messages. */
+
+.fc-bubble {
+  --fc-ease-spring: cubic-bezier(0.2, 0.9, 0.25, 1.12);
+  --fc-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fc-shadow: var(--card-shadow, 0 18px 40px -18px rgb(0 0 0 / 0.4));
+  position: fixed;
+  z-index: 70;
+  border: 1px solid var(--sol-border);
+  background: var(--sol-bg-alt);
+  color: var(--sol-text);
+  font-family: var(--font-mono);
+  text-align: left;
+  box-shadow: var(--fc-shadow), 0 2px 6px -3px rgb(0 0 0 / 0.12);
+  transform-origin: var(--fc-notch) -12px;
+}
+.fc-bubble::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: var(--fc-notch);
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  transform: rotate(45deg);
+  border-radius: 2px 0 0 0;
+  background: inherit;
+  border-left: 1px solid var(--sol-border);
+  border-top: 1px solid var(--sol-border);
+}
+
+/* ── the bubble ─────────────────────────────────────────────────────────── */
+
+.fc-bubble {
+  max-width: calc(100vw - 16px);
+  padding: 10px 13px;
+  border-radius: 13px;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 160ms var(--fc-ease-out),
+    transform 200ms var(--fc-ease-out),
+    left 200ms var(--fc-ease-out),
+    box-shadow 160ms ease;
+}
+.fc-bubble[data-phase="in"] {
+  opacity: 1;
+  transform: none;
+}
+.fc-bubble[data-phase="out"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+.fc-bubble[data-loud],
+.fc-bubble[data-loud]::before {
+  border-color: color-mix(in srgb, var(--sol-red) 45%, var(--sol-border));
+}
+.fc-bubble:hover {
+  box-shadow: var(--fc-shadow), 0 0 0 3px color-mix(in srgb, var(--sol-text) 5%, transparent);
+}
+
+.fc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.fc-head b {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fc-where {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sol-text-muted);
+  font-size: 11px;
+}
+.fc-time {
+  margin-left: auto;
+  color: var(--sol-text-dim);
+  font-size: 10px;
+}
+
+.fc-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.fc-line {
+  display: grid;
+}
+.fc-line > div {
+  min-height: 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+.fc-line-where {
+  margin-left: 6px;
+  color: var(--sol-text-dim);
+  font-size: 10px;
+}
+.fc-at {
+  font-weight: 600;
+}
+.fc-at[data-me] {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  color: var(--sol-red);
+}
+
+.fc-hint {
+  position: absolute;
+  right: 10px;
+  bottom: -19px;
+  color: var(--sol-text-dim);
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+.fc-bubble:hover .fc-hint {
+  opacity: 1;
+}
+
+/* ── in the card ────────────────────────────────────────────────────────── */
+
+/* Between who they are and the ways to reach them: a hairline above, the
+ * recent lines, the reply box. It runs to the card's edges like the rows
+ * around it, so the card reads as one column. */
+.fc-card-msgs {
+  display: flex;
+  flex-direction: column;
+  margin: 8px -13px 2px;
+  border-top: 1px solid var(--sol-border);
+  font-family: var(--font-mono);
+}
+.fc-card-msgs-head {
+  display: flex;
+  align-items: center;
+  padding: 8px 13px 0;
+  color: var(--sol-text-dim);
+  font-size: 10.5px;
+}
+.fc-open {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--sol-border);
+  border-radius: 7px;
+  color: var(--sol-text-muted);
+  font-size: 10.5px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.fc-open:hover {
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+  color: var(--sol-text);
+}
+
+.fc-list {
+  max-height: 232px;
+  overflow-y: auto;
+  padding: 2px 13px 8px;
+  scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(transparent, #000 16px);
+  mask-image: linear-gradient(transparent, #000 16px);
+}
+.fc-sep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 3px;
+  color: var(--sol-text-dim);
+  font-size: 10px;
+}
+.fc-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--sol-border);
+  opacity: 0.6;
+}
+.fc-msg {
+  display: grid;
+  grid-template-columns: 9px 1fr auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.fc-text {
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.fc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sol-red);
+  opacity: 0;
+  transform: translateY(-1px);
+}
+/* New since you last looked: the dot shows, then fades once you have seen it. */
+.fc-msg[data-unread] .fc-dot {
+  animation: fc-seen 2.2s ease forwards;
+}
+@keyframes fc-seen {
+  0%, 60% { opacity: 1; transform: translateY(-1px) scale(1); }
+  100% { opacity: 0; transform: translateY(-1px) scale(0.3); }
+}
+.fc-msg:not([data-unread]):not([data-me]) .fc-text {
+  color: color-mix(in srgb, var(--sol-text) 82%, transparent);
+}
+.fc-msg[data-me] .fc-text {
+  justify-self: end;
+  padding: 3px 9px;
+  border-radius: 10px 10px 3px 10px;
+  background: color-mix(in srgb, var(--sol-text) 7%, transparent);
+}
+.fc-at-time {
+  color: var(--sol-text-dim);
+  font-size: 9.5px;
+}
+.fc-reply {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px 6px;
+}
+.fc-reply input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--sol-border);
+  border-radius: 9px;
+  background: var(--sol-bg);
+  color: var(--sol-text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.fc-reply-thread {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border: 1px solid var(--sol-border);
+  border-radius: 9px;
+  color: var(--sol-text-muted);
+  font-size: 12px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.fc-reply-thread:hover {
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+  color: var(--sol-text);
+}
+.fc-reply input::placeholder {
+  color: var(--sol-text-dim);
+}
+.fc-reply input:focus {
+  border-color: color-mix(in srgb, var(--sol-text) 30%, var(--sol-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-text) 5%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fc-bubble,
+  .fc-dot {
+    transition-duration: 1ms;
+    animation-duration: 1ms;
+    filter: none;
+  }
+}

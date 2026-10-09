@@ -18,7 +18,7 @@ import { NotificationList } from "../notifications/NotificationList";
 import { HorizonRail } from "../triggers/HorizonRail";
 import { TriggerRowItem } from "../TriggerRow";
 import { TriggerPill, SingleHeader } from "../TriggerContextPanel";
-import { PageCard, PageFavicon, PublishedPageActions } from "../PublishedPageEmbed";
+import { FramelessPage, PublishedPageActions } from "../PublishedPageEmbed";
 import { ChatLine, EventLine, PassageBlock, RecapCard } from "../calls/RoomThreadRows";
 import { buildPassages } from "../calls/roomThreadModel";
 import { FaceRow } from "../faces/FaceRow";
@@ -170,22 +170,23 @@ describe("Trigger strip pieces", () => {
   });
 });
 
-describe("PageCard", () => {
-  test("the published page card, with the embed's own verbs", () => {
+describe("FramelessPage", () => {
+  test("the published page, frameless, with the embed's own verbs", () => {
     const html = renderToStaticMarkup(
-      <PageCard
-        icon={<PageFavicon className="h-4 w-4" />}
+      <FramelessPage
         title="Q3 funnel report"
         href="https://codecast.sh/a/hero-report"
         caption="Built from the canvas"
         actions={<PublishedPageActions slug="hero-report" expanded={false} onToggleExpand={() => {}} />}
+        height={500}
+        loaded
       >
         <iframe title="Q3 funnel report" srcDoc="<p>hi</p>" />
-      </PageCard>,
+      </FramelessPage>,
     );
     expect(html).toContain("Q3 funnel report");
-    expect(html).toContain("Copy link to published page");
-    expect(html).toContain('title="Expand"');
+    expect(html).toContain('aria-label="Copy link"');
+    expect(html).toContain('aria-label="Expand"');
     expect(html).toContain("Built from the canvas");
   });
 });
